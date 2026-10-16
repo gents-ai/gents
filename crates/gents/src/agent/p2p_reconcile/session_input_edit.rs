@@ -59,7 +59,6 @@ async fn verified_receipt(
     Ok(Some(receipt))
 }
 
-/// Checks that hold for the command's lifetime, independent of clock and authority.
 async fn intrinsic_rejection(
     identity: &dyn NodeIdentity,
     command: &SessionInputEdit,
@@ -235,9 +234,6 @@ pub(crate) async fn process_command(
                 && row.session_id == command.session_id, "edit immutable scope disagrees with signed intent");
             if verified_receipt(identity.as_ref(), &command, row.receipt_json.as_deref()).await?.is_some() { return Ok(None); }
             crate::graphql::fence_arrivals(txn, "AgentSessionInputEdit").await?;
-            // Replicated unique-field collisions retain both documents, but an
-            // equality lookup on the unique field exposes only its winner; the
-            // non-unique scope index exposes every physical twin.
             let twins = txn.execute(&format!(r#"{{ AgentSessionInputEdit(filter: {{ node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}) {{ _docID command_id }} }}"#,
                 escape_graphql_string(&row.node_did), escape_graphql_string(&row.requester_did))).await?;
             let twins = twins["data"]["AgentSessionInputEdit"].as_array().context("missing command identity query")?;
@@ -285,12 +281,11 @@ pub(crate) async fn process_command(
 
 #[derive(Clone, Copy)]
 enum Sweep {
-    /// Commands without any receipt; cheap enough for every tick.
     Unanswered,
-    /// Also commands whose receipt does not verify. A replica can overwrite a
-    /// valid receipt, and only its change notification names that command, so
-    /// this runs whenever notifications may have been lost: at startup, on
-    /// resync, and on every tick once the subscription has closed.
+    /// A replica can overwrite a valid receipt, and only its change notification
+    /// names that command, so this also-sweep-unverified mode runs whenever
+    /// notifications may have been lost: at startup, on resync, and on every
+    /// tick once the subscription has closed.
     Unverified,
 }
 
@@ -364,9 +359,6 @@ pub async fn run_session_input_edit_reconciler(
     let mut subscription_open = true;
     let mut deferred: HashMap<String, DateTime<Utc>> = HashMap::new();
     let mut ids = Vec::new();
-    // Discovered commands and full sweeps that failed are owed to the next
-    // tick: unanswered-only ticks cannot rediscover a command whose invalid
-    // receipt is non-null.
     let mut failed = Vec::new();
     let mut full_sweep_owed = false;
     let mut sweep = Some(Sweep::Unverified);

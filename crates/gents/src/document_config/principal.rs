@@ -35,12 +35,12 @@ pub struct Node {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub created_by: Option<String>,
-    /// Admission bound on a request's causal hop (`request_hop`). Absent
-    /// uses [`DEFAULT_MAX_REQUEST_HOP`].
+    /// Admission bound on a request's causal hop; absent uses
+    /// [`DEFAULT_MAX_REQUEST_HOP`].
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_request_hop: Option<u32>,
-    /// Optional UI/discovery labels. References, never tags, determine execution.
+    /// Optional UI/discovery labels.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",

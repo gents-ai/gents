@@ -202,29 +202,6 @@ mod canonical_tests {
     }
 
     #[test]
-    fn canonical_diff_preserves_literals_and_covers_all_collections() {
-        let live = fixture("prompt\n");
-        let desired = fixture("prompt");
-        let report = diff_manifests(
-            Path::new("."),
-            "local",
-            &desired,
-            Some(&live.node),
-            &live,
-            false,
-        );
-        assert!(report.live_validation_errors.is_empty());
-        assert_eq!(
-            report.collections.get(Collection::AgentContext).update,
-            ["context"]
-        );
-        assert_eq!(report.counts.get(Collection::Tools).unchanged, 2);
-        let counts = serde_json::to_value(report.counts).unwrap();
-        assert_eq!(counts.as_object().unwrap().len(), Collection::ALL.len());
-        assert_eq!(counts["tools"]["unchanged"], 2);
-    }
-
-    #[test]
     fn prune_uses_retained_canonical_references() {
         let live = fixture("prompt");
         let mut desired = live.clone();

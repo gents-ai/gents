@@ -1,55 +1,42 @@
-//! Baseline table and declarative step chain.
-//!
-//! Types are lifetime-parameterized so tests can inject discovered pins
-//! (`DynamicRegistry`) while production keeps `'static` constants.
-
 use crate::expectation::CollectionExpectation;
 
 /// One collection registered at the migration baseline (lineage root).
 #[derive(Debug, Clone, Copy)]
 pub struct BaselineCollection<'a> {
-    /// Collection name (must match the SDL type name).
     pub name: &'a str,
-    /// GraphQL SDL for `add_schema`.
     pub sdl: &'a str,
     /// Pinned root VersionID. Production entries must specify a pin; dynamic
     /// registries may omit it while authoring a new migration.
     pub expected_version: Option<&'a str>,
-    /// Full post-state expectation for the active baseline version.
     pub expected_state: CollectionExpectation,
 }
 
-/// Embedded wasm + args for a lens edge.
+/// Embedded wasm + args for a lens edge. Wasm is always `from_bytes`, never
+/// path.
 #[derive(Debug, Clone, Copy)]
 pub struct LensSpec<'a> {
-    /// Raw wasm module bytes (always `from_bytes` — never path).
     pub wasm: &'a [u8],
-    /// Optional JSON args string for the module.
     pub args_json: Option<&'a str>,
 }
 
 /// One declarative migration step.
 #[derive(Debug, Clone, Copy)]
 pub enum MigrationStep<'a> {
-    /// Register a collection that did not exist at the baseline.
     AddCollection {
         id: &'a str,
         sdl: &'a str,
         expected_version: Option<&'a str>,
         expected_state: CollectionExpectation,
     },
-    /// Versioned change (field add/rename) with optional lens.
     PatchVersioned {
         id: &'a str,
         collection: &'a str,
-        /// RFC 6902 patch; must include IsActive:false for the safe sequence.
         patch: &'a str,
         lens: Option<LensSpec<'a>>,
         expected_version: Option<&'a str>,
         expected_transform: Option<&'a str>,
         expected_state: CollectionExpectation,
     },
-    /// In-place metadata change (indexes, embeddings) — no new version CID.
     PatchInPlace {
         id: &'a str,
         collection: &'a str,
@@ -59,7 +46,6 @@ pub enum MigrationStep<'a> {
 }
 
 impl<'a> MigrationStep<'a> {
-    /// Stable step id for errors and reports.
     pub fn id(&self) -> &'a str {
         match self {
             Self::AddCollection { id, .. }
@@ -68,7 +54,6 @@ impl<'a> MigrationStep<'a> {
         }
     }
 
-    /// Primary collection this step touches, when applicable.
     pub fn collection(&self) -> Option<&'a str> {
         match self {
             Self::AddCollection { .. } => None,
@@ -87,8 +72,8 @@ pub struct Registry<'a> {
 }
 
 impl<'a> Registry<'a> {
-    /// Names of every collection managed by this registry (baseline only;
-    /// AddCollection steps extend the managed set at apply time).
+    /// Baseline names only; AddCollection steps extend the managed set at
+    /// apply time.
     pub fn managed_names(&self) -> impl Iterator<Item = &'a str> + '_ {
         self.baseline.iter().map(|b| b.name)
     }
@@ -148,8 +133,6 @@ pub struct DynamicRegistry {
 }
 
 impl DynamicRegistry {
-    /// Borrow as a [`Registry`] for the engine. The returned views are valid
-    /// for the lifetime of `self`.
     pub fn as_registry(&self) -> (Vec<BaselineCollection<'_>>, Vec<MigrationStep<'_>>) {
         let baseline = self
             .baseline
@@ -228,9 +211,8 @@ macro_rules! baseline_entry {
     };
 }
 
-/// Fresh canonical schema baseline. Root pins are checked against DefraDB;
-/// historical migrations are intentionally absent from this refactor baseline.
-/// Re-author pins after changing the protocol catalog with the pin-authoring test.
+/// Fresh canonical schema baseline. Re-author pins after changing the protocol
+/// catalog with the pin-authoring test.
 pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_BACKEND_NAME,
@@ -653,10 +635,7 @@ pub fn fixture_lens_wasm() -> &'static [u8] {
 // ---------------------------------------------------------------------------
 
 /// Collections authored by paired clients must share the server's fresh-apply
-/// schema root. A versioned migration has predecessor heads and therefore a
-/// different CID from fresh application, even with identical final fields.
-/// In-place steps can also diverge metadata without changing that CID.
-/// `fresh_apply_parity` and the baseline step guard enforce both constraints.
+/// schema root; versioned and in-place steps would diverge that CID.
 pub const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::AGENT_REQUEST_NAME,
     gents_protocol::schemas::AGENT_MESSAGE_NAME,

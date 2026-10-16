@@ -1,7 +1,5 @@
 use super::*;
 
-/// A pack built from the `assets_fixture` fixture, under a coordinate and
-/// version generic import/store tests do not otherwise care about.
 fn store_test_pack() -> (Vec<u8>, PackHeader) {
     test_pack_named("store_import_fixture", "1.0.0")
 }
@@ -127,12 +125,10 @@ fn release_removes_the_archive_and_its_unpacked_copy() {
     assert!(!stored.path.exists());
     assert!(!unpacked.exists());
 
-    // Idempotent: nothing left to release the second time.
     assert!(!store.release(&header.digest).unwrap());
 }
 
 // --- name index -----------------------------------------------------------
-
 #[test]
 fn an_import_indexes_the_pack_by_coordinate_and_version() {
     let home = tempfile::tempdir().unwrap();
@@ -237,8 +233,6 @@ fn a_bare_dot_or_dot_dot_version_is_stored_but_not_indexed() {
         assert!(store.contains(&header.digest).unwrap());
         assert_eq!(store.lookup("gents", name, None).unwrap(), None);
     }
-    // Neither entry escaped its own `by-name/gents/<name>` directory to
-    // land as a sibling of it or higher up the tree.
     assert!(store.names().unwrap().is_empty());
 }
 
@@ -258,9 +252,7 @@ fn release_deletes_the_matching_name_index_entry_and_keeps_the_rest() {
     store.release(&v1_header.digest).unwrap();
 
     // The index file itself is gone, not merely unresolvable because
-    // `lookup` filters out entries whose archive disappeared: deleting
-    // `remove_name_entries_for_digest`/`remove_indexed_entry` entirely would
-    // make `lookup` alone insufficient to catch the regression.
+    // `lookup` filters entries whose archive disappeared.
     assert!(!v1_entry.exists(), "release deleted the index entry itself");
     assert!(v2_entry.is_file(), "the other version's entry is untouched");
 
@@ -269,7 +261,7 @@ fn release_deletes_the_matching_name_index_entry_and_keeps_the_rest() {
             .lookup("gents", "name_index_e", Some("1.0.0"))
             .unwrap(),
         None,
-        "the released version's archive is gone, so it no longer resolves"
+        "the released version's archive is gone"
     );
     assert_eq!(
         store
@@ -280,10 +272,6 @@ fn release_deletes_the_matching_name_index_entry_and_keeps_the_rest() {
     );
 }
 
-/// When the archive is already gone before `release` runs (a prior release,
-/// or the file was removed out from under the store), there is no header
-/// left to read the coordinate and version from; `release` must still find
-/// and delete the index entry, by falling back to a full scan.
 #[test]
 fn releasing_a_digest_whose_archive_is_already_gone_still_cleans_its_index_entry() {
     let home = tempfile::tempdir().unwrap();
@@ -296,7 +284,7 @@ fn releasing_a_digest_whose_archive_is_already_gone_still_cleans_its_index_entry
     std::fs::remove_file(store.path(&header.digest).unwrap()).unwrap();
     assert!(
         !store.release(&header.digest).unwrap(),
-        "nothing left in the content-addressed store to remove"
+        "nothing left in the content-addressed store"
     );
 
     assert!(

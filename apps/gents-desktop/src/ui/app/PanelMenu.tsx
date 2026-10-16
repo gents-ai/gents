@@ -1,6 +1,3 @@
-/* The pane's menu, a dot menu in its bar: what can show in the dock here,
-   with what is already showing marked, and a way to hide or show the
-   dock. One control, however many surfaces there are. */
 import { Check, EllipsisVertical } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import {
@@ -61,7 +58,6 @@ export function PanelMenu({ routeName }: { routeName: string }) {
             );
           })}
         </DropdownMenuGroup>
-        {/* hidden tabs are a desktop idea; the phone's sheet simply closes */}
         {dock.tabs.length > 0 && (
           <>
             <DropdownMenuSeparator className="max-md:hidden" />

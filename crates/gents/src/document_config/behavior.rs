@@ -10,16 +10,10 @@ use super::serde_helpers::{
     is_enabled, rows_with_doc_id,
 };
 
-/// Selects context and inference as one unit. Agents are reusable
-/// interfaces; the session binds to one by `agent_id` only. There are no
-/// backend/model/compaction/skill copies here — `AgentContext` owns literal
-/// instructions, explicit skill selection, tools, and compaction, and
-/// `InferenceProfile` is the only model-selection path.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct Agent {
-    /// Logical configuration key; `_docID` is the storage identity.
     pub agent_id: String,
     pub node_did: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -28,14 +22,9 @@ pub struct Agent {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub description: Option<String>,
-    /// Absent context means no system instructions, skills, or tools, with
-    /// runtime-default compaction (StripThenSummarize, threshold 0.75).
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub context_id: Option<String>,
-    /// Required: the only model selection path is
-    /// Task -> Agent -> InferenceProfile. There is no default
-    /// fallback.
     pub inference_profile_id: String,
     #[serde(
         default = "default_enabled",
@@ -44,8 +33,6 @@ pub struct Agent {
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
     pub enabled: bool,
-    /// Optional UI/discovery labels. References, never tags, determine
-    /// execution.
     #[serde(
         default,
         deserialize_with = "deserialize_default_on_null",

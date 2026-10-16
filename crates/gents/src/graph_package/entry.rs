@@ -1,10 +1,5 @@
 //! Node-bound adapters for a graph entry's contract.
 //!
-//! [`prepare_entry_run`] is the generic path: it admits operator input
-//! against an entry's `input_schema` and, when the entry declares `prepare`,
-//! collects the declared host facts and hands them plus the admitted input
-//! to the pack's own plugin, persisting whatever documents it returns.
-//!
 //! Every adapter here prepares host evidence and durable workspace/config
 //! rows for the same [`ConfigAccess`] and principal that own the graph.
 //! Model-facing tools and the CLI share this code; neither discovers another
@@ -25,9 +20,9 @@ use crate::graph_pipeline::{
 use crate::plugin::executor::PluginExecutor;
 
 /// A prepare plugin's returned documents are persisted in batches of at most
-/// this many, so one prepare step never renders an unbounded mutation.
+/// this many documents or bytes of rendered mutation text, whichever comes
+/// first, so one prepare step never renders an unbounded mutation.
 const PREPARE_DOCUMENTS_BATCH_LIMIT: usize = 32;
-/// ...or this many bytes of rendered mutation text, whichever comes first.
 const PREPARE_DOCUMENTS_BATCH_BYTES: usize = 1024 * 1024;
 
 fn git_output_bytes(repo: &Path, arguments: &[&str]) -> Result<Vec<u8>> {
@@ -97,9 +92,6 @@ fn resolve_repository(
     Ok((canonical, base_sha, head_sha))
 }
 
-/// Host facts collected for one `git_diff` step: the resolved repository,
-/// SHAs, and the exact `git` output shapes a pack plugin builds its evidence
-/// from.
 struct GitDiffFacts {
     repository: PathBuf,
     base_sha: String,
@@ -152,10 +144,6 @@ fn collect_git_diff(
     })
 }
 
-/// What starts a graph run through the generic entry contract: the plan and
-/// (optionally) which of its entries, the operator's raw input, the host
-/// ceiling a `git_diff`/`read_only_workspace` step may not escape, and the
-/// executor that calls the pack's own prepare plugin.
 pub struct EntryRunRequest<'a> {
     pub plan: &'a GraphPlan,
     pub entry: Option<&'a str>,
@@ -164,7 +152,6 @@ pub struct EntryRunRequest<'a> {
     pub plugins: &'a PluginExecutor,
 }
 
-/// The entry input a run is about to start with, and how it got there.
 #[derive(Debug)]
 pub struct PreparedEntryRun {
     pub entry_name: String,
@@ -175,10 +162,8 @@ pub struct PreparedEntryRun {
     pub documents: usize,
 }
 
-/// Selects the entry a run starts from, the one seam every caller (the CLI,
-/// `self_config`'s `RunGraphTool`, and this module's own prepare path) goes
-/// through, so a ceiling or authority decision made from the selection can
-/// never disagree with which entry actually runs.
+/// One seam for entry selection: a ceiling or authority decision made from
+/// the selection can never disagree with which entry actually runs.
 pub(crate) fn select_entry<'a>(
     plan: &'a GraphPlan,
     requested: Option<&str>,
@@ -214,7 +199,6 @@ pub(crate) struct PreparePluginDocument {
     pub(crate) fields: Value,
 }
 
-/// A prepare plugin's whole stdout contract (D4 step 6).
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PreparePluginOutput {
@@ -222,7 +206,6 @@ pub(crate) struct PreparePluginOutput {
     pub(crate) documents: Vec<PreparePluginDocument>,
 }
 
-/// The `git_diff` host fact exactly as a prepare plugin's stdin carries it.
 fn git_diff_host_json(facts: &GitDiffFacts) -> Value {
     json!({
         "repository": facts.repository.to_string_lossy(),
@@ -234,8 +217,6 @@ fn git_diff_host_json(facts: &GitDiffFacts) -> Value {
     })
 }
 
-/// The `read_only_workspace` host fact exactly as a prepare plugin's stdin
-/// carries it.
 fn read_only_workspace_host_json(workspace_id: &str, owner_node_did: &str) -> Value {
     json!({
         "workspace_id": workspace_id,
@@ -244,8 +225,6 @@ fn read_only_workspace_host_json(workspace_id: &str, owner_node_did: &str) -> Va
     })
 }
 
-/// A prepare plugin's whole stdin envelope: the admitted operator input, a
-/// fresh nonce, and the host facts collected for it.
 fn prepare_stdin(input: Value, nonce: &str, host: Value) -> Value {
     json!({
         "input": input,
@@ -265,8 +244,6 @@ fn required_string_field<'a>(
         .with_context(|| format!("entry {entry_name:?} input is missing string field {field:?}"))
 }
 
-/// Runs an entry's declared `prepare.host` steps in order, folding each
-/// one's facts into the `host` object the plugin's stdin carries.
 async fn collect_host_facts(
     access: &ConfigAccess,
     principal_did: &str,
@@ -324,9 +301,6 @@ async fn collect_host_facts(
     Ok(host)
 }
 
-/// The `_docID` a batched mutation's aliased `create_X` field carries for
-/// one alias, whether the backend answers a create with a bare object or
-/// (DefraDB's own shape) a single-element list.
 fn batch_alias_doc_id<'a>(response: &'a Value, alias: &str) -> Option<&'a str> {
     let value = response.get("data")?.get(alias)?;
     value
@@ -335,11 +309,8 @@ fn batch_alias_doc_id<'a>(response: &'a Value, alias: &str) -> Option<&'a str> {
         .or_else(|| value.as_array()?.first()?.get("_docID")?.as_str())
 }
 
-/// Persists a prepare plugin's returned documents, batched so one prepare
-/// step never renders one unbounded mutation: at most
-/// [`PREPARE_DOCUMENTS_BATCH_LIMIT`] documents or
-/// [`PREPARE_DOCUMENTS_BATCH_BYTES`] of rendered mutation text per batch, all
-/// inside one transaction, in the plugin's own returned order.
+/// Persists a prepare plugin's returned documents in the plugin's own
+/// returned order, all inside one transaction.
 async fn persist_prepared_documents(
     access: &ConfigAccess,
     documents: &[PreparePluginDocument],
@@ -393,11 +364,6 @@ async fn persist_prepared_documents(
         .await
 }
 
-/// One sentence a caller can act on for a prepare plugin's non-success
-/// verdict, in product vocabulary rather than the verdict's own Debug name.
-/// When a `git_diff` step ran, `BadOutput`, `OutOfMemory` and `Timeout` name
-/// the declared limit the diff tripped and its byte size, and suggest
-/// narrowing `base..head`, since that is the one lever an operator has.
 fn describe_prepare_plugin_failure(
     coordinate: &str,
     plugin: &crate::pack::PackPlugin,
@@ -440,9 +406,6 @@ fn describe_prepare_plugin_failure(
     format!("the {coordinate} plugin {what}: {diagnostics}")
 }
 
-/// Selects an entry, admits its operator input, and, when the entry
-/// declares `prepare`, runs its host steps and pack plugin to shape the
-/// entry's real input and persist its evidence documents.
 pub async fn prepare_entry_run(
     access: &ConfigAccess,
     principal_did: &str,

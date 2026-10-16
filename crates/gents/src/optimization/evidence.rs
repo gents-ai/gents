@@ -1,8 +1,4 @@
 //! What a decision reads, and what a proposer may read.
-//!
-//! The runs of one decision are paired one at a time by `eval::report` and
-//! concatenated, so a re-run adds pairs (finding F1). What reaches a proposer
-//! is narrower still: a check's name, what it scored and what it said.
 
 use sha2::{Digest, Sha256};
 
@@ -20,16 +16,10 @@ use crate::optimization::proposer::CheckFeedback;
 pub const BASELINE_CELL: &str = "baseline";
 pub const CANDIDATE_CELL: &str = "candidate";
 
-/// Token totals for both cells across `runs`: what feeds `PolicyV2`'s cost
-/// gate. `None` skips that gate, and the decision journals `cost_skipped`.
-///
-/// A trial that reported no usage is unknown, not free (ruling T312-1). It is
-/// excluded from its cell's token mean, whose denominator is only the trials
-/// that did report, so the side with more missing usage does not look cheaper.
-/// It counts instead toward the missing share over every counted trial, which
-/// is what `PolicyV2::max_missing_usage_bp` bounds: that tolerance is the
-/// field's purpose, and past it the result is `None`. A cell with no trial
-/// that reported usage has no mean at all, so the result is `None` as well.
+/// Token totals for both cells across `runs`; `None` skips the cost gate.
+/// Ruling T312-1: a trial with no usage is unknown, not free — it is excluded
+/// from its cell's token mean but counts toward the missing share bounded by
+/// `max_missing_usage_bp`; a cell with no reporting trial has no mean.
 pub fn token_totals(runs: &[RunRows], max_missing_usage_bp: u64) -> Option<TokenTotals> {
     let (mut baseline, mut candidate) = (CellUsage::default(), CellUsage::default());
     for rows in runs {
@@ -45,11 +35,8 @@ fn add(total: &mut CellUsage, one: CellUsage) {
     total.missing += one.missing;
 }
 
-/// The cost gate's token totals for two cells, by the rule [`token_totals`]
-/// documents: unknown usage is not free; past the tolerated missing share, or
-/// with a cell that reported nothing, `None`. Pure: `eval::report::compare`
-/// calls it too, so an operator's comparison and the optimizer skip the cost
-/// gate on exactly the same data.
+/// Pure: `eval::report::compare` calls this too, so an operator's comparison
+/// and the optimizer skip the cost gate on exactly the same data.
 pub fn totals(
     baseline: CellUsage,
     candidate: CellUsage,
@@ -87,9 +74,6 @@ fn reported(usage: &CellUsage) -> u64 {
     usage.trials.saturating_sub(usage.missing)
 }
 
-/// The evidence one decision reads: every run paired separately, the pairs
-/// concatenated, over the cases the first run froze. All runs of one decision
-/// share a definition and a split, so they froze the same case list.
 pub fn decision_evidence(
     definition: &EvalDefinition,
     runs: &[RunRows],
@@ -110,11 +94,9 @@ pub fn decision_evidence(
     )
 }
 
-/// What a proposer may read from the train run: for each acceptance check
-/// that counts, its name, what it scored, and what it said. Only the train
-/// run's checkpoint cell, [`BASELINE_CELL`], is read, at each slot's latest
-/// completed attempt and after regrade supersession, both selected by
-/// `eval::report` (ruling T312-2). Ordered so two reads produce the same input.
+/// Ruling T312-2: only the train run's checkpoint cell, at each slot's latest
+/// completed attempt and after regrade supersession, selected by
+/// `eval::report`; ordered so two reads produce the same input.
 pub fn train_feedback(definition: &EvalDefinition, train: &RunRows) -> Vec<CheckFeedback> {
     let mut counted: Vec<&VerdictRecord> = counted_verdicts(definition, train, BASELINE_CELL)
         .into_iter()
@@ -133,8 +115,8 @@ pub fn train_feedback(definition: &EvalDefinition, train: &RunRows) -> Vec<Check
         .collect()
 }
 
-/// The Monte Carlo seed, derived from the runs the decision reads, so a
-/// recomputed decision is identical.
+/// Derived from the run ids the decision reads, so a recomputed decision is
+/// identical.
 pub fn decision_seed(run_ids: &[String]) -> u64 {
     let digest = Sha256::digest(run_ids.join("\n").as_bytes());
     let mut bytes = [0u8; 8];

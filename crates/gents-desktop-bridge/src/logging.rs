@@ -31,8 +31,7 @@ pub fn init_tracing_with_config(config: crate::config::TracingConfig) {
     );
 }
 
-/// Where the managed runtime service appends its stderr: failures that occur
-/// before tracing starts, the runtime's exit error, and panics.
+/// Path of the managed runtime's error log for diagnostics output.
 pub fn runtime_error_log(desktop_root: &Path) -> PathBuf {
     desktop_root.join("logs").join("runtime-errors.log")
 }

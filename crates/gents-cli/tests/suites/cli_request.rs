@@ -532,7 +532,6 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
         ),
     )
     .await?;
-    // The runtime records the starting request as the session's provenance.
     graphql_query(
         &graphql,
         &format!(

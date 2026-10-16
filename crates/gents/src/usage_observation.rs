@@ -58,7 +58,6 @@ impl UsageAccount {
         }
     }
 
-    /// An API-key backend's account; `None` without a backend id.
     pub fn for_agent(agent: &ResolvedAgent) -> Option<Self> {
         Some(Self::Backend {
             node_did: agent.node_did().to_string(),
@@ -67,8 +66,6 @@ impl UsageAccount {
         })
     }
 
-    /// The account `backend` names for `node_did` (account = backend): a
-    /// sign-in only for node OAuth, as [`crate::oauth_credential::backend_account`].
     fn for_backend(node_did: &str, backend: &InferenceBackend) -> Self {
         match (backend.provider_kind.oauth_provider(), &backend.auth) {
             (Some(provider), BackendAuth::NodeOAuth { account_ref }) => Self::Credential {
@@ -186,14 +183,12 @@ struct Target {
     credential_doc_id: Option<String>,
     node_did: String,
     provider: String,
-    /// Written here: the provider account key, else `reference`.
     key: String,
     /// `ref:<account_ref or original>:<_docID>`, DID-free, for usage seen
     /// before the key is known. The `_docID` keeps a new first sign-in after
     /// every account was removed, which reuses the reference, apart from the
     /// removed account.
     reference: Option<String>,
-    /// The plan the sign-in carries, for a report that has none.
     plan: Option<UsagePlan>,
 }
 
@@ -271,13 +266,10 @@ pub(crate) fn fallback_key(account_ref: Option<&str>, doc_id: &str) -> String {
 }
 
 /// Deletes `node_did`'s `provider` usage rows under `keys` in the caller's
-/// transaction, for an account's remove. This is the one usage write
-/// outside the runtime (with a runtime up the CLI writes over HTTP). It is
-/// safe because a delete creates nothing, so it cannot race the unique
-/// create the runtime-only writer guards; a runtime write racing it lands
-/// before it (deleted) or after it (a row no enabled account resolves to).
-// ponytail: rows under an account's earlier key (a key change) stay behind,
-// unreachable and token-free; sweep by key prefix if row counts show.
+/// transaction, for an account's remove. Safe to race the runtime-only
+/// writer: a delete creates nothing, and a racing runtime write either
+/// lands before it (deleted) or after it (a row no enabled account
+/// resolves to).
 pub(crate) async fn delete_usage_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -317,7 +309,6 @@ fn stored_row(response: &Value) -> Result<Option<(String, StoredUsage)>> {
         return Ok(None);
     };
     let doc_id = row["_docID"].as_str().context("usage row without _docID")?;
-    // A report this build cannot read is replaced by the next observation.
     let report: UsageReport = serde_json::from_value(row["report"].clone()).unwrap_or_default();
     let read_at = row["read_at"]
         .as_str()
@@ -479,9 +470,6 @@ impl UsageReporter {
     /// Parses now and writes in its own task, so a response never waits on
     /// the node's write gate. The spawned task does not inherit the caller's
     /// transaction (a task-local), so the write is never nested in it.
-    // ponytail: one task per response, unbounded; most write nothing (no
-    // rewrite of unchanged values). Coalesce per account if the write gate
-    // shows contention.
     pub(crate) fn observe(self: &Arc<Self>, headers: &HeaderMap, source: UsageSource) {
         let headers = headers
             .iter()
@@ -548,8 +536,6 @@ type UsageParser = fn(&Value, DateTime<Utc>) -> Option<UsageReport>;
 /// write, one runtime view reload). Every skip happens before any bearer is
 /// touched, so a skipped read never refreshes. Open and Refresh read alike,
 /// Claude included: an account read within `READ_SKIP_WINDOW` is skipped.
-// ponytail: the skip check is not atomic, so two concurrent Opens of one
-// account can both read upstream; add a per-account in-flight guard if it shows.
 pub async fn read_account_usage(
     node: Arc<EmbeddedNode>,
     node_did: &str,
@@ -632,8 +618,8 @@ pub async fn read_account_usage(
                         .header("anthropic-beta", crate::claude_messages::OAUTH_BETA),
                     account_usage::claude_oauth_usage,
                 ),
-                // Returned above; listed so a new kind fails to compile
-                // instead of sending its bearer to another provider.
+                // A new provider kind must fail to compile here rather than
+                // send its bearer to another provider.
                 Kind::OpenAiCompatible | Kind::OpenRouter | Kind::AnthropicApiKey => {
                     return Ok(UsageRead::NotReported);
                 }
@@ -705,8 +691,6 @@ pub async fn read_node_usage(
             })
         })
         .await?;
-    // An enabled backend claims its account; an enabled account no enabled
-    // backend names is read through its provider's preset connection.
     let mut seen = std::collections::HashSet::new();
     let mut jobs = Vec::new();
     for backend in &backends {

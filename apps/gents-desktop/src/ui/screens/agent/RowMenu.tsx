@@ -1,6 +1,3 @@
-/* The end of a list row: an optional on/off switch and a ⋯ menu with Open,
-   Duplicate and Delete. Delete goes through the same typed-name confirm as
-   the editor's Danger zone. One pattern for every config list. */
 import { useState } from "react";
 import { MoreHorizontal } from "lucide-react";
 import { toast } from "sonner";
@@ -31,17 +28,14 @@ export function RowMenu({
   name: string;
   base: Extract<Route, { name: "agent" }>;
   id: string;
-  /* the switch; `blocked` says why it cannot be turned on */
   enabled?: {
     checked: boolean;
     onChange: (next: boolean) => Promise<unknown>;
     blocked?: string;
   };
-  /* makes the copy and resolves with its id; the row opens it */
   onDuplicate?: () => Promise<string>;
   onDelete?: () => Promise<unknown>;
   warning?: string;
-  /* extra menu items, before Delete */
   children?: React.ReactNode;
 }) {
   const noun = NOUNS[base.section] ?? "item";

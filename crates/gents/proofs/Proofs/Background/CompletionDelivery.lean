@@ -1,22 +1,15 @@
 /-!
 # Background completion publication
 
-The terminal CAS winner publishes a durable notification; recovery repairs a
-missing delivery marker. BackgroundCompletion composes notification persistence
-with the existing session wake owner, including its canonical Goal exclusion.
+A background row (a native process or an `agent_new`/`agent_message` row,
+whose terminal is its caused request's terminal output) is terminalized with a
+compare-and-set that a concurrent recovery or cancellation may win first. The
+losing executor must not publish the outcome it observed locally, because it
+can contradict the durable winner; publication is keyed and idempotent so
+retrying the winning delivery cannot duplicate the notification.
 -/
 
 namespace Background.CompletionDelivery
-
-/-!
-A background row (a native process or an `agent_new`/`agent_message`
-row, whose terminal is its caused request's terminal output) is terminalized
-with a compare-and-set. A concurrent
-recovery or cancellation may win that CAS first. The losing executor must not
-publish the outcome it observed locally, because that outcome can contradict
-the durable winner. Publication itself is keyed and idempotent so retrying the
-winning delivery cannot duplicate the notification.
--/
 
 inductive TerminalizationResult where
   | won
@@ -29,13 +22,11 @@ structure NotificationState where
   deliveryMarked : Bool
   deriving DecidableEq, Repr
 
-/-- A stable notification key makes publication an insert-once operation. The
-    delivery marker is written only after the notification is durable. -/
 def publishOnce (state : NotificationState) : NotificationState :=
   { state with notificationPresent := true, deliveryMarked := true }
 
-/-- The terminal compare-and-set and notification append are distinct durable
-    writes. This state is recoverable even when publication fails. -/
+/-- The terminal CAS and notification append are distinct durable writes;
+publication state is recoverable even when publication fails. -/
 def terminalize
     (result : TerminalizationResult)
     (state : NotificationState) : NotificationState :=
@@ -43,11 +34,6 @@ def terminalize
   | .won => { state with terminal := true }
   | .lost => state
 
-/--
-Only a caller that won the durable terminal compare-and-set may publish its
-candidate outcome. A loser leaves notification state untouched; a reconciler
-may separately project the already-durable winner.
--/
 def publishCandidate
     (result : TerminalizationResult)
     (state : NotificationState) : NotificationState :=
@@ -55,9 +41,6 @@ def publishCandidate
   | .won => publishOnce (terminalize .won state)
   | .lost => state
 
-/-- A periodic/startup reconciler repairs a terminal row whose durable
-    delivery marker is absent. Stable-key publication makes this safe to
-    repeat after "append succeeded, marker write failed". -/
 def reconcileDelivery (state : NotificationState) : NotificationState :=
   if state.terminal && !state.deliveryMarked then publishOnce state else state
 

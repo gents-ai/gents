@@ -209,9 +209,6 @@ impl LeanPairingReconcileSnapshot {
         }
     }
 
-    /// Resource ops the production projector would run from this state. The
-    /// Fixtures export install-only resource observations; applied ownership
-    /// affects teardown and is outside this projection.
     fn owned_ops(&self) -> Vec<DiffOp> {
         compute_owned_pairing_diff(&self.desired(), &self.actual(), &PairingApplied::default())
     }
@@ -243,8 +240,6 @@ fn generated_pairing_reconcile_cases_drive_production_projector() {
             "{}: sampled actions never rewrite desired state",
             case.name
         );
-        // These samples validate the real resource projector. The connected
-        // field is an observed transport input, not evidence that this test dialed.
         for state in [&case.before, &case.after] {
             if state.connected {
                 assert_eq!(
@@ -259,8 +254,6 @@ fn generated_pairing_reconcile_cases_drive_production_projector() {
         let before_ops = case.before.owned_ops();
         let after_ops = case.after.owned_ops();
         match case.action.as_str() {
-            // Dialing only moves transport readiness: the projector's pending
-            // resource work is identical on both sides of the transition.
             "dial" | "dialFailed" => {
                 assert!(
                     !case.before.connected,
@@ -328,9 +321,6 @@ fn generated_pairing_reconcile_cases_drive_production_projector() {
         }
     }
 
-    // Readiness is not convergence: the samples must include a connected state
-    // with resources still missing, and convergence only on the state where
-    // every desired resource is installed.
     assert!(
         cases
             .iter()

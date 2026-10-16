@@ -106,9 +106,8 @@ def appendRecords (records : List Segment) (request document : DocId)
     .error .malformed
   else .ok (records ++ [record])
 
-/-- Install the exact terminal closure. Tool status is intentionally not
-derived from `OutputOutcome`: lifecycle completion and output completeness are
-separate axes. -/
+/-- Install the exact terminal closure. Tool status is not derived from
+`OutputOutcome`: lifecycle completion and output completeness are separate axes. -/
 def closeRecords (records : List Segment) (request document : DocId)
     (currentTime : Time) (record : Segment) : Except Error (List Segment) :=
   if record ∈ records && closedRecordValid records request document record then .ok records

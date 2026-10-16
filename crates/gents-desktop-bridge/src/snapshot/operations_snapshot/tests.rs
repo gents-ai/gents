@@ -208,9 +208,9 @@ fn native_executor_correlation_respects_window_and_tool_name() {
     // Both decoys precede the valid executor, so dropping either the name
     // check or the ±1000 ms window selects the wrong entry.
     let execs = vec![
-        exec("index_repo", "2026-05-20T12:00:00Z"), // inside window, name differs
-        exec("grep", "2026-05-20T12:00:01.500Z"),   // outside window, name matches
-        exec("grep", "2026-05-20T12:00:00.500Z"),   // inside window, name matches
+        exec("index_repo", "2026-05-20T12:00:00Z"),
+        exec("grep", "2026-05-20T12:00:01.500Z"),
+        exec("grep", "2026-05-20T12:00:00.500Z"),
     ];
     let liveness = liveness_with(Vec::new(), execs);
 
@@ -221,7 +221,6 @@ fn native_executor_correlation_respects_window_and_tool_name() {
         .expect("in-window matching-name executor must correlate");
     assert_eq!(correlated.started_at, "2026-05-20T12:00:00.500Z");
 
-    // A row with no started_at cannot correlate anything.
     let no_start = ToolCallRow {
         started_at: None,
         ..row.clone()

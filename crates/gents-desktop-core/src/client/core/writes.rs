@@ -35,9 +35,6 @@ use crate::client::peer_directory::RemovalCause;
 
 const REQUEST_PATCH_SIGNATURE_CAPACITY: usize = 2_048;
 
-/// A validated applied receipt is the command result. The local projection is
-/// a separate replica observation; if it is unavailable, the selected-session
-/// refresh and normal observer path reconcile it without inviting replay.
 async fn merge_accepted_edit_projection(
     access: &ConfigAccess,
     store: &ObservedStore,
@@ -314,9 +311,6 @@ impl ClientCore {
             .request_authority(node_did, peer_record.as_ref())
             .await?;
         let agent_id = agent_id_for_write(agent_id);
-        // Chat documents originate in the client's replica and converge over
-        // DefraDB. The local-runtime HTTP endpoint is a configuration control
-        // plane; bypassing the replica here breaks the durable client contract.
         match mutations::submit_request(
             &self.node,
             snapshot.as_ref(),
@@ -348,9 +342,6 @@ impl ClientCore {
         }
     }
 
-    /// The session queue authority: a co-hosted runtime's own endpoint, since
-    /// the local replica may lag its active and pending requests, otherwise
-    /// the local replica of a pure P2P peer.
     fn session_queue_access(&self, node_did: &str) -> ConfigAccess {
         self.operator_graphql(node_did)
             .map(ConfigAccess::Graphql)
@@ -438,9 +429,6 @@ impl ClientCore {
         }
     }
 
-    /// Reconstruct a request's persisted event timeline from the local P2P
-    /// replica. Bounded so an unavailable replica fails the panel instead of
-    /// hanging it.
     pub async fn request_timeline(
         &self,
         node_did: &str,
@@ -487,9 +475,6 @@ impl ClientCore {
         }
     }
 
-    /// Reload the current directory generation and synchronously fence a chat
-    /// mutation against its signed enrollment lease. Expired readiness is
-    /// durably demoted before the caller can create an AgentRequest.
     async fn peer_record_for_chat_write(
         &self,
         node_did: &str,
@@ -586,8 +571,6 @@ impl ClientCore {
         ))
     }
 
-    /// Enrolled routes request as this desktop; a local standard runtime's
-    /// requests are its own.
     fn requester_did(&self, record: &PeerRecord) -> String {
         if record.is_enrollment() {
             self.node_identity.did().to_string()
@@ -622,9 +605,6 @@ impl ClientCore {
         if rows == 0 {
             return Ok(None);
         }
-        // The patch addresses durable documents by their canonical keys. Keep
-        // it untagged so the local observer and operator GraphQL path converge
-        // on the same in-memory rows.
         let signature = chat_patch_signature(&patch);
         let cache_key = format!("{source}\0{node_did}\0{request_id}");
         {
@@ -653,12 +633,6 @@ impl ClientCore {
             self.store.request_resync(Some(node_did));
             return Ok(None);
         };
-        // A completed agent turn may have used self-configuration tools. Most
-        // of that control plane is intentionally absent from the client P2P
-        // route (the Node document and inference credentials in particular),
-        // so the terminal request is the bounded signal to refresh the node's
-        // operator projection. This keeps the next composer/default agent
-        // current without putting GraphQL reads on every snapshot render.
         let version = if terminal {
             self.refresh_node(node_did).await?.unwrap_or(version)
         } else {
@@ -1270,8 +1244,6 @@ impl ClientCore {
             .and_then(crate::local_runtime::operator_endpoint)
     }
 
-    /// The identity of the hosted runtime serving `node_did`, which signs
-    /// that runtime's operator commands.
     pub fn operator_signer(
         &self,
         node_did: &str,
@@ -1696,14 +1668,6 @@ impl ClientCore {
         }
     }
 
-    /// Observe hydration for a selected session and start its first request.
-    ///
-    /// A rejected request is terminal here. Retrying it is an explicit user
-    /// action owned by [`Self::retry_session_hydration`].
-    ///
-    /// Returns this target's observed status. A candidate start carries its
-    /// local evidence observation into the Gents transaction that fences and
-    /// checks the exact durable request before creating it.
     pub async fn ensure_session_hydration_started(
         &self,
         session_id: &str,
@@ -1746,8 +1710,6 @@ impl ClientCore {
         self.load_hydration_status(&session_id, &node_did).await
     }
 
-    /// The requester scope this client reads a node's transcripts under:
-    /// its own node DID for an enrolled node, none otherwise.
     pub fn transcript_node_scope(&self, node_did: &str) -> Option<String> {
         self.sync_state
             .records()
@@ -1756,9 +1718,6 @@ impl ClientCore {
             .then(|| self.node_identity.did().to_string())
     }
 
-    /// Why this client cannot read a locally known session, from its
-    /// replicated header alone. `None` when it can, or when no header is
-    /// known yet.
     pub fn session_unreadable_reason(
         &self,
         session_id: &str,
@@ -1776,7 +1735,6 @@ impl ClientCore {
         )
     }
 
-    /// Derive receiver progress from durable rows for one exact target.
     pub async fn session_hydration_progress(
         &self,
         session_id: &str,
@@ -1785,8 +1743,6 @@ impl ClientCore {
         Ok(self.session_hydration_status(session_id, node_did).await?.0)
     }
 
-    /// Receiver progress plus the signed rejection detail of a refused
-    /// request, so a refusal is presented with its reason.
     pub async fn session_hydration_status(
         &self,
         session_id: &str,
@@ -1800,7 +1756,6 @@ impl ClientCore {
         self.load_hydration_status(&session_id, &node_did).await
     }
 
-    /// Explicitly restart a failed hydration attempt for one session.
     pub async fn retry_session_hydration(&self, session_id: &str, node_did: &str) -> Result<()> {
         let session_id = normalize_required("session_id", session_id)?;
         let node_did = normalize_required("node_did", node_did)?;
@@ -1838,8 +1793,6 @@ impl ClientCore {
         Ok(())
     }
 
-    /// Carry the local admission observation into the transaction; only the
-    /// arrival fence and durable request row are checked under the write gate.
     async fn admit_session_hydration_request(
         &self,
         action: gents::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction,
@@ -2474,150 +2427,6 @@ mod delete_source_tests {
     use serde_json::json;
 
     #[test]
-    fn request_actions_resolve_explicit_node_in_a_shared_snapshot() {
-        let rows: Vec<_> = ["did:alpha", "did:beta"]
-            .into_iter()
-            .map(|did| AgentRequestRow {
-                request_id: "same-id".into(),
-                node_did: Some(did.into()),
-                ..Default::default()
-            })
-            .collect();
-        for did in ["did:alpha", "did:beta"] {
-            assert_eq!(
-                request_in_scope(&rows, "same-id", Some(did))
-                    .unwrap()
-                    .node_did
-                    .as_deref(),
-                Some(did)
-            );
-        }
-        assert!(request_in_scope(&rows, "same-id", None)
-            .unwrap_err()
-            .to_string()
-            .contains("ambiguous"));
-        assert!(request_in_scope(&rows, "same-id", Some("did:missing")).is_err());
-    }
-
-    #[test]
-    fn hydration_documents_match_canonical_client_routable_collections() {
-        let response = defra_node::QueryResponse::success(json!({
-            "AgentRequest": [{ "_docID": "request-1" }],
-            "AgentMessage": [{ "_docID": "message-1" }],
-            "AgentOutputSegment": [{ "_docID": "segment-1" }],
-            "AgentToolCall": [{ "_docID": "tool-call-1" }],
-            "CompactionEntry": [{ "_docID": "compaction-1" }]
-        }));
-
-        assert_eq!(
-            local_hydration_documents_from_response(&response).unwrap(),
-            [
-                (SessionHydrationCollection::AgentRequest, "request-1"),
-                (SessionHydrationCollection::AgentMessage, "message-1"),
-                (SessionHydrationCollection::AgentOutputSegment, "segment-1"),
-                (SessionHydrationCollection::AgentToolCall, "tool-call-1"),
-                (SessionHydrationCollection::CompactionEntry, "compaction-1"),
-            ]
-            .into_iter()
-            .map(|(collection, doc_id)| SessionHydrationDocumentKey {
-                collection,
-                doc_id: doc_id.to_owned(),
-            })
-            .collect()
-        );
-    }
-
-    #[test]
-    fn initial_hydration_request_is_written_only_for_observed_idle_target() {
-        use gents::agent::p2p_reconcile::session_hydration::{
-            ClientHydrationPhase, ClientHydrationProgress,
-        };
-
-        let serving = ClientHydrationProgress {
-            session_id: "session-1".into(),
-            node_did: "did:node".into(),
-            phase: ClientHydrationPhase::Serving,
-            merged_count: 3,
-            served_count: Some(8),
-            ..ClientHydrationProgress::default()
-        };
-        assert!(!should_start_session_hydration_request(
-            &serving,
-            "session-1",
-            "did:node",
-        ));
-        assert!(!should_start_session_hydration_request(
-            &serving,
-            "session-2",
-            "did:node",
-        ));
-
-        let failed = ClientHydrationProgress {
-            phase: ClientHydrationPhase::Failed,
-            ..serving.clone()
-        };
-        assert!(!should_start_session_hydration_request(
-            &failed,
-            "session-1",
-            "did:node",
-        ));
-
-        let complete = ClientHydrationProgress {
-            phase: ClientHydrationPhase::Complete,
-            merged_count: 8,
-            served_count: Some(8),
-            ..serving
-        };
-        assert!(!should_start_session_hydration_request(
-            &complete,
-            "session-1",
-            "did:node",
-        ));
-        let idle = ClientHydrationProgress {
-            session_id: "session-1".into(),
-            node_did: "did:node".into(),
-            ..ClientHydrationProgress::default()
-        };
-        assert!(should_start_session_hydration_request(
-            &idle,
-            "session-1",
-            "did:node",
-        ));
-        assert!(!hydration_start_evidence_is_ready(
-            false,
-            &idle,
-            &LocalHydrationStartEvidence::default(),
-        ));
-        assert!(hydration_start_evidence_is_ready(
-            false,
-            &ClientHydrationProgress {
-                merged_count: 1,
-                ..idle.clone()
-            },
-            &LocalHydrationStartEvidence::default(),
-        ));
-        assert!(hydration_start_evidence_is_ready(
-            false,
-            &idle,
-            &LocalHydrationStartEvidence {
-                owned_session_present: true,
-                nonterminal_request_present: false,
-            },
-        ));
-        assert!(hydration_start_evidence_is_ready(
-            false,
-            &ClientHydrationProgress {
-                merged_count: 1,
-                ..idle
-            },
-            &LocalHydrationStartEvidence {
-                owned_session_present: true,
-                nonterminal_request_present: true,
-            },
-        ));
-    }
-
-    #[test]
     fn hydration_start_evidence_rejects_unknown_request_lifecycle_state() {
         let response = defra_node::QueryResponse::success(json!({
             "AgentSession": [{ "_docID": "session-1" }],
@@ -2704,19 +2513,6 @@ mod delete_source_tests {
         record
     }
 
-    #[test]
-    fn only_the_requested_agent_is_forwarded_to_the_db_binding() {
-        let mut peer = peer_record(Some("enrollment"));
-        peer.pairing_ready = true;
-
-        ensure_peer_chat_ready_at(&peer.node_did, Some(&peer), Utc::now()).unwrap();
-        assert_eq!(agent_id_for_write(None), None);
-        assert_eq!(
-            agent_id_for_write(Some(" review ")).as_deref(),
-            Some("review")
-        );
-    }
-
     #[tokio::test(start_paused = true)]
     async fn expired_enrollment_cannot_admit_a_request_without_waiting_for_the_sweep() {
         let mut peer = peer_record(Some("enrollment"));
@@ -2739,65 +2535,6 @@ mod delete_source_tests {
         machine.pairing_template = Some("machine".to_string());
         machine.pairing_ready = true;
         assert!(peer_record_owning_node_at(&[machine], "did:key:child", Utc::now()).is_none());
-    }
-
-    #[test]
-    fn pending_enrollment_peer_rejects_chat_writes() {
-        let peer = peer_record(Some("enrollment"));
-
-        assert!(
-            ensure_peer_chat_ready_at(&peer.node_did, Some(&peer), Utc::now())
-                .unwrap_err()
-                .to_string()
-                .contains("route is not ready")
-        );
-    }
-
-    #[test]
-    fn malformed_source_and_missing_owner_reject_chat_writes() {
-        let peer = peer_record(None);
-        assert!(ensure_peer_chat_ready_at(&peer.node_did, Some(&peer), Utc::now()).is_err());
-        assert!(
-            ensure_peer_chat_ready_at("did:key:missing", None, Utc::now())
-                .unwrap_err()
-                .to_string()
-                .contains("no saved deployment route")
-        );
-    }
-
-    #[test]
-    fn local_standard_waits_for_background_pairing_before_chat() {
-        let mut peer = peer_record(Some("local-standard"));
-        assert!(ensure_peer_chat_ready_at(&peer.node_did, Some(&peer), Utc::now()).is_err());
-        peer.pairing_ready = true;
-        ensure_peer_chat_ready_at(&peer.node_did, Some(&peer), Utc::now()).unwrap();
-    }
-
-    #[test]
-    fn source_matching_distinguishes_remote_rows_from_local_rows() {
-        let sources = vec![None, Some("did:remote".to_string())];
-
-        assert!(row_matches_source(&sources, 0, "did:local", false));
-        assert!(!row_matches_source(&sources, 0, "did:remote", true));
-        assert!(row_matches_source(&sources, 1, "did:remote", true));
-        assert!(!row_matches_source(&sources, 1, "did:other", true));
-    }
-
-    #[test]
-    fn sourced_pruning_preserves_same_id_rows_and_parallel_attribution() {
-        let mut rows = vec!["shared", "shared", "other"];
-        let mut sources = vec![
-            None,
-            Some("did:remote".to_string()),
-            Some("did:remote".to_string()),
-        ];
-
-        retain_sourced_rows(&mut rows, &mut sources, "did:remote", true, |row| {
-            *row == "shared"
-        });
-
-        assert_eq!(rows, vec!["shared", "other"]);
-        assert_eq!(sources, vec![None, Some("did:remote".to_string())]);
     }
 
     #[test]

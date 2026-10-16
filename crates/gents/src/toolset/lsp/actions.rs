@@ -203,8 +203,7 @@ async fn run_file_action(
         });
     }
     // Cold-started project servers can acknowledge initialize before their
-    // first document index is queryable. A null documentSymbol response is
-    // transient in that window just like a null hover/definition response.
+    // first document index is queryable; a null response there is transient.
     let retry_empty = matches!(
         action,
         LspAction::Hover
@@ -951,14 +950,9 @@ pub(crate) async fn run_linter_diagnostics(
             .ok()?;
     let mut full = vec![program.to_string_lossy().into_owned()];
     full.extend(rest);
-    // Best-effort supplementary probe layered onto one file's diagnostics
-    // section (run_linter_diagnostics is called once per matched file, up to
-    // MAX_GLOB_TARGETS times, inside a single diagnostics tool call): its raw
-    // stdout is reformatted into a single `"{linter}: {trimmed}"` line, or
-    // dropped entirely when empty, rather than surfaced verbatim. Streaming
-    // it live would interleave per-file linter noise into the enclosing
-    // tool call's live output that doesn't match what the tool ultimately
-    // returns, so this deliberately does not thread live_output.
+    // Best-effort supplementary probe; deliberately does not thread
+    // live_output, which would interleave per-file linter noise into the
+    // enclosing tool call's live output.
     let bounds = crate::tool_call_lifecycle::runtime::tool_execution_bounds(timeout);
     let outcome = crate::managed_exec::run_managed_exec(crate::managed_exec::ManagedExecRequest {
         argv: full,

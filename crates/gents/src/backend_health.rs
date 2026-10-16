@@ -1,19 +1,11 @@
-//! Scheduled inference-backend prober (#640).
+//! Scheduled inference-backend prober.
 //!
-//! Measures per-runtime reachability of enabled backends and keeps an
-//! in-memory [`BackendHealthMap`] that the admission/reconcile layer merges
-//! into effective availability. Reachability is observer-relative — each
-//! runtime's opinion governs only its own routing — so measured state is
-//! deliberately NOT persisted to the fleet-replicated `InferenceBackend`
-//! document. The shared document's `probe_status` stays the operator/bootstrap
-//! intent knob; the prober's only doc write is the recurring
-//! `unknown → healthy` promotion (closing the dead-at-startup gap the
-//! startup-only ratchet left open).
-//!
-//! The state machine mirrors `Proofs/BackendHealth/Transition.lean` exactly
-//! and is fenced by the generated `backend_health_cases`: K consecutive
-//! failures demote to `Unhealthy` (vetoing routing), a single success
-//! promotes back to `Healthy`.
+//! Measured reachability is deliberately NOT persisted to the fleet-replicated
+//! `InferenceBackend` document: the shared document's `probe_status` stays the
+//! operator/bootstrap intent knob, and the prober's only doc write is the
+//! recurring `unknown → healthy` promotion. The state machine mirrors
+//! `Proofs/BackendHealth/Transition.lean` and is fenced by the generated
+//! `backend_health_cases`.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -49,8 +41,8 @@ impl Default for BackendProberOptions {
     }
 }
 
-/// Measured health of one backend as observed by THIS runtime.
-/// Mirrors `Proofs.BackendHealth.HealthState`.
+/// Measured health of one backend as observed by this runtime; mirrors
+/// `Proofs.BackendHealth.HealthState`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendHealthState {
     Unknown,
@@ -75,7 +67,6 @@ impl BackendHealthState {
 }
 
 /// Probe outcome vocabulary — mirrors `Proofs.BackendHealth.Event`.
-/// `ProbeFail` folds connect failure, non-2xx, and timeout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProbeEvent {
     ProbeSuccess,
@@ -90,8 +81,6 @@ struct BackendHealthEntry {
     last_error: Option<String>,
 }
 
-/// Public per-backend snapshot — the #631 signal surface (completion retry
-/// consults this for fail-fast-vs-backoff) and the metrics overlay source.
 #[derive(Debug, Clone)]
 pub struct BackendHealthSnapshot {
     pub backend_id: String,
@@ -196,8 +185,7 @@ fn snapshot_from_entry(backend_id: &str, entry: &BackendHealthEntry) -> BackendH
     }
 }
 
-/// One transition step — mirrors `Proofs.BackendHealth.step` exactly (fenced
-/// by the generated cases in the tests module below).
+/// One transition step — mirrors `Proofs.BackendHealth.step`.
 fn step_backend(
     prev: (BackendHealthState, u32),
     event: ProbeEvent,
@@ -251,8 +239,8 @@ impl ProbeSchedule {
     }
 }
 
-/// Discovery depends on connection inputs. Observations and unrelated settings
-/// must not schedule probes: a repeated write cannot consume the failure budget.
+/// Only connection inputs schedule probes: observations and unrelated settings
+/// must not consume the failure budget.
 fn same_probe_inputs(previous: &InferenceBackend, current: &InferenceBackend) -> bool {
     previous.provider_kind == current.provider_kind
         && previous.endpoint == current.endpoint
@@ -261,18 +249,11 @@ fn same_probe_inputs(previous: &InferenceBackend, current: &InferenceBackend) ->
         && previous.discovery_timeout_secs == current.discovery_timeout_secs
 }
 
-/// Embedded database and node DID used to refresh and resolve node-scoped OAuth credentials
-/// during a probe cycle. Refresh and discovery go through the existing
-/// OAuth credential owner (`bootstrap_oauth_client` and the bearer it mints);
-/// this module never touches tokens directly.
 pub struct OAuthProbeContext<'a> {
     pub node: Arc<EmbeddedNode>,
     pub node_did: &'a str,
 }
 
-/// Refresh (if stale) and read the invoking node's OAuthCredential through
-/// the existing credential owner. Returns the credential document needed by
-/// `discover_models`' OAuth path; failures keep the classified auth-error copy.
 async fn oauth_credential_for_probe(
     context: &OAuthProbeContext<'_>,
     backend: &InferenceBackend,
@@ -339,16 +320,11 @@ pub(crate) fn oauth_product(
     }
 }
 
-/// Discovery timeout for one backend's probe, from the backend's configured
-/// discovery timeout (default 10s), floored at 1s.
 fn probe_timeout(backend: &InferenceBackend) -> Duration {
     Duration::from_secs(backend.discovery_timeout_secs.unwrap_or(10).max(1) as u64)
 }
 
-/// Persist a successful discovery using the registry's atomic scope merge.
-/// The credential scope is exact: `None` is the shared-credential scope,
-/// `Some(node)` is that node's OAuth scope. Failures never write,
-/// so a previous catalog and its `observed_at` are preserved.
+// `None` is the shared-credential scope, `Some(node)` the node OAuth scope.
 async fn record_discovered_catalog(
     node: &Arc<EmbeddedNode>,
     backend: &InferenceBackend,
@@ -902,10 +878,9 @@ mod tests {
         }
     }
 
-    /// Minimal /v1/models responder on a real socket. Serving on the ambient
-    /// Tokio runtime keeps the probe client and responder under one scheduler;
-    /// an independently scheduled blocking thread made these tests flaky under
-    /// full-suite CPU contention (#743).
+    /// Minimal /v1/models responder on a real socket, served on the ambient
+    /// Tokio runtime (#743: an independently scheduled blocking thread was
+    /// flaky under full-suite CPU contention).
     struct ModelsListener {
         port: u16,
         requests: Arc<AtomicUsize>,
@@ -1321,7 +1296,6 @@ mod tests {
         let health_map = BackendHealthMap::new();
         let node = test_node().await;
 
-        // Healthy while the endpoint answers.
         let listener = ModelsListener::start();
         let endpoint = listener.endpoint();
         let backends = vec![backend("spark", endpoint.clone())];

@@ -1,89 +1,28 @@
 //! Grok shim leader server: the Unix-domain-socket leader that stock Grok
 //! attaches to as its pager client.
 //!
-//! Gents binds the socket; the pager client connects to it. Ownership and
-//! lifecycle contract (every rule below is enforced in this file and exercised
-//! by the tests at the bottom):
-//!
-//! * Election is exclusive. [`spawn_leader`] acquires the sibling
-//!   extension-swapped lock at `socket_path.with_extension("lock")` — the same
-//!   extension swap a stock Grok leader performs, so the shim and the closed
-//!   source leader can never both own one socket. The lock file is opened with
-//!   `O_NOFOLLOW` so a symlink planted at the lock path cannot redirect the
-//!   open, forced to `0600`, and locked with a *nonblocking exclusive* lock
-//!   before anything is published; the holder PID is written for diagnostics.
-//!   A second leader on the same socket path fails fast and never removes or
-//!   replaces the winner's lock or socket.
-//! * The open lock guard is moved into the accept-loop future, so the lock is
-//!   held for exactly the lifetime of the spawned listener task, not merely
-//!   for the lifetime of [`LeaderHandle`].
-//! * The socket is published atomically: the listener binds inside a private
-//!   `0700` short same-device staging ancestor, the socket is forced to
-//!   `0600` while it is still unreachable inside the staging directory, and
-//!   only then is it `rename(2)`d onto the published path. Binding therefore
-//!   never depends on the length of the published path, so both a long parent
-//!   and a long filename can really bind and connect, and a pager client only
-//!   ever observes a finished `0600` socket or no socket at all.
-//! * Registration order is enforced: the first frame on a connection must be a
-//!   valid `register` envelope; `registered` is written only after it
-//!   validates, with `leader_binary_version = gents-<CARGO_PKG_VERSION>`.
-//! * Delegates are constructed per registered connection: the leader holds an
-//!   [`AcpDelegateFactory`] and only calls it after a `register` frame
-//!   validates, passing the assigned client id plus the registration's
-//!   mode/capabilities. A connection that fails registration constructs zero
-//!   delegates, and `on_disconnect` runs only on the delegate that connection
-//!   constructed.
-//! * `ping` is answered with `pong`, `acp` frames are dispatched to the
-//!   [`AcpDelegate`] with a connection-scoped outbound handle, unsupported
-//!   `control` commands answer a method-not-found error envelope, and
-//!   `disconnect` (or EOF) triggers connection cleanup and the delegate's
-//!   disconnect notification.
-//! * On a clean stop the accept loop announces `shutting_down` plus `shutdown`
-//!   to every live connection, releases the leader lock, and removes the
-//!   socket. The private lock inode is retained to avoid split-lock races.
-//!   [`LeaderHandle::shutdown`] awaits that clean stop.
-//!   Dropping the handle without shutting down is the documented emergency
-//!   path: it aborts the listener task and unlinks the published socket, and
-//!   deliberately leaves the lock file for the next leader to reclaim, because
-//!   unlinking a lock file the dropper may no longer hold would let a new
-//!   leader lose exclusivity.
+//! Gents binds the socket; the pager client connects to it. Election is
+//! exclusive via a sibling extension-swapped lock (the same swap a stock Grok
+//! leader performs) taken nonblocking-exclusive before anything is published;
+//! a loser never removes or replaces the winner's lock or socket. The socket
+//! is published atomically from a private `0700` staging ancestor, so a pager
+//! client only ever observes a finished `0600` socket or no socket at all.
+//! The first frame on a connection must be a valid `register`; delegates are
+//! constructed per registered connection and `on_disconnect` runs only on the
+//! delegate that connection constructed. On a clean stop the accept loop
+//! announces `shutting_down` plus `shutdown` to every live connection,
+//! releases the leader lock, and removes the socket, retaining the private
+//! lock inode to avoid split-lock races. Dropping [`LeaderHandle`] without
+//! shutting down is the emergency path: it aborts the listener task, unlinks
+//! the published socket, and deliberately leaves the lock file, because
+//! unlinking a lock file the dropper may no longer hold would let a new
+//! leader lose exclusivity.
 //!
 //! Two deliberate adjustments to the leader contract, both forced by the
-//! "no Cargo dependency change" rule for this shim:
-//!
-//! * The nonblocking exclusive lock is taken with `std::fs::File::try_lock`.
-//!   On Unix the standard library implements that API with `flock(2)`
-//!   (`LOCK_EX | LOCK_NB`) on the open file description, which is exactly the
-//!   primitive the leader contract requires. `gents-cli` has no `libc` or
-//!   `nix` dependency and this slice may not add one, so the shim calls the
-//!   standard-library API instead of `libc::flock` directly.
-//! * `O_NOFOLLOW` is passed to `OpenOptions::custom_flags` from a per-target
-//!   constant declared in this file with the same ABI value `libc`/`nix` use.
-//!
-//! Expected `super::protocol` surface (owned by the wire-codec slice;
-//! convergence reconciles any naming drift):
-//!
-//! * `ClientEnvelope` enum, serde-tagged `"type"`, snake_case:
-//!   `Register { client_type: String, mode: String, capabilities:
-//!   ClientCapabilities }`, `Acp { payload: String }`,
-//!   `Control { request_id: String, command: serde_json::Value }`, `Ping`,
-//!   `Disconnect`.
-//! * `ServerEnvelope` enum: `Registered { client_id: u64, ready: bool,
-//!   leader_protocol_version: u32, leader_binary_version: String,
-//!   leader_capabilities: LeaderCapabilities }`, `Acp { payload: String }`,
-//!   `Pong`, `Error { code: i32, message: String }`,
-//!   `ShuttingDown { reason: String, delay_ms: u64 }`, `Shutdown`.
-//! * `ClientCapabilities { yolo_mode, auto_mode, default_model, client_version,
-//!   code_nav_enabled, terminal, fs_read, fs_write, status_line }` and
-//!   `LeaderCapabilities { control_v1, runtime_cpu_profile, profile_formats,
-//!   workspace_exposure, relaunch_v1 }`, both `Clone + Debug`.
-//! * `pub const LEADER_PROTOCOL_VERSION: u32 = 1;`
-//! * `async fn read_frame<R: AsyncRead + Unpin, E: DeserializeOwned>(reader:
-//!   &mut R) -> anyhow::Result<Option<E>>` — `Ok(None)` is a clean EOF before
-//!   any payload byte; truncation, oversize, and invalid JSON are errors.
-//! * `async fn write_frame<W: AsyncWrite + Unpin, E: Serialize>(writer: &mut W,
-//!   envelope: &E) -> anyhow::Result<()>` — four-byte big-endian length
-//!   prefix.
+//! "no Cargo dependency change" rule for this shim: the nonblocking exclusive
+//! lock is taken with `std::fs::File::try_lock` (Unix `flock(2)` `LOCK_EX |
+//! LOCK_NB`), and `O_NOFOLLOW` is passed from a per-target constant declared
+//! in this file with the same ABI value `libc`/`nix` use.
 
 use std::fs::{File, OpenOptions, Permissions};
 use std::io::Write;
@@ -126,18 +65,14 @@ const PRIVATE_FILE_MODE: u32 = 0o600;
 /// Mode of the private staging ancestor directory.
 const STAGING_DIR_MODE: u32 = 0o700;
 
-/// Mode of every socket-parent directory the shim creates itself. Existing
-/// directories are never chmodmed to this mode; it applies only to components
-/// that did not exist and are created by [`ensure_socket_parent`].
+/// Mode of every socket-parent directory the shim creates itself; existing
+/// directories are never chmodmed to this mode.
 const SOCKET_PARENT_DIR_MODE: u32 = 0o700;
 
-/// Name of the socket *inside* the staging directory. A single character keeps
-/// the bind path short even when the published path is near the `sun_path`
-/// limit, which is the whole point of staging.
+/// Name of the socket inside the staging directory: one character keeps the
+/// bind path short even when the published path is near the `sun_path` limit.
 const STAGED_SOCKET_NAME: &str = "s";
 
-/// Prefix of the private staging directory; the eight random hex characters
-/// that follow keep the entire staging bind path short.
 const STAGING_DIR_PREFIX: &str = ".gents-grok-";
 
 /// Naming attempts per staging ancestor before falling back to a deeper one.
@@ -146,13 +81,11 @@ const STAGING_ATTEMPTS: usize = 8;
 /// Upper bound on one per-connection dispatch/writer cleanup operation.
 const MAX_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 
-/// Internal bound for joining all live connection tasks during leader
-/// shutdown. This is deliberately independent of the pager-facing shutdown
-/// envelope, whose delay remains zero: the wire asks clients to stop now,
-/// while the leader still waits for their `on_disconnect` cleanup to finish.
+/// Internal bound for joining live connection tasks during leader shutdown,
+/// independent of the pager-facing shutdown envelope whose delay remains zero.
 const CONNECTION_CLEANUP_GRACE: Duration = Duration::from_secs(5);
 
-/// Grok's audited shutdown envelope is immediate. This is a wire value, not
+/// Grok's audited shutdown envelope is immediate; this is a wire value, not
 /// the server's internal cleanup deadline.
 const WIRE_SHUTDOWN_DELAY_MS: u64 = 0;
 
@@ -164,24 +97,22 @@ const OUTBOUND_FRAME_CAPACITY: usize = 256;
 /// `select!` cancellation in the connection loop.
 const INBOUND_FRAME_CAPACITY: usize = 1;
 
-/// Maximum concurrent ACP dispatches per connection. This still permits a
-/// prompt and its cancel to overlap without allowing an unbounded task fanout.
+/// Maximum concurrent ACP dispatches per connection: a prompt and its cancel
+/// may overlap without an unbounded task fanout.
 const MAX_ACP_DISPATCH_TASKS: usize = 64;
 
 /// Attempts to acquire and revalidate one stable lock-file inode.
 const LOCK_ACQUIRE_ATTEMPTS: usize = 8;
 
-/// Published socket path length exercised by the near-limit tests. `sun_path`
-/// is 104 bytes on macOS and 108 on Linux, so 100 bytes of path is genuinely
-/// near the limit while remaining connectable on every supported target.
+/// Published socket path length exercised by the near-limit tests; `sun_path`
+/// is 104 bytes on macOS and 108 on Linux, so 100 bytes is near the limit
+/// while remaining connectable on every supported target.
 #[cfg(test)]
 const NEAR_LIMIT_PATH_BYTES: usize = 100;
 
-/// `O_NOFOLLOW` for `OpenOptions::custom_flags`.
-///
-/// The values are the OS ABI constants that `libc` and `nix` define per target.
-/// Unsupported Unix targets fail the build rather than silently opening a lock
-/// path through a symlink.
+/// `O_NOFOLLOW` for `OpenOptions::custom_flags`: the OS ABI constants that
+/// `libc` and `nix` define per target. Unsupported Unix targets fail the
+/// build rather than silently opening a lock path through a symlink.
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios")))]
 compile_error!("the grok shim leader lock needs this target's O_NOFOLLOW value; add it here");
 #[cfg(target_os = "linux")]
@@ -193,13 +124,11 @@ const O_NOFOLLOW: i32 = 0x0000_0040;
 // ACP delegate seam
 // ---------------------------------------------------------------------------
 
-/// Connection-scoped outbound handle for ACP payloads.
-///
-/// The leader owns frame writing; the delegate only hands it finished JSON-RPC
-/// lines. The handle is cheap to clone, so a delegate can keep one for a
-/// deferred response (for example a `session/prompt` result that must wait for
-/// turn terminalization) and push notifications while a turn streams. Sending
-/// after the connection closed is an error the caller may ignore.
+/// Connection-scoped outbound handle for ACP payloads: the leader owns frame
+/// writing; the delegate only hands it finished JSON-RPC lines. Cheap to
+/// clone, so a delegate can keep one for a deferred response and push
+/// notifications while a turn streams. Sending after the connection closed is
+/// an error the caller may ignore.
 #[derive(Clone)]
 pub(crate) struct AcpOutbound {
     frames: FrameSender,
@@ -250,11 +179,6 @@ impl FrameSender {
 }
 
 impl AcpOutbound {
-    /// Wrap a raw frame sender.
-    ///
-    /// Production connections get their handle from the leader's
-    /// per-connection channel; tests (and any other embedder that already owns
-    /// a channel) can build one directly.
     #[cfg(test)]
     pub(crate) fn for_frames(frames: mpsc::UnboundedSender<ServerEnvelope>) -> Self {
         Self {
@@ -278,13 +202,11 @@ impl AcpOutbound {
     }
 }
 
-/// The ACP behavior behind the leader, implemented by `acp.rs`.
-///
-/// The methods are object-safe boxed futures because the leader stores the
-/// delegate as `Arc<dyn AcpDelegate>` and dispatches each ACP frame on its own
-/// task: a `session/prompt` handler must be able to run to terminalization
-/// while the connection keeps reading (a `session/cancel` frame must not wait
-/// behind the prompt it cancels).
+/// The ACP behavior behind the leader, implemented by `acp.rs`. Methods are
+/// object-safe boxed futures because each ACP frame is dispatched on its own
+/// task: a `session/prompt` handler must run to terminalization while the
+/// connection keeps reading (a `session/cancel` frame must not wait behind
+/// the prompt it cancels).
 pub(crate) trait AcpDelegate: Send + Sync + 'static {
     /// Handle one inbound ACP JSON-RPC line. Responses and notifications are
     /// pushed through `outbound`; the leader never interprets ACP payloads.
@@ -295,8 +217,7 @@ pub(crate) trait AcpDelegate: Send + Sync + 'static {
     ) -> BoxFuture<'a, Result<()>>;
 
     /// The connection went away (disconnect, EOF, protocol violation, or
-    /// leader shutdown). The ACP service drains and interrupts its
-    /// connection-scoped pending turns.
+    /// leader shutdown).
     fn on_disconnect(&self) -> BoxFuture<'_, ()> {
         Box::pin(async {})
     }
@@ -306,22 +227,14 @@ pub(crate) trait AcpDelegate: Send + Sync + 'static {
 /// delegate construction.
 #[derive(Debug, Clone)]
 pub(crate) struct Registration {
-    /// `client_type` from the register frame (validated non-empty).
     pub(crate) client_type: String,
-    /// Registration mode: interactive stdio pager or headless client.
     pub(crate) mode: RegisterMode,
-    /// Capabilities the client advertised on register.
     pub(crate) capabilities: ClientCapabilities,
 }
 
-/// Constructs one [`AcpDelegate`] per *registered* connection.
-///
-/// The leader never shares a delegate across connections: the factory is
+/// Constructs one [`AcpDelegate`] per *registered* connection. The factory is
 /// invoked only after a `register` frame validates, with the connection's
-/// generated `client_id` plus the registration's mode/capabilities, and the
-/// returned `Arc<dyn AcpDelegate>` is used for that connection alone — its
-/// `on_client_capabilities` has already been applied at construction time by
-/// the factory, and its `on_disconnect` runs only for that connection. A
+/// generated `client_id` plus the registration's mode/capabilities; a
 /// connection that fails registration constructs zero delegates.
 pub(crate) trait AcpDelegateFactory: Send + Sync + 'static {
     fn create_delegate<'a>(
@@ -351,7 +264,6 @@ where
 /// Configuration for one spawned leader.
 #[derive(Debug, Clone)]
 pub(crate) struct LeaderServerConfig {
-    /// Filesystem path of the published leader socket.
     pub(crate) socket_path: PathBuf,
 }
 
@@ -371,25 +283,20 @@ pub(crate) struct LeaderHandle {
 }
 
 impl LeaderHandle {
-    /// Published socket path.
     #[cfg(test)]
     pub(crate) fn socket_path(&self) -> &Path {
         &self.socket_path
     }
 
-    /// Leader lock path (the socket path with its extension swapped to
-    /// `lock`).
     #[cfg(test)]
     pub(crate) fn lock_path(&self) -> PathBuf {
         self.socket_path.with_extension("lock")
     }
 
-    /// Request a clean stop and wait for the listener task to finish it.
-    ///
-    /// On return the socket has been removed and the exclusive leader lock has
-    /// been released, so a new leader may take the socket. The private lock
-    /// inode remains in place deliberately: unlinking a flock file creates a
-    /// split-lock race with a concurrent opener.
+    /// Request a clean stop and wait for the listener task to finish it: the
+    /// socket is removed and the exclusive leader lock released. The private
+    /// lock inode remains in place deliberately: unlinking a flock file
+    /// creates a split-lock race with a concurrent opener.
     pub(crate) async fn shutdown(&mut self) -> Result<()> {
         let _ = self.shutdown_tx.send(true);
         self.join().await
@@ -413,13 +320,9 @@ impl Drop for LeaderHandle {
             return;
         };
         task.abort();
-        // Emergency cleanup only. The published socket is unlinked
-        // synchronously so no pager client can keep connecting to a dead
-        // leader. The lock file is deliberately left in place: once the
-        // aborted task drops the guard the next `spawn_leader` reclaims it
-        // safely, whereas unlinking a lock file this dropper may no longer
-        // hold would let a concurrently starting leader lose exclusivity.
-        // `shutdown` is the clean path that releases the lock descriptor.
+        // Emergency cleanup only: unlink the socket synchronously so no pager
+        // client can keep connecting to a dead leader. The lock file stays
+        // (see the module docs); `shutdown` is the clean lock-releasing path.
         if let Err(error) = std::fs::remove_file(&self.socket_path) {
             if error.kind() != std::io::ErrorKind::NotFound {
                 tracing::warn!(
@@ -433,12 +336,6 @@ impl Drop for LeaderHandle {
     }
 }
 
-/// Spawn the production leader for `config`.
-///
-/// Election, stale-socket removal, and socket publication all happen before
-/// the accept-loop task is spawned, and the open lock guard is moved into that
-/// task so the exclusive lock is held for the actual listener lifetime.
-///
 /// Must be called from within a Tokio runtime: the bound listener registers
 /// with the runtime reactor, and the accept loop is a spawned task.
 pub(crate) fn spawn_leader(
@@ -453,19 +350,15 @@ pub(crate) fn spawn_leader(
         );
     }
 
-    // 1. Exclusive election. Every later step happens under this lock, and a
-    //    loser never touches the winner's lock or socket.
     let lock = LeaderLock::acquire(&socket_path)?;
 
-    // 2. Remove a stale socket left by a crashed leader. Only reachable while
-    //    we hold the exclusive lock, so this can never delete a live leader's
-    //    socket.
+    // Only reachable while we hold the exclusive lock, so this can never
+    // delete a live leader's socket.
     if let Err(error) = remove_stale_socket(&socket_path) {
         lock.release();
         return Err(error);
     }
 
-    // 3. Publish the socket atomically from a private staging ancestor.
     let listener = match publish_listener(&socket_path) {
         Ok(listener) => listener,
         Err(error) => {
@@ -485,8 +378,6 @@ pub(crate) fn spawn_leader(
     let (lifecycle_tx, _lifecycle_rx) = broadcast::channel::<ServerEnvelope>(16);
     let task = tokio::spawn(accept_loop(
         listener,
-        // The open guard moves into the accept-loop future: the exclusive
-        // lock is held for exactly the spawned listener lifetime.
         lock,
         socket_path.clone(),
         factory,
@@ -505,8 +396,7 @@ pub(crate) fn spawn_leader(
 /// filesystem root (`/tmp -> /private/tmp` and `/var -> /private/var`). The
 /// strict parent walk below must still reject every operator-controlled or
 /// nested symlink; resolving only these OS-owned root aliases keeps that
-/// security boundary while allowing `std::env::temp_dir()` and the documented
-/// `/tmp/gents-grok.sock` fallback to work on macOS.
+/// security boundary while allowing `std::env::temp_dir()` on macOS.
 fn normalize_platform_temp_root(path: &Path) -> Result<PathBuf> {
     if !path.is_absolute() {
         return Ok(path.to_path_buf());
@@ -586,7 +476,6 @@ async fn accept_loop(
                             %error,
                             "grok shim leader failed to accept a pager connection"
                         );
-                        // Back off so a persistent accept error cannot hot-spin.
                         tokio::time::sleep(Duration::from_millis(50)).await;
                     }
                 }
@@ -600,15 +489,11 @@ async fn accept_loop(
         delay_ms: WIRE_SHUTDOWN_DELAY_MS,
     });
     let _ = lifecycle.send(ServerEnvelope::Shutdown);
-    // Close the lifecycle channel after queuing both frames. Connections
-    // drain the announcements, then observe `Closed` and enter their
-    // `on_disconnect` cleanup while the accept loop waits below.
     drop(lifecycle);
 
     // The pager-facing delay is zero, but clean server shutdown still owns
     // every connection task until its delegate has run `on_disconnect` and
-    // its bounded per-connection cleanup has completed. Detaching here would
-    // let `LeaderHandle::shutdown` return while pending turns were still live.
+    // its bounded per-connection cleanup has completed.
     let drain = async { while connections.join_next().await.is_some() {} };
     let cleanup_result = if tokio::time::timeout(CONNECTION_CLEANUP_GRACE, drain)
         .await
@@ -631,7 +516,6 @@ async fn accept_loop(
 
     drop(listener);
 
-    // Clean stop: remove the published socket, then release the leader lock.
     remove_published_socket(&socket_path);
     lock.release();
     tracing::info!(
@@ -678,9 +562,6 @@ async fn handle_connection(
     let frames_tx = FrameSender::Bounded(frames_tx);
     let (client_frames_tx, mut client_frames_rx) =
         mpsc::channel::<std::result::Result<ClientEnvelope, ProtocolError>>(INBOUND_FRAME_CAPACITY);
-    // This task is the sole owner of the read half. The connection loop only
-    // selects on decoded-frame delivery, so dropping that receive future for a
-    // lifecycle event never drops a partially-read length prefix or payload.
     let reader_task = tokio::spawn(async move {
         loop {
             let frame = read_client_envelope(&mut reader).await;
@@ -704,16 +585,12 @@ async fn handle_connection(
         }
     });
 
-    // Phase 1: the first frame must be a valid register; `registered` is only
-    // written after it validates, and the connection's delegate is only
-    // constructed after the register frame validates.
+    // The first frame must be a valid register; the connection's delegate is
+    // only constructed after it validates.
     let registration =
         match register_client(&mut client_frames_rx, &frames_tx, &mut lifecycle).await {
             Ok(registration) => registration,
             Err(()) => {
-                // register_client already logged the cause and, where the protocol
-                // demands it, wrote the error envelope. No delegate was ever
-                // constructed for this connection, so there is nothing to notify.
                 drop(frames_tx);
                 reader_task.abort();
                 let _ = reader_task.await;
@@ -726,8 +603,6 @@ async fn handle_connection(
         match factory.create_delegate(client_id, &registration).await {
             Ok(delegate) => delegate,
             Err(error) => {
-                // The factory is the seam for per-connection state; failing to
-                // construct it must not leak a half-registered connection.
                 tracing::error!(
                     target: LOG_TARGET,
                     client_id,
@@ -760,8 +635,8 @@ async fn handle_connection(
         "grok shim leader registered a pager client"
     );
 
-    // Phase 2: serve frames. Each ACP frame is dispatched on its own task so
-    // a long-running prompt cannot block reading the cancel that stops it.
+    // Each ACP frame is dispatched on its own task so a long-running prompt
+    // cannot block reading the cancel that stops it.
     let outbound = AcpOutbound {
         frames: frames_tx.clone(),
     };
@@ -773,8 +648,6 @@ async fn handle_connection(
             lifecycle_frame = lifecycle.recv() => {
                 match lifecycle_frame {
                     Ok(envelope) => {
-                        // Forward `shutting_down` and `shutdown`; the closed
-                        // channel below ends the loop.
                         if frames_tx.try_send(envelope).is_err() {
                             break;
                         }
@@ -811,11 +684,9 @@ async fn handle_connection(
                                     break;
                                 }
                             } else {
-                                // Notifications have no response channel on
-                                // which overload can be reported. Closing the
-                                // connection invokes `on_disconnect`, which
-                                // safely cancels every pending turn instead of
-                                // silently dropping a session/cancel.
+                                // Notifications have no response channel; closing the
+                                // connection invokes `on_disconnect`, which cancels
+                                // every pending turn.
                                 break;
                             }
                         } else {
@@ -880,9 +751,8 @@ async fn handle_connection(
         }
     }
 
-    // Connection cleanup: drain the delegate's connection-scoped state first
-    // so in-flight handlers observe the drained turn table, then let the
-    // queued frames flush before the writer is dropped.
+    // Connection cleanup: drain the delegate's state first so in-flight
+    // handlers observe the drained turn table, then flush queued frames.
     delegate.on_disconnect().await;
     let drain = async { while acp_tasks.join_next().await.is_some() {} };
     if tokio::time::timeout(MAX_SHUTDOWN_GRACE, drain)
@@ -912,9 +782,6 @@ async fn register_client(
     frames: &FrameSender,
     lifecycle: &mut broadcast::Receiver<ServerEnvelope>,
 ) -> std::result::Result<Registration, ()> {
-    // Every branch below resolves the registration (or closes the
-    // connection), so a single select suffices — clippy's `never_loop` is
-    // right that the historical `loop` here never iterated.
     let frame = tokio::select! {
         lifecycle_frame = lifecycle.recv() => {
             let _ = lifecycle_frame;
@@ -1060,8 +927,7 @@ fn leader_binary_version() -> String {
 }
 
 fn leader_capabilities() -> LeaderCapabilities {
-    // The shim implements none of the optional leader extensions; the pager
-    // reads these flags to decide what it may send.
+    // The shim implements none of the optional leader extensions.
     LeaderCapabilities {
         control_v1: false,
         runtime_cpu_profile: false,
@@ -1077,23 +943,10 @@ fn leader_capabilities() -> LeaderCapabilities {
 
 /// Ensure every component of `parent` exists as a plain directory.
 ///
-/// This deliberately does *not* use `create_dir_all`: that primitive walks the
-/// path through symlinks (`mkdir(2)` on each prefix follows symlinked
-/// components), so a symlink planted anywhere in the chain would redirect
-/// where the socket and its sibling lock file actually land. Instead the path
-/// is walked component by component:
-///
-/// * an existing directory component is accepted exactly as it is — its mode
-///   is left untouched, so the shim never chmods an operator-owned parent,
-///   `/tmp`, `/var`, or an `XDG_RUNTIME_DIR`;
-/// * an existing symlink component is rejected even when it points to a
-///   directory (`symlink_metadata` never follows the link);
-/// * any other existing component (a regular file, a socket, ...) is
-///   rejected;
-/// * a missing component is created with mode `0700` *from creation*
-///   (`DirBuilderExt::mode`, which passes the mode to `mkdir(2)` so the
-///   directory is never even momentarily group/world-readable), and verified
-///   with `symlink_metadata` before the walk descends into it.
+/// Deliberately not `create_dir_all`, which walks the path through symlinks:
+/// existing directories are accepted with their own mode (never chmodmed),
+/// symlinked and non-directory components are rejected, and missing components
+/// are created `0700` from creation and verified with `symlink_metadata`.
 fn ensure_socket_parent(parent: &Path) -> Result<()> {
     let mut builder = std::fs::DirBuilder::new();
     builder.mode(SOCKET_PARENT_DIR_MODE);
@@ -1107,7 +960,7 @@ fn ensure_socket_parent(parent: &Path) -> Result<()> {
             }
             _ => current.push(component.as_os_str()),
         }
-        // Lstat the candidate: never follows a symlink component.
+        // Lstat: never follows a symlink component.
         match std::fs::symlink_metadata(&current) {
             Ok(metadata) => {
                 let file_type = metadata.file_type();
@@ -1125,7 +978,7 @@ fn ensure_socket_parent(parent: &Path) -> Result<()> {
                         current.display()
                     );
                 }
-                // An existing directory is accepted with whatever mode it has.
+                // Existing directories keep their mode.
                 continue;
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -1138,7 +991,7 @@ fn ensure_socket_parent(parent: &Path) -> Result<()> {
                 });
             }
         }
-        // The component is missing: create it 0700 from creation.
+        // Missing: create 0700.
         builder.create(&current).with_context(|| {
             format!("creating the grok shim socket parent {}", current.display())
         })?;
@@ -1162,15 +1015,10 @@ fn ensure_socket_parent(parent: &Path) -> Result<()> {
 // Exclusive leader lock
 // ---------------------------------------------------------------------------
 
-/// The exclusive sibling leader lock.
-///
-/// The lock file is the published socket path with its extension swapped to
-/// `lock`. It is opened with `O_NOFOLLOW`, forced to `0600`, and locked with a
-/// nonblocking exclusive lock (`File::try_lock`, i.e. `flock(2)` with
-/// `LOCK_EX | LOCK_NB` on Unix, on the open file description). The holder PID
-/// is written for diagnostics. The open `File` is the guard: the lock lives
-/// exactly as long as it does, which is why [`spawn_leader`] moves the guard
-/// into the accept-loop future.
+/// The exclusive sibling leader lock at `socket_path.with_extension("lock")`:
+/// opened `O_NOFOLLOW`, forced `0600`, locked nonblocking-exclusive with
+/// `File::try_lock` (`flock(2)` `LOCK_EX | LOCK_NB` on Unix). The open `File`
+/// is the guard; the holder PID is written for diagnostics.
 struct LeaderLock {
     path: PathBuf,
     file: File,
@@ -1179,11 +1027,8 @@ struct LeaderLock {
 impl LeaderLock {
     fn acquire(socket_path: &Path) -> Result<Self> {
         let path = socket_path.with_extension("lock");
-        // The lock file lives beside the published socket, and a spawn may
-        // target a socket path whose parent chain does not exist yet (the
-        // atomic publication step creates it). Create the parent here — with
-        // the symlink-rejecting, no-chmod walk — so the election file always
-        // sits next to the socket it elects for.
+        // The lock file lives beside the published socket; create the parent
+        // (with the symlink-rejecting, no-chmod walk) here.
         if let Some(parent) = path.parent() {
             ensure_socket_parent(parent).with_context(|| {
                 format!(
@@ -1240,23 +1085,18 @@ impl LeaderLock {
         )
     }
 
-    /// Release the lock by dropping the descriptor while retaining the stable
-    /// private inode. Removing a flock file before dropping the descriptor
-    /// lets another leader create and lock a different inode; dropping first
-    /// and then unlinking can delete a new leader's lock. A persistent inode is
-    /// the only race-free pathname contract for advisory locks.
+    /// Release by dropping the descriptor while retaining the stable private
+    /// inode: removing a flock file before (or while) dropping the descriptor
+    /// lets a concurrent opener race past the exclusive lock.
     fn release(self) {
         tracing::debug!(target: LOG_TARGET, lock = %self.path.display(), "released the grok shim leader lock");
         drop(self.file);
     }
 }
 
-/// Force `0600` on the open lock file and verify it through the descriptor.
-///
-/// The mode passed to `open(2)` is masked by the process umask and ignored
-/// entirely when the file already exists, so the mode is set on the open file
-/// and then re-read through the same descriptor. Verifying through the
-/// descriptor (not the path) fails closed if anything swapped the path.
+/// Force `0600` on the open lock file and verify it through the descriptor:
+/// `open(2)`'s mode is masked by the umask (and ignored for existing files),
+/// and descriptor-based verification fails closed if the path was swapped.
 fn force_private_mode(file: &File, path: &Path) -> Result<()> {
     let current = file
         .metadata()
@@ -1312,7 +1152,7 @@ fn path_identity(path: &Path) -> Option<(u64, u64)> {
 }
 
 /// PID recorded in the lock file, for the "another leader holds the lock"
-/// diagnostic. Path-based read: it is only used in a log message.
+/// diagnostic; path-based read is fine because it only feeds a log message.
 fn read_holder_pid(lock_path: &Path) -> Option<u32> {
     std::fs::read_to_string(lock_path).ok()?.trim().parse().ok()
 }
@@ -1325,9 +1165,9 @@ fn write_holder_pid(file: &mut File) -> Result<()> {
     Ok(())
 }
 
-/// Remove a stale socket left behind by a crashed leader. Only called while
-/// the exclusive lock is held, so this can never delete a live leader's
-/// socket. Anything that is not a plain socket file is refused.
+/// Remove a stale socket left behind by a crashed leader; only called under
+/// the exclusive lock, so a live leader's socket is never touched. Anything
+/// that is not a plain socket file is refused.
 fn remove_stale_socket(socket_path: &Path) -> Result<()> {
     match std::fs::symlink_metadata(socket_path) {
         Ok(metadata) => {
@@ -1373,12 +1213,10 @@ fn remove_stale_socket(socket_path: &Path) -> Result<()> {
 // Atomic socket publication
 // ---------------------------------------------------------------------------
 
-/// Publish the leader socket atomically.
-///
-/// The listener binds inside a private `0700` short same-device staging
-/// ancestor, so binding never depends on the length of the published path;
-/// the socket is forced to `0600` while it is still unreachable inside the
-/// staging directory, and only then `rename(2)`d onto the published path.
+/// Publish the leader socket atomically: bind inside a private `0700` short
+/// same-device staging ancestor (so binding never depends on the published
+/// path length), force the socket `0600` while it is still unreachable, then
+/// `rename(2)` onto the published path.
 fn publish_listener(socket_path: &Path) -> Result<UnixListener> {
     let parent = socket_path.parent().ok_or_else(|| {
         anyhow!(
@@ -1386,9 +1224,6 @@ fn publish_listener(socket_path: &Path) -> Result<UnixListener> {
             socket_path.display()
         )
     })?;
-    // Walk the parent chain one component at a time: existing directories are
-    // accepted with their own mode (never chmodmed), symlinks and non-directory
-    // components are refused, and only missing components are created 0700.
     ensure_socket_parent(parent).with_context(|| {
         format!(
             "creating the grok shim leader socket parent {}",
@@ -1414,8 +1249,7 @@ fn bind_and_publish(staging_dir: &Path, socket_path: &Path) -> Result<UnixListen
         return Err(error);
     }
     // rename(2) publishes atomically: a pager client either sees no socket or
-    // sees the finished 0600 socket, never a partially published one, and the
-    // bound socket keeps serving from its new path.
+    // the finished 0600 socket, never a partially published one.
     if let Err(error) = std::fs::rename(&staged_socket, socket_path) {
         let _ = std::fs::remove_file(&staged_socket);
         return Err(error).with_context(|| {
@@ -1463,20 +1297,13 @@ struct StagingDir {
 
 impl StagingDir {
     /// Create a fresh private staging directory for publishing a socket whose
-    /// parent is `final_parent`.
-    ///
-    /// Candidates are the same-device ancestors of `final_parent`, shortest
-    /// first, so the bind path stays short even when the published path is
-    /// near the `sun_path` limit. `rename(2)` to the published path stays on
-    /// one filesystem because the staging directory shares the parent's
-    /// device.
+    /// parent is `final_parent`: candidates are the same-device ancestors,
+    /// shortest first, so the bind path stays short even near the `sun_path`
+    /// limit and the `rename(2)` stays on one filesystem.
     fn create(final_parent: &Path) -> Result<Self> {
         let mut last_error: Option<std::io::Error> = None;
-        // Create the staging directory atomically private: the mode rides
-        // the `mkdir(2)` call itself (`DirBuilderExt::mode`), so the
-        // directory is never even momentarily group/world-readable — unlike
-        // a create-then-chmod sequence, where a umask-derived 0755 window
-        // exists between the two syscalls.
+        // Mode rides `mkdir(2)` itself: no umask-derived group/world-readable
+        // window between create and chmod.
         let mut builder = std::fs::DirBuilder::new();
         builder.mode(STAGING_DIR_MODE);
         for ancestor in staging_candidate_ancestors(final_parent) {
@@ -1484,9 +1311,8 @@ impl StagingDir {
                 let candidate = ancestor.join(staging_dir_name());
                 match builder.create(&candidate) {
                     Ok(()) => {
-                        // Verify the mode actually applied: a filesystem
-                        // that ignored the request must not be published
-                        // through.
+                        // Verify the mode applied; a filesystem that ignored
+                        // the request must not be published through.
                         let mode = std::fs::metadata(&candidate)
                             .with_context(|| {
                                 format!(
@@ -1528,8 +1354,8 @@ impl StagingDir {
         )
     }
 
-    /// Remove the (now empty) staging directory. Best effort: a leftover empty
-    /// directory is harmless, unlike a leftover socket.
+    /// Remove the (now empty) staging directory; best effort, since a leftover
+    /// empty directory is harmless unlike a leftover socket.
     fn cleanup(self) {
         if let Err(error) = std::fs::remove_dir(&self.path) {
             tracing::warn!(
@@ -1542,11 +1368,10 @@ impl StagingDir {
     }
 }
 
-/// Same-device non-root ancestors of `final_parent`, ordered shortest
-/// (shallowest) first. `/` is never a staging candidate: a privileged process
-/// must not publish temporary shim directories at the filesystem root.
-/// Ancestors on a different device are skipped because publishing from them
-/// could not `rename(2)` onto the final path.
+/// Same-device non-root ancestors of `final_parent`, shortest first. `/` is
+/// never a candidate (a privileged process must not publish shim directories
+/// at the filesystem root); cross-device ancestors cannot `rename(2)` onto the
+/// final path.
 fn staging_candidate_ancestors(final_parent: &Path) -> Vec<PathBuf> {
     let parent_dev = match std::fs::metadata(final_parent) {
         Ok(metadata) => metadata.dev(),
@@ -1589,16 +1414,13 @@ mod tests {
 
     /// Test double for the ACP delegate: records payloads, capabilities, and
     /// disconnects, echoes every ACP payload back, and can push one deferred
-    /// payload after `handle_acp` returns. Each instance records its assigned
-    /// client id, so tests can prove two registrations get two distinct
-    /// delegate instances.
+    /// payload after `handle_acp` returns.
     struct RecordingDelegate {
         late_push: bool,
         payloads: Mutex<Vec<String>>,
         capabilities: Mutex<Option<(bool, bool, bool, Option<String>)>>,
         client_ids: Mutex<Vec<u64>>,
         disconnects: AtomicUsize,
-        /// Monotonic instance id, unique per constructed delegate.
         instance_id: u64,
     }
 
@@ -1662,9 +1484,8 @@ mod tests {
         }
     }
 
-    /// Delegate whose disconnect hook parks until the test releases it. This
-    /// makes the leader-vs-connection shutdown ordering observable without
-    /// sleeps or scheduler assumptions.
+    /// Delegate whose disconnect hook parks until the test releases it, so
+    /// shutdown ordering is observable without sleeps.
     struct GatedDisconnectDelegate {
         started: tokio::sync::Notify,
         release: tokio::sync::Notify,
@@ -1699,21 +1520,14 @@ mod tests {
         }
     }
 
-    /// A recording factory: constructs a fresh [`RecordingDelegate`] per
-    /// registered connection and records both the construction count and the
-    /// per-connection client ids / capabilities it observed. The instance id
-    /// is unique per constructed delegate, which is exactly the property the
-    /// leader must preserve: no two registered connections share a delegate.
+    /// Construct a fresh [`RecordingDelegate`] per registered connection and
+    /// record what it observed; the instance id is unique per constructed
+    /// delegate (no two registered connections share a delegate).
     #[derive(Default)]
     struct RecordingFactory {
-        /// Construct late-push delegates (one deferred ACP push after
-        /// `handle_acp` returns).
         late_push: bool,
-        /// Every delegate this factory constructed, in registration order.
         delegates: Mutex<Vec<Arc<RecordingDelegate>>>,
-        /// The client ids the leader passed in, in registration order.
         client_ids: Mutex<Vec<u64>>,
-        /// The registration capabilities the leader passed in.
         capabilities: Mutex<Vec<ClientCapabilities>>,
     }
 
@@ -1789,28 +1603,15 @@ mod tests {
 
     // -- fixtures and helpers ------------------------------------------------
 
-    /// An explicit short root for near-limit path tests, per the slice
-    /// contract. Falls back to the platform temp dir when `/tmp` is absent.
-    ///
-    /// The chosen root is canonicalized: on macOS `/tmp` is a symlink to
-    /// `/private/tmp`, and the socket-parent walk deliberately refuses
-    /// symlinked components, so the fixture resolves the platform's system
-    /// temp symlink once here. Every path the tests then hand to the shim is
-    /// a chain of plain directories, which is what production on a real
-    /// (non-symlinked) runtime dir looks like.
+    /// Canonicalize the chosen short test root: on macOS `/tmp` is a symlink
+    /// to `/private/tmp` and the socket-parent walk refuses symlinked
+    /// components, so resolve the platform's system temp symlink once here.
     fn short_test_root() -> PathBuf {
-        // 1. The contract's explicit short root when it is actually writable
-        //    and genuinely short: `metadata`/`is_dir` alone accept an
-        //    unwritable or over-long mount, and a canonical absolute root
-        //    longer than [`MAX_SHORT_ROOT_BYTES`] leaves no room for the
-        //    near-limit `sun_path` exercises below.
         let explicit = Path::new("/tmp");
         if is_short_writable_root(explicit) {
             return std::fs::canonicalize(explicit).unwrap_or_else(|_| explicit.to_path_buf());
         }
-        // 2. Sandbox escape hatch: a caller-provided short root (used when the
-        //    process cannot write `/tmp` at all, e.g. a seatbelt profile that
-        //    scopes writes to a workspace). Same writability and length bar.
+        // Sandbox escape hatch: a caller-provided short root.
         if let Ok(override_root) = std::env::var("GENTS_TEST_ROOT") {
             if !override_root.trim().is_empty() {
                 let override_root = PathBuf::from(override_root);
@@ -1819,22 +1620,14 @@ mod tests {
                 }
             }
         }
-        // 3. The platform temp dir, under the same two bars. A TMPDIR pointed
-        //    into a deep sandboxed workspace is writable but longer than
-        //    `sun_path`, which would make every real `bind(2)` impossible.
         let platform = std::env::temp_dir();
         if is_short_writable_root(&platform) {
             return std::fs::canonicalize(&platform).unwrap_or(platform);
         }
-        // 4. A short *relative* root anchored at the process cwd.
-        //
-        //    Sandboxed CI checkouts can make every writable absolute location
-        //    longer than `sun_path` (104 bytes on macOS) — but `sun_path`
-        //    bounds the path *string* passed to bind, and a relative path
-        //    keeps that string short. The leader code path is identical for
-        //    relative and absolute paths (the parent walk, staging,
-        //    `rename(2)`, and connect all resolve against cwd), so near-limit
-        //    tests still exercise genuinely near-limit bind/connect strings.
+        // A short *relative* root anchored at cwd: sandboxed CI checkouts can
+        // make every writable absolute location longer than `sun_path`, but
+        // `sun_path` bounds the bind string, and relative and absolute paths
+        // follow the identical leader code path.
         let workspace = PathBuf::from(".tmp-test-root");
         std::fs::create_dir_all(&workspace).expect("creating the workspace-local short test root");
         workspace
@@ -1877,18 +1670,12 @@ mod tests {
         root
     }
 
-    /// A socket path whose *filename* is near the `sun_path` limit.
-    ///
     /// Falls back to a plain short filename when the test root alone already
-    /// reaches the requested byte target, so the helper never underflows; the
-    /// near-limit property is then asserted by the caller.
+    /// reaches the target, so the helper never underflows.
     fn long_filename_socket_path(root: &Path, target_bytes: usize) -> PathBuf {
         let file_name_len = target_bytes.saturating_sub(root.as_os_str().len() + 1);
         let stem_len = file_name_len.saturating_sub(".sock".len());
         if stem_len <= 8 {
-            // The root is too long to build a meaningful near-limit filename;
-            // return a plain short name and let the caller's own assertion
-            // decide whether the path really approached the limit.
             return root.join("s.sock");
         }
         root.join(format!("{}.sock", "f".repeat(stem_len)))
@@ -2047,8 +1834,6 @@ mod tests {
             Some(ServerEnvelope::Acp { payload: echoed }) => assert_eq!(echoed, payload),
             other => panic!("expected an acp echo, got {other:?}"),
         }
-        // The connection's delegate — the one the factory constructed for it —
-        // saw exactly the dispatched payload.
         let delegates = factory.constructed();
         let delegate = delegates
             .last()
@@ -2065,9 +1850,6 @@ mod tests {
             next_server_frame(&mut reader).await.is_none(),
             "the leader should close the connection after disconnect"
         );
-        // The server drops the connection only after on_disconnect ran, so
-        // observing EOF proves the disconnect notification was delivered to
-        // the connection's own delegate.
         assert!(
             delegate.disconnect_count() >= 1,
             "the connection delegate should observe the disconnect"
@@ -2095,163 +1877,17 @@ mod tests {
         }
     }
 
-    /// The default recording factory: works with `exercise_leader` and every
-    /// test that just needs a functioning per-connection delegate.
+    /// The default recording factory for tests that need a functioning
+    /// per-connection delegate.
     fn recording_factory() -> Arc<RecordingFactory> {
         Arc::new(RecordingFactory::default())
     }
 
-    // -- pure helpers --------------------------------------------------------
-
-    #[test]
-    fn leader_binary_version_is_the_prefixed_package_version() {
-        assert_eq!(
-            leader_binary_version(),
-            format!("gents-{}", env!("CARGO_PKG_VERSION"))
-        );
-    }
-
-    #[test]
-    fn register_validation_rejects_blank_client_types() {
-        assert!(validate_register("grok-pager", &RegisterMode::Stdio).is_ok());
-        assert!(validate_register("grok-pager", &RegisterMode::Headless).is_ok());
-        assert!(validate_register("", &RegisterMode::Stdio).is_err());
-        assert!(validate_register("   ", &RegisterMode::Stdio).is_err());
-    }
-
-    #[test]
-    fn internal_error_responses_target_requests_only() {
-        assert!(
-            internal_error_response(r#"{"jsonrpc":"2.0","method":"x"}"#).is_none(),
-            "notifications must not be answered"
-        );
-        assert!(
-            internal_error_response("not json").is_none(),
-            "undecodable payloads must not be answered"
-        );
-        let response = internal_error_response(r#"{"jsonrpc":"2.0","id":7,"method":"x"}"#)
-            .expect("requests must be answered");
-        let value: Value =
-            serde_json::from_str(&response).expect("the failure response is valid JSON-RPC");
-        assert_eq!(value["id"], json!(7));
-        assert_eq!(value["error"]["code"], json!(JSONRPC_INTERNAL_ERROR));
-    }
-
-    #[tokio::test]
-    async fn production_outbound_queue_backpressures_until_the_writer_drains() {
-        let (frames, mut receiver) = mpsc::channel(1);
-        let outbound = AcpOutbound {
-            frames: FrameSender::Bounded(frames),
-        };
-        outbound.send("first").await.expect("first frame fits");
-        let blocked = tokio::spawn({
-            let outbound = outbound.clone();
-            async move { outbound.send("second").await }
-        });
-        tokio::task::yield_now().await;
-        assert!(
-            !blocked.is_finished(),
-            "the second send must wait while the bounded queue is full"
-        );
-        assert!(matches!(
-            receiver.try_recv(),
-            Ok(ServerEnvelope::Acp { .. })
-        ));
-        blocked
-            .await
-            .expect("backpressured sender joins")
-            .expect("send resumes after drain");
-        assert!(matches!(
-            receiver.try_recv(),
-            Ok(ServerEnvelope::Acp { .. })
-        ));
-    }
-
-    #[tokio::test]
-    async fn acp_dispatch_capacity_is_hard_bounded_and_completed_tasks_reap() {
-        let mut tasks = JoinSet::new();
-        let release = Arc::new(tokio::sync::Semaphore::new(0));
-        for _ in 0..MAX_ACP_DISPATCH_TASKS {
-            let release = release.clone();
-            tasks.spawn(async move {
-                let _permit = release.acquire().await.expect("release semaphore");
-            });
-        }
-        assert!(!acp_dispatch_has_capacity(&tasks));
-        release.add_permits(MAX_ACP_DISPATCH_TASKS);
-        while tasks.join_next().await.is_some() {}
-        reap_acp_dispatches(&mut tasks);
-        assert!(acp_dispatch_has_capacity(&tasks));
-    }
-
-    #[test]
-    fn staging_candidates_prefer_the_shortest_same_device_ancestor() {
-        let root = unique_test_root("staging-order");
-        let parent = root.join("a").join("b");
-        std::fs::create_dir_all(&parent).expect("creating nested test dirs");
-        let candidates = staging_candidate_ancestors(&parent);
-        assert!(
-            !candidates.is_empty(),
-            "at least the parent itself qualifies"
-        );
-        assert!(
-            candidates
-                .iter()
-                .all(|candidate| candidate != Path::new("/")),
-            "the filesystem root must never be used for staging"
-        );
-        let parent_dev = std::fs::metadata(&parent).expect("parent metadata").dev();
-        for candidate in &candidates {
-            assert_eq!(
-                std::fs::metadata(candidate)
-                    .expect("candidate metadata")
-                    .dev(),
-                parent_dev,
-                "every candidate must share the socket parent's device"
-            );
-            assert!(
-                parent.starts_with(candidate),
-                "every candidate must be an ancestor of (or equal to) the socket parent"
-            );
-        }
-        let lengths: Vec<usize> = candidates
-            .iter()
-            .map(|path| path.as_os_str().len())
-            .collect();
-        let mut sorted = lengths.clone();
-        sorted.sort_unstable();
-        assert_eq!(lengths, sorted, "candidates must be ordered shortest first");
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn the_staging_dir_is_private_and_removed_on_cleanup() {
-        let root = unique_test_root("staging-dir");
-        let staging = StagingDir::create(&root).expect("creating the staging ancestor");
-        let mode = std::fs::metadata(&staging.path)
-            .expect("staging metadata")
-            .permissions()
-            .mode()
-            & 0o777;
-        assert_eq!(mode, 0o700, "the staging ancestor must be private");
-        let staging_path = staging.path.clone();
-        staging.cleanup();
-        assert!(
-            !staging_path.exists(),
-            "cleanup must remove the staging ancestor"
-        );
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    /// The staging directory is created 0700 *from creation*: the mode rides
-    /// the `mkdir(2)` call itself (`DirBuilderExt::mode`), so there is no
-    /// create-then-chmod window in which a umask-derived group/world-readable
-    /// directory is observable.
+    /// The staging directory is created 0700 *from creation*: no create-then-
+    /// chmod window in which a group/world-readable directory is observable.
     #[cfg(unix)]
     #[test]
     fn the_staging_dir_is_0700_from_creation_and_rejects_unsafe_parents() {
-        // 1. A staging directory created inside a normal parent is 0700 the
-        //    moment it exists — no chmod-after-create sequence is involved.
         let root = unique_test_root("staging-create-mode");
         let staging = StagingDir::create(&root).expect("creating the staging ancestor");
         assert_eq!(
@@ -2266,9 +1902,6 @@ mod tests {
         staging.cleanup();
         let _ = std::fs::remove_dir_all(&root);
 
-        // 2. A symlinked socket parent is rejected before any staging
-        //    directory is created through it: publication can never be
-        //    redirected through a link an attacker controls.
         let root = unique_test_root("staging-symlink-parent");
         let target = root.join("real");
         let link = root.join("link");
@@ -2295,8 +1928,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    // -- socket-parent creation ----------------------------------------------
-
     #[test]
     fn nested_missing_socket_parents_are_created_0700() {
         let root = unique_test_root("parent-nested");
@@ -2317,8 +1948,6 @@ mod tests {
                 component.display()
             );
         }
-        // The second call must accept the (now existing) chain without error
-        // and without changing any mode.
         ensure_socket_parent(&parent).expect("existing components must be accepted");
         let mode = std::fs::metadata(&parent)
             .expect("parent metadata")
@@ -2334,8 +1963,7 @@ mod tests {
         let root = unique_test_root("parent-mode");
         let parent = root.join("owned");
         std::fs::create_dir(&parent).expect("creating the operator-owned parent");
-        // Deliberately different from 0700: the walk must accept the existing
-        // directory and must never chmod an operator-owned parent.
+        // Deliberately not 0700: existing directories are never chmodmed.
         std::fs::set_permissions(&parent, Permissions::from_mode(0o755))
             .expect("loosening the parent mode");
         ensure_socket_parent(&parent).expect("an existing parent must be accepted");
@@ -2348,8 +1976,6 @@ mod tests {
             mode, 0o755,
             "the pre-existing parent mode must be left untouched"
         );
-        // A deeper chain under the pre-existing parent: the existing 0755
-        // component keeps its mode, the new one is created 0700.
         let deep = parent.join("created");
         ensure_socket_parent(&deep).expect("the deeper chain must be created");
         assert_eq!(
@@ -2382,7 +2008,6 @@ mod tests {
             .expect("setting the target mode");
         let link = root.join("link");
         std::os::unix::fs::symlink(&target, &link).expect("creating the symlink");
-        // The symlink points at a directory, but it must still be refused.
         let deep = link.join("nested");
         let error = ensure_socket_parent(&deep).expect_err("a symlink component must be rejected");
         assert!(
@@ -2476,30 +2101,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    // -- publication ---------------------------------------------------------
-
-    #[tokio::test]
-    async fn over_limit_paths_still_bind_and_publish() {
-        let root = unique_test_root("overlimit");
-        let socket = long_parent_socket_path(&root, 200);
-        assert!(
-            socket.as_os_str().len() > 110,
-            "the published path must exceed every sun_path limit (got {})",
-            socket.as_os_str().len()
-        );
-        // Binding happens inside the short staging ancestor, so publication
-        // never depends on the length of the published path.
-        let listener = publish_listener(&socket)
-            .expect("binding must not depend on the published path length");
-        let metadata =
-            std::fs::metadata(&socket).expect("the socket must be published at the long path");
-        assert!(metadata.file_type().is_socket());
-        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
-        drop(listener);
-        std::fs::remove_file(&socket).expect("cleaning up the published socket");
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
     #[tokio::test]
     async fn near_limit_long_filename_binds_and_connects() {
         let root = unique_test_root("longfile");
@@ -2519,8 +2120,6 @@ mod tests {
     async fn near_limit_long_parent_binds_and_connects() {
         let root = unique_test_root("longparent");
         let socket = long_parent_socket_path(&root, NEAR_LIMIT_PATH_BYTES);
-        // The parent directories do not exist yet: publication must create
-        // them, stage the bind in a short ancestor, and rename into place.
         let factory = recording_factory();
         let mut handle = spawn_leader(LeaderServerConfig::new(socket.clone()), factory.clone())
             .expect("the leader should spawn near the path-length limit");
@@ -2605,11 +2204,9 @@ mod tests {
 
         // The winner still serves traffic through the production path.
         exercise_leader(&socket, &first_factory).await;
-
         first.shutdown().await.expect("clean shutdown");
         assert_clean_stop(&first);
 
-        // The lock is free again, so a new leader can take the socket.
         let mut second = spawn_leader(LeaderServerConfig::new(socket.clone()), recording_factory())
             .expect("a leader should spawn after the previous one stopped");
         second.shutdown().await.expect("clean shutdown");
@@ -2697,8 +2294,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    // -- registration order and protocol handling ----------------------------
-
     #[tokio::test]
     async fn register_must_precede_registered_and_validate() {
         let root = unique_test_root("register");
@@ -2706,7 +2301,6 @@ mod tests {
         let mut handle = spawn_leader(LeaderServerConfig::new(socket.clone()), recording_factory())
             .expect("the leader should spawn");
 
-        // ping before register is a protocol violation.
         {
             let (mut reader, mut writer) = connect(&socket).await;
             write_client_frame(&mut writer, &ClientEnvelope::Ping).await;
@@ -2721,7 +2315,6 @@ mod tests {
                 "the leader must close after a protocol violation"
             );
         }
-        // acp before register is a protocol violation.
         {
             let (mut reader, mut writer) = connect(&socket).await;
             write_client_frame(
@@ -2739,8 +2332,8 @@ mod tests {
             }
             assert!(next_server_frame(&mut reader).await.is_none());
         }
-        // an unknown register mode is rejected as an undecodable frame: with
-        // the typed protocol the wire narrows to "stdio" | "headless".
+        // An unknown register mode is rejected as an undecodable frame; the
+        // wire narrows to "stdio" | "headless".
         {
             let (mut reader, mut writer) = connect(&socket).await;
             write_client_frame(
@@ -2757,7 +2350,6 @@ mod tests {
                 other => panic!("expected registered, got {other:?}"),
             }
         }
-        // a blank client_type is rejected.
         {
             let (mut reader, mut writer) = connect(&socket).await;
             write_client_frame(
@@ -2777,7 +2369,6 @@ mod tests {
             }
             assert!(next_server_frame(&mut reader).await.is_none());
         }
-        // a valid register still works afterwards.
         {
             let (reader, writer, _client_id) = register(&socket).await;
             drop((reader, writer));
@@ -2819,8 +2410,6 @@ mod tests {
         let mut handle = spawn_leader(LeaderServerConfig::new(socket.clone()), factory.clone())
             .expect("the leader should spawn");
         let (mut reader, mut writer, _client_id) = register(&socket).await;
-        // The factory runs before the server reads any further frame, so a
-        // completed ping/pong proves the capabilities reached construction.
         write_client_frame(&mut writer, &ClientEnvelope::Ping).await;
         match next_server_frame(&mut reader).await {
             Some(ServerEnvelope::Pong) => {}
@@ -2904,8 +2493,6 @@ mod tests {
             Some(ServerEnvelope::Acp { payload: echoed }) => assert_eq!(echoed, payload),
             other => panic!("expected an acp echo, got {other:?}"),
         }
-        // The deferred push arrives after handle_acp returned, on the same
-        // connection, through the cloned outbound handle.
         match next_server_frame(&mut reader).await {
             Some(ServerEnvelope::Acp { payload }) => {
                 assert!(payload.contains("deferred"), "got {payload}");
@@ -2916,8 +2503,6 @@ mod tests {
         assert_clean_stop(&handle);
         let _ = std::fs::remove_dir_all(&root);
     }
-
-    // -- per-connection delegate construction --------------------------------
 
     #[tokio::test]
     async fn two_registrations_receive_distinct_delegate_instances() {
@@ -2933,7 +2518,6 @@ mod tests {
             client_id_a, client_id_b,
             "two registrations must receive distinct client ids"
         );
-        // Keep both connections open until the assertions below finish.
         let connections = (reader_a, writer_a, reader_b, writer_b);
 
         let delegates = factory.constructed();
@@ -2995,7 +2579,6 @@ mod tests {
             }
             assert!(next_server_frame(&mut reader).await.is_none());
         }
-        // ping before register is also rejected with no delegate constructed.
         {
             let (mut reader, mut writer) = connect(&socket).await;
             write_client_frame(&mut writer, &ClientEnvelope::Ping).await;
@@ -3013,7 +2596,6 @@ mod tests {
             "the factory must never be invoked for a failed registration"
         );
 
-        // A valid registration still constructs exactly one afterwards.
         let (_reader, _writer, _client_id) = register(&socket).await;
         assert_eq!(factory.constructed_count(), 1);
 
@@ -3030,9 +2612,6 @@ mod tests {
         let mut handle = spawn_leader(LeaderServerConfig::new(socket.clone()), factory.clone())
             .expect("the leader should spawn");
 
-        // The register frame validates, but the factory refuses to construct
-        // the delegate, so the leader closes the connection without ever
-        // writing `registered`.
         {
             let (mut reader, mut writer) = connect(&socket).await;
             write_client_frame(&mut writer, &register_envelope()).await;
@@ -3060,9 +2639,7 @@ mod tests {
         let mut handle = spawn_leader(LeaderServerConfig::new(socket.clone()), factory.clone())
             .expect("the leader should spawn");
 
-        // Client A registers and stays connected.
         let (mut reader_a, mut writer_a, _client_id_a) = register(&socket).await;
-        // Client B registers and then disconnects.
         let (mut reader_b, mut writer_b, _client_id_b) = register(&socket).await;
 
         let delegates = factory.constructed();
@@ -3070,7 +2647,6 @@ mod tests {
         let delegate_a = delegates[0].clone();
         let delegate_b = delegates[1].clone();
 
-        // B disconnects; only B's delegate observes it.
         write_client_frame(&mut writer_b, &ClientEnvelope::Disconnect).await;
         assert!(
             next_server_frame(&mut reader_b).await.is_none(),
@@ -3087,13 +2663,11 @@ mod tests {
             "connection A's on_disconnect must not run for B's disconnect"
         );
 
-        // A still handles a subsequent ping.
         write_client_frame(&mut writer_a, &ClientEnvelope::Ping).await;
         match next_server_frame(&mut reader_a).await {
             Some(ServerEnvelope::Pong) => {}
             other => panic!("expected pong for A after B disconnected, got {other:?}"),
         }
-        // ...and a subsequent ACP dispatch, on A's own delegate.
         let payload = json!({
             "jsonrpc": "2.0",
             "id": 11,

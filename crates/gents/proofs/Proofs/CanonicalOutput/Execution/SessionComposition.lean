@@ -3,11 +3,6 @@ import Proofs.CanonicalOutput.Execution.GoalContinuation
 import Proofs.CanonicalOutput.Execution.RestartRecovery
 import Proofs.CompletionRetry.CanonicalGate
 
-/-!
-One session trace over the existing owners. This module supplies wiring, not a
-second implementation of their transitions. In particular there is no raw gate
-trace constructor: provider closure decisions pass through the retry adapter.
--/
 namespace CanonicalOutput.Execution.SessionComposition
 
 private theorem begin_preserves_nextSeq
@@ -22,8 +17,6 @@ private theorem finish_preserves_nextSeq
     after.state.transcript.nextSeq = before.transcript.nextSeq := by
   rw [Handover.successful_finish_frame before after actor h]
 
-/-- The request binding is the claim owner's observation, not a cast between
-logical queue IDs and physical output/request IDs. -/
 def currentClaim (state : World) : Bool :=
   match state.claimed with
   | none => false
@@ -75,8 +68,6 @@ theorem provider_commit_is_actual_gate_commit
       cases h
       exact CompletionRetry.CanonicalGate.successful_commit_is_actual_gate_commit actor now operation hc
 
-/-- Retry initialization belongs to a newly claimed physical request. It cannot
-carry accepted/retracted state or spent repair state from the previous request. -/
 def initialRetry (request : DocId) (now : Time) (scope : Nat)
     (budget : CompletionRetry.Budget) (deadline : Option Time) : CompletionRetry.State :=
   { request := request, scope := scope, turn := 0, phase := .issuing
@@ -96,9 +87,6 @@ def activate (state : World) (actor : Gate.Actor) (now : Time)
   let world ← Handover.claimAndActivate state actor now activation
   some { world with retry := initialRetry activation.request.document now scope budget deadline }
 
-/-- Direct title activation is a claim of its own signed request, not a
-synthetic session-queue entry. The parent binding survives as claim evidence
-for audit usage, but cannot gate this lease. -/
 def activateTitle (state : World) (actor : Gate.Actor) (now : Time)
     (activation : Handover.TitleActivation) (scope : Nat)
     (budget : CompletionRetry.Budget) (deadline : Option Time) : Option World := do
@@ -113,9 +101,6 @@ theorem goal_claim_requires_publication_route
     activate state actor now activation scope budget deadline = none := by
   simp [activate, nonGoalActivation, h]
 
-/-- Proof of an actual existing Goal-owner publication, not a caller-created
-record with the right field names. This is trace evidence, not another durable
-receipt or lifecycle. -/
 def GoalPublication (result : GoalContinuation.Result) : Prop :=
   ∃ goal state actor now request binding entry,
     GoalContinuation.publishGoalChild? goal state actor now request binding entry = some result
@@ -152,9 +137,6 @@ theorem activation_binds_retry_to_claim
         before session actor now activation hc
       exact ⟨hb.2.1.symm, rfl, rfl⟩
 
-/-- A session history interleaves existing owners, not arbitrary replacement of
-their records. Acquisition and non-provider tool work also remain available
-between requests. Policy progress and provider commits require the exact claim. -/
 inductive Trace : World → World → Prop where
   | refl (state : World) : Trace state state
   | provider {before after : World} (actor : Gate.Actor) (now : Time)

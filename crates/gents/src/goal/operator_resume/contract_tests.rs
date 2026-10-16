@@ -270,8 +270,6 @@ async fn overlapping_resume_and_native_goal_write_conflict_atomically() {
         .before;
     for resume_first in [false, true] {
         let f = Fixture::new(initial).await;
-        // Remote/native writes do not participate in ConfigApplyTxn's local
-        // mutation mutex. Keep both storage snapshots open deliberately.
         let remote = f.node.runner().begin_txn(false).await.unwrap();
         let goal_id = escape_graphql_string(&f.goal.goal_id);
         let query = format!(

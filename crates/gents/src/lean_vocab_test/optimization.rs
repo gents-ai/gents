@@ -1,11 +1,3 @@
-//! Deserialization types for the Lean optimization promotion policy rows
-//! (`Optimization.sufficient`, `noCaseRegression`, `costOk` and `decideGates` in
-//! `Proofs/Optimization.lean`, emitted as `optimization_cases` by
-//! `Proofs/Conformance/Optimization.lean`, function
-//! `Conformance.Optimization.optimizationCasesJson`). Field names and types
-//! mirror the emitted JSON exactly and decode strictly: contract drift must fail
-//! loudly here instead of being masked by serde defaults.
-
 use serde::Deserialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

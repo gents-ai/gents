@@ -29,11 +29,6 @@ private def workspace := path ["workspace"]
 private def root := path ["workspace", "root"]
 private def nested := path ["workspace", "root", "project"]
 
-/-- Filesystem-shaped labels record which Rust resolver observation each
-abstract canonical-path case must refine. They do not model filesystem effects.
-`stored` marks a candidate that is the document's pre-existing grant being
-re-admitted (an edit that omits `host.root`, or a read-side canonicalization),
-not a freshly authored value. -/
 def cases : List Case :=
   [ ⟨"exact_create", "create", "configured", false, false, "existing", true, some workspace,
       [root], [root], some root, true, none⟩
@@ -95,9 +90,6 @@ def cases : List Case :=
 private def policy (c : Case) : PublicationPolicy :=
   ⟨c.configured, c.enabled.toFinset, c.ceiling⟩
 
-/-- The create/set admission owner for a case: strict for a freshly authored
-root, plus the stored-grant overlap tolerance when the case's candidate is the
-document's pre-existing grant. -/
 def createSelectionOk (c : Case) : Prop :=
   rootSelectionOk c.configured (publishedRoots (policy c)) (c.authored.trim == "") c.candidate ∨
     (c.stored = true ∧ overlapping (publishedRoots (policy c)) c.candidate)

@@ -1,9 +1,7 @@
-/* The pieces both session views put around their composer. */
 import type { SendStatus } from "@source-inc/gents-desktop-chat";
 import { cn } from "@gents/ui/lib/utils";
 import type { ShellView } from "@/../hooks/shellView";
 
-/** Add only local composer emptiness; every other blocker belongs to ClientShell. */
 export function presentedComposerSendStatus(
   draft: string,
   canonicalNonEmptyStatus: SendStatus,
@@ -17,11 +15,6 @@ export function presentedComposerSendStatus(
       };
 }
 
-/** Display the existing workflow owner's observation, never infer queue health. */
-/* The line under the composer holds its place whether or not it has
-   anything to say: a status arriving and leaving moved the composer up
-   and down, and a person's eye with it. One line of the small size is
-   always reserved; an error, being rarer and longer, may still grow it. */
 export function SessionSubmissionStatus({
   activityStatus,
   hint,
@@ -29,8 +22,6 @@ export function SessionSubmissionStatus({
 }: {
   activityStatus: ShellView["shellProjection"]["activityStatus"];
   hint?: string | null;
-  /** a new chat has no transcript above to hold still, so its line may
-      take no room until it has something to say */
   reserve?: boolean;
 }) {
   const status = activityStatus;

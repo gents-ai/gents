@@ -1,9 +1,5 @@
 import { expect, gotoHarness, test } from "./desktopTest";
 
-/* A mouse wheel sends each notch as its own scroll, so wheeling up a
-   transcript past an open activity box hands notches to the box. Once the
-   box is at its top, the rest must reach the transcript, not stop under the
-   pointer. */
 test("wheeling up past an open activity box keeps the transcript moving", async ({
   page,
 }) => {
@@ -21,7 +17,6 @@ test("wheeling up past an open activity box keeps the transcript moving", async 
   const scroller = panel.locator(
     "xpath=ancestor::*[@data-slot='scroll-area-viewport'][1]",
   );
-  /* the box at its own top, under the pointer */
   const box = group.locator("xpath=following-sibling::*[1]");
   await box.evaluate((el) => {
     const viewport = el.querySelector<HTMLElement>("[data-slot=scroll-area-viewport]");

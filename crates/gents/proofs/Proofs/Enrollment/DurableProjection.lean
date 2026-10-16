@@ -2,9 +2,6 @@ import Proofs.Enrollment.Properties
 
 namespace Enrollment
 
-/-- An enrollment's requested authority, independent of the one-shot offer,
-challenge and nonce. Equality requires the same client identity, server and
-profile; a route for another authority cannot satisfy a pending request. -/
 structure RequestAuthority where
   networkId : String
   adminDid : Did
@@ -19,13 +16,6 @@ def requestAuthority (request : Request) : RequestAuthority :=
   ⟨request.networkId, request.adminDid, request.serverPeer, request.candidateDid,
     request.candidatePeer, request.ownerNode, request.profile⟩
 
-/-- This is a pending-list projection, never membership or request authority.
-`currentApproval` comes from `durableCurrentApproval`, including the current
-signed revision and authorization expiry. `routeApplied` means the route owner
-has applied that exact approved request/digest/sequence/expiry. An expired
-one-shot request may still own an unexpired authorization. A decided request
-stays visible until its own route is ready, even when older authority suffices.
--/
 def pendingRequestSatisfied (requested current : RequestAuthority)
     (hasDecision currentApproval routeApplied : Bool) : Bool :=
   !hasDecision && currentApproval && routeApplied && decide (requested = current)
@@ -48,7 +38,6 @@ theorem pending_request_requires_current_applied_authority
       pendingRequestSatisfied requested current hasDecision true false = false := by
   simp [pendingRequestSatisfied]
 
-/-- Unordered durable documents restored from DefraDB. -/
 structure DurableDocuments where
   offers : Finset Offer := ∅
   adminPins : Finset NetworkAdminPin := ∅
@@ -95,11 +84,6 @@ instance (docs : DurableDocuments) (revision : AuthorizationRevision) :
     Decidable (durableUniqueMaximumRevision docs revision) := by
   unfold durableUniqueMaximumRevision; infer_instance
 
-/--
-An approval restored from unordered documents is authoritative only when every
-identity boundary is unique and its exact active revision is the unique scoped
-maximum. No replay order or GraphQL row order participates in this predicate.
--/
 def durableCurrentApproval
     (docs : DurableDocuments) (offer : Offer) (request : Request) (decision : Decision) : Prop :=
   durableRequestAdmissible docs offer request ∧

@@ -1,5 +1,4 @@
 //! Request-owned immutable output appends, under the existing mutation gate.
-//!
 //! The supplied record is a prepared fact: retries retain its timestamp and
 //! bytes. No caller buffer or ordinal advances inside the transaction. A caller
 //! acknowledges its batch only after this owner returns a committed document ID.
@@ -32,7 +31,6 @@ pub(crate) struct ProviderPublicationPlan {
     pub(crate) tool_deadline_at: String,
     /// Provider-native ids of the calls this turn accepts as background rows.
     pub(crate) background_calls: Vec<String>,
-    /// The queued message this authored publication answers and supersedes.
     pub(crate) consumes_folded: Option<crate::lifecycle::queue::FoldedConsumption>,
 }
 
@@ -90,8 +88,6 @@ fn created_tool_call_doc_ids(
         .collect()
 }
 
-/// Provider-native ids of a turn's `agent_new`/`agent_message` calls: a
-/// started session is a background row from its accepted publication on.
 pub(crate) fn session_message_call_ids(message: &gents_protocol::message::Message) -> Vec<String> {
     match message {
         gents_protocol::message::Message::Assistant { content, .. } => content
@@ -112,7 +108,6 @@ pub(crate) fn session_message_call_ids(message: &gents_protocol::message::Messag
 #[derive(Clone, Debug)]
 pub(crate) struct PublishedProviderTurn {
     pub(crate) message_doc_id: String,
-    /// Read only by tests that pin the published transcript position.
     #[cfg(test)]
     pub(crate) sequence: u32,
     pub(crate) accepted_tools: Vec<super::AcceptedToolCall>,
@@ -231,9 +226,8 @@ pub(crate) async fn close_provider_attempt(
     close_provider_attempt_at(node, generation, prepared, close, None, Utc::now()).await
 }
 
-/// A changed request generation may acknowledge an already committed, exact
-/// auxiliary closure without authorizing another write. Ordinary provider
-/// closes and every fresh auxiliary close remain fenced to the writer generation.
+/// Fenced to the writer generation, except a changed generation may acknowledge
+/// an already committed, exact auxiliary closure without authorizing another write.
 pub(crate) async fn close_provider_attempt_at(
     node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,
@@ -519,8 +513,6 @@ pub(crate) fn validate_source_physical_identities(
     Ok(())
 }
 
-/// Validate only the extent committed by this Closed record. Later source data
-/// lies outside that immutable extent and does not change its reconstruction.
 pub(crate) fn validate_closed_source_extent(
     records: &[OutputSegmentRow],
     request_doc_id: &str,
@@ -739,10 +731,8 @@ async fn partial_header_in_txn(
 
 use crate::graphql::created_doc_id;
 
-/// Atomically seal and publish one accepted provider turn. Tool-bearing turns
-/// are admitted by the extended path that also creates pending tool rows; this
-/// entry deliberately rejects them rather than publishing executable intent
-/// without its lifecycle documents.
+/// Publishes executable intent only with its lifecycle documents; tool-bearing
+/// turns go through the extended path that also creates pending tool rows.
 pub(crate) async fn publish_provider_turn(
     node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,
@@ -1013,9 +1003,6 @@ async fn replay_publication_in_txn(
     else {
         anyhow::bail!("publication replay generation changed");
     };
-    // Lean `reuseAuthored`: a reclaimed generation, already authorized on the
-    // live lease above, reuses the identical authored entry an earlier
-    // generation of this request accepted. Provider turns stay generation-bound.
     anyhow::ensure!(
         accepted_generation == generation
             || (matches!(exemplar.source, OutputSource::Authored { .. })
@@ -1120,8 +1107,6 @@ async fn replay_publication_in_txn(
     })
 }
 
-/// Append exactly one provider flush. Replaying the same committed fact is a
-/// read, even after expiry; it never renews or reopens its source.
 pub(crate) async fn append_provider_segment(
     node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,
@@ -1224,8 +1209,6 @@ async fn append_in_txn_with_time(
         return Err(ProviderAppendRejection::LostLease.into());
     }
 
-    // Obtain the actual genesis-derived ID inside the transaction. Validation
-    // failure rolls this create back; no invented ID participates in validation.
     let result = txn
         .execute_with_variables(
             CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
@@ -1253,12 +1236,10 @@ async fn append_in_txn_with_time(
     Ok(doc_id)
 }
 
-/// Read the existing authorized request owner, not a parallel principal check.
-///
-/// This in-transaction `_docID` point read is the publication's fence against
-/// recovery and cancellation: native OCC validates point-read keys at commit
-/// (`RequestExecutionLease/ObservedTransaction.lean`). Keep it a point read,
-/// and do not add a same-value request write: that only replicates a commit.
+/// Publication's fence against recovery/cancellation: native OCC validates
+/// point-read keys at commit (RequestExecutionLease/ObservedTransaction.lean).
+/// Keep this an in-transaction `_docID` point read; do not add a same-value
+/// request write.
 async fn load_request_in_txn(
     txn: &ConfigApplyTxn<'_>,
     prepared: &OutputSegment,
@@ -1341,7 +1322,7 @@ async fn load_source_in_txn(
 
 #[cfg(test)]
 mod tool_call_batch_tests {
-    use super::created_tool_call_doc_ids;
+    use super::*;
 
     #[test]
     fn batch_create_rows_bind_to_tool_keys_not_response_order() {

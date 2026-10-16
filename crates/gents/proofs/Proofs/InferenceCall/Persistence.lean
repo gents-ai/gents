@@ -1,14 +1,10 @@
 import Proofs.InferenceCall.State
 
 /-!
-# Persisted inference-call writer guards
-
-These predicates refine the existing persistence operations at their database
-boundary. They are necessary write guards, not additional constructors of
-`InferenceCall.Transition`. Failure and completion require running; cancellation
-also permits queued. Terminal outcome and stamp form one first-winner
-projection. Usage is an independently observed provider ledger value; updating
-it does not itself charge an aggregate budget or authorize lifecycle writes.
+Write guards at the persisted inference-call database boundary. Failure and
+completion require running; cancellation also permits queued. Terminal outcome
+and stamp form one first-winner projection. Usage is an independently observed
+provider ledger value; updating it does not itself charge an aggregate budget.
 -/
 namespace InferenceCall.Persistence
 
@@ -19,7 +15,6 @@ structure Row (Usage : Type) where
 
 variable {Usage : Type}
 
-/-- A delayed start cannot reopen a call which recovery already terminalized. -/
 def start (current : Row Usage) : Row Usage :=
   if current.call.state = .queued then
     { current with call := { current.call with state := .running } }
@@ -34,8 +29,6 @@ instance (current target : InferenceCallState) :
   unfold terminalWriteAllowed
   infer_instance
 
-/-- Outcome and timestamp are written together only by the first live-state
-    winner. A late usage observation uses `observeUsage`, separately. -/
 def terminalize (current : Row Usage) (target : InferenceCallState) (stamp : Nat) : Row Usage :=
   if terminalWriteAllowed current.call.state target then
     { current with call := { current.call with state := target }, terminalStamp := some stamp }

@@ -2,28 +2,6 @@ import Proofs.Compaction.Prefix
 import Proofs.Compaction.Properties
 import Proofs.PromptAssembly.ClaudeMap
 
-/-!
-# The real summarize reducer
-
-Defect 1 of #993: the modelled reducer was `id`, so pair closure was proven
-about a function that never dropped anything. Production's summarize path splits
-the transcript on a token budget at an arbitrary index, and that index can land
-between an assistant message carrying a `ToolCall` and the user message carrying
-its `ToolResult`. The call is summarized away, the result stays in the retained
-tail, and `sanitize_history_for_provider` drops the orphan at loop entry — the
-tool's output is gone from the provider view while the summary describes only
-the call.
-
-`summarize` is parameterised over the budget index rather than pinning a token
-function: what must be proven is that *whatever* index the budget picks, the
-reducer stays sound. It does, because `pairSafeBoundary` lands on a complete
-turn boundary. A normal straddling split retreats to retain the whole turn; if
-that atomic tail itself exceeds the budget, production instead selects the next
-complete boundary after it (possibly the end, summarizing every row).
-`raw_split_can_orphan` is the counterexample showing that a pair-safe boundary
-is load-bearing rather than decoration.
--/
-
 namespace Compaction
 
 open Transcript (MessageRow MessageKind ToolResultKey)
@@ -59,17 +37,8 @@ theorem foldrMax_le (n : Nat) :
 
 /-! ## The pair-safe boundary -/
 
-/-- The token-budget index production selects in `split_messages_for_summary`,
-after advancing past an oversized atomic tail when retaining it cannot fit. -/
 abbrev SplitPolicy := List MessageRow → Nat
 
-/-- The greatest `j ≤ limit` at which no tool call is awaiting its result.
-
-Production mirrors this in `compaction::history::pair_safe_boundary`: it walks
-a candidate index back to the nearest turn boundary. The token splitter first
-tries that conservative retreat. If the resulting atomic tail is itself over
-budget, it submits the boundary after that complete tail instead. Both choices
-enter this reducer only at a boundary where no call awaits its result. -/
 def pairSafeBoundary (msgs : List MessageRow) (limit : Nat) : Nat :=
   ((List.range (min limit msgs.length + 1)).filter
     (fun j => decide (pendingAfter ∅ (msgs.take j) = ∅))).foldr max 0
@@ -89,9 +58,6 @@ theorem pairSafeBoundary_pending_empty (msgs : List MessageRow) (limit : Nat) :
   · rw [h]; rfl
   · exact of_decide_eq_true (List.mem_filter.mp h).2
 
-/-- The retention target selects a preferred boundary within the replay owner's
-ceiling. It is not the full provider context ceiling. Returning `none` means
-there is no useful protected prefix to summarize before provider IO. -/
 def protectedPairSafeBoundary (msgs : List MessageRow) (rawIndex maxPrefix : Nat) : Option Nat :=
   let split := min (pairSafeBoundary msgs rawIndex) (pairSafeBoundary msgs maxPrefix)
   if split == 0 then none else some split
@@ -125,8 +91,6 @@ inductive ProtectedReplaySplitError where
   | replay (error : PromptAssembly.ClaudeMap.MapError)
   deriving DecidableEq, Repr
 
-/-- The only replay check here is the existing ClaudeMap owner. Successful
-reduction therefore cannot reinterpret a required tag as summarized history. -/
 def prepareProtectedReplayCheckpoint (msgs : List MessageRow)
     (rawIndex maxPrefix : Nat)
     (required : List PromptAssembly.ClaudeMap.ReplayTag)
@@ -170,16 +134,6 @@ theorem preparedProtectedReplayCheckpoint_uses_replay_owner
               protectedPairSafeBoundary_bounded msgs rawIndex maxPrefix split hs,
               by simpa only [bne_iff_ne, ne_eq, not_not] using haligned, hp⟩
 
-/-- Required reasoning is accepted only with the ordinary prefix that produced
-it (`ReplayFrontier.turnOk`). A summary may change that prefix even if it leaves
-the required row intact. The provider can require the reasoning block, so
-omitting it after a failed capture check is not a valid recovery.
-
-No owner retires required coordinates during a request or supplies new capture
-evidence for a summarized prefix. Conservatively forbid prefix summarization
-while any coordinate remains required; a fresh request without requirements
-keeps its ordinary retention policy. Validate associations first so malformed,
-duplicate and absent coordinates retain their existing errors. -/
 def replayReductionCeiling (required : List PromptAssembly.ClaudeMap.ReplayTag)
     (rows : List PromptAssembly.ClaudeMap.TaggedReplayRow) :
     Except PromptAssembly.ClaudeMap.MapError (Option Nat) :=
@@ -216,14 +170,11 @@ theorem replayReductionCeiling_closed_round_is_unbounded
   · simp only [List.isEmpty_nil, if_true, Except.ok.injEq] at h
     exact h.symm
 
-/-- A zero ceiling admits no split at all, whatever the retention target picks. -/
 theorem protectedPairSafeBoundary_zero (msgs : List MessageRow) (rawIndex : Nat) :
     protectedPairSafeBoundary msgs rawIndex 0 = none := by
   have h : pairSafeBoundary msgs 0 = 0 := Nat.le_zero.mp (pairSafeBoundary_le msgs 0)
   simp [protectedPairSafeBoundary, h]
 
-/-- The composed owner refuses an open round instead of summarizing a prefix the
-required turns depend on. -/
 theorem openRoundReduction_cannot_fit (msgs : List MessageRow) (rawIndex : Nat)
     (required : List PromptAssembly.ClaudeMap.ReplayTag)
     (rows : List PromptAssembly.ClaudeMap.TaggedReplayRow)
@@ -254,12 +205,6 @@ theorem strictlyIncreasing_drop (n : Nat) :
       | nil => simpa using h
       | cons row rest => rw [List.drop_succ_cons]; exact ih rest h.2
 
-/-- Every retained tool result has its announcement inside the same window.
-
-The generalisation over `seen` is what carries the induction: the pending set is
-always backed by an assistant announcement already walked past, and once the
-window starts with an empty pending set that backing must come from inside the
-window itself. -/
 theorem activeBlockValidFrom_pairs_closed_aux :
     ∀ (l : List MessageRow) (pending : Finset ToolExecution.ToolCallId)
       (seen : List MessageRow),
@@ -339,8 +284,6 @@ theorem activeBlockValid_pairs_closed {l : List MessageRow}
     (fun c hc => absurd hc (Finset.not_mem_empty c)) row hmem callId key hkind
   simpa using h
 
-/-- **Pair closure over the real reducer.** Dropping at a pending-empty index of
-a provider-valid transcript cannot orphan a tool result. -/
 theorem drop_pairs_closed_of_pending_empty {msgs : List MessageRow} {n : Nat}
     (hblock : ActiveBlockValid msgs)
     (hroles : PromptView.AnnouncementsAreAssistant msgs)
@@ -361,9 +304,6 @@ theorem drop_blockValid_of_pending_empty {msgs : List MessageRow} {n : Nat}
 
 /-! ## The reducer -/
 
-/-- Retain the tail from the pair-safe boundary and record a summary handle for
-everything dropped. Identity below the gate (nothing to summarize) and identity
-while the modelled `safeToReduce` gate is closed. -/
 def summarize (policy : SplitPolicy) (handle : SummaryHandle) :
     TranscriptReducer := fun v =>
   if 0 < pairSafeBoundary v.messages (policy v.messages) ∧ PromptView.safeToReduce v then
@@ -416,14 +356,6 @@ instance instIsValidReducerSummarize (policy : SplitPolicy)
     unfold summarize
     rw [if_neg (fun hc => hsafe hc.2)]
 
-/-! ## Why the boundary retreat is load-bearing -/
-
-/-- The unadjusted budget index is unsound: it can land between an assistant
-announcement and its result, orphaning the result in the retained tail.
-
-This is the counterexample the acceptance criterion asks for — reverting
-`pairSafeBoundary` in production must fail a proof, and this is the proof that
-depends on it. -/
 theorem raw_split_can_orphan :
     ∃ (msgs : List MessageRow) (k : Nat),
       ActiveBlockValid msgs ∧

@@ -1,5 +1,4 @@
-/// glibc per-thread arenas retained DefraDB query churn at about 2.5x the live
-/// heap and memcg-OOM-killed the runtime at 512 MiB (#2034).
+/// mimalloc: glibc arenas retained DefraDB query churn at ~2.5x live heap and memcg-OOM-killed the runtime (#2034).
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;

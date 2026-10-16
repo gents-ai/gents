@@ -1,23 +1,8 @@
 import Proofs.CanonicalOutput.Execution.BackgroundGate
 import Proofs.Recovery.Sweeps.BackgroundRestart
 
-/-!
-# Native background restart refinement
-
-This adapter is intentionally restricted to the existing orphan observation:
-the registry no longer reports an owned childless background execution, and
-the host owner's stop verdict (`ManagedExec.stopOutcome`) is part of that
-observation. Only an observed stop reaches the interruption/expiry causes; an
-unobserved one settles as `processLost`. The verdict itself is a native
-observation of the OS process group, not proved here. Parent expiry alone
-cannot construct it.
--/
-
 namespace CanonicalOutput.Execution.RestartRecovery
 
-/-- ACP-authenticated projection of one physical AgentToolCall plus the exact
-notification rendered by the existing native restart template owner. No
-physical document identity is inferred from the legacy logical context. -/
 structure RestartBinding where
   document : DocId
   node : Nat
@@ -48,9 +33,6 @@ def restartEvidence? (observation : Recovery.OrphanedBackgroundToolRow) :
   let obligation ← observation.toRestartRow.notification
   pure (cause, obligation)
 
-/-- An absent executor cannot author another output flush. Restart recovery may
-only append a conservative Partial closure over the exact tool extent already
-committed at this gate; the shared close owner validates that prefix fully. -/
 def restartClosingValid (world : World) (tool : OwnedTool) (closing : Segment) : Bool :=
   closing.flush.isNone && closing.coordinate == ⟨tool.requestDoc, .tool tool.document⟩ &&
     closing.writer == .tool tool.document &&
@@ -188,10 +170,6 @@ theorem successful_enqueue_is_actual_notification
           all_goals cases h
           all_goals simpa [BackgroundContinuation.publishNotification] using hp
 
-/-- Restart closure and its ordinary background notification commit under the
-same storage holder.  The recovery adapter continues to reuse the close,
-notification, and queue owners; this wrapper only supplies their shared atomic
-boundary and installs the queue result they computed from the current world. -/
 def commit (state : World) (actor : Gate.Actor) (now : Time) (document : DocId)
     (binding : RestartBinding) (closing : Segment)
     (wake : SessionQueue.QueueEntry)

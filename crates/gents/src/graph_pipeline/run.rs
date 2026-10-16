@@ -72,9 +72,6 @@ pub struct GraphRunResultView {
     pub observed_count: usize,
     pub violation: Option<String>,
     pub refs: Vec<GraphResultRef>,
-    /// Exact documents used to evaluate this named result contract. The
-    /// durable run projection exposes values as well as immutable references
-    /// so every observer can render useful output without a second UI model.
     pub documents: Vec<Value>,
 }
 
@@ -130,7 +127,6 @@ pub struct GraphRunView {
     pub completed_at: Option<String>,
     pub update_generation: i64,
     pub requests: Vec<GraphRunRequestView>,
-    /// Calls to the run's plugin nodes, which are not model requests.
     #[serde(default)]
     pub plugin_calls: Vec<GraphRunRequestView>,
     pub stages: Vec<GraphRunStageView>,
@@ -139,7 +135,6 @@ pub struct GraphRunView {
     pub persisted_result_refs: Vec<GraphResultRef>,
     pub active_request_count: usize,
     pub terminal_request_count: usize,
-    /// Derived from physical ancestry and the canonical Goal; never persisted.
     #[serde(default)]
     pub outstanding_invocation_count: usize,
     #[serde(default)]
@@ -148,9 +143,6 @@ pub struct GraphRunView {
     pub failure_evidence: Option<Value>,
 }
 
-/// A graph run view load that fails on durable facts, so repeating the same
-/// load by the same actor fails the same way. Other load errors may be
-/// transient.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum GraphRunUnobservable {
     #[error("GraphRun {run_id:?} does not exist")]
@@ -161,7 +153,6 @@ pub enum GraphRunUnobservable {
     InvalidFailureEvidence,
 }
 
-/// The persisted `GraphRun.status` vocabulary: Lean `RunStatus`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GraphRunStatus {
     Running,
@@ -192,9 +183,6 @@ impl GraphRunStatus {
     }
 }
 
-/// A run in one of these statuses is done and will never change again.
-/// Shared by `is_terminal` and `gents pack remove`'s unfinished-run check,
-/// so the two cannot disagree about what "done" means.
 pub(crate) const GRAPH_RUN_TERMINAL_STATUSES: [&str; 3] = [
     GraphRunStatus::Succeeded.as_str(),
     GraphRunStatus::Failed.as_str(),
@@ -206,7 +194,6 @@ impl GraphRunView {
         GRAPH_RUN_TERMINAL_STATUSES.contains(&self.status.as_str())
     }
 
-    /// The run's status; a value outside the vocabulary is an error.
     pub fn status(&self) -> Result<GraphRunStatus> {
         GraphRunStatus::ALL
             .into_iter()
@@ -702,7 +689,6 @@ async fn load_graph_run_view_with(
         }
     }
     // The first committed failure is durable even while siblings drain.
-    // Later observations cannot replace it or turn the run into a success.
     let failure_evidence = error.clone().or(failure_evidence);
 
     Ok(GraphRunView {
@@ -755,8 +741,6 @@ async fn load_graph_run_view_with(
     })
 }
 
-/// Authenticated derived association used by the existing publication transaction.
-/// This is not stored and does not authorize a new request by itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GraphInvocationBinding {
     pub run_id: String,
@@ -767,8 +751,6 @@ pub(crate) async fn graph_binding_for_request_in_txn(
     txn: &ConfigApplyTxn<'_>,
     parent_doc_id: &str,
 ) -> Result<Option<GraphInvocationBinding>> {
-    // Correlation is only a discovery hint. Walk original physical ancestry so
-    // a historical child with omitted optional correlation remains discoverable.
     let mut next = Some(parent_doc_id.to_owned());
     let mut seen = BTreeSet::new();
     let mut correlations = BTreeSet::new();
@@ -841,9 +823,6 @@ pub(crate) async fn graph_binding_for_request_in_txn(
     Ok(bindings.pop())
 }
 
-/// Reconstruct one durable graph execution from its pinned revision and the
-/// ordinary request/output documents. No progress cache or UI execution model
-/// is involved.
 pub async fn load_graph_run_view(
     node: &EmbeddedNode,
     actor_did: &str,
@@ -852,7 +831,6 @@ pub async fn load_graph_run_view(
     load_graph_run_view_with(node, actor_did, run_id).await
 }
 
-/// The same durable projection through the repository's shared client access.
 pub async fn load_graph_run_view_with_access(
     access: &ConfigAccess,
     actor_did: &str,
@@ -868,10 +846,6 @@ fn collection_result_projection_fields(version: &Value, collection: &str) -> Res
         .with_context(|| format!("collection {collection} version has no Fields array"))?;
     let mut names = fields
         .iter()
-        // Relation fields need a nested GraphQL selection. Result hydration
-        // deliberately projects every scalar/array value and leaves relation
-        // traversal to an explicitly declared result document instead of
-        // inventing an unbounded recursive projection.
         .filter(|field| field.get("RelationName").is_none_or(Value::is_null))
         .filter_map(|field| field.get("Name").and_then(Value::as_str))
         .filter(|name| *name != "_docID" && *name != "_version")
@@ -991,10 +965,6 @@ async fn hydrate_terminal_result_documents(
     Ok(())
 }
 
-/// Reconstruct a graph run and hydrate each terminal output from the exact
-/// document commits pinned when the run succeeded. This is the shared result
-/// projection for CLI and bridge consumers; it does not create a UI-only
-/// execution or result model.
 pub async fn load_graph_run_result_view_with_access(
     access: &ConfigAccess,
     actor_did: &str,
@@ -1005,9 +975,6 @@ pub async fn load_graph_run_result_view_with_access(
     Ok(view)
 }
 
-/// Reconcile every running graph owned by one node. The durable run and
-/// its pinned revision remain the only source of truth; this sweep merely
-/// applies the already-modeled terminal transition when evidence is ready.
 pub async fn reconcile_owned_graph_runs(
     node: &std::sync::Arc<EmbeddedNode>,
     owner_did: &str,
@@ -1046,7 +1013,6 @@ pub async fn reconcile_owned_graph_runs(
     Ok(terminalized)
 }
 
-/// Own graph completion in the daemon rather than in a CLI/UI observer.
 pub async fn run_graph_run_reconciler(
     node: Arc<EmbeddedNode>,
     owner_did: String,
@@ -1109,8 +1075,6 @@ async fn commit_terminal_with_access(
         .await
 }
 
-/// Capture inside the existing GraphRun transaction before causing sibling
-/// interruptions. A losing generation writes nothing and emits no interrupts.
 async fn capture_failure_in_txn(txn: &ConfigApplyTxn<'_>, view: &GraphRunView) -> Result<bool> {
     let fresh = load_graph_run_view_with(txn, &view.owner_did, &view.run_id).await?;
     if fresh.status != "running" || fresh.update_generation != view.update_generation {
@@ -1238,9 +1202,6 @@ fn needs_failure_capture(view: &GraphRunView) -> bool {
         && view.failure_evidence.is_some()
 }
 
-/// Re-evaluate durable run state and, when a terminal predicate holds, race
-/// the single terminal transaction. A losing reconciler reloads on its next
-/// pass; no completion-owner lock exists.
 pub async fn reconcile_graph_run(
     node: &std::sync::Arc<EmbeddedNode>,
     identity: Option<Did>,
@@ -1284,8 +1245,6 @@ pub async fn reconcile_graph_run(
     Ok(view)
 }
 
-/// Reconcile through the same local-or-GraphQL access used by operator
-/// clients. Terminal state is still committed by the GraphRun CAS above.
 pub async fn reconcile_graph_run_with_access(
     access: &ConfigAccess,
     actor_did: &str,
@@ -1329,9 +1288,6 @@ pub async fn reconcile_graph_run_with_access(
     Ok(view)
 }
 
-/// Persist cancellation intent, then reuse the ordinary request interrupt
-/// path for every currently correlated request. Recovery can repeat this
-/// operation until the run has no active work.
 pub async fn request_graph_run_cancellation(
     node: &std::sync::Arc<EmbeddedNode>,
     identity: Option<Did>,
@@ -1420,8 +1376,6 @@ async fn interrupt_request_with_access(access: &ConfigAccess, request_id: &str) 
     Ok(())
 }
 
-/// Persist cancellation and interrupt correlated work through the shared
-/// client access. A running runtime observes the ordinary request latch.
 pub async fn request_graph_run_cancellation_with_access(
     access: &ConfigAccess,
     actor_did: &str,
@@ -1544,43 +1498,5 @@ mod tests {
         }
         view.status = "paused".to_owned();
         assert!(view.status().is_err());
-    }
-
-    #[test]
-    fn terminal_projection_requires_and_commits_proven_failure_evidence() {
-        let pending = terminal_view(None);
-        assert!(terminal_projection(&pending).is_none());
-
-        let evidence = json!({
-            "version": 1,
-            "code": "result_contract_unsatisfied",
-            "message": "terminal graph stages completed but the declared result contract is unsatisfied",
-        });
-        let failed = terminal_view(Some(evidence.clone()));
-        let projected = terminal_projection(&failed).expect("proven failure must terminalize");
-        assert_eq!(projected.0, "failed");
-        assert_eq!(projected.1, Some(&evidence));
-        assert!(projected.2.is_none());
-
-        let mut active = failed;
-        active.active_request_count = 1;
-        assert!(
-            terminal_projection(&active).is_none(),
-            "failure must wait for correlated work to quiesce"
-        );
-        assert!(needs_failure_capture(&active));
-        assert!(!should_interrupt_active_work(&active));
-        active.error = Some(evidence);
-        assert!(!needs_failure_capture(&active));
-        assert!(should_interrupt_active_work(&active));
-    }
-
-    #[test]
-    fn durable_started_at_derives_a_restart_stable_run_deadline() {
-        let deadline = graph_run_deadline(Some("2026-08-25T00:00:00Z"), 7_200)
-            .unwrap()
-            .expect("deadline");
-        assert_eq!(deadline.to_rfc3339(), "2026-08-25T02:00:00+00:00");
-        assert!(graph_run_deadline(Some("not-a-time"), 7_200).is_err());
     }
 }

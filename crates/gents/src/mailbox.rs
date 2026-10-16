@@ -586,7 +586,7 @@ async fn stamp_notification(
     }
 
     // A local unique-index race is idempotent only if the exact key resolves
-    // to the same owner/source tuple. Any other collision fails closed.
+    // to the same owner/source tuple; any other collision fails closed.
     if let Some(item) = load_mailbox_item_by_key(node, &item_key).await? {
         if item.requester_did == context.requester_did
             && item.parsed_status() == Some(MailboxStatus::Open)

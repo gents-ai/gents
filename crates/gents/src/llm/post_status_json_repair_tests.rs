@@ -1,53 +1,4 @@
-//! Steward `post_status` tool-call argument deserialization on large markdown
-//! bodies (single-backslash escapes / embedded newlines / backticks / mid-object
-//! truncation).
-//!
-//! ## What this pins
-//!
-//! Stewards post their status report through a tool whose `Args` carry the
-//! report body as a JSON string and the per-finding details as a JSON array of
-//! strings (the `findings` array-param shape observed to emit raw escapes).
-//! When the model emits a ~5–8 KB markdown body that contains
-//! single-backslash sequences (`\d+`, Windows paths `C:\temp`), embedded
-//! newlines, and backticks, the tool-call `arguments` string that reaches the
-//! client either:
-//!
-//!   * contains an INVALID JSON ESCAPE (the model wrote a single backslash that
-//!     is not a legal JSON escape), or
-//!   * is TRUNCATED mid-object (the generation hit a token cap before closing
-//!     the object — `finish_reason == "length"`).
-//!
-//! Both land at the SAME client seam: `crate::llm::tool::ToolDyn::call`
-//! (`crates/gents/src/llm/tool.rs`), which deserializes the model's
-//! `arguments` string into the tool's typed `Args`.
-//!
-//! Before the fix, a parse failure there became `ToolError::JsonError`, which the
-//! dispatcher (`agent/loop_stream.rs`) turned into the *tool result string* fed
-//! back to the model — so the model just saw a raw error and re-emitted the same
-//! oversized payload until the budget was spent, and NOTHING was posted.
-//!
-//! After the fix, `ToolDyn::call` attempts an ESCAPE-ONLY repair (double raw lone
-//! backslashes; it never closes a truncated value) and re-parses:
-//!
-//!   * The single-backslash case is REPAIRED and the tool runs (the report
-//!     posts) — see [`post_status_json_single_backslash_escape_recovers_and_posts`].
-//!   * The truncation case can NOT be completed by an escape-only repair, so it
-//!     is reported as `ToolError::UnparseableArgs { kind: Truncated, .. }` and is
-//!     never run — see [`post_status_json_truncated_body_is_rejected_not_posted`]
-//!     and [`post_status_json_truncation_signal_is_offset_independent`]. The
-//!     dispatcher then renders that into a clean parse-failure notice for the
-//!     model (terminalizing the call `failed(ArgumentInvalid)`) so the model
-//!     re-emits corrected arguments on its next turn — fail-fast, not a hidden
-//!     daemon retry.
-//!
-//! Note the error TEXT on the truncation path: Rust's `serde_json` reports
-//! `Category::Eof` ("EOF while parsing ..."). That is the CLIENT parser, distinct
-//! from vLLM's server-side Python `json` parser (handled separately in
-//! `crate::error::classify_completion_error`). This file pins the CLIENT-side
-//! variant.
-//!
-//! These tests are deterministic and need no live backend; they exercise the
-//! real `ToolDyn::call` seam directly.
+//! Exercises the real `ToolDyn::call` seam; no live backend needed.
 
 use crate::llm::tool::{Tool, ToolDefinition, ToolDyn, ToolError, UnparseableArgsKind};
 use serde::{Deserialize, Serialize};
@@ -103,9 +54,6 @@ impl Tool for PostStatusTool {
     }
 }
 
-/// A realistic ~5–8 KB steward markdown body: embedded newlines, backticks,
-/// fenced code blocks, and SINGLE-backslash sequences (regex + Windows/UNC
-/// paths) that are NOT legal JSON string escapes.
 fn large_steward_markdown_body() -> String {
     let mut body = String::new();
     body.push_str("# Steward Status — host-check\n\n");

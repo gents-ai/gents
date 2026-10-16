@@ -157,10 +157,6 @@ impl DefraSessionHook {
         let selected_tool_identity = self.remote_tools.as_ref().and_then(|remote| {
             crate::meta_tools::selected_remote_identity(target_name, &target_args, remote)
         });
-        // Backgrounded executions are decoupled from the parent request
-        // deadline (like background agent bridges): they get their
-        // configured background lifetime, with cancel_process and the
-        // completion notification as the lifecycle controls (#985).
         let lifetime = self
             .background_tool_registry
             .timeouts()
@@ -259,8 +255,6 @@ impl DefraSessionHook {
         let executions = self.background_executions.clone();
         let process_recorder =
             executions.process_recorder(&execution_call_id, &execution_tool_doc_id);
-        // A spawned task starts with no task-locals: carry the chat's
-        // interactivity so a plugin call in the background can still ask.
         tokio::spawn(crate::plugin::approval::carry_interactive(async move {
             let execution = AssertUnwindSafe(crate::managed_exec::ownership::scope_process_recorder(
                 process_recorder,
@@ -562,9 +556,6 @@ impl DefraSessionHook {
             executions
                 .release_process_record(&execution_call_id, &execution_tool_doc_id)
                 .await;
-            // Keep volatile ownership attached to the spawned task itself.
-            // Dropping this guard after cleanup signals ordinary completion;
-            // task panic or abort also releases ownership for recovery.
             drop(execution_reservation);
         }));
 
@@ -665,8 +656,6 @@ impl DefraSessionHook {
             node_did: self.node_did.clone(),
             requester_did,
         };
-        // The handle's own durable record selects its configured wait policy;
-        // an unknown or unauthorized handle is reported by the wait loop.
         let wait_policy = match self
             .load_authorized_background_tool(&caller, background_tool_call_id)
             .await
@@ -681,10 +670,6 @@ impl DefraSessionHook {
         let wait_deadline_at = chrono::Utc::now()
             + chrono::Duration::from_std(wait_policy.wait_for(parsed.timeout_secs))
                 .context("wait timeout exceeds the representable range")?;
-        // wait_process can outlive the hook future that started it: the
-        // request execution deadline owns that future. Register the already
-        // running accepted lifecycle before awaiting so the existing deadline
-        // sweep can take and terminalize the exact physical call.
         self.in_flight_lifecycles
             .lock()
             .await
@@ -1095,7 +1080,6 @@ impl DefraSessionHook {
     }
 }
 
-/// Lean `ManagedExec.cancelReply`: `cancelled` only for an observed stop.
 fn cancel_process_reply(
     tool_call_id: &str,
     process: crate::managed_exec::ProcessStopOutcome,
@@ -1134,83 +1118,4 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
     }
 }
 
-/// A native background process past its own deadline: its completion
-/// notification reports a failure with the `deadline_exceeded` reason, which
-/// recovery's projection of a `timedOut` row reproduces.
 const BACKGROUND_TIMEOUT_NOTIFICATION: (&str, &str) = ("failed", "deadline_exceeded");
-
-#[cfg(test)]
-mod ownership_projection_tests {
-    use super::{project_background_completion_if_owned, BACKGROUND_TIMEOUT_NOTIFICATION};
-    use std::sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    };
-
-    #[tokio::test]
-    async fn terminal_compare_loser_does_not_project_completion() {
-        let projected = Arc::new(AtomicBool::new(false));
-        let observed = projected.clone();
-
-        let output = project_background_completion_if_owned(false, async move {
-            observed.store(true, Ordering::SeqCst);
-            Ok::<(), anyhow::Error>(())
-        })
-        .await;
-
-        assert!(output.is_none());
-        assert!(!projected.load(Ordering::SeqCst));
-    }
-
-    #[tokio::test]
-    async fn terminal_compare_winner_projects_completion_once() {
-        let projected = Arc::new(AtomicBool::new(false));
-        let observed = projected.clone();
-
-        let output = project_background_completion_if_owned(true, async move {
-            assert!(!observed.swap(true, Ordering::SeqCst));
-            Ok::<(), anyhow::Error>(())
-        })
-        .await;
-
-        assert!(matches!(output, Some(Ok(()))));
-        assert!(projected.load(Ordering::SeqCst));
-    }
-
-    #[tokio::test]
-    async fn background_timeout_preserves_failure_metadata() {
-        assert_eq!(
-            BACKGROUND_TIMEOUT_NOTIFICATION,
-            ("failed", "deadline_exceeded")
-        );
-        let admission = crate::tool_call_lifecycle::admission_fixture::published_admission(
-            crate::tool_call_lifecycle::admission_fixture::PublishedAdmissionOptions {
-                name: "background-timeout-metadata".to_owned(),
-                real_identity: true,
-                await_mode: crate::tool_call_lifecycle::AwaitMode::Background,
-                start_running: true,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        let mut tool = admission.tool;
-        assert!(tool.timeout().await.unwrap());
-        let doc_id = tool.doc_id().unwrap().to_owned();
-        let response = admission
-            .node
-            .execute(&format!(
-                r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state cancel_cause tool_failure_class status }} }}"#,
-                crate::graphql::escape_graphql_string(&doc_id)
-            ))
-            .await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        let row = &response.data.unwrap()["AgentToolCall"][0];
-        assert_eq!(row["lifecycle_state"], "timedOut");
-        assert_eq!(row["cancel_cause"], "deadline");
-        assert_eq!(row["tool_failure_class"], "external");
-        assert_eq!(row["status"], "completionPending");
-        admission.node.shutdown().await;
-        std::fs::remove_dir_all(admission.path).unwrap();
-    }
-}

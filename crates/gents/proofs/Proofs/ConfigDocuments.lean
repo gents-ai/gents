@@ -1,10 +1,11 @@
 import Mathlib.Data.List.Basic
 
-/-! Canonical document vocabulary shared by apply and self-configuration models.
+namespace ConfigDocuments
+
+/-- Canonical document vocabulary shared by apply and self-configuration models.
 Fields describe the spec at ce3aaf12; nested groups are atomic values here, with
 semantic validation owned by the resolver. This is a formal view, not another
 runtime/config implementation. Observations are excluded from desired fields. -/
-namespace ConfigDocuments
 
 inductive Collection where
   | node

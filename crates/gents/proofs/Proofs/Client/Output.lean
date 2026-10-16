@@ -4,10 +4,9 @@ import Proofs.StreamingResponse.Properties
 /-!
 # Client execution/output composition
 
-Execution status and output visibility are projected together here, but keep
-their distinct owners: request lifecycle determines `head`; canonical immutable
-facts determine `output`. This makes the three independence rules executable
-without recreating a response lifecycle.
+Request lifecycle determines `head`; canonical immutable facts determine
+`output`. This makes the three independence rules executable without recreating
+a response lifecycle.
 -/
 
 namespace Client
@@ -39,7 +38,7 @@ theorem active_request_projects_running {attempt : AttemptView}
   cases state <;> simp_all [activeRequestState, projectHead, deriveAttempt]
 
 /-- Missing or not-yet-reconstructible output does not demote terminal request
-execution. The output premise is computed by the shared canonical projection. -/
+execution; the output premise is computed by the shared canonical projection. -/
 theorem missing_output_cannot_demote_completed {attempt : AttemptView}
     {observation : StreamingResponse.Observation}
     (hcompleted : attempt.request.lifecycleState = .completed)
@@ -52,8 +51,6 @@ theorem missing_output_cannot_demote_completed {attempt : AttemptView}
     simp_all [projectOutput, projectHead, deriveAttempt]
   · exact hmissing
 
-/-- A fully reconstructed Complete message remains an output fact. It cannot
-terminalize a request whose lifecycle owner still reports active execution. -/
 theorem complete_message_cannot_terminalize_active_request {attempt : AttemptView}
     {observation : StreamingResponse.Observation}
     {message : CanonicalOutput.MessageEnvelope}
@@ -71,7 +68,6 @@ theorem complete_message_cannot_terminalize_active_request {attempt : AttemptVie
   exact ⟨hrunning, by simp [projectOutput, ClientHeadProjection.isTerminal,
     hrunning, ClientTurnState.isTerminal], hcomplete, houtput⟩
 
-/-- Partial is an output outcome, not a second request failure state. -/
 theorem partial_message_is_not_failure_status {attempt : AttemptView}
     {observation : StreamingResponse.Observation}
     {message : CanonicalOutput.MessageEnvelope}

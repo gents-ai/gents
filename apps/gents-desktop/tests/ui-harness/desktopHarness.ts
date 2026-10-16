@@ -151,33 +151,12 @@ export type MobilePerformanceHarnessController = {
   finishStreaming(): void;
   streamUpdate(): number;
   streamBurst(count: number): number;
-  /** a settled group of `count` commands near the long session's foot */
   toolBatch(count: number): void;
-  /** appends `text` to the live reply, as one update */
   streamText(text: string): void;
-  /** how long a read of an older timeline page takes, as the bridge's do */
   setOlderPageDelay(ms: number): void;
-  /**
-   * One snapshot of a turn ending the way the bridge can deliver it: the
-   * live tail kept or dropped, the saved reply present (under its own key,
-   * as the bridge renders it) or not yet, the turn running or completed.
-   */
   endReply(step: { live: "keep" | "drop"; saved: boolean; completed: boolean }): void;
-  /**
-   * A message the person sent, as the bridge shows it: first the pending
-   * turn, then the saved prompt row, before the live tail. Every stand-in
-   * names the request by its id, as a send returns it, so the row is one
-   * from pending to saved.
-   */
   userTurn(stage: "pending" | "saved"): void;
-  /**
-   * From now on a send to the large session is accepted, under the request
-   * id `userTurn` uses, but the transcript does not show it until
-   * `userTurn` does: the moment between the bridge accepting a message and
-   * its read holding it.
-   */
   holdSends(): void;
-  /** a step the reply takes, after the live tail: running, then done */
   liveTool(state: "running" | "done"): void;
 };
 
@@ -197,7 +176,6 @@ type DesktopUiHarness = {
   sessionSync: SessionSyncHarnessController;
 };
 
-/* the request a held send to the large session is accepted under */
 const LARGE_SENT_REQUEST_ID = "6f1c2a7e-large-request-sent";
 
 export const MOBILE_PERFORMANCE_FIXTURE = {
@@ -212,8 +190,6 @@ export const MOBILE_PERFORMANCE_FIXTURE = {
   repeatedNavigationCount: 10,
 } as const;
 
-/* a patch carries canonical (snake_case) InferenceBackend fields; the view
-   the bridge projects is camelCase with tags always a list */
 function projectBackendPatch(
   backend: InferenceBackendView,
   changes: Record<string, unknown>,
@@ -649,7 +625,6 @@ export function createDesktopUiHarness(
     }, 0);
   }
 
-  /* the live reply as it last stood, for the saved message that replaces it */
   let liveReply = "";
   function appendStreamChunk() {
     streamSequence += 1;
@@ -690,9 +665,6 @@ export function createDesktopUiHarness(
       lastError: p2pStatus === "healthy" ? null : "fixture transport unavailable",
       lastFailureAt: p2pStatus === "healthy" ? null : STARTED_AT,
     };
-    // A fresh empty fleet has no home until setup provisions one. After that,
-    // the snapshot has to name the initialized agent or the config screen
-    // will not treat it as the local service.
     const freshHome = scenario === "empty-fleet" && !provisioned;
     const next: DesktopClientSnapshot = {
       bootstrap: {
@@ -872,7 +844,6 @@ export function createDesktopUiHarness(
       provisioned = true;
       deployment = {
         ...deployment,
-        // Background pairing installs an enrollment route for the managed DID.
         source: "enrollment",
         label,
         node: { ...deployment.node, displayName: label },
@@ -903,8 +874,6 @@ export function createDesktopUiHarness(
       notify("runtime");
       return snapshot();
     },
-    /* no packs installed and no registry account; the allowed folders
-       are the ones added since the page loaded; no plugin call is asking */
     async listInstalledPacks() {
       return { packs: [] };
     },
@@ -1332,8 +1301,6 @@ export function createDesktopUiHarness(
         const existing = sessions.get(request.sessionId)!;
         const nextSequence = existing.timelineItems.length + 1;
         const requestId = `request-${++requestSeq}`;
-        /* like the bridge, a message sent while the turn runs is queued
-           behind it rather than answered */
         if (
           existing.turnState === "running" ||
           existing.turnState === "waitingForClaim"
@@ -1960,7 +1927,6 @@ export function createDesktopUiHarness(
             maxConcurrent: document.max_concurrent ?? null,
             maxQueueDepth: document.max_queue_depth ?? null,
             enabled: document.enabled ?? true,
-            /* the bridge projects tags as a list, never absent */
             tags: document.tags ?? [],
             models: [],
             advertisedModels: [],
@@ -2637,7 +2603,6 @@ export function createDesktopUiHarness(
               timestamp: STARTED_AT,
               reconstruction: HARNESS_READY_RECONSTRUCTION,
             };
-            /* the bridge places a saved reply before the live tail's slot */
             const tailAt = without.findIndex((item) => item.kind === "liveAssistant");
             const timelineItems = !saved
               ? without
@@ -2746,8 +2711,6 @@ export function createDesktopUiHarness(
             syncSessions();
             notify("store");
           },
-          /* a settled group of `count` commands near the long session's
-             foot, where rows are always drawn: enough steps to cap its box */
           toolBatch(count) {
             const session = sessions.get("session-large");
             if (!session) {

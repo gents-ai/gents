@@ -444,7 +444,6 @@ async fn dispatch_serial_per_group_separates_correlation_and_membership_generati
     );
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();
-    // Active work is itself a durable marker. Model that real storage invariant.
     let old_key = super::super::durable_fire_key("event-group", &["run-a"]);
     materializer.mark_group_materialized(&node_did, "event-1", &old_key);
     materializer.persist_materialized_group_markers(&node_did);
@@ -596,11 +595,6 @@ async fn dispatch_latest_only_lock_blocks_second_supersede_until_first_materiali
 
 #[tokio::test]
 async fn dispatch_errors_and_skips_materialize_on_template_render_failure() {
-    // Template references `event.missing_field`, but the intent's event_vars
-    // has no such key. With strict-undefined semantics, rendering must fail,
-    // and dispatch must return Rejected (with a "template:" prefix), skip the
-    // materializer entirely, and invoke `on_result` with the same Rejected
-    // value so the upstream source can write back `last_status = "error"`.
     let task = resolved_task("{{ event.missing_field }}");
     let schedule = resolved_schedule("sched-1", task.clone());
     let snapshot = snapshot_with_schedules(HashMap::from([("sched-1".to_string(), schedule)]));
@@ -660,10 +654,6 @@ async fn dispatch_errors_and_skips_materialize_on_template_render_failure() {
 
 #[tokio::test]
 async fn dispatch_scopes_concurrency_by_the_agents_node_did() {
-    // #605: the trigger tuple is only unique per agent. Both the serial gate
-    // and LatestOnly supersede must receive the DID of the fire's agent so
-    // replicated foreign requests for the same trigger id can never gate (or
-    // be superseded by) this agent's fires.
     let task = resolved_task("tick");
     let schedule = resolved_schedule("sched-did", task.clone());
     let snapshot = snapshot_with_schedules(HashMap::from([("sched-did".to_string(), schedule)]));

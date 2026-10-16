@@ -2,9 +2,6 @@ import Proofs.CanonicalOutput.Execution.ToolMapFrame
 
 namespace CanonicalOutput.Execution
 
-/-- A terminal acknowledgement changes tool execution accounting, not already
-published result authority. Lifecycle coherence is the close owner's existing
-postcondition; the payload half follows from the prior coherent projection. -/
 theorem terminalToolWrite_preserves_toolProjectionCoherent
     (world : World) (document : DocId) (state : ToolExecution.ToolCallState)
     (edit : OwnedTool → OwnedTool)

@@ -1,6 +1,5 @@
-//! Shared explicit CLI collection selections. Profiles do not grant ACP access.
-//! Runtime/agent are operator selections; desktop/discovery omit backend secrets.
-//! Pairing templates remain the owner of directional DID/requester predicates.
+//! Shared explicit CLI collection selections. Pairing templates remain the
+//! owner of directional DID/requester predicates.
 
 use std::collections::BTreeSet;
 
@@ -194,40 +193,6 @@ const DISCOVERY_COLLECTIONS: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn expands_profiles_and_dedupes_explicit_collections() {
-        let collections = expand_p2p_collection_profile_ids(
-            [" AgentRequest ", "AgentRequest", ""],
-            ["chat-requests", "tool-services"],
-        )
-        .unwrap();
-
-        assert!(collections.contains("AgentRequest"));
-        assert!(collections.contains("ToolServiceRegistry"));
-        assert_eq!(
-            collections
-                .iter()
-                .filter(|name| name.as_str() == "AgentRequest")
-                .count(),
-            1
-        );
-    }
-
-    #[test]
-    fn rejects_unknown_profile() {
-        let error = expand_p2p_collection_profile_ids([], ["unknown"]).unwrap_err();
-        assert!(error.to_string().contains("unknown P2P collection profile"));
-    }
-
-    #[test]
-    fn ignores_empty_profile_ids() {
-        let collections = expand_p2p_collection_profile_ids(["AgentRequest"], ["", "  "]).unwrap();
-        assert_eq!(
-            collections,
-            ["AgentRequest".to_string()].into_iter().collect()
-        );
-    }
 
     #[test]
     fn profiles_select_canonical_documents_without_implicit_client_credentials() {

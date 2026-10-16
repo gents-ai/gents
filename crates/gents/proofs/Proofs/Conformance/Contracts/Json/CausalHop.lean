@@ -2,10 +2,6 @@ import Proofs.Request.CausalHop
 import Proofs.DurableLineage
 import Proofs.Conformance.Contracts.Json.Helpers
 
-/-! Executable causal-hop rows. Every expectation evaluates `CausalHop.nextHop`
-and `CausalHop.admitHop`; the native materializer (the single writer of
-`AgentRequest.request_hop`) and the admission hop check must agree with
-them. -/
 namespace Conformance.CausalHopContracts
 
 open Conformance.Contracts
@@ -20,18 +16,14 @@ def causeHopJson : CausalHop.Cause → String
   | .crossSession causeHop => toString causeHop
   | _ => "null"
 
-/-- One materialization step: the hop a request of `cause` receives from the
-hop of the request it continues in its own session, admitted against the
-target's `max_request_hop`. -/
+
 structure StepCase where
   name : String
   cause : CausalHop.Cause
   ownPredecessorHop : Nat
   maxRequestHop : Nat
 
-/-- A causal chain from a root at hop zero across sessions: each step is
-materialized from the previous request's hop and checked against the same
-target bound. -/
+
 structure ChainCase where
   name : String
   maxRequestHop : Nat
@@ -58,14 +50,12 @@ def stepCases : List StepCase :=
   , ⟨"zero_bound_refuses_first_send", .crossSession 0, 0, 0⟩
   , ⟨"configured_bound_refuses_past_target_limit", .crossSession 2, 0, 2⟩ ]
 
-/-- `pingPong n`: two sessions alternately continuing each other from a root,
-each step's own predecessor being the request two links back. -/
+
 def pingPongSteps (n : Nat) : List CausalHop.Step :=
   let hops := CausalHop.pingPongHops n
   (List.range n).map fun index => .cross ((hops.take (index + 1)).reverse.drop 1 |>.head?.getD 0)
 
-/-- Agent loops: an A↔B exchange, and a message loop with interleaved
-same-session continuations. Each is cut at its target's bound. -/
+
 def chainCases : List ChainCase :=
   [ ⟨"ping_pong_is_cut_at_default_bound", CausalHop.defaultMaxRequestHop, pingPongSteps 9⟩
   , ⟨"message_loop_is_cut_at_default_bound", CausalHop.defaultMaxRequestHop,
@@ -73,14 +63,13 @@ def chainCases : List ChainCase :=
         .cont, .cross 4, .cross 5, .cross 6]⟩
   , ⟨"continuations_never_extend_a_chain", 1, [.cross 0, .cont, .cont, .cont]⟩ ]
 
-/-- Calls and returns between a caller `a` and a callee `b` from root hop
-zero (`CausalHop.run`); each event's hop is admitted against one bound. -/
+
 structure CallCase where
   name : String
   maxRequestHop : Nat
   events : List CausalHop.Event
 
-/-- A ping-pong in which each send's result is returned to its sender. -/
+
 def pingPongWithReturns : Nat → List CausalHop.Event
   | 0 => []
   | n + 1 => pingPongWithReturns n ++
@@ -91,7 +80,7 @@ def callCases : List CallCase :=
   , ⟨"ping_pong_with_returns_is_cut_at_default_bound", CausalHop.defaultMaxRequestHop,
       pingPongWithReturns 9⟩ ]
 
-/-- Hops of the requests a call trace materializes, from `start`. -/
+
 def callHops : CausalHop.Pair → List CausalHop.Event → List Nat
   | _, [] => []
   | p, e :: rest => e.hop p :: callHops (e.apply p) rest
@@ -121,7 +110,7 @@ def stepCaseJson (c : StepCase) : String :=
     ++ ",\"expected_hop\":" ++ toString hop
     ++ ",\"expected_admitted\":" ++ toString (CausalHop.admitHop c.maxRequestHop hop) ++ "}"
 
-/-- Hops reached after each step of a chain, starting from hop zero. -/
+
 def chainHops : Nat → List CausalHop.Step → List Nat
   | _, [] => []
   | start, step :: rest =>
@@ -141,7 +130,7 @@ def chainCaseJson (c : ChainCase) : String :=
     ++ ",\"expected_admitted\":"
       ++ jsonArray (hops.map (toString ∘ CausalHop.admitHop c.maxRequestHop)) ++ "}"
 
-/-- One agent-interrupt permission question (`DurableLineage.interruptAllowed`). -/
+
 structure InterruptCase where
   name : String
   callerSession : String
@@ -165,7 +154,7 @@ def interruptCaseJson (c : InterruptCase) : String :=
       ++ toString (DurableLineage.interruptAllowed c.callerSession c.targetSession
         c.targetOriginCause) ++ "}"
 
-/-- The interrupt fixture covers both verdicts. -/
+
 theorem interrupt_cases_cover_both_verdicts :
     interruptCases.any (fun c => DurableLineage.interruptAllowed c.callerSession
       c.targetSession c.targetOriginCause) = true ∧
@@ -173,8 +162,7 @@ theorem interrupt_cases_cover_both_verdicts :
       c.targetSession c.targetOriginCause) = true := by
   native_decide
 
-/-- One delivered session message (`DurableLineage.sessionMessageWrite`) into
-a session whose current hop is `ownHop`. -/
+
 structure WriteCase where
   name : String
   delivery : DurableLineage.Delivery
@@ -206,7 +194,7 @@ def contractJson : String :=
     ++ ",\"interrupt_cases\":" ++ jsonArray (interruptCases.map interruptCaseJson)
     ++ ",\"write_cases\":" ++ jsonArray (writeCases.map writeCaseJson) ++ "}"
 
-/-- The fixture exercises every cause and both admission outcomes. -/
+
 theorem step_cases_cover_causes_and_outcomes :
     ["root", "cross_session", "return", "continuation"].all (fun cause =>
       stepCases.any (causeString ·.cause == cause)) = true ∧
@@ -216,8 +204,7 @@ theorem step_cases_cover_causes_and_outcomes :
       (CausalHop.nextHop c.cause c.ownPredecessorHop)) = true := by
   native_decide
 
-/-- Every loop fixture is cut: its final request is refused while every
-earlier request is admitted. -/
+
 theorem loop_fixtures_are_cut :
     (chainCases.take 2).all (fun c =>
       let admitted := (chainHops 0 c.steps).map (CausalHop.admitHop c.maxRequestHop)
@@ -225,14 +212,12 @@ theorem loop_fixtures_are_cut :
         (admitted.dropLast.all (· == true))) = true := by
   native_decide
 
-/-- The exported ping-pong chain is the model's `pingPongHops`. -/
+
 theorem ping_pong_fixture_matches_model :
     chainHops 0 (pingPongSteps 9) = (CausalHop.pingPongHops 9).drop 1 := by
   native_decide
 
-/-- Sequential calls are all admitted at a bound of one. In the ping-pong the
-only refused request is the send past the default bound; the results
-returned to each sender, including that refused send's, are admitted. -/
+
 theorem call_fixtures_match_the_bound :
     (callHops ⟨0, 0⟩ (CausalHop.sequentialCalls 12)).all (· ≤ 1) = true ∧
     (callHops ⟨0, 0⟩ (pingPongWithReturns 9)).filter
@@ -240,8 +225,7 @@ theorem call_fixtures_match_the_bound :
       [CausalHop.defaultMaxRequestHop + 1] := by
   native_decide
 
-/-- With its returns erased, the exported ping-pong is the model's
-`pingPongHops`. -/
+
 theorem ping_pong_with_returns_erases_to_model :
     callHops ⟨0, 0⟩ ((pingPongWithReturns 9).filter (fun e => !e.isReturn)) =
       (CausalHop.pingPongHops 9).drop 1 := by

@@ -1,20 +1,13 @@
-//! Typed patch layer for agent self-configuration (#654).
+//! Typed patch layer for agent self-configuration.
 //!
 //! Mirrors the Lean `SelfConfig` model (`proofs/Proofs/SelfConfig/`): each
-//! config collection has a declared writable field set; everything else —
-//! identity/unique keys, the owner `node_did`, runtime-owned status fields,
-//! secrets, apply-managed fields — is protected. A patch is an in-memory
-//! partial merge over exactly the writable fields ([`apply_patch`]), rejected
-//! wholesale if it names anything outside them ([`ensure_admissible`]),
-//! validated as a whole document, and committed through a
-//! [`super::ConfigApplyTxn`] under the node DID.
-//!
-//! Desired-field selection and merge semantics are fenced against the Lean contract
-//! snapshot by `tests/conformance/self_config.rs`:
-//! - `all_fields` reuses the canonical desired-state projection; runtime-owned
-//!   observations are excluded even when they share the same stored document;
-//! - identity immutability, field containment, and reject-leaves-unchanged
-//!   replay the generated Lean witness cases through this merge.
+//! config collection has a declared writable field set; everything else is
+//! protected. A patch is an in-memory partial merge over exactly the writable
+//! fields ([`apply_patch`]), rejected wholesale if it names anything outside
+//! them ([`ensure_admissible`]), validated as a whole document, and committed
+//! through a [`super::ConfigApplyTxn`] under the node DID. Desired-field
+//! selection and merge semantics are fenced against the Lean contract
+//! snapshot by `tests/conformance/self_config.rs`.
 
 use anyhow::{bail, Result};
 use serde_json::{Map, Value};
@@ -154,12 +147,10 @@ impl SelfConfigTarget {
     }
 }
 
-/// A self-config patch: field → `Some(value)` to set, `None` to clear.
-/// Ordered; later entries win (Lean `applyPatch` fold).
+/// A self-config patch: field → `Some(value)` to set, `None` to clear. Later entries win.
 pub type SelfConfigPatch = Vec<(String, Option<Value>)>;
 
-/// Reject unknown/protected fields before merging. Canonical typed decoding and
-/// full retained reference validation check values at preview/publication.
+/// Reject unknown/protected fields before merging.
 pub fn ensure_admissible(target: SelfConfigTarget, patch: &SelfConfigPatch) -> Result<()> {
     for (field, _) in patch {
         if !target.is_writable(field) {
@@ -216,7 +207,7 @@ pub fn ensure_admissible(target: SelfConfigTarget, patch: &SelfConfigPatch) -> R
 
 /// In-memory partial merge (Lean `applyPatch`): only writable fields change;
 /// a set overwrites, a clear removes. Entries outside the writable set are
-/// ignored here as defense in depth below [`ensure_admissible`].
+/// ignored as defense in depth below [`ensure_admissible`].
 pub fn apply_patch(
     target: SelfConfigTarget,
     doc: &Map<String, Value>,

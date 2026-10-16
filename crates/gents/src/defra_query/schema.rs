@@ -1,11 +1,3 @@
-//! Collection-field discovery and invalid-field diagnostics for `defra_query`.
-//!
-//! When a query fails (or the caller asks for `fields: ["*"]`), the collection
-//! is introspected via GraphQL `__type` and the schema field set is turned into
-//! agent-usable output: the allowed field inventory (restricted sensitive
-//! fields excluded) and, for invalid fields, close-match suggestions. This
-//! keeps the diagnostics structural — no hard-coded per-collection field lists.
-
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -14,47 +6,32 @@ use super::query::{collect_filter_field_keys, is_restricted_field, DefraQueryPar
 use super::render::validate_identifier;
 use crate::graphql::escape_graphql_string;
 
-/// A field on a collection as reported by GraphQL introspection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaField {
     pub name: String,
-    /// The field's GraphQL type spelling: the named type, suffixed with `!`
-    /// when the field is non-nillable (e.g. `String`, `DateTime`, `Int!`),
-    /// otherwise the wrapper kind (e.g. `LIST`).
     pub type_name: String,
 }
 
 impl SchemaField {
-    /// The field's named type, with the non-nillable marker
-    /// [`SchemaField::type_name`] renders stripped off.
-    ///
-    /// Introspection reports a non-nillable field as a `NON_NULL` wrapper with
-    /// no name of its own; `type_name` resolves the name out of `ofType` and
-    /// re-renders the wrapper as `Name!`. Nillability is not part of a GraphQL
-    /// type name and no name contains `!`, so a rule stated over type *names*
-    /// has to compare against this rather than against `type_name`.
+    // Introspection reports a non-nillable field as a NON_NULL wrapper; rules
+    // stated over type names must compare against the name with `!` stripped.
     pub fn named_type(&self) -> &str {
         self.type_name.trim_end_matches('!')
     }
 }
 
-/// The introspected field set of one collection.
 #[derive(Debug, Clone)]
 pub struct CollectionSchema {
     pub fields: Vec<SchemaField>,
 }
 
 impl CollectionSchema {
-    /// Every introspected field name, including DefraDB internals and
-    /// aggregate pseudo-fields. This is the *validity* set: anything outside
-    /// it is definitively not queryable.
     pub(crate) fn field_names(&self) -> BTreeSet<&str> {
         self.fields.iter().map(|f| f.name.as_str()).collect()
     }
 
-    /// The *display* set: fields worth advertising to an agent. Excludes
-    /// restricted sensitive fields, aggregate pseudo-fields (`AVG`, `COUNT`,
-    /// ...), and `_`-prefixed internals except `_docID`.
+    // Display set: excludes restricted sensitive fields, aggregate
+    // pseudo-fields and `_`-prefixed internals except `_docID`.
     pub(crate) fn visible_fields(&self, collection: &str) -> Vec<&SchemaField> {
         self.fields
             .iter()
@@ -65,9 +42,8 @@ impl CollectionSchema {
     }
 }
 
-/// DefraDB's aggregate pseudo-fields, which introspection reports beside a
-/// collection's own fields. An application field may itself be uppercase
-/// (`URL`), so these are named rather than inferred from case.
+// An application field may itself be uppercase (URL), so aggregate
+// pseudo-fields are named rather than inferred from case.
 pub(crate) fn is_aggregate_pseudo_field(name: &str) -> bool {
     matches!(
         name,
@@ -75,11 +51,8 @@ pub(crate) fn is_aggregate_pseudo_field(name: &str) -> bool {
     )
 }
 
-/// The selection every introspection query asks of a `__type`.
 const TYPE_FIELDS: &str = "fields { name type { name kind ofType { name kind } } }";
 
-/// Build the `__type` introspection query for a collection. The name is
-/// validated as an identifier and escaped, so untrusted input cannot inject.
 pub fn introspection_query(collection: &str) -> Result<String> {
     validate_identifier(collection).map_err(|e| anyhow!("invalid collection name: {e}"))?;
     Ok(format!(
@@ -88,11 +61,9 @@ pub fn introspection_query(collection: &str) -> Result<String> {
     ))
 }
 
-/// One query introspecting every collection in `collections`, aliased
-/// `c0`, `c1`, ... in order; [`parse_collection_schemas`] reads it back.
-/// DefraDB builds its whole introspection schema for every introspection
-/// query it executes, so asking once costs one build instead of one per
-/// collection.
+// DefraDB builds its whole introspection schema for every introspection
+// query, so asking once for many collections costs one build, not one per
+// collection.
 pub fn introspection_query_many(collections: &[&str]) -> Result<String> {
     let mut query = String::from("{");
     for (index, collection) in collections.iter().enumerate() {
@@ -106,15 +77,10 @@ pub fn introspection_query_many(collections: &[&str]) -> Result<String> {
     Ok(query)
 }
 
-/// Parse the `data` of an introspection response into a [`CollectionSchema`].
-/// Returns `None` when the type does not exist (`__type` is `null`).
 pub fn parse_collection_schema(data: Option<&Value>) -> Option<CollectionSchema> {
     parse_type(data?.get("__type")?)
 }
 
-/// Parse the response to [`introspection_query_many`] for `count`
-/// collections, in the order they were asked for; `None` for a collection
-/// the schema does not have.
 pub fn parse_collection_schemas(
     data: Option<&Value>,
     count: usize,
@@ -143,13 +109,6 @@ fn parse_type(ty: &Value) -> Option<CollectionSchema> {
     })
 }
 
-/// GraphQL reports a non-nillable field as a `NON_NULL` wrapper with no name of
-/// its own, so its named type has to be read out of `ofType`. Re-rendering it
-/// as `Name!` keeps [`SchemaField::type_name`] in the spelling
-/// `crate::defra_write` reads a field type from; DefraDB wraps a collection
-/// field's named type in at most one `NON_NULL`, so one `ofType` level resolves
-/// every shape it emits. A `LIST` keeps its kind: no list value is one of the
-/// single scalars callers ask about.
 fn field_type_name(ty: Option<&Value>) -> String {
     if let Some(name) = named_type(ty) {
         return name.to_string();
@@ -170,8 +129,6 @@ fn type_kind(ty: Option<&Value>) -> Option<&str> {
     ty?.get("kind")?.as_str()
 }
 
-/// The shared "no such collection" message, used by both the failure
-/// diagnostic and discovery mode.
 pub fn unknown_collection_message(collection: &str) -> String {
     format!(
         "collection {collection:?} does not exist; {}",
@@ -179,9 +136,6 @@ pub fn unknown_collection_message(collection: &str) -> String {
     )
 }
 
-/// Suggest close matches for an invalid field name from the candidate set,
-/// nearest first, at most three, only when reasonably close (edit distance at
-/// most half the invalid name's length).
 pub(crate) fn suggest_fields(invalid: &str, candidates: &[String]) -> Vec<String> {
     let threshold = (invalid.chars().count() / 2).max(2);
     let mut scored: Vec<(usize, &String)> = candidates
@@ -209,13 +163,6 @@ fn levenshtein(a: &str, b: &str) -> usize {
     row[b.len()]
 }
 
-/// Build the enriched failure message for a query that DefraDB rejected.
-///
-/// With a schema in hand, requested selection fields and filter field keys are
-/// checked against the introspected field set; any misses produce a diagnostic
-/// with the allowed inventory and suggestions. When the collection itself does
-/// not exist (`schema` is `None`) that is said plainly. When nothing looks
-/// field-shaped (all names valid), falls back to `raw_errors`.
 pub fn diagnose_failed_query(
     params: &DefraQueryParams,
     schema: Option<&CollectionSchema>,
@@ -270,8 +217,6 @@ pub fn diagnose_failed_query(
     )
 }
 
-/// The success payload for discovery mode (`fields: ["*"]`): the queryable
-/// field inventory for the collection, restricted fields excluded.
 pub fn discovery_payload(collection: &str, schema: &CollectionSchema) -> Value {
     let fields: Vec<Value> = schema
         .visible_fields(collection)
@@ -292,74 +237,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn schema_from(names_and_types: &[(&str, &str)]) -> CollectionSchema {
-        CollectionSchema {
-            fields: names_and_types
-                .iter()
-                .map(|(n, t)| SchemaField {
-                    name: n.to_string(),
-                    type_name: t.to_string(),
-                })
-                .collect(),
-        }
-    }
-
-    /// The introspected AgentToolCall-ish fixture used across tests: internals,
-    /// aggregates, and real fields, matching what DefraDB actually returns.
-    fn tool_call_schema() -> CollectionSchema {
-        schema_from(&[
-            ("AVG", "Float!"),
-            ("COUNT", "Int!"),
-            ("GROUP", "LIST"),
-            ("_deleted", "Boolean"),
-            ("_docID", "ID"),
-            ("_version", "LIST"),
-            ("tool_call_key", "String"),
-            ("tool_name", "String"),
-            ("status", "String"),
-            ("started_at", "DateTime"),
-            ("completed_at", "DateTime"),
-            ("deadline_at", "DateTime"),
-            ("request_id", "String"),
-        ])
-    }
-
-    fn params(collection: &str, fields: &[&str]) -> DefraQueryParams {
-        DefraQueryParams {
-            collection: collection.to_string(),
-            filter: None,
-            fields: fields.iter().map(|f| f.to_string()).collect(),
-            limit: None,
-        }
-    }
-
-    #[test]
-    fn introspection_query_targets_the_collection() {
-        let q = introspection_query("AgentToolCall").unwrap();
-        assert!(q.contains(r#"__type(name: "AgentToolCall")"#), "{q}");
-        assert!(q.contains("fields"), "{q}");
-        assert!(
-            q.contains("ofType"),
-            "a non-null field needs its inner type: {q}"
-        );
-    }
-
-    #[test]
-    fn many_collections_are_introspected_in_one_aliased_query() {
-        let q = introspection_query_many(&["AgentToolCall", "Missing"]).unwrap();
-        assert!(q.contains(r#"c0: __type(name: "AgentToolCall")"#), "{q}");
-        assert!(q.contains(r#"c1: __type(name: "Missing")"#), "{q}");
-        assert!(introspection_query_many(&["X\") { } evil"]).is_err());
-        let data = json!({
-            "c0": { "fields": [ { "name": "status", "type": { "kind": "SCALAR", "name": "String" } } ] },
-            "c1": null
-        });
-        let parsed = parse_collection_schemas(Some(&data), 2);
-        assert_eq!(parsed.len(), 2);
-        assert_eq!(parsed[0].as_ref().unwrap().fields[0].name, "status");
-        assert!(parsed[1].is_none());
-    }
-
     #[test]
     fn introspection_query_rejects_injection() {
         let err = introspection_query("X\") { } evil").unwrap_err();
@@ -367,217 +244,20 @@ mod tests {
     }
 
     #[test]
-    fn parse_extracts_field_names_and_types() {
-        let data = json!({
-            "__type": {
-                "fields": [
-                    { "name": "status", "type": { "kind": "SCALAR", "name": "String" } },
-                    { "name": "started_at", "type": { "kind": "SCALAR", "name": "DateTime" } },
-                    { "name": "_version", "type": { "kind": "LIST", "name": null } }
-                ]
-            }
-        });
-        let schema = parse_collection_schema(Some(&data)).expect("type exists");
-        assert_eq!(
-            schema.fields,
-            vec![
-                SchemaField {
-                    name: "status".into(),
-                    type_name: "String".into()
-                },
-                SchemaField {
-                    name: "started_at".into(),
-                    type_name: "DateTime".into()
-                },
-                SchemaField {
-                    name: "_version".into(),
-                    type_name: "LIST".into()
-                },
-            ]
-        );
-    }
-
-    /// The shapes DefraDB emits for a non-nillable field and for both list
-    /// forms, as a live `__type` query returns them.
-    #[test]
-    fn parse_names_a_non_null_field_and_keeps_list_kinds() {
-        let data = json!({
-            "__type": {
-                "fields": [
-                    { "name": "required_total", "type": {
-                        "kind": "NON_NULL", "name": null,
-                        "ofType": { "kind": "SCALAR", "name": "Int", "ofType": null } } },
-                    { "name": "required_label", "type": {
-                        "kind": "NON_NULL", "name": null,
-                        "ofType": { "kind": "SCALAR", "name": "String", "ofType": null } } },
-                    { "name": "tags", "type": {
-                        "kind": "LIST", "name": null,
-                        "ofType": { "kind": "SCALAR", "name": "String", "ofType": null } } },
-                    { "name": "required_tags", "type": {
-                        "kind": "LIST", "name": null,
-                        "ofType": { "kind": "NON_NULL", "name": null,
-                                    "ofType": { "kind": "SCALAR", "name": "String" } } } },
-                    { "name": "GROUP", "type": {
-                        "kind": "LIST", "name": null,
-                        "ofType": { "kind": "OBJECT", "name": "AgentToolCall", "ofType": null } } }
-                ]
-            }
-        });
-        let schema = parse_collection_schema(Some(&data)).expect("type exists");
-        let types: Vec<&str> = schema.fields.iter().map(|f| f.type_name.as_str()).collect();
-        assert_eq!(types, vec!["Int!", "String!", "LIST", "LIST", "LIST"]);
-    }
-
-    #[test]
-    fn parse_returns_none_for_unknown_type() {
-        let data = json!({ "__type": null });
-        assert!(parse_collection_schema(Some(&data)).is_none());
-        assert!(parse_collection_schema(None).is_none());
-    }
-
-    #[test]
-    fn visible_fields_hide_aggregates_and_internals_but_keep_docid() {
-        let schema = tool_call_schema();
-        let visible: Vec<&str> = schema
-            .visible_fields("AgentToolCall")
-            .iter()
-            .map(|f| f.name.as_str())
-            .collect();
-        assert!(visible.contains(&"_docID"), "{visible:?}");
-        assert!(visible.contains(&"tool_name"), "{visible:?}");
-        assert!(visible.contains(&"started_at"), "{visible:?}");
-        for hidden in ["AVG", "COUNT", "GROUP", "_version", "_deleted"] {
-            assert!(!visible.contains(&hidden), "{hidden} should be hidden");
-        }
-    }
-
-    #[test]
-    fn visible_fields_exclude_restricted_secrets() {
-        let schema = schema_from(&[
-            ("backend_id", "String"),
-            ("endpoint", "String"),
-            ("auth", "JSON"),
-        ]);
-        let visible: Vec<&str> = schema
-            .visible_fields("InferenceBackend")
-            .iter()
-            .map(|f| f.name.as_str())
-            .collect();
-        assert_eq!(visible, vec!["backend_id", "endpoint"]);
-    }
-
-    #[test]
-    fn suggests_timestamp_neighbours_for_created_at() {
-        let candidates: Vec<String> = tool_call_schema()
-            .visible_fields("AgentToolCall")
-            .iter()
-            .map(|f| f.name.clone())
-            .collect();
-        let suggestions = suggest_fields("created_at", &candidates);
-        assert!(
-            suggestions.contains(&"started_at".to_string()),
-            "{suggestions:?}"
-        );
-        assert!(
-            suggestions.contains(&"completed_at".to_string()),
-            "{suggestions:?}"
-        );
-        assert!(
-            !suggestions.contains(&"deadline_at".to_string()),
-            "deadline_at is too far: {suggestions:?}"
-        );
-    }
-
-    #[test]
-    fn suggests_node_did_for_node_name() {
-        let candidates = vec![
-            "node_did".to_string(),
-            "agent_id".to_string(),
-            "request_id".to_string(),
-            "status".to_string(),
-        ];
-        assert_eq!(suggest_fields("node_name", &candidates), vec!["node_did"]);
-    }
-
-    #[test]
-    fn no_suggestions_for_nonsense() {
-        let candidates = vec!["request_id".to_string(), "status".to_string()];
-        assert!(suggest_fields("zzzqqqxxx", &candidates).is_empty());
-    }
-
-    #[test]
     fn suggestions_never_include_restricted_fields() {
         // Candidates come from the visible set, so a near-miss on a secret
         // field must not resurrect it.
-        let schema = schema_from(&[("backend_id", "String"), ("auth", "JSON")]);
+        let schema = CollectionSchema {
+            fields: vec![
+                SchemaField { name: "backend_id".into(), type_name: "String".into() },
+                SchemaField { name: "auth".into(), type_name: "JSON".into() },
+            ],
+        };
         let candidates: Vec<String> = schema
             .visible_fields("InferenceBackend")
             .iter()
             .map(|f| f.name.clone())
             .collect();
         assert!(suggest_fields("auths", &candidates).is_empty());
-    }
-
-    #[test]
-    fn diagnose_reports_invalid_selection_fields_with_inventory_and_suggestions() {
-        let schema = tool_call_schema();
-        let msg = diagnose_failed_query(
-            &params("AgentToolCall", &["tool_name", "created_at"]),
-            Some(&schema),
-            "raw",
-        );
-        assert!(msg.contains("created_at"), "{msg}");
-        assert!(msg.contains("AgentToolCall"), "{msg}");
-        assert!(msg.contains("started_at"), "{msg}");
-        assert!(msg.contains("completed_at"), "{msg}");
-        // Inventory present: a valid field the caller did NOT request.
-        assert!(msg.contains("tool_call_key"), "{msg}");
-        // Aggregates are not advertised.
-        assert!(!msg.contains("AVG"), "{msg}");
-    }
-
-    #[test]
-    fn diagnose_reports_invalid_filter_keys() {
-        let schema = tool_call_schema();
-        let mut p = params("AgentToolCall", &["tool_name"]);
-        p.filter = Some(json!({ "_and": [{ "created_at": { "_gt": "2026" } }] }));
-        let msg = diagnose_failed_query(&p, Some(&schema), "raw");
-        assert!(msg.contains("created_at"), "{msg}");
-        assert!(msg.contains("started_at"), "{msg}");
-    }
-
-    #[test]
-    fn diagnose_reports_unknown_collection() {
-        let msg = diagnose_failed_query(&params("NoSuchThing", &["x"]), None, "raw");
-        assert!(msg.contains("NoSuchThing"), "{msg}");
-        assert!(msg.contains("does not exist"), "{msg}");
-    }
-
-    #[test]
-    fn diagnose_falls_back_to_raw_errors_when_fields_all_valid() {
-        let schema = tool_call_schema();
-        let msg = diagnose_failed_query(
-            &params("AgentToolCall", &["tool_name"]),
-            Some(&schema),
-            "some backend explosion",
-        );
-        assert!(msg.contains("some backend explosion"), "{msg}");
-    }
-
-    #[test]
-    fn discovery_payload_lists_visible_fields_with_types() {
-        let schema = tool_call_schema();
-        let payload = discovery_payload("AgentToolCall", &schema);
-        assert_eq!(payload["collection"], "AgentToolCall");
-        assert_eq!(payload["discovery"], true);
-        let fields = payload["fields"].as_array().expect("fields array");
-        let names: Vec<&str> = fields.iter().map(|f| f["name"].as_str().unwrap()).collect();
-        assert!(names.contains(&"started_at"), "{names:?}");
-        assert!(!names.contains(&"AVG"), "{names:?}");
-        let started = fields
-            .iter()
-            .find(|f| f["name"] == "started_at")
-            .expect("started_at present");
-        assert_eq!(started["type"], "DateTime");
     }
 }

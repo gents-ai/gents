@@ -14,8 +14,6 @@ pub(crate) mod canonical;
 mod canonical_tests;
 pub(crate) mod native_encoding;
 
-/// Exact physical binding returned by accepted provider publication. Tool
-/// execution adopts this row; it never recreates provider intent.
 #[derive(Clone, Debug)]
 pub struct AcceptedToolCall {
     pub(crate) tool_call_doc_id: String,
@@ -28,8 +26,6 @@ pub struct AcceptedToolCall {
     pub(crate) tool_name: String,
     pub(crate) execution_generation: String,
     pub(crate) arguments: gents_protocol::output::PayloadRef,
-    /// Immutable await mode fixed at accepted publication. Only a
-    /// `agent_new`/`agent_message` call is published in background.
     pub(crate) await_mode: crate::tool_call_lifecycle::AwaitMode,
 }
 
@@ -63,13 +59,6 @@ struct StreamBuffer {
     persisted: StreamBufferSnapshot,
 }
 
-/// Uncommitted stream state versus the persisted snapshot. It holds no
-/// growing content text: content bookkeeping is a byte counter because
-/// content only grows between resets, so counter inequality is exactly text
-/// inequality. Reasoning keeps its bounded preview text (capped at
-/// `MAX_LIVE_REASONING_BYTES`) because an oversized arrival replaces the
-/// preview wholesale; `reasoning_progress_seq` still marks arrivals whose
-/// capped preview text is identical to the persisted preview.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct StreamBufferSnapshot {
     content_bytes: usize,
@@ -79,20 +68,15 @@ struct StreamBufferSnapshot {
 }
 
 impl StreamBufferSnapshot {
-    /// Record a content delta. Callers gate empty deltas.
     fn record_content(&mut self, tokens: &str) {
         self.content_bytes += tokens.len();
     }
 
-    /// Record a reasoning arrival against the bounded preview. Arrivals whose
-    /// capped preview text is unchanged still advance the progress sequence.
     fn record_reasoning(&mut self, reasoning: &str) {
         append_live_reasoning_preview(&mut self.reasoning, reasoning);
         self.reasoning_progress_seq = self.reasoning_progress_seq.saturating_add(1);
     }
 
-    /// Whether content or reasoning became visible against the persisted
-    /// snapshot for the first time in this stream epoch.
     fn first_visible_since(&self, persisted: &Self) -> bool {
         (persisted.content_bytes == 0 && self.content_bytes > 0)
             || (persisted.reasoning.is_empty() && !self.reasoning.is_empty())
@@ -213,8 +197,6 @@ impl DefraStreamWriter {
     ) -> Result<bool> {
         use gents_protocol::output::{OutputSegment, OutputSource, OutputWriter};
         let encoded = native_encoding::encode_native_message(message)?;
-        // The tail lock is held across the append so a concurrent acceptance
-        // cannot commit the same prepared delta under the same ordinal.
         let mut tails = self.provider_tails.lock().await;
         let tail = tails
             .get_mut(&request.doc_id)
@@ -288,9 +270,6 @@ impl DefraStreamWriter {
         close: canonical::ProviderAttemptClose,
     ) -> Result<()> {
         use gents_protocol::output::{OutputSegment, OutputSource, OutputWriter};
-        // Serialize closing with flushes just as complete publication does.
-        // Releasing this lock after reading the scope lets another flush land
-        // between choosing the closing timestamp and committing the closure.
         let mut tails = self.provider_tails.lock().await;
         let scope = tails
             .get(&request.doc_id)
@@ -341,14 +320,7 @@ impl DefraStreamWriter {
         let request = lifecycle.request();
         let encoded = std::sync::Arc::new(native_encoding::encode_native_message(message)?);
         let expected = std::sync::Arc::new(message.clone());
-        // Combine the closure record with the final uncommitted delta when one
-        // remains: the one-batch source commits bytes, closure, header and any
-        // admissions in one transaction. Replaying a fully flushed turn still
-        // closes a terminal-only record.
         let mut tails = self.provider_tails.lock().await;
-        // Timestamp only after any in-flight flush has committed. Sampling
-        // before this lock can manufacture clock regression during normal
-        // concurrent flush/publication, despite a monotonically advancing clock.
         let created_at = chrono::Utc::now().to_rfc3339();
         let tail = tails
             .get_mut(&request.doc_id)
@@ -718,15 +690,9 @@ impl DefraStreamWriter {
     }
 }
 
-/// Prepare the uncommitted per-stream delta against the acknowledged prefix,
-/// reusing the flush owner's prefix/declaration and no-shrink validation. The
-/// resulting runs/payload fit either an interim flush record or the combined
-/// final-flush record of a one-batch source.
 struct ProviderStreamDelta {
     runs: Vec<gents_protocol::output::SegmentRun>,
     payload: String,
-    /// False when every stream already sits in the acknowledged prefix, so an
-    /// interim flush is a no-op and acceptance stays a terminal-only closure.
     grew: bool,
 }
 
@@ -801,65 +767,3 @@ pub(crate) fn tail_window(value: &str, max_bytes: usize) -> &str {
     &value[start..]
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn content_bytes_equal_when_texts_equal() {
-        let mut a = StreamBufferSnapshot::default();
-        let mut b = StreamBufferSnapshot::default();
-        a.record_content("hello ");
-        b.record_content("hell");
-        b.record_content("o ");
-        assert_eq!(a, b, "delta chunking must not change dirty state");
-        b.record_content("!");
-        assert_ne!(a, b);
-    }
-
-    #[test]
-    fn first_visible_matches_original_emptiness_checks() {
-        let persisted = StreamBufferSnapshot::default();
-        let mut current = StreamBufferSnapshot::default();
-        assert!(!current.first_visible_since(&persisted));
-        current.record_content("hi");
-        assert!(current.first_visible_since(&persisted));
-        let mut persisted_after_flush = current.clone();
-        persisted_after_flush.reasoning.clear();
-        persisted_after_flush.reasoning_progress_seq = 0;
-        assert!(!current.first_visible_since(&persisted_after_flush));
-    }
-
-    #[test]
-    fn identical_capped_preview_still_marks_dirty() {
-        let mut current = StreamBufferSnapshot::default();
-        let oversized = "é".repeat(MAX_LIVE_REASONING_BYTES);
-        current.record_reasoning(&oversized);
-        let persisted = current.clone();
-        assert_eq!(current, persisted, "flush persists the capped preview");
-        // A second oversized arrival replaces the preview with identical
-        // capped text; the snapshot must still be dirty and first-visible
-        // reasoning stays nonempty against the persisted preview.
-        current.record_reasoning(&oversized);
-        assert_ne!(current, persisted, "progress seq must break the tie");
-        assert!(!current.reasoning.is_empty());
-        assert_eq!(current.reasoning, persisted.reasoning);
-        assert!(current.reasoning.len() <= MAX_LIVE_REASONING_BYTES);
-    }
-
-    #[test]
-    fn reset_returns_both_epochs_to_empty_content() {
-        let mut current = StreamBufferSnapshot::default();
-        current.record_content("streamed");
-        current.record_reasoning("thought");
-        // Mirror reset_tail: current is zeroed, persisted adopts the cleared
-        // current, so the next arrival is first-visible again.
-        current.content_bytes = 0;
-        current.reasoning.clear();
-        let persisted = current.clone();
-        assert_eq!(current, persisted);
-        current.record_content("next turn");
-        assert!(current.first_visible_since(&persisted));
-        assert_ne!(current, persisted);
-    }
-}

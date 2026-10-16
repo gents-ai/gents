@@ -7,8 +7,6 @@ pub(super) mod help;
 mod skill;
 mod validate;
 
-/// Resource index returned by `["help"]`: one line per resource, filtered to
-/// the granted ones. Fields, syntax and recipes live in `["help", RESOURCE]`.
 const HELP_INDEX: &[(&str, &str)] = &[
     (
         "agent",
@@ -44,7 +42,6 @@ const HELP_INDEX: &[(&str, &str)] = &[
     ("batch", "ordered config calls"),
 ];
 
-/// Where `preview` goes, and the help aliases, stated once in the index.
 const HELP_GRAMMAR: &str = "Documents: list, get, create, update, delete. target_id names the document; set writes fields, clear removes optional fields. list takes options.limit/cursor. create requires a new ID; update requires an existing ID. agent create takes options instead of set and allocates its ID and Context/Tools.
 Preview: [RESOURCE,preview,VERB]. Delete needs options.digest from preview. batch takes options.operations: ordered config calls; each commits separately, stopping on error. Packs use installation workflows. Collections and migrations use the separate schema tool; graph authoring is unavailable.";
 
@@ -163,8 +160,6 @@ impl ConfigCommandParams {
                 !argv.contains(&flag),
                 "option {flag} supplied in both argv and options"
             );
-            // A list of strings is the repeated flag (cleanup targets, pack
-            // slots); any other structured value stays one JSON value.
             let values = match value {
                 Value::String(value) => vec![value],
                 Value::Array(items) if !items.is_empty() && items.iter().all(Value::is_string) => {
@@ -199,7 +194,6 @@ impl ConfigCommandParams {
     }
 }
 
-/// Recognize help before parsing command operands, never inside option values.
 fn config_help_resource(argv: &[String]) -> Option<Option<&str>> {
     let first = argv.first()?.as_str();
     if matches!(first, "help" | "--help" | "-h") {
@@ -219,7 +213,6 @@ fn config_help_resource(argv: &[String]) -> Option<Option<&str>> {
     None
 }
 
-/// Help bypasses dispatch and returns plain text, so it has no execution receipt.
 pub(crate) fn is_help_call(args: &Value) -> bool {
     serde_json::from_value::<ConfigCommandParams>(args.clone())
         .ok()
@@ -227,8 +220,6 @@ pub(crate) fn is_help_call(args: &Value) -> bool {
         .is_some_and(|argv| config_help_resource(&argv).is_some())
 }
 
-/// The command words a `RESOURCE ... --help` path names, so help can narrow
-/// to that command: operands after the resource, without `preview` or flags.
 fn help_verb(argv: &[String]) -> Vec<&str> {
     if argv
         .first()
@@ -243,7 +234,6 @@ fn help_verb(argv: &[String]) -> Vec<&str> {
         .filter(|word| !word.starts_with('-') && *word != "help")
         .take(3)
         .collect::<Vec<_>>();
-    // `preview create` narrows to create; a bare `preview` is the verb.
     if words.len() > 1 && words[0] == "preview" {
         words.remove(0);
     }
@@ -256,13 +246,6 @@ fn required_resource_id<'a>(value: Option<&'a String>, label: &str) -> Result<&'
         .with_context(|| format!("missing {label}: supply target_id, or a non-empty resource ID in argv before options or patch fields; see [\"help\"]"))
 }
 
-/// Native `config` tool. Its model-facing text is layered for progressive
-/// disclosure (#2088): the description is a small core (call shape, ID and
-/// write rules, how to get more); `["help"]` lists resources; `["help",
-/// RESOURCE]` gives that resource's commands, fields and one recipe; errors
-/// name the next call. Every layer is paid for in tokens on each turn or help
-/// call, so nothing is repeated across layers or responses, and concepts that
-/// explain how documents fit together belong to the Engineer prompt, not here.
 #[derive(Clone)]
 pub struct ConfigCommandTool {
     pub(super) node: Arc<EmbeddedNode>,
@@ -274,7 +257,6 @@ pub struct ConfigCommandTool {
     pub(super) preview: bool,
     pub(super) process_ceiling: crate::tool_surface::SelfConfigProcessCeiling,
     pub(super) execution: Arc<super::execution::ExecutionObservation>,
-    /// Whose home holds the pack store and the plugin store this tool installs into.
     pub(super) plugins: Arc<crate::plugin::executor::PluginExecutor>,
 }
 
@@ -332,8 +314,6 @@ Agent IDs are "<DID>:<slug>"; the slug alone works. ["help"] lists granted resou
         let receipt = call.execution.receipt();
         log_config_call(&words, &observed, help, previewing, &result);
         match result {
-            // Help is the page itself: plain text with no envelope. It is
-            // answered before any command parses, so it never mutates.
             Ok(text) if help => Ok(text),
             Ok(text) => append_receipt(&text, &receipt).map_err(Into::into),
             Err(error) => {
@@ -353,8 +333,6 @@ Agent IDs are "<DID>:<slug>"; the slug alone works. ["help"] lists granted resou
     }
 }
 
-/// The model's call as compact JSON for the call log, cut at about 2 KB.
-/// The config tool accepts no credential fields, so none can appear here.
 fn observed_call(args: &ConfigCommandParams) -> String {
     let call = json!({
         "argv": args.argv,
@@ -373,10 +351,6 @@ fn truncated(text: &str, max: usize) -> String {
     }
 }
 
-/// One `tool call` event per config call, and a `self-config write` event
-/// for each call that asks to change configuration, so a trial's
-/// exploration path and write counts can be followed from the log while its
-/// node is held.
 fn log_config_call(
     argv: &[String],
     call: &str,
@@ -441,8 +415,6 @@ fn log_config_call(
     );
 }
 
-/// A preview that references a document which does not exist yet names the
-/// call that can check it, or the order that makes the reference valid.
 fn missing_reference_next_step(
     missing: &crate::document_config::MissingReference,
     deleting: bool,
@@ -458,8 +430,6 @@ fn missing_reference_next_step(
     format!("{target} {id:?} does not exist yet; create it with its own resource command first, or reference an existing ID.")
 }
 
-/// Every non-help result ends with the execution receipt, after the answer
-/// and its next step, without re-serializing (and so re-sorting) the answer.
 fn append_receipt(
     text: &str,
     receipt: &super::execution::ConfigExecutionReceipt,
@@ -1038,8 +1008,6 @@ impl ConfigCommandTool {
                     crate::document_config::BackendAuth::Unauthenticated
                 )
             {
-                // Credentialed discovery stays with the operator paths and the
-                // runtime prober; the agent reads what they last published.
                 let observation = self
                     .backend_observation_view(backend_id, backend.provider_kind)
                     .await?;
@@ -1168,8 +1136,6 @@ impl ConfigCommandTool {
         }
     }
 
-    /// A local AgentTarget names its agent by the same short slug; a
-    /// foreign target_node_did keeps the ID exactly as given.
     async fn resolve_target_agent(
         &self,
         target_id: &str,
@@ -1595,16 +1561,9 @@ impl ConfigCommandTool {
         Ok(())
     }
 
-    /// Agent create stores `<node DID>:<slug>`
-    /// (`self_config::agent::derive_agent_id`) while every other configuration ID
-    /// is stored as given, so wherever config accepts an agent ID it also
-    /// accepts that node-local slug. An exact ID wins, and the slug only
-    /// resolves under this node's own DID.
     async fn resolve_agent_id(&self, id: &str) -> Result<String> {
         let current = self.core.agent_id();
         if !self.categories.contains("node") {
-            // Only the current agent is reachable; the catalog check names
-            // the missing grant for any other ID.
             let slug_of_current = format!("{}:{id}", self.node_did) == current;
             return Ok(if slug_of_current { current } else { id }.to_owned());
         }
@@ -1665,11 +1624,6 @@ impl ConfigCommandTool {
         })
     }
 
-    /// A profile edit without options.agent changes the invoking
-    /// agent's own model and limits. Once the node has other
-    /// agents that default is the likely mistake (the call was meant for
-    /// a worker), and the tool keeps no memory of which agents a caller
-    /// just created, so any second agent makes the target explicit.
     async fn require_named_profile_owner(&self, verb: &str) -> Result<()> {
         let owner = escape_graphql_string(&self.node_did);
         let query = format!("{{ Agent(filter: {{node_did: {{_eq: \"{owner}\"}}}}) {{agent_id}} }}");
@@ -1701,9 +1655,6 @@ impl ConfigCommandTool {
         Ok(())
     }
 
-    /// Create and clone derive the new ID from the display name, so an
-    /// explicit ID would be silently ignored; clone sources and disable
-    /// targets resolve like every other agent ID.
     async fn resolve_agent_ids(
         &self,
         operation: &str,
@@ -1750,8 +1701,6 @@ impl ConfigCommandTool {
         verb: &str,
         request: ApplyRequest<'static>,
     ) -> Result<String> {
-        // A JSON-stringified object where a native one belongs is the common
-        // model mistake; name the field instead of the decoder's complaint.
         let stringified = request
             .patch
             .iter()
@@ -1832,8 +1781,6 @@ impl ConfigCommandTool {
         ordered! {"resource": target.collection_name(), "document": value}.pretty()
     }
 
-    /// Credential-free observation of one owned backend in its own
-    /// authentication scope, read under the invoking node's identity.
     async fn backend_observation_view(
         &self,
         backend_id: &str,
@@ -1945,10 +1892,8 @@ impl ConfigCommandTool {
         ordered! {"resource": target.collection_name(), "document": document}.pretty()
     }
 
-    /// Each account and account-free backend: provider, label, state, the
-    /// profiles that use it and its last stored usage. Store reads only: it
-    /// never contacts a provider or renews a sign-in, and shows no token,
-    /// sign-in identity, credential id or account reference.
+    /// Store reads only: never contacts a provider or renews a sign-in, and
+    /// shows no token, sign-in identity, credential id or account reference.
     async fn account_inventory(&self) -> Result<String> {
         use crate::backend_provider::BackendProviderOauthExt;
         use crate::oauth_credential::backend_account;
@@ -2203,10 +2148,6 @@ impl ConfigCommandTool {
     }
 }
 
-/// Verbs a model reasonably guesses that mean an existing command: `preview
-/// edit` is `preview` where preview replaces edit, and automation `create` is
-/// its upsert through `edit`. Resources whose `preview edit ID` or `create`
-/// are distinct commands are left alone.
 fn normalize_verbs(argv: &mut Vec<String>) {
     let words = argv.iter().map(String::as_str).collect::<Vec<_>>();
     let drop = match words.as_slice() {
@@ -2222,7 +2163,6 @@ fn normalize_verbs(argv: &mut Vec<String>) {
     }
 }
 
-/// The exact call that applies a preview, for a model that guessed `apply`.
 fn apply_refusal(resource: &str) -> Option<String> {
     let form = match resource {
         "pack" => "[\"pack\",\"install\",PACKAGE] with options.digest from [\"pack\",\"preview\",\"install\",PACKAGE]".to_owned(),
@@ -2395,8 +2335,6 @@ fn extract_agent_target(argv: &[String]) -> Result<(Option<String>, Vec<String>)
     Ok((agent_id, rest))
 }
 
-/// `--allow-drop GROUP[,GROUP]`, repeatable: the Tools groups whose omitted
-/// settings the caller means to drop.
 fn extract_allow_drop(argv: &[String]) -> Result<(BTreeSet<String>, Vec<String>)> {
     let mut groups = BTreeSet::new();
     let mut rest = Vec::with_capacity(argv.len());
@@ -2616,8 +2554,6 @@ pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
     Value::Array(contracts)
 }
 
-/// The advertised field shape at a decode error path (`host.cli[0].name`), so
-/// a type error names what the field takes instead of an internal Rust type.
 pub(super) fn field_shape(collection: &str, path: &str) -> Option<Value> {
     let contract = [
         "agent",

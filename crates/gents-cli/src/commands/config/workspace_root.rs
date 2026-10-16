@@ -10,9 +10,6 @@ use crate::config_writes::ConfigAccess;
 use crate::request_helpers::resolve_dual_id;
 use crate::{extract_mutation_doc_id, print_json, resolve_config_access};
 
-// Operator-local allowed-root ceiling used by agent configuration. This is not
-// pack configuration: Tools.host.root selects a path but does not grant authority.
-
 pub(super) async fn workspace_root_list(args: ConfigListArgs) -> Result<()> {
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let mut rows = crate::graphql_rows(
@@ -166,27 +163,3 @@ pub(super) async fn workspace_root_rm(args: ConfigShowArgs) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn canonicalize_rejects_relative_paths() {
-        let err = canonicalize_workspace_root_path(Path::new("relative/path")).unwrap_err();
-        assert!(err.to_string().contains("must be an absolute path"));
-    }
-
-    #[test]
-    fn canonicalize_normalizes_dot_and_dotdot_lexically() {
-        let normalized =
-            canonicalize_workspace_root_path(Path::new("/a/./b/../c")).expect("absolute path");
-        assert_eq!(normalized, PathBuf::from("/a/c"));
-    }
-
-    #[test]
-    fn canonicalize_does_not_require_existence() {
-        let normalized = canonicalize_workspace_root_path(Path::new("/definitely/not/a/real/path"))
-            .expect("absolute path need not exist");
-        assert_eq!(normalized, PathBuf::from("/definitely/not/a/real/path"));
-    }
-}

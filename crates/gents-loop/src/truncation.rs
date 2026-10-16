@@ -2,9 +2,8 @@
 //! side effect. The full output is retained by the canonical transcript;
 //! this only selects what the model is shown.
 
-/// Every notice `truncate` writes starts with one of these. Compaction
-/// recognizes already-truncated tool output by them, so a new notice shape
-/// must be added here.
+/// Every notice `truncate` writes starts with one of these; compaction
+/// recognizes already-truncated tool output by them.
 pub const TRUNCATION_NOTICE_PREFIXES: [&str; 4] = [
     "[Showing lines ",
     "[Showing first ",
@@ -125,9 +124,6 @@ pub fn truncate(text: &str, mode: TruncationMode, limits: &TruncationLimits) -> 
 
     let (truncated, returned_bytes) = match mode {
         TruncationMode::Head => {
-            // The shown text is a byte prefix of `text`, so a line keeps its
-            // `\r` before `\n`: composed presentations select that prefix
-            // from the committed output and must reproduce it exactly.
             let mut shown = 0;
             let mut line_count = 0;
             let mut partial = None;
@@ -430,8 +426,6 @@ mod tests {
 
     #[test]
     fn an_empty_line_that_fits_keeps_the_line_budget() {
-        // The empty line is a whole line; the byte fallback must not add a
-        // second one past max_lines.
         let limits = TruncationLimits {
             max_lines: 1,
             max_bytes: 3,

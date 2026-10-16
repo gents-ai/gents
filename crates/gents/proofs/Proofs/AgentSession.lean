@@ -1,10 +1,7 @@
 import Proofs.Request.State
 
 /-! Durable session owner; Nat identifiers/times abstract validated canonical
-strings. Authorization and atomic query/write remain DB adapter obligations.
-Read-only session discovery uses the authenticated caller's DefraDB ACP visibility;
-node/requester fields identify a selected row, not additional read permissions.
-Presentation and provenance never select execution configuration. -/
+strings. Authorization and atomic query/write remain DB adapter obligations. -/
 namespace AgentSession
 structure Scope where
   node : Nat
@@ -54,7 +51,6 @@ structure Document where
   provenance : Option Provenance := none
   observation : Option Observation := none
   deriving DecidableEq, Repr
-/-- Authoritative query projection, not another writable request/index. -/
 structure RequestFact where
   purpose : RequestPurpose
   scope : Scope
@@ -62,7 +58,6 @@ structure RequestFact where
   createdAt : Time
   observed : RequestObservation
   deriving DecidableEq, Repr
-/-- Logical request ID breaks timestamp ties. -/
 def newer (a b : RequestFact) : Bool :=
   a.createdAt > b.createdAt ||
     (a.createdAt == b.createdAt && a.observed.requestId > b.observed.requestId)
@@ -72,7 +67,6 @@ def newest : List RequestFact → Option RequestFact
     | none => some row
     | some previous => if newer row previous then some row else some previous
 
-/-- `none` queries all requesters; `some none` queries exact absent scope. -/
 def latest (rows : List RequestFact) (node session : Nat)
     (requester : Option (Option Nat)) : Option RequestFact :=
   newest (rows.filter fun r => r.purpose == .normal && r.scope.node == node && r.scope.session == session &&
@@ -93,7 +87,6 @@ theorem newest_member (rows : List RequestFact) (r : RequestFact)
       · simp only [Option.some.injEq] at h; subst r
         exact List.mem_cons_of_mem _ (ih hn)
 
-/-- Every selected row dominates all candidates in canonical timestamp/ID order. -/
 theorem newest_maximal (rows : List RequestFact) (r : RequestFact)
     (h : newest rows = some r) : ∀ candidate ∈ rows,
       candidate.createdAt < r.createdAt ∨
@@ -145,7 +138,6 @@ theorem newest_maximal (rows : List RequestFact) (r : RequestFact)
           omega
         · exact hb candidate he
 
-/-- Filtering candidates cannot change a retained canonical winner. -/
 theorem newest_filter_preserves (rows : List RequestFact) (r : RequestFact)
     (p : RequestFact → Bool) (h : newest rows = some r) (hr : p r = true) :
     newest (rows.filter p) = some r := by
@@ -233,9 +225,8 @@ theorem latest_exact_of_session_winner (rows : List RequestFact) (node session :
     r (fun row => row.scope.requester == r.scope.requester) (by simpa [latest] using h) (by simp)
   simpa [latest, List.filter_filter, Bool.and_assoc, Bool.and_comm, Bool.and_left_comm] using hf
 
-/-- Run with complete authoritative rows inside the admission/successor transaction,
-including the currently indexed request. `preview` is whitespace-normalized by the
-existing projection adapter before this character-bound operation. -/
+/-- Run with complete authoritative rows inside the admission/successor
+transaction. -/
 def advance (s : Document) (rows : List RequestFact) (r : RequestFact)
     (preview : String) (now : Time) : Document :=
   if r.scope = s.scope ∧ r.agent = s.agent ∧
@@ -264,9 +255,9 @@ theorem title_arrival_preserves_observed (rows : List RequestFact) (title : Requ
     (o : RequestObservation) (hp : title.purpose = .titleAudit) :
     observedRequest (title :: rows) o = observedRequest rows o := by
   simp [observedRequest, hp]
-/-- A notification supplies identity only. Resolve its current authoritative row
-inside the existing projection transaction; event payload state cannot overwrite
-newer request facts. DB snapshot freshness remains the adapter's obligation. -/
+
+/-- Event payload state cannot overwrite authoritative request rows; snapshot
+freshness remains the DB adapter's obligation. -/
 def refresh (s : Document) (rows : List RequestFact) (event : RequestObservation)
     (now : Time) : Document :=
   match s.observation with
@@ -281,9 +272,7 @@ def refresh (s : Document) (rows : List RequestFact) (event : RequestObservation
     | none => s
   | none => s
 
-/-- Only a newly published tool terminal emits activity, in the same transaction.
-Replays and losing publications emit no notification. Request lifecycle state
-need not change; identity is resolved through the authoritative request row. -/
+/-- Only a newly published tool terminal emits activity, in the same transaction. -/
 def toolActivity (s : Document) (rows : List RequestFact) (event : RequestObservation)
     (now : Time) (published : Bool) : Document :=
   if published then refresh s rows event now else s
@@ -291,20 +280,6 @@ def toolActivity (s : Document) (rows : List RequestFact) (event : RequestObserv
 theorem unpublished_tool_activity_noop (s : Document) (rows : List RequestFact)
     (event : RequestObservation) (now : Time) :
     toolActivity s rows event now false = s := by simp [toolActivity]
-
-theorem published_tool_activity (s : Document) (o : Observation)
-    (r : RequestFact) (now : Time)
-    (ho : s.observation = some o) (hl : o.latest = some r.observed)
-    (hs : r.scope = s.scope) (hb : r.agent = s.agent)
-    (hp : r.purpose = .normal) :
-    toolActivity s [r] r.observed now true =
-      { s with observation := some { o with latest := some r.observed, activity := max now o.activity } } := by
-  simp [toolActivity, refresh, ho, hl, observedRequest, hp, hs, hb]
-
-/-- Stale event lifecycle payloads have no influence on the projection. -/
-theorem refresh_ignores_event_state (s : Document) (rows : List RequestFact)
-    (event : RequestObservation) (state : RequestState) (now : Time) :
-    refresh s rows { event with state } now = refresh s rows event now := rfl
 
 def touch (s : Document) (now : Time) : Document :=
   { s with observation := some (match s.observation with

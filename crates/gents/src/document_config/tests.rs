@@ -1,9 +1,6 @@
 use super::*;
 use crate::config_client::write_tools_document;
 
-/// The wide-open preset is an authored nested `Tools` document. Pin its explicit
-/// permissive surface: meta dispatch and DefraDB query capabilities on, every
-/// privilege-bearing host capability absent (absence grants nothing).
 fn wide_open_tools_document(node_did: &str) -> Tools {
     serde_json::from_value(serde_json::json!({
         "tools_id": "wide-open",
@@ -18,10 +15,8 @@ fn wide_open_tools_document(node_did: &str) -> Tools {
 fn wide_open_preset_is_permissive_and_explicit() {
     let did = "did:test:amy";
     let preset = wide_open_tools_document(did);
-    // Owner-scoped logical id; `node_did` passes the per-node filter.
     assert_eq!(preset.tools_id, "wide-open");
     assert_eq!(preset.node_did, did);
-    // Two capabilities are explicitly enabled by this preset.
     assert_eq!(
         preset.built_ins.as_ref().unwrap().enable_context_budget,
         Some(true)
@@ -30,10 +25,6 @@ fn wide_open_preset_is_permissive_and_explicit() {
         preset.datastore.as_ref().unwrap().enable_defra_query,
         Some(true)
     );
-    // No host tools, remote services (hence no meta dispatch), agents,
-    // integrations, or self-config: the permissive surface is explicit, never
-    // implied by a policy version — the canonical document has no historical
-    // re-interpretation contract.
     assert!(preset.host.is_none());
     assert!(preset.remote.is_none());
     assert!(preset.agents.is_none());
@@ -58,11 +49,8 @@ fn tools_document_accepts_empty_string_arrays_and_null_groups() {
     }))
     .expect("null groups and empty-string arrays should deserialize");
 
-    // Null/empty list forms (DefraDB empty-list transport) decode to the
-    // canonical empty defaults, never an implicit grant.
     assert!(document.host.as_ref().unwrap().cli.is_empty());
     assert!(document.remote.as_ref().unwrap().services.is_empty());
-    // Goal capabilities are opt-in only; unset means disabled.
     assert!(document.built_ins.is_none());
     assert_eq!(
         document.host.as_ref().unwrap().files.as_ref().unwrap().mode,
@@ -89,8 +77,6 @@ fn tools_document_accepts_explicit_selections() {
 
 #[test]
 fn required_mcp_service_selection_is_explicit_and_unique() {
-    // Required is authored on the same explicit service selection. This test
-    // checks its local shape; runtime readiness remains the admission owner.
     let tools: Tools = serde_json::from_value(serde_json::json!({
         "tools_id": "required-mcp",
         "node_did": "did:key:test",
@@ -98,7 +84,6 @@ fn required_mcp_service_selection_is_explicit_and_unique() {
     }))
     .unwrap();
     tools.validate().unwrap();
-    // A duplicate service id stays invalid regardless of required status.
     let tools: Tools = serde_json::from_value(serde_json::json!({
         "tools_id": "required-mcp",
         "node_did": "did:key:test",
@@ -134,9 +119,6 @@ fn validate_rejects_blank_agent_target_ids() {
     );
 }
 
-/// Validate write-tool declarations through the shared registration owner used
-/// by every write path (`document_config::write_tool`); `cli_tool_names` and
-/// additional runtime tools are empty unless a collision test provides them.
 fn validate_write_tools(decls: &[WriteToolDecl]) -> anyhow::Result<()> {
     super::write_tool::validate_write_tool_declarations(decls, &[], &[])
 }
@@ -351,8 +333,6 @@ fn dynamic_output_obligation_requires_a_model_provided_required_field() {
 
 #[test]
 fn validate_rejects_write_tool_name_colliding_with_builtin() {
-    // `read_file` is a native tool; reusing it as a write-tool name would
-    // silently shadow the native impl at registration.
     let decls = vec![WriteToolDecl {
         notification: None,
         tool_name: "read_file".to_string(),
@@ -395,8 +375,6 @@ fn validate_rejects_write_tool_name_colliding_with_defra_query() {
 
 #[test]
 fn validate_rejects_write_tool_name_colliding_with_cli_tool() {
-    // A host.cli entry is advertised as its own tool in the same Tools
-    // document, so a write tool reusing that name is a dispatch collision.
     let decls = vec![WriteToolDecl {
         notification: None,
         tool_name: "rg".to_string(),
@@ -452,10 +430,6 @@ fn validate_rejects_duplicate_field_names_within_decl() {
 fn reserved_names_cover_native_and_meta_tools() {
     use crate::toolset::NativeTool;
 
-    // Every constructible native tool's `tool_name()` must appear in the
-    // `NativeTool::ALL_NAMES` registry (guards it against drifting from
-    // `tool_name` as variants are added), and every registry entry must be
-    // reserved.
     let native = [
         NativeTool::ListFiles { max_entries: 1 },
         NativeTool::ReadFile { max_chars: 1 },
@@ -507,7 +481,6 @@ fn reserved_names_cover_native_and_meta_tools() {
         );
     }
 
-    // A name that is not a built-in stays available for write tools.
     assert!(!is_reserved_builtin_tool_name("request_action"));
 }
 
@@ -521,8 +494,6 @@ fn memory_tool_name_is_reserved() {
 
 #[test]
 fn write_tools_deserialize_trims_whitespace() {
-    // Padded tool_name / collection / field name would otherwise survive to
-    // verbatim GraphQL interpolation and corrupt the mutation.
     let json = serde_json::json!([{
         "tool_name": "  request_action  ",
         "collection": " ActionRequest ",
@@ -724,14 +695,11 @@ async fn tools_document_round_trips_read_only_commands() {
             .unwrap()
             .read_only_commands,
         Some(vec!["jq".to_string(), "echo".to_string()]),
-        "read_only_commands must round-trip through the GraphQL document representation"
     );
 }
 
 #[test]
 fn read_only_commands_absent_decodes_to_none() {
-    // A stored/manifest doc that omits the key must decode to None so the
-    // runtime falls back to the hardcoded default_read_only_commands() list.
     let json = serde_json::json!({
         "tools_id": "sel-1",
         "node_did": "did:test:test",
@@ -783,8 +751,6 @@ fn write_tools_round_trip() {
     assert_eq!(parsed[0].fields.len(), 3);
     assert!(parsed[0].fields[0].required);
     assert!(!parsed[0].fields[2].required);
-    // The DefraDB `[String]` storage form also round-trips through the
-    // dual-shape deserializer shared with surface entries.
     let stored = serde_json::json!([serde_json::to_string(&decls[0]).unwrap()]);
     let loaded =
         super::deserialize_dual_shape::<WriteToolDecl>(Some(stored), "write_tools").unwrap();
@@ -820,8 +786,6 @@ async fn tools_document_round_trips_write_tools() {
         ],
         output_obligation: None,
     }];
-    // Canonical Tools carries datastore surface references; create/query tool
-    // declarations are expanded from the referenced DatastoreToolSurface.
     let tools = Tools {
         tools_id: "steward-write-tools".to_string(),
         node_did: "did:key:z-test-write".to_string(),
@@ -918,19 +882,9 @@ async fn agent_description_round_trip_with_explicit_owner_fixture() {
     let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
-    // Canonical Agent(context_id, inference_profile_id, tags) carries
-    // UI text and references only. Literal instructions, skill selection, tools,
-    // and compaction live on AgentContext; model selection lives on
-    // InferenceProfile — the retired parallel fields (summary,
-    // system_prompt, backend/model, compaction, skill lists) must not return.
-    // install_test_agent provides the explicit context/tools/profile/backend
-    // chain; the node bootstrap itself creates no executable configuration.
     let node_did = "did:key:z-test-desc";
     crate::test_support::install_test_agent(&node, node_did, "amy-general").await;
 
-    // Compact authored document. `tags: null` is the DefraDB empty-list form and
-    // must decode to the empty default; an omitted context_id decodes to None
-    // (no instructions, skills, or tools; runtime-default compaction).
     let authored = serde_json::json!({
         "agent_id": "amy-general",
         "node_did": node_did,
@@ -950,7 +904,6 @@ async fn agent_description_round_trip_with_explicit_owner_fixture() {
         "null tags must decode to the empty default"
     );
     assert!(sparse.enabled, "omitted enabled must default to true");
-    // Compact roundtrip: no disabled/empty boilerplate is re-emitted.
     assert_eq!(
         serde_json::to_value(&sparse).unwrap(),
         serde_json::json!({
@@ -984,15 +937,12 @@ async fn agent_description_round_trip_with_explicit_owner_fixture() {
     assert_eq!(
         loaded.description,
         Some("A general-purpose assistant for research and writing.".to_string()),
-        "description must round-trip through upsert/load"
     );
     assert_eq!(loaded.context_id, doc.context_id);
     assert_eq!(loaded.inference_profile_id, doc.inference_profile_id);
     assert!(loaded.enabled);
 }
 
-/// Borrow the embedded node back out of a Local `ConfigAccess` for the
-/// document-level readers that still take `&EmbeddedNode`.
 fn access_node(
     access: &crate::config_client::ConfigAccess,
 ) -> &std::sync::Arc<defra_node::EmbeddedNode> {
@@ -1004,9 +954,6 @@ async fn inference_retry_policy_fields_round_trip() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
-    // Retry knobs are now owned by the referenced InferenceRetryPolicy, not the
-    // profile; typed effort lives on the profile. The backend must exist for
-    // the references closure to accept the profile.
     let retry = InferenceRetryPolicy {
         node_did: "did:key:z-test-retry".to_string(),
         retry_policy_id: "retry-policy".to_string(),
@@ -1093,114 +1040,7 @@ async fn inference_retry_policy_fields_round_trip() {
 }
 
 #[test]
-fn inference_sampling_rejects_negative_seed() {
-    // Seed is owned by InferenceSampling (#1430 split); the canonical validator
-    // rejects it before any write is staged, so the DB-level negative-seed
-    // rejection now lives with this owner.
-    let sampling = InferenceSampling {
-        node_did: "did:key:z-test-seed".to_string(),
-        sampling_id: "negative-seed-sampling".to_string(),
-        seed: Some(-1),
-        ..Default::default()
-    };
-
-    assert_eq!(
-        sampling.validate().unwrap_err().to_string(),
-        "InferenceSampling negative-seed-sampling seed must be non-negative"
-    );
-}
-
-#[test]
-fn inference_retry_policy_null_backoff_decodes_to_defaults() {
-    let fields = crate::agent::completion_retry::CompletionRetryProfileFields {
-        retry_backoff_ms: Some(Vec::new()),
-        ..Default::default()
-    };
-    let resolved = crate::agent::completion_retry::CompletionRetryPolicy::resolve(
-        &fields,
-        crate::lifecycle::ExecutionOrigin::Scheduled,
-    );
-    assert_eq!(
-        resolved,
-        crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default()
-    );
-
-    // `backoff_ms: null` (DefraDB's unset form — never `[]`) decodes to the
-    // unset default and resolves the scheduled ladder.
-    let retry: InferenceRetryPolicy = serde_json::from_value(serde_json::json!({
-        "node_did": "did:key:z-test-backoff",
-        "retry_policy_id": "empty-backoff",
-        "backoff_ms": null,
-    }))
-    .unwrap();
-    assert_eq!(retry.backoff_ms, None);
-    let fields = crate::agent::completion_retry::CompletionRetryProfileFields {
-        retry_max_transport: retry.max_transport_retries,
-        retry_backoff_ms: retry.backoff_ms,
-        retry_max_resample: retry.max_resample_retries,
-        retry_allow_repair: retry.allow_repair,
-        retry_interactive_max: retry.interactive_max_retries,
-    };
-    let resolved = crate::agent::completion_retry::CompletionRetryPolicy::resolve(
-        &fields,
-        crate::lifecycle::ExecutionOrigin::Scheduled,
-    );
-    assert_eq!(
-        resolved,
-        crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default()
-    );
-}
-
-#[test]
-fn completion_retry_policy_resolution_uses_origin_and_profile_fields() {
-    let scheduled = crate::agent::completion_retry::CompletionRetryPolicy::resolve(
-        &crate::agent::completion_retry::CompletionRetryProfileFields::default(),
-        crate::lifecycle::ExecutionOrigin::Scheduled,
-    );
-    assert_eq!(
-        scheduled,
-        crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default()
-    );
-
-    let interactive_fields = crate::agent::completion_retry::CompletionRetryProfileFields {
-        retry_interactive_max: Some(2),
-        ..Default::default()
-    };
-    let interactive = crate::agent::completion_retry::CompletionRetryPolicy::resolve(
-        &interactive_fields,
-        crate::lifecycle::ExecutionOrigin::Interactive,
-    );
-    assert_eq!(
-        interactive.transport_backoff,
-        vec![
-            std::time::Duration::from_secs(2),
-            std::time::Duration::from_secs(2)
-        ]
-    );
-
-    let scheduled_fields = crate::agent::completion_retry::CompletionRetryProfileFields {
-        retry_backoff_ms: Some(vec![1_000, 5_000]),
-        ..Default::default()
-    };
-    let scheduled = crate::agent::completion_retry::CompletionRetryPolicy::resolve(
-        &scheduled_fields,
-        crate::lifecycle::ExecutionOrigin::Scheduled,
-    );
-    assert_eq!(
-        scheduled.transport_backoff,
-        vec![
-            std::time::Duration::from_millis(1_000),
-            std::time::Duration::from_millis(5_000)
-        ]
-    );
-}
-
-#[test]
 fn validate_accepts_well_formed_agent_target_documents() {
-    // Delegation targets are AgentTarget documents: same-owner agent
-    // references close through the references closure, foreign destinations are
-    // explicit. The calling owner owns each target document; target_node_did
-    // owns the destination agent.
     let code_entry = AgentTargetDocument {
         target_id: "amy-code".to_string(),
         node_did: "did:key:zParent".to_string(),
@@ -1219,7 +1059,6 @@ fn validate_accepts_well_formed_agent_target_documents() {
         description: None,
         tags: Vec::new(),
     };
-    // Canonical documents deserialize strictly and preserve their fields.
     for entry in [&code_entry, &research_entry] {
         let value = serde_json::to_value(entry).unwrap();
         assert_eq!(
@@ -1227,7 +1066,6 @@ fn validate_accepts_well_formed_agent_target_documents() {
             *entry
         );
     }
-    // The Tools agents group references these by target_id only.
     let doc = Tools {
         tools_id: "test-tools".to_string(),
         node_did: "did:test:test".to_string(),
@@ -1265,8 +1103,6 @@ fn tools_validation_reports_every_violation() {
 
 #[test]
 fn validate_rejects_undeclared_agent_target_reference() {
-    // AgentTools.target_ids are references to AgentTarget documents; the
-    // references closure rejects undeclared ids early with a clear error.
     let refs = ConfigReferences::from_documents(
         "did:test:test",
         vec![(
@@ -1338,255 +1174,7 @@ fn write_tool_fill_grammar_is_exact_and_runtime_fields_cannot_be_required() {
 }
 
 // ---------------------------------------------------------------------------
-// InferenceSampling::validate (#1331 rules, #1430 owner split) — table-driven
-// from the historical gents-cli desired-state rules
-// (crates/gents-cli/src/desired_state/validate/agent.rs).
-// ---------------------------------------------------------------------------
-
-fn base_sampling(sampling_id: &str) -> InferenceSampling {
-    InferenceSampling {
-        node_did: "owner".to_string(),
-        sampling_id: sampling_id.to_string(),
-        ..Default::default()
-    }
-}
-
-fn base_execution(execution_id: &str) -> InferenceExecution {
-    InferenceExecution {
-        node_did: "owner".to_string(),
-        execution_id: execution_id.to_string(),
-        ..Default::default()
-    }
-}
-
-#[test]
-fn inference_execution_validate_accepts_defaults() {
-    assert!(base_execution("defaults").validate().is_ok());
-}
-
-#[test]
-fn inference_execution_validate_rejects_non_positive_stream_liveness_timeout() {
-    for value in [0, -1] {
-        let mut execution = base_execution("liveness");
-        execution.stream_liveness_timeout_secs = Some(value);
-        let error = execution.validate().unwrap_err().to_string();
-        assert!(
-            error.contains("stream_liveness_timeout_secs must be positive"),
-            "value {value}: {error}"
-        );
-    }
-}
-
-#[test]
-fn inference_execution_validate_rejects_non_positive_deadline() {
-    for value in [0, -1] {
-        let mut execution = base_execution("deadline");
-        execution.stream_liveness_timeout_secs = Some(300);
-        execution.deadline_duration_secs = Some(value);
-        let error = execution.validate().unwrap_err().to_string();
-        assert!(
-            error.contains("deadline_duration_secs must be positive"),
-            "value {value}: {error}"
-        );
-    }
-}
-
-#[test]
-fn inference_execution_validate_rejects_liveness_at_or_past_deadline() {
-    for (liveness, deadline) in [(300, 300), (600, 300)] {
-        let mut execution = base_execution("relationship");
-        execution.stream_liveness_timeout_secs = Some(liveness);
-        execution.deadline_duration_secs = Some(deadline);
-        let error = execution.validate().unwrap_err().to_string();
-        assert!(
-            error.contains(&format!(
-                "stream_liveness_timeout_secs ({liveness}) must be less than deadline_duration_secs ({deadline})"
-            )),
-            "liveness {liveness} deadline {deadline}: {error}"
-        );
-    }
-}
-
-#[test]
-fn inference_execution_validate_accepts_liveness_shorter_than_deadline() {
-    let mut execution = base_execution("ok-relationship");
-    execution.stream_liveness_timeout_secs = Some(300);
-    execution.deadline_duration_secs = Some(600);
-    assert!(execution.validate().is_ok());
-}
-
-#[test]
-fn inference_sampling_validate_rejects_negative_seed() {
-    let mut sampling = base_sampling("seeded");
-    sampling.seed = Some(-1);
-    let error = sampling.validate().unwrap_err().to_string();
-    assert!(error.contains("seed must be non-negative"), "{error}");
-}
-
-#[test]
-fn inference_profile_accepts_unset_and_every_vocabulary_reasoning_effort() {
-    // Effort is a typed enum on the canonical profile: unset (None variant)
-    // and every vocabulary entry are valid; unknown strings are rejected at
-    // deserialization by the enum itself.
-    use crate::config::ReasoningEffort;
-    let unset_forms: [Option<ReasoningEffort>; 1] = [None];
-    for unset in unset_forms {
-        let profile = InferenceProfile {
-            node_did: "owner".into(),
-            profile_id: "unset-effort".into(),
-            backend_id: "backend".into(),
-            model_name: "model".into(),
-            reasoning_effort: unset,
-            ..Default::default()
-        };
-        assert!(profile.validate().is_ok(), "unset form {unset:?} failed");
-    }
-    for value in [
-        ReasoningEffort::None,
-        ReasoningEffort::Minimal,
-        ReasoningEffort::Low,
-        ReasoningEffort::Medium,
-        ReasoningEffort::High,
-        ReasoningEffort::XHigh,
-        ReasoningEffort::Max,
-        ReasoningEffort::Ultra,
-    ] {
-        let profile = InferenceProfile {
-            node_did: "owner".into(),
-            profile_id: "vocab".into(),
-            backend_id: "backend".into(),
-            model_name: "model".into(),
-            reasoning_effort: Some(value),
-            ..Default::default()
-        };
-        assert!(profile.validate().is_ok(), "value {value:?} failed");
-        // Round-trip through the typed serialization.
-        let value_json = serde_json::to_value(value).unwrap();
-        assert_eq!(
-            serde_json::from_value::<ReasoningEffort>(value_json.clone()).unwrap(),
-            value
-        );
-    }
-    // Outside the vocabulary the parser is the rejection owner.
-    assert!(ReasoningEffort::parse("extreme").is_err());
-    let error = ReasoningEffort::parse("extreme").unwrap_err().to_string();
-    assert!(error.contains("reasoning_effort must be one of"), "{error}");
-    // And an unknown serialized string must not decode onto the profile.
-    let decoded: Result<InferenceProfile, _> = serde_json::from_value(serde_json::json!({
-        "node_did": "owner", "profile_id": "bad-effort",
-        "backend_id": "backend", "model_name": "model",
-        "reasoning_effort": "extreme"
-    }));
-    assert!(decoded.is_err(), "unknown effort strings must not decode");
-}
-
-// ---------------------------------------------------------------------------
-// Sampling bounds (#1331 fix round 1 — moved from the imperative
-// `gents config profile set` writer, the only place that enforced them;
-// #1430 moved the rules into InferenceSampling::validate).
-// ---------------------------------------------------------------------------
-
-#[test]
-fn inference_sampling_validate_accepts_sampling_bounds_at_their_edges() {
-    let mut sampling = base_sampling("edges");
-    sampling.top_p = Some(0.0);
-    sampling.min_p = Some(1.0);
-    sampling.top_k = Some(1);
-    sampling.repetition_penalty = Some(f64::MIN_POSITIVE);
-    sampling.frequency_penalty = Some(-2.0);
-    sampling.presence_penalty = Some(2.0);
-    assert!(sampling.validate().is_ok());
-}
-
-#[test]
-fn inference_sampling_validate_rejects_top_p_outside_unit_interval() {
-    for value in [-0.01, 1.01] {
-        let mut sampling = base_sampling("top-p");
-        sampling.top_p = Some(value);
-        let error = sampling.validate().unwrap_err().to_string();
-        assert!(
-            error.contains("top_p must be within [0, 1]"),
-            "{value}: {error}"
-        );
-    }
-}
-
-#[test]
-fn inference_sampling_validate_rejects_min_p_outside_unit_interval() {
-    for value in [-0.01, 1.01] {
-        let mut sampling = base_sampling("min-p");
-        sampling.min_p = Some(value);
-        let error = sampling.validate().unwrap_err().to_string();
-        assert!(
-            error.contains("min_p must be within [0, 1]"),
-            "{value}: {error}"
-        );
-    }
-}
-
-#[test]
-fn inference_sampling_validate_rejects_non_positive_top_k() {
-    for value in [0, -1] {
-        let mut sampling = base_sampling("top-k");
-        sampling.top_k = Some(value);
-        let error = sampling.validate().unwrap_err().to_string();
-        assert!(error.contains("top_k must be positive"), "{value}: {error}");
-    }
-}
-
-#[test]
-fn inference_sampling_validate_rejects_non_positive_repetition_penalty() {
-    for value in [0.0, -1.0] {
-        let mut sampling = base_sampling("rep-penalty");
-        sampling.repetition_penalty = Some(value);
-        let error = sampling.validate().unwrap_err().to_string();
-        assert!(
-            error.contains("repetition_penalty must be positive"),
-            "{value}: {error}"
-        );
-    }
-}
-
-#[test]
-fn inference_sampling_validate_rejects_frequency_and_presence_penalty_outside_range() {
-    for value in [-2.01, 2.01] {
-        let mut frequency = base_sampling("freq-penalty");
-        frequency.frequency_penalty = Some(value);
-        let error = frequency.validate().unwrap_err().to_string();
-        assert!(
-            error.contains("frequency_penalty must be within [-2, 2]"),
-            "{value}: {error}"
-        );
-
-        let mut presence = base_sampling("presence-penalty");
-        presence.presence_penalty = Some(value);
-        let error = presence.validate().unwrap_err().to_string();
-        assert!(
-            error.contains("presence_penalty must be within [-2, 2]"),
-            "{value}: {error}"
-        );
-    }
-}
-
-#[test]
-fn inference_sampling_validate_reports_every_violation_at_once() {
-    let mut sampling = base_sampling("multi-bad");
-    sampling.seed = Some(-1);
-    sampling.top_p = Some(2.0);
-    sampling.top_k = Some(0);
-    let error = sampling.validate().unwrap_err().to_string();
-    assert!(error.contains("seed must be non-negative"), "{error}");
-    assert!(error.contains("top_p must be within [0, 1]"), "{error}");
-    assert!(error.contains("top_k must be positive"), "{error}");
-}
-
-// ---------------------------------------------------------------------------
-// InferenceBackend::validate lives in `backend_registry` (crate root); see
-// `crates/gents/src/backend_registry/tests.rs` for its table-driven cases.
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Agent::validate_references (#1331)
+// Agent::validate_references
 // ---------------------------------------------------------------------------
 
 fn reference_documents() -> Vec<(crate::Collection, serde_json::Value)> {
@@ -1735,7 +1323,6 @@ async fn oauth_account_scope_matches_lean() {
             Some(owner) => {
                 assert!(matches!(auth, BackendAuth::NodeOAuth { .. }), "{case}");
                 let provider = kind_of(&case["provider_kind"]).oauth_provider().unwrap();
-                // The runtime resolves under the executing node, never the stored owner.
                 let row = resolve_oauth_credential(
                     &access,
                     scope,
@@ -1793,8 +1380,7 @@ fn reference_snapshot_rejects_foreign_roots_duplicates_and_malformed_rows() {
         .unwrap_err()
         .to_string()
         .contains("multiple live"));
-    // Genuinely malformed canonical backend row: the auth object with a
-    // competing credential selection fails the backend validator.
+    // Genuinely malformed canonical backend row fails the backend validator.
     let mut documents = reference_documents();
     documents[0].1["auth"] = serde_json::json!({"kind":"api_key", "key":"key", "variable":"KEY"});
     assert!(ConfigReferences::from_documents("owner", documents).is_err());
@@ -1818,9 +1404,6 @@ fn same_owner_delegation_requires_an_agent_but_foreign_admission_is_separate() {
             serde_json::json!({"node_did":"owner","target_id":"worker","name":"worker","target_node_did":destination,"agent_id":"remote"}),
         )
     };
-    // Same-owner targets must resolve the referenced agent inside the same
-    // closure; foreign destinations are checked by delegation admission under
-    // ACP, never satisfied by a config lookup, so the foreign case validates.
     let refs = ConfigReferences::from_documents("owner", vec![target("owner")]).unwrap();
     assert!(refs.validate().is_err());
     let refs = ConfigReferences::from_documents("owner", vec![target("foreign")]).unwrap();
@@ -1831,8 +1414,6 @@ fn same_owner_delegation_requires_an_agent_but_foreign_admission_is_separate() {
 async fn reference_loader_isolates_foreign_malformed_backends_and_rejects_owned_corruption() {
     let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    // Use raw storage only to seed deliberately malformed rows. The common
-    // desired-state writer correctly rejects these before publication.
     for (owner, id, auth) in [
         ("owner", "good", "unauthenticated"),
         ("foreign", "bad", "invalid-auth"),

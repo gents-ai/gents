@@ -1,17 +1,5 @@
 import Proofs.Basic
 
-/-!
-# Graph pipeline publication and run pinning
-
-This model covers the control-plane boundary for compiling a model-proposed
-document graph. A proposal is not executable configuration. It becomes visible
-to the trigger runtime only after whole-graph validation and complete artifact
-materialization, through one active-revision pointer.
-
-The model deliberately abstracts over compiler algorithms, DefraDB transaction
-implementation, and stage execution. Those are Rust conformance boundaries.
--/
-
 namespace GraphPipeline
 
 abbrev GraphId := Nat
@@ -315,12 +303,6 @@ theorem start_requires_active_revision
   simp only [step?] at h
   split at h <;> simp_all
 
-/-- A run may not start without input that satisfies the pinned entry
-contract. A declared prepare step runs on the host before the start
-transaction begins; admission of caller-supplied input against the entry's
-schema may run inside the start transaction, and the package path also admits
-it before any host step. The admitted flag conveys no trust beyond that
-admission. -/
 theorem start_requires_admitted_input
     {pre post : State} {runId : RunId} {inputAdmitted : Bool}
     (h : step? pre (.startRun runId inputAdmitted) = some post) :

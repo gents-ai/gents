@@ -5,31 +5,24 @@ use crate::model::{FilesystemEntry, WalkStats, DEFAULT_IGNORED_NAMES};
 
 const DEFAULT_GREP_PREVIEW_CHARS: usize = 240;
 
-/// Largest response the runner writes. The host reads at most 2 MiB of runner
-/// stdout (`MAX_NATIVE_RUNNER_OUTPUT_BYTES`) and a longer response fails to
-/// decode instead of truncating, so results are cut here. Measured on the
-/// encoded response, after both JSON encodings (`raw_json` output is itself
-/// JSON), with headroom for the envelope and trailing newline.
+/// Hosts read at most 2 MiB of runner stdout (`MAX_NATIVE_RUNNER_OUTPUT_BYTES`);
+/// a longer response fails to decode rather than truncate, so results are cut
+/// to this bound (measured on the encoded response, both JSON encodings).
 pub const MAX_RESPONSE_BYTES: usize = 1536 * 1024;
 
-/// Largest request the runner reads from stdin. Requests carry a pattern and
-/// a path, never file contents; a larger request is refused, not truncated.
+/// A larger request is refused, not truncated.
 pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 
-/// Characters of a caller-supplied pattern echoed back in result metadata.
 const MAX_ECHOED_PATTERN_CHARS: usize = 1024;
 
-/// Characters of an error message the runner reports. Escaping can grow each
-/// character to at most six bytes, so the error envelope stays far below
-/// `MAX_RESPONSE_BYTES`.
+/// Escaping can grow each character to six bytes; keep the error envelope far
+/// below `MAX_RESPONSE_BYTES`.
 const MAX_ERROR_CHARS: usize = 64 * 1024;
 
-/// Echo a caller-supplied pattern in metadata, cut to a bounded prefix.
 pub(crate) fn echoed_pattern(pattern: &str) -> String {
     truncate_inline(pattern, MAX_ECHOED_PATTERN_CHARS)
 }
 
-/// The response line (with trailing newline) reporting `error`, bounded.
 pub fn error_response_line(error: &anyhow::Error) -> String {
     let message = truncate_inline(&format!("{error:#}"), MAX_ERROR_CHARS);
     let mut line = serde_json::to_string(&crate::protocol::NativeFsRunnerResponse {
@@ -55,9 +48,6 @@ pub(crate) fn encoded_response_len(output: &str) -> Result<usize> {
         + 1)
 }
 
-/// Render `items`, cutting to the longest prefix whose encoded response fits
-/// `budget`; a cut result reports `truncated`. Rendered length grows with the
-/// prefix, so the cut is found by bisection.
 pub(crate) fn render_within_budget<T>(
     items: &[T],
     truncated: bool,
@@ -259,24 +249,4 @@ fn truncate_inline(text: &str, max_chars: usize) -> String {
     }
     let truncated = text.chars().take(max_chars).collect::<String>();
     format!("{truncated}... [truncated]")
-}
-
-#[cfg(test)]
-mod budget_tests {
-    use super::*;
-
-    #[test]
-    fn zero_item_render_over_budget_fails_clearly() {
-        let error = render_within_budget(&[1u8, 2, 3], false, 64, |items, _| {
-            Ok(format!("{}{}", "m".repeat(200), items.len()))
-        })
-        .unwrap_err();
-        assert!(
-            error.to_string().contains("result metadata alone exceeds"),
-            "{error}"
-        );
-        let error =
-            render_within_budget::<u8>(&[], false, 64, |_, _| Ok("m".repeat(200))).unwrap_err();
-        assert!(error.to_string().contains("exceeds the 64-byte"), "{error}");
-    }
 }

@@ -60,7 +60,6 @@ function applyLiveTextPatch(
   return next || null;
 }
 
-/** Native adapter of ClientLiveDelta.accepts; identity is encoded by the bridge. */
 export function acceptsLiveCursor(
   base: string | null | undefined,
   current: string | null | undefined,
@@ -69,7 +68,6 @@ export function acceptsLiveCursor(
   return !terminal && base != null && base === current;
 }
 
-/** Apply a bridge-checked response suffix without rebuilding historical rows. */
 export function applySessionLiveDelta(
   current: DesktopSessionSnapshot,
   delta: SessionLiveDeltaView,

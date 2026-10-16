@@ -1,5 +1,4 @@
 //! Exact accepted-header tool accounting inside the request terminal transaction.
-//! Handoff records uncertainty; a running executor is never declared stopped.
 use anyhow::{Context, Result};
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, OutputOutcome};
 use gents_protocol::row::{AgentRequestRow, AgentToolCallRow};
@@ -108,7 +107,6 @@ pub(super) async fn account_tools_in_txn(
         ))
         .await?;
     let tools: Vec<ToolDocument> = crate::graphql::rows(&response, "AgentToolCall")?;
-    // Every accepted intent must resolve its exact physical lifecycle document.
     for header in headers.iter().filter(|h| matches!(&h.message.publication,
         MessagePublication::RequestExecution { execution_generation } if execution_generation == generation)
         && h.message.outcome == OutputOutcome::Complete && h.message.role == MessageRole::Assistant) {
@@ -261,10 +259,7 @@ pub(super) async fn account_tools_in_txn(
                 reader.load_message(&deliveries[0].doc_id).await?;
             }
         }
-        // A request's exceptional terminal never stops a running tool: it
-        // only records the handoff instant. No other session is reached.
         let input = if state == "pending" {
-            // No executor ever started: cancel immutable intent, not an effect.
             format!(
                 r#"lifecycle_state: "cancelled", cancel_cause: "interrupted", completed_at: "{timestamp}""#
             )

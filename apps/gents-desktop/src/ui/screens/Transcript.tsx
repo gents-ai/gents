@@ -63,8 +63,7 @@ import {
   Reasoning,
   useGroupState,
 } from "./ActivityGroup";
-/* the newest entries are always drawn: the turn in progress and the few
-   before it are where the reader is, and where the transcript grows */
+
 const ALWAYS_DRAWN = 8;
 
 function FailedEarlier({ message }: { message: string }) {
@@ -93,8 +92,6 @@ function copyActions(text: string | null | undefined) {
   ];
 }
 
-/* the sessions that sent work into this one; a turn another session sent is
-   labeled with its sender */
 const ParentContext = createContext<ParentWork | null>(null);
 
 const TranscriptItem = memo(function TranscriptItem({
@@ -102,7 +99,6 @@ const TranscriptItem = memo(function TranscriptItem({
   final = false,
 }: {
   item: RenderedTimelineItem;
-  /* the answer a finished turn ended on: it carries the response actions */
   final?: boolean;
 }) {
   const parentWork = useContext(ParentContext);
@@ -117,7 +113,6 @@ const TranscriptItem = memo(function TranscriptItem({
       );
     case "userMessage":
     case "pendingUserTurn": {
-      /* a sent message reads as sent: only one that did not go through says so */
       const state =
         item.kind === "pendingUserTurn"
           ? pendingInputState(item.lifecycleState, item.foldedIntoRequestId)
@@ -141,18 +136,10 @@ const TranscriptItem = memo(function TranscriptItem({
         <UserMessage actions={copyActions(item.content)}>{item.content}</UserMessage>
       );
       const senderName = sender.summary?.title ?? "another session";
-      /* a turn another session sent wears that session's mark, the way any
-         other sender would; its state, where the mark cannot say it, is a
-         chip seated on the bubble's bottom edge */
       return (
-        /* the mark hangs in the transcript's right gutter, seated on the
-           first line's center: the bubble's own my-1 and py-3 put that 26px
-           down, half the avatar is 12 */
         <div className={cn("relative", state && "mb-2")}>
           <AgentInitials
             name={sender.agentName ?? senderName}
-            /* in the gutter where there is one; seated on the bubble's
-               top corner when the screen is too narrow to spare it */
             className="absolute -top-1 right-2 size-6 text-[10px] ring-2 ring-background sm:top-3.5 sm:-right-8 sm:ring-0"
             aria-hidden={false}
             role="img"
@@ -177,7 +164,6 @@ const TranscriptItem = memo(function TranscriptItem({
     case "liveAssistant":
       return <Reply item={item} final={final} />;
     case "toolGroup":
-      /* placed by the transcript into an ActivityGroup; never reaches here */
       return null;
   }
 });
@@ -240,13 +226,6 @@ function StoppedNotice({
   );
 }
 
-/* A reply, live or saved, drawn as one tree. The saved message that
-   replaces a live tail is drawn under the tail's key (`drawKey`), so this
-   same tree updates in place: nothing is removed and inserted under the
-   reader, and the text carries on revealing. A turn that thought and then
-   acted leaves reasoning with nothing said after it: that is a think, not
-   an empty answer, so it carries no action bar and no blank line where
-   prose would be. */
 function Reply({
   item,
   final,
@@ -258,15 +237,9 @@ function Reply({
   return (
     <div data-testid={live ? "live-assistant" : undefined}>
       <AssistantMessage
-        /* the answer sits wider apart than the rows around it: the column's
-           gap is even, which puts the thing a person came to read at the
-           same distance as a row of activity */
         className={item.content ? "py-4" : undefined}
         actions={!live && item.content && !final ? copyActions(item.content) : false}
       >
-        {/* a provider that will not hand its reasoning over leaves a
-            placeholder, not prose: say so in a line rather than offer a
-            disclosure with an apology behind it */}
         {readableReasoning(item.reasoning) ? (
           <Reasoning text={readableReasoning(item.reasoning)!} />
         ) : reasoningWithheld(item.reasoning) ? (
@@ -286,22 +259,13 @@ function Reply({
    elsewhere — is simply there. */
 function ReplyText({ content, live }: { content: string; live: boolean }) {
   const [revealing] = useState(live);
-  /* No wrapper: prose-app spaces its blocks with `& > * + *`, so anything
-     between it and the markdown makes every paragraph, heading and list
-     lose its margins at once — silently, because the text still renders. */
   if (!revealing) return <Markdown>{content}</Markdown>;
   return <StreamText text={content} />;
 }
 
-/* Under a finished response the actions sit on the line below the answer
-   and stay there, rather than floating over it on hover. Copy takes the response as written — its markdown — and says so. */
 function ResponseActions({ text }: { text: string }) {
   const { copied, copy } = useCopied();
   return (
-    /* on a desktop they wait for the pointer, like a step's caret: an
-       answer reads as the end of the turn, not as a row of controls. The
-       space is kept, so nothing moves when they appear; a touch screen has
-       no hover to wait for, and keyboard focus shows them too */
     <div
       className={cn(
         "-mt-1 flex items-center gap-1 px-1 transition-opacity duration-150 motion-reduce:transition-none",
@@ -324,9 +288,7 @@ function ResponseActions({ text }: { text: string }) {
   );
 }
 
-/* A row in the transcript's window. Memoized on what it draws, so an update
-   that leaves a row alone (every streamed chunk, for all but the last)
-   renders neither the row nor its wrapper. */
+// A row in the transcript's window.
 const ItemRow = memo(function ItemRow({
   rowKey,
   timelineKey,
@@ -400,7 +362,6 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   );
   const [retrying, setRetrying] = useState(false);
 
-  /* the latest request's terminal facts; the bridge sends no response row */
   const latest = session?.latestRequestOutcome;
   const status = inFlight
     ? activityStatus(session?.timelineItems ?? [], stopping)
@@ -411,12 +372,8 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     (session?.turnState === "failed"
       ? "The request failed before a response was available. Check the request trace for details."
       : "");
-  /* the request that ended failed, and the session is already on a later
-     one: both facts, in order, the failure before the live text */
   const continuing =
     Boolean(latest?.failureReason) && session?.turnState === "processing";
-  /* the list the transcript actually maps, held stable so the fold's
-     memo has a key that does not change on every render */
   const visible = useMemo(
     () =>
       (continuing
@@ -427,9 +384,6 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   const showError =
     Boolean(responseError) && !wasInterrupted && (continuing || !inFlight);
 
-  /* Streaming continuity: the live text is kept on screen until the
-     message that replaces it arrives (a projection can drop one before the
-     other lands), and that message is drawn under the live tail's key. */
   const sessionKey = session?.sessionId ?? null;
   const heldRef = useRef<HeldLive | null>(null);
   const [heldExpiry, setHeldExpiry] = useState(0);
@@ -448,16 +402,12 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     !visible.some((item) => item.kind === "liveAssistant" && Boolean(item.content));
   useEffect(() => {
     if (!holding) return;
-    /* nothing replaced it: an interrupted turn, or a message that never
-       came. Stop holding rather than show stale text indefinitely. */
     const timer = setTimeout(() => {
       heldRef.current = null;
       setHeldExpiry((n) => n + 1);
     }, 3_000);
     return () => clearTimeout(timer);
   }, [holding]);
-  /* the message just sent, drawn from the moment it is sent: one row per
-     message, whatever stands for it as it settles */
   const localTurn = useView((view) => view.pendingTurn);
   const turns = useMemo(
     () => withSentTurns(held.items, localTurn, sessionKey),
@@ -471,10 +421,6 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   keysRef.current = keys;
   const rendered = turns;
   const entries = useMemo(() => groupTranscript(rendered), [rendered]);
-  /* A turn's answer is the last thing it said before the person spoke
-     again, or before the transcript ends once nothing is running. Only a
-     finished turn has one: while the agent works, its last words are
-     narration that may yet be followed by more. */
   const finalKeys = useMemo(() => {
     const keys = new Set<string>();
     let last: string | null = null;
@@ -508,8 +454,6 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   };
 
   return (
-    /* the condensed header floats over the scroller, so a step opening
-       near the top must stop below it, not under it (h-12 plus a little) */
     <div
       className="mt-6 grid grid-cols-[minmax(0,1fr)] gap-5 [--step-scroll-inset:56]"
       data-testid="transcript-panel"
@@ -530,8 +474,6 @@ export const TranscriptPanel = memo(function TranscriptPanel({
             <TranscriptWindowProvider scroller={scroller} session={sessionKey}>
               {entries.map((entry, index) =>
                 entry.kind === "item" ? (
-                  /* keyed for the pager, which holds the reader's place
-                     by the row under their eye while older pages land */
                   <ItemRow
                     key={drawKey(keys, entry.item)}
                     rowKey={drawKey(keys, entry.item)}
@@ -587,8 +529,6 @@ export const TranscriptPanel = memo(function TranscriptPanel({
           )}
         </div>
       )}
-      {/* the run's line, in the place kept for it at the foot: laid out as a
-          reply is, but not one, so nothing reading the transcript counts it */}
       <div className="relative min-w-0">
         <div data-slot="activity-line" className="prose-app px-2">
           <ActivityLine status={status} />

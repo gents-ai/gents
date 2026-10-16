@@ -16,11 +16,8 @@ where
         .with_context(|| format!("decoding {collection} rows"))
 }
 
-/// Execute one timeline query and return its rows. A missing collection is a
-/// hard error, not a silently empty section: every collection read here
-/// (`AgentMessage`, `AgentToolCall`, `InferenceCall`, `AgentSession`, `Goal`,
-/// `AgentRequest`, ...) is required for a truthful timeline. Only a genuinely
-/// empty result set returns `Ok(vec![])`.
+/// A missing collection is a hard error, not a silently empty section; only a
+/// genuinely empty result set returns `Ok(vec![])`.
 pub(super) async fn required_rows(
     access: &ConfigAccess,
     collection_name: &str,

@@ -73,17 +73,12 @@ pub(super) async fn apply_config_writes(
     .await
 }
 
-/// The agent the Codex shim binds to plus the canonical inference profile it
-/// selects. `Agent` carries `inference_profile_id` only — backend,
-/// model, and effort choices live on the profile, never as agent copies.
+/// Backend/model/effort choices live on the profile, never as agent copies.
 pub(super) struct BoundAgent {
     pub(super) inference_profile: InferenceProfile,
 }
 
-/// One backend enabled for this node plus its discovered model catalog in
-/// the exact credential scope this node may use. `catalog` is absent until
-/// a successful discovery has been observed; absence is never invented into
-/// synthetic model entries.
+/// Catalog absence is never invented into synthetic model entries.
 pub(super) struct AvailableBackend {
     pub(super) backend: InferenceBackend,
     pub(super) catalog: Option<BackendModelCatalog>,
@@ -101,8 +96,6 @@ async fn load_bound_agent_document(state: &ShimState) -> Result<gents::AgentDocu
         })
     })
     .await?;
-    // Full canonical decode: `deny_unknown_fields` makes malformed
-    // configuration a hard error instead of a silently half-filled document.
     let agent: gents::AgentDocument = serde_json::from_value(raw)
         .with_context(|| format!("decoding bound Agent {agent_id:?}"))?;
     Ok(agent)
@@ -126,17 +119,9 @@ pub(super) async fn load_bound_agent(state: &ShimState) -> Result<BoundAgent> {
     Ok(BoundAgent { inference_profile })
 }
 
+/// Drops a backend only on an explicit readiness veto; fail-closed admission stays
+/// in `fleet_slots.rs`/`healthz`, and another node's backend is never selectable.
 pub(super) async fn available_model_backends(state: &ShimState) -> Result<Vec<AvailableBackend>> {
-    // The model list is a *configuration* surface — pick a backend/profile to
-    // bind a agent to — not an admission decision, so it starts from the
-    // document's configured intent (`enabled` backends, as before #1332)
-    // and must keep working before this runtime has published any
-    // readiness at all (fresh stores, config-only sessions, a backend that
-    // has no agent bound to it yet). It only drops a backend on an
-    // *explicit* readiness veto; `fleet_slots.rs`/`healthz` are the
-    // admission-reporting surfaces and keep their fail-closed agent.
-    // Backends are scoped to the exact bound node; another node's
-    // backend is never selectable here.
     let node_did = state.node_did.as_ref();
     let mut backends = list_enabled_backends_for_agent(state.node.as_ref(), node_did)
         .await
@@ -152,8 +137,6 @@ pub(super) async fn available_model_backends(state: &ShimState) -> Result<Vec<Av
         .iter()
         .map(|(_, profile)| (profile.profile_id.as_str(), profile.backend_id.as_str()))
         .collect();
-    // An agent binds to a backend only through its selected inference
-    // profile; agents whose profile is unresolvable attribute to no backend.
     let bindings = agents
         .iter()
         .filter_map(|agent| {
@@ -181,10 +164,6 @@ pub(super) async fn available_model_backends(state: &ShimState) -> Result<Vec<Av
 
     let mut available = Vec::with_capacity(backends.len());
     for backend in backends {
-        // Exact authentication scope: shared credentials observe the backend's
-        // shared (anonymous) catalog; node OAuth observes only this
-        // node's catalog. One node never inherits another's
-        // advertised list.
         let credential_scope =
             matches!(backend.auth, BackendAuth::NodeOAuth { .. }).then_some(node_did);
         let catalog = lookup_backend_observation(&state.node, node_did, &backend.backend_id)
@@ -207,13 +186,8 @@ pub(super) async fn available_model_backends(state: &ShimState) -> Result<Vec<Av
     Ok(available)
 }
 
-/// Whether the readiness projection *explicitly* vetoes `backend_id` — never
-/// a "we don't know" signal. True only when a readiness row exists for this
-/// agent and every agent currently bound to `backend_id` through its
-/// inference profile is reported `Unavailable` with a backend-related reason
-/// (`BackendDisabled` or `BackendTemporarilyUnavailable`). No readiness row,
-/// no agents bound yet, or at least one bound agent that's `Ready` or
-/// unavailable for an unrelated reason — all read as "not vetoed."
+/// True only when every agent bound to `backend_id` is `Unavailable` for a
+/// backend-related reason; missing rows or agents read as "not vetoed."
 fn backend_vetoed_by_readiness(
     backend_id: &str,
     bindings: &[(String, String)],
@@ -290,12 +264,7 @@ pub(super) fn model_list_entries(backends: &[AvailableBackend], bound: &BoundAge
     entries
 }
 
-/// Advertise exactly the efforts discovery observed for one model — never
-/// synthetic effort-model variants. `None` means the efforts are unknown and
-/// `Some(empty)` means the model has no configurable reasoning effort; both
-/// render as no selectable effort options. Efforts outside the Codex protocol
-/// vocabulary (`max`, `ultra`) cannot be expressed in a `ModelListResponse`
-/// and are omitted rather than invented.
+/// Unknown or empty efforts render as no selectable options.
 fn advertised_effort_options(efforts: Option<&[ReasoningEffort]>) -> Value {
     let Some(efforts) = efforts else {
         return json!([]);
@@ -466,7 +435,6 @@ async fn apply_model_selection(
                 {
                     return Ok(());
                 }
-                // Copy the current controls; changing this agent must not mutate a shared profile.
                 profile.profile_id = new_profile_id.clone();
                 profile.backend_id = selection.backend_id.clone();
                 profile.model_name = selection.model_name.clone();
@@ -606,12 +574,6 @@ mod tests {
 
     #[test]
     fn backend_vetoed_when_every_bound_agent_is_explicitly_vetoed() {
-        // `available_model_backends` starts from `list_enabled_backends`, so
-        // this exercises the case that matters: the `InferenceBackend`
-        // document itself would read enabled+healthy, but this runtime's
-        // local prober vetoed it — that veto only ever reaches the readiness
-        // projection (#640; measured health is never persisted to the
-        // document).
         let node_did = "did:test:codex-shim";
         let bindings = vec![("default".to_string(), "backend-a".to_string())];
         let row = readiness_row(
@@ -649,10 +611,6 @@ mod tests {
 
     #[test]
     fn missing_readiness_row_leaves_configured_backend_offered() {
-        // The model list is a configuration surface (choose a backend/profile
-        // to configure a agent with) and must work before this runtime has
-        // published any readiness at all — a fresh store, a config-only
-        // session. Absence of a readiness row is not a veto.
         let node_did = "did:test:codex-shim";
         let bindings = vec![("default".to_string(), "backend-a".to_string())];
 
@@ -666,9 +624,6 @@ mod tests {
 
     #[test]
     fn backend_with_no_bound_agents_is_not_vetoed() {
-        // A brand-new backend with no `Agent` bound to it yet (the
-        // exact shape of a backend just created for configuration) has
-        // nothing in the readiness projection to veto it with.
         let node_did = "did:test:codex-shim";
         let bindings = vec![("default".to_string(), "backend-a".to_string())];
         let row = readiness_row(
@@ -686,10 +641,6 @@ mod tests {
         ));
     }
 
-    /// Discovery-backed list: exactly the advertised models, with the efforts
-    /// the server advertises — no synthetic effort-model variants, no invented
-    /// defaults for unknown effort sets, and efforts outside the Codex
-    /// protocol vocabulary are omitted rather than invented.
     #[test]
     fn model_list_entries_advertise_discovered_models_and_efforts() {
         let catalog = BackendModelCatalog {
@@ -765,7 +716,6 @@ mod tests {
         write_inference_backend_document(access, &backend)
             .await
             .expect("seed backend");
-        // Shared (unauthenticated) credential scope: the catalog is anonymous.
         ConfigAccess::transact_local_write(node, None, "codex.models.test.catalog", |txn| {
             let backend = &backend;
             let models = models.clone();
@@ -787,19 +737,12 @@ mod tests {
         backend
     }
 
-    /// Single owner (#1331 successor): `apply_model_to_bound_agent` must
-    /// reject a profile whose backend does not advertise the profile's model
-    /// through the scoped catalog — not just trust
-    /// `resolve_model_selection`'s own match.
     #[tokio::test]
     async fn apply_model_to_bound_agent_rejects_an_unadvertised_model() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         gents::ensure_runtime_schemas(&node).await.unwrap();
         let node_did = "did:test:codex-shim";
         let access = ConfigAccess::local(node.clone());
-        // Publication admits a profile only against its backend's catalog, so
-        // the unadvertised profile is published while its model is listed and
-        // then left behind by a later discovery that drops it.
         seed_backend_with_catalog(
             &access,
             &node,
@@ -828,17 +771,12 @@ mod tests {
         let error = apply_model_selection(&access, node_did, "default", &selection)
             .await
             .expect_err("an unadvertised model must be rejected");
-        // `{:#}` (anyhow's alternate Display) walks the full context chain;
-        // `{}` would only show this call's own wrapping context.
         assert!(
             format!("{error:#}").contains("does not advertise"),
             "{error:#}"
         );
     }
 
-    /// The mirror-image happy path: a genuinely-advertised profile commits,
-    /// selecting `inference_profile_id` only — no backend/model copies on the
-    /// agent.
     #[tokio::test]
     async fn apply_model_to_bound_agent_accepts_an_advertised_model() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
@@ -883,8 +821,6 @@ mod tests {
                 .expect("selected profile remains present");
         assert_eq!(selected.backend_id, "backend-a");
         assert_eq!(selected.model_name, "model-y");
-        // The selection id the model list and ConfigRead agree on still
-        // resolves from the profile's canonical fields.
         assert_eq!(
             model_selection_id(&selected.backend_id, &selected.model_name),
             "backend-a::model-y"
@@ -973,7 +909,6 @@ mod tests {
         write_inference_profile_document(&access, &original)
             .await
             .unwrap();
-        // A matching profile deliberately has different controls; /model must not select it.
         write_inference_profile_document(&access, &profile("other-policy", "y"))
             .await
             .unwrap();
@@ -1034,8 +969,6 @@ mod tests {
             gents::load_agent(&node, "selected").await.unwrap().unwrap(),
             selected
         );
-        // A retained dangling reference must fail the shared publication transaction
-        // without leaving an orphan copied profile or changing the agent binding.
         let escaped = gents::graphql::escape_graphql_string(&selected.inference_profile_id);
         let response = node.execute(&format!(r#"mutation {{ update_InferenceProfile(filter: {{node_did: {{_eq: "did:test:codex-shim"}}, profile_id: {{_eq: "{escaped}"}}}}, input: {{sampling_id:"missing"}}) {{_docID}} }}"#)).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
@@ -1061,7 +994,6 @@ mod tests {
             gents::load_agent(&node, "selected").await.unwrap().unwrap(),
             selected
         );
-        // Restore the actual retained profile through the common owner for the next case.
         write_inference_profile_document(&access, &new_profile)
             .await
             .unwrap();

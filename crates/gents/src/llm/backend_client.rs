@@ -1,18 +1,3 @@
-//! Single owner of "build the provider completion client for a agent's
-//! `BackendProviderKind`" — the daemon (`agent/runtime/context.rs`) and
-//! one-shot (`oneshot.rs`) used to carry independent copies of this
-//! four-way match, and only the daemon wrapped OAuth-branch client
-//! construction in a build timeout. Both callers now go through
-//! [`build_backend_client`], which applies that timeout to every OAuth build
-//! regardless of caller.
-//!
-//! Each `BackendProviderKind` × wire-API combination produces a distinct
-//! concrete `rig` client type, so the result is a small closed enum
-//! ([`BackendClient`]) rather than a `dyn` client: callers match on it once to
-//! hand the concrete value to their own generic completion-loop entry point
-//! (`run_agent_with_client` / `run_oneshot_with_completion_client`), which
-//! is the only place left that needs to be generic over the client type.
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,8 +7,7 @@ use defra_node::EmbeddedNode;
 use crate::backend_provider::BackendProviderKind;
 use crate::config::ResolvedAgent;
 
-/// A built provider completion client, tagged by which
-/// `BackendProviderKind` × wire-API combination produced it.
+/// A built provider completion client, tagged by its provider/wire-API branch.
 pub(crate) enum BackendClient {
     OpenAiChatCompletions(
         rig::providers::openai::CompletionsClient<
@@ -83,9 +67,6 @@ pub(crate) enum BackendClient {
 }
 
 impl BackendClient {
-    /// Read the built client's URI builder, not the mutable backend document.
-    /// These are the completion paths used by the pinned Rig clients; body
-    /// capture independently records the destination used at send time.
     pub(crate) fn replay_issuer(
         &self,
     ) -> Result<Option<gents_loop::claude_messages_body::ReplayIssuer>> {
@@ -110,7 +91,6 @@ impl BackendClient {
         )
     }
 
-    /// Family recorded from the branch that actually constructed this client.
     pub(crate) fn provider_family(&self) -> &'static str {
         match self {
             Self::OpenAiChatCompletions(_) | Self::OpenAiResponses(_) => {
@@ -127,13 +107,11 @@ impl BackendClient {
     }
 }
 
-/// The Claude subscription posts to its fixed Messages URI.
 pub(crate) fn claude_subscription_replay_issuer(
 ) -> Result<Option<gents_loop::claude_messages_body::ReplayIssuer>> {
     messages_replay_issuer(BackendProviderKind::ClaudeCliSubscription)
 }
 
-/// Messages clients post to the fixed Messages URI; `kind` is the family.
 fn messages_replay_issuer(
     kind: BackendProviderKind,
 ) -> Result<Option<gents_loop::claude_messages_body::ReplayIssuer>> {
@@ -146,8 +124,6 @@ fn messages_replay_issuer(
     )
 }
 
-/// The network terminal of an OpenAI-compatible backend, recording usage
-/// headers for the backend when it has an id.
 fn api_key_http(
     node: &Arc<EmbeddedNode>,
     agent: &ResolvedAgent,
@@ -161,14 +137,8 @@ fn api_key_http(
     }
 }
 
-/// Build the provider completion client for `agent`'s
-/// `backend_provider_kind` (and, where the provider has one, its configured
-/// `openai_wire_api`).
-///
-/// OAuth-branch construction (ChatGPT Codex, Grok/xAI OAuth) hits DefraDB for
-/// the agent's `OAuthCredential` and is bounded by `build_timeout` so a wedged
-/// lookup cannot hang startup forever — the same protection the daemon has
-/// always applied, now shared by one-shot too (#1338).
+/// OAuth-branch construction hits DefraDB for the agent's `OAuthCredential`
+/// and is bounded by `build_timeout` so a wedged lookup cannot hang startup.
 pub(crate) async fn build_backend_client(
     node: Arc<EmbeddedNode>,
     agent: &ResolvedAgent,
@@ -328,14 +298,8 @@ pub(crate) async fn build_backend_client(
     }
 }
 
-/// Dispatch a built `BackendClient` to `$body`, binding the unwrapped
-/// concrete client to `$c`. Single owner of the six-arm match every caller
-/// otherwise has to repeat: each `BackendProviderKind` × wire-API
-/// combination produces a distinct concrete `rig` client type, and `$body`
-/// is typically a call into a `CompletionClient`-generic continuation
-/// (`run_agent_with_client` / `run_oneshot_with_completion_client`) that
-/// Rust monomorphizes once per concrete type it's invoked with — so the
-/// match itself can't become a plain function, only written once.
+/// Each concrete `rig` client type is monomorphized separately by Rust, so
+/// this match cannot become a plain function.
 macro_rules! with_backend_client {
     ($client:expr, |$c:ident| $body:expr) => {
         match $client {
@@ -383,10 +347,6 @@ mod tests {
         agent
     }
 
-    /// OpenAI-compatible and OpenRouter clients are built synchronously from
-    /// strings (api key/endpoint) with no I/O, so the table test can assert
-    /// on the exact concrete variant the shared constructor returns for every
-    /// `BackendProviderKind` that doesn't need a live OAuthCredential.
     #[tokio::test]
     async fn each_openai_shaped_provider_kind_yields_the_expected_client_variant() {
         let node = test_node().await;
@@ -442,7 +402,6 @@ mod tests {
         );
     }
 
-    /// An Anthropic API key builds its Messages client from the key alone.
     #[tokio::test]
     async fn anthropic_api_key_builds_a_key_messages_client_without_io() {
         let node = test_node().await;
@@ -639,9 +598,6 @@ mod tests {
         assert!(format!("{error:#}").contains(&missing), "{error:#}");
     }
 
-    /// Seed credentials so every OAuth route reaches a concrete client. A
-    /// missing-credential assertion cannot distinguish xAI Chat Completions
-    /// from Responses because both fail in their shared bootstrap preamble.
     #[tokio::test]
     async fn each_oauth_provider_kind_yields_the_expected_client_variant() {
         let node = test_node().await;

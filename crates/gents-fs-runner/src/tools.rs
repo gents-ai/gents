@@ -22,9 +22,8 @@ const DEFAULT_MAX_ENTRIES_VISITED: usize = 200_000;
 const SEARCH_DIR_ENTRY_HINTS: usize = 10;
 const DEFAULT_MAX_BYTES_READ: u64 = 128 * 1024 * 1024;
 const DEFAULT_MAX_WALL_MS: u64 = 15_000;
-/// Longest glob or grep pattern accepted. Pattern compilers have their own
-/// size limits (globset panics past its regex limit), so an oversized pattern
-/// is refused up front with an error instead of crashing the runner.
+/// Globset panics past its own regex size limit; refuse oversized patterns
+/// up front instead of crashing the runner.
 const MAX_PATTERN_BYTES: usize = 4096;
 
 fn check_pattern_size(pattern: &str) -> Result<()> {

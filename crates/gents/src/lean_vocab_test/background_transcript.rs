@@ -31,8 +31,7 @@ impl LeanR4cBackgroundWorkCase {
     }
 }
 
-/// Interrupt disposition witness computed by the Lean
-/// `Background.Interrupt.interruptTool` for one owned tool-call shape.
+/// Interrupt disposition witness from Lean `Background.Interrupt.interruptTool`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanInterruptDispositionCase {
     pub(crate) name: String,
@@ -43,9 +42,8 @@ pub(crate) struct LeanInterruptDispositionCase {
     pub(crate) post_await_mode: String,
 }
 
-/// Paging witness over the retained output window (#937): inputs plus the
-/// slice outputs computed from the Lean `Background.ToolOutput.readSlice`
-/// model, consumed against `read_retained_output_slice`.
+/// Paging witness over the retained output window (#937), consumed against
+/// `read_retained_output_slice`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanToolOutputPagingCase {
     pub(crate) name: String,

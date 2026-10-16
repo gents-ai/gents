@@ -1321,7 +1321,6 @@ function memberCount(value: string): number {
       return parsed.length;
     }
   } catch {
-    // Newline/comma-delimited ids are also accepted by the pack schema.
   }
   return trimmed.split(/[\n,]+/).filter((item) => item.trim()).length;
 }

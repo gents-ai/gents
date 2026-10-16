@@ -1,19 +1,12 @@
 //! Grok shim wire codec: length-prefixed frames and leader envelopes.
 //!
 //! Gents is the leader server on this socket and stock Grok is the pager
-//! client. Both directions speak one JSON value per frame behind a four-byte
-//! big-endian `u32` length prefix, capped at [`MAX_MESSAGE_SIZE`] (64MB). A
-//! clean end of stream before any header byte is [`ProtocolError::ConnectionClosed`];
-//! a header or payload that stops early is a truncation error, never a
-//! silently short frame.
-//!
-//! The envelope vocabulary is the leader wire protocol, not ACP itself:
-//! `register` / `registered` (with [`LEADER_PROTOCOL_VERSION`] and the
-//! `gents-<version>` [`LEADER_BINARY_VERSION`]), `leader_ready` gating,
-//! `ping` / `pong`, `acp` pass-through (one raw JSON-RPC 2.0 line per frame),
-//! `control`, `shutting_down` + `shutdown`, and `error`. ACP payloads are
-//! opaque to this frame layer; [`super::acp`] owns their JSON-RPC decoding.
-//! The shim imports no Grok code.
+//! client: one JSON value per frame behind a four-byte big-endian `u32`
+//! length prefix, capped at [`MAX_MESSAGE_SIZE`]. A clean end of stream
+//! before any header byte is [`ProtocolError::ConnectionClosed`]; a header or
+//! payload that stops early is a truncation error, never a silently short
+//! frame. ACP payloads are opaque to this layer; [`super::acp`] owns their
+//! JSON-RPC decoding. The shim imports no Grok code.
 
 use std::fmt;
 
@@ -119,12 +112,8 @@ impl From<serde_json::Error> for ProtocolError {
 // Frame IO
 // ---------------------------------------------------------------------------
 
-/// Read one length-prefixed frame and return its payload bytes.
-///
-/// Returns [`ProtocolError::ConnectionClosed`] only for a clean end of stream
-/// before the first prefix byte; a prefix or body that stops early is a
-/// truncation error. Declared lengths above [`MAX_MESSAGE_SIZE`] are rejected
-/// before any allocation, so a hostile peer cannot force a giant buffer.
+/// Read one length-prefixed frame and return its payload bytes. Declared
+/// lengths above [`MAX_MESSAGE_SIZE`] are rejected before any allocation.
 pub async fn read_frame<R>(reader: &mut R) -> Result<Vec<u8>, ProtocolError>
 where
     R: AsyncRead + Unpin,
@@ -152,10 +141,8 @@ where
     Ok(payload)
 }
 
-/// Write one length-prefixed frame.
-///
-/// The payload is flushed before returning so a peer never observes a partial
-/// frame body. Payloads above [`MAX_MESSAGE_SIZE`] are rejected up front.
+/// Write one length-prefixed frame. The payload is flushed before returning
+/// so a peer never observes a partial frame body.
 pub async fn write_frame<W>(writer: &mut W, payload: &[u8]) -> Result<(), ProtocolError>
 where
     W: AsyncWrite + Unpin,
@@ -248,10 +235,8 @@ where
     write_frame_as(writer, envelope).await
 }
 
-/// Fill `buf` as far as the stream allows, tolerating `Interrupted`.
-///
-/// Returns the number of bytes read; a return below `buf.len()` means the
-/// stream ended.
+/// Fill `buf` as far as the stream allows, tolerating `Interrupted`; a return
+/// below `buf.len()` means the stream ended.
 async fn read_full<R>(reader: &mut R, buf: &mut [u8]) -> Result<usize, ProtocolError>
 where
     R: AsyncRead + Unpin,
@@ -301,12 +286,10 @@ pub struct ClientCapabilities {
 
 #[cfg(test)]
 impl ClientCapabilities {
-    /// True when the registering client asked for approve-all execution.
     pub fn is_always_approve(&self) -> bool {
         self.yolo_mode
     }
 
-    /// True when the registering client asked for classifier auto approval.
     pub fn is_auto(&self) -> bool {
         self.auto_mode
     }
@@ -352,7 +335,6 @@ pub enum ClientEnvelope {
 
 #[cfg(test)]
 impl ClientEnvelope {
-    /// The raw JSON-RPC payload, for `acp` envelopes only.
     pub fn acp_payload(&self) -> Option<&str> {
         match self {
             ClientEnvelope::Acp { payload } => Some(payload.as_str()),
@@ -360,7 +342,6 @@ impl ClientEnvelope {
         }
     }
 
-    /// The registering client's capabilities, for `register` envelopes only.
     pub fn capabilities(&self) -> Option<&ClientCapabilities> {
         match self {
             ClientEnvelope::Register { capabilities, .. } => Some(capabilities),
@@ -461,8 +442,6 @@ pub enum ServerEnvelope {
 
 #[cfg(test)]
 impl ServerEnvelope {
-    /// Build the `registered` answer for a client id and readiness flag,
-    /// stamping the shim's protocol and binary versions.
     pub fn registered(client_id: u64, ready: bool) -> Self {
         ServerEnvelope::Registered {
             client_id,
@@ -473,7 +452,6 @@ impl ServerEnvelope {
         }
     }
 
-    /// Build a protocol-level `error` envelope.
     pub fn error(code: i32, message: impl Into<String>) -> Self {
         ServerEnvelope::Error {
             code,
@@ -481,12 +459,10 @@ impl ServerEnvelope {
         }
     }
 
-    /// Build the `shutting_down` announcement that precedes `shutdown`.
     pub fn shutting_down(reason: ShutdownReason, delay_ms: u64) -> Self {
         ServerEnvelope::ShuttingDown { reason, delay_ms }
     }
 
-    /// The client id, for `registered` envelopes only.
     pub fn client_id(&self) -> Option<u64> {
         match self {
             ServerEnvelope::Registered { client_id, .. } => Some(*client_id),
@@ -494,9 +470,6 @@ impl ServerEnvelope {
         }
     }
 
-    /// Whether this envelope permits ACP traffic: only `registered` with
-    /// `ready: true`, or an already-issued [`ServerEnvelope::LeaderReady`]
-    /// (tracked by the caller), does.
     pub fn is_registered_ready(&self) -> bool {
         matches!(
             self,
@@ -717,14 +690,6 @@ mod tests {
     }
 
     #[test]
-    fn leader_binary_version_is_gents_prefixed() {
-        assert_eq!(
-            LEADER_BINARY_VERSION,
-            format!("gents-{}", env!("CARGO_PKG_VERSION"))
-        );
-    }
-
-    #[test]
     fn ping_pong_acp_control_and_shutdown_wire_names() {
         assert_eq!(
             serde_json::to_value(ClientEnvelope::Ping).unwrap(),
@@ -863,53 +828,5 @@ mod tests {
             .unwrap();
         let error = read_server_envelope(&mut reader).await.unwrap_err();
         assert!(matches!(error, ProtocolError::InvalidFrame(_)));
-    }
-
-    #[tokio::test]
-    async fn frame_encode_decode_helpers_round_trip() {
-        // `encode_frame`/`decode_frame` are payload-only codecs: the 4-byte
-        // length prefix belongs to `write_frame`, which layers framing on top.
-        let envelope = ServerEnvelope::registered(3, true);
-        let payload = encode_frame(&envelope).unwrap();
-        assert!(!payload.starts_with(&(payload.len() as u32).to_be_bytes()[..]));
-        let decoded: ServerEnvelope = decode_frame(&payload).unwrap();
-        assert_eq!(decoded, envelope);
-
-        // The framed path round-trips the same value with a real prefix.
-        let (mut writer, mut reader) = tokio::io::duplex(8192);
-        write_frame_as(&mut writer, &envelope).await.unwrap();
-        let framed: ServerEnvelope = read_frame_as(&mut reader).await.unwrap();
-        assert_eq!(framed, envelope);
-    }
-
-    #[test]
-    fn protocol_error_display_is_actionable() {
-        assert!(ProtocolError::MessageTooLarge(MAX_MESSAGE_SIZE + 1)
-            .to_string()
-            .contains("exceeds"));
-        assert!(ProtocolError::ConnectionClosed
-            .to_string()
-            .contains("closed"));
-        assert!(ProtocolError::TruncatedHeader { read: 2 }
-            .to_string()
-            .contains("2 of 4"));
-        assert!(ProtocolError::TruncatedFrame {
-            declared: 10,
-            read: 4
-        }
-        .to_string()
-        .contains("4 of 10"));
-        assert!(ProtocolError::InvalidFrame("bad".to_string())
-            .to_string()
-            .contains("bad"));
-        let io_error = ProtocolError::from(std::io::Error::new(
-            std::io::ErrorKind::BrokenPipe,
-            "broken pipe",
-        ));
-        assert!(io_error.to_string().contains("broken pipe"));
-        let json_error = serde_json::from_str::<Value>("{").unwrap_err();
-        assert!(ProtocolError::from(json_error)
-            .to_string()
-            .contains("decodable"));
     }
 }

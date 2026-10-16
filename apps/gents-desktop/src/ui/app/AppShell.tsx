@@ -1,13 +1,8 @@
-/* The app's frame: a window bar with the mark and the screen's own bar; a
-   rail with the agent, new session, mailbox and sessions; the content slot
-   on the ground. Chrome and canvas share the
-   ground; content that needs a surface brings its own. */
 import { useState, type ReactNode } from "react";
 import { CircleAlert, X } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import { cn } from "@gents/ui/lib/utils";
 import type { History, Route } from "@/lib/router";
-/* the surfaces this app registers, wherever the shell is rendered */
 import "@/screens/surfaces";
 import { useApp } from "./AppContext";
 import { PaneBarSlotContext } from "./PaneBar";
@@ -19,7 +14,6 @@ import { SwipeHandles } from "./SwipeHandles";
 import { useShellLayout } from "./useShellLayout";
 import { WindowBar } from "./WindowBar";
 
-/* the client's error, over the canvas until dismissed */
 function ErrorBanner() {
   const { stores, lifecycle } = useApp();
   const error = stores.client.use.error();
@@ -51,14 +45,12 @@ export function AppShell({
   children,
 }: {
   route: Route;
-  /** where the person came from and went back from: the bar's own back and forward */
   history?: History;
   children: ReactNode;
 }) {
   const layout = useShellLayout(route);
   const { shellRef, columns, wide, docked, dockVisible, paneCol, paneWidth, shownNav } =
     layout;
-  /* the pane bar's slot: screens fill it through a portal */
   const [paneBar, setPaneBar] = useState<HTMLElement | null>(null);
   const settings = (variant: "rail" | "row") => (
     <SettingsMenu variant={variant} showNav={wide} />
@@ -79,8 +71,6 @@ export function AppShell({
           settings={settings("row")}
           onPaneBar={setPaneBar}
         />
-        {/* the rail runs the window's full height below the bar; below md the
-            bar's menu opens the same panel as a sheet */}
         {wide && (
           <div className="col-start-1 row-start-2 min-h-0">
             <RailFlyout route={route} mode={shownNav} settings={settings("row")}>
@@ -88,8 +78,6 @@ export function AppShell({
             </RailFlyout>
           </div>
         )}
-        {/* the pane: a card with no header of its own; its title, marks and
-            actions live in the window bar's pane region */}
         <section
           className={cn(
             "flex min-h-0 min-w-0 flex-col",
@@ -99,12 +87,8 @@ export function AppShell({
         >
           <main
             className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
-            /* The pane's content keeps a width of its own where the card is
-               narrower than it should lay out at: past the divider's range it
-               keeps its minimum, and while the divider moves it keeps the width
-               that move lays it out at. The card follows the divider and clips
-               it, so it slides under the dock rather than re-wrapping. 10 is the
-               card's right margin and borders. */
+            /* Keeps its own width while the card is narrower than it should
+               lay out at, so it slides under the dock rather than re-wrapping. */
             style={
               paneWidth !== null
                 ? { width: Math.max(360, paneWidth - 10) }

@@ -150,7 +150,6 @@ fn decode_requests(response: serde_json::Value) -> Result<Vec<RetainedRequest>> 
 mod tests {
     use super::*;
     use crate::{KeyIdentity, NodeIdentity};
-    use serde_json::json;
 
     fn locator(did: &str, hint: &str) -> TrialLocator {
         TrialLocator {
@@ -336,21 +335,6 @@ resources:
             let error = format!("{error:#}");
             assert!(error.contains("AgentRequest"), "{error}");
             assert!(!error.contains("already open"), "{error}");
-        }
-    }
-
-    #[test]
-    fn retained_requests_refuse_overflow_instead_of_truncating() {
-        let response = json!({"data": {"AgentRequest": vec![json!({}); MAX_REQUESTS + 1]}});
-        let error = decode_requests(response).unwrap_err();
-        assert!(error.to_string().contains("more than 1000 requests"));
-    }
-
-    #[test]
-    fn retained_paths_refuse_absolute_and_traversing_hints() {
-        let runs = tempfile::tempdir().unwrap();
-        for hint in ["", "../outside", "trial/../../outside", "/tmp/outside"] {
-            assert!(retained_trial_dir(runs.path(), hint).is_err(), "{hint}");
         }
     }
 

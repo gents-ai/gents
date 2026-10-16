@@ -40,10 +40,9 @@ fn claude_sign_in(did: &str, who: &str) -> OAuthCredential {
     )
 }
 
-/// Claude accounts A (original, `label-a`), B and D added, C added and
-/// disabled, and a Grok backend G. Profiles `p`, `summ` and `q` on A; behavior
-/// `x` on `p` with `summ` as its compaction profile, `y` on `p`. A, B, C and G
-/// list their models; D's catalog was never read.
+/// Accounts A, B and D added, C added and disabled, and a Grok backend G.
+/// Profiles `p`, `summ` and `q` on A; agents `x` (compaction profile `summ`)
+/// and `y` on `p`. A, B, C and G list their models; D's catalog was never read.
 struct Fixture {
     node: Arc<EmbeddedNode>,
     access: ConfigAccess,
@@ -198,7 +197,6 @@ impl Fixture {
             .unwrap();
     }
 
-    /// Every profile document as stored.
     async fn profiles(&self) -> BTreeMap<String, Value> {
         let did = self.did.as_str();
         self.access
@@ -422,7 +420,6 @@ async fn companions_are_the_other_profiles_of_the_same_behaviors_on_one_account(
     let fixture = Fixture::new(DID).await;
     let (a, b) = (&fixture.backends["a"], &fixture.backends["b"]);
     let did = fixture.did.as_str();
-    // `y` compacts with `o` on B; `z` runs on `m` on A and compacts with `p`.
     fixture
         .apply(vec![
             (

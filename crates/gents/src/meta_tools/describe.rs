@@ -1030,13 +1030,8 @@ mod tests {
         assert_eq!(value["path"], "/service_id");
     }
 
-    /// Build a schema so large that `raw_schema: true` would exceed
-    /// `RAW_SCHEMA_MAX_BYTES` and confirm the output is capped with an honest
-    /// truncation marker.
     #[test]
     fn raw_schema_oversized_is_capped_with_truncation_marker() {
-        // Build a schema with many verbose properties so the pretty-printed JSON
-        // exceeds 16 000 bytes.
         let properties: Map<String, Value> = (0..200)
             .map(|i| {
                 (
@@ -1074,7 +1069,6 @@ mod tests {
         let output = describe_tool_result("x-data", "big_tool", true, &list_result)
             .expect("known tool should describe");
 
-        // Output must be shorter than the raw pretty-printed schema + header overhead.
         let header = "## big_tool\nA tool with a huge schema.\n\nRaw input schema:\n```json\n";
         let body = output
             .strip_prefix(header)
@@ -1087,13 +1081,11 @@ mod tests {
             body.len(),
             raw_schema_json.len()
         );
-        // Slack: body should be within 2x the cap (marker overhead).
         assert!(
             body.len() < RAW_SCHEMA_MAX_BYTES * 2,
             "capped body should be near the cap, got {}",
             body.len()
         );
-        // Honest marker must be present.
         assert!(
             body.contains("[Showing lines"),
             "honest truncation marker must be present"
@@ -1104,14 +1096,12 @@ mod tests {
         );
     }
 
-    /// A small schema under the cap must be returned verbatim (no truncation marker).
     #[test]
     fn raw_schema_under_cap_passes_through_verbatim() {
         let list_result = ListToolsResult::with_all_items(vec![x_data_search_tool()]);
         let output = describe_tool_result("x-data", "search_posts", true, &list_result)
             .expect("known tool should describe");
 
-        // The schema from x_data_search_tool is small; no truncation marker expected.
         assert!(
             !output.contains("[Showing lines"),
             "small schema must not carry a truncation marker"

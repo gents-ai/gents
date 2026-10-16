@@ -1,12 +1,4 @@
-import {
-  isValidElement,
-  memo,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { memo } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
@@ -70,10 +62,6 @@ function prefersReducedMotion() {
   );
 }
 
-/**
- * Smooth a newly observed response burst without delaying ordinary token
- * streaming or replaying animation for transcript history.
- */
 export function RevealedMarkdownContent({
   value,
   animate,

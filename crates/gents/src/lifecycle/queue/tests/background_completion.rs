@@ -2,8 +2,6 @@ use super::*;
 use crate::lifecycle::RequestTerminalOutcome;
 use crate::session;
 
-/// A desktop-owned session: an enrolled desktop request, finished through the
-/// real lifecycle, whose session is owned by the desktop's requester DID.
 async fn desktop_owned_session(
     db: &TestDb,
     session_id: &str,
@@ -45,8 +43,6 @@ async fn desktop_owned_session(
         .await
         .unwrap()
         .unwrap();
-    // Materialize and finish the enrolled desktop turn through the real
-    // lifecycle, before its longer-lived background work completes.
     let writer = crate::streaming::DefraStreamWriter::new(
         db.node.clone(),
         db.node_did(),
@@ -467,9 +463,6 @@ fn wake_agent_request(
         doc_id: doc_id.to_string(),
         request_id: request_id.to_string(),
         node_did: parent.node_did.clone(),
-        // Background wakes are signed local-control requests, so their exact
-        // requester scope is the signing principal even when the parent was
-        // an unscoped interactive request.
         requester_did: Some(parent.node_did.clone()),
         agent_id: parent.agent_id.clone(),
         session_id: parent.session_id.clone(),
@@ -836,9 +829,6 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
         )
         .await
         .unwrap();
-    // Publication alone does not acknowledge the wake. The terminal commit
-    // selects the exact header and acknowledges the claimed notification set
-    // atomically; startup must not infer completion from published bytes.
     let unpublished_terminal = crate::load_background_completion_diagnostics(
         &crate::config_client::ConfigAccess::local(node.clone()),
         db.node_did(),
@@ -1131,7 +1121,6 @@ async fn append_sequence_index_fetches_only_latest_header() {
         assert_eq!(plan["executionSuccess"], true, "{response}");
         let roots = plan["operationNode"].as_array().unwrap();
         assert_eq!(roots.len(), 2);
-        // DefraDB emits operation roots in query selection order: message, then tool call.
         fetched.push(metric(&roots[0]).unwrap_or_else(|| panic!("{response}")));
     }
     assert_eq!(fetched, vec![49, 1]);
@@ -1210,10 +1199,7 @@ async fn append_sequence_excludes_foreign_session_messages_and_reservations() {
     .await
     .unwrap();
     txn.discard().await.unwrap();
-    assert_eq!(
-        next, 7,
-        "own background reservation remains ahead of own message; foreign rows cannot move this session's cursor"
-    );
+    assert_eq!(next, 7);
 }
 
 /// Lean `CausalHop.completionWake`: the next wake claim consumes every pending

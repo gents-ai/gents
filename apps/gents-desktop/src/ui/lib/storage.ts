@@ -1,5 +1,5 @@
-/* This browser's storage, for state that outlives the visit. Storage can be
-   unavailable or refuse a write; then that state lasts the run. */
+// This browser's storage, for state that outlives the visit; storage can be
+// unavailable or refuse a write, and then that state lasts the run.
 export const browserStorage = {
   getItem(key: string) {
     try {
@@ -12,21 +12,19 @@ export const browserStorage = {
     try {
       localStorage.setItem(key, value);
     } catch {
-      /* storage unavailable */
+      // Storage unavailable.
     }
   },
   removeItem(key: string) {
     try {
       localStorage.removeItem(key);
     } catch {
-      /* storage unavailable */
+      // Storage unavailable.
     }
   },
 };
 
 const isStrings = (v: unknown): v is unknown[] => Array.isArray(v);
 
-/** The strings in what storage held: storage is outside the app's control
-    (another build, a hand edit), so anything else is left out. */
 export const storedStrings = (v: unknown): string[] =>
   isStrings(v) ? v.filter((x): x is string => typeof x === "string") : [];

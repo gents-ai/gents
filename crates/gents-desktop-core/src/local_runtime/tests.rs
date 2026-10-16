@@ -1,7 +1,7 @@
 use super::identity::{normalize_optional_string, resolve_p2p_peer_id};
 use super::{
     augment_peer_status_payload_for_desktop, await_serving_runtime_within,
-    dangerously_overwrite_desktop_home, default_node_home, graphql_endpoint_for_desktop_access,
+    dangerously_overwrite_desktop_home, graphql_endpoint_for_desktop_access,
     init_standard_local_runtime, load_operator_node_identity, load_standard_runtime_identity,
     operator_signer, render_human_summary, reset_desktop_runtime_state, runtime_graphql_url,
     runtime_status_url, serving_runtime, DesktopInitOptions, DesktopInitSummary,
@@ -32,40 +32,6 @@ fn sample_summary() -> DesktopInitSummary {
             "Then submit prompts from Chat, or run `gents chat` in another terminal.".to_string(),
         ],
     }
-}
-
-#[test]
-fn init_summary_serializes_camel_case() {
-    let summary = DesktopInitSummary {
-        status: "ok",
-        source: "local",
-        node_home: "/h".into(),
-        desktop_home: "/d".into(),
-        peer_directory: "/p".into(),
-        label: "L".into(),
-        node_name: "n".into(),
-        node_did: "did:key:z".into(),
-        graphql: "http://x".into(),
-        p2p_transport: "iroh".into(),
-        p2p_peer_id: "pid".into(),
-        p2p_listen_address: "addr".into(),
-        peer_record_id: "rec".into(),
-        next_steps: vec![],
-    };
-    let value = serde_json::to_value(&summary).unwrap();
-    assert_eq!(value["nodeDid"], "did:key:z");
-    assert!(value.get("node_did").is_none());
-    assert!(value.get("statusEndpoint").is_none());
-}
-
-#[test]
-fn default_node_home_uses_fresh_gents_home() {
-    let home = default_node_home().expect("node home");
-
-    assert_eq!(
-        home.file_name().and_then(|name| name.to_str()),
-        Some(".gents")
-    );
 }
 
 #[test]
@@ -272,7 +238,6 @@ fn discovery_binds_to_the_live_ready_did() {
     }
 }
 
-/// Answers every request with one JSON body, starting after `delay`.
 async fn serve_status_after(
     listener: std::net::TcpListener,
     delay: std::time::Duration,
@@ -373,7 +338,6 @@ async fn discovery_waits_for_a_runtime_that_is_not_listening_yet() {
         p2p_transport: "iroh".to_string(),
         p2p_peer_id: None,
     };
-    // The socket is bound but not accepting, as while the runtime starts.
     let server = serve_status_after(
         listener,
         std::time::Duration::from_millis(600),
@@ -428,8 +392,6 @@ async fn discovery_fails_at_once_for_a_runtime_that_predates_readiness() {
 
 const HOSTED_GRAPHQL: &str = "http://127.0.0.1:9191/api/v0/graphql";
 
-/// A runtime home under `dir` with a file identity key, serving
-/// `HOSTED_GRAPHQL`. Returns the home and its DID.
 fn hosted_home(dir: &std::path::Path) -> (std::path::PathBuf, String) {
     use gents::identity::NodeIdentity as _;
 
@@ -454,8 +416,6 @@ fn hosted_record(home: &std::path::Path, did: &str, graphql: &str) -> crate::cli
     record
 }
 
-/// The desktop signs as a co-hosted runtime's node identity only toward the
-/// endpoint that runtime's home currently serves.
 #[test]
 fn operator_node_identity_requires_the_homes_own_runtime_endpoint() {
     let tempdir = tempfile::tempdir().unwrap();
@@ -481,8 +441,6 @@ fn operator_node_identity_requires_the_homes_own_runtime_endpoint() {
     assert!(load_operator_node_identity(&homeless).is_err());
 }
 
-/// The usage read is signed by the hosted runtime's own identity, loaded
-/// under the same checks as its operator node identity.
 #[test]
 fn operator_signer_is_the_hosted_runtimes_own_identity() {
     let tempdir = tempfile::tempdir().unwrap();

@@ -24,7 +24,6 @@ fn request_from_native(
     }
 }
 
-/// Text-only request: empty surface, no preamble.
 fn ping_request() -> CompletionRequest {
     request_from_native(None, vec![Message::user("ping")], Vec::new())
 }
@@ -41,8 +40,6 @@ fn echo_tool_request() -> CompletionRequest {
     )
 }
 
-/// Fixture-only client: the bearer refuses, so a turn that outruns the
-/// fixture queue fails at the token read instead of reaching the network.
 fn test_client() -> ClaudeSubscriptionClient<StaticBearer> {
     ClaudeSubscriptionClient::with_bearer(Arc::new(StaticBearer::failing("no credential")))
 }
@@ -197,10 +194,6 @@ async fn build_with_a_seeded_credential_yields_a_shared_bearer() {
 }
 
 /// Spec §6: a stale credential triggers exactly one refresh before the send.
-/// Drives the real `OAuthRefreshKind::Claude` dispatch and the env-override
-/// wrapper: the rotated token comes back as the bearer, and the second read
-/// is served from cache (the one-shot server is gone by then, so a second
-/// refresh would fail to connect).
 #[tokio::test]
 async fn stale_credential_refreshes_once_through_the_claude_token_endpoint() {
     let node = test_node().await;
@@ -216,9 +209,7 @@ async fn stale_credential_refreshes_once_through_the_claude_token_endpoint() {
         r#"{"access_token":"access-NEW","refresh_token":"refresh-NEW","expires_in":28800}"#,
     )
     .await;
-    // Process-global, read by the wrapper at refresh time; hold TOKEN_URL_ENV
-    // across the whole set/remove window so lib tests that set this override
-    // cannot interleave with it.
+    // Process-global override; serialized via TOKEN_URL_ENV.
     let _env = crate::oauth_credential::test_support::TOKEN_URL_ENV
         .lock()
         .await;

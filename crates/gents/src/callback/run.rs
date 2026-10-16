@@ -52,7 +52,7 @@ pub fn result_docs_ready(
 }
 
 /// CallbackResult is an edge from a succeeded invocation whose result docs are
-/// complete. Succeeded-without-result is repaired by recovery.
+/// complete; recovery repairs succeeded-without-result.
 pub fn can_emit_callback_result(
     state: &str,
     journal: &[ActionJournalEntry],
@@ -284,9 +284,9 @@ pub fn resolve_action_plan_with_module(
     plan_from_callback(callback, source, module)
 }
 
-/// Denied wipes the journal only before host execution. After it started, the
-/// denial fails the invocation through the recovery owner, so an action the
-/// host may already have run is marked interrupted and never retried.
+/// Denied wipes the journal only before host execution; after it started, the
+/// denial fails the invocation so an action the host may already have run is
+/// marked interrupted and never retried.
 pub(crate) fn apply_planner_deny(invocation: &mut CallbackInvocationDoc, reason: &str) {
     let journal = decode_journal(invocation.action_journal.as_deref()).unwrap_or_default();
     if let Some(failed) = crate::workspace::recover_running(&journal) {
@@ -403,8 +403,8 @@ async fn execute_running_invocation(
         return super::plugin::execute(node, invocation, handler, source, plugins, journal).await;
     }
 
-    // Recovery with a stored plan must not reload/re-validate the WASM module.
-    // A missing module or empty trusted-signer set would otherwise deny() and
+    // Recovery with a stored plan must not reload/re-validate the WASM module;
+    // a missing module or empty trusted-signer set would otherwise deny() and
     // wipe an Executing journal the host may already have acted on.
     let stored = match stored_action_plan(invocation) {
         Ok(plan) => plan,
@@ -506,7 +506,8 @@ async fn execute_running_invocation(
         current_state(&journal, 0),
         Some(ActionJournalState::Validated)
     ) {
-        // Durable Executing before the adapter so recovery observes rather than re-runs.
+        // Durable Executing before the adapter so recovery observes rather
+        // than re-runs.
         advance(&mut journal, 0, ActionJournalState::Executing);
         persist_journal(node, invocation, &journal, LIFECYCLE_RUNNING, None).await?;
     }
@@ -726,8 +727,8 @@ pub async fn recover_local_invocations(
     retry_failed_plugin_invocations(node, node_did, ceiling, plugins, engine).await
 }
 
-/// Runs a failed plugin invocation again once its backoff has passed, while
-/// its callback allows more attempts and nothing it did could repeat.
+/// Runs a failed plugin invocation again once its backoff has passed and its
+/// callback allows more attempts.
 async fn retry_failed_plugin_invocations(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,

@@ -1,17 +1,7 @@
-//! Presentation-neutral timeline ordering (#608 parity).
+//! Presentation-neutral timeline ordering.
 //!
-//! Every client shell — desktop today, mobile next — must render a session's
-//! transcript in the **same order**, interleaving assistant/user messages with
-//! their tool groups, placing the pending turn, and ordering orphan tool groups
-//! around the live-assistant overlay. The *order and the message↔tool-group
-//! partition* are semantics; only the pixels are presentation.
-//!
-//! That ordering used to live only in the desktop Tauri bridge
-//! (`build_rendered_timeline`), unshared and unfenced — the single biggest
-//! parity risk, because a second shell that re-interleaves will drift on order
-//! and on which tool group is an orphan. This module is the shared, Lean-fenced
-//! skeleton (`proofs/Proofs/ClientShell/Timeline.lean`): shells compute the slot
-//! order here, then map each neutral slot to their own rich item.
+//! Shells compute the slot order here, then map each neutral slot to their own
+//! rich item. Fenced by `proofs/Proofs/ClientShell/Timeline.lean`.
 
 /// A message's role, reduced to what the ordering cares about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,23 +11,17 @@ pub enum TimelineRole {
 }
 
 /// The ordering-relevant projection of one transcript message.
-///
-/// A shell fills this from its rich view; the skeleton reads only these fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimelineMessageInput {
-    /// Stable identity for first-wins dedup (the desktop `message_key`).
+    /// Stable identity for first-wins dedup.
     pub key: String,
-    /// Ordering key and tool-group attach key. `None` sorts first, matching the
-    /// `BTreeMap<Option<i64>, _>` grouping the desktop bridge uses.
+    /// Ordering key and tool-group attach key. `None` sorts first.
     pub sequence: Option<i64>,
     pub role: TimelineRole,
-    /// Whether this message contributes a visible message slot. A message can
-    /// survive dedup, emit no slot (e.g. a user turn with no rendered content),
-    /// and still own a tool group — so this is separate from dedup.
+    /// Separate from dedup: a message can survive dedup, emit no slot, and
+    /// still own a tool group.
     pub emits_item: bool,
-    /// Opaque secondary dedup token (the desktop presentation key). `None` opts
-    /// out of presentation dedup. The skeleton only compares tokens for
-    /// equality — it never inspects content, so it stays presentation-neutral.
+    /// Opaque secondary dedup token; compared only for equality.
     pub dedup_token: Option<String>,
 }
 
@@ -77,9 +61,7 @@ pub enum OverlayPlacement {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OverlayInput {
     /// True when a durable assistant turn from the same request already owns
-    /// the overlay content — in which case it must NOT be re-emitted. This is
-    /// deliberately independent of timeline position because P2P replication
-    /// may expose newer messages alongside an older response snapshot.
+    /// the overlay content, in which case it must not be re-emitted.
     pub has_durable_owner: bool,
     pub placement: OverlayPlacement,
 }
@@ -115,9 +97,7 @@ pub enum TimelineSlot {
     Overlay,
 }
 
-/// The BTreeMap ordering the desktop bridge relies on: `None` first, then
-/// ascending. Kept explicit so the ordering is a stated contract, not an
-/// accident of a collection type.
+/// `None` sequences sort first, then ascending.
 fn sequence_lt(left: Option<i64>, right: Option<i64>) -> bool {
     match (left, right) {
         (None, None) => false,
@@ -127,26 +107,19 @@ fn sequence_lt(left: Option<i64>, right: Option<i64>) -> bool {
     }
 }
 
-/// Build the canonical timeline slot order (#608).
-///
-/// `messages` are the already-content-filtered transcript messages in arbitrary
-/// order (the shell decides which messages are worth showing — that is
-/// presentation). `group_sequences` are the `message_sequence` keys that have
-/// at least one tool call. `pending` supplies request-owned observations in admission order.
+/// Build the canonical timeline slot order.
 ///
 /// Discipline, mirrored by `ClientShell.Timeline.buildOrder`:
 /// 1. sort messages by `sequence` (None first),
 /// 2. first-wins dedup by `key`, then by `dedup_token`,
 /// 3. each surviving message emits its slot (if `emits_item`) immediately
-///    followed by its tool group (if it owns one), marking that group attached,
+///    followed by its tool group (if it owns one),
 /// 4. each distinct pending request key before its chosen durable message,
-///    or at the body tail when no anchor is visible; equal anchors retain
-///    admission order and physical identity dedup is first-wins,
-/// 5. orphan tool groups — those attached to no surviving message — in sequence
-///    order, inserting the overlay immediately before the specifically targeted
-///    active group when it owns a still-running, unmaterialized tool turn,
-/// 7. otherwise the overlay at the tail, iff present and not already owned by
-///    a durable assistant turn from the same request.
+///    or at the body tail when no anchor is visible,
+/// 5. orphan tool groups in sequence order, inserting the overlay before the
+///    targeted active group when it owns a still-running, unmaterialized tool turn,
+/// 6. otherwise the overlay at the tail, iff present and not already owned
+///    by a durable assistant turn from the same request.
 pub fn build_timeline_order(
     messages: &[TimelineMessageInput],
     group_sequences: &[Option<i64>],
@@ -258,12 +231,6 @@ pub fn build_timeline_order(
 
 #[cfg(test)]
 mod tests {
-    //! Conformance for the timeline ordering skeleton. Each test drives the real
-    //! `build_timeline_order` through a witness and asserts a property the Lean
-    //! model proves (`proofs/Proofs/ClientShell/Timeline.lean`). If the Rust
-    //! ordering drifts from the fenced discipline, the matching test fails —
-    //! which is what stops a second shell from silently diverging.
-
     use super::*;
 
     fn msg(key: &str, seq: i64, role: TimelineRole) -> TimelineMessageInput {
@@ -311,8 +278,7 @@ mod tests {
     }
 
     /// Lean `group_attached_or_orphan` + `group_not_both`: every tool group is
-    /// placed exactly once — attached to its owner or as an orphan, never both,
-    /// never dropped.
+    /// placed exactly once — attached or orphan, never both, never dropped.
     #[test]
     fn every_tool_group_is_placed_exactly_once() {
         let messages = vec![
@@ -633,8 +599,7 @@ mod tests {
     }
 
     /// Presentation-token dedup collapses re-presentations AND suppresses the
-    /// second message's group attach (the desktop `continue`-before-attach
-    /// nuance a naive shell would miss).
+    /// second message's group attach.
     #[test]
     fn presentation_token_dedup_also_drops_the_second_group_attach() {
         let mut first = msg("m1", 0, TimelineRole::Assistant);
@@ -642,9 +607,6 @@ mod tests {
         let mut second = msg("m2", 1, TimelineRole::Assistant);
         second.dedup_token = Some("same".to_string());
 
-        // Both message sequences own a group; the second message is dropped by
-        // presentation dedup, so its group becomes an orphan (placed in the tail),
-        // not attached.
         let slots = build_timeline_order(&[first, second], &[Some(0), Some(1)], &[], None);
 
         let m2_shown = slots
@@ -658,7 +620,7 @@ mod tests {
         assert_eq!(count_group(&slots, Some(1)), 1);
     }
 
-    /// `None` sequences sort first (matching the desktop `BTreeMap<Option<i64>>`).
+    /// `None` sequences sort first.
     #[test]
     fn none_sequence_sorts_before_some() {
         let mut none_msg = msg("none", 0, TimelineRole::Assistant);

@@ -25,8 +25,6 @@ pub struct ResolvedBridgePolicy {
     pub store_key_custody: gents::store_key::StoreKeyCustodyChoice,
 }
 
-/// Outcome of a single-flight `desktop_client_start`.
-///
 /// Concurrent start callers share one in-flight open of the embedded node so a
 /// second `NodeBuilder` cannot race the first for the persistent store.
 #[derive(Debug, Clone)]
@@ -38,28 +36,22 @@ pub enum ClientStartProgress {
 
 pub struct DesktopAppState {
     pub bridge: Mutex<DesktopBridge>,
-    /// Owns the desktop store for install, shutdown, init and reset. The
-    /// detached starter holds it from before the store opens until the core is
-    /// installed, or, after a start that stalled past its bound, until that
-    /// late core is closed.
+    /// Owns the desktop store for install, shutdown, init and reset; the
+    /// detached starter holds it until the core is installed.
     pub client_lifecycle: Arc<tokio::sync::Mutex<()>>,
-    /// Serializes managed server start/stop operations. Startup intentionally
-    /// spans provisioning and server readiness, so the state flag alone is
-    /// not sufficient to prevent two callers from racing the port bind.
+    /// Serializes managed server start/stop so two callers cannot race the
+    /// port bind across provisioning and server readiness.
     pub managed_server_lifecycle: tokio::sync::Mutex<()>,
     pub policy: ResolvedBridgePolicy,
     pub managed_server: tokio::sync::Mutex<ManagedServerState>,
-    /// OAuth credentials issued by a completed provider sign-in whose save to
-    /// the node's canonical configuration failed. Held only in memory so the
-    /// user can retry the save without repeating the browser login.
+    /// OAuth credentials issued by a completed sign-in whose save failed; held
+    /// only in memory so the user can retry the save without repeating login.
     pub pending_oauth_credentials: PendingOAuthCredentials,
 }
 
 /// Node DID, credential provider and the sign-in's account identity.
 type CredentialKey = (String, String, String);
 
-/// A credential issued by a completed sign-in, ordered by issuance for its
-/// (node DID, credential provider) key.
 pub struct IssuedOAuthCredential {
     sequence: u64,
     credential: gents::oauth_credential::OAuthCredential,
@@ -70,8 +62,7 @@ impl IssuedOAuthCredential {
         &self.credential
     }
 
-    /// Sign-ins of different accounts are ordered and held apart. The account
-    /// is the one `store_sign_in` matches on: the key, else `account_id`.
+    /// Sign-ins of different accounts are ordered and held apart.
     fn key(&self) -> CredentialKey {
         let identity = [
             &self.credential.provider_account_key,
@@ -92,7 +83,6 @@ impl IssuedOAuthCredential {
 
 pub enum CredentialSave<T> {
     Saved(T),
-    /// A newer sign-in for the same key was already saved or held.
     Superseded,
     Failed(anyhow::Error),
 }
@@ -105,10 +95,10 @@ struct CredentialSlot {
 }
 
 /// Issued-but-unsaved OAuth credentials, keyed by node DID and credential
-/// provider. Never serialized, never written to disk, and never returned to
-/// the webview; the process exit discards them. Saves and retries for one key
-/// run one at a time in issuance order, so an older credential can neither
-/// overwrite a newer one in the store nor discard a newer held one.
+/// provider. Never serialized, written to disk, or returned to the webview.
+/// Saves and retries for one key run one at a time in issuance order, so an
+/// older credential can neither overwrite a newer one nor discard a newer
+/// held one.
 #[derive(Default)]
 pub struct PendingOAuthCredentials {
     issued: std::sync::atomic::AtomicU64,
@@ -145,9 +135,8 @@ impl PendingOAuthCredentials {
             .clone()
     }
 
-    /// Writes `issued` unless a newer credential for its key was already saved
-    /// or held. A failed write holds it for retry; a successful one releases
-    /// any older held credential.
+    /// Writes `issued` unless a newer credential for its key was already
+    /// saved or held; a failed write holds it for retry.
     pub async fn save<T, F, Fut>(
         &self,
         issued: IssuedOAuthCredential,
@@ -183,9 +172,7 @@ impl PendingOAuthCredentials {
         }
     }
 
-    /// Writes the newest credential held for this node and provider, if any,
-    /// and releases it once stored; other accounts' held sign-ins stay held.
-    /// Returns `None` when nothing is held.
+    /// Writes the newest held credential for this node and provider, if any.
     pub async fn retry<T, F, Fut>(
         &self,
         node_did: &str,
@@ -236,10 +223,8 @@ impl PendingOAuthCredentials {
 #[derive(Default)]
 pub struct ManagedServerState {
     pub pairing_task: Option<JoinHandle<()>>,
-    /// Cancels `pairing_task` while it still waits for the runtime's status,
-    /// before any enrollment document is authored.
+    /// Cancels `pairing_task` before any enrollment document is authored.
     pub pairing_cancel: Option<tokio_util::sync::CancellationToken>,
-    /// The single in-flight replicated-schema observation of the managed runtime.
     pub schema_observation_task: Option<JoinHandle<()>>,
     pub starting: bool,
     pub last_error: Option<String>,
@@ -247,35 +232,31 @@ pub struct ManagedServerState {
     pub start_wait: Option<crate::tauri_commands::managed_server::StartWait>,
     /// Crash-loop evidence carried across status reads.
     pub crash_loop: crate::tauri_commands::managed_server::CrashLoopWatch,
-    /// launchd refused this start because macOS has not approved a
-    /// background item it has not registered yet.
+    /// launchd refused this start because macOS has not approved an
+    /// unregistered background item.
     pub approval_refused: bool,
-    /// The managed runtime refused its store as incompatible, as observed by
-    /// the last failed start or status read. Scopes a home reset.
+    /// The managed runtime refused its store as incompatible; scopes a home reset.
     pub incompatible_store: Option<gents::storage_backend::IncompatibleStore>,
 }
 
 pub struct DesktopBridge {
     pub core: Option<Arc<ClientCore>>,
-    /// Hidden views and prevented closes still own their selections. Only
-    /// native destruction retires a view; late IPC cannot register it again.
+    /// Only native destruction retires a window selection; late IPC cannot
+    /// register it again.
     selected_nodes_by_window: BTreeMap<String, Option<String>>,
     pub updates_task: Option<JoinHandle<()>>,
     pub approvals_watch_task: Option<JoinHandle<()>>,
     pub(crate) approvals_prompt_subscriptions: crate::approvals_watch::PromptSubscriptions,
-    /// Cancel handle for an in-flight ChatGPT/Codex login server, so a closed
-    /// browser can be aborted instead of hanging the callback wait.
+    /// Cancel handle for an in-flight ChatGPT/Codex login server.
     pub codex_login_cancel: Option<gents_chatgpt_login::ShutdownHandle>,
     /// Cancel handle for an in-flight Claude subscription login server.
     pub claude_login_cancel: Option<gents_claude_login::ShutdownHandle>,
     /// Cancel flag for an in-flight Grok device-code login poll.
     pub grok_login_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    /// Shared progress for an in-flight client start. The sender is owned by
-    /// the detached starter task; waiters hold receivers and do not open a
+    /// Shared progress for an in-flight client start; waiters must not open a
     /// second node.
     pub start_inflight: Option<watch::Sender<ClientStartProgress>>,
     /// The last client start refused the client store as incompatible.
-    /// Scopes a home reset.
     pub incompatible_client_store: Option<gents::storage_backend::IncompatibleStore>,
 }
 

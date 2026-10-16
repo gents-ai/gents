@@ -1,5 +1,3 @@
-//! Process-wide log-rate ceiling.
-
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Mutex;
@@ -222,7 +220,6 @@ mod tests {
             Decision::AllowWithSummary { suppressed: 1 }
         );
 
-        // Next rollover with no interim suppression reports nothing.
         assert_eq!(
             limiter.check("site-a", start + Duration::from_secs(22)),
             Decision::Allow
@@ -264,8 +261,6 @@ mod tests {
 
         use super::*;
 
-        /// Controllable clock for [`RateLimitFilter::with_clock`]: a fixed
-        /// base instant plus a test-adjustable millisecond offset.
         static CLOCK_BASE: OnceLock<Instant> = OnceLock::new();
         static CLOCK_OFFSET_MS: AtomicU64 = AtomicU64::new(0);
 
@@ -306,11 +301,9 @@ mod tests {
             }
         }
 
-        // The flood-cap + suppression-summary end-to-end test lives in
-        // `tests/log_rate_filter.rs`: summaries are emitted through the
-        // process-global dispatcher, which a `--lib` test cannot install
-        // without leaking into every other test in the binary.
-
+        // The end-to-end summary test lives in `tests/log_rate_filter.rs`: the
+        // summary dispatcher is process-global, so a `--lib` test cannot
+        // install it without leaking into every other test in the binary.
         #[test]
         fn filter_passes_spans_through_untouched() {
             let output = CapturedOutput::default();

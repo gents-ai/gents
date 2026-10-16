@@ -8,11 +8,10 @@ export const MANAGED_SERVER_BOOT_TIMEOUT_MS = 5 * 60_000;
 export const MANAGED_SERVER_APPROVAL_TIMEOUT_MS = 10 * 60_000;
 export const MANAGED_SERVER_POLL_INTERVAL_MS = 1_000;
 
-/**
- * `updating` is a runtime that answers but has not reported ready, typically
- * migrating its data after an update. It is waited on without a bound and is
- * never offered a restart, which would interrupt the migration.
- */
+/* `updating` is a runtime that answers but has not reported ready,
+   typically migrating its data after an update. It is waited on without
+   a bound and is never offered a restart, which would interrupt the
+   migration. */
 export type ManagedServerWaitKind = "approval" | "booting" | "updating";
 
 export type ManagedServerWait = {
@@ -23,8 +22,6 @@ export type ManagedServerWait = {
 export function managedServerWaitKind(
   status: ManagedServerStatus,
 ): ManagedServerWaitKind | null {
-  // A serving runtime whose approval was revoked is not waited on; the
-  // agent screen reports it.
   if (
     status.approvalRequired &&
     status.state !== "running" &&
@@ -44,8 +41,6 @@ export function nextManagedServerWait(
   const kind = managedServerWaitKind(status);
   if (!kind) return null;
   if (previous?.kind === kind) return previous;
-  // An update that stops reporting progress is still one boot: its time
-  // counts toward the booting bound.
   if (previous?.kind === "updating" && kind === "booting")
     return { kind, since: previous.since };
   return { kind, since: now };
@@ -85,12 +80,6 @@ export function describeManagedServerWait(
 const delay = (ms: number) =>
   new Promise<void>((resolve) => globalThis.setTimeout(resolve, ms));
 
-/**
- * Runs a managed-server start or restart while republishing the bridge's
- * status observation, so a long start shows which wait it is in. A runtime
- * the command left still booting is observed until it settles instead of
- * failing, so a slow migration is never interrupted by a restart.
- */
 export async function observeManagedServerOperation(
   api: Pick<DesktopApiAdapter, "managedServerStatus">,
   operation: () => Promise<ManagedServerStatus>,
@@ -117,7 +106,6 @@ export async function observeManagedServerOperation(
         wait = nextManagedServerWait(wait, status, Date.now());
         onWait(wait);
       } catch {
-        /* The operation's own result reports failures. */
       }
     }
   })();
@@ -144,7 +132,6 @@ export async function observeManagedServerOperation(
   }
 }
 
-/** The background node did not settle: it timed out waiting or reported a failure. */
 export class ManagedServerStartupError extends Error {
   constructor(
     message: string,
@@ -181,12 +168,6 @@ export function unsettledManagedServerError(
   return null;
 }
 
-/**
- * Waits while the bridge observes the managed service booting or awaiting
- * macOS approval, within the same bounds the bridge applies to its own waits.
- * Resolves with the last observation; `signal` ends the wait early when the
- * user chooses to continue without it.
- */
 export async function awaitManagedServerSettled(
   api: Pick<DesktopApiAdapter, "managedServerStatus">,
   initial: ManagedServerStatus,

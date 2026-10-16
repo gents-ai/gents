@@ -64,7 +64,7 @@ fn errors_on_missing_args_key() {
         request: None,
         event: serde_json::json!({}),
         doc: None,
-        args: Some(serde_json::json!({})), // args present but empty
+        args: Some(serde_json::json!({})),
         group: None,
         node: serde_json::json!({}),
         ctx: serde_json::json!({}),
@@ -75,7 +75,6 @@ fn errors_on_missing_args_key() {
 
 #[test]
 fn enforces_rendered_size_cap() {
-    // construct a template whose output exceeds MAX_RENDERED_BYTES
     let big = "x".repeat(2_000_000);
     let scope = TemplateScope {
         session: None,
@@ -93,7 +92,7 @@ fn enforces_rendered_size_cap() {
 
 #[test]
 fn enforces_template_size_cap() {
-    let big = "x".repeat(100_000); // exceeds 64 KB
+    let big = "x".repeat(100_000);
     let scope = TemplateScope {
         session: None,
         request: None,
@@ -253,8 +252,6 @@ fn authoring_rejects_a_function_a_fire_would_only_reach_conditionally() {
 
 #[test]
 fn authoring_accepts_a_called_name_the_template_binds_itself() {
-    // A call resolves through the frames the template itself binds, and through
-    // the globals the engine does provide: neither is an unknown name.
     for template in [
         "{% set f = args.formatter %}{{ f() }}",
         "{% set f = args.formatter %}{% if doc.urgent %}{{ f() }}{% endif %}",
@@ -269,8 +266,6 @@ fn authoring_accepts_a_called_name_the_template_binds_itself() {
 
 #[test]
 fn authoring_accepts_fields_configuration_cannot_enumerate() {
-    // Document and argument fields are caller-defined, and strict undefined is a
-    // fire-time outcome: neither may be an authoring rejection.
     for template in [
         "{{ doc.customer.name | upper }} at {{ ctx.now }} for {{ node.agent_id }}",
         "{{ args.mode | default('review') }} {{ args.count | int }}",
@@ -289,9 +284,6 @@ fn authoring_accepts_fields_configuration_cannot_enumerate() {
 fn authoring_reports_a_syntax_error_rather_than_a_missing_name() {
     for template in [
         "{% if doc.message %}missing endif",
-        // The walk reads one instruction stream. A block or a macro would
-        // compile into another, and the engine this workspace builds cannot
-        // parse either, so neither reaches the walk.
         "{% block body %}{{ doc.x | toyaml }}{% endblock %}",
         "{% macro shout(x) %}{{ x | toyaml }}{% endmacro %}",
     ] {
@@ -352,8 +344,6 @@ fn authoring_rejects_a_test_name_rejectattr_resolves_from_its_argument() {
 
 #[test]
 fn authoring_rejects_a_test_the_engine_cannot_provide() {
-    // `trim` is a registered filter and not a registered test, so judging a name
-    // in test position against the filters would admit it.
     for (template, unknown) in [
         ("{% if doc.body is jsonish %}yes{% endif %}", "jsonish"),
         ("{% if doc.body is trim %}yes{% endif %}", "trim"),
@@ -380,23 +370,17 @@ fn authoring_accepts_a_name_argument_admission_cannot_decide() {
         "{{ doc.rows | selectattr('active') }}",
         "{{ doc.rows | rejectattr('id', 'gt', 3) }}",
         "{{ doc.rows | select }}",
-        // A name no constant carries is not an admission fact.
         "{{ doc.items | map(doc.filter_name) }}",
         "{{ doc.items | map(*args.spec) }}",
         "{{ doc.items | map('lower', doc.extra) }}",
-        // `is filter` and `is test` answer whether a name resolves rather than
-        // resolving it, so an absent name is their result, not a failure.
         "{% if 'nosuchfilter' is filter %}yes{% endif %}",
         "{% if 'nosuchtest' is test %}yes{% endif %}",
         "{{ doc.rows | select(doc.test_name, doc.threshold) }}",
         "{{ doc.rows | selectattr('id', args.test, 3) }}",
-        // A conditional or short-circuit name reaches the lookup as whichever
-        // constant the invocation selects, in either branch order.
         "{{ doc.items | map('nosuchfilter' if doc.conditional else 'lower') }}",
         "{{ doc.items | map('lower' if doc.conditional else 'nosuchfilter') }}",
         "{{ doc.rows | select(doc.test_name or 'nosuchtest', doc.threshold) }}",
         "{{ doc.rows | select('nosuchtest' if doc.conditional else 'gt', doc.threshold) }}",
-        // Named arguments after a registered name carry no name themselves.
         "{{ doc.rows | selectattr('id', 'gt', doc.threshold if doc.strict else 0) }}",
     ] {
         check_template_vocabulary(template).expect(template);
@@ -405,8 +389,6 @@ fn authoring_accepts_a_name_argument_admission_cannot_decide() {
 
 #[test]
 fn authoring_accepts_a_call_on_every_name_the_render_scope_resolves() {
-    // Emit position compiles `super()` and a one-argument `loop()` into their
-    // own instructions, so only a call inside an expression reaches the walk.
     for template in [
         "{% for row in group.docs recursive %}{% set sub = loop(row.children) %}{{ sub }}{% endfor %}",
         "{% set inherited = super() %}{{ inherited }}",
@@ -499,9 +481,6 @@ fn conditional_name_arguments_that_admission_defers_render_for_their_invocations
 
 #[test]
 fn admission_defers_a_name_a_later_argument_puts_out_of_reach() {
-    // The walk reads the arguments after the name as one run of fixed stack
-    // effects, and a splat nested in one of them has no fixed effect, so the
-    // literal before the run is left to fire time.
     for template in [
         "{{ doc.items | map('nosuchfilter', range(*doc.z)) }}",
         "{{ doc.rows | select('nosuchtest', range(*doc.z)) }}",
@@ -512,10 +491,6 @@ fn admission_defers_a_name_a_later_argument_puts_out_of_reach() {
 
 #[test]
 fn admission_reads_one_program_pass_for_a_long_argument_expression() {
-    // The parser caps a call at 2000 arguments, but not the size of one
-    // argument's expression: a list literal filling the template size cap
-    // compiles to tens of thousands of instructions, every task carries two
-    // template fields, and admission judges every candidate task in a plan.
     let elements = (MAX_TEMPLATE_BYTES - 64) / ",1".len();
     let template = format!(
         "{{{{ doc.items | map('lower', 1, [doc.x{}]) }}}}",
@@ -530,9 +505,6 @@ fn admission_reads_one_program_pass_for_a_long_argument_expression() {
 
 #[test]
 fn admission_reads_one_program_pass_for_a_long_run_of_branching_arguments() {
-    // A conditional argument compiles to jumps whose targets the walk has to
-    // join, so a run of them costs it the branches as well as the length. The
-    // parser caps a call at 2000 arguments, the name taking the first.
     let template = format!(
         "{{{{ doc.items | map('lower'{}) }}}}",
         ",1 if doc.flag else 2".repeat(1_999)
@@ -546,9 +518,6 @@ fn admission_reads_one_program_pass_for_a_long_run_of_branching_arguments() {
 
 #[test]
 fn admission_reads_one_program_pass_for_many_name_carrying_filters() {
-    // Nothing caps how many filters a template spells out but its size, and a
-    // filter carrying a name needs the whole program's jumps and heights even
-    // with no argument after the name.
     let filter = "{{ doc.x|map('lower') }}";
     let template = filter.repeat(MAX_TEMPLATE_BYTES / filter.len());
     assert!(template.len() <= MAX_TEMPLATE_BYTES, "{}", template.len());

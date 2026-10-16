@@ -93,11 +93,6 @@ pub(super) async fn agent_mutate(
     agent_apply(node, owner, args, ceiling, false).await
 }
 
-/// Publish or preview a node-owned agent operation through the canonical
-/// configuration transaction owner. The supplied identity must own the target
-/// node; HTTP access additionally retains its endpoint's DefraDB authentication.
-/// Direct prompt edits require an existing, unshared Context, so they cannot
-/// alter another Agent's instructions or write into the absent-context fallback.
 pub async fn configure_agent(
     access: &ConfigAccess,
     owner: &str,
@@ -325,7 +320,6 @@ async fn agent_apply_in_txn(
             if args.description.is_present() {
                 context.description = args.description.owned_value();
             }
-            // Clone tool grants into a distinct document, so later edits cannot change the source.
             let mut tools: Option<Tools> = match context.tools_id.as_deref() {
                 Some(id) => Some(serde_json::from_value(load(crate::Collection::Tools, id)?)?),
                 None => None,
@@ -392,9 +386,7 @@ async fn agent_apply_in_txn(
                     ceiling.root.as_deref(),
                 )
                 .await?;
-                // A cloned source's root is a stored grant the invoker must
-                // already hold; an explicit --root authors a fresh grant and
-                // is strictly admitted.
+                // An explicit --root authors a fresh grant; otherwise the source's root is re-admitted.
                 let stored_root = if args.root.is_present() {
                     None
                 } else {

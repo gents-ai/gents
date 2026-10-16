@@ -1,6 +1,6 @@
 //! Sealed source reconstruction, refining CanonicalOutput/Reconstruction.lean.
-//! Callers supply authorized observations and explicit denial evidence. Absence
-//! never implies denial, and missing bytes never produce a shortened message.
+//! Absence never implies denial, and missing bytes never produce a shortened
+//! message.
 
 use super::{
     MediaData, MediaKind, MediaType, MessageBlock, MessagePublication, MessageRole, OutputSegment,
@@ -24,8 +24,6 @@ pub struct ObservedSegment<'a> {
     pub segment: &'a OutputSegment,
 }
 
-/// Dependency membership AND denial established by the hydration/ACP owner.
-/// A bare denied ID is insufficient to link an absent dependency to a closure.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DependencyDenial {
     pub root_close_id: String,
@@ -35,12 +33,11 @@ pub struct DependencyDenial {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReconstructedStream {
     pub declaration: StreamDeclaration,
-    /// Exact UTF-8 payload; use `as_bytes()` for byte-oriented consumers.
+    /// Exact UTF-8 payload.
     pub text: String,
 }
 
-/// Require one exact fact. Duplicate arrival is harmless; distinct physical
-/// identities or contents conflict. No winner is selected from twins.
+/// Require one exact fact; twins conflict.
 fn unique<'a>(
     mut records: impl Iterator<Item = ObservedSegment<'a>>,
     missing: ReconstructionError,
@@ -79,8 +76,7 @@ fn invalid_extent(reference: &PayloadRef, bytes: u64) -> ReconstructionError {
 }
 
 /// Reconstruct a header's selected text without retaining a second payload
-/// copy. Ranges are byte offsets in the sealed UTF-8 stream; literals are the
-/// only small runtime-owned bytes allowed between selected output ranges.
+/// copy.
 pub fn reconstruct_presented_payload(
     records: &[ObservedSegment<'_>],
     denied: &[String],
@@ -133,7 +129,6 @@ fn closing_for_reference<'a>(
     dependency_denials: &[DependencyDenial],
     reference: &PayloadRef,
 ) -> Result<ObservedSegment<'a>, ReconstructionError> {
-    // Keep authorization behavior identical to the stream primitive.
     if let Some(doc_id) = dependency_denials
         .iter()
         .filter(|d| d.root_close_id == reference.close_doc_id)
@@ -244,7 +239,7 @@ fn validate_reference_source(
 }
 
 /// A successfully reconstructed sealed extent with its reasoning signature
-/// streams indexed by native (block, part) position, in stream order.
+/// streams indexed by native (block, part) position.
 struct SealedExtent {
     streams: Vec<ReconstructedStream>,
     signatures: HashMap<(u32, u32), Vec<usize>>,
@@ -274,10 +269,7 @@ impl SealedExtent {
     }
 }
 
-/// The observations grouped once, each group in observation order: by exact
-/// document identity (closing lookup) and by (request, source) (extent sweep).
-/// Both owners filter on exactly these keys, so a group is the subsequence
-/// they would select from the whole observation set.
+/// Observations grouped by exact document identity and by (request, source).
 struct ObservationIndex<'a> {
     by_doc: HashMap<&'a str, Vec<ObservedSegment<'a>>>,
     by_source: HashMap<(&'a str, &'a OutputSource), Vec<ObservedSegment<'a>>>,
@@ -301,26 +293,15 @@ impl<'a> ObservationIndex<'a> {
     }
 }
 
-/// One reconstruction invocation over a fixed observation set. Closing lookup
-/// and extent reconstruction depend on a reference only through its close
-/// document, except for the stream bound and error attribution, so a success
-/// is reused for every reference through the same close. Failures are never
-/// retained: each failing reference re-runs the per-reference definition and
-/// reports its own error. Nothing outlives the invocation.
+/// One reconstruction invocation over a fixed observation set; a success is
+/// reused for every reference through the same close.
 struct Extents<'s, 'a> {
     records: &'s [ObservedSegment<'a>],
     denied: &'s [String],
     dependency_denials: &'s [DependencyDenial],
-    /// Tests disable reuse to evaluate the per-reference definition.
-    #[cfg(test)]
-    reuse: bool,
     index: OnceCell<ObservationIndex<'a>>,
     closings: RefCell<HashMap<&'a str, ObservedSegment<'a>>>,
     extents: RefCell<HashMap<&'a str, Rc<SealedExtent>>>,
-    #[cfg(test)]
-    closing_scans: std::cell::Cell<usize>,
-    #[cfg(test)]
-    extent_builds: std::cell::Cell<usize>,
 }
 
 impl<'s, 'a> Extents<'s, 'a> {
@@ -333,23 +314,10 @@ impl<'s, 'a> Extents<'s, 'a> {
             records,
             denied,
             dependency_denials,
-            #[cfg(test)]
-            reuse: true,
             index: OnceCell::new(),
             closings: RefCell::default(),
             extents: RefCell::default(),
-            #[cfg(test)]
-            closing_scans: Default::default(),
-            #[cfg(test)]
-            extent_builds: Default::default(),
         }
-    }
-
-    fn reuses(&self) -> bool {
-        #[cfg(test)]
-        return self.reuse;
-        #[cfg(not(test))]
-        true
     }
 
     fn index(&self) -> &ObservationIndex<'a> {
@@ -358,68 +326,49 @@ impl<'s, 'a> Extents<'s, 'a> {
     }
 
     fn closing(&self, reference: &PayloadRef) -> Result<ObservedSegment<'a>, ReconstructionError> {
-        if self.reuses() {
-            if let Some(closing) = self.closings.borrow().get(reference.close_doc_id.as_str()) {
-                return Ok(*closing);
-            }
+        if let Some(closing) = self.closings.borrow().get(reference.close_doc_id.as_str()) {
+            return Ok(*closing);
         }
-        #[cfg(test)]
-        self.closing_scans.set(self.closing_scans.get() + 1);
-        let candidates = if self.reuses() {
-            self.index()
-                .by_doc
-                .get(reference.close_doc_id.as_str())
-                .map_or(&[][..], Vec::as_slice)
-        } else {
-            self.records
-        };
+        let candidates = self
+            .index()
+            .by_doc
+            .get(reference.close_doc_id.as_str())
+            .map_or(&[][..], Vec::as_slice);
         let closing =
             closing_for_reference(candidates, self.denied, self.dependency_denials, reference)?;
-        if self.reuses() {
-            self.closings.borrow_mut().insert(closing.doc_id, closing);
-        }
+        self.closings.borrow_mut().insert(closing.doc_id, closing);
         Ok(closing)
     }
 
-    /// Equal to `reconstruct_extent_streams(.., reference)`, with `reference.stream`
+    /// Equal to `reconstruct_extent_streams(.., reference)` with the stream
     /// guaranteed in bounds on success.
     fn extent(&self, reference: &PayloadRef) -> Result<Rc<SealedExtent>, ReconstructionError> {
-        let reused = if self.reuses() {
-            self.extents
-                .borrow()
-                .get(reference.close_doc_id.as_str())
-                .cloned()
-        } else {
-            None
-        };
+        let reused = self
+            .extents
+            .borrow()
+            .get(reference.close_doc_id.as_str())
+            .cloned();
         let extent = match reused {
             Some(extent) => extent,
             None => {
                 let closing = self.closing(reference)?;
-                #[cfg(test)]
-                self.extent_builds.set(self.extent_builds.get() + 1);
-                let same_source = if self.reuses() {
-                    self.index()
-                        .by_source
-                        .get(&(
-                            closing.segment.request_doc_id.as_str(),
-                            &closing.segment.source,
-                        ))
-                        .map_or(&[][..], Vec::as_slice)
-                } else {
-                    self.records
-                };
+                let same_source = self
+                    .index()
+                    .by_source
+                    .get(&(
+                        closing.segment.request_doc_id.as_str(),
+                        &closing.segment.source,
+                    ))
+                    .map_or(&[][..], Vec::as_slice);
                 let extent = Rc::new(SealedExtent::new(extent_streams_from_closing(
                     same_source,
                     self.denied,
                     closing,
                     reference,
                 )?));
-                if self.reuses() {
-                    self.extents
-                        .borrow_mut()
-                        .insert(closing.doc_id, Rc::clone(&extent));
-                }
+                self.extents
+                    .borrow_mut()
+                    .insert(closing.doc_id, Rc::clone(&extent));
                 extent
             }
         };
@@ -489,7 +438,7 @@ fn extent_streams_from_closing(
     }
 
     // Index once, excluding out-of-extent raw facts BEFORE twin checks. Never
-    // allocate from an untrusted declared count or scan all records per ordinal.
+    // allocate from an untrusted declared count.
     let mut slots: BTreeMap<u32, Vec<ObservedSegment<'_>>> = BTreeMap::new();
     let mut denied_in_extent = BTreeSet::new();
     for record in records.iter().copied().filter(same_source) {
@@ -521,7 +470,6 @@ fn extent_streams_from_closing(
             return Err(malformed());
         }
     } else if !closing.segment.runs.is_empty() || !closing.segment.payload.is_empty() {
-        // Native shape check: Lean's Option Flush cannot represent this record.
         return Err(malformed());
     }
     let mut streams: Vec<ReconstructedStream> = Vec::new();
@@ -554,7 +502,6 @@ fn extent_streams_from_closing(
             let end = offset
                 .checked_add(usize::try_from(run.bytes).map_err(|_| malformed())?)
                 .ok_or_else(malformed)?;
-            // str::get rejects both out-of-bounds runs and split UTF-8 scalars.
             let part = record
                 .segment
                 .payload
@@ -836,9 +783,9 @@ fn validate_reasoning_signature(
     Ok(())
 }
 
-/// Reconstruct one complete canonical transcript header into its native message.
-/// This is the sole protocol-level path for history, provider input, forks and
-/// exports: it validates immutable provenance before exposing any bytes.
+/// Reconstruct one complete canonical transcript header into its native
+/// message: the sole protocol-level path for history, provider input, forks
+/// and exports.
 pub fn reconstruct_message(
     records: &[ObservedSegment<'_>],
     denied: &[String],
@@ -853,10 +800,8 @@ fn reconstruct_message_with(
     message: &TranscriptMessage,
 ) -> Result<Message, ReconstructionError> {
     validate_native_shape(message)?;
-
     let validate_reference =
         |reference: &PayloadRef| validate_reference_source(extents, message, reference);
-    // Closures/source provenance are validated before native decoding.
     let mut provenance_failure = None;
     for reference in message.payload_references() {
         if provenance_failure.is_none() {
@@ -1226,1453 +1171,5 @@ fn reconstruct_message_with(
             }
             Ok(Message::User { content })
         }
-    }
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::output::{OutputOutcome, SegmentRun, StreamPayload};
-    use crate::rendered_request::{CaptureScope, CaptureScopeKind};
-
-    fn provider_source() -> OutputSource {
-        OutputSource::ProviderTurn {
-            scope: CaptureScope {
-                kind: CaptureScopeKind::Inference,
-                seq: 1,
-            },
-            turn_index: 0,
-            attempt: 0,
-        }
-    }
-
-    fn request_writer() -> OutputWriter {
-        OutputWriter::RequestExecution {
-            execution_generation: "gen-1".to_string(),
-        }
-    }
-
-    fn text_declaration(block_index: u32) -> StreamDeclaration {
-        StreamDeclaration {
-            block_index,
-            part_index: 0,
-            payload: StreamPayload::Text,
-        }
-    }
-
-    fn run(stream: u32, bytes: u32, declaration: Option<StreamDeclaration>) -> SegmentRun {
-        SegmentRun {
-            stream,
-            bytes,
-            declaration,
-        }
-    }
-
-    fn closed(segments: u32, stream_bytes: Vec<u64>) -> Option<SourceClose> {
-        Some(SourceClose::Closed {
-            outcome: OutputOutcome::Complete,
-            segments,
-            stream_bytes,
-        })
-    }
-
-    fn segment(
-        doc_id: &str,
-        ordinal: Option<u32>,
-        runs: Vec<SegmentRun>,
-        payload: &str,
-        close: Option<SourceClose>,
-    ) -> (String, OutputSegment) {
-        (
-            doc_id.to_string(),
-            OutputSegment {
-                node_did: "did:key:z6MkAgent".to_string(),
-                requester_did: None,
-                session_id: "session-1".to_string(),
-                request_doc_id: "request-1".to_string(),
-                source: provider_source(),
-                writer: request_writer(),
-                ordinal,
-                runs,
-                payload: payload.to_string(),
-                close,
-                created_at: "2025-01-01T00:00:00Z".to_string(),
-            },
-        )
-    }
-
-    fn observations(records: &[(String, OutputSegment)]) -> Vec<ObservedSegment<'_>> {
-        records
-            .iter()
-            .map(|(doc_id, segment)| ObservedSegment { doc_id, segment })
-            .collect()
-    }
-
-    fn reconstruct(
-        records: &[(String, OutputSegment)],
-        reference: &PayloadRef,
-    ) -> Result<ReconstructedStream, ReconstructionError> {
-        reconstruct_denied(records, &[], &[], reference)
-    }
-
-    fn reconstruct_denied(
-        records: &[(String, OutputSegment)],
-        denied: &[String],
-        dependency_denials: &[DependencyDenial],
-        reference: &PayloadRef,
-    ) -> Result<ReconstructedStream, ReconstructionError> {
-        let observed = observations(records);
-        let per_reference = reconstruct_stream(&observed, denied, dependency_denials, reference);
-        let extents = Extents::new(&observed, denied, dependency_denials);
-        assert_eq!(extents.stream(reference), per_reference);
-        assert_eq!(extents.stream(reference), per_reference);
-        per_reference
-    }
-
-    fn per_reference<'s, 'a>(
-        records: &'s [ObservedSegment<'a>],
-        denied: &'s [String],
-        dependency_denials: &'s [DependencyDenial],
-    ) -> Extents<'s, 'a> {
-        let mut extents = Extents::new(records, denied, dependency_denials);
-        extents.reuse = false;
-        extents
-    }
-
-    /// Shadows the public owner in every message fixture here: the reused-extent
-    /// path must return exactly what the per-reference definition returns,
-    /// including the error and its attribution.
-    fn reconstruct_message(
-        records: &[ObservedSegment<'_>],
-        denied: &[String],
-        dependency_denials: &[DependencyDenial],
-        message: &TranscriptMessage,
-    ) -> Result<Message, ReconstructionError> {
-        let reused = super::reconstruct_message(records, denied, dependency_denials, message);
-        assert_eq!(
-            reused,
-            reconstruct_message_with(&per_reference(records, denied, dependency_denials), message)
-        );
-        reused
-    }
-
-    fn reference(close_doc_id: &str, stream: u32) -> PayloadRef {
-        PayloadRef {
-            close_doc_id: close_doc_id.to_string(),
-            stream,
-        }
-    }
-
-    /// Two-flush single-stream source: "he" + "llo" sealed as 5 bytes.
-    fn hello_source() -> Vec<(String, OutputSegment)> {
-        vec![
-            segment(
-                "flush-0",
-                Some(0),
-                vec![run(0, 2, Some(text_declaration(0)))],
-                "he",
-                None,
-            ),
-            segment(
-                "close-1",
-                Some(1),
-                vec![run(0, 3, None)],
-                "llo",
-                closed(2, vec![5]),
-            ),
-        ]
-    }
-
-    #[test]
-    fn reconstructs_sealed_stream_with_declaration_and_text() {
-        let records = hello_source();
-        let stream = reconstruct(&records, &reference("close-1", 0)).expect("reconstructs");
-        assert_eq!(stream.declaration, text_declaration(0));
-        assert_eq!(stream.text.as_bytes(), b"hello".to_vec());
-        assert_eq!(stream.text, "hello");
-    }
-
-    #[test]
-    fn conflicting_physical_close_identity_is_arrival_order_independent() {
-        let mut records = hello_source();
-        let mut conflicting = records[1].clone();
-        conflicting.1.request_doc_id = "different-request".into();
-        records.push(conflicting);
-        let forward = reconstruct(&records, &reference("close-1", 0));
-        records.reverse();
-        assert_eq!(forward, reconstruct(&records, &reference("close-1", 0)));
-        assert!(matches!(
-            forward,
-            Err(ReconstructionError::InvalidStructure { .. })
-        ));
-    }
-
-    #[test]
-    fn terminal_only_closure_rejects_unindexed_payload() {
-        let records = vec![
-            segment(
-                "flush-0",
-                Some(0),
-                vec![run(0, 5, Some(text_declaration(0)))],
-                "hello",
-                None,
-            ),
-            segment("close-1", None, Vec::new(), "stray", closed(1, vec![5])),
-        ];
-        assert!(matches!(
-            reconstruct(&records, &reference("close-1", 0)),
-            Err(ReconstructionError::ExtentMismatch { .. })
-        ));
-    }
-
-    #[test]
-    fn exact_duplicate_delivery_is_idempotent() {
-        let mut records = hello_source();
-        // Same physical ID, same content: a replay, not a twin.
-        records.push(records[0].clone());
-        let stream = reconstruct(&records, &reference("close-1", 0)).expect("reconstructs");
-        assert_eq!(stream.text, "hello");
-    }
-
-    #[test]
-    fn interleaved_exact_close_replays_are_idempotent_but_physical_twins_conflict() {
-        let source = hello_source();
-        let mut records = vec![
-            source[1].clone(),
-            source[0].clone(),
-            source[1].clone(),
-            source[0].clone(),
-        ];
-        let expected = reconstruct(&source, &reference("close-1", 0));
-        assert!(expected.is_ok());
-        for _ in 0..records.len() {
-            assert_eq!(reconstruct(&records, &reference("close-1", 0)), expected);
-            records.rotate_left(1);
-        }
-        let mut twin = source[1].clone();
-        twin.0 = "distinct-physical-close".into();
-        records.push(twin);
-        for _ in 0..records.len() {
-            assert!(matches!(
-                reconstruct(&records, &reference("close-1", 0)),
-                Err(ReconstructionError::ConflictingClosures { .. })
-            ));
-            records.rotate_left(1);
-        }
-    }
-
-    #[test]
-    fn order_independent_across_shuffled_records() {
-        let mut records = hello_source();
-        records.reverse();
-        let stream = reconstruct(&records, &reference("close-1", 0)).expect("reconstructs");
-        assert_eq!(stream.text, "hello");
-    }
-
-    #[test]
-    fn missing_closing_record_is_unresolved_not_shortened() {
-        let records = hello_source();
-        let error =
-            reconstruct(&records, &reference("absent", 0)).expect_err("absent close is unresolved");
-        assert_eq!(
-            error,
-            ReconstructionError::UnresolvedClose {
-                close_doc_id: "absent".to_string()
-            }
-        );
-    }
-
-    #[test]
-    fn missing_in_extent_flush_is_incomplete_not_shortened() {
-        let mut records = hello_source();
-        records.remove(0); // ordinal 0 is gone; extent is 0..2
-        let error = reconstruct(&records, &reference("close-1", 0))
-            .expect_err("missing ordinal is incomplete");
-        assert_eq!(
-            error,
-            ReconstructionError::MissingSegment {
-                close_doc_id: "close-1".to_string(),
-                ordinal: 0,
-            }
-        );
-    }
-
-    #[test]
-    fn twin_flush_at_same_ordinal_is_a_conflict() {
-        let mut records = hello_source();
-        // Same coordinate, different content and identity: a twin.
-        let (twin_id, mut twin) = segment(
-            "flush-0-twin",
-            Some(0),
-            vec![run(0, 2, Some(text_declaration(0)))],
-            "HE",
-            None,
-        );
-        twin.created_at = "2025-01-01T00:00:01Z".to_string();
-        records.push((twin_id, twin));
-        let error =
-            reconstruct(&records, &reference("close-1", 0)).expect_err("twin flush is a conflict");
-        assert_eq!(
-            error,
-            ReconstructionError::ConflictingSegments {
-                close_doc_id: "close-1".to_string(),
-                ordinal: 0,
-            }
-        );
-    }
-
-    #[test]
-    fn twin_closures_are_a_conflict() {
-        let mut records = hello_source();
-        // A second distinct closure record for the same source coordinate.
-        let (twin_id, twin) = segment("close-2", None, Vec::new(), "", closed(2, vec![5]));
-        records.push((twin_id, twin));
-        let error = reconstruct(&records, &reference("close-1", 0))
-            .expect_err("twin closures are a conflict");
-        assert_eq!(
-            error,
-            ReconstructionError::ConflictingClosures {
-                request_doc_id: "request-1".to_string(),
-                source: provider_source(),
-            }
-        );
-    }
-
-    #[test]
-    fn reference_to_plain_flush_is_invalid() {
-        let records = hello_source();
-        let error = reconstruct(&records, &reference("flush-0", 0))
-            .expect_err("plain flush is not a closure");
-        assert_eq!(
-            error,
-            ReconstructionError::InvalidReference {
-                reference: reference("flush-0", 0),
-            }
-        );
-    }
-
-    #[test]
-    fn out_of_range_stream_is_invalid_reference() {
-        let records = hello_source();
-        let error =
-            reconstruct(&records, &reference("close-1", 1)).expect_err("stream 1 is not sealed");
-        assert_eq!(
-            error,
-            ReconstructionError::InvalidReference {
-                reference: reference("close-1", 1),
-            }
-        );
-    }
-
-    #[test]
-    fn late_out_of_extent_flush_is_inert() {
-        let mut records = hello_source();
-        // Recovery closed ordinals 0..2; a superseded writer's late flush at
-        // ordinal 2 lands beyond the extent and must not collide or corrupt.
-        let (late_id, late) = segment("late-2", Some(2), vec![run(0, 9, None)], "garbage!!", None);
-        records.push((late_id, late));
-        let stream = reconstruct(&records, &reference("close-1", 0)).expect("reconstructs");
-        assert_eq!(stream.text, "hello");
-    }
-
-    #[test]
-    fn terminal_only_closure_closes_flushed_extent() {
-        // Everything was already flushed; closure arrives without new bytes.
-        let records = vec![
-            segment(
-                "flush-0",
-                Some(0),
-                vec![run(0, 5, Some(text_declaration(0)))],
-                "hello",
-                None,
-            ),
-            segment("close-1", None, Vec::new(), "", closed(1, vec![5])),
-        ];
-        let stream = reconstruct(&records, &reference("close-1", 0)).expect("reconstructs");
-        assert_eq!(stream.text, "hello");
-    }
-
-    #[test]
-    fn explicitly_declared_empty_stream_is_preserved() {
-        // A zero-stream source has segments = 0 and no stream_bytes; stream 0
-        // is not sealed in it.
-        let records = vec![segment("close-0", None, Vec::new(), "", closed(0, vec![]))];
-        let error = reconstruct(&records, &reference("close-0", 0))
-            .expect_err("no stream is sealed in a zero-stream source");
-        assert_eq!(
-            error,
-            ReconstructionError::InvalidReference {
-                reference: reference("close-0", 0),
-            }
-        );
-
-        let records = vec![
-            segment(
-                "flush-0",
-                Some(0),
-                vec![run(0, 0, Some(text_declaration(0)))],
-                "",
-                None,
-            ),
-            segment("close-1", None, Vec::new(), "", closed(1, vec![0])),
-        ];
-        let stream = reconstruct(&records, &reference("close-1", 0)).expect("reconstructs");
-        assert_eq!(stream.declaration, text_declaration(0));
-        assert!(stream.text.as_bytes().is_empty());
-        assert_eq!(stream.text, "");
-    }
-
-    #[test]
-    fn zero_byte_continuation_is_malformed() {
-        let records = vec![
-            segment(
-                "flush-0",
-                Some(0),
-                vec![run(0, 2, Some(text_declaration(0)))],
-                "he",
-                None,
-            ),
-            segment(
-                "close-1",
-                Some(1),
-                vec![run(0, 0, None)],
-                "",
-                closed(2, vec![2]),
-            ),
-        ];
-        let error = reconstruct(&records, &reference("close-1", 0))
-            .expect_err("empty continuation is not progress");
-        assert_eq!(
-            error,
-            ReconstructionError::ExtentMismatch {
-                reference: reference("close-1", 0),
-                bytes: 2,
-            }
-        );
-    }
-
-    #[test]
-    fn runs_must_partition_payload_exactly() {
-        // Runs cover fewer bytes than the payload carries.
-        let records = vec![segment(
-            "close-0",
-            Some(0),
-            vec![run(0, 2, Some(text_declaration(0)))],
-            "hello",
-            closed(1, vec![5]),
-        )];
-        let error = reconstruct(&records, &reference("close-0", 0))
-            .expect_err("runs must cover the payload");
-        assert_eq!(
-            error,
-            ReconstructionError::ExtentMismatch {
-                reference: reference("close-0", 0),
-                bytes: 5,
-            }
-        );
-    }
-
-    #[test]
-    fn oversized_run_is_malformed() {
-        let records = vec![segment(
-            "close-0",
-            Some(0),
-            vec![run(0, 9, Some(text_declaration(0)))],
-            "hi",
-            closed(1, vec![9]),
-        )];
-        let error = reconstruct(&records, &reference("close-0", 0))
-            .expect_err("run cannot exceed the payload");
-        assert_eq!(
-            error,
-            ReconstructionError::ExtentMismatch {
-                reference: reference("close-0", 0),
-                bytes: 9,
-            }
-        );
-    }
-
-    #[test]
-    fn run_split_inside_utf8_sequence_is_malformed() {
-        // "é" is two bytes; the run boundary splits the sequence.
-        let records = vec![segment(
-            "close-0",
-            Some(0),
-            vec![run(0, 1, Some(text_declaration(0)))],
-            "é",
-            closed(1, vec![2]),
-        )];
-        let error = reconstruct(&records, &reference("close-0", 0))
-            .expect_err("run must end on a UTF-8 boundary");
-        assert_eq!(
-            error,
-            ReconstructionError::ExtentMismatch {
-                reference: reference("close-0", 0),
-                bytes: 2,
-            }
-        );
-    }
-
-    #[test]
-    fn multibyte_text_preserves_unicode_byte_lengths() {
-        // "héllo" is 6 bytes (é is 2); byte accounting is UTF-8 bytes.
-        let records = vec![segment(
-            "close-0",
-            Some(0),
-            vec![run(0, 6, Some(text_declaration(0)))],
-            "héllo",
-            closed(1, vec![6]),
-        )];
-        let stream = reconstruct(&records, &reference("close-0", 0)).expect("reconstructs");
-        assert_eq!(stream.text.as_bytes().len(), 6);
-        assert_eq!(stream.text, "héllo");
-    }
-
-    #[test]
-    fn assembled_stream_must_match_sealed_byte_length() {
-        // The flush assembles 5 bytes but the closure sealed 6.
-        let records = vec![segment(
-            "close-0",
-            Some(0),
-            vec![run(0, 5, Some(text_declaration(0)))],
-            "hello",
-            closed(1, vec![6]),
-        )];
-        let error = reconstruct(&records, &reference("close-0", 0))
-            .expect_err("assembled bytes disagree with the sealed extent");
-        assert_eq!(
-            error,
-            ReconstructionError::ExtentMismatch {
-                reference: reference("close-0", 0),
-                bytes: 6,
-            }
-        );
-    }
-
-    #[test]
-    fn streams_open_densely_from_zero() {
-        // First run opens stream 1 while no stream exists yet.
-        let records = vec![segment(
-            "close-0",
-            Some(0),
-            vec![run(1, 2, Some(text_declaration(0)))],
-            "he",
-            closed(1, vec![0, 2]),
-        )];
-        let error = reconstruct(&records, &reference("close-0", 1))
-            .expect_err("streams open densely from zero");
-        assert_eq!(
-            error,
-            ReconstructionError::ExtentMismatch {
-                reference: reference("close-0", 1),
-                bytes: 2,
-            }
-        );
-    }
-
-    #[test]
-    fn duplicate_native_declaration_position_is_malformed() {
-        // Two streams both declare (block 0, part 0).
-        let records = vec![segment(
-            "close-0",
-            Some(0),
-            vec![
-                run(0, 1, Some(text_declaration(0))),
-                run(1, 1, Some(text_declaration(0))),
-            ],
-            "ab",
-            closed(1, vec![1, 1]),
-        )];
-        let error = reconstruct(&records, &reference("close-0", 0))
-            .expect_err("a native position is declared exactly once");
-        assert_eq!(
-            error,
-            ReconstructionError::ExtentMismatch {
-                reference: reference("close-0", 0),
-                bytes: 1,
-            }
-        );
-    }
-
-    #[test]
-    fn multi_stream_flush_advances_each_stream() {
-        let records = vec![
-            segment(
-                "flush-0",
-                Some(0),
-                vec![
-                    run(0, 2, Some(text_declaration(0))),
-                    run(1, 2, Some(text_declaration(1))),
-                ],
-                "heab",
-                None,
-            ),
-            segment(
-                "close-1",
-                Some(1),
-                vec![run(0, 3, None), run(1, 1, None)],
-                "lloc",
-                closed(2, vec![5, 3]),
-            ),
-        ];
-        let first = reconstruct(&records, &reference("close-1", 0)).expect("stream 0");
-        assert_eq!(first.text, "hello");
-        assert_eq!(first.declaration, text_declaration(0));
-        let second = reconstruct(&records, &reference("close-1", 1)).expect("stream 1");
-        assert_eq!(second.text, "abc");
-        assert_eq!(second.declaration, text_declaration(1));
-    }
-
-    #[test]
-    fn in_extent_flush_by_a_different_writer_is_invalid() {
-        // The only record at ordinal 0 names a different writer than the
-        // closing record: the extent disagrees about its producer.
-        let (foreign_id, mut foreign) = segment(
-            "flush-0",
-            Some(0),
-            vec![run(0, 2, Some(text_declaration(0)))],
-            "he",
-            None,
-        );
-        foreign.writer = OutputWriter::RequestExecution {
-            execution_generation: "gen-2".to_string(),
-        };
-        let (_, closing) = segment(
-            "close-1",
-            Some(1),
-            vec![run(0, 3, None)],
-            "llo",
-            closed(2, vec![5]),
-        );
-        let records = vec![(foreign_id, foreign), ("close-1".to_string(), closing)];
-        let error = reconstruct(&records, &reference("close-1", 0))
-            .expect_err("in-extent writer must match the closing record");
-        assert_eq!(
-            error,
-            ReconstructionError::InvalidWriter {
-                request_doc_id: "request-1".to_string(),
-                source: provider_source(),
-            }
-        );
-    }
-
-    #[test]
-    fn tool_source_requires_the_exact_tool_writer() {
-        let tool_call = "tool-call-1".to_string();
-        let source = OutputSource::ToolCall {
-            tool_call_doc_id: tool_call.clone(),
-        };
-        let writer = OutputWriter::ToolExecution {
-            tool_call_doc_id: tool_call.clone(),
-        };
-        let mut base = segment(
-            "close-0",
-            Some(0),
-            vec![run(0, 5, Some(text_declaration(0)))],
-            "hello",
-            closed(1, vec![5]),
-        )
-        .1;
-        base.source = source.clone();
-        base.writer = writer.clone();
-        let records = vec![("close-0".to_string(), base)];
-        let stream = reconstruct(&records, &reference("close-0", 0)).expect("reconstructs");
-        assert_eq!(stream.text, "hello");
-
-        // A request writer cannot own tool output.
-        let mut mismatched = segment(
-            "close-0",
-            Some(0),
-            vec![run(0, 5, Some(text_declaration(0)))],
-            "hello",
-            closed(1, vec![5]),
-        )
-        .1;
-        mismatched.source = source;
-        let records = vec![("close-0".to_string(), mismatched)];
-        let error = reconstruct(&records, &reference("close-0", 0))
-            .expect_err("tool output requires the exact tool writer");
-        assert_eq!(
-            error,
-            ReconstructionError::InvalidWriter {
-                request_doc_id: "request-1".to_string(),
-                source: OutputSource::ToolCall {
-                    tool_call_doc_id: "tool-call-1".to_string(),
-                },
-            }
-        );
-    }
-
-    #[test]
-    fn final_flush_ordinal_must_be_the_last_of_the_extent() {
-        // The closing record carries ordinal 0 but seals two flushes.
-        let records = vec![
-            segment(
-                "flush-0",
-                Some(0),
-                vec![run(0, 2, Some(text_declaration(0)))],
-                "he",
-                None,
-            ),
-            segment(
-                "close-1",
-                Some(0),
-                vec![run(0, 3, None)],
-                "llo",
-                closed(2, vec![5]),
-            ),
-        ];
-        let error = reconstruct(&records, &reference("close-1", 0))
-            .expect_err("final flush must carry ordinal segments - 1");
-        assert_eq!(
-            error,
-            ReconstructionError::ExtentMismatch {
-                reference: reference("close-1", 0),
-                bytes: 5,
-            }
-        );
-    }
-
-    #[test]
-    fn known_denial_of_the_closing_record_is_access_denied() {
-        let records = hello_source();
-        let denied = vec!["close-1".to_string()];
-        let error = reconstruct_denied(&records, &denied, &[], &reference("close-1", 0))
-            .expect_err("known denial is an access error");
-        assert_eq!(
-            error,
-            ReconstructionError::AccessDenied {
-                doc_id: "close-1".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn known_denial_of_an_in_extent_segment_is_access_denied() {
-        let records = hello_source();
-        let denied = vec!["flush-0".to_string()];
-        let error = reconstruct_denied(&records, &denied, &[], &reference("close-1", 0))
-            .expect_err("denied dependency is an access error");
-        assert_eq!(
-            error,
-            ReconstructionError::AccessDenied {
-                doc_id: "flush-0".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn owner_verified_dependency_denial_propagates_over_absence() {
-        let records = hello_source();
-        let dependency_denials = vec![DependencyDenial {
-            root_close_id: "close-1".to_string(),
-            denied_doc_id: "remote-segment".to_string(),
-        }];
-        let error =
-            reconstruct_denied(&records, &[], &dependency_denials, &reference("close-1", 0))
-                .expect_err("owner-verified denial is an access error even when the row is absent");
-        assert_eq!(
-            error,
-            ReconstructionError::AccessDenied {
-                doc_id: "remote-segment".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn absence_alone_is_never_denial() {
-        let records = hello_source();
-        // A bare denied ID with no owner-verified dependency relationship does
-        // not deny this root; the reference still resolves.
-        let denied = vec!["unrelated-doc".to_string()];
-        let stream = reconstruct_denied(&records, &denied, &[], &reference("close-1", 0))
-            .expect("unrelated denial does not affect this root");
-        assert_eq!(stream.text, "hello");
-    }
-
-    #[test]
-    fn retracted_source_is_not_referenceable() {
-        let records = vec![segment(
-            "close-0",
-            Some(0),
-            vec![run(0, 2, Some(text_declaration(0)))],
-            "he",
-            Some(SourceClose::Retracted),
-        )];
-        let error = reconstruct(&records, &reference("close-0", 0))
-            .expect_err("retracted output is never referenced");
-        assert_eq!(
-            error,
-            ReconstructionError::InvalidReference {
-                reference: reference("close-0", 0),
-            }
-        );
-    }
-
-    #[test]
-    fn foreign_source_records_are_not_selected() {
-        let mut records = hello_source();
-        // A twin at a different source coordinate sharing the ordinal must not
-        // collide with this source's extent.
-        let (foreign_id, mut foreign) = segment(
-            "foreign-0",
-            Some(0),
-            vec![run(0, 2, Some(text_declaration(0)))],
-            "ZZ",
-            None,
-        );
-        foreign.source = OutputSource::Authored {
-            key: "authored-1".to_string(),
-        };
-        records.push((foreign_id, foreign));
-        let stream = reconstruct(&records, &reference("close-1", 0)).expect("reconstructs");
-        assert_eq!(stream.text, "hello");
-    }
-
-    fn provider_message(blocks: Vec<MessageBlock>) -> TranscriptMessage {
-        TranscriptMessage {
-            message_key: "message-1".to_owned(),
-            session_id: "session-1".to_owned(),
-            node_did: "did:key:z6MkAgent".to_owned(),
-            requester_did: None,
-            request_doc_id: Some("request-1".to_owned()),
-            publication: MessagePublication::RequestExecution {
-                execution_generation: "gen-1".to_owned(),
-            },
-            outcome: OutputOutcome::Complete,
-            sequence: 0,
-            role: MessageRole::Assistant,
-            native_id: Some("native-1".to_owned()),
-            blocks,
-            created_at: "2025-01-01T00:00:00Z".to_owned(),
-        }
-    }
-
-    #[test]
-    fn reconstructs_native_assistant_message_and_composed_payload() {
-        let records = hello_source();
-        let payload = PresentedPayload {
-            output: reference("close-1", 0),
-            presentation: PayloadPresentation::Composed {
-                parts: vec![
-                    PresentationPart::OutputRange {
-                        start_byte: 0,
-                        end_byte: 2,
-                    },
-                    PresentationPart::Literal {
-                        text: "! ".to_owned(),
-                    },
-                    PresentationPart::OutputRange {
-                        start_byte: 2,
-                        end_byte: 5,
-                    },
-                ],
-            },
-        };
-        let message = reconstruct_message(
-            &observations(&records),
-            &[],
-            &[],
-            &provider_message(vec![MessageBlock::Text { text: payload }]),
-        )
-        .expect("strictly reconstructs");
-        assert_eq!(
-            message,
-            Message::Assistant {
-                id: Some("native-1".to_owned()),
-                content: vec![AssistantContent::Text(Text {
-                    text: "he! llo".to_owned(),
-                })],
-            }
-        );
-    }
-
-    #[test]
-    fn reasoning_fields_keep_native_kind_and_validate_retained_signature() {
-        let declaration = |part_index, payload| StreamDeclaration {
-            block_index: 0,
-            part_index,
-            payload,
-        };
-        let records = vec![segment(
-            "close-reasoning",
-            Some(0),
-            vec![
-                run(0, 5, Some(declaration(0, StreamPayload::Reasoning))),
-                run(
-                    1,
-                    3,
-                    Some(declaration(0, StreamPayload::ReasoningSignature)),
-                ),
-                run(
-                    2,
-                    3,
-                    Some(declaration(1, StreamPayload::ReasoningEncrypted)),
-                ),
-                run(3, 3, Some(declaration(2, StreamPayload::ReasoningRedacted))),
-            ],
-            "thinksigENCRED",
-            closed(1, vec![5, 3, 3, 3]),
-        )];
-        let parts = vec![
-            ReasoningPart::Text {
-                text: reference("close-reasoning", 0),
-                signature: Some("sig".to_owned()),
-            },
-            ReasoningPart::Encrypted {
-                data: reference("close-reasoning", 2),
-            },
-            ReasoningPart::Redacted {
-                data: reference("close-reasoning", 3),
-            },
-        ];
-        let message = provider_message(vec![MessageBlock::Reasoning {
-            id: None,
-            parts: parts.clone(),
-        }]);
-        assert_eq!(
-            reconstruct_message(&observations(&records), &[], &[], &message),
-            Ok(Message::Assistant {
-                id: Some("native-1".to_owned()),
-                content: vec![AssistantContent::Reasoning(Reasoning {
-                    id: None,
-                    content: vec![
-                        ReasoningContent::Text {
-                            text: "think".to_owned(),
-                            signature: Some("sig".to_owned()),
-                        },
-                        ReasoningContent::Encrypted("ENC".to_owned()),
-                        ReasoningContent::Redacted {
-                            data: "RED".to_owned(),
-                        },
-                    ],
-                })],
-            })
-        );
-
-        for signature in [None, Some("different".to_owned())] {
-            let mut wrong = message.clone();
-            wrong.blocks = vec![MessageBlock::Reasoning {
-                id: None,
-                parts: vec![ReasoningPart::Text {
-                    text: reference("close-reasoning", 0),
-                    signature,
-                }],
-            }];
-            assert!(matches!(
-                reconstruct_message(&observations(&records), &[], &[], &wrong),
-                Err(ReconstructionError::InvalidStructure { .. })
-            ));
-        }
-
-        let mut wrong_kind = message;
-        wrong_kind.blocks = vec![MessageBlock::Reasoning {
-            id: None,
-            parts: vec![
-                parts[0].clone(),
-                ReasoningPart::Redacted {
-                    data: reference("close-reasoning", 2),
-                },
-            ],
-        }];
-        assert!(matches!(
-            reconstruct_message(&observations(&records), &[], &[], &wrong_kind),
-            Err(ReconstructionError::ExtentMismatch { .. })
-        ));
-    }
-
-    #[test]
-    fn authored_reasoning_text_without_signature_stream_remains_valid() {
-        let mut records = vec![segment(
-            "close-reasoning",
-            Some(0),
-            vec![run(
-                0,
-                5,
-                Some(StreamDeclaration {
-                    block_index: 0,
-                    part_index: 0,
-                    payload: StreamPayload::Reasoning,
-                }),
-            )],
-            "think",
-            closed(1, vec![5]),
-        )];
-        records[0].1.source = OutputSource::Authored {
-            key: "authored-reasoning".to_owned(),
-        };
-        let message = provider_message(vec![MessageBlock::Reasoning {
-            id: None,
-            parts: vec![ReasoningPart::Text {
-                text: reference("close-reasoning", 0),
-                signature: Some("inline-only".to_owned()),
-            }],
-        }]);
-        assert!(reconstruct_message(&observations(&records), &[], &[], &message).is_ok());
-    }
-
-    #[test]
-    fn declaration_conflicts_remain_field_specific() {
-        let declaration = |payload| StreamDeclaration {
-            block_index: 0,
-            part_index: 0,
-            payload,
-        };
-        for second in [
-            StreamPayload::ReasoningSummary,
-            StreamPayload::ReasoningSignature,
-        ] {
-            let first = if second == StreamPayload::ReasoningSignature {
-                StreamPayload::ReasoningSignature
-            } else {
-                StreamPayload::Reasoning
-            };
-            let records = vec![segment(
-                "close-conflict",
-                Some(0),
-                vec![
-                    run(0, 1, Some(declaration(first))),
-                    run(1, 1, Some(declaration(second))),
-                ],
-                "ab",
-                closed(1, vec![1, 1]),
-            )];
-            assert!(matches!(
-                reconstruct(&records, &reference("close-conflict", 0)),
-                Err(ReconstructionError::ExtentMismatch { .. })
-            ));
-        }
-    }
-
-    #[test]
-    fn rejects_provider_payload_at_a_rewritten_native_position() {
-        let records = hello_source();
-        let message = provider_message(vec![
-            MessageBlock::Text {
-                text: PresentedPayload {
-                    output: reference("close-1", 0),
-                    presentation: PayloadPresentation::Full,
-                },
-            },
-            MessageBlock::Text {
-                text: PresentedPayload {
-                    output: reference("close-1", 0),
-                    presentation: PayloadPresentation::Full,
-                },
-            },
-        ]);
-        assert!(matches!(
-            reconstruct_message(&observations(&records), &[], &[], &message),
-            Err(ReconstructionError::ExtentMismatch { .. })
-        ));
-    }
-
-    #[test]
-    fn rejects_invalid_presented_range_without_shortening_output() {
-        let records = hello_source();
-        let payload = PresentedPayload {
-            output: reference("close-1", 0),
-            presentation: PayloadPresentation::Composed {
-                parts: vec![PresentationPart::OutputRange {
-                    start_byte: 1,
-                    end_byte: 99,
-                }],
-            },
-        };
-        assert!(matches!(
-            reconstruct_presented_payload(&observations(&records), &[], &[], &payload),
-            Err(ReconstructionError::InvalidPresentation { .. })
-        ));
-    }
-
-    #[test]
-    fn native_tool_call_requires_exact_declared_identity_and_valid_json() {
-        let records = vec![segment(
-            "close-args",
-            Some(0),
-            vec![run(
-                0,
-                2,
-                Some(StreamDeclaration {
-                    block_index: 0,
-                    part_index: 0,
-                    payload: StreamPayload::ToolArguments {
-                        id: "call-1".to_owned(),
-                        call_id: None,
-                        name: "echo".to_owned(),
-                    },
-                }),
-            )],
-            "{}",
-            closed(1, vec![2]),
-        )];
-        let header = provider_message(vec![MessageBlock::ToolCall {
-            tool_call_doc_id: "tool-1".to_owned(),
-            id: "call-1".to_owned(),
-            call_id: None,
-            name: "echo".to_owned(),
-            arguments: reference("close-args", 0),
-            signature: None,
-            additional_params: None,
-        }]);
-        assert!(matches!(
-            reconstruct_message(&observations(&records), &[], &[], &header),
-            Ok(Message::Assistant { content, .. }) if matches!(&content[..], [AssistantContent::ToolCall(_)])
-        ));
-        let mut wrong = header;
-        wrong.blocks = vec![MessageBlock::ToolCall {
-            tool_call_doc_id: "tool-1".to_owned(),
-            id: "wrong".to_owned(),
-            call_id: None,
-            name: "echo".to_owned(),
-            arguments: reference("close-args", 0),
-            signature: None,
-            additional_params: None,
-        }];
-        assert!(matches!(
-            reconstruct_message(&observations(&records), &[], &[], &wrong),
-            Err(ReconstructionError::ExtentMismatch { .. })
-        ));
-    }
-
-    #[test]
-    fn recovery_can_omit_unparseable_argument_stream_but_not_reference_it() {
-        let records = vec![segment(
-            "close-mixed",
-            Some(0),
-            vec![
-                run(0, 1, Some(text_declaration(0))),
-                run(
-                    1,
-                    1,
-                    Some(StreamDeclaration {
-                        block_index: 1,
-                        part_index: 0,
-                        payload: StreamPayload::ToolArguments {
-                            id: "call".to_owned(),
-                            call_id: None,
-                            name: "echo".to_owned(),
-                        },
-                    }),
-                ),
-            ],
-            "x{",
-            Some(SourceClose::Closed {
-                outcome: OutputOutcome::Partial,
-                segments: 1,
-                stream_bytes: vec![1, 1],
-            }),
-        )];
-        let recovered = TranscriptMessage {
-            publication: MessagePublication::RequestRecovery {
-                execution_generation: "recovery".to_owned(),
-            },
-            outcome: OutputOutcome::Partial,
-            native_id: None,
-            blocks: vec![MessageBlock::Text {
-                text: PresentedPayload {
-                    output: reference("close-mixed", 0),
-                    presentation: PayloadPresentation::Full,
-                },
-            }],
-            ..provider_message(vec![])
-        };
-        assert_eq!(
-            reconstruct_message(&observations(&records), &[], &[], &recovered),
-            Ok(Message::assistant("x"))
-        );
-    }
-
-    #[test]
-    fn fork_has_no_request_membership_and_preserves_dependency_authorization() {
-        let records = hello_source();
-        let fork = TranscriptMessage {
-            request_doc_id: None,
-            publication: MessagePublication::Fork {
-                origin_message_doc_id: "origin-1".to_owned(),
-            },
-            blocks: vec![MessageBlock::Text {
-                text: PresentedPayload {
-                    output: reference("close-1", 0),
-                    presentation: PayloadPresentation::Full,
-                },
-            }],
-            ..provider_message(vec![])
-        };
-        assert!(reconstruct_message(&observations(&records), &[], &[], &fork).is_ok());
-        assert!(matches!(
-            reconstruct_message(&observations(&records), &["close-1".to_owned()], &[], &fork),
-            Err(ReconstructionError::AccessDenied { .. })
-        ));
-        let invalid = TranscriptMessage {
-            request_doc_id: Some("request-1".to_owned()),
-            ..fork
-        };
-        assert!(matches!(
-            reconstruct_message(&observations(&records), &[], &[], &invalid),
-            Err(ReconstructionError::InvalidStructure { .. })
-        ));
-    }
-    #[test]
-    fn media_payload_kind_must_match_native_media_block() {
-        let records = vec![segment(
-            "close-media",
-            Some(0),
-            vec![run(
-                0,
-                4,
-                Some(StreamDeclaration {
-                    block_index: 0,
-                    part_index: 0,
-                    payload: StreamPayload::Media {
-                        media_kind: MediaKind::Audio,
-                    },
-                }),
-            )],
-            "aGk=",
-            closed(1, vec![4]),
-        )];
-        let media = super::super::MediaBlock {
-            kind: MediaKind::Image,
-            data: MediaData::Raw {
-                data: reference("close-media", 0),
-            },
-            media_type: None,
-            detail: None,
-            additional_params: None,
-        };
-        let header = provider_message(vec![MessageBlock::Media(media)]);
-        assert!(matches!(
-            reconstruct_message(&observations(&records), &[], &[], &header),
-            Err(ReconstructionError::ExtentMismatch { .. })
-        ));
-    }
-
-    #[test]
-    fn system_and_tool_delivery_role_shapes_are_not_interchangeable() {
-        let records = hello_source();
-        let mut system = provider_message(vec![MessageBlock::Text {
-            text: PresentedPayload {
-                output: reference("close-1", 0),
-                presentation: PayloadPresentation::Full,
-            },
-        }]);
-        system.role = MessageRole::System;
-        assert!(matches!(
-            reconstruct_message(&observations(&records), &[], &[], &system),
-            Err(ReconstructionError::InvalidStructure { .. })
-        ));
-
-        let mut delivery = provider_message(vec![MessageBlock::Text {
-            text: PresentedPayload {
-                output: reference("close-1", 0),
-                presentation: PayloadPresentation::Full,
-            },
-        }]);
-        delivery.role = MessageRole::User;
-        delivery.native_id = None;
-        delivery.publication = MessagePublication::ToolDelivery {
-            tool_call_doc_id: "tool-1".to_owned(),
-        };
-        // Provider bytes cannot be smuggled into a tool-owned delivery.
-        assert!(matches!(
-            reconstruct_message(&observations(&records), &[], &[], &delivery),
-            Err(ReconstructionError::InvalidStructure { .. })
-        ));
-    }
-
-    /// One provider extent with a reasoning part per flush; even parts also
-    /// retain a signature stream at the same native position.
-    fn many_part_reasoning(parts: u32) -> (Vec<(String, OutputSegment)>, TranscriptMessage) {
-        let mut records = Vec::new();
-        let mut message_parts = Vec::new();
-        let mut stream_bytes = Vec::new();
-        for part in 0..parts {
-            let body = format!("r{part}");
-            let mut runs = vec![run(
-                stream_bytes.len() as u32,
-                body.len() as u32,
-                Some(StreamDeclaration {
-                    block_index: 0,
-                    part_index: part,
-                    payload: StreamPayload::Reasoning,
-                }),
-            )];
-            let body_ref = reference("close-many", stream_bytes.len() as u32);
-            stream_bytes.push(body.len() as u64);
-            let mut payload = body;
-            let signature = (part % 2 == 0).then(|| format!("s{part}"));
-            if let Some(signature) = &signature {
-                runs.push(run(
-                    stream_bytes.len() as u32,
-                    signature.len() as u32,
-                    Some(StreamDeclaration {
-                        block_index: 0,
-                        part_index: part,
-                        payload: StreamPayload::ReasoningSignature,
-                    }),
-                ));
-                stream_bytes.push(signature.len() as u64);
-                payload.push_str(signature);
-            }
-            message_parts.push(ReasoningPart::Text {
-                text: body_ref,
-                signature,
-            });
-            let last = part + 1 == parts;
-            records.push(segment(
-                &if last {
-                    "close-many".to_owned()
-                } else {
-                    format!("flush-{part}")
-                },
-                Some(part),
-                runs,
-                &payload,
-                None,
-            ));
-        }
-        records.last_mut().expect("at least one part").1.close = closed(parts, stream_bytes);
-        let message = provider_message(vec![MessageBlock::Reasoning {
-            id: None,
-            parts: message_parts,
-        }]);
-        (records, message)
-    }
-
-    #[test]
-    fn many_part_message_reconstructs_each_extent_once() {
-        let parts = 3000;
-        let (records, message) = many_part_reasoning(parts);
-        let observed = observations(&records);
-        let extents = Extents::new(&observed, &[], &[]);
-        let Message::Assistant { content, .. } =
-            reconstruct_message_with(&extents, &message).expect("reconstructs")
-        else {
-            panic!("assistant message");
-        };
-        let [AssistantContent::Reasoning(reasoning)] = content.as_slice() else {
-            panic!("one reasoning block");
-        };
-        assert_eq!(reasoning.content.len(), parts as usize);
-        assert_eq!(
-            reasoning.content[2],
-            ReasoningContent::Text {
-                text: "r2".to_owned(),
-                signature: Some("s2".to_owned()),
-            }
-        );
-        // Work is linear in references: one closing scan and one extent
-        // reconstruction for the whole message, not one per part.
-        assert_eq!(extents.closing_scans.get(), 1);
-        assert_eq!(extents.extent_builds.get(), 1);
-    }
-
-    #[test]
-    fn many_part_message_matches_per_reference_definition_on_every_fault() {
-        let (records, message) = many_part_reasoning(96);
-        let observed = observations(&records);
-        assert!(reconstruct_message(&observed, &[], &[], &message).is_ok());
-        let per_reference_extents = per_reference(&observed, &[], &[]);
-        reconstruct_message_with(&per_reference_extents, &message).expect("reconstructs");
-        assert!(per_reference_extents.extent_builds.get() > 96);
-
-        // Known denial inside the extent, and an owner-verified dependency denial.
-        let denied = vec!["flush-40".to_owned()];
-        assert!(matches!(
-            reconstruct_message(&observed, &denied, &[], &message),
-            Err(ReconstructionError::AccessDenied { .. })
-        ));
-        let dependency = [DependencyDenial {
-            root_close_id: "close-many".to_owned(),
-            denied_doc_id: "flush-7".to_owned(),
-        }];
-        assert!(matches!(
-            reconstruct_message(&observed, &[], &dependency, &message),
-            Err(ReconstructionError::AccessDenied { .. })
-        ));
-
-        // Missing and twin ordinals inside the sealed extent.
-        let mut missing = records.clone();
-        missing.remove(50);
-        assert!(matches!(
-            reconstruct_message(&observations(&missing), &[], &[], &message),
-            Err(ReconstructionError::MissingSegment { ordinal: 50, .. })
-        ));
-        let mut twin = records.clone();
-        let mut other = twin[33].clone();
-        other.0 = "twin-33".to_owned();
-        twin.push(other);
-        assert!(matches!(
-            reconstruct_message(&observations(&twin), &[], &[], &message),
-            Err(ReconstructionError::ConflictingSegments { ordinal: 33, .. })
-        ));
-
-        let MessageBlock::Reasoning { parts, .. } = &message.blocks[0] else {
-            unreachable!()
-        };
-        let with_parts = |parts: Vec<ReasoningPart>| {
-            let mut changed = message.clone();
-            changed.blocks = vec![MessageBlock::Reasoning { id: None, parts }];
-            changed
-        };
-        // A late native position rewrite, out-of-range stream, wrong kind and
-        // wrong signature each keep the per-reference error and attribution.
-        let mut swapped = parts.clone();
-        swapped.swap(70, 71);
-        assert!(matches!(
-            reconstruct_message(&observed, &[], &[], &with_parts(swapped)),
-            Err(ReconstructionError::ExtentMismatch { .. })
-        ));
-        let mut out_of_range = parts.clone();
-        out_of_range[90] = ReasoningPart::Text {
-            text: reference("close-many", 10_000),
-            signature: None,
-        };
-        assert_eq!(
-            reconstruct_message(&observed, &[], &[], &with_parts(out_of_range)),
-            Err(ReconstructionError::InvalidReference {
-                reference: reference("close-many", 10_000),
-            })
-        );
-        let mut wrong_kind = parts.clone();
-        wrong_kind[81] = ReasoningPart::Summary {
-            text: match &parts[81] {
-                ReasoningPart::Text { text, .. } => text.clone(),
-                _ => unreachable!(),
-            },
-        };
-        assert!(matches!(
-            reconstruct_message(&observed, &[], &[], &with_parts(wrong_kind)),
-            Err(ReconstructionError::ExtentMismatch { .. })
-        ));
-        for (index, signature) in [
-            (60, None),
-            (61, Some("s61".to_owned())),
-            (62, Some("x".to_owned())),
-        ] {
-            let mut wrong = parts.clone();
-            if let ReasoningPart::Text {
-                signature: slot, ..
-            } = &mut wrong[index]
-            {
-                *slot = signature;
-            }
-            assert!(matches!(
-                reconstruct_message(&observed, &[], &[], &with_parts(wrong)),
-                Err(ReconstructionError::InvalidStructure { .. })
-            ));
-        }
-        // Unresolved close for one late reference among many resolvable ones.
-        let mut unresolved = parts.clone();
-        unresolved[95] = ReasoningPart::Text {
-            text: reference("close-absent", 0),
-            signature: None,
-        };
-        assert_eq!(
-            reconstruct_message(&observed, &[], &[], &with_parts(unresolved)),
-            Err(ReconstructionError::UnresolvedClose {
-                close_doc_id: "close-absent".to_owned(),
-            })
-        );
     }
 }

@@ -1,10 +1,7 @@
-/* "New task…", "New schedule…" and "New event source…" on a trigger. The
-   dialog only drafts the document: nothing is written when it opens, is
-   cancelled or is confirmed. The trigger's own Save writes the new document
-   and the trigger together, so a trigger that is never saved leaves
-   nothing behind. A new task starts disabled, and an event source has no
-   default collection (watching AgentRequest would let a task trigger
-   itself). */
+/* Drafts a task, schedule or event source for a trigger. Nothing is written
+ * here: the trigger's own Save writes the new document and the trigger
+ * together. An event source has no default collection (watching AgentRequest
+ * would let a task trigger itself). */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { useState } from "react";
 import type { EventSource, Schedule } from "@source-inc/gents-desktop-client";
@@ -49,9 +46,7 @@ export function NewReferenceDialog({
   onClose,
 }: {
   deployment: NodeView;
-  /* which document to draft; null when closed */
   kind: NewReference["kind"] | null;
-  /* the drafted document, or null when cancelled */
   onClose: (drafted: NewReference | null) => void;
 }) {
   const node_did = deployment.nodeDid;

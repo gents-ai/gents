@@ -1,5 +1,3 @@
-//! Observations of config dispatch, not a second command parser or write owner.
-
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
@@ -8,8 +6,7 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 pub struct ConfigExecutionReceipt {
     pub version: u8,
-    /// The call entered an operation capable of publishing configuration.
-    /// This deliberately does not assert whether that operation committed.
+    /// Deliberately does not assert whether that operation committed.
     pub mutation_entered: bool,
 }
 

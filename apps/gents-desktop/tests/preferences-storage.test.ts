@@ -18,8 +18,6 @@ describe("preferences read back from storage", () => {
 });
 
 describe("list views read back from storage", () => {
-  /* an earlier build offered "Needs you"; its saved pick must not be read
-     as another state */
   it("drops a session state or source this build does not offer", () => {
     const restored = restoreListViews({
       sessionFilter: {

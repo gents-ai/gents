@@ -1,10 +1,5 @@
 //! The recorder seam: the document operations the loop performs.
 //!
-//! The loop writes one trial row, its verdicts and its completion, and reads
-//! back what a run has already written so a resumed run plans only what it
-//! still owes. Naming those four as a trait lets a test crash the loop between
-//! any two of them without a fault-injection path in the runtime.
-//!
 //! A recorder never interprets a failure. Whatever it returns as `Err` is a
 //! failure of the record, not of the trial, so the loop propagates it
 //! unchanged rather than inventing an outcome for a trial that may well have

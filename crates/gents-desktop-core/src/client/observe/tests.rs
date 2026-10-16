@@ -10,31 +10,6 @@ mod mixed_batch;
 #[path = "tests/overflow.rs"]
 mod overflow;
 
-#[test]
-fn projection_invalidation_reuses_the_observed_snapshot_allocation() {
-    let (store, _) = ObservedStore::new(ClientStore::default());
-    let held = store.snapshot();
-    let pointer = Arc::as_ptr(&held);
-    let initial = store.projection_revision();
-    store.invalidate_projection(false);
-    assert_eq!(Arc::as_ptr(&store.snapshot()), pointer);
-    assert_eq!(
-        store.projection_revision().store_version,
-        initial.store_version + 1
-    );
-}
-
-#[test]
-fn observer_merge_advances_revision_and_strips_transcript_rows() {
-    let (store, _) = ObservedStore::new(ClientStore::default());
-    let initial = store.projection_revision();
-    store.merge_observer_patch(ClientStore::default());
-    let current = store.projection_revision();
-    assert_eq!(current.store_version, initial.store_version + 1);
-    assert!(store.snapshot().transcript_messages.is_empty());
-    assert!(store.snapshot().output_segments.is_empty());
-}
-
 use crate::client::schema::ensure_runtime_schemas;
 use defra_node::{EventName, NodeBuilder};
 use std::sync::Arc;

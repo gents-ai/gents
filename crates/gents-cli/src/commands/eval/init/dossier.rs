@@ -1,7 +1,3 @@
-//! The subject dossier: what the author knows about the agent it drafts
-//! cases for. The author reads nothing itself; this is rendered once, from
-//! the pack's own declared assets through the real pack loader.
-
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -23,18 +19,12 @@ pub(crate) struct Dossier {
     pub(crate) pack_digest: String,
     pub(crate) agent_id: String,
     pub(crate) slot: String,
-    /// Collections a documents capture may name, with their fields: from
-    /// datastore surfaces (`fields` of each entry) and `schemas/*.graphql`
-    /// (field names parsed from `type X { … }`).
     pub(crate) collections: BTreeMap<String, BTreeSet<String>>,
     pub(crate) text: String,
 }
 
-/// A dossier larger than this is refused: it would crowd the author's turn.
 pub(crate) const DOSSIER_LIMIT_BYTES: usize = 64 * 1024;
 
-/// The dossier of `agent` (or the pack's only agent) of the directory
-/// pack at `pack_dir`.
 pub(crate) fn render(pack_dir: &Path, agent: Option<&str>) -> Result<Dossier> {
     let (manifest, assets) = read_pack(pack_dir)?;
     let asset = |path: &str| {
@@ -45,10 +35,6 @@ pub(crate) fn render(pack_dir: &Path, agent: Option<&str>) -> Result<Dossier> {
     let pack_digest = digest_declared_assets(&manifest, |path| asset(path).map(Vec::as_slice))?;
     let config_path = manifest.config.clone().unwrap_or_default();
 
-    // The loader fills `${VAR:-default}` with its default and refuses an
-    // unset `${VAR}`; the dossier shows the marker instead. Every `$` of the
-    // config's strings is escaped so interpolation reads each back as its own
-    // text, except the owner marker the loader binds itself.
     let read = RefCell::new(BTreeSet::new());
     let config = load_pack_config(
         &manifest,
@@ -123,8 +109,6 @@ pub(crate) fn render(pack_dir: &Path, agent: Option<&str>) -> Result<Dossier> {
         Some(tools) => {
             let _ = writeln!(text, "Tools document {}:", tools.tools_id);
             let host = tools.host.as_ref();
-            // A mode at its default is omitted when serialized; the typed
-            // value is read instead, so an explicit `Off` still shows.
             let mode = |mode: Option<Result<Value, serde_json::Error>>| -> Result<String> {
                 Ok(match mode.transpose()? {
                     Some(Value::String(mode)) => mode,
@@ -268,9 +252,6 @@ pub(crate) fn render(pack_dir: &Path, agent: Option<&str>) -> Result<Dossier> {
     })
 }
 
-/// The directory pack's manifest and the bytes of every asset it declares:
-/// the manifest read as `resolve_subject_pack` reads a directory's, the
-/// assets those the pack's digest covers.
 pub(super) fn read_pack(pack_dir: &Path) -> Result<(PackManifest, BTreeMap<String, Vec<u8>>)> {
     let manifest_path = pack_dir.join("manifest.json");
     let manifest: PackManifest = serde_json::from_slice(
@@ -287,10 +268,6 @@ pub(super) fn read_pack(pack_dir: &Path) -> Result<(PackManifest, BTreeMap<Strin
     Ok((manifest, assets))
 }
 
-/// The pack config with every `$` of its string values escaped, so the
-/// loader's interpolation reads each string back as its own text: a
-/// `${VAR:-default}` stays that marker. The owner marker is left for the
-/// loader to bind, as it does for any install.
 fn literal_placeholders(bytes: &[u8]) -> Result<Vec<u8>> {
     const OWNER: &str = "${GENTS_PACK_NODE_DID}";
     fn escape(value: &mut Value) {
@@ -334,8 +311,6 @@ fn choose_agent<'a>(config: &'a PackConfig, agent: Option<&str>) -> Result<&'a A
     }
 }
 
-/// One datastore surface entry as the author reads it, and its collection's
-/// fields into `collections`.
 fn render_entry(
     entry: &Value,
     text: &mut String,
@@ -382,7 +357,6 @@ fn render_entry(
         .extend(fields.into_iter().chain(filters));
 }
 
-/// The `{{ name }}` variables a prompt template expects, sorted.
 fn template_variables(template: &str) -> BTreeSet<String> {
     let mut variables = BTreeSet::new();
     let mut rest = template;
@@ -406,15 +380,12 @@ fn is_schema(path: &str) -> bool {
     path.starts_with("schemas/") && path.ends_with(".graphql")
 }
 
-/// The pack's own prose: excluded, since prose invites testing the prose.
 fn is_readme(path: &str) -> bool {
     path.rsplit('/')
         .next()
         .is_some_and(|name| name.to_ascii_uppercase().starts_with("README"))
 }
 
-/// The `type Name { field: … }` blocks of an SDL document, with each
-/// block's field names.
 fn schema_types(sdl: &str) -> Vec<(String, BTreeSet<String>)> {
     let mut types = Vec::new();
     let mut current: Option<(String, BTreeSet<String>)> = None;
@@ -457,8 +428,6 @@ mod tests {
             .join("../gents/tests/fixtures/eval_runner/canary_pack")
     }
 
-    /// A directory pack: `config` as `pack_config.json`, a README, and
-    /// `assets` (path, text). Each agent gets its own inference slot.
     fn write_pack(dir: &Path, config: &Value, assets: &[(&str, &str)]) {
         let mut paths = vec!["README.md".to_owned(), "pack_config.json".to_owned()];
         std::fs::write(dir.join("README.md"), "# a fixture pack\n").unwrap();

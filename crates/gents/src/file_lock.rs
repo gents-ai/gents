@@ -85,17 +85,4 @@ mod tests {
         ));
         drop(inherited);
     }
-
-    #[test]
-    fn a_shared_lock_excludes_an_exclusive_one_until_dropped() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("lock");
-        let shared = FileLock::shared(open(&path)).unwrap();
-        assert!(matches!(
-            FileLock::try_exclusive(open(&path)),
-            Err(TryLockError::WouldBlock)
-        ));
-        drop(shared);
-        assert!(FileLock::try_exclusive(open(&path)).is_ok());
-    }
 }

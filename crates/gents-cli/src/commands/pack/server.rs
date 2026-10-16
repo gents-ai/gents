@@ -53,8 +53,6 @@ pub(super) fn spawn_server_with_args_and_env(
     cmd.spawn().context("spawning pack server")
 }
 
-/// `/healthz` only proves that HTTP is up; gate commands on the authoritative
-/// runtime agent-readiness projection.
 pub(super) async fn wait_runtime_ready(
     graphql: &GraphqlEndpoint,
     node_did: &str,

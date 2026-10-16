@@ -12,10 +12,6 @@ use super::super::document_view;
 use super::super::DocumentResolveContext;
 
 pub(super) const CONTROL_RECONCILE_DEBOUNCE: Duration = Duration::from_secs(5);
-/// A write committed on this node arrives as one transaction's changes, so it
-/// needs no replication-burst coalescing. An operator waiting on the resulting
-/// readiness (desktop setup confirms within seconds) must not pay the replicated
-/// debounce.
 pub(super) const CONTROL_RECONCILE_LOCAL_DEBOUNCE: Duration = Duration::from_millis(250);
 pub(super) const CONTROL_RECONCILE_SETTLE_RETRY: Duration = Duration::from_secs(1);
 const CONTROL_RECONCILE_SETTLE_WINDOW: Duration = Duration::from_secs(60);
@@ -162,10 +158,6 @@ pub(super) async fn run_control_watcher_with_timing(
                 {
                     Ok(snapshot) => {
                         let fingerprint = snapshot.configuration_fingerprint();
-                        // A fresh observed write must reach the reconcile owner
-                        // even when it changes only non-runtime metadata. Its
-                        // existing no-op path publishes completion. Suppress
-                        // only unchanged settle retries, not new observations.
                         if phase_announced || last_proposed_fingerprint.as_deref() != Some(fingerprint.as_str()) {
                             if !phase_announced {
                                 runtime_status
@@ -211,10 +203,9 @@ pub(super) async fn run_control_watcher_with_timing(
                         .set_reconcile_phase(ReconcilePhase::Idle)
                         .await;
                 }
-                // A successful visible snapshot has completed this reconcile.
                 // The settle deadline bounds retries for unresolved references
-                // and failed reloads; it must not turn every observed write into
-                // a one-second full-view polling loop.
+                // and failed reloads; it must not turn every observed write
+                // into a full-view polling loop.
                 dirty = false;
                 settle_deadline = None;
                 sleep.as_mut().reset(tokio::time::Instant::now() + timing.idle_sleep);

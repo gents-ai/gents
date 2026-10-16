@@ -1,8 +1,5 @@
 import { expect, gotoHarness, test } from "./desktopTest";
 
-/* The two places that read the transcript's geometry, in a real layout:
-   landing at the foot, and keeping the reader's row in place while an
-   older page lands. */
 test.describe("a long transcript", () => {
   test.beforeEach(async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "chromium-desktop", "one layout is enough");
@@ -37,8 +34,6 @@ test.describe("a long transcript", () => {
   test("keeps the reader's row in place while an older page lands", async ({
     page,
   }) => {
-    /* reaching the top asks for the older page; the row under the reader then
-       is the one that must not move */
     const { key, before, rowsBefore } = await page
       .getByTestId("transcript-panel")
       .evaluate((panel) => {
@@ -46,7 +41,6 @@ test.describe("a long transcript", () => {
           '[data-slot="scroll-area-viewport"]',
         ) as HTMLElement;
         const rowsBefore = scroller.querySelectorAll("[data-timeline-key]").length;
-        /* as a reader does: their own wheel, then the scroll it makes */
         scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
         scroller.scrollTop = 0;
         const first = scroller.querySelector<HTMLElement>("[data-timeline-key]")!;

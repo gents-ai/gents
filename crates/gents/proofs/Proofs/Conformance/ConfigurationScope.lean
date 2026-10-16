@@ -5,8 +5,6 @@ import Lean
 namespace Conformance.ConfigurationScope
 open Configuration Lean
 
-/-- Two nodes reuse every authored label, with different context/model
-payloads. The third scope is absent; an ill-owned decoded row remains rejected. -/
 private def registry : Registry :=
   { tasks := fun owner id => if owner ∈ ["alice", "bob"] && id == "task"
       then some ⟨owner, ⟨"coding", true⟩⟩ else none
@@ -46,9 +44,6 @@ private def contextBoundsJson : Json := toJson (contextBoundsCases.map fun (sele
     ("maximum", toJson maximum),
     ("allowed", toJson (ConfigDefaults.contextOverrideAllowed selected modelDefault maximum))])
 
-/-- One agent `coding` stored under scope `alice`: its owner, enabled flag
-and context selection (`context` exists, `gone` does not), with the node's
-default selection. -/
 private def defaultAgentCases :
     List (String × String × Bool × Option String × Option String) := [
   ("no_default", "alice", false, some "context", none),
@@ -72,7 +67,6 @@ private def defaultAgentJson : Json := toJson (defaultAgentCases.map
       ("publishable", toJson (defaultAgentPublishable reg "alice" defaultId)),
       ("context_resolves", toJson (resolveContext reg "alice" contextId).toBool)])
 
-/-- The Rust wire text of a backend auth, in serde field order. -/
 private def authText : BackendAuth → String
   | .unauthenticated => "{\"kind\":\"unauthenticated\"}"
   | .apiKey key => s!"\{\"kind\":\"api_key\",\"key\":{(toJson key).compress}}"
@@ -81,17 +75,12 @@ private def authText : BackendAuth → String
   | .nodeOAuth (some a) =>
     s!"\{\"kind\":\"node_oauth\",\"account_ref\":{(toJson a).compress}}"
 
-/-- Stored sign-ins the cases resolve against: alice's original and `acct-1`,
-bob's `acct-2`, and alice's disabled `acct-off`. -/
 private def oauthRows : List OAuthAccountRow := [
   ⟨"alice", "ChatGptCodex", none, true⟩,
   ⟨"alice", "ChatGptCodex", some "acct-1", true⟩,
   ⟨"bob", "ChatGptCodex", some "acct-2", true⟩,
   ⟨"alice", "ChatGptCodex", some "acct-off", false⟩]
 
-/-- A backend stored under `stored_owner` runs under `scope`: any OAuth account
-reference is looked up under the executing scope, never the stored owner, and
-never resolves another node's or a disabled row. -/
 private def oauthAccountCases : List (String × String × String × String × BackendAuth) := [
   ("original_none_under_scope", "alice", "alice", "ChatGptCodex", .nodeOAuth none),
   ("reference_under_scope", "alice", "alice", "ChatGptCodex", .nodeOAuth (some "acct-1")),
@@ -126,7 +115,6 @@ private def defaultReplacementJson : Json := toJson (
       Json.mkObj [("current", toJson current), ("candidate", toJson candidate),
         ("allowed", toJson (defaultAgentReplacementAllowed current candidate))])
 
-/-- Export the actual shared-label input documents as well as computed results. -/
 def casesJson : String := (Json.mkObj
   [("documents", toJson (["alice", "bob"].map fun owner => Json.mkObj
       [("node_did", toJson owner), ("task_id", toJson "task"),
@@ -140,8 +128,6 @@ def casesJson : String := (Json.mkObj
    ("oauth_account", oauthAccountJson),
    ("default_replacement", defaultReplacementJson)]).compress
 
-/-- These scope fixtures advertise one model with unknown capabilities. Backend
-owner comes from the containing document, independently of credential scope. -/
 private def advertisement (credentials : Option String) : DiscoveryObservation :=
   ⟨"backend", credentials, [⟨"advertised", none⟩]⟩
 

@@ -9,13 +9,10 @@ use serde::Deserialize;
 use serde::Serialize;
 use strum_macros::Display;
 
-/// Authentication mode for OpenAI-backed providers.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Display)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthMode {
-    /// OpenAI API key provided by the caller and stored by Codex.
     ApiKey,
-    /// ChatGPT OAuth managed by Codex (tokens persisted and refreshed by Codex).
     Chatgpt,
     /// [UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.
     ///
@@ -24,7 +21,6 @@ pub enum AuthMode {
     #[serde(rename = "chatgptAuthTokens")]
     #[strum(serialize = "chatgptAuthTokens")]
     ChatgptAuthTokens,
-    /// Programmatic Codex auth backed by a registered Agent Identity.
     #[serde(rename = "agentIdentity")]
     #[strum(serialize = "agentIdentity")]
     AgentIdentity,
@@ -110,10 +106,6 @@ macro_rules! serialization_scope_expr {
     };
 }
 
-/// Generates an `enum ClientRequest` where each variant is a request that the
-/// client can send to the server. Each variant has associated `params` and
-/// `response` types. Also generates a `export_client_responses()` function to
-/// export all response types to TypeScript.
 macro_rules! client_request_definitions {
     (
         $(
@@ -326,9 +318,6 @@ client_request_definitions! {
         response: v1::InitializeResponse,
     },
 
-    /// NEW APIs
-    // Thread lifecycle
-    // Uses `inspect_params` because only some fields are experimental.
     ThreadStart => "thread/start" {
         params: v2::ThreadStartParams,
         inspect_params: true,
@@ -357,18 +346,11 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadUnsubscribeResponse,
     },
-    /// Increment the thread-local out-of-band elicitation counter.
-    ///
-    /// This is used by external helpers to pause timeout accounting while a user
-    /// approval or other elicitation is pending outside the app-server request flow.
     ThreadIncrementElicitation => "thread/increment_elicitation" {
         params: v2::ThreadIncrementElicitationParams,
         serialization: thread_id(params.thread_id),
         response: v2::ThreadIncrementElicitationResponse,
     },
-    /// Decrement the thread-local out-of-band elicitation counter.
-    ///
-    /// When the count reaches zero, timeout accounting resumes for the thread.
     ThreadDecrementElicitation => "thread/decrement_elicitation" {
         params: v2::ThreadDecrementElicitationParams,
         serialization: thread_id(params.thread_id),
@@ -467,17 +449,14 @@ client_request_definitions! {
     },
     ThreadTurnsList => "thread/turns/list" {
         params: v2::ThreadTurnsListParams,
-        // Explicitly concurrent: this primarily reads append-only rollout storage.
         serialization: None,
         response: v2::ThreadTurnsListResponse,
     },
     ThreadTurnsItemsList => "thread/turns/items/list" {
         params: v2::ThreadTurnsItemsListParams,
-        // Explicitly concurrent: this primarily reads append-only rollout storage.
         serialization: None,
         response: v2::ThreadTurnsItemsListResponse,
     },
-    /// Append raw Responses API items to the thread history without starting a user turn.
     ThreadInjectItems => "thread/inject_items" {
         params: v2::ThreadInjectItemsParams,
         serialization: thread_id(params.thread_id),
@@ -558,8 +537,7 @@ client_request_definitions! {
         serialization: None,
         response: v2::AppsListResponse,
     },
-    // File system requests are intentionally concurrent. Desktop already treats local
-    // file system operations as concurrent, and app-server remote fs mirrors that model.
+    // File system requests are intentionally concurrent; remote fs mirrors that model.
     FsReadFile => "fs/readFile" {
         params: v2::FsReadFileParams,
         serialization: None,
@@ -708,19 +686,16 @@ client_request_definitions! {
         serialization: global_shared_read("remote-control"),
         response: v2::RemoteControlStatusReadResponse,
     },
-    /// Lists collaboration mode presets.
     CollaborationModeList => "collaborationMode/list" {
         params: v2::CollaborationModeListParams,
         serialization: None,
         response: v2::CollaborationModeListResponse,
     },
-    /// Test-only method used to validate experimental gating.
     MockExperimentalMethod => "mock/experimentalMethod" {
         params: v2::MockExperimentalMethodParams,
         serialization: None,
         response: v2::MockExperimentalMethodResponse,
     },
-    /// Adds or replaces a remote environment by id for later selection.
     EnvironmentAdd => "environment/add" {
         params: v2::EnvironmentAddParams,
         serialization: global("environment"),
@@ -805,50 +780,42 @@ client_request_definitions! {
         response: v2::FeedbackUploadResponse,
     },
 
-    /// Execute a standalone command (argv vector) under the server's sandbox.
     OneOffCommandExec => "command/exec" {
         params: v2::CommandExecParams,
         inspect_params: true,
         serialization: optional_command_process_id(params.process_id),
         response: v2::CommandExecResponse,
     },
-    /// Write stdin bytes to a running `command/exec` session or close stdin.
     CommandExecWrite => "command/exec/write" {
         params: v2::CommandExecWriteParams,
         serialization: command_process_id(params.process_id),
         response: v2::CommandExecWriteResponse,
     },
-    /// Terminate a running `command/exec` session by client-supplied `processId`.
     CommandExecTerminate => "command/exec/terminate" {
         params: v2::CommandExecTerminateParams,
         serialization: command_process_id(params.process_id),
         response: v2::CommandExecTerminateResponse,
     },
-    /// Resize a running PTY-backed `command/exec` session by client-supplied `processId`.
     CommandExecResize => "command/exec/resize" {
         params: v2::CommandExecResizeParams,
         serialization: command_process_id(params.process_id),
         response: v2::CommandExecResizeResponse,
     },
-    /// Spawn a standalone process (argv vector) without a Codex sandbox.
     ProcessSpawn => "process/spawn" {
         params: v2::ProcessSpawnParams,
         serialization: process_handle(params.process_handle),
         response: v2::ProcessSpawnResponse,
     },
-    /// Write stdin bytes to a running `process/spawn` session or close stdin.
     ProcessWriteStdin => "process/writeStdin" {
         params: v2::ProcessWriteStdinParams,
         serialization: process_handle(params.process_handle),
         response: v2::ProcessWriteStdinResponse,
     },
-    /// Terminate a running `process/spawn` session by client-supplied `processHandle`.
     ProcessKill => "process/kill" {
         params: v2::ProcessKillParams,
         serialization: process_handle(params.process_handle),
         response: v2::ProcessKillResponse,
     },
-    /// Resize a running PTY-backed `process/spawn` session by client-supplied `processHandle`.
     ProcessResizePty => "process/resizePty" {
         params: v2::ProcessResizePtyParams,
         serialization: process_handle(params.process_handle),
@@ -895,7 +862,6 @@ client_request_definitions! {
         response: v2::GetAccountResponse,
     },
 
-    /// DEPRECATED APIs below
     GetConversationSummary {
         params: v1::GetConversationSummaryParams,
         serialization: None,
@@ -906,14 +872,11 @@ client_request_definitions! {
         serialization: None,
         response: v1::GitDiffToRemoteResponse,
     },
-    /// DEPRECATED in favor of GetAccount
     GetAuthStatus {
         params: v1::GetAuthStatusParams,
         serialization: global("account-auth"),
         response: v1::GetAuthStatusResponse,
     },
-    // Legacy fuzzy search cancellation is intentionally concurrent: clients reuse a
-    // cancellation token so a newer request can cancel an older in-flight search.
     FuzzyFileSearch {
         params: FuzzyFileSearchParams,
         serialization: None,
@@ -936,10 +899,6 @@ client_request_definitions! {
     },
 }
 
-/// Generates an `enum ServerRequest` where each variant is a request that the
-/// server can send to the client along with the corresponding params and
-/// response types. It also generates helper types used by the app/server
-/// infrastructure (payload enum, request constructor, and export helpers).
 macro_rules! server_request_definitions {
     (
         $(
@@ -1043,8 +1002,6 @@ macro_rules! server_request_definitions {
     };
 }
 
-/// Generates `ServerNotification` enum and helpers, including a JSON Schema
-/// exporter for each notification.
 macro_rules! server_notification_definitions {
     (
         $(
@@ -1089,7 +1046,6 @@ macro_rules! server_notification_definitions {
 
     };
 }
-/// Notifications sent from the client to the server.
 macro_rules! client_notification_definitions {
     (
         $(
@@ -1119,40 +1075,31 @@ impl TryFrom<JSONRPCRequest> for ServerRequest {
 }
 
 server_request_definitions! {
-    /// NEW APIs
-    /// Sent when approval is requested for a specific command execution.
-    /// This request is used for Turns started via turn/start.
     CommandExecutionRequestApproval => "item/commandExecution/requestApproval" {
         params: v2::CommandExecutionRequestApprovalParams,
         response: v2::CommandExecutionRequestApprovalResponse,
     },
 
-    /// Sent when approval is requested for a specific file change.
-    /// This request is used for Turns started via turn/start.
     FileChangeRequestApproval => "item/fileChange/requestApproval" {
         params: v2::FileChangeRequestApprovalParams,
         response: v2::FileChangeRequestApprovalResponse,
     },
 
-    /// EXPERIMENTAL - Request input from the user for a tool call.
     ToolRequestUserInput => "item/tool/requestUserInput" {
         params: v2::ToolRequestUserInputParams,
         response: v2::ToolRequestUserInputResponse,
     },
 
-    /// Request input for an MCP server elicitation.
     McpServerElicitationRequest => "mcpServer/elicitation/request" {
         params: v2::McpServerElicitationRequestParams,
         response: v2::McpServerElicitationRequestResponse,
     },
 
-    /// Request approval for additional permissions from the user.
     PermissionsRequestApproval => "item/permissions/requestApproval" {
         params: v2::PermissionsRequestApprovalParams,
         response: v2::PermissionsRequestApprovalResponse,
     },
 
-    /// Execute a dynamic tool call on the client.
     DynamicToolCall => "item/tool/call" {
         params: v2::DynamicToolCallParams,
         response: v2::DynamicToolCallResponse,
@@ -1163,21 +1110,15 @@ server_request_definitions! {
         response: v2::ChatgptAuthTokensRefreshResponse,
     },
 
-    /// Generate a fresh upstream attestation result on demand.
     AttestationGenerate => "attestation/generate" {
         params: v2::AttestationGenerateParams,
         response: v2::AttestationGenerateResponse,
     },
 
-    /// DEPRECATED APIs below
-    /// Request to approve a patch.
-    /// This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).
     ApplyPatchApproval {
         params: v1::ApplyPatchApprovalParams,
         response: v1::ApplyPatchApprovalResponse,
     },
-    /// Request to exec a command.
-    /// This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).
     ExecCommandApproval {
         params: v1::ExecCommandApprovalParams,
         response: v1::ExecCommandApprovalResponse,
@@ -1189,7 +1130,6 @@ server_request_definitions! {
 pub struct FuzzyFileSearchParams {
     pub query: String,
     pub roots: Vec<String>,
-    // if provided, will cancel any previous request that used the same value
     pub cancellation_token: Option<String>,
 }
 
@@ -1260,7 +1200,6 @@ pub struct FuzzyFileSearchSessionCompletedNotification {
 }
 
 server_notification_definitions! {
-    /// NEW NOTIFICATIONS
     Error => "error" (v2::ErrorNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
     ThreadStatusChanged => "thread/status/changed" (v2::ThreadStatusChangedNotification),
@@ -1283,16 +1222,11 @@ server_notification_definitions! {
     ItemGuardianApprovalReviewStarted => "item/autoApprovalReview/started" (v2::ItemGuardianApprovalReviewStartedNotification),
     ItemGuardianApprovalReviewCompleted => "item/autoApprovalReview/completed" (v2::ItemGuardianApprovalReviewCompletedNotification),
     ItemCompleted => "item/completed" (v2::ItemCompletedNotification),
-    /// This event is internal-only. Used by Codex Cloud.
     RawResponseItemCompleted => "rawResponseItem/completed" (v2::RawResponseItemCompletedNotification),
     AgentMessageDelta => "item/agentMessage/delta" (v2::AgentMessageDeltaNotification),
-    /// EXPERIMENTAL - proposed plan streaming deltas for plan items.
     PlanDelta => "item/plan/delta" (v2::PlanDeltaNotification),
-    /// Stream base64-encoded stdout/stderr chunks for a running `command/exec` session.
     CommandExecOutputDelta => "command/exec/outputDelta" (v2::CommandExecOutputDeltaNotification),
-    /// Stream base64-encoded stdout/stderr chunks for a running `process/spawn` session.
     ProcessOutputDelta => "process/outputDelta" (v2::ProcessOutputDeltaNotification),
-    /// Final exit notification for a `process/spawn` session.
     ProcessExited => "process/exited" (v2::ProcessExitedNotification),
     CommandExecutionOutputDelta => "item/commandExecution/outputDelta" (v2::CommandExecutionOutputDeltaNotification),
     TerminalInteraction => "item/commandExecution/terminalInteraction" (v2::TerminalInteractionNotification),
@@ -1331,7 +1265,6 @@ server_notification_definitions! {
     ThreadRealtimeError => "thread/realtime/error" (v2::ThreadRealtimeErrorNotification),
     ThreadRealtimeClosed => "thread/realtime/closed" (v2::ThreadRealtimeClosedNotification),
 
-    /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
     WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),
     WindowsSandboxSetupCompleted => "windowsSandbox/setupCompleted" (v2::WindowsSandboxSetupCompletedNotification),
 

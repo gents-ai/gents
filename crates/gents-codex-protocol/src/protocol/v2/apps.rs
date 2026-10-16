@@ -7,13 +7,9 @@ use std::collections::HashMap;
 #[serde(rename_all = "camelCase")]
 /// EXPERIMENTAL - list available apps/connectors.
 pub struct AppsListParams {
-    /// Opaque pagination cursor returned by a previous call.
     pub cursor: Option<String>,
-    /// Optional page size; defaults to a reasonable server-side value.
     pub limit: Option<u32>,
-    /// Optional thread id used to evaluate app feature gating from that thread's config.
     pub thread_id: Option<String>,
-    /// When true, bypass app caches and fetch the latest data from sources.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub force_refetch: bool,
 }
@@ -79,12 +75,6 @@ pub struct AppInfo {
     pub install_url: Option<String>,
     #[serde(default)]
     pub is_accessible: bool,
-    /// Whether this app is enabled in config.toml.
-    /// Example:
-    /// ```toml
-    /// [apps.bad_app]
-    /// enabled = false
-    /// ```
     #[serde(default = "default_enabled")]
     pub is_enabled: bool,
     #[serde(default)]
@@ -119,8 +109,6 @@ impl From<AppInfo> for AppSummary {
 /// EXPERIMENTAL - app list response.
 pub struct AppsListResponse {
     pub data: Vec<AppInfo>,
-    /// Opaque cursor to pass to the next call to continue after the last item.
-    /// If None, there are no more items to return.
     pub next_cursor: Option<String>,
 }
 

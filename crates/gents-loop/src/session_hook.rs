@@ -1,16 +1,10 @@
-//! The persistence-hook seam.
-//!
-//! The owned loop threads every durable effect (a persisted message, a
-//! tool-call/result transition, a pre-completion prompt check) through a
-//! [`SessionHook`] instead of writing DefraDB itself. `gents`'s
-//! `DefraSessionHook` (native) implements it; the loop only ever calls these
-//! owned seams used by the loop and its stream processor.
+//! The persistence-hook seam. The owned loop threads every durable effect
+//! through a [`SessionHook`] instead of writing DefraDB itself; `gents`'s
+//! `DefraSessionHook` (native) implements it.
 //!
 //! `run_loop_stream` and `StreamProcessor` take `H: SessionHook` as a type
-//! parameter (not `Arc<dyn SessionHook>`): every call site already holds a
-//! concrete `DefraSessionHook`, so a generic keeps them unchanged. The trait
-//! itself is still object-safe (`#[async_trait]` boxes every future), for a
-//! caller that does need a trait object.
+//! parameter rather than `Arc<dyn SessionHook>`; the trait stays object-safe
+//! for a caller that needs a trait object.
 
 use async_trait::async_trait;
 use gents_protocol::message::Message;
@@ -19,8 +13,7 @@ use crate::live_output::LiveToolOutputWriter;
 use crate::tool_call_lifecycle::ToolOutcome;
 use crate::{HookAction, ToolCallHookAction};
 
-/// Canonical publication hooks supplied by the native session owner. The
-/// concrete admission and accepted-call types remain outside the guest loop.
+/// Canonical publication hooks supplied by the native session owner.
 #[async_trait]
 pub trait CanonicalSessionHook<Accepted: Send>: SessionHook {
     async fn adopt_accepted_tool_calls(&self, calls: Vec<(String, Accepted)>)
@@ -31,7 +24,7 @@ pub trait CanonicalSessionHook<Accepted: Send>: SessionHook {
 pub trait SessionHook: Send + Sync {
     /// Admit one child under an already running plugin call. Implementations
     /// must bind its canonical arguments and physical parent before returning
-    /// the internal identity consumed by the ordinary dispatch hooks.
+    /// the internal identity consumed by the dispatch hooks.
     async fn admit_tool_effect(
         &self,
         _parent_internal_id: &str,
@@ -52,8 +45,8 @@ pub trait SessionHook: Send + Sync {
         Ok(())
     }
 
-    /// Supplies admitted candidates; only the writer acknowledgment admits them
-    /// into the provider projection, since queued input can change before publication.
+    /// Supplies admitted candidates; only the writer acknowledgment admits
+    /// them into the provider projection.
     async fn pending_steering_inputs(
         &self,
     ) -> anyhow::Result<Vec<crate::loop_stream::FoldedPrompt>> {
@@ -77,8 +70,7 @@ pub trait SessionHook: Send + Sync {
     ) -> HookAction;
 
     /// Called when the model emits a tool call, before dispatch: persists the
-    /// call and returns whether to run it, skip it (with a reason that
-    /// becomes the tool result), or terminate.
+    /// call and returns whether to run, skip, or terminate.
     async fn on_tool_call(
         &self,
         tool_name: &str,
@@ -87,9 +79,9 @@ pub trait SessionHook: Send + Sync {
         args: &str,
     ) -> ToolCallHookAction;
 
-    /// Called instead of `on_tool_call` when tool-policy admission rejects
-    /// the call. The call never wins the dispatch election: it must be settled
-    /// from Pending with `outcome` as its pre-dispatch failure result.
+    /// Called instead of `on_tool_call` when tool-policy admission rejects the
+    /// call; the call must be settled from Pending with `outcome` as its
+    /// pre-dispatch failure result.
     async fn on_tool_admission_rejected(
         &self,
         tool_name: &str,
@@ -118,7 +110,7 @@ pub trait SessionHook: Send + Sync {
     async fn session_id(&self) -> Option<String>;
 
     /// Bind a streamed tool call's internal id to its provider-assigned
-    /// result id, so a later streamed result can be matched back to it.
+    /// result id.
     async fn register_stream_tool_call_identity(
         &self,
         internal_call_id: &str,
@@ -127,9 +119,8 @@ pub trait SessionHook: Send + Sync {
     );
 }
 
-/// A hook that persists nothing and never terminates the loop. Used by
-/// internal, sub-loop callers (the compaction summarizer's own completion
-/// request) that have no session to persist into.
+/// A hook that persists nothing and never terminates the loop, used by
+/// internal sub-loop callers with no session to persist into.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoopSessionHook;
 

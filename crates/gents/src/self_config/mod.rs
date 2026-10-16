@@ -1,9 +1,5 @@
-//! Node-scoped self-configuration through canonical context and inference documents.
-//! Patches name explicit writable fields and commit through the common desired-state
-//! transaction after validating the complete retained configuration. Nested tool
-//! permissions and auth references retain their existing typed owners. Raw API keys
-//! cannot be changed or returned. Optional no-lockout checks the candidate config
-//! chain. Agent management publishes canonical documents in the same transaction.
+//! Node-scoped self-configuration through canonical context and inference
+//! documents. Raw API keys cannot be changed or returned.
 
 pub mod agent;
 mod agent_management;
@@ -46,7 +42,6 @@ use agent::derive_agent_id;
 use defra_node::EmbeddedNode;
 use ops::{decode_merged, validate_merged_selection, ApplyRequest};
 
-// Engineer-granted configurator: identity and self-config.
 pub const ENGINEER_AGENT_TAG: &str = "gents:engineer";
 
 pub fn engineer_self_config() -> crate::document_config::SelfConfigTools {
@@ -62,18 +57,12 @@ pub const GET_GRAPH_RUN_TOOL_NAME: &str = "get_graph_run";
 pub const GET_GRAPH_RESULT_TOOL_NAME: &str = "get_graph_result";
 pub const CANCEL_GRAPH_RUN_TOOL_NAME: &str = "cancel_graph_run";
 
-/// The graph tools a transport outside a model turn offers: the reads, each
-/// made under the caller's own DefraDB identity. Starting or cancelling a run
-/// there would need an authorization decision that DefraDB does not make for
-/// the graph collections, and gents adds no authorization layer of its own.
 pub const MCP_GRAPH_READ_TOOL_NAMES: [&str; 3] = [
     LIST_GRAPHS_TOOL_NAME,
     GET_GRAPH_RUN_TOOL_NAME,
     GET_GRAPH_RESULT_TOOL_NAME,
 ];
 
-/// Model-facing names reserved by the runtime. Configuration is one coherent
-/// argv-style surface; graph execution remains a separate operational surface.
 pub const SELF_CONFIG_TOOL_NAMES: [&str; 7] = [
     CONFIG_TOOL_NAME,
     PREVIEW_GRAPH_TOOL_NAME,
@@ -86,8 +75,6 @@ pub const SELF_CONFIG_TOOL_NAMES: [&str; 7] = [
 
 pub(crate) use crate::tool_output::{ordered, Ordered};
 
-/// Reading order of an effective configuration: the agent and its chain,
-/// then what it may do, then grants and timing.
 const EFFECTIVE_ORDER: &[&str] = &[
     "execution_settings",
     "agent_id",
@@ -103,8 +90,6 @@ const EFFECTIVE_ORDER: &[&str] = &[
     "effect_timing",
 ];
 
-/// Error wrapper mirroring `DefraQueryError`: render the full anyhow chain to
-/// the model.
 #[derive(Debug)]
 pub struct SelfConfigError(anyhow::Error);
 
@@ -130,9 +115,6 @@ fn outcome_text(outcome: &PatchOutcome) -> Result<String> {
     serde_json::to_string_pretty(outcome).map_err(|error| anyhow!("serialize outcome: {error}"))
 }
 
-// ---------------------------------------------------------------------------
-// Category request builders: each returns the ApplyRequest the core drives.
-// ---------------------------------------------------------------------------
 
 fn anchored_request(
     target: SelfConfigTarget,
@@ -156,7 +138,6 @@ fn agent_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<
     request
 }
 /// An `inference_profile_id` pick may not switch accounts of one provider.
-/// Unset (compaction only) reuses the agent's profile.
 fn fence_profile_pick(request: &mut ApplyRequest<'static>) {
     request.validate = Box::new(|txn, anchor, stored, merged| {
         Box::pin(async move {
@@ -187,10 +168,8 @@ fn fence_profile_pick(request: &mut ApplyRequest<'static>) {
 }
 
 /// Model-facing patches may target any owned agent, including the invoking
-/// configurator itself; its lockout protection is the no-lockout guard (Lean
-/// `SelfConfig.keepsControl`), and operator grants are bounded in the validate
-/// slot (Lean `SelfConfig.keepsGrants`). Keep the shared-reference check inside the
-/// same transaction as validation/publication so a stale preflight cannot
+/// configurator itself. Keep the shared-reference check inside the same
+/// transaction as validation/publication so a stale preflight cannot
 /// authorize a write.
 fn protect_working_agent(mut request: ApplyRequest<'static>) -> ApplyRequest<'static> {
     let target = request.target;
@@ -198,11 +177,6 @@ fn protect_working_agent(mut request: ApplyRequest<'static>) -> ApplyRequest<'st
     request.validate = Box::new(move |txn, anchor, stored, merged| {
         let validation = validate(txn, anchor, stored, merged);
         Box::pin(async move {
-            // Context and Tools are reusable documents. A targeted edit must
-            // not mutate another agent (especially Engineer) through a shared
-            // reference. Keep the observation and rejection in the same
-            // transaction as the canonical patch publication, matching the
-            // Lean siblingToolsAllowed contract.
             let owner = anchor
                 .doc
                 .get("node_did")
@@ -261,10 +235,6 @@ fn protect_working_agent(mut request: ApplyRequest<'static>) -> ApplyRequest<'st
     });
     request
 }
-/// The `host.root` the stored Tools document already holds. An edit that
-/// leaves it unchanged re-admits a stored grant (the operator may have since
-/// narrowed below it); a patch that sets a new root is held to strict
-/// admission.
 fn stored_host_root(stored: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
     serde_json::from_value::<crate::document_config::Tools>(serde_json::Value::Object(
         stored.clone(),
@@ -313,14 +283,9 @@ fn tools_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<
     request.guard = Box::new(|_, stored, merged| guard_tools_keep_control(stored, merged));
     request
 }
-/// A set of a nested Tools group replaces the whole group, so a partial group
-/// silently drops what it omits. On the invoker's own Tools that loses its
-/// working surfaces (the mailbox surface, defra_query) without a lockout the
-/// no-lockout guard would catch, so such a patch is refused and names what it
-/// would drop unless `allow_drop` names the group. This confirms intent; it
-/// narrows no legal transition (Lean `SelfConfig.keepsControl` stays the only
-/// lockout protection). Like that guard it applies only to the invoker under
-/// no_lockout, which the Engineer's grant sets.
+/// On the invoker's own Tools a set that silently drops what it omits is
+/// refused unless `allow_drop` names the group; confirms intent, narrows no
+/// legal transition.
 fn refuse_silent_tools_drops(
     mut request: ApplyRequest<'static>,
     allow_drop: BTreeSet<String>,
@@ -331,8 +296,8 @@ fn refuse_silent_tools_drops(
         .map(|(field, _)| field.clone())
         .filter(|field| !allow_drop.contains(field))
         .collect::<Vec<_>>();
-    // Rides the invoker-only guard slot, after the lockout guard so a lockout
-    // is reported as one.
+    // Invoker-only guard slot, after the lockout guard so a lockout is
+    // reported as one.
     let guard = request.guard;
     request.guard = Box::new(move |anchor, stored, merged| {
         guard(anchor, stored, merged)?;
@@ -362,9 +327,8 @@ fn refuse_silent_tools_drops(
     request
 }
 
-/// Settings present in `before` and absent from `after`: removed keys, removed
-/// array items, and values cleared to null. A changed value is a choice, not a
-/// drop.
+/// Settings present in `before` and absent from `after`. A changed value is a
+/// choice, not a drop.
 fn dropped_settings(path: &str, before: &Value, after: &Value, out: &mut Vec<String>) {
     match (before, after) {
         (Value::Null, _) => {}
@@ -572,8 +536,7 @@ fn automation_request(
                 );
             }
             // Packs may publish an event source before installing its schema;
-            // the schema tool installs schemas first, so a
-            // collection it cannot see here is a typo that would never fire.
+            // a collection missing here is a typo that would never fire.
             if target == SelfConfigTarget::EventSource {
                 if let Some(collection) = merged.get("source_collection").and_then(Value::as_str) {
                     anyhow::ensure!(
@@ -612,13 +575,9 @@ fn automation_target(kind: &str) -> Result<SelfConfigTarget> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Agent management arguments
-// ---------------------------------------------------------------------------
 
-/// Model-facing tri-state for agent edits. Serde invokes `Default` only
-/// when the property is absent; a present JSON null reaches the deserializer
-/// and becomes `Clear`.
+/// Model-facing tri-state for agent edits. A present JSON null is `Clear`;
+/// the property must be absent to stay `Omitted`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum StringUpdate {
     #[default]
@@ -674,9 +633,7 @@ fn agent_edit_fields(args: &ConfigureAgentParams) -> Vec<String> {
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigureAgentParams {
-    /// `list` | `inspect` | `preview` | `create` | `edit` | `clone` | `disable`.
     pub action: String,
-    /// Proposed mutation for `action: "preview"`.
     #[serde(default)]
     pub operation: Option<String>,
     #[serde(default)]
@@ -684,32 +641,24 @@ pub struct ConfigureAgentParams {
     /// User-facing summary for the working agent and its context.
     #[serde(default)]
     pub description: StringUpdate,
-    /// Complete operating instructions for the working agent. Required
-    /// when creating from a permission preset; optional overrides a clone or
-    /// an existing agent.
     #[serde(default)]
     pub system_prompt: StringUpdate,
-    /// Exact agent_id of the sibling agent (required for edit/disable).
     #[serde(default)]
     pub agent_id: Option<String>,
-    /// Exact sibling agent_id to clone; a supplied preset requests a new agent.
     #[serde(default)]
     pub clone_from: Option<String>,
     #[serde(default)]
     pub root: StringUpdate,
     #[serde(default)]
     pub preset: StringUpdate,
-    /// Exact owner-scoped inference profile ID.
     #[serde(default)]
     pub profile_id: StringUpdate,
-    /// Promote the applied agent to this node's default agent.
     #[serde(default)]
     pub make_default: bool,
     #[serde(default)]
     pub enable_lsp: Option<bool>,
     #[serde(default)]
     pub enable_graph_tools: Option<bool>,
-    /// Optional fail-closed network narrowing for canonical host bash tools.
     #[serde(default)]
     pub network_mode: Option<crate::toolset::CommandNetworkMode>,
 }
@@ -931,15 +880,14 @@ async fn guard_agent_profile_choice(
     ops::guard_compaction_choice_in_txn(txn, SelfConfigTarget::Agent, &anchor, &own, &cloned).await
 }
 
-/// Install document and graph packs from the home's pack store or the registry through the
-/// canonical resolver, package publication, and activation owners. The running
-/// node is always the install owner; callers cannot select another DID,
-/// filesystem distribution, registry endpoint, or control-plane endpoint.
+/// Install document and graph packs through the canonical resolver, package
+/// publication, and activation owners. The running node is always the install
+/// owner; callers cannot select another DID, filesystem distribution, registry
+/// endpoint, or control-plane endpoint.
 struct PackInstaller {
     core: SelfConfigCore,
     node: Arc<EmbeddedNode>,
-    /// The runtime's gents home, which holds the pack store and the plugin
-    /// store; `None` resolves from the registry in memory and installs no plugins.
+    /// `None` resolves from the registry in memory and installs no plugins.
     home: Option<std::path::PathBuf>,
 }
 
@@ -951,7 +899,6 @@ struct PackInstallParams {
     pub expected_digest: Option<String>,
 }
 
-/// What [`crate::plugin::install::snapshot_pack_plugin_records`] observed, to restore on failure.
 type PluginRollback = Vec<(
     String,
     String,
@@ -978,10 +925,8 @@ impl ConfigPackDistribution {
         }
     }
 
-    /// The exact `namespace/name@version` this distribution resolved to, so
-    /// applying a preview resolves the same pack again (from the store the
-    /// preview filled) rather than whatever is newest by then. `requested`
-    /// stands when the version is not one a store index can hold.
+    /// Pin the preview's resolution so applying it resolves the same pack
+    /// again rather than whatever is newest by then.
     fn pinned_spec(&self, requested: &str) -> String {
         let manifest = self.manifest();
         if crate::pack_store::is_valid_index_version(&manifest.version) {
@@ -1048,10 +993,8 @@ impl PackInstaller {
         Ok(())
     }
 
-    /// Resolves the pack named by `args`: an installed record whose archive
-    /// the home's store still holds, then the store, then the registry. An
-    /// `update` asks the registry for the newest version first, so it never
-    /// resolves back to the version it is meant to replace.
+    /// An `update` asks the registry for the newest version first, so it
+    /// never resolves back to the version it is meant to replace.
     async fn resolve(
         &self,
         operation: &str,
@@ -1108,11 +1051,6 @@ impl PackInstaller {
         Ok(distribution)
     }
 
-    /// The active graph of the installed pack with `manifest`'s namespace and
-    /// name. The install record is keyed by `namespace/name`, so a pack of the
-    /// same name from another namespace is never reported as installed.
-    // vertexia: graphs are looked up by bare package name, so two namespaces
-    // installed at once with the same name fail loud as ambiguous.
     async fn installed(
         &self,
         manifest: &crate::pack::PackManifest,
@@ -1320,11 +1258,6 @@ impl PackInstaller {
         }))?)
     }
 
-    /// One page of the packs the home's pack store holds, by `namespace/name`.
-    /// Bounded by `limit`; the store's name index is read whole (names only,
-    /// no archives), and only the page's manifests are opened.
-    // vertexia: the name index is listed whole, a cursor-seeked directory walk
-    // if a home ever holds thousands of pack names.
     async fn list(&self, limit: usize, cursor: Option<&str>) -> anyhow::Result<String> {
         anyhow::ensure!(
             (1..=50).contains(&limit),
@@ -1477,12 +1410,10 @@ impl PackInstaller {
     }
 
     /// Removes an installed graph package's `PackInstallation` record and
-    /// everything it lists: its `GraphDefinition`, every revision it
-    /// produced and their derived triggers, and the package's own
-    /// documents. Refused while any of its graphs has a run that has not
-    /// reached a terminal status. The package is named by coordinate alone,
-    /// so removing never resolves it (no store or registry lookup). It
-    /// releases no plugin bytes or archive; use `gents pack remove` for that.
+    /// everything it lists. Refused while any of its graphs has a run that
+    /// has not reached a terminal status. Never resolves the package (no
+    /// store or registry lookup); releases no plugin bytes or archive; use
+    /// `gents pack remove` for that.
     async fn remove(&self, package: &str) -> anyhow::Result<String> {
         let args = PackInstallParams {
             package: package.to_owned(),
@@ -1540,10 +1471,10 @@ impl PackInstaller {
             .collect()
     }
 
-    /// Installs the plugins `distribution` ships into the home's plugin store,
-    /// sealed: a plugin that asks for authority is refused, because granting
-    /// it is the operator's call. Returns the records to restore if the
-    /// graph install that follows fails, and the plugins now installed.
+    /// Installs the plugins `distribution` ships into the home's plugin
+    /// store, sealed: a plugin that asks for authority is refused, because
+    /// granting it is the operator's call. Returns the records to restore if
+    /// the graph install that follows fails.
     fn install_plugins(
         &self,
         distribution: &ConfigPackDistribution,
@@ -1854,12 +1785,8 @@ fn graph_access(node: &Arc<EmbeddedNode>) -> crate::config_client::ConfigAccess 
     crate::config_client::ConfigAccess::local(node.clone())
 }
 
-/// The `list_graphs` reply text for `owner_did`, read through `access`:
-/// every graph definition the owner holds with its verified active plan,
-/// sorted by graph id, as pretty-printed JSON. `run_tool` names the tool that
-/// starts a listed graph; a surface that offers no run tool passes `None`,
-/// and the reply then carries no `run_with`. Every read runs with
-/// `access`'s identity.
+/// `run_tool` names the tool that starts a listed graph; `None` omits the
+/// reply's `run_with`.
 pub async fn list_graphs_value(
     access: &crate::config_client::ConfigAccess,
     owner_did: &str,
@@ -2014,10 +1941,8 @@ impl Tool for RunGraphTool {
                     format!("graph {graph_id:?} has no active revision; call list_graphs again")
                 }
             })?;
-        // The same selection `prepare_entry_run` makes below, so the
-        // ceiling decision can never disagree with which entry actually
-        // runs (a mismatch here would let a model-invoked run reach a
-        // `git_diff` host step with no ceiling at all).
+        // The same selection `prepare_entry_run` makes below, so the ceiling
+        // decision can never disagree with which entry actually runs.
         let selected_entry = crate::graph_package::select_entry(&plan, args.entry.as_deref()).ok();
         let requires_git_diff_ceiling = selected_entry
             .and_then(|entry| entry.prepare.as_ref())
@@ -2219,9 +2144,6 @@ impl Tool for CancelGraphRunTool {
     }
 }
 
-/// The model-facing definitions of the five graph tools, in registration
-/// order. The in-session tools present exactly these, and the `/mcp` reads
-/// present the entries named in [`MCP_GRAPH_READ_TOOL_NAMES`].
 pub fn graph_tool_definitions() -> [ToolDefinition; 5] {
     [
         list_graphs_definition(),
@@ -2283,7 +2205,7 @@ fn cancel_graph_run_definition() -> ToolDefinition {
 }
 
 /// Build the gated self-config tool family for one agent. Fails closed:
-/// with an empty node DID (bare oneshot contexts) no tools are registered.
+/// with an empty node DID no tools are registered.
 pub fn build_self_config_tools(
     node: Arc<EmbeddedNode>,
     node_did: String,
@@ -2358,14 +2280,12 @@ pub fn build_self_config_tools(
     tools
 }
 
-/// A graph intent reaches storage only through pack installation, so the
-/// preview is offered only with that grant; without it the tool's schema is a
-/// per-turn cost with no path to publication.
+/// Offered only with the pack-install grant: a graph intent reaches storage
+/// only through pack installation.
 fn previews_graphs(config: &SelfConfigToolConfig) -> bool {
     config.enable_graph_tools && config.enable_pack_install
 }
 
-/// Advertised tool names for a resolved self-config surface.
 pub fn self_config_tool_names(config: &SelfConfigToolConfig) -> Vec<String> {
     let mut names = Vec::new();
     if previews_graphs(config) {

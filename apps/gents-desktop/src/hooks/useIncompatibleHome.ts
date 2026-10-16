@@ -12,28 +12,19 @@ import type { ClientState, ClientStore } from "./clientStore";
 
 type IncompatibleHomeOptions = {
   api: DesktopApiAdapter;
-  /** where the report lives, read by an action when it runs */
   client: ClientStore;
   setError: (error: string | null) => void;
-  /** Runs startup again once the old home is out of the way. */
   startFresh: () => Promise<void>;
 };
 
 export type IncompatibleHome = {
-  /** The bridge's account of the home: a preview until a reset completes. */
   report: ManagedServerResetResult | null;
   busy: boolean;
   fullReset: boolean;
   canReset: boolean;
   previewReset: () => Promise<void>;
   cancel: () => void;
-  /** Increments each time the user continues from a completed reset. */
   generation: number;
-  /**
-   * Takes the error of a failed startup, setup start, restart, or client
-   * start. Resolves true when the bridge classified it as a store this
-   * version cannot open and the home was previewed for a reset.
-   */
   adopt: (error: unknown) => Promise<boolean>;
   backUp: () => Promise<void>;
   remove: () => Promise<void>;
@@ -41,7 +32,6 @@ export type IncompatibleHome = {
   continueFresh: () => Promise<void>;
 };
 
-/** The bridge's typed classification; never inferred from message text. */
 export function isIncompatibleHomeError(error: unknown): boolean {
   if (error instanceof BridgeInvokeError)
     return error.code === "incompatibleLocalStore";
@@ -51,8 +41,6 @@ export function isIncompatibleHomeError(error: unknown): boolean {
   return false;
 }
 
-/** What the person can do about a home this version cannot open. Made
-    once; each reads the report from the client store when it runs. */
 export function createIncompatibleHomeOps({
   api,
   client,
@@ -144,7 +132,6 @@ export function createIncompatibleHomeOps({
               : await api.resetManagedServer(),
           );
         } catch {
-          /* The refusal above already explains the failure. */
         }
       }
     } finally {
@@ -181,7 +168,6 @@ export function createIncompatibleHomeOps({
   };
 }
 
-/** The incompatible home as screens read it: its state and its actions. */
 export function useIncompatibleHome(
   client: ClientStore,
   ops: ReturnType<typeof createIncompatibleHomeOps>,

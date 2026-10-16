@@ -1,5 +1,4 @@
-//! Plain text for `gents optimization`: one line per journal entry, and the
-//! job table `run` and `show` end with.
+//! Plain text for `gents optimization`.
 
 use std::io::{self, Write};
 
@@ -8,8 +7,7 @@ use gents::optimization::{Decision, JobState, JobView, JournalEntry, PolicyV2};
 use crate::commands::eval::render::{decision_label, signed_percent, wire};
 use crate::commands::eval::UNCALIBRATED_BANNER;
 
-/// Shown in place of a recomputed decision when `show` could not recompute
-/// one: the job's definition was deleted or no longer validates.
+/// Placeholder when `show` could not recompute a decision.
 const NOT_RECOMPUTABLE: &str = "not recomputable: definition changed or runs invalidated";
 
 /// [`UNCALIBRATED_BANNER`] when `policy` is the placeholder defaults.

@@ -6,7 +6,7 @@ export function ownsAutomaticRecovery(): boolean {
   return !isMacTauriShell() || windowLabel() === "main";
 }
 
-/// iPadOS also reports MacIntel, so a touch screen rules macOS out.
+// iPadOS also reports MacIntel, so a touch screen rules macOS out.
 export function isMacTauriShell(): boolean {
   return (
     inTauri() &&
@@ -31,14 +31,12 @@ export function isMobileTauriShell(): boolean {
   return inTauri() && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 }
 
-/// Native background-service hosting is implemented with per-user launchd and
-/// systemd services. Browser harnesses retain local hosting for UI tests.
+// Browser harnesses retain local hosting for UI tests.
 export function supportsLocalManagedServer(): boolean {
   return !inTauri() || isMacTauriShell() || isLinuxTauriShell();
 }
 
-/// Only Windows uses a web-rendered window bar. macOS reserves native title
-/// and tab chrome outside the webview; Linux keeps its window-manager chrome.
+// Only Windows uses a web-rendered window bar; macOS and Linux keep native chrome.
 export function headerIsWindowBar(): boolean {
   return isWindowsTauriShell();
 }

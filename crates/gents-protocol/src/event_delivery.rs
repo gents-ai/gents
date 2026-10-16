@@ -1,5 +1,5 @@
-//! One durable group clock shared by task triggers and callback bindings.
-//! Delivery, membership and timeout decisions remain owned by the event engine.
+//! One durable group clock shared by task triggers and callback bindings;
+//! delivery, membership and timeout decisions remain owned by the event engine.
 
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +10,6 @@ pub enum EventConsumer {
     CallbackBinding { binding_id: String },
 }
 
-/// Replaces the trigger-only group-state vocabulary, not its delivery owner.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EventGroupState {

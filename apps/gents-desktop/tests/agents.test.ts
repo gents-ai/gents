@@ -20,7 +20,6 @@ describe("a node's agents", () => {
     expect(agentOf(null, "setup")).toBeNull();
   });
 
-  /* every screen that preselects an agent uses the client's one rule */
   it("takes the node's default over the one marked default", () => {
     expect(defaultAgentOf(node("coding", "setup"))?.agentId).toBe("coding");
     expect(defaultAgentOf(node(null, "setup"))?.agentId).toBe("setup");

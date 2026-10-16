@@ -32,9 +32,6 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for InterruptionCaptur
     }
 }
 
-/// Parks the request inside provider-input estimation. `build_request` awaits
-/// every tool definition, so this future holds the daemon in the window between
-/// the claim and the first provider call for as long as a test needs.
 #[derive(Clone)]
 struct PreInferenceBlockingTool {
     entered: Arc<tokio::sync::Notify>,
@@ -165,8 +162,6 @@ async fn request_terminal_row(
         .context("AgentRequest read selected no row for the claimed request")
 }
 
-/// The lease outlives the assertion window and this harness runs no recovery
-/// sweep, so only the live owner can terminalize the request.
 #[tokio::test]
 async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
@@ -276,9 +271,6 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
     node.shutdown().await;
 }
 
-/// Observing the real latch before invoking the handler makes the admission
-/// window deterministic; the durable Claimed state distinguishes it from the
-/// later Processing preparation window.
 #[tokio::test]
 async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
@@ -455,9 +447,6 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
     node.shutdown().await;
 }
 
-/// The paused read is the provider-context checkpoint restoration inside
-/// `run_inference`, after its initial latch check; it never completes, so only
-/// observing the latch across that preparation lets the owner terminalize.
 #[tokio::test]
 async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_the_owner() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
@@ -555,8 +544,6 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
     node.shutdown().await;
 }
 
-/// A Git clean filter parks `git add -A` inside sealed-workspace hashing, so
-/// the interrupt arrives while Git, not the runtime, holds the preparation.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn interrupt_while_hashing_a_sealed_workspace_kills_git_and_keeps_its_index() {

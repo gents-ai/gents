@@ -1,30 +1,6 @@
-//! Task A1 — two-node P2P event-trigger e2e test.
-//!
-//! This qualifies the ONE unproven assumption underpinning the on-host
-//! Diagnose->Act->Verify loop: **does a document that arrives on a node via
-//! P2P replication fire that node's `Trigger` as a `created` event?**
-//!
-//! The EventSource subscribes to DefraDB's global update bus and treats a
-//! first-observed `doc_id` as a `created` fire, so a P2P-merged doc *should*
-//! fire — but the existing-docs seed-cap and the subscription-vs-merge timing
-//! could suppress it. This test answers that empirically.
-//!
-//! Topology:
-//!   - Node A (`db_writer`): a bare writer node, P2P enabled, no agent.
-//!   - Node B (`db_agent`): runs the `Gents` + an `Trigger` watching
-//!     `ReplicatedEvent`.
-//!
-//! Ordering matters: the source doc is written on A only AFTER B's trigger is
-//! reconciled into the active snapshot AND A->B replication is established, so
-//! the merged doc is a fresh first-observation on B (the `created` path).
-//!
-//! This test owns its own source schema (`ReplicatedEvent`) so it does not
-//! collide with the single-node `event_trigger_e2e.rs` `WebhookEvent` schema.
-//!
-//! Mirrors `event_trigger_e2e.rs` (the single-node vertical) for the agent /
-//! trigger / assertion shape, and `state_machine_conformance/r5_cross_deployment.rs`
-//! for the two-node P2P replicator plumbing (`install_one_way_replicator`,
-//! `wait_for_listen_addr`, `wait_for_connected_peer`).
+//! Owns its own `ReplicatedEvent` source schema: the single-node
+//! `event_trigger_e2e.rs` uses `WebhookEvent` in the same process-global
+//! DefraDB schema registry.
 
 use std::sync::Arc;
 use std::time::Duration;

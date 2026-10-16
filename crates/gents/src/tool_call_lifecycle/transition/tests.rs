@@ -3,8 +3,6 @@ use std::sync::Arc;
 use super::super::{ToolCallLifecycle, ToolCallState};
 use super::IllegalToolCallTransition;
 
-/// Build a minimal in-memory node. Schema setup is not required for these
-/// tests because the guards fire before any DB mutation.
 async fn test_node() -> Arc<defra_node::EmbeddedNode> {
     Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap())
 }
@@ -120,8 +118,6 @@ async fn foreground_rejects_pending_state() {
     );
 }
 
-/// Lean `ToolCallContext.Transition.foreground` requires a non-session-message
-/// row: a started session's result arrives only as a message.
 #[tokio::test]
 async fn foreground_rejects_session_message_rows() {
     for tool_name in [

@@ -7,8 +7,10 @@ import { RemoteToolDiscovery } from "./RemoteToolDiscovery";
 import { useEffect, useState, type ReactNode } from "react";
 import { useApp } from "@/app/AppContext";
 
-// Mirrors the canonical effective defaults used by Tools::validation_violations.
-// The desktop bridge does not currently publish these values in its catalog.
+/**
+ * Mirrors Tools::validation_violations' canonical effective defaults; the
+ * desktop bridge does not publish these values in its catalog.
+ */
 export const TOOL_LIMIT_DEFAULTS = {
   bashTimeout: 120,
   waitTimeout: 30,
@@ -17,20 +19,18 @@ export const TOOL_LIMIT_DEFAULTS = {
   maxLspTimeout: 300,
 } as const;
 
-/** `host.files` limits: row label, server-side ceiling (`Tools::validate`)
- * and unset default. */
+/** `host.files` limits: row label, server-side ceiling, unset default. */
 export const FILE_LIMITS = {
   max_read_chars: { label: "File read byte limit", max: 1_000_000, fallback: "32000" },
   max_list_entries: { label: "File listing entry limit", max: 5_000, fallback: "200" },
   max_matches: { label: "File search match limit", max: 5_000, fallback: "200" },
 } as const;
 
-/* a note that belongs to the group, set in the row's own padding */
 function Note({ children }: { children: ReactNode }) {
   return <p className="px-5 py-3 text-sm text-muted-foreground">{children}</p>;
 }
 
-/** A positive whole number, optionally bounded (`max`), empty for unset. */
+/** A positive whole number, optionally bounded; empty for unset. */
 function WholeNumberRow({
   id,
   label,
@@ -130,7 +130,6 @@ export function parseToolGroups(value: string): Partial<Tools> | null {
   }
 }
 
-/** These controls edit the canonical nested groups, not a second config schema. */
 export function ToolGroupControls({
   value,
   onChange,

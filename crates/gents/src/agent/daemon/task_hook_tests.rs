@@ -24,8 +24,6 @@ const TASK_ID: &str = "hook-task";
 const TRIGGER_ID: &str = "hook-trigger";
 const WORKSPACE_ID: &str = "task-hook-workspace";
 
-/// Replies once, fails the provider call, or never answers, counting every
-/// call.
 #[derive(Clone)]
 struct ScriptedModel {
     calls: Arc<AtomicUsize>,
@@ -71,12 +69,9 @@ impl CompletionModel for ScriptedModel {
     }
 }
 
-/// How the request under test reached its Task.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Lineage {
-    /// A schedule fire resolved through its Trigger.
     Trigger,
-    /// A manual `gents task run`: a Task fire receipt written with the request.
     ManualFire,
 }
 
@@ -683,8 +678,6 @@ async fn claim_admission_rejection_releases_the_bound_workspace() {
         .all(|binding| !binding.is_active()));
 }
 
-/// ReadWrite claim admission reaches worker-ticket binding only on hosts with
-/// an enforceable WorkspaceWrite sandbox.
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn refused_worker_ticket_releases_the_bound_workspace_before_work() {
@@ -713,9 +706,6 @@ async fn refused_worker_ticket_releases_the_bound_workspace_before_work() {
         .all(|binding| !binding.is_active()));
 }
 
-/// Claim admission refuses a ReadWrite workspace binding on a host with no
-/// enforceable WorkspaceWrite sandbox, so this request reaches its hooks only
-/// where one exists.
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn a_failing_before_hook_releases_the_bound_workspace() {
@@ -746,8 +736,6 @@ async fn a_failing_before_hook_releases_the_bound_workspace() {
 }
 
 impl Harness {
-    /// Runs the request against durable task hook records in `records`, and
-    /// abandons it the moment `marker` appears, as a runtime crash would.
     async fn crash_at(&self, request: AgentRequest, marker: &Path, records: &Path) {
         let mut daemon = self.daemon_with(
             false,
@@ -765,9 +753,8 @@ impl Harness {
         }
     }
 
-    /// Restarts against the same records: startup recovery until request
-    /// recovery has decided the abandoned request, which task hook recovery
-    /// waits for, then the recovered cleanup it started.
+    /// Restarts against the same records through startup recovery, waiting
+    /// for request recovery and then the recovered cleanup it started.
     async fn restart(&self, records: &Path, doc_id: &str) {
         let registry =
             BackgroundExecutionRegistry::default().with_task_hook_records(records.to_path_buf());
@@ -997,9 +984,6 @@ async fn a_before_hook_that_outlives_the_request_deadline_fails_the_request_clea
     assert!(harness.mark("swept").exists());
 }
 
-/// The owned work's result is observed after its workspace seal, so the
-/// after-phase a Task runs is selected by the seal's outcome: after_success
-/// cannot gate sealing or integration.
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn workspace_seal_completes_before_the_after_phase_is_selected() {
@@ -1044,8 +1028,8 @@ async fn workspace_seal_completes_before_the_after_phase_is_selected() {
 }
 
 impl Harness {
-    /// Runs the request and, once `marker` appears, revokes its execution by
-    /// installing another generation, as LatestOnly supersession does.
+    /// Runs the request and, once `marker` appears, revokes its execution
+    /// generation.
     async fn run_superseding_at(&self, request: AgentRequest, marker: &Path) -> serde_json::Value {
         let doc_id = request.doc_id.clone();
         let mut daemon = self.daemon(false);

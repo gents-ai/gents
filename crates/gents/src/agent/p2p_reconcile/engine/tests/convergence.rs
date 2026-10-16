@@ -86,21 +86,13 @@ async fn stale_applied_endpoint_absent_from_actual_is_torn_down_once() {
     );
 }
 
-/// Regression for the demo layer-order race: the data-plane desired lands
-/// before the control-plane layer, so the first tick installs the
-/// replicator carrying only the conversation collections. When the merged
-/// desired arrives — same address, same filter, LARGER collection set —
-/// the replicator must be reinstalled with the merged set: the carried
-/// collection set is part of the replicator identity (Lean
-/// `collections_change_forces_reinstall`). Pre-fix the diff keyed
-/// replicators on address alone and converged falsely, so the
-/// control-plane collections were never pushed to the peer (demo `pair`
-/// step-8 hang even with a healthy connection).
+/// `collections_change_forces_reinstall` (Lean): the carried collection set is
+/// part of the replicator identity. Covers the demo layer-order race where
+/// the data-plane desired lands before the control-plane layer; pre-fix the
+/// diff keyed replicators on address alone and converged falsely.
 #[tokio::test]
 async fn grown_replicator_collection_set_reinstalls_replicator() {
     let conversation_filter = one_filter("AgentRequest", "requester_did", "did:key:requester");
-    // Tick 1: only the data-plane layer is visible (Push template shape:
-    // nothing subscribed, the filtered replicator carries the set).
     let store = MockStore::with_desired(Some(PairingDesired {
         collections: BTreeSet::new(),
         replicator_addresses: set(&["addr1"]),
@@ -121,8 +113,8 @@ async fn grown_replicator_collection_set_reinstalls_replicator() {
         vec![DiffOp::InstallReplicator("addr1".into())]
     );
 
-    // The control-plane layer merges in: same address, same filter,
-    // larger replicator collection set plus the control subscription.
+    // The control-plane layer merges in: same address, same filter, larger
+    // collection set plus the control subscription.
     *store.desired.lock().unwrap() = Ok(Some(PairingDesired {
         collections: set(&["Network"]),
         replicator_addresses: set(&["addr1"]),
@@ -151,7 +143,6 @@ async fn grown_replicator_collection_set_reinstalls_replicator() {
         ]
     );
 
-    // Tick 3: converged — the collections identity must not churn.
     let third = reconcile_peer_tick(&admin, &store, "peer-a")
         .await
         .expect("third tick");
@@ -162,8 +153,8 @@ async fn grown_replicator_collection_set_reinstalls_replicator() {
     );
 }
 
-/// The active-peer gate must fail open: a broken `active_peers` read means
-/// "assume not connected" and dial as before, never a wedged pairing.
+/// `active_peers` failure means "assume not connected" and dial as before
+/// (fail-open), never a wedged pairing.
 #[tokio::test]
 async fn active_peer_read_failure_still_dials() {
     let store = MockStore::with_desired(Some(PairingDesired {
@@ -183,8 +174,6 @@ async fn active_peer_read_failure_still_dials() {
     assert_eq!(*admin.connects.lock().unwrap(), vec![vec!["addr1"]]);
 }
 
-/// A different peer being active is not this peer being active: the tick
-/// must still dial.
 #[tokio::test]
 async fn other_active_peer_does_not_suppress_dial() {
     let store = MockStore::with_desired(Some(PairingDesired {
@@ -226,8 +215,7 @@ async fn second_tick_converges_across_name_and_id_spaces() {
         first.ops_applied
     );
 
-    // Applied must persist the collection *name* (the observable contract),
-    // not the internal id.
+    // Applied persists the collection name, not the internal id.
     assert_eq!(
         store.applied.lock().unwrap().collections,
         set(&["AgentRequest"]),
@@ -246,9 +234,6 @@ async fn second_tick_converges_across_name_and_id_spaces() {
 
 #[tokio::test]
 async fn teardown_is_restricted_to_applied_extras() {
-    // Applied holds collection *names* (the observable contract). The remote
-    // subscription set is tracked in id-space internally by the mock, but
-    // `read_actual` reverse-resolves it to names for the diff.
     let store = MockStore::with_desired(Some(PairingDesired::default()));
     *store.applied.lock().unwrap() = PairingApplied {
         collections: set(&["managed"]),

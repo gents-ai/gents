@@ -1,20 +1,8 @@
 //! Shared GraphQL utility functions used across Gents runtime modules.
 //!
-//! Two defenses apply, one per grammatical position:
-//! - [`escape_graphql_string`] for values interpolated inside **string
-//!   literals** — escaping makes any content safe to embed.
-//! - [`validate_graphql_name`] / [`validate_collection_identifier`] for
-//!   values interpolated as bare **identifiers** (collection names, field
-//!   names, mutation input keys). Identifiers sit outside string literals,
-//!   so escaping cannot apply; validation against the GraphQL Name grammar
-//!   is the only defense.
-//!
-//! The identifier validators live in `gents-protocol` so the mutation
-//! renderer there shares this crate's definition, and are re-exported here.
-//!
-//! A third position — a raw **object/fragment** spliced in whole, as an event
-//! source filter is by the trigger engine's filter probe — is
-//! covered by neither. See #1038.
+//! A raw object/fragment spliced in whole — as an event source filter is by
+//! the trigger engine's filter probe — is covered by neither escaping nor
+//! identifier validation. See #1038.
 
 use anyhow::{Context, Result};
 use defra_node::{EmbeddedNode, QueryResponse};
@@ -27,10 +15,6 @@ pub use gents_protocol::graphql::{
     validate_graphql_name,
 };
 
-/// Execute GraphQL through the node's identity-aware retry path.
-///
-/// This is the low-level form for callers that intentionally inspect GraphQL
-/// errors. Most callers should use [`graphql_with_transaction_retry`].
 /// Render a GraphQL string-list literal, emitting `null` for an empty list
 /// (never `[]`, which types as `JsonArray` and corrupts nillable array columns).
 pub fn graphql_string_list_literal<'a>(values: impl IntoIterator<Item = &'a str>) -> String {

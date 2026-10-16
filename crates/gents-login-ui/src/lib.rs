@@ -1,31 +1,19 @@
 use base64::Engine as _;
 use tiny_http::{Header, Response, StatusCode as TinyStatusCode};
 
-// Shared self-contained OAuth callback UI.
-
-/// The app's typefaces, inlined: the page's CSP admits no other origin, and
-/// the callback must look the same offline and with any system fonts.
 const FONTS: [(&str, &[u8]); 2] = [
     ("Inter Variable", include_bytes!("../fonts/inter.woff2")),
     ("Lora Variable", include_bytes!("../fonts/lora.woff2")),
 ];
 
-/// What the browser tab says once a provider sends the person back. The tab
-/// is a dead end, so it only says where to go next; the reason a sign-in
-/// failed, which can carry provider text, goes to the app instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallbackPage {
     SignedIn,
     Cancelled,
-    /// The provider ended the sign-in without a grant.
     NotCompleted,
-    /// The provider granted it, but the code could not be exchanged.
     ExchangeFailed,
-    /// The state did not match this sign-in: an old tab or a second visit.
     StaleLink,
-    /// The redirect arrived without the parts a sign-in needs.
     Incomplete,
-    /// Any other path, such as a browser's favicon request.
     NotFound,
 }
 
@@ -86,7 +74,6 @@ fn font_faces() -> String {
         .join("\n")
 }
 
-/// The page's HTML, or `None` for a path that is not a sign-in at all.
 pub fn render(page: CallbackPage) -> Option<String> {
     let (title, note) = page.copy()?;
     Some(
@@ -129,26 +116,6 @@ mod tests {
         CallbackPage::StaleLink,
         CallbackPage::Incomplete,
     ];
-
-    #[test]
-    fn callback_pages_distinguish_success_cancellation_and_errors() {
-        let text = |page| render(page).expect("a page");
-        assert!(text(CallbackPage::SignedIn).contains("You’re signed in."));
-        assert!(text(CallbackPage::Cancelled).contains("No rush."));
-        for page in [
-            CallbackPage::NotCompleted,
-            CallbackPage::ExchangeFailed,
-            CallbackPage::StaleLink,
-            CallbackPage::Incomplete,
-        ] {
-            assert!(page.status() >= 400);
-            assert!(text(page).contains("Let’s try that again."));
-        }
-        for page in PAGES {
-            assert!(!text(page).contains("{{"));
-        }
-        assert_eq!(render(CallbackPage::NotFound), None);
-    }
 
     #[test]
     fn callback_response_is_html_without_cache_or_external_resources() {

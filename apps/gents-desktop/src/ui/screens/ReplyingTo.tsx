@@ -1,8 +1,3 @@
-/* The armed reply, made visible. Opening a mailbox item with Reply holds it
-   as the selection's mailbox route: the next message sent carries the
-   item's id, and the item closes when that request is claimed. The chip
-   names the item, the popover shows what it asked, and the X puts the
-   reply down. */
 import { ChevronDown, Clock, CornerDownLeft, X } from "lucide-react";
 import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 import {
@@ -44,13 +39,8 @@ export function ReplyingTo() {
       data-testid="replying-to"
       data-item-id={cause.itemId}
     >
-      {/* one pill: the name opens the popover, and the X, shown while the
-          pointer or focus is on the pill, disarms the reply. The pill is
-          capped so a long title truncates rather than widening the row */}
       <span className="group/chip inline-flex h-6 max-w-56 items-center rounded-full border border-border bg-background text-xs text-muted-foreground transition-colors focus-within:border-foreground/30 hover:border-foreground/30 has-data-popup-open:border-foreground/30">
         <HoverCard open={open} onOpenChange={setOpen}>
-          {/* the card opens on hover as a preview does, and a click pins it
-              open for a touch screen or a keyboard */}
           <HoverCardTrigger
             delay={300}
             render={
@@ -62,8 +52,6 @@ export function ReplyingTo() {
               />
             }
           >
-            {/* the arrow says "reply"; the words said it again and left no
-                room for the title, which is the part a person needs */}
             <CornerDownLeft className="size-3 shrink-0" />
             <span className="truncate text-foreground">
               {item?.title ?? "a mailbox item"}
@@ -73,8 +61,6 @@ export function ReplyingTo() {
             align="start"
             side="top"
             sideOffset={8}
-            /* the kit's shadow is sized for a light page; over the dark transcript
-               the card read flat, held apart only by its hairline */
             className="w-80 gap-3 shadow-xl shadow-black/40 md:w-[28rem]"
           >
             {item ? (
@@ -108,7 +94,7 @@ export function ReplyingTo() {
 }
 
 function Details({ item }: { item: MailboxItemView }) {
-  /* fixed when the popover opens: a deadline does not tick over mid-read */
+  // fixed when the popover opens: a deadline does not tick over mid-read
   const [now] = useState(() => Date.now());
   const deadline = deadlineOf(item);
   const soon = dueSoon(deadline, now);
@@ -140,8 +126,6 @@ function Details({ item }: { item: MailboxItemView }) {
         </p>
       )}
       {item.payload && (
-        /* the same fold as the mailbox card: the payload is data the agent
-           attached, closed until asked for, so the card stays short */
         <Collapsible className="group/details">
           <CollapsibleTrigger className="inline-flex cursor-pointer items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
             Details

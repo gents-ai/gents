@@ -87,14 +87,11 @@ async fn colliding_logical_interrupt_fetch_rejects_ambiguity_and_binds_owner_phy
     )
     .await;
 
-    // The foreign principal latches only its own physical row.
     let access = crate::config_client::ConfigAccess::local(node.clone());
     interrupt_request_by_doc_id_with_access(&access, &foreign, "foreign", None)
         .await
         .unwrap();
 
-    // The physical fetch binds exactly one physical row and never reads the
-    // foreign principal's latch through the owner's key.
     assert_eq!(
         fetch_interrupt_requested_at_by_doc_id(&node, &owner)
             .await
@@ -112,8 +109,7 @@ async fn colliding_logical_interrupt_fetch_rejects_ambiguity_and_binds_owner_phy
         None
     );
 
-    // The surviving logical reader fails closed on the colliding logical id
-    // instead of silently reading one replica's row with `limit: 1`.
+    // Colliding logical id fails closed instead of reading one replica's row.
     assert!(
         fetch_interrupt_requested_at(&node, "shared").await.is_err(),
         "colliding logical id must be rejected, not resolved by limit 1"

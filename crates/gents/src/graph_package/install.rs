@@ -22,13 +22,8 @@ pub struct GraphPackageInstallBindings {
     pub inference_slots: crate::pack::PackInferenceBindings,
 }
 
-/// What an install/reinstall of a graph package puts in its
-/// `PackInstallation` record: the plugins it just installed, and whether it
-/// was requested for its own sake (a direct `gents pack install`) rather
-/// than only as a documents pack's dependency. Every graph installer (the
-/// CLI, a documents pack's graph dependency, and the `self_config` tool)
-/// goes through this one type so the record is written the same way from
-/// every call site.
+/// One `GraphInstallRecord` shape for every graph installer, so the record
+/// is written the same way from every call site.
 #[derive(Clone, Debug, Default)]
 pub struct GraphInstallRecord {
     pub plugins: Vec<crate::pack::InstalledPackPlugin>,
@@ -52,10 +47,8 @@ pub struct PreparedGraphPackageInstall {
     pub plan: GraphPlan,
     pub desired_state: DesiredStateApplyPlan,
     pub schema_digests: Vec<RequiredSchemaDigest>,
-    /// The graph's active revision digest as observed while preparing this
-    /// install, read outside any transaction. Re-checked inside the commit
-    /// transaction so a concurrent activation between prepare and commit is
-    /// refused rather than silently accepted (#1651).
+    /// Observed outside any transaction; re-checked inside the commit
+    /// transaction so a concurrent activation is refused (#1651).
     expected_active_revision_digest: Option<String>,
 }
 
@@ -109,9 +102,6 @@ async fn validate_owner(access: &ConfigAccess, owner: &str) -> Result<()> {
         .await
 }
 
-/// Select an existing node without inventing host, model, or role
-/// defaults, for a package already resolved from any source (a directory, a
-/// `.pack`, the home's store, or the registry).
 pub async fn default_graph_package_install_bindings(
     access: &ConfigAccess,
     package: &LoadedGraphPackage,
@@ -132,8 +122,6 @@ pub async fn default_graph_package_install_bindings(
     })
 }
 
-/// Select installed package state without re-reading installation environment.
-/// The runtime plan reader retains node ownership, revision and digest verification.
 pub async fn load_installed_package_plan(
     access: &ConfigAccess,
     package_name: &str,
@@ -181,12 +169,10 @@ pub async fn load_installed_package_plan(
 /// Which active graph plan a run starts.
 #[derive(Clone, Copy, Debug)]
 pub enum GraphRunSelector<'a> {
-    /// An installed graph package by its plan name (`PackagePlan.name`, the
-    /// `run_with.package` that `list_graphs` reports). With `coordinate`
-    /// (`namespace/name`), the active revision must also match that
-    /// coordinate's installation record.
     Package {
         name: &'a str,
+        /// With `coordinate` (`namespace/name`), the active revision must
+        /// also match that coordinate's installation record.
         coordinate: Option<&'a str>,
     },
     /// A graph by id, pinned to the digest of its active revision.
@@ -261,8 +247,8 @@ fn digest_bytes(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
-/// The query for a graph's active revision digest; read by preparation and
-/// re-read inside the commit transaction through [`active_revision_digest`].
+/// Read outside any transaction and re-read inside the commit transaction
+/// through [`active_revision_digest`].
 fn active_revision_digest_query(owner: &str, graph_id: &str) -> String {
     format!(
         r#"{{ GraphDefinition(filter: {{ node_did: {{ _eq: "{}" }}, graph_id: {{ _eq: "{}" }} }}, limit: 2) {{ active_revision_digest }} }}"#,
@@ -336,9 +322,6 @@ fn same_install_configuration(active: &GraphPlan, base: &GraphPlan, package: &Pa
     active == candidate
 }
 
-/// Read-only canonical plan owner for an already resolved graph.
-/// Callers pin the distribution digest before passing the package here; this
-/// function revalidates inference references and the complete desired state.
 pub(crate) async fn prepare_loaded_graph_package_install(
     access: &ConfigAccess,
     package: &LoadedGraphPackage,
@@ -372,7 +355,7 @@ async fn prepare_package(
         "graph owner differs from installation scope"
     );
     // The existing node is shared identity, never graph-owned replacement
-    // configuration. Every other authored document uses the ordinary apply owner.
+    // configuration.
     let bundle = DesiredStateApplyPlan::from_pack_config(&config)?;
     let desired_state = DesiredStateApplyPlan::new(
         bundle
@@ -508,8 +491,6 @@ async fn prepare_package(
 }
 
 async fn ensure_package_schemas(access: &ConfigAccess, package: &LoadedGraphPackage) -> Result<()> {
-    // Preflight every contract before the first additive write. The shared
-    // publication owner revalidates each plan immediately before applying it.
     let mut plans = Vec::new();
     for path in &package.manifest.schemas {
         let sdl = package.asset_text(path)?;
@@ -530,7 +511,6 @@ async fn ensure_package_schemas(access: &ConfigAccess, package: &LoadedGraphPack
     Ok(())
 }
 
-/// Publication owner for an already resolved pack.
 pub async fn install_loaded_graph_package(
     access: &ConfigAccess,
     actor_did: &str,
@@ -548,14 +528,11 @@ pub async fn install_loaded_graph_package(
         .await
 }
 
-/// Publishes package schemas and writes the desired state and graph
-/// revision `prepared` describes, in one transaction. Refuses with
+/// One transaction. Refuses with
 /// [`crate::config_client::StaleExpectation`] when the graph's active
-/// revision digest changed since `prepared` observed it outside that
-/// transaction, so a concurrent activation cannot slip between the check
-/// and the write (#1651). Split out from [`install_loaded_graph_package`]
-/// so a caller (and this module's own tests) can interleave a concurrent
-/// change between preparing and committing an install.
+/// revision digest changed since `prepared` observed it (#1651). Split out
+/// so a caller can interleave a concurrent change between preparing and
+/// committing an install.
 async fn commit_prepared_graph_package_install(
     access: &ConfigAccess,
     owner: &str,
@@ -573,9 +550,6 @@ async fn commit_prepared_graph_package_install(
         &package.package_digest,
         record.plugins.clone(),
     );
-    // A retryable transaction's closure runs as `Fn`, so it can only ever
-    // move a `Copy` capture; hand the `async move` block a reference rather
-    // than the owned identity itself.
     let identity = &identity;
     access
         .transact_write("graph_package.install", |txn| {

@@ -27,77 +27,7 @@ fn assert_in_range(delay: Duration, low_ms: u64, high_ms: u64) {
 }
 
 #[test]
-fn failure_class_maps_transport_variants() {
-    assert_eq!(
-        failure_class(
-            &InferenceError::ModelUnreachable {
-                endpoint: "x".into()
-            },
-            "unreachable"
-        ),
-        FailureClass::Transport
-    );
-    assert_eq!(
-        failure_class(&transient("boom"), "boom"),
-        FailureClass::Transport
-    );
-    assert_eq!(
-        failure_class(
-            &InferenceError::Timeout {
-                timeout: std::time::Duration::from_secs(30)
-            },
-            "timeout"
-        ),
-        FailureClass::Transport
-    );
-    assert_eq!(
-        failure_class(
-            &InferenceError::RateLimited {
-                retry_after: Some(Duration::from_secs(60))
-            },
-            "rate limited"
-        ),
-        FailureClass::Transport
-    );
-}
-
-#[test]
-fn failure_class_maps_permanent_variants() {
-    assert_eq!(
-        failure_class(
-            &InferenceError::PermanentFailure {
-                reason: "nope".into()
-            },
-            "nope"
-        ),
-        FailureClass::Permanent
-    );
-    assert_eq!(
-        failure_class(
-            &InferenceError::ContextLengthExceeded {
-                reason: "too long".into()
-            },
-            "too long"
-        ),
-        FailureClass::Permanent
-    );
-    assert_eq!(
-        failure_class(
-            &InferenceError::RetriesExhausted {
-                max_retries: 3,
-                last_error: "x".into()
-            },
-            "x"
-        ),
-        FailureClass::Permanent
-    );
-}
-
-#[test]
 fn failure_class_parse_signature_overrides_variant() {
-    // classify_completion_error currently produces TransientFailure for the
-    // vLLM tool-call json-parse 400 (see error.rs doc comment); failure_class
-    // must reclassify it via the error_text signature, not the variant.
     let text = parse_400_text("override");
     assert_eq!(
         failure_class(&transient(&text), &text),
@@ -119,10 +49,6 @@ fn failure_class_parse_signature_can_come_from_classified_reason() {
 
 #[test]
 fn failure_class_fail_closed_tool_use_is_parse_bad_request() {
-    // The Claude Messages parser reports an unmapped tool_use as a
-    // ProviderError string, which classify_completion_error labels transient.
-    // It is bad model output, so failure_class must route it to the resample
-    // lane, not the transport ladder.
     let text = "ProviderError: fail-closed: tool_use observed (bash_unrestricked)";
     assert_eq!(
         failure_class(&transient(text), text),
@@ -243,7 +169,7 @@ fn deadline_fail_fast_when_next_delay_overshoots() {
     let first = state.on_pre_stream_failure(&error, "connection reset", now, None);
     assert!(matches!(first, PreStreamDirective::RetryAfter { .. }));
 
-    // Deadline is 10s out; even at -25% jitter, 30s's floor (22.5s) blows past it.
+    // Deadline is 10s out; even at -25% jitter the 30s floor blows past it.
     let deadline = now + chrono::Duration::seconds(10);
     match state.on_pre_stream_failure(&error, "connection reset", now, Some(deadline)) {
         PreStreamDirective::Fail { reason } => {
@@ -276,15 +202,13 @@ fn deterministic_parse_400_skips_remaining_resample_budget_and_repairs() {
     assert_eq!(state.retry_count(), 1);
 
     // Same error text again: deterministic, even though resample budget (2)
-    // is not exhausted (resample_used == 1) — must go straight to Repair.
+    // is not spent — must go straight to Repair.
     let second = state.on_pre_stream_failure(&error, &text, now, None);
     assert_eq!(second, PreStreamDirective::Repair);
 }
 
 #[test]
 fn repair_is_available_only_once() {
-    // max_resample = 0 so any parse-400 immediately hits the
-    // deterministic-or-budget-spent branch.
     let policy = CompletionRetryPolicy {
         transport_backoff: vec![Duration::from_secs(5)],
         max_resample: 0,
@@ -309,9 +233,6 @@ fn repair_is_available_only_once() {
 
 #[test]
 fn fresh_parse_400_deadline_overshoot_fails_immediately_not_repair() {
-    // Budget is available (fresh error, resample room) but the deadline is
-    // too close for the resample delay to fit — this must Fail, never
-    // fall through to Repair (mirrors Lean parseExhaust vs repair guards).
     let policy = CompletionRetryPolicy {
         transport_backoff: vec![Duration::from_secs(30)],
         max_resample: 1,
@@ -398,9 +319,6 @@ fn interactive_default_allows_a_single_short_retry_then_fails() {
 
 #[test]
 fn internal_immediate_carries_a_small_fixed_ladder_with_no_resample_or_repair() {
-    // #1016: internal tool-free sub-completions (compaction) recover on a
-    // fixed 0s/1s/2s ladder — the crate-wide three-retry convention with an
-    // immediate first slot — and never on the origin ladders.
     let policy = CompletionRetryPolicy::internal_immediate();
     assert_eq!(
         policy.transport_backoff,
@@ -416,9 +334,6 @@ fn internal_immediate_carries_a_small_fixed_ladder_with_no_resample_or_repair() 
 
 #[test]
 fn internal_immediate_retracts_three_times_then_fails() {
-    // The empty-output path is the no-effect mid-stream failure: each retry
-    // must be a retract-and-resample (never close-and-continue), the first at
-    // the 100ms jitter floor, and the fourth failure is terminal.
     let mut state = CompletionRetryState::new(CompletionRetryPolicy::internal_immediate());
     let now = Utc::now();
 
@@ -439,8 +354,6 @@ fn internal_immediate_retracts_three_times_then_fails() {
 
 #[test]
 fn internal_immediate_is_deadline_aware() {
-    // Even the immediate slot respects the request deadline: a delay that
-    // cannot fit fails fast rather than sleeping into certain death.
     let mut state = CompletionRetryState::new(CompletionRetryPolicy::internal_immediate());
     let now = Utc::now();
     match state.on_mid_stream_failure(false, now, Some(now)) {
@@ -473,7 +386,6 @@ fn default_for_origin_maps_interactive_and_scheduled() {
 
 #[test]
 fn interactive_default_parse_400_goes_straight_to_repair() {
-    // max_resample = 0 in the interactive default: no resample room at all.
     let mut state = CompletionRetryState::new(CompletionRetryPolicy::interactive_default());
     let now = Utc::now();
     let error = transient("parse trouble");

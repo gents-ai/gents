@@ -41,13 +41,9 @@ const FRAMES = [
   "⠀⠀⠀⠀",
 ];
 const FRAME_MS = 60;
-/* a session read is a local store read; past this it is not slow, it is stuck */
 const STILL_WAITING_MS = 8000;
 
-/* read when the line mounts, not when the module loads: a test host has no
-   matchMedia until its setup runs */
 const still = () => {
-  try {
     return matchMedia("(prefers-reduced-motion: reduce)").matches;
   } catch {
     return false;
@@ -55,7 +51,6 @@ const still = () => {
 };
 
 export function SessionLoading() {
-  /* under reduced motion the line holds its full frame */
   const [STILL] = useState(still);
   const [frame, setFrame] = useState(() => (STILL ? FRAMES.indexOf("⣿⣿⣿⣿") : 0));
   const [waiting, setWaiting] = useState(false);

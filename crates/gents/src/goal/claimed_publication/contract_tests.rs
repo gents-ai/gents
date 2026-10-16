@@ -11,7 +11,6 @@ use crate::lifecycle::{ClaimOutcome, RequestTerminalOutcome, TerminalizeResult};
 use crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request;
 use crate::tool_call_lifecycle::{AwaitMode, SpawnedBackgroundToolAdmission};
 
-// Reuse the existing real-DB Goal fixture and independent signed-field checks.
 use super::super::operator_resume::support::*;
 
 #[derive(Deserialize)]
@@ -131,8 +130,6 @@ async fn run_generated_running_wait() {
     .unwrap();
     assert!(result.is_none(), "generated intentional wait must defer");
     assert_eq!(fixture.observe().await, case.expected);
-    // Lean `BackgroundState.resultOwed`: an ended target whose completion
-    // delivery is still owed keeps the claim deferred.
     background.complete("finished").await.unwrap();
     assert!(publish_claimed_continuation(
         &fixture.node,
@@ -145,9 +142,6 @@ async fn run_generated_running_wait() {
     .unwrap()
     .is_none());
     assert_eq!(fixture.observe().await, case.expected);
-    // Recovery delivers the owed completion: its wake is the session's latest
-    // request, so the old-parent claim never publishes and the Goal continues
-    // from that wake.
     let report =
         crate::tool_call_lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(
             &fixture.node,
@@ -184,9 +178,6 @@ async fn run_generated_running_wait() {
     fixture.node.shutdown().await;
 }
 
-/// A terminal target whose completion obligation is already discharged, as
-/// the `completed_waited_tool_resumes` observation reads it: no delivery is
-/// owed and no newer request is in the session.
 async fn discharge_completion_obligation(node: &crate::defra_node::EmbeddedNode, doc_id: &str) {
     let response = node
         .execute(&format!(
@@ -197,8 +188,6 @@ async fn discharge_completion_obligation(node: &crate::defra_node::EmbeddedNode,
     assert!(!response.has_errors(), "{:?}", response.errors);
 }
 
-/// Later scans of the same abandoned claim, bound as follow-ups of the
-/// budget wrap-up case rather than as independent fixtures.
 const ABANDONED_RESCAN: &str = "abandoned_wrapup_rescan_makes_no_write";
 const ABANDONED_CLEARED: &str = "abandoned_wrapup_never_publishes_after_evidence_clears";
 
@@ -367,8 +356,6 @@ async fn run_generated_wait_observations() {
                 }
                 "completion_pending" => {
                     target.start_running().await.unwrap();
-                    // Every terminal winner of a started background target
-                    // owes its completion delivery.
                     if case.name.starts_with("failed_") {
                         target
                             .fail("failed", crate::tool_call_lifecycle::FailureClass::External)
@@ -448,7 +435,6 @@ async fn run_generated_wait_observations() {
             terminal_header = wait.accepted_header_doc_id().map(str::to_owned);
             wait_docs.push(wait.doc_id().unwrap().to_owned());
             if observed_wait["replied"] == false {
-                // Left pending: parent terminalization cancels it with no reply.
                 turn += 1;
                 continue;
             }
@@ -530,8 +516,6 @@ async fn run_generated_wait_observations() {
             }
             turn += 1;
         }
-        // A turn that fails before its accepted wait starts is the legitimate
-        // runtime path that settles the control without any invocation reply.
         let unstarted_wait = case.observation["waits"]
             .as_array()
             .unwrap()
@@ -613,7 +597,6 @@ async fn run_generated_wait_observations() {
             wrapup,
         );
         let result = if case.observation["storage_failed"] == true {
-            // Fail the waited-target read inside the publication transaction.
             ConfigApplyTxn::with_read_storage_failure(
                 "await_mode spawned_by_tool_call_doc_id",
                 publication,
@@ -671,7 +654,6 @@ async fn run_generated_wait_observations() {
                     stopped.last_failure,
                 );
                 if stopped.parsed_status() == Some(GoalStatus::BudgetLimited) {
-                    // The abandoned wrap-up keeps its claim and stays a candidate.
                     let rescan = |wrapup| {
                         publish_claimed_continuation(
                             &fixture.node,
@@ -700,7 +682,6 @@ async fn run_generated_wait_observations() {
                         (&stopped.updated_at, &stopped.last_failure),
                         "{ABANDONED_RESCAN}: a rescan must not write the Goal again"
                     );
-                    // Settle every wait so the evidence reads as absent.
                     for wait_doc in &wait_docs {
                         execute(&fixture.node, &format!(
                             r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "cancelled" }}) {{ _docID }} }}"#,
@@ -919,10 +900,6 @@ async fn queued_claimed_publication_observes_pause_before_creating_child() {
     fixture.node.shutdown().await;
 }
 
-/// A replay of a claimed publication checks the published continuation
-/// against its own signed hop. A request written later in the same second
-/// (with a request id that sorts first and a higher hop) cannot turn the
-/// replay into a conflict.
 #[tokio::test]
 async fn claimed_publication_replay_keeps_its_hop_across_a_same_second_write() {
     let before = json!({"status":"active","blocked_audits":2,"wrapup_requested":false,

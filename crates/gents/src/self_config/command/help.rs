@@ -9,26 +9,19 @@ macro_rules! mailbox_identity_choice {
     };
 }
 
-/// One recipe step: a native call and an optional note on what to carry into
-/// the next step. Placeholders are `<UPPER_CASE>`.
+/// A recipe step: a native call plus an optional carry-over note.
 type Step = (Value, Option<&'static str>);
 
-/// A resource's help page, written like a skill: what the resource is and
-/// when to use it, its commands, the rules its fields cannot state, one
-/// recipe, and the next step. Field shapes are one level further down, in
-/// `RESOURCE COMMAND --help`.
 pub(super) struct Page {
     pub(super) what: &'static str,
-    /// Commands as argv words; `[x]` is optional and `a|b` alternatives.
+    /// Commands as argv words.
     pub(super) commands: &'static [&'static str],
     pub(super) notes: &'static str,
     pub(super) next: &'static str,
 }
 
 impl ConfigCommandTool {
-    /// `["help"]`, `["help", RESOURCE]` and `RESOURCE COMMAND --help`,
-    /// following the layering on [`ConfigCommandTool`]. Help is plain text
-    /// with no envelope: recipes read as native JSON without escaping.
+    /// Plain text with no envelope: recipes read as native JSON without escaping.
     pub(super) fn help(&self, resource: Option<&str>, command: Vec<&str>) -> Result<String> {
         let enabled = model_resources(&self.categories, self.core.held_grants().pack_install);
         let Some(requested) = resource else {
@@ -123,11 +116,7 @@ impl ConfigCommandTool {
     }
 }
 
-/// `RESOURCE COMMAND --help`: only the matching command lines and the field
-/// shapes they write. `None` falls back to the resource page.
 fn command_help(resource: &str, page: &Page, command: &[&str]) -> Option<String> {
-    // automation preview KIND --help names the kind where other resources
-    // name their verb.
     let kinds = [
         "task",
         "trigger",
@@ -188,7 +177,6 @@ fn command_help(resource: &str, page: &Page, command: &[&str]) -> Option<String>
     Some(out)
 }
 
-/// A recipe call with its keys in the order a call is written.
 fn render_call(call: &Value) -> String {
     serde_json::to_string(&Ordered::reading_order(
         call.clone(),
@@ -388,11 +376,8 @@ fn mailbox_values() -> Value {
     })
 }
 
-/// Recipes are the supported paths through several resources. Each is
-/// exercised end to end by `help_is_layered_and_its_recipes_run_as_written`.
 pub(crate) fn recipes(resource: &str) -> Vec<(&'static str, Vec<Step>)> {
     match resource {
-        // Needs a real package and slot binding, so the recipe test leaves it out.
         "pack" => vec![(
             "install a pack and feed it from your own automation",
             vec![

@@ -1,10 +1,3 @@
-//! Server sweep for `SessionHydrationRequest`.
-//!
-//! Loads pending rows, rebuilds the Lean catalog from pairing/membership/
-//! session/transcript documents, runs [`super::session_hydration::decide_hydration`],
-//! pushes the exact selected set through existing peer-targeted doc-push
-//! machinery, then writes a terminal `served`/`rejected` status.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -59,9 +52,6 @@ trait HydrationDelivery: Send + Sync {
 #[async_trait]
 trait HydrationRequestStore: Send + Sync {
     async fn load_pending_requests(&self) -> Result<Vec<HydrationRequestRow>>;
-    /// Pairing, membership and session-owner facts only. Admission never
-    /// depends on the transcript closure, so a refused request is decided
-    /// without reading it.
     async fn load_admission(&self, request: &HydrationRequest) -> Result<LoadedHydrationAdmission>;
     async fn load_selection(&self, request: &HydrationRequest) -> Result<HydrationSelection>;
     async fn authorization_is_current(
@@ -79,11 +69,7 @@ trait HydrationRequestStore: Send + Sync {
 
 #[derive(Debug, Clone)]
 struct LoadedHydrationAdmission {
-    /// Admission facts; `documents` and the reference closure are empty.
     catalog: HydrationCatalog,
-    /// Absent when the requester has no active authenticated enrollment, in
-    /// which case the catalog holds no verified membership and admission
-    /// rejects.
     authorization: Option<EnrollmentAuthorizationFence>,
 }
 
@@ -128,8 +114,6 @@ async fn reconcile_hydration_tick(
             first_error = Some(error.context(format!("reconcile session hydration {request_key}")));
         }
     };
-    // Every refusal commits before any delivery starts: a slow or
-    // unreachable peer must not hold another requester's terminal outcome.
     let mut admitted = Vec::new();
     for row in pending {
         match admit_or_reject(store, row.clone(), &mut outcome).await {
@@ -150,8 +134,6 @@ async fn reconcile_hydration_tick(
     Ok(outcome)
 }
 
-/// Decide admission from pairing, membership and ownership facts alone and
-/// commit a refusal immediately. Returns the admitted request for delivery.
 async fn admit_or_reject(
     store: &dyn HydrationRequestStore,
     row: HydrationRequestRow,
@@ -1030,8 +1012,6 @@ async fn load_referenced_bases(
 
 const HYDRATION_TOOL_CALL_FIELDS: &str = "_docID tool_call_key requester_did node_did session_id request_doc_id tool_call_id spawned_by_tool_call_doc_id plugin_parent_tool_call_doc_id plugin_effect_ordinal terminal_output";
 
-/// A row with any plugin-effect provenance is never a session base; the
-/// closure decides whether its parent reaches it.
 fn observe_tool_call(
     row: gents_protocol::row::AgentToolCallRow,
     bases: &mut Vec<ScopedDocument>,
@@ -1062,9 +1042,6 @@ fn observe_tool_call(
     });
 }
 
-/// Same-session children arrive with the session's tool calls. Children of a
-/// retained parent from another session are found through the indexed parent
-/// field; the closure bounds and decodes them.
 async fn load_effect_children(
     node: &EmbeddedNode,
     request: &HydrationRequest,
@@ -1606,8 +1583,6 @@ mod tests {
             result = &mut tick => panic!("hydration completed before the authorization fence: {result:?}"),
             _ = barrier.started.notified() => {}
         }
-        // The catalog was admitted under the old generation. Commit the
-        // revocation while the fresh owner-command recheck is paused.
         store
             .authorization_current
             .store(false, std::sync::atomic::Ordering::SeqCst);
@@ -1702,8 +1677,6 @@ mod tests {
             session.clone(),
         )
         .unwrap();
-        // The parent is still running: no delivery message names it, so it is
-        // retained as a session base rather than through a ToolDelivery.
         let messages = graphql_with_transaction_retry(
             &node,
             &format!(
@@ -1805,8 +1778,6 @@ mod tests {
             .iter()
             .any(|row| row.doc_id == terminal.output.close_doc_id));
 
-        // A parent retained from another session reaches the same rows only
-        // through the indexed parent field.
         let mut effects = Vec::new();
         load_effect_children(
             &node,

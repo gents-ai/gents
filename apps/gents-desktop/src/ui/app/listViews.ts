@@ -1,8 +1,5 @@
-/* Where the person left the lists: what the sessions list and the mailbox
-   are narrowed to. It outlives the visit, in this browser's storage, so a
-   narrowing is there when they come back. It names data (nodes, agents)
-   that can come and go, so it is read back leniently and kept apart from
-   the person's preferences. */
+// Outlives the visit in this browser's storage; it names data (nodes,
+// agents) that can come and go, so it is read back leniently.
 import { useStore } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { createStore } from "zustand/vanilla";
@@ -16,12 +13,8 @@ import { browserStorage, storedStrings } from "@/lib/storage";
 
 export type ListViews = {
   sessionFilter: SessionFilter;
-  /** the nodes the sessions list shows; null until the person picks, while
-      it starts at the node this machine runs */
   sessionNodes: string[] | null;
-  /** the nodes the mailbox shows; none picked is every node */
   mailboxNodes: string[];
-  /** the mailbox's kinds; none picked is every kind */
   mailboxKinds: string[];
 };
 
@@ -32,8 +25,6 @@ const initial = (): ListViews => ({
   mailboxKinds: [],
 });
 
-/** What storage held, as list views: storage is outside the app's control
-    (another build, a hand edit), so a value that is not one is the default. */
 export function restoreListViews(stored: unknown): ListViews {
   const saved = (typeof stored === "object" && stored !== null ? stored : {}) as Record<
     string,
@@ -63,7 +54,6 @@ export const listViews = {
   setSessionFilter(sessionFilter: SessionFilter) {
     store.setState({ sessionFilter });
   },
-  /** null lets the sessions list start at the node this machine runs again */
   setSessionNodes(sessionNodes: string[] | null) {
     store.setState({ sessionNodes });
   },
@@ -80,5 +70,5 @@ export function useListViews<T>(select: (views: ListViews) => T): T {
   return useStore(store, select);
 }
 
-/** tests only: the lists as on a first run */
+// Tests only: the lists as on a first run.
 export const resetListViews = () => store.setState(initial(), true);

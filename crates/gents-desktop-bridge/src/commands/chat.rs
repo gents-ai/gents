@@ -82,8 +82,7 @@ pub async fn send_chat_message(
 }
 
 /// The chat folder as a request cwd: absent when blank, else an existing
-/// absolute directory. The runtime still holds it under the agent's tool
-/// root ceiling at admission.
+/// absolute directory.
 fn chat_folder(raw: Option<&str>) -> Result<Option<String>> {
     let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);

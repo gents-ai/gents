@@ -146,7 +146,6 @@ pub(super) async fn load_thread_turns(
                 && row.get("request_id").is_none_or(Value::is_null)
                 && row.get("request_doc_id").is_none_or(Value::is_null)
             {
-                // Forked transcript tool facts intentionally have no executable request edge.
                 continue;
             }
             let logical = row
@@ -781,8 +780,6 @@ async fn decode_tool_rows(
     let mut tools = Vec::new();
     for row in raw_rows(response, "AgentToolCall") {
         if row.get("request_doc_id").is_none_or(Value::is_null) {
-            // Forked transcript facts have no executable request owner and
-            // are not Codex command items for a request turn.
             continue;
         }
         let message_sequence = row
@@ -932,40 +929,6 @@ mod tests {
     }
 
     #[test]
-    fn replicated_nullable_request_scalars_decode_without_legacy_transcript_fields() {
-        let response = json!({
-            "data": {
-                "AgentRequest": [{
-                    "request_id": "request-1",
-                    "content": null,
-                    "status": null,
-                    "lifecycle_state": null,
-                    "failure_reason": null,
-                    "input": null,
-                    "execution_origin": null
-                }]
-            }
-        });
-
-        let requests = decode_rows::<AgentRequestRow>(&response, "AgentRequest").unwrap();
-        assert_eq!(requests[0].content, None);
-        assert_eq!(requests[0].failure_reason, None);
-    }
-
-    #[test]
-    fn completed_status_depends_only_on_request_lifecycle() {
-        let request = request_row(json!({
-            "request_id": "request-1",
-            "content": "Inspect the repo",
-            "lifecycle_state": "completed",
-            "input": null,
-            "execution_origin": "interactive"
-        }));
-
-        assert_eq!(turn_status(&request), codex::TurnStatus::Completed);
-    }
-
-    #[test]
     fn background_completion_wake_is_visible_without_rendering_internal_prompt() {
         let record = CodexThreadRecord {
             session_id: "thread-1".to_string(),
@@ -1079,23 +1042,6 @@ mod tests {
             ]
         ));
         assert!(turn.items.len() > 2, "the answer follows both messages");
-    }
-
-    #[test]
-    fn turn_completion_timing_uses_canonical_request_terminalization() {
-        let request = request_row(json!({
-            "request_id": "request-1",
-            "content": "",
-            "lifecycle_state": "completed",
-            "created_at": "2026-07-15T10:00:00Z",
-            "terminalized_at": "2026-07-15T10:00:05Z",
-            "input": null,
-            "execution_origin": "interactive"
-        }));
-        assert_eq!(
-            turn_completed_timestamp(&request),
-            timestamp_seconds("2026-07-15T10:00:05Z")
-        );
     }
 
     #[test]

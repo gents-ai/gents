@@ -1,5 +1,3 @@
-/* Shared configuration editor rows plus explicit Save/Cancel actions.
-   Fields only update their local draft; persistence is user-controlled. */
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ExternalLink, FolderOpen, Plus, XIcon } from "lucide-react";
@@ -38,12 +36,11 @@ type Common = {
   id: string;
   label: ReactNode;
   description?: ReactNode;
-  /* shown at the field, under its description */
   error?: string;
   disabled?: boolean;
 };
 
-/** What DraftActions reads of a draft (useDraft). */
+/** What DraftActions reads of a draft. */
 type DraftLike = {
   dirty: boolean;
   saving: boolean;
@@ -53,8 +50,7 @@ type DraftLike = {
   reset: () => void;
 };
 
-/** A draft's Save and Cancel, and its error. Each field comes from the
-    draft unless the editor says otherwise. */
+/** A draft's Save and Cancel, and its error. */
 export function DraftActions({
   draft,
   fields,
@@ -66,10 +62,7 @@ export function DraftActions({
   saveLabel = "Save",
 }: {
   draft: DraftLike;
-  /** each field with a problem's element, in the order they are drawn: Save
-      goes to the first instead of saving */
   fields?: Partial<Record<string, string>>;
-  /** the draft's problems, where the editor works them out itself */
   problems?: Partial<Record<string, string>>;
   dirty?: boolean;
   error?: string | null;
@@ -103,8 +96,6 @@ export function DraftActions({
   );
 }
 
-/* Enter leaves a one-line field, as a form would; nothing is saved until
-   the draft's own Save */
 const blurOnEnter = (e: React.KeyboardEvent<HTMLElement>) => {
   if (e.key === "Enter" && !e.shiftKey) (e.target as HTMLElement).blur();
 };
@@ -146,7 +137,6 @@ export function TextRow({
   );
 }
 
-/* a number kept as text while editing; empty means null */
 export function NumberRow({
   id,
   label,
@@ -198,7 +188,6 @@ export function AreaRow({
   rows?: number;
   mono?: boolean;
   stacked?: boolean;
-  /* a stacked area that opens showing all of its text */
   expandedByDefault?: boolean;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -373,19 +362,13 @@ export function RefRow({
   createLabel: string;
   onCreate?: () => Promise<string | null>;
   openRoute?: (id: string) => Route;
-  /* opens the chosen document beside the page instead of navigating to it */
   onOpen?: (id: string) => void;
 }) {
   const all = none ? [{ value: "", label: none }, ...items] : items;
-  /* the select renders whatever value it is given; the New item is never it */
   const known = all.some((i) => i.value === value);
-  /* a reference to a document that no longer exists: shown as such, and the
-     field is invalid until another is picked (the desktop's DocumentSelection rule) */
   const shown = known ? all : [...all, { value, label: `${value} (unavailable)` }];
   const invalid = error ? true : !known && value ? true : undefined;
-  /* a searchable popup is a dialog: one at a time with the shell's others */
   const popover = useExclusivePopover();
-  /* a label reads "Name · summary"; the summary sits beside the name in the list */
   const labelOf = (v: string) => {
     const full = shown.find((i) => i.value === v)?.label ?? v;
     const at = full.indexOf(" · ");
@@ -435,7 +418,6 @@ export function RefRow({
               {value ? labelOf(value).name : (none ?? "Choose")}
             </span>
           </ComboboxTrigger>
-          {/* wide, so the summary beside each name has room; searchable past a few */}
           <ComboboxContent
             ref={popover.popupRef}
             aria-label={`Choose ${String(label).toLowerCase()}`}
@@ -512,7 +494,6 @@ export function RefRow({
   );
 }
 
-/* several picks from a known list, shown as chips; typing filters the list */
 export function ChipsRow({
   id,
   label,
@@ -532,7 +513,6 @@ export function ChipsRow({
   items: Choice[];
   placeholder?: string;
   empty?: string;
-  /* a last item that makes a new document and adds it to the chips */
   createLabel?: string;
   onCreate?: () => Promise<string | null>;
 }) {

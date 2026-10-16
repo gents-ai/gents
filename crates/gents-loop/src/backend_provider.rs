@@ -18,9 +18,8 @@ pub enum BackendProviderKind {
     ChatGptCodex,
     #[serde(rename = "XaiGrokOAuth")]
     XaiGrokOAuth,
-    /// Claude subscription over Messages HTTP, authenticated with an
-    /// node-scoped `OAuthCredential` (`claude-subscription`) written by
-    /// `gents claude-login`.
+    /// Claude subscription over Messages HTTP with a node-scoped
+    /// `OAuthCredential` (`claude-subscription`).
     #[serde(rename = "ClaudeCliSubscription")]
     ClaudeCliSubscription,
     /// Anthropic API key over Messages HTTP; `api_key` or `environment` auth.
@@ -62,8 +61,8 @@ impl BackendProviderKind {
         }
     }
 
-    /// Backends that authenticate with node-scoped `OAuthCredential` documents
-    /// rather than a fleet-global API key. These must not be fleet-probed.
+    /// Must not be fleet-probed: authenticates with node-scoped
+    /// `OAuthCredential` documents rather than a fleet-global API key.
     pub fn is_node_scoped_oauth(self) -> bool {
         matches!(
             self,
@@ -71,7 +70,6 @@ impl BackendProviderKind {
         )
     }
 
-    /// Kinds that speak the native Anthropic Messages wire.
     pub fn uses_messages_wire(self) -> bool {
         matches!(self, Self::ClaudeCliSubscription | Self::AnthropicApiKey)
     }

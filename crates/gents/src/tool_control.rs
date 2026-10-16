@@ -6,17 +6,13 @@ use defra_node::EmbeddedNode;
 use crate::hook::BackgroundExecutionRegistry;
 use crate::tool_call_lifecycle::{AwaitMode, CancelCause, ToolCallLifecycle};
 
-/// Lean `ManagedExec.cancelReply`: `Cancelled` is reported only after the
-/// execution's process was observed to stop.
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CancelBackgroundToolCallOutcome {
     Cancelled {
         live_execution_cancelled: bool,
     },
-    /// Settled as lost without a stop claim: no live worker here and no
-    /// durable record proving ownership, or it ended while unobserved.
     Lost,
-    /// Signalled, but a process is still observed running.
     Unverified,
     AlreadyTerminal {
         state: String,
@@ -25,9 +21,6 @@ pub enum CancelBackgroundToolCallOutcome {
     NotFound,
 }
 
-/// Session-principal boundary for client process controls. Keep authorization
-/// identical to the model-facing process tools; the operator API below is
-/// deliberately broader and must not be exposed directly to client IDs.
 pub async fn cancel_session_background_process(
     node: Arc<EmbeddedNode>,
     executions: &BackgroundExecutionRegistry,
@@ -79,9 +72,6 @@ pub async fn cancel_background_tool_call(
     }
 
     if lifecycle.is_session_message() {
-        // A session-message row has no process: the kill interrupts the one
-        // request it caused, or ends the row itself when it cannot wait on
-        // this runtime's own terminal for that request.
         return Ok(
             match crate::session_message::kill(&node, &mut lifecycle).await? {
                 crate::session_message::KillOutcome::Settled => {
@@ -114,11 +104,6 @@ pub async fn cancel_background_tool_call(
     let persisted = lifecycle
         .cancel_during_run(CancelCause::UserCancelled)
         .await;
-    // Persist the operator-authored terminal cause before signalling the live
-    // worker. Otherwise the worker can observe cancellation first and win the
-    // terminal write with the less-specific `interrupted` cause. A persistence
-    // failure must still stop the live work: cancellation is best-effort state
-    // control, not contingent on observability storage being available.
     let doc_id = lifecycle
         .doc_id()
         .ok_or_else(|| anyhow::anyhow!("background cancellation lacks physical identity"))?
@@ -179,9 +164,7 @@ mod tests {
     use std::time::Duration;
     use tokio_util::sync::CancellationToken;
 
-    /// Canonical claimed-request fixture, mirroring
-    /// `tool_call_lifecycle::delivery::claimed_request`.
-    async fn claimed_request(
+
         node: &Arc<EmbeddedNode>,
         request_id: &str,
         session_id: &str,
@@ -286,8 +269,6 @@ mod tests {
         }
         let token = tokens["cancel-native-tool"].clone();
         let reservation = reservations.remove("cancel-native-tool").unwrap();
-        // A live worker releases its execution once signalled; cancellation
-        // is reported only after that release.
         let worker = {
             let token = token.clone();
             tokio::spawn(async move {
@@ -350,10 +331,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&data_path);
     }
 
-    /// After a runtime loss there is no live worker. Cancellation must not
-    /// claim a stop it did not observe: an unrecorded process settles as lost,
-    /// while a recorded surviving group is stopped and then reported cancelled.
-    #[cfg(unix)]
+
     #[tokio::test]
     async fn cancel_without_live_worker_never_reports_an_unobserved_stop() {
         use crate::tool_call_lifecycle::admission_fixture::{
@@ -428,17 +406,7 @@ mod tests {
         }
     }
 
-    /// Owned cancel of a background tool must persist the operator-authored
-    /// completion reason, the cancellation cause, and leave the row in the
-    /// `completionPending:<reason>` cursor so background-completion recovery
-    /// can redrive the signed notification + wake side effects.
-    ///
-    /// Uses a real `KeyIdentity::load_or_create` registered as the node's
-    /// signing identity: the redrive's wake request is authored with
-    /// `RequestSigner::RegisteredTarget`, which resolves that registration at
-    /// signing time, so the persisted wake row must carry a real admission
-    /// signature rather than a fixture DID.
-    #[tokio::test]
+
     async fn owned_cancel_persists_custom_completion_reason_for_redrive() {
         use crate::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
         use crate::identity::NodeIdentity;
@@ -532,19 +500,12 @@ mod tests {
         assert_eq!(row["request_id"].as_str(), Some("request-custom"));
         let tool_doc_id = row["_docID"].as_str().unwrap().to_owned();
 
-        // The operator-authored reason is the redrive cursor: recovery strips
-        // `completionPending:` and carries the remainder into the wake. This
-        // pins the required production behavior: cancel_during_run_owned must
-        // thread its completion reason into terminalize_with_delivery's
-        // terminal_persistence_status instead of discarding it.
         assert_eq!(
             row["status"].as_str(),
             Some("completionPending:operator requested drain"),
             "owned cancel must persist the custom completion reason as the redrive cursor"
         );
 
-        // Redrive: recovery must converge the notification + wake side effects
-        // exactly once for this row.
         let report =
             ToolCallLifecycle::reconcile_background_completion_side_effects(&node, &node_did)
                 .await
@@ -554,8 +515,6 @@ mod tests {
             "the cancelled background row must redrive its completion side effects"
         );
 
-        // Exactly one canonical completion notification, keyed by the physical
-        // tool-call document (the ExistingNotification dedupe identity).
         let message_key = format!("background-completion-notification:{tool_doc_id}:tool");
         let message_key = crate::graphql::escape_graphql_string(&message_key);
         let notification_response = node.execute(&format!(
@@ -580,10 +539,6 @@ mod tests {
         assert!(notification["requester_did"].is_null());
         assert_eq!(notification["role"].as_str(), Some("user"));
 
-        // The wake continuation is authored with RequestSigner::RegisteredTarget,
-        // so its persisted row must carry a real admission signature from the
-        // registered runtime node, plus the runtime-source lineage back to
-        // the parent request.
         let escaped_session = crate::graphql::escape_graphql_string("session-custom");
         let escaped_agent = crate::graphql::escape_graphql_string(&node_did);
         let wake_response = node

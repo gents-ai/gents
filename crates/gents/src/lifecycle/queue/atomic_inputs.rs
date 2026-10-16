@@ -20,13 +20,6 @@ struct BackgroundCompletionGateKey {
     queue_key: String,
 }
 
-/// Serialize the read/create/reconcile path for one local coalescing domain.
-/// The proven queue transition is sequential: one coalescing enqueue must
-/// observe the pending entry created by the previous transition. DefraDB
-/// transactions conflict only when they touch the same document, so two empty
-/// reads could otherwise create disjoint requests and return before duplicate
-/// reconciliation converges them. The weak registry does not retain either
-/// nodes or idle gates; stale entries are pruned when a new gate is created.
 pub(super) fn background_completion_gate(
     node: &EmbeddedNode,
     session_id: &str,
@@ -61,8 +54,8 @@ pub(super) fn background_completion_gate(
 /// pending wake. A Goal on the session, in any status, never suppresses the
 /// wake (Lean `CompletionContinuation.enqueueWake?`).
 /// A concurrent claim conflicts and retries, so a wake cannot precede its input.
-/// The single transaction owner for fresh input and canonical receipt replay.
-/// An observed receipt ID is reloaded and validated inside this transaction.
+/// The single transaction owner for fresh input and canonical receipt replay;
+/// an observed receipt ID is reloaded and validated inside this transaction.
 pub(crate) async fn persist_background_completion_with_message_canonical(
     node: &std::sync::Arc<EmbeddedNode>,
     parent: &AgentRequest,
@@ -452,17 +445,12 @@ async fn background_completion_transaction_attempt(
     let current_hop =
         crate::session::load_session_current_hop_in_txn(txn, &parent.node_did, &parent.session_id)
             .await?;
-    // A wake over the bound is written like any other and refused at
-    // admission, so it becomes the session's latest request and every later
-    // same-session continuation copies its hop.
     let wake_hop = crate::lifecycle::next_request_hop(wake, current_hop);
     let pending_rows: Vec<AgentRequestRow> =
         serde_json::from_value(response["data"]["pending"].clone())
             .context("decode pending AgentRequest rows")?;
-    // Every pending notification is consumed by whichever wake claims next
-    // (the claim snapshots the session's input by sequence), so the one
-    // pending wake must carry the highest hop any of them requires: a lower
-    // one is superseded by a new wake at this hop rather than joined.
+    // The one pending wake carries the highest hop any pending notification
+    // requires; a lower one is superseded by a new wake at this hop.
     let (pending, lower) = match pending_rows.into_iter().find(|row| {
         row_matches_coalesced_source_and_key(row, QueueSource::BackgroundCompletion, queue_key)
     }) {
@@ -509,8 +497,6 @@ async fn background_completion_transaction_attempt(
             let request_id = format!("background-completion-{queue_scope}-{next_generation:020}");
             let retry_key = format!("{retry_key_prefix}{next_generation:020}");
             let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-            // The durable wake format marker is stamped by this owner on
-            // creation, never taken from caller-supplied input.
             let wake_input = RequestInput {
                 queue: Some(background_wake_queue(
                     queue,

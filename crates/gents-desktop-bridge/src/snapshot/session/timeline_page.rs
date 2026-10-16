@@ -33,12 +33,8 @@ fn rendered_timeline_durable_sequence(
     }
 }
 
-/// Bound the bridge-visible transcript while retaining an opaque, durable-row
-/// cursor for explicit older-page requests. The full database-backed snapshot
-/// remains authoritative inside the bridge; only IPC materialization is
-/// windowed here. Request-owned inputs are already loaded session state; retain
-/// them beside their selected durable anchor (or the tip) for the frontend's
-/// existing local transcript window, without inventing a database cursor.
+/// Window only the IPC-materialized timeline; the full database-backed snapshot
+/// remains authoritative inside the bridge.
 pub fn apply_session_timeline_page(
     snapshot: &mut DesktopSessionSnapshot,
     before_item_key: Option<&str>,

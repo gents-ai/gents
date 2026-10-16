@@ -1,7 +1,6 @@
 //! Operator-initiated read-only workspace placement for graph entrypoints.
-//!
-//! This composes the existing repository placement, ActionPlan executor, and
-//! workspace document mutations. It does not create a second workspace model.
+//! Composes existing repository placement, the ActionPlan executor, and
+//! workspace document mutations; it does not create a second workspace model.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -136,8 +135,6 @@ pub async fn provision_read_only_workspace(
                 workspace_id: created.workspace.workspace_id,
                 base_sha: created.workspace.base_sha,
             });
-            // Each single-action plan has its own journal; no result from create
-            // is mistaken for a previously persisted freeze.
             execute_freeze_workspace_base_plan(&freeze, &mut Vec::new(), &mut context)
         })
     };

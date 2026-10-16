@@ -2,22 +2,12 @@ import Proofs.Recovery.Contract
 
 namespace Recovery
 
-/-- One host task hook record: the attempt observations an execution wrote
-    before each hook launched, which `TaskHooks.recoverInterrupted` selects
-    remaining cleanup from. It is host state beside the runtime's locked store,
-    never a replicated document, because a hook's effects happened on this
-    host. `requestResolved` holds once the request's terminal is written (by
-    its owner or request recovery) or the request is gone; `liveExecution`
-    holds while an executor in this runtime still owns the record. -/
 structure TaskHookRecordRow where
   recorded : Bool
   requestResolved : Bool
   liveExecution : Bool
   deriving DecidableEq, Repr
 
-/-- Cleanup recovery waits for the request's terminal: running cleanup while
-    the request is still owned would race the executor that owes it, and
-    request recovery is what decides the terminal cleanup must not rewrite. -/
 def taskHookRecordStale (row : TaskHookRecordRow) : Prop :=
   row.recorded = true ∧ row.requestResolved = true ∧ row.liveExecution = false
 
@@ -25,7 +15,6 @@ instance (row : TaskHookRecordRow) : Decidable (taskHookRecordStale row) := by
   unfold taskHookRecordStale
   infer_instance
 
-/-- Remaining cleanup runs once, then the record is forgotten. -/
 def taskHookRecordRecover (row : TaskHookRecordRow) : TaskHookRecordRow :=
   if taskHookRecordStale row then { row with recorded := false } else row
 
@@ -52,12 +41,6 @@ theorem taskHookRecord_recover_zero :
     rw [h_stale.1] at h_released
     exact Bool.noConfusion h_released
   simp [taskHookRecordMeasure, h_not]
-
-/-- A record whose request is still owned, or that a live executor holds, is
-    left untouched. -/
-theorem taskHookRecord_not_stale_unchanged (row : TaskHookRecordRow)
-    (h : ¬ taskHookRecordStale row) : taskHookRecordRecover row = row := by
-  simp [taskHookRecordRecover, h]
 
 def taskHookRecoverySweep : RecoverySweep :=
   { Row := TaskHookRecordRow

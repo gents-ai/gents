@@ -264,9 +264,6 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
         Some("failed")
     );
 
-    // No persisted tool_failure_class: the export must classify the timed-out
-    // lifecycle itself (gents::tool_call_lifecycle::ToolCallState::TimedOut →
-    // External), not copy the model-facing result text.
     assert_eq!(
         timed_out.get("tool_status").and_then(Value::as_str),
         Some("timedOut")
@@ -487,8 +484,8 @@ async fn trace_timeline_reconstructs_request_events_from_persisted_rows() -> Res
     Ok(())
 }
 
-/// Seed one request with two rendered-request captures (turn 0 attempts 0 and
-/// 1) carrying v3 provenance manifests with the admission join.
+/// Seed one request with two rendered-request captures carrying v3 provenance
+/// manifests with the admission join.
 async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
     let request_doc_id = exec_doc_id(
         node,
@@ -600,8 +597,8 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
     Ok(())
 }
 
-/// Rows stored exactly as a v2 writer left them (#2333 removed the v2 write
-/// path; these keep the CLI's delta decode pinned over immutable history).
+/// Rows stored exactly as a v2 writer left them; these keep the CLI's delta
+/// decode pinned over immutable history.
 async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
     let mut first_capture_key = String::new();
     for turn in 0..2usize {
@@ -663,7 +660,6 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
         let canonical_provenance =
             gents::rendered_request::canonical_json_string(&rendered.provenance_payload_json)?;
         if turn == 0 {
-            // A v2 writer stored the first turn as full records.
             let container = json!({
                 "gents_capture_json": 1,
                 "request_body": {"gents_lossless_json": 1, "kind": "full", "value": rendered.request_json},
@@ -693,9 +689,6 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
             .await?;
             continue;
         }
-        // The second turn is the witnessed delta a v2 writer leaves behind:
-        // both payloads record a base witness pinning the first row and its
-        // exact request_json field commit.
         let first_row = node
             .execute(&format!(
                 r#"{{RenderedRequest(filter:{{capture_key:{{_eq:"{}"}}}},limit:1){{_docID}}}}"#,
@@ -778,8 +771,6 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
     Ok(())
 }
 
-/// One capture in the current format, written by the production sink: the CLI
-/// reads the same rows the runtime writes.
 async fn seed_manifest_rendered_request_row(node: &Arc<EmbeddedNode>) -> Result<()> {
     let capture_scope = "inference.1".to_string();
     let assembly_trace = gents::rendered_request::AssemblyTrace::from_effective_messages(
@@ -852,7 +843,6 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
     }
     let home = agent_home.to_str().context("agent home utf8")?;
 
-    // --list: both captures, in numeric identity order, metadata only.
     let output = run_cli_text(
         tempdir.path(),
         &[
@@ -888,7 +878,6 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
         "admission join surfaces: {listing:#}"
     );
 
-    // Exactly one match: metadata plus the request_json field-commit CID.
     let output = run_cli_text(
         tempdir.path(),
         &[
@@ -925,7 +914,6 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
         "default output must not carry the body: {capture:#}"
     );
 
-    // --include-body is the one deliberate body read.
     let output = run_cli_text(
         tempdir.path(),
         &[
@@ -953,8 +941,6 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
         serde_json::from_str(provenance_payload).context("parsing decoded provenance payload")?;
     assert_eq!(provenance_payload["trace_version"], 4);
 
-    // Mixed-version exports keep the same JSON-text payload contract. The
-    // second v2 row is a witnessed delta and carries a native tool result.
     let output = run_cli_text(
         tempdir.path(),
         &[
@@ -983,7 +969,6 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
         );
     }
 
-    // The current format decodes through the same body read.
     let output = run_cli_text(
         tempdir.path(),
         &[
@@ -1008,7 +993,6 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
         3
     );
 
-    // Ambiguity without --list fails with a narrowing hint.
     let stderr = run_cli_failure_stderr(
         tempdir.path(),
         &[
@@ -1025,7 +1009,6 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
         "{stderr}"
     );
 
-    // The run timeline surfaces the same captures as events.
     let output = run_cli_text(
         tempdir.path(),
         &[
@@ -1196,8 +1179,6 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
     let openai_full = trace_project_json(tempdir.path(), home, "openai-codex", "full")?;
     assert_projection_json_matches_schema("openai_codex_run_trace", &openai_full)?;
     let openai_full_serialized = serde_json::to_string(&openai_full)?;
-    // The final output and transcript share one canonical message now; there
-    // is no independently stored child-response payload to redact or export.
     for expected_child_text in ["reviewer private child message"] {
         assert!(
             openai_full_serialized.contains(expected_child_text),

@@ -11,7 +11,7 @@ that manifest. Counts remain transport progress, not output validity.
 
 namespace SessionHydration
 
-/-! Collection-qualified identities prevent an equal raw `_docID` from another
+/-- Collection-qualified identities prevent an equal raw `_docID` from another
 collection from satisfying the signed manifest. -/
 abbrev DocumentKey := Document
 
@@ -37,8 +37,6 @@ def ClientProgress.mergedCount (progress : ClientProgress) : Nat :=
 def ClientProgress.servedCount (progress : ClientProgress) : Option Nat :=
   progress.servedDocuments.map Finset.card
 
-/-- Documents in the signed server manifest that the receiver has actually
-observed. Unlike `mergedCount`, this is a valid numerator for `servedCount`. -/
 def ClientProgress.coveredCount (progress : ClientProgress) : Nat :=
   match progress.servedDocuments with
   | some served => (progress.mergedDocuments ∩ served).card
@@ -132,12 +130,9 @@ def progressFor (prev : ClientProgress) (session node : String) : ClientProgress
   if prev.session = session ∧ prev.node = node then prev
   else { session, node }
 
-/-- An explicit request starts a fresh receiver attempt for this target. -/
 def beginRequest (session node : String) : ClientProgress :=
   { session, node, phase := .requested }
 
-/-- An owned session header permits hydration during a live turn. Without that
-header, a pending local request alone does not prove the session exists. -/
 def canStartInitial (ownedSession hasDocuments nonterminalRequest : Bool) : Bool :=
   ownedSession || (hasDocuments && !nonterminalRequest)
 
@@ -152,7 +147,8 @@ theorem pending_request_without_session_waits (hasDocuments : Bool) :
 /-- A replicated session header whose requester differs from the scope this
 reader reads under belongs to that requester. The server's ownership check
 refuses such a request, so the receiver never starts one: the header alone is
-enough to present the session as unreadable (#2066). -/
+enough to present the session as unreadable (#2066). A pending local request
+alone does not prove the session exists. -/
 def canStart (foreignHeader ownedSession hasDocuments nonterminalRequest : Bool) : Bool :=
   !foreignHeader && canStartInitial ownedSession hasDocuments nonterminalRequest
 
@@ -166,7 +162,6 @@ theorem readable_header_keeps_initial_start
       canStartInitial ownedSession hasDocuments nonterminalRequest := by
   simp [canStart]
 
-/-- An explicit retry is legal only for the same failed target. -/
 def canRetry (prev : ClientProgress) (session node : String) : Bool :=
   decide (prev.session = session ∧ prev.node = node ∧ prev.phase = .failed)
 
@@ -213,9 +208,6 @@ inductive AdmissionAction where
   | explicitRetry
   deriving DecidableEq, Repr
 
-/-- Admission is scoped to the durable row and the observation for the exact
-target. Passive observation may create only a missing request; retry may reset
-only a rejected request after the user explicitly asks. -/
 def canAdmitRequest (action : AdmissionAction) (request : DurableRequest)
     (prev : ClientProgress) (session node : String)
     (foreignHeader ownedSession hasDocuments nonterminalRequest : Bool) : Bool :=
@@ -227,8 +219,11 @@ def canAdmitRequest (action : AdmissionAction) (request : DurableRequest)
       !foreignHeader && canRetry prev session node
   | _, _ => false
 
-/-- The only admission transition starts a fresh durable attempt. A denied
-action retains the observation unchanged. -/
+/-- The only admission transition starts a fresh durable attempt. Passive
+observation may create only a missing request; retry may reset only a rejected
+request after the user explicitly asks; a denied action retains the observation
+unchanged. Admission is scoped to the durable row and the observation for the
+exact target; it retains no process-wide receiver state. -/
 def admitRequest (action : AdmissionAction) (request : DurableRequest)
     (prev : ClientProgress) (session node : String)
     (foreignHeader ownedSession hasDocuments nonterminalRequest : Bool) : ClientProgress :=
@@ -269,8 +264,6 @@ theorem explicit_retry_requires_exact_failed_target
       ownedSession hasDocuments nonterminalRequest = prev := by
   simp [admitRequest, canAdmitRequest, hretry]
 
-/-- Projecting a snapshot is a pure query over one durable control row plus
-the locally merged set. It retains no process-wide receiver state. -/
 def projectDurable (request : DurableRequest) (mergedDocuments : Finset DocumentKey)
     (validation : ValidationResult) (session node : String) : ClientProgress :=
   match request with
@@ -281,9 +274,6 @@ def projectDurable (request : DurableRequest) (mergedDocuments : Finset Document
   | .rejected documents =>
       observe (beginRequest session node) mergedDocuments documents validation true session node
 
-/-- Public receiver boundary: a served receipt cannot supply its own validation
-enum. The projection recomputes canonical closure and native reconstruction from
-the local snapshot, then applies the lower state projection. -/
 def projectCanonicalSnapshot (request : DurableRequest)
     (mergedDocuments : Finset DocumentKey)
     (scope : CanonicalOutput.Hydration.AuthorizationScope)
@@ -394,16 +384,12 @@ theorem observe_cannot_complete_without_server (prev : ClientProgress)
   simp [hnf, hserved, canComplete]
   split_ifs <;> simp
 
-/-- Equal cardinality cannot substitute for exact document identity. -/
 theorem equal_count_substitution_fails_closed
     (merged served : Finset DocumentKey) (_ : merged.card = served.card)
     (hmissing : ¬ served ⊆ merged) :
     canComplete merged (some served) .valid = false := by
   simp [canComplete, hmissing]
 
-/-- Locally present transcript rows are not evidence that a hydration request
-was started. Only `beginRequest` may move an idle receiver into an in-flight
-phase when the server has not supplied a manifest. -/
 theorem observe_idle_without_server_stays_idle (prev : ClientProgress)
     (mergedDocuments : Finset DocumentKey) (session node : String)
     (hidle : (progressFor prev session node).phase = .idle)
@@ -412,8 +398,6 @@ theorem observe_idle_without_server_stays_idle (prev : ClientProgress)
   unfold observe observeCore
   simp [hidle, hserved, mergeServed, canComplete]
 
-/-- A failed receiver is terminal under passive observation. Restarting the
-same target requires the explicit `beginRequest` transition. -/
 theorem observe_failed_without_begin_stays_failed (prev : ClientProgress)
     (mergedDocuments : Finset DocumentKey)
     (servedDocuments : Option (Finset DocumentKey)) (validation : ValidationResult)
@@ -423,7 +407,6 @@ theorem observe_failed_without_begin_stays_failed (prev : ClientProgress)
   unfold observe observeCore
   simp [hfailed]
 
-/-- Focusing a different session/node starts from an idle empty receiver state. -/
 theorem progressFor_other_target_resets (prev : ClientProgress) (session node : String)
     (hdifferent : prev.session ≠ session ∨ prev.node ≠ node) :
     progressFor prev session node = { session, node } := by
@@ -433,7 +416,6 @@ theorem progressFor_other_target_resets (prev : ClientProgress) (session node : 
     exact False.elim (hdifferent.elim (fun h => h hsame.1) (fun h => h hsame.2))
   · rfl
 
-/-- Retrying clears a prior terminal receiver state and its old manifest. -/
 theorem beginRequest_resets_terminal (session node : String) :
     (beginRequest session node).phase = .requested ∧
     (beginRequest session node).mergedDocuments = ∅ ∧

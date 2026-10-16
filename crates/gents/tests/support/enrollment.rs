@@ -48,10 +48,9 @@ pub async fn wait_for_peer_identity(node: &EmbeddedNode) -> (String, String) {
     }
 }
 
-/// Author and approve one exact signed enrollment generation.
-///
-/// P2P integration fixtures use this production document path instead of
-/// writing the enrollment-owned `PeerPairingDesired` materialization directly.
+/// Author and approve one exact signed enrollment generation through the
+/// production document path, instead of writing the enrollment-owned
+/// `PeerPairingDesired` materialization directly.
 pub async fn authorize_enrollment_peer(
     node: Arc<EmbeddedNode>,
     network_id: &str,

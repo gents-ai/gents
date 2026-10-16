@@ -42,8 +42,6 @@ export function ManagedRuntimeAuthorityPicker({
 }) {
   const [validating, setValidating] = useState(false);
   const [directoryDraft, setDirectoryDraft] = useState(toolRoot ?? home);
-  /* a committed folder becomes the draft; while one is being validated
-     (null) the draft stays as typed */
   const [committedRoot, setCommittedRoot] = useState(toolRoot);
   if (toolRoot !== committedRoot) {
     setCommittedRoot(toolRoot);

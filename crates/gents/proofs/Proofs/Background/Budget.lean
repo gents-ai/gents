@@ -2,13 +2,11 @@ import Proofs.Basic
 
 namespace Background
 
-/-- Live background rows one request may own (`MAX_BACKGROUNDED_TOOLS_PER_PARENT`).
-Every started session occupies one slot until its row terminalizes. -/
+/-- Live background rows one request may own (`MAX_BACKGROUNDED_TOOLS_PER_PARENT`). -/
 def maxBackgroundedPerParent : Nat := 8
 
-/-- Existing background admission gate. A successful create consumes one slot.
-The caller supplies the count of live background rows observed by its owner;
-this contract does not assert atomicity between concurrent creators. -/
+/-- Existing background admission gate; the caller supplies the count of live
+background rows observed by its owner. -/
 def admitBackground (liveCount : Nat) : Option Nat :=
   if liveCount < maxBackgroundedPerParent then some (liveCount + 1) else none
 

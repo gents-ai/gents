@@ -137,9 +137,8 @@ pub(super) async fn claim_queue_allows(
     }
 
     if serial_trigger.is_some() {
-        // A serial trigger can conflict with active requests from other sessions.
-        // Enumerate that bounded work set, then join its authoritative receipts;
-        // walking the trigger's full receipt history makes every later claim slower.
+        // A serial trigger conflicts with active requests across sessions; scan the
+        // bounded pending set and join receipts instead of walking full history.
         let mut after_request = None;
         loop {
             let after_arg = cursor_after_arg(after_request.as_deref());

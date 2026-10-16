@@ -1,18 +1,10 @@
 #!/usr/bin/env bash
 #
-# uninstall-gents-macos.sh
-#
-# Removes all local resources that Gents creates on macOS:
-#   - the ~/.gents agent home (data, keys, plugins, codex-ui, init/runtime state, p2p key)
-#   - the macOS LaunchAgent background service (ai.gents.runtime)
-#   - the macOS keychain identity item (com.source-inc.gents.identity)
-#   - the CLI binary (/usr/local/bin/gents)
-#   - the desktop app (/Applications/Gents.app)
-#   - every Gents entry under ~/Library (support, caches, logs, WebKit,
-#     preferences, saved state, containers, ...)
-#
-# It does NOT touch per-repo worktrees created under <repo>/.gents/workspaces/,
-# since those live inside your project checkouts. Those are only reported.
+# uninstall-gents-macos.sh — remove Gents resources from this Mac:
+#   ~/.gents agent home, LaunchAgent ai.gents.runtime, keychain identity
+#   com.source-inc.gents.identity, /usr/local/bin/gents, /Applications/Gents.app,
+#   and every Gents entry under ~/Library.
+# Per-repo worktrees under <repo>/.gents/workspaces/ are reported, not removed.
 #
 # Usage:
 #   ./uninstall-gents-macos.sh           # interactive (asks for confirmation)
@@ -21,9 +13,6 @@
 
 set -euo pipefail
 
-# ----------------------------------------------------------------------------
-# Constants (mirrors the source of truth in the Gents codebase)
-# ----------------------------------------------------------------------------
 GENTS_HOME_DEFAULT="${GENTS_HOME:-$HOME/.gents}"
 SERVICE_LABEL="ai.gents.runtime"
 LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/${SERVICE_LABEL}.plist"
@@ -33,7 +22,6 @@ APP_DIR_NAME="gents"
 APP_BUNDLE="/Applications/Gents.app"
 CLI_BINARY="/usr/local/bin/gents"
 
-# ~/Library subdirectories swept for Gents entries (step 6).
 LIBRARY_SUBDIRS=(
   "Application Support"
   "Application Scripts"
@@ -49,17 +37,16 @@ LIBRARY_SUBDIRS=(
   "Saved Application State"
   "WebKit"
 )
-# Exact, case-sensitive name patterns identifying Gents entries.
 LIBRARY_NAME_PATTERNS=(
-  "$APP_DIR_NAME"                 # e.g. Application Support/gents
-  "$APP_DIR_NAME.*"               # e.g. gents.log
-  "$APP_DIR_NAME-*"               # e.g. gents-fixture-host
-  "$BUNDLE_ID"                    # e.g. Caches/com.source-inc.gents
-  "$BUNDLE_ID.*"                  # e.g. com.source-inc.gents.plist / .savedState
-  "$BUNDLE_ID-*"                  # e.g. com.source-inc.gents-fixture-host
-  "*.$BUNDLE_ID"                  # e.g. Group Containers/<TEAMID>.com.source-inc.gents
+  "$APP_DIR_NAME"
+  "$APP_DIR_NAME.*"
+  "$APP_DIR_NAME-*"
+  "$BUNDLE_ID"
+  "$BUNDLE_ID.*"
+  "$BUNDLE_ID-*"
+  "*.$BUNDLE_ID"
   "*.$BUNDLE_ID.*"
-  "ai.gents.*"                    # e.g. LaunchAgents/ai.gents.runtime.plist
+  "ai.gents.*"
 )
 
 ASSUME_YES=0
@@ -80,7 +67,6 @@ log()  { printf '  %s\n' "$*"; }
 info() { printf '\n==> %s\n' "$*"; }
 
 run() {
-  # run <description> <command...>
   local desc="$1"; shift
   if [[ "$DRY_RUN" -eq 1 ]]; then
     log "[dry-run] $desc"
@@ -90,7 +76,6 @@ run() {
   "$@"
 }
 
-# rm -rf helper that only acts on existing paths and honours dry-run.
 remove_path() {
   local path="$1"
   if [[ -e "$path" || -L "$path" ]]; then
@@ -101,7 +86,6 @@ remove_path() {
 }
 
 need_sudo_for() {
-  # Returns 0 if the given path exists and is not writable by us.
   local path="$1"
   [[ -e "$path" ]] || return 1
   local parent
@@ -122,9 +106,6 @@ sudo_remove_path() {
   fi
 }
 
-# ----------------------------------------------------------------------------
-# Confirmation
-# ----------------------------------------------------------------------------
 cat <<EOF
 This will remove Gents and its local data from this Mac:
 
@@ -155,58 +136,41 @@ if [[ "$ASSUME_YES" -ne 1 && "$DRY_RUN" -ne 1 ]]; then
   esac
 fi
 
-# ----------------------------------------------------------------------------
-# 1. Stop & remove the LaunchAgent background service
-# ----------------------------------------------------------------------------
+# Stop & remove the LaunchAgent
 info "Stopping and removing the LaunchAgent service ($SERVICE_LABEL)"
 uid="$(id -u)"
 if [[ "$DRY_RUN" -eq 1 ]]; then
   log "[dry-run] launchctl bootout gui/$uid/$SERVICE_LABEL"
 else
-  # Best-effort: ignore errors if the job isn't loaded.
   launchctl bootout "gui/$uid/$SERVICE_LABEL" 2>/dev/null || true
   launchctl remove "$SERVICE_LABEL" 2>/dev/null || true
 fi
 remove_path "$LAUNCH_AGENT_PLIST"
 
-# ----------------------------------------------------------------------------
-# 2. Quit and remove the desktop app
-# ----------------------------------------------------------------------------
+# Quit and remove the desktop app
 info "Quitting and removing the desktop app"
 if [[ "$DRY_RUN" -eq 1 ]]; then
   log "[dry-run] osascript quit \"Gents\""
 else
   osascript -e 'tell application "Gents" to quit' 2>/dev/null || true
-  # Fall back to a hard kill if it's still running.
   pkill -f "$APP_BUNDLE/Contents/MacOS/" 2>/dev/null || true
 fi
 sudo_remove_path "$APP_BUNDLE"
 
-# ----------------------------------------------------------------------------
-# 3. Remove the CLI binary
-# ----------------------------------------------------------------------------
 info "Removing the CLI binary"
 sudo_remove_path "$CLI_BINARY"
 
-# ----------------------------------------------------------------------------
-# 4. Remove the agent home (~/.gents)
-# ----------------------------------------------------------------------------
 info "Removing the agent home"
-# Safety guard: never rm -rf "/" or "$HOME" itself.
 if [[ -z "$GENTS_HOME_DEFAULT" || "$GENTS_HOME_DEFAULT" == "/" || "$GENTS_HOME_DEFAULT" == "$HOME" ]]; then
   echo "Refusing to remove suspicious GENTS_HOME: '$GENTS_HOME_DEFAULT'" >&2
 else
   remove_path "$GENTS_HOME_DEFAULT"
 fi
 
-# ----------------------------------------------------------------------------
-# 5. Remove the macOS keychain identity
-# ----------------------------------------------------------------------------
 info "Removing the macOS keychain identity ($KEYCHAIN_SERVICE)"
 if [[ "$DRY_RUN" -eq 1 ]]; then
   log "[dry-run] security delete-generic-password -s \"$KEYCHAIN_SERVICE\""
 else
-  # There may be one item per agent label; loop until none remain.
   while security find-generic-password -s "$KEYCHAIN_SERVICE" >/dev/null 2>&1; do
     if ! security delete-generic-password -s "$KEYCHAIN_SERVICE" >/dev/null 2>&1; then
       break
@@ -218,18 +182,10 @@ else
   log "      from Keychain Access manually; they are not exportable via CLI."
 fi
 
-# ----------------------------------------------------------------------------
-# 6. Remove every Gents entry under ~/Library
-#    The app stores data under the plain "gents" name (e.g.
-#    ~/Library/Application Support/gents); WebView, cache, log, and
-#    preference entries are keyed by the bundle id. Rather than a fixed
-#    list, sweep every standard Library location for entries whose names
-#    match Gents exactly (case-sensitive, anchored), so unrelated items such
-#    as ".../external_agents" are never matched.
-# ----------------------------------------------------------------------------
+# Remove every Gents entry under ~/Library
 info "Removing all Gents entries under ~/Library"
 if [[ "$DRY_RUN" -ne 1 ]]; then
-  # Drop cached preferences so cfprefsd doesn't rewrite the plist.
+  # Drop cached preferences so cfprefsd doesn't rewrite them.
   defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true
 fi
 found_any=0
@@ -239,7 +195,6 @@ for subdir in "${LIBRARY_SUBDIRS[@]}"; do
   [[ -d "$base" ]] || continue
   for pattern in "${LIBRARY_NAME_PATTERNS[@]}"; do
     for entry in "$base"/$pattern; do
-      # Literal (non-wildcard) patterns survive nullglob; skip if absent.
       [[ -e "$entry" || -L "$entry" ]] || continue
       # Safety guard: only direct children of a Library subdirectory.
       [[ "$(dirname "$entry")" == "$base" ]] || continue
@@ -251,9 +206,6 @@ done
 shopt -u nullglob
 [[ "$found_any" -eq 1 ]] || log "no Gents entries found under ~/Library"
 
-# ----------------------------------------------------------------------------
-# 7. Report per-repo worktrees (informational only)
-# ----------------------------------------------------------------------------
 info "Per-repo worktrees (not removed)"
 log "Gents may have created worktrees under <your-checkouts>/.gents/workspaces/."
 log "Search for them with:"

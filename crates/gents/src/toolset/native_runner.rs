@@ -10,16 +10,14 @@ use crate::tool_call_lifecycle::runtime::current_tool_runtime_context;
 use crate::tool_call_lifecycle::FailureClass;
 
 const MAX_NATIVE_RUNNER_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
-// The runner cuts its own results to fit; its budget must leave headroom
-// below what the host reads, or an oversized response fails to decode.
+// The runner truncates its own results; an oversized response fails to decode.
 const _: () =
     assert!(gents_fs_runner::MAX_RESPONSE_BYTES + 64 * 1024 < MAX_NATIVE_RUNNER_OUTPUT_BYTES);
 const RUNNER_ENV: &str = "GENTS_FS_RUNNER";
 const MAX_FS_RUNNER_SECONDS: i64 = 120;
 static SELF_RUNNER_ENABLED: AtomicBool = AtomicBool::new(false);
 
-/// Declare that the current host executable implements the hidden
-/// `__native-fs-runner` command.
+/// Declare that the current host executable implements the `__native-fs-runner` command.
 pub fn enable_self_runner() {
     SELF_RUNNER_ENABLED.store(true, Ordering::Relaxed);
 }
@@ -32,12 +30,9 @@ fn effective_deadline(
     request_deadline.map_or(cap, |deadline| deadline.min(cap))
 }
 
-/// Text for a managed-exec timeout. When the REQUEST deadline is what
-/// expired, this text never reaches the model: the dispatcher's envelope
-/// shares the same deadline and resolves an elapsed deadline to
-/// `ToolOutcome::TimedOut`, including when this inner managed boundary wakes
-/// the dispatcher before its sibling deadline sleep. A per-call cap expiry,
-/// by contrast, is an ordinary model-actionable tool result.
+/// When the request deadline expired, the dispatcher's envelope resolves to
+/// `ToolOutcome::TimedOut` before this text is model-facing; a per-call cap
+/// expiry is an ordinary model-actionable tool result.
 fn fs_runner_timed_out_result(
     tool_name: &str,
     request_deadline: Option<chrono::DateTime<chrono::Utc>>,
@@ -78,16 +73,14 @@ impl NativeFsRunner {
         }
     }
 
-    /// Typed glob helper for LSP diagnostics. Returns resolved paths, not
-    /// model-facing GlobTool text. `raw_json` is an internal decode seam.
+    /// Returns resolved paths for LSP diagnostics, not model-facing GlobTool
+    /// text; `raw_json` is an internal decode seam.
     pub(crate) async fn glob_paths(
         &self,
         pattern: &str,
         max_matches: usize,
     ) -> Result<Vec<PathBuf>, ToolError> {
-        // The runner renders matches relative to its effective request base,
-        // which may be a workspace_cwd below the tool root. Capture that same
-        // base for decoding instead of incorrectly rebasing paths at root.
+        // Decode against the runner's effective request base, not the tool root.
         let base = self.effective_base();
         let raw = self
             .run(
@@ -132,9 +125,8 @@ impl NativeFsRunner {
             .as_ref()
             .is_some_and(|scope| scope.workspace_artifact.is_some())
         {
-            // The native helper remains the same read-only typed protocol. In
-            // artifact scope its process must use the shared grant validation,
-            // sandbox and derived environment; never an unsandboxed fallback.
+            // Artifact scope must use the shared grant validation, sandbox and
+            // derived environment; never an unsandboxed fallback.
             let constraints = super::CommandConstraints {
                 allowed_argv_prefixes: Vec::new(),
                 forbidden_argv_prefixes: Vec::new(),
@@ -178,8 +170,6 @@ impl NativeFsRunner {
             stdin,
             environment,
             tool_name: Some(tool_name.to_string()),
-            // The typed runner decodes subprocess stdout into a different
-            // native result. It does not own the bash composed presentation.
             live_output: None,
         })
         .await
@@ -203,8 +193,8 @@ impl NativeFsRunner {
                 request_deadline,
                 chrono::Utc::now(),
             )),
-            // Never model-facing: the dispatcher's envelope polls its (fired)
-            // cancellation branch first and resolves to `ToolOutcome::Cancelled`.
+            // The dispatcher's envelope polls its (fired) cancellation branch
+            // first, so this never becomes model-facing.
             ManagedExecOutcome::Cancelled { .. } => Ok(format!(
                 "native filesystem runner for {tool_name} was cancelled"
             )),
@@ -455,8 +445,6 @@ mod tests {
             })
         };
         let command = || RunnerCommand {
-            // Exercise the actual resolved-runner launch owner without changing
-            // process-wide GENTS_FS_RUNNER or requiring an adjacent binary.
             argv: vec![
                 "/bin/sh".into(),
                 "-c".into(),
@@ -528,10 +516,6 @@ printf '{"ok":true,"output":"sandboxed read","error":null}'"#
         );
     }
 
-    // The per-call cap must NOT read as a request-deadline expiry: the
-    // dispatcher's envelope converts a genuine request-deadline expiry to
-    // `ToolOutcome::TimedOut` (terminating the request), while a cap expiry
-    // is an ordinary, model-actionable tool result.
     #[test]
     fn cap_expiry_before_request_deadline_is_an_ordinary_tool_result() {
         let now = Utc::now();

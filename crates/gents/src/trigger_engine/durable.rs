@@ -150,8 +150,8 @@ pub(crate) async fn stage_fire_receipt(
     Ok(true)
 }
 
-/// Called in the terminal owner's transaction. Recovery uses the same unique
-/// outcome key; an acknowledgement lost after commit cannot extend the chain.
+/// Called in the terminal owner's transaction; an acknowledgement lost after
+/// commit cannot extend the chain because recovery reuses the unique outcome key.
 pub(crate) async fn stage_outcome(
     txn: &ConfigApplyTxn<'_>,
     fire: &TriggerFire,
@@ -262,7 +262,6 @@ pub(crate) async fn publish_goal_outcomes(
     Ok(())
 }
 
-/// Read the native first-arrival journal in the caller's claim snapshot.
 /// Missing arrivals are not replaced with content-ID or wall-clock ordering.
 pub async fn request_arrival_order(
     txn: &ConfigApplyTxn<'_>,

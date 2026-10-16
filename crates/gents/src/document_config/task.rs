@@ -1,10 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-/// Reusable task definition; firing a trigger does not create a Task document.
-///
-/// The trigger engine renders these templates into an AgentRequest before the
-/// owned request loop executes it. Manual invocation uses the same definition.
-/// All fields are desired configuration; execution state belongs to requests.
+/// Reusable task definition; the trigger engine renders templates into an
+/// AgentRequest before the owned loop executes it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -19,8 +16,7 @@ pub struct Task {
     pub description: Option<String>,
     pub agent_id: String,
     pub prompt_template: String,
-    /// Emit one durable FireOutcome at the request or Goal terminal boundary.
-    /// Outcome consumers must leave this disabled.
+    /// Emit one durable FireOutcome at the terminal boundary.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -58,7 +54,7 @@ pub struct Task {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub updated_at: Option<String>,
-    /// Optional UI/discovery labels. References, never tags, determine execution.
+    /// Optional UI/discovery labels.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -68,9 +64,8 @@ pub struct Task {
     pub tags: Vec<String>,
 }
 
-/// A task-owned host command, using the behavior's HostTools.root (runtime cwd
-/// when absent) and inherited host environment. No input projection, prompt
-/// interpolation, callback reference, or workspace-specific argument schema.
+/// A task-owned host command, using the behavior's HostTools.root and inherited
+/// host environment.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -78,13 +73,10 @@ pub struct TaskHook {
     /// Unique within this task; identifies execution/recovery of this occurrence.
     pub hook_id: String,
     pub phase: TaskHookPhase,
-    /// Executable followed by literal arguments. Must be nonempty. PATH lookup
-    /// and relative paths use ordinary host process semantics. For shell syntax,
-    /// explicitly invoke a shell, e.g. ["sh", "-c", "./prepare.sh && ./verify.sh"].
+    /// Executable followed by literal arguments; PATH lookup and relative
+    /// paths use ordinary host process semantics.
     pub command: Vec<String>,
-    /// Per-command timeout in seconds. Absent/null uses 120; explicit values
-    /// must be between 1 and 86400. Launch failure, timeout, and nonzero exit are
-    /// hook errors.
+    /// Per-command timeout in seconds; absent uses 120, explicit 1..=86400.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub timeout_secs: Option<i64>,
@@ -94,18 +86,14 @@ pub struct TaskHook {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum TaskHookPhase {
-    /// Before provider execution, after durable request creation.
-    /// Failure prevents the agent from starting and enters failure/cleanup phases.
+    /// Before provider execution; failure prevents the agent from starting.
     Before,
-    /// After successful agent execution. Failure prevents successful completion.
+    /// After successful agent execution; failure prevents successful completion.
     AfterSuccess,
     /// After failed agent execution or a failed before-hook; not cancellation.
     AfterFailure,
-    /// Cleanup on success, failure, or cancellation once any before-hook or agent
-    /// step starts, including a failing first before-hook. Every finally hook is
-    /// attempted in order even if an earlier cleanup hook fails.
-    /// Other hook failures must not suppress cleanup. Cleanup failures are recorded
-    /// without erasing the primary failure/cancellation. Interrupted commands surface
-    /// through existing request recovery; arbitrary host effects are not replayed.
+    /// Cleanup once any before-hook or agent step starts; every finally hook is
+    /// attempted in order, other hook failures must not suppress cleanup, and
+    /// cleanup failures are recorded without erasing the primary outcome.
     Finally,
 }

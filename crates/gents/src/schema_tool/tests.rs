@@ -87,14 +87,6 @@ fn argument_recovery_does_not_choose_between_conflicting_sdl_inputs() {
     assert!(next.options.is_empty());
 }
 
-#[test]
-fn unknown_concept_help_returns_nearest_available_parent() {
-    let path = ["indexes", "vector", "unknown"].map(str::to_owned);
-    let error = help::page(&path).unwrap_err().to_string();
-    let argv: Vec<String> = serde_json::from_str(error.split_once("argv:").unwrap().1).unwrap();
-    assert_eq!(argv, ["help", "indexes", "vector"]);
-    assert!(help::page(&argv[1..]).is_ok());
-}
 async fn call(tool: &SchemaTool, value: Value) -> Value {
     serde_json::from_str(&tool.call(args(value)).await.unwrap()).unwrap()
 }

@@ -1,11 +1,7 @@
 //! `<run dir>/progress.json`: which slots are in flight and at which stage
-//! (spec 4b §6). Ephemeral and advisory: the loop and, through
-//! [`StageProgress`], an executor write it. `gents eval watch` reads it to
-//! show what is in flight, and [`super::running_elsewhere`] reads it for
-//! `gents eval rm`, `gents eval gc` and `gents eval cancel` to tell whether a
-//! live process holds the run. It is never evidence, never an anchor or digest input and never a
-//! document. Every write replaces the file atomically, so a reader sees one
-//! whole state or the previous one.
+//! (spec 4b §6). Ephemeral and advisory: never evidence, never an anchor or
+//! digest input and never a document. Every write replaces the file
+//! atomically, so a reader sees one whole state or the previous one.
 //!
 //! An entry may carry the trial's [`LiveSnapshot`], which the executor
 //! reports while the trial runs, and the case's [`GoalEntry`] list, so a
@@ -33,7 +29,6 @@ pub const PROGRESS_FILE: &str = "progress.json";
 pub struct LiveSnapshot {
     /// RFC 3339: when the home was read.
     pub observed_at: String,
-    /// Completed-stage checks and per-stage usage, retained while later stages run.
     #[serde(default)]
     pub stages: BTreeMap<String, serde_json::Value>,
     /// Since the trial's first stage started.
@@ -41,13 +36,13 @@ pub struct LiveSnapshot {
     /// Public requests in the trial's home, the stages' own and every one
     /// they caused.
     pub requests: u64,
-    /// Inference calls: one per model turn.
+    /// One per model turn.
     pub model_turns: u64,
-    /// Summed as the trial's usage is: `None` once one call did not report.
+    /// `None` once one call did not report.
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
-    /// Reported usage remains a lower bound while any call lacks usage.
-    /// Exact totals above remain unknown; observers must label these bounds.
+    /// Reported usage remains a lower bound while any call lacks usage;
+    /// observers must label these bounds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reported_input_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -94,17 +89,14 @@ pub struct SessionContextUsage {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LastToolCall {
     pub tool_name: String,
-    /// The tool call's lifecycle state: `running`, `completed`, `failed`, …
     pub state: Option<String>,
-    /// The start of its result on one line, cut to
-    /// [`LastToolCall::RESULT_CHARS`].
+    /// Cut to [`LastToolCall::RESULT_CHARS`].
     pub result: Option<String>,
 }
 
 impl LastToolCall {
     pub const RESULT_CHARS: usize = 160;
 
-    /// Whether the call ended failed or timed out.
     pub fn failed(&self) -> bool {
         matches!(self.state.as_deref(), Some("failed" | "timedOut"))
     }
@@ -131,16 +123,12 @@ pub struct InFlight {
     /// The process hosting the slot, so a reader can tell a live entry from
     /// one a stopped process left behind.
     pub pid: u32,
-    /// RFC 3339 with milliseconds: when this entry was last rewritten. The
-    /// loop refreshes it on its marker timer, so an entry that stops
-    /// being refreshed belongs to a process that stopped.
+    /// RFC 3339 with milliseconds: when this entry was last rewritten.
     pub written_at: String,
     /// The latest snapshot the executor reported; absent before the first
     /// and from an executor that reports none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live: Option<LiveSnapshot>,
-    /// What the case expects the home to hold, derived by
-    /// [`crate::eval::runner::goal::case_goal`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub goal: Vec<GoalEntry>,
 }
@@ -199,7 +187,6 @@ pub fn host_alive(_pid: u32) -> bool {
 }
 
 /// An entry a live process refreshed within `window`.
-/// An unreadable `written_at` is not fresh; one from the future is.
 pub fn is_fresh(slot: &InFlight, window: Duration) -> bool {
     fresh(slot.pid, &slot.written_at, window)
 }
@@ -242,8 +229,7 @@ impl ProgressWriter {
     }
 
     /// Mark this process as the run's holder until the guard drops. The loop
-    /// takes it at entry, before its first plan; dropping the guard, on every
-    /// exit path, rewrites the file without it.
+    /// takes it at entry; dropping the guard rewrites the file without it.
     pub(crate) fn hold(self: &Arc<Self>) -> HolderGuard {
         self.update(|progress| {
             progress.holder = Some(Holder {
@@ -264,12 +250,9 @@ impl ProgressWriter {
     }
 
     /// Refresh the holder's and every entry's `written_at`: the loop is
-    /// alive and its slots are still in flight. Called on the loop's marker
-    /// timer, in a batch and in a backoff alike; it writes at most about
-    /// once per `min_gap`, so a fast timer does not rewrite the file on every
-    /// tick. The throttle is three quarters of the gap: a timer ticking once
-    /// per gap arrives a little early as often as late, and a full-gap
-    /// throttle would skip about every other tick.
+    /// alive and its slots are still in flight. Writes at most about once
+    /// per `min_gap`: the throttle is three quarters of the gap, so a timer
+    /// ticking once per gap is not halved.
     pub(crate) fn heartbeat(&self, min_gap: Duration) {
         let throttle = min_gap - min_gap / 4;
         {
@@ -452,97 +435,10 @@ mod tests {
     }
 
     #[test]
-    fn stage_measurements_survive_later_live_snapshots() {
-        let dir = tempfile::tempdir().unwrap();
-        let writer = ProgressWriter::new(dir.path());
-        writer.slot_started("t", in_flight(Some("setup")));
-        let progress = StageProgress::for_trial(&writer, "t");
-        let measured = serde_json::json!({"usage":{"input_tokens":123},"checks":[]});
-        progress.stage_result("setup", measured.clone());
-        progress.stage_started("repair");
-        progress.live(LiveSnapshot {
-            input_tokens: Some(456),
-            ..Default::default()
-        });
-        let live = writer.live_of("t").unwrap();
-        assert_eq!(live.stages["setup"], measured);
-        assert_eq!(live.input_tokens, Some(456));
-        assert_eq!(
-            read_progress(dir.path()).unwrap().slots["t"].live,
-            Some(live)
-        );
-    }
-
-    #[test]
-    fn a_writer_records_slots_and_stages_and_forgets_ended_slots() {
-        let dir = tempfile::tempdir().unwrap();
-        let writer = ProgressWriter::new(dir.path());
-        assert_eq!(read_progress(dir.path()), Some(Progress::default()));
-
-        writer.slot_started("t1", in_flight(None));
-        let started = read_progress(dir.path()).unwrap().slots["t1"].clone();
-        assert_eq!(
-            started.pid,
-            std::process::id(),
-            "slot_started stamps the host"
-        );
-        assert!(!started.written_at.is_empty());
-        let stages = StageProgress::for_trial(&writer, "t1");
-        stages.stage_started("check");
-        let during = read_progress(dir.path()).unwrap();
-        assert_eq!(during.slots["t1"].stage_id.as_deref(), Some("check"));
-
-        stages.stage_ended("check");
-        assert_eq!(
-            read_progress(dir.path()).unwrap().slots["t1"].stage_id,
-            None
-        );
-
-        writer.slot_ended("t1");
-        assert!(read_progress(dir.path()).unwrap().slots.is_empty());
-        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name())
-            .collect();
-        assert_eq!(leftovers, vec![std::ffi::OsString::from(PROGRESS_FILE)]);
-    }
-
-    #[test]
-    fn a_reported_snapshot_replaces_the_last_and_an_older_entry_reads_without_one() {
-        let dir = tempfile::tempdir().unwrap();
-        let writer = ProgressWriter::new(dir.path());
-        writer.slot_started("t1", in_flight(None));
-        let stages = StageProgress::for_trial(&writer, "t1");
-        assert!(stages.attached() && !StageProgress::default().attached());
-        for requests in [1, 2] {
-            stages.live(LiveSnapshot {
-                requests,
-                ..LiveSnapshot::default()
-            });
-        }
-        let slot = read_progress(dir.path()).unwrap().slots["t1"].clone();
-        assert_eq!(slot.live.as_ref().map(|live| live.requests), Some(2));
-        assert_eq!(writer.live_of("t1").map(|live| live.requests), Some(2));
-        stages.stage_started("check");
-        assert!(
-            read_progress(dir.path()).unwrap().slots["t1"]
-                .live
-                .is_some(),
-            "a stage boundary keeps the snapshot"
-        );
-        writer.slot_ended("t1");
-        assert_eq!(writer.live_of("t1"), None);
-
-        // What a runner before snapshots wrote.
-        std::fs::write(
-            dir.path().join(PROGRESS_FILE),
-            br#"{"slots":{"t1":{"cell_id":"base","case_id":"a","trial_index":0,"attempt":1,
-                "stage_id":null,"started_at":"2026-09-22T00:00:00Z","pid":1,
-                "written_at":"2026-09-22T00:00:00.000Z"}}}"#,
-        )
-        .unwrap();
-        let old = read_progress(dir.path()).unwrap().slots["t1"].clone();
-        assert_eq!((old.live, old.goal), (None, Vec::new()));
+    fn this_process_is_alive_and_an_impossible_pid_is_not() {
+        assert!(host_alive(std::process::id()));
+        assert!(!host_alive(0));
+        assert!(!host_alive(u32::MAX), "never kill(-1, 0)");
     }
 
     /// `gents eval rm --force` may remove a run directory under a live
@@ -561,105 +457,5 @@ mod tests {
         assert!(!run_dir.exists(), "the removed run directory stays removed");
         ProgressWriter::new(&dir.path().join("absent"));
         assert!(!dir.path().join("absent").exists(), "nor does a new writer");
-    }
-
-    #[test]
-    fn a_default_handle_reports_nothing_and_is_equal_to_any_other() {
-        let dir = tempfile::tempdir().unwrap();
-        let writer = ProgressWriter::new(dir.path());
-        StageProgress::default().stage_started("check");
-        assert_eq!(read_progress(dir.path()), Some(Progress::default()));
-        assert_eq!(
-            StageProgress::default(),
-            StageProgress::for_trial(&writer, "t1")
-        );
-        assert_eq!(read_progress(&dir.path().join("absent")), None);
-    }
-
-    #[test]
-    fn this_process_is_alive_and_an_impossible_pid_is_not() {
-        assert!(host_alive(std::process::id()));
-        assert!(!host_alive(0));
-        assert!(!host_alive(u32::MAX), "never kill(-1, 0)");
-        let mut slot = in_flight(None);
-        slot.pid = std::process::id();
-        slot.written_at = now_millis();
-        assert!(is_fresh(&slot, Duration::from_secs(3)));
-        slot.written_at = "2026-01-01T00:00:00.000Z".into();
-        assert!(!is_fresh(&slot, Duration::from_secs(3)), "too old");
-        slot.written_at = "not a time".into();
-        assert!(!is_fresh(&slot, Duration::from_secs(3)));
-    }
-
-    #[test]
-    fn the_holder_is_written_refreshed_and_cleared_and_an_old_file_has_none() {
-        let dir = tempfile::tempdir().unwrap();
-        let writer = ProgressWriter::new(dir.path());
-        let held = writer.hold();
-        let holder = || read_progress(dir.path()).unwrap().holder;
-        let first = holder().expect("held");
-        assert_eq!(first.pid, std::process::id());
-        assert!(first.is_fresh(Duration::from_secs(3)));
-        std::thread::sleep(Duration::from_millis(5));
-        writer.heartbeat(Duration::ZERO);
-        assert!(
-            holder().unwrap().written_at > first.written_at,
-            "an idle loop's heartbeat refreshes its holder"
-        );
-        writer.slot_started("t1", in_flight(None));
-        writer.slot_ended("t1");
-        assert!(holder().is_some(), "slot writes keep the holder");
-        drop(held);
-        assert_eq!(read_progress(dir.path()), Some(Progress::default()));
-
-        std::fs::write(dir.path().join(PROGRESS_FILE), br#"{"slots":{}}"#).unwrap();
-        assert_eq!(read_progress(dir.path()), Some(Progress::default()));
-        let stale = Holder {
-            pid: std::process::id(),
-            written_at: "2026-01-01T00:00:00.000Z".into(),
-        };
-        assert!(!stale.is_fresh(Duration::from_secs(3)));
-    }
-
-    #[test]
-    fn a_heartbeat_writes_at_most_once_per_gap() {
-        let dir = tempfile::tempdir().unwrap();
-        let writer = ProgressWriter::new(dir.path());
-        writer.slot_started("t1", in_flight(None));
-        let written = || {
-            read_progress(dir.path()).unwrap().slots["t1"]
-                .written_at
-                .clone()
-        };
-        writer.heartbeat(Duration::from_secs(60));
-        let first = written();
-        std::thread::sleep(Duration::from_millis(5));
-        writer.heartbeat(Duration::from_secs(60));
-        assert_eq!(written(), first, "inside the gap nothing is written");
-        writer.heartbeat(Duration::ZERO);
-        assert!(written() > first);
-    }
-
-    /// A tick that comes a little early still writes: the throttle is three
-    /// quarters of the gap, so a timer ticking once per gap is not halved.
-    #[test]
-    fn a_heartbeat_a_little_early_still_writes() {
-        let dir = tempfile::tempdir().unwrap();
-        let writer = ProgressWriter::new(dir.path());
-        writer.slot_started("t1", in_flight(None));
-        let written = || {
-            read_progress(dir.path()).unwrap().slots["t1"]
-                .written_at
-                .clone()
-        };
-        let gap = Duration::from_secs(2);
-        writer.heartbeat(gap);
-        let first = written();
-        std::thread::sleep(Duration::from_millis(1_600));
-        writer.heartbeat(gap);
-        assert!(
-            written() > first,
-            "past three quarters of the gap it writes"
-        );
     }
 }

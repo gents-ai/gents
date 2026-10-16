@@ -1,7 +1,3 @@
-//! `compare`: the paired statistics between two cells, of one run or two,
-//! and a policy verdict only when `--policy` asks for one; `--by` adds a
-//! breakdown by check or stage and `--case` one case's trials side by side.
-
 use std::io::Write;
 
 use anyhow::Result;
@@ -77,8 +73,6 @@ pub(super) async fn compare(
     }
 }
 
-/// A breakdown's or a case's JSON with the comparison's `"policy"` outcome
-/// beside it: the `PolicyOutcome` under `--policy`, else null.
 #[derive(Serialize)]
 struct WithPolicy<'a, T: Serialize> {
     #[serde(flatten)]
@@ -96,7 +90,6 @@ fn with_policy<'a, T: Serialize>(
     }
 }
 
-/// The named cell, or the run's only one.
 fn pick_cell(report: &EvalReport, named: Option<&str>, flag: &str) -> Result<String> {
     match (named, report.cells.as_slice()) {
         (Some(cell), _) => Ok(cell.to_owned()),

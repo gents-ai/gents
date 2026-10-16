@@ -32,10 +32,6 @@ pub struct PackInferenceBindingPreview {
     pub automatic: bool,
 }
 
-/// Inspect declared slots and the node's retained inference documents.
-/// Requested bindings are validated when present, while missing slots remain
-/// visible so a model can discover the exact choices before constructing an
-/// install preview.
 pub async fn inspect_pack_inference_bindings(
     access: &ConfigAccess,
     manifest: &PackManifest,
@@ -89,8 +85,6 @@ pub async fn inspect_pack_inference_bindings(
     })
 }
 
-/// The node's inference profiles, each with whether a pack slot can be
-/// bound to it. Fails when the node is missing or disabled.
 pub async fn inference_profile_options(
     access: &ConfigAccess,
     node_did: &str,
@@ -157,9 +151,6 @@ pub async fn inference_profile_options(
     Ok(options)
 }
 
-/// Resolve every declared slot against the node's retained inference
-/// documents. This is read-only and is the strict preview used immediately
-/// before an authorized canonical installer transaction.
 pub async fn preview_pack_inference_bindings(
     access: &ConfigAccess,
     manifest: &PackManifest,
@@ -226,9 +217,6 @@ pub async fn preview_pack_inference_bindings(
     Ok(preview)
 }
 
-/// Bind authored slot markers and stamp provenance on every pack-authored
-/// configuration type that owns tags. User inference documents are rejected,
-/// so referenced profiles/backends can never acquire pack provenance here.
 pub fn bind_pack_install_config(
     manifest: &PackManifest,
     config: &PackConfig,
@@ -264,8 +252,6 @@ pub fn bind_pack_install_config(
     super::provenance::stamp_pack_origin(manifest, &bound)
 }
 
-/// Publish bound document-pack configuration without replacing its node
-/// or the retained inference documents selected by the slot map.
 pub async fn install_pack_documents(
     access: &ConfigAccess,
     owner: &str,

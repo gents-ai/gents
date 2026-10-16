@@ -6,17 +6,15 @@ use gents::session::canonical_rows::{
 
 pub struct DocumentPatch {
     pub store: ClientStore,
-    /// Existing auxiliary requests may be intentionally absent from the public
-    /// store; that is not evidence of a deleted document.
+    // Absent auxiliary requests are not evidence of a deleted document.
     pub observed_documents: usize,
-    /// Exact missing physical IDs when this patch queried AgentRequest.
-    /// Other collections retain the conservative row-count fallback because
-    /// their decoders do not expose physical IDs uniformly.
+    // Exact missing physical IDs for AgentRequest patches; other collections
+    // fall back to row counts.
     pub missing_doc_ids: Option<Vec<String>>,
 }
 
-/// Preserve document existence separately from public projection so auxiliary
-/// facts cannot trigger the observer's authoritative-deletion fallback.
+// Document existence is preserved separately from the public projection so
+// auxiliary facts cannot trigger the observer's authoritative-deletion fallback.
 pub async fn fetch_doc_patch(
     node: &EmbeddedNode,
     collection_name: &str,

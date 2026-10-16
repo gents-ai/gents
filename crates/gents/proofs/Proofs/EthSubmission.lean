@@ -2,7 +2,6 @@ import Proofs.Basic
 
 namespace EthSubmission
 
-/-- Durable states for one idempotent Ethereum submission. -/
 inductive Status where
   | prepared
   | submittedUnknown
@@ -52,8 +51,7 @@ def Submission.step? (submission : Submission) (action : Action) : Option Submis
   (Status.step? submission.status action).map fun status =>
     { submission with status := status }
 
-/-- Every legal transition retains the idempotency identity and exact signed
-transaction. Recovery can poll or rebroadcast, but cannot manufacture bytes. -/
+/-- Recovery can poll or rebroadcast, but cannot manufacture bytes. -/
 theorem step_preserves_prepared_identity
     (before after : Submission) (action : Action)
     (h : before.step? action = some after) :

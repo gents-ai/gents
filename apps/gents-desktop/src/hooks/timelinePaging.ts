@@ -7,10 +7,6 @@ function timelineItemIdentity(item: RenderedTimelineItem) {
   return `${item.kind}:${item.itemKey}`;
 }
 
-/* A pending turn retires only once the request's prompt row is saved
-   (`ownsTurn`, the same ownership the bridge suppresses its pending turn
-   by): a request also authors user rows — workspace instructions, tool
-   delivery — that must not retire it. */
 function removeMaterializedPendingTurns(items: RenderedTimelineItem[]) {
   const materialized = new Set(
     items.flatMap((item) =>
@@ -116,11 +112,6 @@ function reuseUnchangedTimelineItems(
   });
 }
 
-/**
- * Merge an authoritative tip page into any older pages the reader explicitly
- * loaded. Rows inside the incoming tip are replaced, rows before its cursor
- * retain object identity, and stale live-tail rows disappear.
- */
 export function mergeSessionTipSnapshot(
   current: DesktopSessionSnapshot | null,
   tip: DesktopSessionSnapshot,
@@ -133,11 +124,6 @@ export function mergeSessionTipSnapshot(
   ) {
     return tip;
   }
-  /* The tip is the newest rows, so when a row leaves its end (a live tail
-     dropped before the message replacing it lands) it starts a row earlier.
-     Rows older than the first one shown would land above the reader and
-     move everything under them; they arrive only through paging, which
-     holds the reader's place. */
   const firstShown = current.timelineItems[0];
   const shownFrom = firstShown
     ? tip.timelineItems.findIndex(
@@ -192,7 +178,6 @@ export function mergeSessionTipSnapshot(
   };
 }
 
-/** Merge an older page without allowing its metadata to regress the live tip. */
 export function mergeOlderSessionTimelinePage(
   current: DesktopSessionSnapshot | null,
   older: DesktopSessionSnapshot,
@@ -224,8 +209,6 @@ export function mergeOlderSessionTimelinePage(
       pageItems: timelineItems.length,
       hasOlder: older.timelinePage.hasOlder,
       hasNewer: false,
-      // A durable page can contain only rows the timeline intentionally hides.
-      // Preserve the bridge's synthetic cursor so the next query advances.
       oldestItemKey:
         prefix.length > 0
           ? (timelineItems[0]?.itemKey ?? null)

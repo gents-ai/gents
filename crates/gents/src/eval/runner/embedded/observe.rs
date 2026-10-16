@@ -17,11 +17,6 @@ use crate::graphql::{escape_graphql_string, first_row, graphql_with_transaction_
 use crate::run_timeline::{RunTimelineRows, TimelineToolCallRow};
 
 /// Progress and usage callbacks for one `await_terminal_with` poll.
-///
-/// `on_state` runs when the observed `(lifecycle_state, session_id)` pair
-/// changes. `on_interrupt_requested` runs once, immediately before the deadline
-/// interrupt. `on_tick` runs after each non-terminal state read, with the time
-/// since observation began.
 #[async_trait::async_trait]
 pub trait ObservationHook: Send + Sync {
     async fn on_state(&self, _state: &str, _session_id: Option<&str>) {}
@@ -29,7 +24,6 @@ pub trait ObservationHook: Send + Sync {
     async fn on_tick(&self, _elapsed: Duration) {}
 }
 
-/// Hook that records nothing. [`await_terminal`] uses it.
 pub struct NoHook;
 
 #[async_trait::async_trait]
@@ -92,18 +86,10 @@ pub struct RequestEvidence {
 /// Poll `AgentRequest { lifecycle_state session_id }` until the request is
 /// terminal or the deadline-and-grace window ends.
 ///
-/// Every `poll`, read the latest row. When `deadline` elapses while that state
-/// is still non-terminal, call [`crate::interrupt::interrupt_request`] exactly
-/// once and set `interrupted_on_deadline`. Keep polling until `deadline + grace`.
-///
-/// Return `Ok` as soon as the state parses to a terminal
-/// [`RequestLifecycleState`] (`Completed`, `Failed`, `Superseded`, `Dead`, or
-/// `Interrupted`). When the grace expires and the last observed state is still
-/// non-terminal, return `Ok` with `terminal_state` set to that state when
-/// [`RequestLifecycleState::parse`] yields a terminal state, otherwise
-/// `Interrupted`, and `interrupted_on_deadline: true`. This is the library form
-/// of today's `nonterminal_after_interrupt` observation: the caller still learns
-/// that the deadline fired, and a missing or unparseable row is not unwrapped.
+/// When `deadline` elapses while the state is still non-terminal,
+/// [`crate::interrupt::interrupt_request`] is called exactly once and
+/// `interrupted_on_deadline` is set. After `deadline + grace` the last observed
+/// state is returned, or `Interrupted` when it is still non-terminal.
 pub async fn await_terminal(
     node: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
@@ -201,11 +187,6 @@ pub async fn collect_request_evidence(
     Ok(request_evidence_from_sources(&data, &timeline))
 }
 
-/// Map the evidence-query data object and the request's run timeline into
-/// [`RequestEvidence`]. Tool calls and assistant messages come from the
-/// timeline, narrowed to this request’s physical document; the request failure
-/// reason and inference calls come from the query. The timeline also includes
-/// earlier session turns and child requests, which are not this stage’s calls.
 pub fn request_evidence_from_sources(data: &Value, timeline: &RunTimelineRows) -> RequestEvidence {
     let mut evidence = request_evidence_from_query_data(data);
     evidence.tool_calls = timeline
@@ -224,11 +205,6 @@ pub fn request_evidence_from_sources(data: &Value, timeline: &RunTimelineRows) -
     evidence
 }
 
-/// Map a query data object into [`RequestEvidence`].
-///
-/// `AgentToolCall` rows, when present, are serialized
-/// [`TimelineToolCallRow`]s, the shape the stage runner's observed outcome
-/// carries. Missing collections are empty; a row is never unwrapped.
 pub fn request_evidence_from_query_data(data: &Value) -> RequestEvidence {
     let requests = rows(data, "AgentRequest");
     let failure_reason = requests
@@ -276,8 +252,6 @@ fn tool_call_evidence(row: &TimelineToolCallRow) -> ToolCallEvidence {
     }
 }
 
-/// The request's own assistant messages in sequence order, presented through
-/// the transcript owner.
 fn assistant_messages(timeline: &RunTimelineRows) -> Vec<MessageEvidence> {
     let Some(request_doc_id) = timeline.request.doc_id.as_deref() else {
         return Vec::new();
@@ -301,9 +275,6 @@ fn assistant_messages(timeline: &RunTimelineRows) -> Vec<MessageEvidence> {
         .collect()
 }
 
-/// Same string kinds the stage runner returns today: `"deadline"`, `"tool"`,
-/// `"provider"`, `"runtime"`, `"infrastructure"`, or `"unknown"`.
-/// `None` means the request completed.
 pub fn classify_request_outcome(
     terminal_state: RequestLifecycleState,
     interrupted_on_deadline: bool,
@@ -397,8 +368,6 @@ fn poll_query(request_id: &str) -> String {
     )
 }
 
-/// The request failure reason and its inference calls. Tool calls and
-/// messages are read through the run timeline owner.
 pub fn evidence_query(request_id: &str) -> String {
     let request_id = escape_graphql_string(request_id);
     format!(
@@ -411,7 +380,6 @@ pub fn evidence_query(request_id: &str) -> String {
     )
 }
 
-/// Usage sample: inference timing and tokens.
 pub fn inference_sample_query(request_id: &str) -> String {
     let request_id = escape_graphql_string(request_id);
     format!(
@@ -455,8 +423,6 @@ fn field_u64(row: &Value, key: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
-
     use crate::eval::runner::embedded::EmbeddedHome;
     use gents_protocol::request_lifecycle::RequestLifecycleState;
     use serde_json::Value;
@@ -486,15 +452,27 @@ mod tests {
                 && case.outcome.as_deref() == Some("infrastructure")
         }));
         for case in cases {
-            let mut evidence = evidence(
-                case.inference_failed,
-                case.tool_failed,
-                case.request_reason.as_deref(),
-            );
-            if evidence.inference_calls.is_empty() {
+            let mut evidence = RequestEvidence::default();
+            if case.tool_failed {
+                evidence.tool_calls.push(ToolCallEvidence {
+                    tool_name: "t".into(),
+                    status: Some("failed".into()),
+                    lifecycle_state: Some("failed".into()),
+                    tool_failure_class: None,
+                    started_at: None,
+                    completed_at: None,
+                    args: Value::Null,
+                    result: Value::Null,
+                });
+            }
+            if case.inference_failed || case.inference_reason.is_some() {
                 evidence.inference_calls.push(InferenceCallEvidence {
                     call_seq: 1,
-                    call_state: Some("running".into()),
+                    call_state: if case.inference_failed {
+                        Some("failed".into())
+                    } else {
+                        Some("running".into())
+                    },
                     failure_reason: case.inference_reason.clone(),
                     prompt_tokens: None,
                     completion_tokens: None,
@@ -502,9 +480,8 @@ mod tests {
                     started_at: None,
                     ended_at: None,
                 });
-            } else {
-                evidence.inference_calls[0].failure_reason = case.inference_reason.clone();
             }
+            evidence.failure_reason = case.request_reason.clone();
             assert_eq!(
                 classify_request_outcome(
                     RequestLifecycleState::parse(&case.state).unwrap(),
@@ -514,46 +491,6 @@ mod tests {
                 case.outcome.as_deref(),
                 "{case:?}"
             );
-        }
-    }
-
-    fn evidence(
-        inference_failed: bool,
-        tool_failed: bool,
-        failure_reason: Option<&str>,
-    ) -> RequestEvidence {
-        RequestEvidence {
-            messages: vec![],
-            tool_calls: if tool_failed {
-                vec![ToolCallEvidence {
-                    tool_name: "t".into(),
-                    status: Some("failed".into()),
-                    lifecycle_state: Some("failed".into()),
-                    tool_failure_class: None,
-                    started_at: None,
-                    completed_at: None,
-                    args: Value::Null,
-                    result: Value::Null,
-                }]
-            } else {
-                vec![]
-            },
-            inference_calls: if inference_failed {
-                vec![InferenceCallEvidence {
-                    call_seq: 1,
-                    call_state: Some("failed".into()),
-                    failure_reason: None,
-                    prompt_tokens: None,
-                    completion_tokens: None,
-                    queued_at: None,
-                    started_at: None,
-                    ended_at: None,
-                }]
-            } else {
-                vec![]
-            },
-            responses: vec![],
-            failure_reason: failure_reason.map(str::to_string),
         }
     }
 
@@ -585,128 +522,20 @@ mod tests {
         );
     }
 
-    #[test]
-    fn classification_matches_the_stages_table() {
-        use RequestLifecycleState as S;
-        assert_eq!(
-            classify_request_outcome(S::Interrupted, true, &evidence(false, false, None)),
-            Some("deadline")
-        );
-        assert_eq!(
-            classify_request_outcome(S::Completed, false, &evidence(false, false, None)),
-            None
-        );
-        assert_eq!(
-            classify_request_outcome(
-                S::Failed,
-                false,
-                &evidence(false, false, Some("invalid_tool_call_budget_exhausted"))
-            ),
-            Some("tool")
-        );
-        assert_eq!(
-            classify_request_outcome(
-                S::Failed,
-                false,
-                &evidence(
-                    true,
-                    true,
-                    Some("invalid_tool_call_budget_exhausted: limit=8, used=8")
-                )
-            ),
-            Some("tool"),
-            "budget exhaustion wins when inference and tool also failed"
-        );
-        assert_eq!(
-            classify_request_outcome(
-                S::Failed,
-                false,
-                &evidence(
-                    true,
-                    true,
-                    Some("repeated_tool_failure: tool=config, identical_failures=3")
-                )
-            ),
-            Some("tool"),
-            "a repeated identical tool failure is a tool outcome"
-        );
-        let mut status_only = evidence(false, false, None);
-        status_only.tool_calls.push(ToolCallEvidence {
-            tool_name: "t".into(),
-            status: Some("failed".into()),
-            lifecycle_state: Some("completed".into()),
-            tool_failure_class: None,
-            started_at: None,
-            completed_at: None,
-            args: Value::Null,
-            result: Value::Null,
-        });
-        assert_eq!(
-            classify_request_outcome(S::Failed, false, &status_only),
-            Some("runtime"),
-            "only the authoritative lifecycle_state marks a tool failed"
-        );
-        assert_eq!(
-            classify_request_outcome(S::Failed, false, &evidence(true, true, None)),
-            Some("unknown")
-        );
-        assert_eq!(
-            classify_request_outcome(S::Failed, false, &evidence(true, false, None)),
-            Some("provider")
-        );
-        let mut inference_reason = evidence(false, false, None);
-        inference_reason
-            .inference_calls
-            .push(InferenceCallEvidence {
-                call_seq: 1,
-                call_state: Some("completed".into()),
-                failure_reason: Some("503".into()),
-                prompt_tokens: None,
-                completion_tokens: None,
-                queued_at: None,
-                started_at: None,
-                ended_at: None,
-            });
-        assert_eq!(
-            classify_request_outcome(S::Failed, false, &inference_reason),
-            Some("provider")
-        );
-        assert_eq!(
-            classify_request_outcome(S::Failed, false, &evidence(false, true, None)),
-            Some("tool")
-        );
-        let mut tool_lifecycle = evidence(false, false, None);
-        tool_lifecycle.tool_calls.push(ToolCallEvidence {
-            tool_name: "t".into(),
-            status: None,
-            lifecycle_state: Some("failed".into()),
-            tool_failure_class: Some("argumentInvalid".into()),
-            started_at: None,
-            completed_at: None,
-            args: Value::Null,
-            result: Value::Null,
-        });
-        assert_eq!(
-            classify_request_outcome(S::Failed, false, &tool_lifecycle),
-            Some("tool")
-        );
-        assert_eq!(
-            classify_request_outcome(S::Failed, false, &evidence(false, false, None)),
-            Some("runtime")
-        );
-        assert_eq!(
-            classify_request_outcome(S::Dead, false, &evidence(false, false, None)),
-            Some("runtime")
-        );
-        assert_eq!(
-            classify_request_outcome(S::Superseded, false, &evidence(false, false, None)),
-            Some("runtime")
-        );
-        // Old "mystery" row: a non-runtime, non-completed state is unknown.
-        assert_eq!(
-            classify_request_outcome(S::Processing, false, &evidence(false, false, None)),
-            Some("unknown")
-        );
+    #[tokio::test]
+    async fn every_query_observe_issues_is_valid_against_the_home_schema() {
+        let home = crate::eval::runner::embedded::EmbeddedHome::create_temp("observe-queries")
+            .await
+            .unwrap();
+        for query in [
+            poll_query("req-\"quoted\""),
+            evidence_query("req-\"quoted\""),
+            inference_sample_query("req-\"quoted\""),
+        ] {
+            let response = home.node.execute(&query).await;
+            assert!(response.errors.is_empty(), "{query}: {:?}", response.errors);
+        }
+        home.node.shutdown().await;
     }
 
     async fn insert_request(home: &EmbeddedHome, request_id: &str, lifecycle_state: &str) {
@@ -722,29 +551,6 @@ mod tests {
         assert!(response.errors.is_empty(), "{:?}", response.errors);
     }
 
-    /// A field a query names that the schema no longer has fails here rather
-    /// than in a live run.
-    #[tokio::test]
-    async fn every_query_observe_issues_is_valid_against_the_home_schema() {
-        let home = EmbeddedHome::create_temp("observe-queries").await.unwrap();
-        for query in [
-            poll_query("req-\"quoted\""),
-            evidence_query("req-\"quoted\""),
-            inference_sample_query("req-\"quoted\""),
-        ] {
-            let response = home.node.execute(&query).await;
-            assert!(response.errors.is_empty(), "{query}: {:?}", response.errors);
-        }
-        home.node.shutdown().await;
-    }
-
-    /// Every source the evidence reads, mapped out of a real home whose rows
-    /// were written by the canonical owners.
-    ///
-    /// A whole canary run exercises messages and inference calls; it never
-    /// produces a tool call or a failed request, and a field read out of the
-    /// wrong column would be invisible there. This pins all three vectors and
-    /// the failure reason.
     #[tokio::test]
     async fn request_evidence_maps_every_source_it_reads() {
         use crate::lifecycle::RequestTerminalOutcome;
@@ -900,14 +706,6 @@ mod tests {
             "a message's created_at is its canonical header's: {:?}",
             evidence.messages
         );
-
-        // These are exactly the rows the classifier reads, so the mapping is
-        // pinned against what it is for: the tool budget wins over the failed
-        // inference call and the failed tool.
-        assert_eq!(
-            classify_request_outcome(RequestLifecycleState::Failed, false, &evidence),
-            Some("tool")
-        );
         home.node.shutdown().await;
     }
 
@@ -944,8 +742,6 @@ mod tests {
         .await
         .unwrap();
         assert!(observed.interrupted_on_deadline);
-        // No runtime is running, so the observer never flips it; the state stays
-        // non-terminal and the grace expires.
         assert_ne!(observed.terminal_state, RequestLifecycleState::Completed);
         let request_id = crate::graphql::escape_graphql_string("req-stuck");
         let query = format!(

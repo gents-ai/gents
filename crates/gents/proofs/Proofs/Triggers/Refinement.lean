@@ -3,10 +3,6 @@ import Proofs.Triggers.Reachability
 
 namespace Triggers.Durable
 
-/-- The legacy dispatch model erases durable identities and claim ownership.
-Its queued-serial branch describes enqueueing, not concurrent execution. The
-receipt owner refines that branch for a fresh, valid document fire; duplicate
-admission stays with the durable owner. -/
 def dispatchProjection (request : Request) : AgentRequest := {
   id := request.fire.identity.requestId
   causedBy := some request.fire.identity.trigger

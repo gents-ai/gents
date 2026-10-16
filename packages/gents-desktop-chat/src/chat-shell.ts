@@ -85,8 +85,6 @@ export type ChatWorkflowState =
       turnState?: TurnState | null;
     };
 
-/** `queue`: the session's turn is not terminal, so a message sent now waits
-    behind it and joins the turn that claims it (Lean `SendDecision.queue`). */
 export type SendStatus =
   | { kind: "ready" }
   | { kind: "queue"; turnState: TurnState; hint: string }
@@ -104,7 +102,6 @@ type ProjectionInput = {
   selectedNodeDid: string | null;
   selectedSessionId: string | null;
   sending: boolean;
-  /** The workflow reads these alone; transcript content never decides it. */
   session: Pick<
     DesktopSessionSnapshot,
     | "sessionId"
@@ -122,8 +119,6 @@ type ProjectionInput = {
 
 export type ChatShellProjection = {
   workflow: ChatWorkflowState;
-  /** Whether a message with content could be sent now. The composer adds
-      its own emptiness, so this does not change with each keystroke. */
   nonEmptyContentSendStatus: SendStatus;
   activityStatus: ChatActivityStatus | null;
   turnState: TurnState | null;
@@ -132,12 +127,9 @@ export type ChatShellProjection = {
 
 /**
  * Commit authoritative projection transitions back into the hook's local
- * workflow state.
- *
- * `projectChatShell` is intentionally pure, but the request id it tracks is
- * also used to select the next session snapshot. If a terminal projection is
- * rendered without retiring that local id, the following snapshot refresh can
- * pin the completed request again and resurrect the interrupt control.
+ * workflow state; without retiring the tracked request id on a terminal
+ * projection, the next snapshot refresh can pin the completed request again
+ * and resurrect the interrupt control.
  */
 export function reconcileProjectedWorkflow(
   localWorkflow: ChatWorkflowState,
@@ -151,8 +143,6 @@ export function reconcileProjectedWorkflow(
     return projectedWorkflow;
   }
 
-  /* a submission observed as the turn, or queued behind the turn it then
-     tracks */
   if (
     localWorkflow.kind === "awaitingObservation" &&
     projectedWorkflow.kind === "turnInProgress" &&
@@ -318,8 +308,7 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
   const foldedRequestIds = new Set(
     (input.session?.foldedInputs ?? []).map((folded) => folded.requestId),
   );
-  /* Lean `trackedRequestForFrontend`: a submission observed as queued or
-     folded is not the session's turn */
+  // Lean `trackedRequestForFrontend`: a queued or folded submission is not the turn.
   const trackedRequestId =
     (input.localWorkflow.kind === "awaitingObservation" ||
       input.localWorkflow.kind === "turnInProgress") &&

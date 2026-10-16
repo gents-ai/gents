@@ -59,9 +59,6 @@ pub use context_budget::{
 };
 pub use gents_loop::tool_policy::CommandPolicyDenial;
 pub(crate) use gents_loop::tool_policy::DenialReason;
-/// `DenialReason` moved to `gents_loop::tool_policy` (G-1) flat, not nested
-/// under a `denial` module; this shim keeps the pre-move `toolset::denial::
-/// DenialReason` path this crate's call sites already use.
 pub(crate) mod denial {
     pub(crate) use gents_loop::tool_policy::DenialReason;
 }
@@ -96,46 +93,23 @@ pub use shared::{
     CommandExecutionPolicy, CommandNetworkMode, WorkspaceAuthority,
 };
 
-/// Canonical baseline for inspecting or narrowing the read-only host capability.
 pub fn default_read_only_command_policy() -> CommandExecutionPolicy {
     CommandExecutionPolicy::read_only(default_read_only_commands())
 }
 
-/// `read_file` bytes per call (cut on a character boundary) when
-/// `host.files.max_read_chars` is unset.
 pub(crate) const DEFAULT_MAX_FILE_CHARS: usize = 32_000;
 pub(crate) const DEFAULT_MAX_COMMAND_CHARS: usize = 16_000;
 pub(crate) const MAX_CONFIGURED_COMMAND_CHARS: usize = 1_000_000;
-/// `list_files` entries per call when `host.files.max_list_entries` is unset.
 pub(crate) const DEFAULT_MAX_LIST_ENTRIES: usize = 200;
-/// `glob`/`grep` matches per call when `host.files.max_matches` is unset.
 pub(crate) const DEFAULT_MAX_MATCHES: usize = 200;
-/// Ceiling on a configured `host.files.max_read_chars`, matching the command
-/// output ceiling: one tool result should not dominate a context window.
 pub(crate) const MAX_CONFIGURED_FILE_CHARS: usize = 1_000_000;
-/// Ceiling on configured `host.files` entry and match counts. Independently,
-/// the filesystem runner cuts a result that would exceed its response budget
-/// (`gents_fs_runner::MAX_RESPONSE_BYTES`) and reports it as truncated, so a
-/// large count over long paths or previews degrades to a shorter result
-/// rather than an error.
 pub(crate) const MAX_CONFIGURED_FILE_RESULTS: usize = 5_000;
-// Foreground default aligned with other agent frameworks (Claude Code and
-// grok-build both default to 120s); deployments raise or lower it with
-// `--command-timeout-secs`. Explicit model requests may exceed it up to the
-// separately configured `--command-timeout-max-secs` ceiling (#985, #1018).
 pub(crate) const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 120;
-// Lifetime ceiling for work backgrounded via spawn_process. Background
-// runs are exempt from the foreground ceiling — cancel_process and the
-// completion notification are the lifecycle controls — but keep a 10-hour
-// backstop (grok-build uses the same bound) so an orphaned job cannot run
-// forever (#985). `background_timeout_secs` may only shorten it.
 pub(crate) const BACKGROUND_COMMAND_TIMEOUT_SECS: u64 = 36_000;
 pub const AGENT_NEW_TOOL_NAME: &str = "agent_new";
 pub const AGENT_MESSAGE_TOOL_NAME: &str = "agent_message";
 pub const AGENT_INTERRUPT_TOOL_NAME: &str = "agent_interrupt";
 pub const AGENT_LIST_TOOL_NAME: &str = "agent_list";
-/// The agents tool group (`AgentTools.enabled`), in the order they are
-/// offered.
 pub const AGENT_TOOL_NAMES: [&str; 4] = [
     AGENT_NEW_TOOL_NAME,
     AGENT_MESSAGE_TOOL_NAME,
@@ -157,7 +131,6 @@ pub struct CliToolConfig {
     pub env_vars: HashMap<String, String>,
     pub working_dir: Option<PathBuf>,
     pub timeout_secs: u64,
-    /// UTF-8 byte budget for stdout and for stderr, each, returned per call.
     pub max_output_chars: usize,
 }
 
@@ -165,8 +138,6 @@ pub struct CliToolConfig {
 pub struct ToolSet {
     tools: Vec<NativeTool>,
     read_root: Option<PathBuf>,
-    /// Lifetime of a bash run started with `spawn_process`, advertised by the
-    /// bash tools; the spawn admission owner enforces the same value.
     background_lifetime: Duration,
 }
 
@@ -406,7 +377,6 @@ pub enum NativeTool {
     Cli(CliToolConfig),
 }
 
-/// Per-call default and maximum of the read-side file tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileToolLimits {
     pub max_read_chars: usize,
@@ -424,8 +394,6 @@ impl Default for FileToolLimits {
     }
 }
 
-/// Whether `name` is a native bash tool, the only native host tool that can
-/// run in the background.
 pub(crate) fn is_bash_tool_name(name: &str) -> bool {
     name == NativeTool::BASH_NAME || name == NativeTool::BASH_UNRESTRICTED_NAME
 }
@@ -441,10 +409,6 @@ impl NativeTool {
     const BASH_UNRESTRICTED_NAME: &'static str =
         <UnrestrictedBashTool as crate::llm::tool::Tool>::NAME;
 
-    /// Names of every fixed-name `NativeTool` variant. The concrete `Tool`
-    /// implementations own the strings; this registry and `tool_name` both
-    /// derive from those constants. `Cli` is excluded because its name comes
-    /// from configuration.
     pub(crate) const ALL_NAMES: [&'static str; 8] = [
         Self::LIST_FILES_NAME,
         Self::READ_FILE_NAME,
@@ -519,7 +483,6 @@ impl ToolSetBuilder {
         self
     }
 
-    /// The four read-side file tools with explicit per-call limits.
     pub fn read_file_tools_with_limits(mut self, limits: FileToolLimits) -> Self {
         self.tools.extend([
             NativeTool::ListFiles {
@@ -653,7 +616,6 @@ impl ToolSetBuilder {
         self
     }
 
-    /// Configured `spawn_process` lifetime for bash runs.
     pub fn background_lifetime(mut self, lifetime: Duration) -> Self {
         self.background_lifetime = Some(lifetime);
         self
@@ -679,9 +641,6 @@ pub fn build_native_tools() -> Result<Vec<Box<dyn ToolDyn>>> {
         .build_native_tools()
 }
 
-/// `agent_new`/`agent_message` (Lean `ToolOperation.sessionMessage`).
-/// The agents tools that start or message a session: each is a background
-/// row that ends with the request it caused.
 pub(crate) fn is_session_message_tool(tool_name: &str) -> bool {
     tool_name == AGENT_NEW_TOOL_NAME || tool_name == AGENT_MESSAGE_TOOL_NAME
 }

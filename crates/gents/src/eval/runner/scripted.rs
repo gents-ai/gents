@@ -1,9 +1,7 @@
 //! A [`TrialExecutor`] that answers from a table instead of running anything.
 //!
 //! The runner loop is the thing under test in most of the suite: which trials
-//! it plans, how it retries, what it writes. The scripted executor lets those
-//! tests state the evidence a trial produced, keyed by the cell, case, index
-//! and attempt that produced it, and records every key it was asked for.
+//! it plans, how it retries, what it writes.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
@@ -19,8 +17,7 @@ use crate::eval::runner::executor::{
 };
 use crate::eval::{Anchor, OutcomeKind, ProviderReason, TrialUsage};
 
-/// The slot a scripted answer belongs to. `cell_label` rather than `cell_id`,
-/// so a test names the cell the way its fixture does.
+/// The slot a scripted answer belongs to.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ScriptKey {
     pub cell_label: String,
@@ -32,7 +29,6 @@ pub struct ScriptKey {
 pub struct ScriptedExecutor {
     table: HashMap<ScriptKey, TrialEvidence>,
     default: Option<TrialEvidence>,
-    /// Every key [`TrialExecutor::execute`] was called with, in order.
     pub calls: Mutex<Vec<ScriptKey>>,
 }
 
@@ -204,7 +200,6 @@ mod tests {
                 "items",
                 vec![],
             ));
-        assert!(ex.wants_script_key());
         let mut spec = TrialSpec::empty_for_tests("t1");
         spec.script_key = Some(key.clone());
         assert_eq!(

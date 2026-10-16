@@ -22,7 +22,6 @@ pub(crate) struct LeanPayloadPresentationCase {
     pub(crate) name: String,
     pub(crate) segments: Vec<LeanCanonicalSegment>,
     pub(crate) message: LeanCanonicalMessage<LeanPayloadSpec>,
-    /// `None` when the message cannot be reconstructed.
     pub(crate) expected: Option<LeanPayloadLengths>,
 }
 
@@ -43,8 +42,6 @@ pub(crate) struct LeanTerminalDiagnosticPresentationCase {
     pub(crate) expected: LeanTerminalDiagnosticPresentationExpected,
 }
 
-/// `Conformance.TerminalDiagnosticReplayContracts`: whether a stored
-/// interrupted-call diagnostic replays under a (possibly changed) budget.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanTerminalDiagnosticReplayCase {
@@ -69,14 +66,14 @@ pub(crate) enum LeanTerminalDiagnosticPresentationExpected {
     },
 }
 
-/// Observe reconstructed payload fields at the native reconstruction boundary.
-/// This is deliberately not an adapter for provider_input::estimate_request.
+/// Observe reconstructed payload fields at the native reconstruction boundary;
+/// deliberately not an adapter for provider_input::estimate_request.
 pub(crate) trait PayloadPresentationAdapter {
     type Error: std::fmt::Display;
 
-    /// Report the sum of reconstructed payload-field bytes (including selected
-    /// literal markers). Return None for an unreconstructable message, not a
-    /// header-only or stored-stream fallback. Exclude inline metadata and URLs.
+    /// Sum of reconstructed payload-field bytes (including selected literal
+    /// markers); None for an unreconstructable message, not a fallback. Excludes
+    /// inline metadata and URLs.
     fn presented_payload_bytes<'a>(
         &'a mut self,
         segments: &'a [LeanCanonicalSegment],
@@ -84,7 +81,6 @@ pub(crate) trait PayloadPresentationAdapter {
     ) -> ExecutionFuture<'a, Result<Option<u64>, Self::Error>>;
 }
 
-/// Check presentation length, independently of provider serialization/sizing.
 pub(crate) async fn assert_native_payload_presentation_case<A>(
     case: &LeanPayloadPresentationCase,
     adapter: &mut A,

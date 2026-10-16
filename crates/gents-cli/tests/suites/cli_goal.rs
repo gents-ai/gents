@@ -206,8 +206,6 @@ async fn goal_resume_request_reuses_signed_predecessor_and_returns_same_child() 
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
     let session_id = format!("resume-session-{}", Uuid::new_v4().simple());
 
-    // The real CLI signs and submits the predecessor; the running daemon owns
-    // its completion. No unsigned request or forged terminal row is seeded.
     let submitted = run_cli_json(
         &home_dir,
         &[

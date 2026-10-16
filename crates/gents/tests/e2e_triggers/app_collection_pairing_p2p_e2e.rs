@@ -1,9 +1,3 @@
-//! #657 — reconcile-driven app-collection replication fires an Trigger.
-//!
-//! Unlike `event_trigger_p2p_e2e` (manual `install_one_way_replicator`), this
-//! drives replication through `DataPlanePairingDesired` + the pairing
-//! reconciler. Both nodes run `Gents::run`.
-
 use std::time::{Duration, Instant};
 
 use gents::agent::p2p_reconcile::GraphqlEnrollmentStore;

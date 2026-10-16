@@ -1,31 +1,21 @@
-//! Shared provider-usage charge semantics.
-//!
-//! The request-wide aggregate ledger ([`crate::agent::loop_stream`]) and the
-//! durable `InferenceCall` write path ([`crate::admission::persistence`]) must
-//! charge the same way: otherwise Harbor/ATIF sums of persisted rows diverge
-//! from the live ledger, and a crash-rehydrate path would disagree with either.
-//!
-//! Mirrors `PromptAssembly.AggregateBudget.Usage.chargedTotal` in Lean: charge
-//! the provider input/output components already stored on `InferenceCall`.
-//! `total_tokens` remains an observed provider value, not a second accounting
-//! source that has no durable column.
+//! Shared provider-usage charge semantics: the request-wide aggregate ledger
+//! and the durable `InferenceCall` write path must charge the same way, or
+//! persisted sums diverge from the live ledger. Mirrors
+//! `PromptAssembly.AggregateBudget.Usage.chargedTotal`.
 
 use rig::completion::Usage;
 
-/// Tokens charged against a request-wide budget for one provider usage report.
-///
-/// Equal to `input_tokens + output_tokens`, the durable components used by
-/// restart rehydration. Zero means the report is not enforceable (treated as
-/// missing by the ledger).
+/// Tokens charged against a request-wide budget for one provider usage report:
+/// `input_tokens + output_tokens`, the durable components used by restart
+/// rehydration. Zero means the report is not enforceable.
 pub fn charged_usage_total(usage: Usage) -> u64 {
     usage.input_tokens.saturating_add(usage.output_tokens)
 }
 
 /// Reconstruct the charged total from durable `InferenceCall` columns.
 ///
-/// Persistence writes both provider components together. Both absent means the
-/// call never reported usage; any partial or negative row is corrupt and must
-/// fail budget rehydration closed.
+/// Both absent means the call never reported usage; any partial or negative
+/// row is corrupt and must fail budget rehydration closed.
 fn charged_from_persisted_parts(
     prompt_tokens: Option<i64>,
     completion_tokens: Option<i64>,
@@ -59,11 +49,8 @@ where
 }
 
 /// Sum durable usage columns across rows for observation (ATIF / Harbor).
-///
 /// Each column stays `None` until at least one row supplies a non-negative
-/// value for it — the same rule the ledger's rehydrate path uses per field.
-/// Callers that need the request-wide charged total should use
-/// [`sum_charged_from_persisted_parts`] over the raw rows.
+/// value.
 pub fn sum_persisted_usage_columns<I>(rows: I) -> (Option<u64>, Option<u64>, Option<u64>)
 where
     I: IntoIterator<Item = (Option<i64>, Option<i64>, Option<i64>)>,

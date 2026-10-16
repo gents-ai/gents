@@ -1,6 +1,3 @@
-/// Returns the modeled outcome of each dispatched call, in dispatch order. A
-/// dispatch the model decided to suppress, skip or stop finds the wrong event
-/// or an empty script and fails the test.
 struct RepeatProbe {
     script: Arc<std::sync::Mutex<std::collections::VecDeque<serde_json::Value>>>,
 }
@@ -9,8 +6,6 @@ impl ToolDyn for RepeatProbe {
     fn name(&self) -> String {
         "repeat_probe".into()
     }
-    /// Registered as a command-envelope owner so a malformed envelope has no
-    /// error identity.
     fn emits_command_envelope(&self) -> bool {
         true
     }
@@ -273,7 +268,6 @@ async fn repeated_identical_bash_failure_stops_the_loop() {
     node.shutdown().await;
 }
 
-/// Not a command runner, but returns text shaped like the command envelope.
 struct EnvelopeShapedTool {
     calls: Arc<std::sync::atomic::AtomicUsize>,
 }

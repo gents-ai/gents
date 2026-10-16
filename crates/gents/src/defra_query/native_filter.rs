@@ -22,10 +22,6 @@ struct InputField {
     type_ref: TypeRef,
 }
 
-/// The native runner can return zero for unknown COUNT filter fields instead
-/// of reporting invalid input. Its introspected input definitions and native
-/// scalar/operator codecs remain the authority for filter shape; this adapter
-/// checks that representation before any read, including write target preview.
 pub(crate) async fn validate_filter(
     access: &dyn ConfigRead,
     collection: &str,

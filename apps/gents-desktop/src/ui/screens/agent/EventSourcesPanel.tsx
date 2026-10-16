@@ -40,7 +40,6 @@ type EventSourceDraft = {
   tags: string[];
 };
 
-/* each field's value as the document takes it; each throws its problem */
 function eventSourceFields(next: EventSourceDraft) {
   return {
     sourceCollection: () =>
@@ -68,10 +67,6 @@ function eventSourceFields(next: EventSourceDraft) {
   };
 }
 
-/**
- * What is wrong with an event source draft, at its fields: each field's
- * own parse, then the grouping rules, each at the field that resolves it.
- */
 export function eventSourceProblems(
   next: EventSourceDraft,
 ): Problems<EventSourceDraft> {
@@ -79,7 +74,6 @@ export function eventSourceProblems(
   const out: Problems<EventSourceDraft> = {};
   for (const field of Object.keys(fields) as (keyof typeof fields)[])
     out[field] = problemOf(fields[field]);
-  /* the rules read only fields that parsed */
   const value = <K extends keyof typeof fields>(field: K) =>
     out[field] ? undefined : (fields[field]() as ReturnType<(typeof fields)[K]>);
   const expectedCount = value("expectedCount");
@@ -110,7 +104,6 @@ export function EventSourceEditor({
 }: {
   deployment: NodeView;
   source: EventSource;
-  /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
 }) {
   const { changeConfig } = useApp().actions;

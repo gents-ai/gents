@@ -9,19 +9,6 @@ import { logShellEvent } from "./clientLifecycle";
 import { desktopUpdateRefreshScope } from "./projectionController";
 import { timingConfig } from "./timing";
 
-/**
- * How the desktop follows the client while it runs, as reactions to the
- * stores rather than to renders: one projection controller, one bridge
- * listener and the foreground reads for each run of the client; a session
- * read and the selected node told to the host whenever the selection moves;
- * and the live-delta poll while a request in the selected session is
- * tracked. Returns the way to stop.
- *
- * Nothing runs until the client does: starting the controller during
- * configuration bootstrap races the lifecycle's authoritative snapshot read
- * and can clear its failure while leaving startupPhase at
- * configuration-error.
- */
 export function startClientObservation(
   { api, stores, view, actions, lifecycle, trackedRequestId }: DesktopApp,
   listenToUpdates: DesktopClientUpdatedListenerFactory,
@@ -65,8 +52,6 @@ export function startClientObservation(
       })
       .catch(reportListenerError);
 
-    /* the host narrows its observation to the selected node; only the newest
-       publish may report a failure */
     let published = 0;
     const publishSelection = () => {
       const mine = ++published;
@@ -75,9 +60,6 @@ export function startClientObservation(
       });
     };
 
-    /* the live cursor, polled while a request in the selected session is
-       tracked; a continuity failure promotes itself to one full bounded
-       projection */
     const pollMs = timingConfig().activeSessionPollMs;
     let polled: string | null = null;
     let pollTimer: ReturnType<typeof setTimeout> | undefined;

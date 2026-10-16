@@ -31,7 +31,7 @@ inductive EvaluationError where
   deriving DecidableEq, Repr
 
 /-- The wire adapter only expands valid representation into existing ClaudeMap
-events. It delegates every order and sealing decision to `runContentTrace`. -/
+events. -/
 def evaluate (start : ThinkingStart) (later : List StreamEvent) :
     Except EvaluationError (List ContentStep × List StreamBlock) := do
   let initial ← (expandThinkingStart start).mapError EvaluationError.wire

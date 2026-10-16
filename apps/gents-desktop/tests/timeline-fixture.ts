@@ -1,6 +1,5 @@
-/* Sessions and their timeline items as the bridge sends them: every field
-   present, the ones a test does not care about null. A test names only
-   what it is about. */
+/* Session and timeline-item fixtures as the bridge sends them: every field
+   present, the ones a test does not care about null. */
 import type {
   DesktopSessionSnapshot,
   RenderedTimelineItem,
@@ -58,7 +57,7 @@ export const pendingUserTurn = (
   kind: "pendingUserTurn",
 });
 
-/** A session's context: an empty window that nothing has compacted. */
+/** An empty session context. */
 export const sessionContext = (
   context: Partial<DesktopSessionSnapshot["context"]> = {},
 ): DesktopSessionSnapshot["context"] => ({
@@ -76,7 +75,7 @@ export const sessionContext = (
   ...context,
 });
 
-/** A session as read: settled, with no turn in flight. */
+/** A settled session with no turn in flight. */
 export const sessionSnapshot = (
   session: Partial<DesktopSessionSnapshot> = {},
 ): DesktopSessionSnapshot => ({

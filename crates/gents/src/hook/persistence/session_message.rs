@@ -4,10 +4,10 @@ use anyhow::Context;
 use crate::session_message::{AgentMessageArgs, AgentNewArgs};
 
 impl DefraSessionHook {
-    /// Dispatch `agent_new`/`agent_message`. The accepted call was
-    /// published in background: it returns its receipt immediately and stays
-    /// running until the request it caused reaches a durable terminal, which
-    /// the background completion observer delivers as a notification.
+    /// Dispatch `agent_new`/`agent_message`. The accepted call was published
+    /// in background and stays running until the request it caused reaches a
+    /// durable terminal, delivered as a notification by the background
+    /// completion observer.
     pub(super) async fn persist_session_message_tool_call(
         &self,
         tool_name: &str,
@@ -299,8 +299,6 @@ impl DefraSessionHook {
 }
 
 impl DefraSessionHook {
-    /// `agent_interrupt` and `agent_list`: foreground calls answered in the
-    /// calling turn from the caller's own agents configuration.
     pub(super) async fn persist_agent_control_tool_call(
         &self,
         tool_name: &str,

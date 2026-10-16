@@ -509,8 +509,6 @@ async fn status_liveness_surfaces_expired_processing_request_and_running_tool() 
     Ok(())
 }
 
-/// #1782: progress counts completed tool calls and inference activity, read
-/// through bounded per-request queries, not only currently running calls.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn status_liveness_progress_counts_completed_tools_and_inference() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -663,7 +661,6 @@ async fn status_liveness_progress_counts_completed_tools_and_inference() -> Resu
         }
     };
 
-    // Completed tool batch, none running: newest completion is 20s old.
     let batched = format!("batched-{}", Uuid::new_v4().simple());
     let batched_doc = seed_request(batched.clone()).await?;
     for (index, (started, completed)) in [(-200, -190), (-40, -20), (-120, -100)]
@@ -688,8 +685,6 @@ async fn status_liveness_progress_counts_completed_tools_and_inference() -> Resu
     )
     .await?;
 
-    // Another principal's newer row naming the same request document is not
-    // this request's progress.
     graphql_query(
         &graphql,
         &format!(
@@ -717,7 +712,6 @@ async fn status_liveness_progress_counts_completed_tools_and_inference() -> Resu
     )
     .await?;
 
-    // Between tool batches, waiting on an in-flight inference started 5s ago.
     let thinking = format!("thinking-{}", Uuid::new_v4().simple());
     let thinking_doc = seed_request(thinking.clone()).await?;
     seed_tool(

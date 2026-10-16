@@ -3,29 +3,16 @@ import Proofs.PromptAssembly.State
 /-!
 # Assistant content ordering
 
-`Proofs.PromptAssembly.Executable` models a message as a single `MessageKind`:
-a row either announces a set of tool calls, carries one tool result, or is
-ordinary. That abstraction is deliberately blind to what sits *inside* an
-assistant message.
-
-Production is not. `sanitize_history_for_provider` (`src/compaction.rs`) is a
-composition of three transforms. For grouped-order providers, the outermost
-one — Rust `normalize_assistant_content_order` — reorders the items within an
-assistant message to text, then reasoning and other non-call content, then
-tool calls. Claude's native replay instead preserves the original block order:
-moving a signed thinking block changes the exact continuation witness.
-
-This file models both order modes. The load-bearing result is
-`callsOf_normalizeFor`: either choice leaves the announced tool calls
-unchanged, so the row abstraction above is invariant under it.
+`Proofs.PromptAssembly.Executable` models a message as a single `MessageKind`
+row; the Rust `normalize_assistant_content_order` composition reorders assistant
+content for grouped-order providers, while Claude's native replay preserves the
+original block order because moving a signed thinking block changes the exact
+continuation witness. Both order modes leave announced tool calls unchanged, so
+the row abstraction is invariant under them (`callsOf_normalizeFor`).
 -/
 
 namespace PromptAssembly.Content
 
-/-- An item inside an assistant message, abstracted to what the ordering rule
-distinguishes: text, everything else that is not a call (reasoning, images),
-and tool calls. The `index` on the first two constructors keeps distinct items
-distinguishable, so `normalize_perm` and `filter_normalize_*` say something. -/
 inductive Item where
   | text (index : Nat)
   | other (index : Nat)
@@ -67,17 +54,12 @@ def callId? : Item → Option ToolExecution.ToolCallId
 
 end Item
 
-/-- The canonical provider order: text, then other non-call content, then tool
-calls. Mirrors Rust `normalize_assistant_content_order`, which partitions the
-content list into the same three buckets and concatenates them in this order.
-Relative order *within* each bucket is preserved, because `List.filter` is
-order-preserving. -/
+/-- Mirrors Rust `normalize_assistant_content_order`. -/
 def normalize (items : List Item) : List Item :=
   items.filter Item.isText ++ items.filter Item.isOther ++ items.filter Item.isCall
 
-/-- The selected provider-input order, not an inference from message contents
-or the presence of a signed string. Claude uses `nativePreserved`; the existing
-grouped-order providers use `grouped`. -/
+/-- The selected provider-input order, not an inference from message contents.
+Claude uses `nativePreserved`; grouped-order providers use `grouped`. -/
 inductive OrderMode where
   | grouped
   | nativePreserved
@@ -149,7 +131,6 @@ theorem mem_callsOf_of_mem {items : List Item} {callId : ToolExecution.ToolCallI
         simp only [callsOf_cons_call]
         exact Finset.mem_insert_of_mem hmem
 
-/-- A content list with no calls announces nothing. -/
 theorem callsOf_eq_empty_of_no_calls (items : List Item)
     (h : ∀ item ∈ items, item.isCall = false) : callsOf items = ∅ := by
   induction items with
@@ -188,11 +169,6 @@ theorem callsOf_eq_empty_of_no_calls (items : List Item)
     | other index => simpa using ih
     | call callId => simp [ih]
 
-/-- **Reordering never changes what a message announces.**
-
-This is what licenses `Proofs.PromptAssembly.Provider` to run the Rust
-three-stage composition while keeping the row abstraction — and therefore every
-pairing theorem stated over it — intact. -/
 theorem callsOf_normalize (items : List Item) :
     callsOf (normalize items) = callsOf items := by
   unfold normalize
@@ -200,22 +176,18 @@ theorem callsOf_normalize (items : List Item) :
     callsOf_filter_isOther, callsOf_filter_isCall]
   simp
 
-/-- Both provider order modes preserve the exact set of announced calls. -/
 theorem callsOf_normalizeFor (mode : OrderMode) (items : List Item) :
     callsOf (normalizeFor mode items) = callsOf items := by
   cases mode with
   | grouped => exact callsOf_normalize items
   | nativePreserved => rfl
 
-/-- Every item lands in exactly one bucket. -/
 theorem exists_unique_bucket (item : Item) :
     (item.isText ∧ ¬ item.isOther ∧ ¬ item.isCall) ∨
       (¬ item.isText ∧ item.isOther ∧ ¬ item.isCall) ∨
       (¬ item.isText ∧ ¬ item.isOther ∧ item.isCall) := by
   cases item <;> simp
 
-/-- **Nothing is lost or duplicated.** Normalization is a permutation of its
-input, so reordering cannot silently drop assistant content. -/
 theorem normalize_perm (items : List Item) :
     List.Perm (normalize items) items := by
   induction items with
@@ -242,7 +214,6 @@ theorem length_normalize (items : List Item) :
     (normalize items).length = items.length :=
   (normalize_perm items).length_eq
 
-/-- Normalization is a fixpoint on already-ordered content, hence idempotent. -/
 @[simp] theorem filter_isText_normalize (items : List Item) :
     (normalize items).filter Item.isText = items.filter Item.isText := by
   unfold normalize
@@ -294,22 +265,18 @@ theorem length_normalize (items : List Item) :
   rw [htext, hother, List.filter_filter]
   simp
 
-/-- **Idempotence.** A second pass at the provider boundary is a no-op, so
-re-entering the send path cannot keep re-shuffling content. -/
 theorem normalize_idempotent (items : List Item) :
     normalize (normalize items) = normalize items := by
   conv_lhs => rw [normalize]
   rw [filter_isText_normalize, filter_isOther_normalize, filter_isCall_normalize]
   rfl
 
-/-- Re-entering either provider-input order stage cannot change its output. -/
 theorem normalizeFor_idempotent (mode : OrderMode) (items : List Item) :
     normalizeFor mode (normalizeFor mode items) = normalizeFor mode items := by
   cases mode with
   | grouped => exact normalize_idempotent items
   | nativePreserved => rfl
 
-/-- Neither order mode drops or duplicates assistant content. -/
 theorem normalizeFor_perm (mode : OrderMode) (items : List Item) :
     List.Perm (normalizeFor mode items) items := by
   cases mode with

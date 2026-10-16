@@ -1,6 +1,3 @@
-//! Migration engine: inactive+fields lock, PatchVersioned (lensless + fixture lens),
-//! crash-window resume, chain-replay pin authoring.
-
 use defra_node::EmbeddedNode;
 use gents_migration::{
     ensure_migrations_dynamic, fixture_lens_wasm, predict_transform_id, BaselineCollectionOwned,
@@ -21,7 +18,7 @@ const ADD_LABEL_PATCH: &str = r#"[
   {"op":"replace","path":"/IsActive","value":false}
 ]"#;
 
-/// Discover the destination CID of an inactive field-add patch (authoring tool).
+/// Discover the destination CID of an inactive field-add patch.
 async fn discover_inactive_patch_pin(node: &EmbeddedNode) -> (String, String) {
     node.add_schema(FIXTURE_SDL).await.expect("add FixtureDoc");
     let v0 = node
@@ -55,7 +52,6 @@ async fn inactive_field_add_keeps_old_version_active() {
     let (v0, v1) = discover_inactive_patch_pin(node.as_ref()).await;
     assert_ne!(v0, v1);
 
-    // Activate the new pin — single-txn flip.
     node.set_active_collection_version(&v1)
         .await
         .expect("activate");
@@ -75,12 +71,10 @@ async fn inactive_field_add_keeps_old_version_active() {
 
 #[tokio::test]
 async fn patch_versioned_lensless_attach_patch_activate_and_idempotent() {
-    // Node A: discover pins only.
     let discover = fresh_node().await;
     let (v0, v1) = discover_inactive_patch_pin(discover.as_ref()).await;
     discover.shutdown().await;
 
-    // Node B: apply via the engine with discovered pins.
     let node = fresh_node().await;
     let registry = DynamicRegistry {
         baseline: vec![BaselineCollectionOwned {
@@ -113,7 +107,7 @@ async fn patch_versioned_lensless_attach_patch_activate_and_idempotent() {
     assert!(active.is_active);
     assert!(active.fields.iter().any(|f| f.name == "label"));
 
-    // Both versions known pins → multi-version DAG accepted.
+    // Both versions known pins.
     let all = node.get_all_collection_versions().await.expect("versions");
     let fixture_versions: Vec<_> = all
         .iter()
@@ -133,7 +127,7 @@ async fn patch_versioned_lensless_attach_patch_activate_and_idempotent() {
 #[tokio::test]
 async fn patch_versioned_with_fixture_lens_registers_transform() {
     let wasm = fixture_lens_wasm();
-    // Stub wasm is 8 bytes — skip full lens path if build was stubbed.
+    // Stub wasm is 8 bytes.
     if wasm.len() <= 16 {
         eprintln!(
             "skipping fixture lens e2e: stub wasm (set wasm target / unset GENTS_SKIP_LENS_BUILD)"
@@ -152,7 +146,6 @@ async fn patch_versioned_with_fixture_lens_registers_transform() {
     let predicted_tx = predict_transform_id(&lens);
 
     let node = fresh_node().await;
-    // Seed a document at baseline so a later read exercises the lens path.
     {
         let reg0 = DynamicRegistry {
             baseline: vec![BaselineCollectionOwned {
@@ -243,7 +236,6 @@ async fn crash_resume_after_inactive_patch_before_activate() {
     discover.shutdown().await;
 
     let node = fresh_node().await;
-    // Manually reach "complete inactive" without activate.
     node.add_schema(FIXTURE_SDL).await.expect("schema");
     let patched = node
         .patch_collection("FixtureDoc", ADD_LABEL_PATCH)
@@ -253,7 +245,6 @@ async fn crash_resume_after_inactive_patch_before_activate() {
     assert!(!patched.is_active);
 
     let registry = DynamicRegistry {
-        baseline: vec![BaselineCollectionOwned {
             name: "FixtureDoc".into(),
             sdl: FIXTURE_SDL.into(),
             expected_version: Some(v0.clone()),
@@ -273,7 +264,6 @@ async fn crash_resume_after_inactive_patch_before_activate() {
     let report = ensure_migrations_dynamic(node.as_ref(), &registry)
         .await
         .expect("resume activate");
-    // Should activate without re-patching (steps_applied counts activate path).
     assert!(
         report.steps_applied + report.steps_already_current >= 1,
         "{report:?}"
@@ -290,8 +280,6 @@ async fn crash_resume_after_inactive_patch_before_activate() {
 
 #[tokio::test]
 async fn canonical_catalog_pins_for_authoring() {
-    // Authoring aid: register the canonical SDL directly so stale pins cannot
-    // prevent the test from reporting every missing or stale root VersionID.
     let node = fresh_node().await;
     let catalog = gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
         .iter()

@@ -3,8 +3,6 @@ use super::*;
 use crate::claude_messages_body::{ReplayIssuer, ReplayTag, ReplayWire, ResolvedReplayEvidence};
 
 /// One native row and its independently established canonical provider source.
-/// The tag follows this row through provider-view projection by the projection's
-/// emitted source index, never by provider-generated IDs or equal content.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TaggedMessage {
     pub message: Message,
@@ -32,15 +30,12 @@ pub struct ReplayEvidenceRow {
     pub evidence: ResolvedReplayEvidence,
 }
 
-/// A deterministic violation of canonical replay provenance. Native owners
-/// preserve this type through contextual errors; storage failures must not be
-/// relabeled as invalid provider input.
+/// A deterministic violation of canonical replay provenance; storage failures
+/// must not be relabeled as this.
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct ReplayEvidenceViolation(pub String);
 
-/// A native canonical lookup. The returned list deliberately retains zero or
-/// multiple matches so the replay owner can reject missing/ambiguous evidence.
 pub type ReplayEvidenceResolver = Arc<
     dyn Fn(
             Vec<ReplayTag>,
@@ -52,13 +47,12 @@ pub type ReplayEvidenceResolver = Arc<
 /// One-shot carrier from an admission estimate's replay evidence resolution to
 /// the immediately following dispatch lookup.
 ///
-/// Native premise the model does not cover (it treats resolution as an opaque
-/// pure parameter of the tags): the slot holds ONLY the admission estimate's
-/// resolution, is consumed exactly once by the immediately following dispatch
-/// whose tags it covers, and every later assembly re-reads the store. A
-/// capture replicating between the estimate and that first dispatch is
-/// observed no earlier than the next resolution; the estimate's token count
-/// already races this way.
+/// Native premise the model does not cover: the slot holds ONLY the admission
+/// estimate's resolution, is consumed exactly once by the immediately
+/// following dispatch whose tags it covers, and every later assembly re-reads
+/// the store. A capture replicating between the estimate and that first
+/// dispatch is observed no earlier than the next resolution; the estimate's
+/// token count already races this way.
 #[derive(Clone, Default)]
 pub struct ReplayEstimateSeed {
     state: std::sync::Arc<std::sync::Mutex<ReplayEstimateSeedState>>,
@@ -86,7 +80,7 @@ impl ReplayEstimateSeed {
     }
 
     /// Record one resolution while an admission estimate holds the seed armed;
-    /// dispatch and later resolutions resolve unarmed and record nothing.
+    /// dispatch and later resolutions record nothing.
     pub fn record(&self, rows: Vec<ReplayEvidenceRow>) {
         let mut state = self
             .state
@@ -115,8 +109,7 @@ pub struct LoopReplayInput {
     pub issuer: Option<ReplayIssuer>,
     /// Wire selected by the running loop's actual provider profile.
     pub wire: Option<ReplayWire>,
-    /// The pending tool round's sources, which a reduction must not
-    /// summarize. Replay selection does not read them.
+    /// The pending tool round's sources; a reduction must not summarize them.
     pub required: Vec<ReplayTag>,
     pub resolve: Option<ReplayEvidenceResolver>,
     /// Carries the admission estimate's resolution to the first dispatch.
@@ -126,9 +119,8 @@ pub struct LoopReplayInput {
 impl LoopReplayInput {
     /// Arm [`Self::estimate_seed`] so the resolutions run while the returned
     /// guard is held are recorded for the immediately following dispatch.
-    /// Dropping the guard ends the bracket, so an assembly that unwinds or is
-    /// cancelled still leaves later resolutions unarmed. The admission
-    /// estimate brackets exactly its own assembly with this.
+    /// Dropping the guard ends the bracket on every exit path, including
+    /// unwinds and cancellation.
     pub fn arm_estimate_seed(&self) -> EstimateSeedGuard {
         let seed = self.estimate_seed.clone();
         if let Some(seed) = &seed {
@@ -139,8 +131,7 @@ impl LoopReplayInput {
 }
 
 /// Ends the estimate-seed bracket opened by
-/// [`LoopReplayInput::arm_estimate_seed`] when dropped, on every exit path
-/// including panics, unwinds and cancellation.
+/// [`LoopReplayInput::arm_estimate_seed`] when dropped.
 pub struct EstimateSeedGuard {
     seed: Option<ReplayEstimateSeed>,
 }
@@ -153,13 +144,9 @@ impl Drop for EstimateSeedGuard {
     }
 }
 
-/// `(turn_index, attempt, request, assembly_trace)`.
-///
-/// The trace rides alongside the request because the assembled
-/// `CompletionRequest` is the *output* of prompt assembly and cannot explain
-/// its own inputs: the provider-assigned assistant message ids, the exact
-/// threaded tool-result content, the post-compaction message list, and which
-/// builder produced it are all in-memory facts that die with the loop. See
+/// `(turn_index, attempt, request, assembly_trace)`. The trace rides alongside
+/// the request because the assembled `CompletionRequest` is the *output* of
+/// prompt assembly and cannot explain its own inputs; see
 /// `crate::rendered_request::AssemblyTrace`.
 pub type RenderedRequestSink = Arc<
     dyn Fn(
@@ -205,12 +192,10 @@ pub type TurnCompactor = Arc<
 
 pub type StructuredOutputValidator = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
-/// A typed-output contract carried through the owned completion loop.
-///
-/// Rig owns the provider schema transport. Gents keeps ownership of the loop
-/// so schema validation participates in its deadline-aware, formally modelled
-/// retract-and-resample lifecycle instead of bypassing persistence and hooks
-/// through `rig::Agent::prompt_typed`.
+/// A typed-output contract carried through the owned completion loop. Rig owns
+/// the provider schema transport; gents keeps loop ownership so schema
+/// validation participates in its modelled retract-and-resample lifecycle
+/// instead of bypassing persistence and hooks through `rig::Agent::prompt_typed`.
 #[derive(Clone)]
 pub struct StructuredOutputConfig {
     pub(super) schema: schemars::Schema,
@@ -276,8 +261,8 @@ pub enum LoopStreamItem {
         attempt: u32,
         capture_scope: gents_protocol::rendered_request::CaptureScope,
     },
-    /// A complete provider turn ready for atomic durable acceptance. The loop
-    /// resumes into tool dispatch only after the consumer returns.
+    /// A complete provider turn ready for atomic durable acceptance; tool
+    /// dispatch resumes only after the consumer returns.
     ProviderTurnReady {
         turn: usize,
         attempt: u32,
@@ -286,10 +271,8 @@ pub enum LoopStreamItem {
     TurnRetracted {
         turn: usize,
         attempt: u32,
-        /// Backoff the generator sleeps before the resample. Carried so the
-        /// daemon can extend the next poll's liveness budget by it, exactly as
-        /// for `AttemptFailed` — otherwise a retract backoff longer than the
-        /// liveness timeout is misread as a dead stream (#648).
+        /// Carried so the daemon can extend the next poll's liveness budget by
+        /// it, as for `AttemptFailed` (#648).
         backoff: std::time::Duration,
     },
     AttemptFailed {
@@ -310,7 +293,7 @@ pub enum LoopStreamItem {
         reply: tokio::sync::oneshot::Sender<anyhow::Result<Vec<FoldedPrompt>>>,
     },
     /// Owned execution publishes admitted input before the first provider
-    /// invocation. Tool continuation messages already have delivery owners.
+    /// invocation.
     AuthoredInputReady {
         context: Option<Message>,
         prompt: Message,
@@ -323,7 +306,7 @@ pub enum LoopStreamItem {
 #[derive(Clone)]
 pub struct LoopConfig {
     /// One backend/wire-selected provider projection shared by every budget
-    /// decision in this completion loop and its nested compactor.
+    /// decision in this loop and its nested compactor.
     pub provider_input_counter: Arc<crate::provider_input::ProviderInputCounter>,
     pub replay: LoopReplayInput,
     pub preamble: Option<String>,
@@ -355,8 +338,7 @@ pub struct LoopConfig {
     pub compaction_threshold: f64,
     pub retry_policy: CompletionRetryPolicy,
     /// Longest silence tolerated from an open provider stream, before its
-    /// first item and between items. Expiry fails the attempt as transport
-    /// through `retry_policy`. It runs only while the loop awaits provider
+    /// first item and between items. Runs only while the loop awaits provider
     /// output, never across admission queueing, tool dispatch or retry
     /// backoff. `None` waits for the request deadline.
     pub provider_idle_timeout: Option<std::time::Duration>,

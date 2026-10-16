@@ -1,6 +1,3 @@
-/* Scope: which nodes and agents a list covers, and the URL it can be
-   linked by. The default is the shell's selected node, which is what
-   every screen shows today. */
 import type {
   DeploymentView,
   MailboxItemView,

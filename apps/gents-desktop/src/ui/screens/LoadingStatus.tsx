@@ -18,9 +18,6 @@ const BUSY = {
   configureInference: "Opening…",
 };
 
-/* Above the composer while sending still works; in its place, in the same
-   grid cell, when the session cannot take a message, so the reason sits
-   where the person was about to type. */
 export function LoadingStatus({ overlay = false }: { overlay?: boolean }) {
   const status = useView((view) => view.loadingStatus);
   const {

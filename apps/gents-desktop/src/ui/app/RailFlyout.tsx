@@ -53,7 +53,6 @@ function Item({
         active && "border-border/60 bg-background text-ink shadow-xs",
       )}
     >
-      {/* the rail's 32px square, minus the border already on the row */}
       <span className="grid size-[30px] shrink-0 place-items-center">{icon}</span>
       <span className="min-w-0 flex-1 truncate">{children}</span>
       {count ? (
@@ -65,8 +64,6 @@ function Item({
   );
 }
 
-/* the panel's content, shared by the hover flyout, the expanded column
-   and the mobile sheet */
 export function NavPanel({
   route,
   settings,
@@ -89,9 +86,6 @@ export function NavPanel({
     working !== null && route.name === "agent" && route.nodeDid === working.nodeDid;
   return (
     <>
-      {/* the working node, in the same slot as its avatar on the rail: its
-          configuration is always one click away. A client that runs no node
-          of its own says so, and offers the nodes it can see. */}
       {working ? (
         <a
           href={href({
@@ -150,7 +144,6 @@ export function NavPanel({
           </span>
         </a>
       )}
-      {/* the rail's hairline, in place, then drawn on to the edge */}
       <div className="mb-1 ml-[18px] h-px w-5 bg-border" />
       <Item
         to={href({ name: "session", sessionId: null })}
@@ -217,7 +210,6 @@ export function NavPanel({
           </a>
         </>
       )}
-      {/* the same rhythm as the rail's foot (AppShell): 4px between chip, rule, Nodes and Settings */}
       <div className="mt-auto flex flex-col gap-1">
         {syncRow && (
           <div className="mx-3">
@@ -239,8 +231,6 @@ export function NavPanel({
   );
 }
 
-/* whether the hover flyout is showing: what the rail draws under the
-   flyout's own rows hides itself while it is, so there is one control */
 export const FlyoutOpenContext = createContext(false);
 
 export function RailFlyout({

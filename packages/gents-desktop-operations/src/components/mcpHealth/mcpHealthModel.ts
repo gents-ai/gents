@@ -7,11 +7,8 @@ export type VisualState =
 
 export type DisplayProjection = "healthy" | "stale" | "unreachable" | "unknown";
 
-// Raw persisted `status` typed for presentation (dot color, CSS class).
-// This mirrors the server's raw vocabulary verbatim — it does not
-// classify or invent any state. The single owner of MCP health
-// classification is `MCPServiceHealthView.displayState`
-// (`ToolServiceHealthState::project` in Rust); see `projectStatus`.
+// Raw `status` pass-through for presentation only; the classification owner is
+// `ToolServiceHealthState::project` in Rust — no TS heuristic re-derives it.
 export function visualState(service: MCPServiceHealthView): VisualState {
   const raw = (service.status ?? "").toLowerCase();
   const status = raw === "stale" ? "degraded" : raw;
@@ -29,10 +26,6 @@ export function visualState(service: MCPServiceHealthView): VisualState {
   }
 }
 
-// Pass-through of the server-projected `displayState`. This is the only
-// classification the desktop performs — no TS heuristic re-derives it
-// from `status`/`failureCount`/`lastSeen`. The `"unknown"` fallback is
-// the single place a missing/unrecognized `displayState` is handled.
 export function projectStatus(service: MCPServiceHealthView): DisplayProjection {
   const displayState = service.displayState;
   if (

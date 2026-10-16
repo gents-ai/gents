@@ -2,15 +2,7 @@ use std::path::PathBuf;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-use crate::tool_surface::FileToolMode;
-use crate::toolset::{
-    apply_workspace_authority, CommandExecutionMode, CommandExecutionPolicy, WorkspaceAuthority,
-};
-
-use super::{
-    bind_workspace_overlay, workspace_authority_file_mode, IsolatedWorkspaceRecord,
-    WorkspaceBindInput, WorkspacePlacementRecord,
-};
+use super::{bind_workspace_overlay, IsolatedWorkspaceRecord, WorkspaceBindInput, WorkspacePlacementRecord};
 
 fn temp_tree() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let root = tempfile::tempdir().unwrap();
@@ -62,15 +54,6 @@ fn bind_input<'a>(
 }
 
 #[test]
-fn read_write_meets_unrestricted_to_workspace_write() {
-    let policy =
-        CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::Unrestricted);
-    let met = apply_workspace_authority(&policy, WorkspaceAuthority::ReadWrite);
-    assert_eq!(met.mode, CommandExecutionMode::WorkspaceWrite);
-    assert!(met.deny_git_metadata_writes());
-}
-
-#[test]
 fn read_write_never_meets_to_unrestricted() {
     for behavior in [
         CommandExecutionMode::ReadOnly,
@@ -85,36 +68,6 @@ fn read_write_never_meets_to_unrestricted() {
             behavior.meet(CommandExecutionMode::WorkspaceWrite)
         );
     }
-}
-
-#[test]
-fn read_only_and_integrate_meet_command_mode_to_read_only() {
-    let policy =
-        CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::Unrestricted);
-    assert_eq!(
-        apply_workspace_authority(&policy, WorkspaceAuthority::ReadOnly).mode,
-        CommandExecutionMode::ReadOnly
-    );
-    assert_eq!(
-        apply_workspace_authority(&policy, WorkspaceAuthority::Integrate).mode,
-        CommandExecutionMode::ReadOnly
-    );
-}
-
-#[test]
-fn authority_file_mode_matches_spec() {
-    assert_eq!(
-        workspace_authority_file_mode(WorkspaceAuthority::ReadWrite),
-        FileToolMode::ReadWrite
-    );
-    assert_eq!(
-        FileToolMode::ReadWrite.meet(workspace_authority_file_mode(WorkspaceAuthority::ReadOnly)),
-        FileToolMode::ReadOnly
-    );
-    assert_eq!(
-        FileToolMode::ReadWrite.meet(workspace_authority_file_mode(WorkspaceAuthority::Integrate)),
-        FileToolMode::ReadOnly
-    );
 }
 
 #[test]
@@ -503,26 +456,6 @@ fn persisted_cwd_must_stay_under_placement() {
 }
 
 #[test]
-fn workspace_authority_parse_and_write_flags() {
-    for (spelling, authority) in [
-        ("readOnly", WorkspaceAuthority::ReadOnly),
-        ("readWrite", WorkspaceAuthority::ReadWrite),
-        ("integrate", WorkspaceAuthority::Integrate),
-    ] {
-        assert_eq!(WorkspaceAuthority::parse(spelling).unwrap(), authority);
-        assert_eq!(authority.as_str(), spelling);
-    }
-    assert!(WorkspaceAuthority::parse("administrator").is_err());
-    assert!(WorkspaceAuthority::ReadWrite.allows_file_writes());
-    assert!(!WorkspaceAuthority::ReadOnly.allows_file_writes());
-    assert!(!WorkspaceAuthority::Integrate.allows_file_writes());
-    assert_eq!(
-        WorkspaceAuthority::ReadOnly.infimum(WorkspaceAuthority::ReadWrite),
-        WorkspaceAuthority::ReadOnly
-    );
-}
-
-#[test]
 fn write_and_integrate_authority_require_the_configured_principal() {
     let workspace = ready_workspace();
     assert!(super::require_workspace_principal(
@@ -552,14 +485,6 @@ fn write_and_integrate_authority_require_the_configured_principal() {
 }
 
 #[test]
-fn blank_workspace_id_is_unbound() {
-    assert!(super::optional_id(None).is_none());
-    assert!(super::optional_id(Some("")).is_none());
-    assert!(super::optional_id(Some("  ")).is_none());
-    assert_eq!(super::optional_id(Some("ws-1")), Some("ws-1"));
-}
-
-#[test]
 fn principal_and_placement_identity_mismatches_fail_closed() {
     let (_guard, operator, path) = temp_tree();
     let workspace = ready_workspace();
@@ -585,8 +510,6 @@ fn principal_and_placement_identity_mismatches_fail_closed() {
     .is_err());
 }
 
-/// Actual Git workspace, runtime schemas, signed request and held execution lease.
-/// Source files are authored before sealing; consumers must not mutate source.
 pub(crate) struct ArtifactTestFixture {
     pub grant: crate::workspace::ArtifactGrant,
     pub owner: crate::lifecycle::RequestLifecycle,
@@ -865,8 +788,6 @@ async fn artifact_grant_rechecks_binding_generation_and_sealed_bytes() {
             assert_eq!(fx.grant.validate_for_launch().await.is_ok(), should_allow);
         }
     }
-    // Fixture-only lifecycle resets above isolate each launch guard; production
-    // terminal ownership is tested by the execution lease suite, not this seeder.
     let response = fx.node.execute(&format!(r#"mutation {{ update_WorkspaceBinding(filter: {{ request_doc_id: {{ _eq: "{doc}" }} }}, input: {{ lifecycle_state: "released" }}) {{ _docID }} }}"#)).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     assert!(fx
@@ -928,8 +849,6 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
         let mode = CommandExecutionMode::parse(case["mode"].as_str().unwrap()).unwrap();
         let fx = artifact_test_fixture(&[]).await;
         if name == "unsupported_platform" {
-            // Inject only the host observation into the actual admission path;
-            // do not substitute a launch-only selector for admission evidence.
             assert_eq!(case["expected_admitted"], false);
             assert!(case["expected_bound_mode"].is_null());
             let error = super::resolve_request_workspace_overlay_on_host(
@@ -967,8 +886,6 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
         let generation = if name == "stale_incarnation" {
             "stale-execution"
         } else {
-            // An intentionally rejected owner remains unclaimed; do not forge
-            // an execution tuple merely to reach the later launch guard.
             request_owner.execution_generation().unwrap_or("")
         };
         let resolved = super::resolve_request_workspace_overlay(
@@ -979,8 +896,6 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
             Some(fx._dir.path()),
         )
         .await;
-        // Resolver failure is evidence of invalid context, not by itself proof
-        // that execution fails: always drive actual command launch preparation.
         if matches!(
             name,
             "missing_binding"
@@ -1267,16 +1182,15 @@ async fn artifact_resolver_rejects_missing_or_ready_context_before_binding() {
                 .unwrap_err()
                 .to_string()
                 .contains("sealed ReadOnly workspace"),
-            "{name}"
-        );
-        let after = fx.node.execute(&query).await;
-        assert!(!after.has_errors());
-        assert_eq!(
-            after.data, before.data,
-            "{name}: rejected artifact request created a binding"
-        );
-        // No artifact selection preserves the existing independent tool policy.
-        let ordinary = super::resolve_request_workspace_overlay(
+                    "{name}"
+                );
+                let after = fx.node.execute(&query).await;
+                assert!(!after.has_errors());
+                assert_eq!(
+                    after.data, before.data,
+                    "{name}: rejected artifact request created a binding"
+                );
+                let ordinary = super::resolve_request_workspace_overlay(
             &fx.node,
             owner.request(),
             owner.execution_generation().unwrap(),

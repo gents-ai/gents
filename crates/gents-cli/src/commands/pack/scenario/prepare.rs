@@ -1,10 +1,8 @@
 //! `experiment.json` `prepare` steps: host-run plugin calls before the seed.
 //!
-//! Each step admits a pack plugin under its own declared authority, calls
-//! it (optionally bound read-only to an operator-resolved ceiling
-//! directory), and maps its own output onto new `seed.fields` entries by
-//! JSON pointer. Steps run in manifest order, after every event source is
-//! observed and before the seed.
+//! Each step admits a pack plugin under its declared authority and maps its
+//! output onto new `seed.fields` entries by JSON pointer; steps run in
+//! manifest order, after every event source is observed and before the seed.
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -29,14 +27,12 @@ pub(super) struct ScenarioPrepareStep {
     pub(super) plugin: String,
     #[serde(default = "default_prepare_input")]
     pub(super) input: Value,
-    /// A directory this step binds read-only into the named plugin's
-    /// declared `bind_dir` field, resolved against the process cwd and,
-    /// when `init.tool_root` is set, required to stay inside it (see
-    /// [`gents::plugin::BoundDir::new`]). Present exactly when the plugin
-    /// declares `bind_dir` ([`validate_prepare_steps`]).
+    /// Binds read-only into the plugin's `bind_dir`; when `init.tool_root`
+    /// is set it must stay inside it. Present exactly when the plugin
+    /// declares `bind_dir`.
     #[serde(default)]
     pub(super) bind_dir: Option<String>,
-    /// Maps a JSON Pointer into the plugin's output onto a new `seed.fields`
+    /// JSON Pointer into the plugin's output mapped onto a new `seed.fields`
     /// entry; `""` selects the whole output value.
     pub(super) seed_fields: BTreeMap<String, String>,
 }
@@ -45,14 +41,10 @@ fn default_prepare_input() -> Value {
     Value::Object(serde_json::Map::new())
 }
 
-/// Validates every `prepare` step against the pack's own declared plugins
-/// and the seed fields `seed.fields`, `seed.job_id_field`, and
-/// `seed.prompt_field` already claim. A `prepare` step's `input` must be an
-/// object: the plugin ABI accepts nothing else, and refusing it here fails
-/// before the runtime starts rather than deep inside `call`/`call_bound`.
-/// Duplicate seed field names, whether between two `prepare` steps or
-/// against a seed field the manifest already declares, are refused here so
-/// insertion order never has to decide a winner.
+/// Validates every `prepare` step against the pack's declared plugins and
+/// seed fields. `input` must be an object (the plugin ABI accepts nothing
+/// else); duplicate seed field names are refused so insertion order never
+/// decides a winner.
 pub(super) fn validate_prepare_steps(manifest: &ScenarioManifest) -> Result<()> {
     let mut prepared_seed_fields = BTreeSet::new();
     for step in &manifest.prepare {
@@ -109,12 +101,6 @@ pub(super) fn validate_prepare_steps(manifest: &ScenarioManifest) -> Result<()> 
     Ok(())
 }
 
-/// Maps a prepare step's `seed_fields` pointers onto its plugin's own JSON
-/// output, coercing to the same string values `seed.fields` and the seed's
-/// GraphQL create mutation always carry. A pointer that does not resolve, or
-/// resolves to anything but a string, number, or bool, is refused: a
-/// mismatched field fails the run here rather than seeding an unusable
-/// value.
 pub(super) fn prepare_seed_fields(
     plugin: &str,
     output: &Value,
@@ -139,11 +125,8 @@ pub(super) fn prepare_seed_fields(
     Ok(fields)
 }
 
-/// Runs every `prepare` step in manifest order, returning the seed fields
-/// their outputs mapped ([`validate_prepare_steps`] refuses two steps from
-/// declaring the same seed field, so insertion order never matters here).
-/// Each call goes through [`gents::plugin::executor::call_runner`], which
-/// serves the network the plugin's declared manifold grants.
+/// Runs every `prepare` step in manifest order; each call is served the
+/// network its plugin's declared manifold grants.
 pub(super) async fn run_prepare_steps(
     pack: PathBuf,
     distribution: gents::pack::PackManifest,
@@ -165,7 +148,6 @@ pub(super) async fn run_prepare_steps(
             tool_root.clone(),
             step.clone(),
         );
-        // Building a plugin from source shells out to its toolchain.
         let (runner, budget, bound) = tokio::task::spawn_blocking(move || {
             admit_prepare_step(
                 &pack,
@@ -211,9 +193,6 @@ pub(super) async fn run_prepare_steps(
     Ok(fields)
 }
 
-/// Finds `step`'s plugin, builds it from source when its source is on disk,
-/// and admits it under its own declared authority with its budget and bound
-/// directory.
 fn admit_prepare_step(
     pack: &Path,
     distribution: &gents::pack::PackManifest,
@@ -228,22 +207,13 @@ fn admit_prepare_step(
         .find(|declared| declared.name == step.plugin)
         .with_context(|| format!("prepare step names undeclared plugin {}", step.plugin))?;
     let artifact_path = pack.join(&plugin.artifact);
-    // A pack directory holding only its declared assets (a built
-    // `.pack`, the home's store, or a registry fetch) keeps
-    // `plugin.source` in the manifest but never ships the source tree
-    // itself, so a source is only actually available here when its
-    // entry file is really on disk. Rebuild from it when it is; fall
-    // back to the shipped artifact otherwise, exactly like a plugin
-    // with no declared source at all.
     let source_entry = plugin.source.as_deref().and_then(|source| {
         crate::commands::pack::build::plugin_entry(&plugin.language)
             .map(|entry| pack.join(source).join(entry))
     });
     if source_entry.is_some_and(|entry| entry.is_file()) {
-        // Always rebuilt, not just when missing: `build_plugin` stamps
-        // the source digest, so an unchanged source costs one digest
-        // check, while a source an author edited since the last build
-        // never runs stale here.
+        // Always rebuilt: build_plugin stamps the source digest, so an
+        // edited source never runs stale here.
         crate::commands::pack::build::build_plugin(pack, distribution, plugin)
             .with_context(|| format!("building prepare plugin {}", step.plugin))?;
     } else if !artifact_path.is_file() {
@@ -255,9 +225,8 @@ fn admit_prepare_step(
     }
     let artifact = std::fs::read(&artifact_path)
         .with_context(|| format!("reading {}", artifact_path.display()))?;
-    // The author's own plugin runs with exactly the authority it
-    // declares (mirrors `commands::pack::test::run_plugin_cases`);
-    // consent is the gate below, not a narrower ceiling.
+    // The author's own plugin runs with exactly the authority it declares;
+    // consent is the gate below.
     let declared = declared_manifold(plugin)?;
     if let Some(asks) = describe_manifold(&declared) {
         anyhow::ensure!(
@@ -287,8 +256,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// A minimal declared plugin, with or without `bind_dir`, for exercising
-    /// `validate_prepare_steps` without a real `.afb`.
+    /// A minimal declared plugin for exercising `validate_prepare_steps`
+    /// without a real `.afb`.
     fn scenario_plugin(name: &str, bind_dir: bool) -> gents::pack::PackPlugin {
         gents::pack::PackPlugin {
             name: name.to_string(),
@@ -450,8 +419,8 @@ mod tests {
         assert_eq!(fields.get("page_count").map(String::as_str), Some("3"));
         assert_eq!(fields.get("sealed").map(String::as_str), Some("true"));
 
-        // "" selects the whole output value, usable only when that whole
-        // value is itself a string, number, or bool.
+        // "" selects the whole output value, only when that whole value is
+        // itself a string, number, or bool.
         let scalar_output = json!("bare-string-output");
         let whole = BTreeMap::from([("whole".to_string(), String::new())]);
         let fields = prepare_seed_fields("scanner", &scalar_output, &whole).unwrap();
@@ -468,13 +437,6 @@ mod tests {
         assert!(format!("{error:#}").contains("string, number, or bool"));
     }
 
-    /// Proves the wiring from a scenario's `prepare` step through to
-    /// `BoundDir`: the plugin sees exactly the operator-bound directory
-    /// (and the seed field it produced), never one it names itself, and a
-    /// `bind_dir` stepping outside the resolved `init.tool_root` is refused
-    /// before the plugin ever runs (`BoundDir`'s own unit tests, in
-    /// `gents::plugin`, cover the canonicalization and symlink cases this
-    /// wiring relies on).
     #[tokio::test]
     async fn a_prepare_step_binds_only_the_operator_directory() {
         let fixture = crate::commands::plugin::testing::build_bind_plugin_fixture();
@@ -530,12 +492,9 @@ mod tests {
         assert!(format!("{error:#}").contains("outside"), "{error:#}");
     }
 
-    /// Regression for the missing-coverage finding on the production path a
-    /// fresh packs checkout always takes: `plugins/*.afb` is gitignored, so
-    /// the artifact is missing on every clean clone and must be built from
-    /// `source` on demand. `admit_prepare_step` is synchronous, so it is
-    /// called directly here while holding `afterburner_build::compile_lock()`,
-    /// exactly like `build_bind_plugin_fixture` does for its own build.
+    /// Regression: `plugins/*.afb` is gitignored, so a clean clone must
+    /// build the artifact from `source` on demand (synchronous
+    /// `admit_prepare_step` under `compile_lock()`).
     #[test]
     fn a_missing_prepare_plugin_artifact_is_built_from_source_on_demand() {
         let fixture = crate::commands::plugin::testing::build_bind_plugin_fixture();
@@ -581,12 +540,6 @@ mod tests {
         assert!(bound.is_some());
     }
 
-    /// A pack directory holding only its declared assets, the shape a built
-    /// `.pack`, the home's store, or a registry fetch actually ships, keeps
-    /// `plugin.source` in the manifest without shipping the source tree
-    /// itself (`bind_plugin_fixture`'s `plugins/list_files/source` is not
-    /// in `assets`). The prepare step must run the shipped artifact rather
-    /// than attempt a build that has nothing to build from.
     #[tokio::test]
     async fn a_prepare_step_runs_from_an_asset_only_pack_copy() {
         let fixture = crate::commands::plugin::testing::build_bind_plugin_fixture();
@@ -635,9 +588,6 @@ mod tests {
         assert_eq!(fields.get("files").map(String::as_str), Some("a.txt"));
     }
 
-    /// The other half of the missing-artifact path: a plugin with no
-    /// `source` and a missing artifact has nothing to build from, so it is
-    /// refused with an actionable message rather than a bare I/O error.
     #[test]
     fn a_missing_artifact_with_no_source_is_refused() {
         let fixture = crate::commands::plugin::testing::build_bind_plugin_fixture();
@@ -662,8 +612,6 @@ mod tests {
         );
     }
 
-    /// A prepare plugin granted a network allow-list reaches it through the
-    /// host.
     #[tokio::test]
     async fn a_prepare_step_fetches_through_the_host_from_a_granted_host() {
         let port = crate::commands::plugin::testing::hello_server().await;
@@ -683,17 +631,13 @@ mod tests {
         assert_eq!(fields.get("hello").map(String::as_str), Some("true"));
     }
 
-    /// The consent gate: a prepare plugin whose manifest declares authority
-    /// beyond the sealed default must be refused unless `--grant-authority`
-    /// is passed, and passing it admits the plugin under that authority.
     #[tokio::test]
     async fn a_prepare_plugin_declaring_authority_requires_grant_authority() {
         let fixture = crate::commands::plugin::testing::build_bind_plugin_fixture();
         let mut distribution: gents::pack::PackManifest =
             serde_json::from_slice(&std::fs::read(fixture.path().join("manifest.json")).unwrap())
                 .unwrap();
-        // `fs` is mutually exclusive with `bind_dir` (`PackPlugin::validate`),
-        // so `env` is the non-sealed axis exercised here.
+        // `fs` is mutually exclusive with `bind_dir` (`PackPlugin::validate`).
         distribution.metadata.plugins[0].manifold = Some(json!({
             "fs": "None",
             "net": "None",

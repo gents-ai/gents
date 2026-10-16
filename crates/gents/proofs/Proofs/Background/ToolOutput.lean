@@ -6,13 +6,9 @@ import Proofs.CanonicalOutput.Execution.Projection
 `read_tool_output` reads the exact physical tool's canonical immutable segment
 source. Open output is its validated dense prefix; closed output is its
 committed extent, so late suffix facts are inert. Missing or conflicting facts
-are failure, never invented empty output. Volatile registries and deleted
-persisted stdout/stderr fields are not alternate sources.
-
-Model granularity: offsets are byte counts (`Nat`). UTF-8 character-boundary
-snapping of slice edges and the one-byte progress guard for a sub-codepoint
-budget remain native representation details. Conformance rows use ASCII and
-positive budgets, where both are inert.
+are failure, never invented empty output. UTF-8 character-boundary snapping of
+slice edges and the one-byte progress guard for a sub-codepoint budget remain
+native representation details; conformance rows use ASCII and positive budgets.
 -/
 
 namespace Background
@@ -20,8 +16,6 @@ namespace ToolOutput
 
 /-! ## Retained-window slice (mirrors `read_retained_output_slice`) -/
 
-/-- Generic byte paging window. Canonical tool output constructs this with
-    `firstOffset = 0` and `totalBytes = retainedLen`; no prefix is evicted. -/
 structure RetainedWindow where
   firstOffset : Nat
   retainedLen : Nat
@@ -31,8 +25,6 @@ structure RetainedWindow where
 def RetainedWindow.retainedEnd (window : RetainedWindow) : Nat :=
   window.firstOffset + window.retainedLen
 
-/-- Rust normalizes `total_bytes` up to the retained end
-    (`total_bytes.max(retained_end)`). -/
 def RetainedWindow.normalizedTotal (window : RetainedWindow) : Nat :=
   max window.totalBytes window.retainedEnd
 
@@ -45,8 +37,6 @@ structure SliceResult where
   hasMore : Bool
   deriving DecidableEq, Repr
 
-/-- Clamp the cursor into the canonical window, take at most `maxBytes`, and
-    report the contiguous continuation cursor and total metadata. -/
 def readSlice (window : RetainedWindow) (offset maxBytes : Nat) : SliceResult :=
   let start := min (max offset window.firstOffset) window.retainedEnd
   let sliceLen := min maxBytes (window.retainedEnd - start)
@@ -59,10 +49,6 @@ def readSlice (window : RetainedWindow) (offset maxBytes : Nat) : SliceResult :=
   , hasMore := decide (nextOffset < window.normalizedTotal)
   }
 
-/-- P1: pages are contiguous from a live cursor — when the requested offset
-    is inside the retained window, the slice starts exactly there and the
-    continuation cursor is `offset + returned`, so repeated reads have no
-    gap and no overlap. -/
 theorem readSlice_contiguous_from_live_cursor
     (window : RetainedWindow) (offset maxBytes : Nat)
     (h_low : window.firstOffset ≤ offset)
@@ -72,7 +58,6 @@ theorem readSlice_contiguous_from_live_cursor
         offset + (readSlice window offset maxBytes).sliceLen := by
   simp [readSlice, Nat.max_eq_left h_low, Nat.min_eq_left h_high]
 
-/-- P2: the slice never leaves the retained window. -/
 theorem readSlice_within_retained
     (window : RetainedWindow) (offset maxBytes : Nat) :
     window.firstOffset ≤ (readSlice window offset maxBytes).start ∧
@@ -82,8 +67,6 @@ theorem readSlice_within_retained
   · simp [readSlice]
     omega
 
-/-- P3: a cursor at or past the retained end returns an empty slice parked
-    at the retained end (no spinning, no fabricated bytes). -/
 theorem readSlice_past_end_empty
     (window : RetainedWindow) (offset maxBytes : Nat)
     (h_past : window.retainedEnd ≤ offset) :
@@ -93,8 +76,6 @@ theorem readSlice_past_end_empty
     Nat.max_eq_left (Nat.le_trans (Nat.le_add_right _ _) h_past)
   simp [readSlice, h_max, Nat.min_eq_right h_past]
 
-/-- P4: `hasMore` is exactly "the continuation cursor has not reached the
-    total produced bytes". -/
 theorem readSlice_hasMore_iff
     (window : RetainedWindow) (offset maxBytes : Nat) :
     (readSlice window offset maxBytes).hasMore = true ↔
@@ -102,8 +83,6 @@ theorem readSlice_hasMore_iff
         (readSlice window offset maxBytes).totalBytes := by
   simp [readSlice]
 
-/-- P5: progress — a positive budget against a non-exhausted retained window
-    always returns at least one byte, so pagination cannot wedge. -/
 theorem readSlice_progress
     (window : RetainedWindow) (offset maxBytes : Nat)
     (h_budget : 0 < maxBytes)

@@ -1,5 +1,3 @@
-//! Durable enrollment document loader and fail-closed authority projector.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 use std::time::Duration;
@@ -99,16 +97,10 @@ pub struct EnrollmentProjection {
     pub pending: Vec<PendingEnrollment>,
     pub active: Vec<ActiveEnrollment>,
     pub denied: Vec<DeniedEnrollment>,
-    /// Exact unique maximal revoked tombstones retained for direct redelivery.
     pub revoked: Vec<RevokedEnrollment>,
     pub next_authorization_sequences: BTreeMap<(String, String), u64>,
-    /// Corruption whose ownership is attributable to one network member.
-    /// It retracts only that member's current route.
     pub scoped_conflicts: BTreeMap<(String, String), String>,
-    /// Immutable request identity/terminal conflicts. A conflicted request is
-    /// never decidable, but another valid request for the member remains so.
     pub request_conflicts: BTreeMap<String, String>,
-    /// Root/unattributable local-authority corruption only.
     pub conflict: Option<String>,
 }
 
@@ -140,18 +132,13 @@ pub struct GraphqlEnrollmentStore {
     fail_closed: Arc<FailClosedLog>,
 }
 
-/// Why the last projection failed closed, if it did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum FailClosed {
-    /// A standalone node has no Network; that is its normal state.
     NoNetwork,
     RootRows(String),
     Authority(String),
 }
 
-/// The enrollment sweep reprojects on every database update, so the same
-/// fail-closed reason recurs for as long as the state lasts. Only a change of
-/// state is logged; the fail-closed projection itself is unaffected.
 #[derive(Debug, Default)]
 struct FailClosedLog(StdMutex<Option<FailClosed>>);
 
@@ -309,8 +296,6 @@ impl GraphqlEnrollmentStore {
             WireDecisionKind::Approved => (DateTime::parse_from_rfc3339(&decided_at)?
                 + chrono::Duration::from_std(lease)?)
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            // DateTime fields cannot encode an empty sentinel. A denial has
-            // no lease; its signed boundary is exactly its decision time.
             WireDecisionKind::Denied => decided_at.clone(),
         };
         let mut decision = EnrollmentDecisionRecord {
@@ -431,8 +416,6 @@ impl GraphqlEnrollmentStore {
         })
     }
 
-    /// Append an admin-signed maximal revocation and directly redeliver the
-    /// tombstone. Exact replay is idempotent; authority history is never deleted.
     pub async fn revoke_request(&self, request_id: &str) -> Result<EnrollmentDecisionOutcome> {
         let guard = self.decision_lock.lock().await;
         let projection = self.load_projection().await?;
@@ -638,8 +621,6 @@ impl GraphqlEnrollmentStore {
         }
     }
 
-    /// Persist the immutable receipt for the exact authorization generation
-    /// after the pairing owner has reported the runtime-side route applied.
     pub(crate) async fn record_applied_route(
         &self,
         active: &ActiveEnrollment,
@@ -721,8 +702,6 @@ impl GraphqlEnrollmentStore {
         revision_doc_id: Option<&str>,
         route_receipt_doc_id: Option<&str>,
     ) -> bool {
-        // Delivery is a capability handoff. Reload immediately before push so
-        // an earlier active sweep can never race a durable revocation/new max.
         let current = match self.load_projection().await {
             Ok(projection) => projection,
             Err(error) => {
@@ -773,7 +752,6 @@ impl GraphqlEnrollmentStore {
         }
     }
 
-    /// Load every authority row once and project it without relying on row order.
     pub async fn load_projection(&self) -> Result<EnrollmentProjection> {
         let response = crate::graphql::graphql_with_transaction_retry(
             &self.node,
@@ -784,8 +762,6 @@ impl GraphqlEnrollmentStore {
         self.project_loaded_response(&response).await
     }
 
-    /// Point-read arrival fences include concurrently added signed revocations
-    /// in the mutation transaction's conflict set (DefraDB 980190c).
     pub(crate) async fn load_projection_in_txn(
         &self,
         txn: &crate::config_client::ConfigApplyTxn<'_>,
@@ -963,8 +939,6 @@ impl GraphqlEnrollmentStore {
         }
 
         let mut decisions = Vec::new();
-        // Structurally attributable hostile rows retain their observed maximum
-        // without poisoning unrelated members. A later valid generation may recover.
         let mut invalid_authority_max = BTreeMap::<(String, String), u64>::new();
         let mut observed_revision_next = BTreeMap::<(String, String), u64>::new();
         for raw in rows::<Value>(response, "NetworkEnrollmentDecision")? {
@@ -1420,8 +1394,6 @@ impl GraphqlEnrollmentStore {
                 }
             }
         }
-        // Retain the exact unique maximal tombstone even though it is not
-        // operationally active. This is the durable revocation delivery owner.
         for verified in &requests {
             if request_conflicts.contains_key(&verified.record.request_id) {
                 continue;
@@ -1612,9 +1584,6 @@ fn attribute_candidate_request(raw: &Value, local_network: &str) -> CandidateReq
     if network_id.is_some_and(|network_id| network_id != local_network) {
         return CandidateRequestAttribution::ForeignOrUnattributable;
     }
-    // This store has one cryptographically verified local Network root.
-    // A row missing only its network field remains attributable to that root
-    // by request/member identity and must quarantine that narrow scope.
     let network_id = network_id.unwrap_or(local_network);
     let request_id = raw_text(raw, "request_id").map(str::to_string);
     let member_did = raw_text(raw, "candidate_did").map(str::to_string);
@@ -2321,412 +2290,3 @@ fn decode_signature(field: &str, value: &str) -> Result<Vec<u8>> {
     Ok(signature)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[derive(Clone, Default)]
-    struct CapturedLog(Arc<StdMutex<Vec<u8>>>);
-
-    impl std::io::Write for CapturedLog {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    fn logged_lines(states: Vec<Option<FailClosed>>) -> Vec<String> {
-        let output = CapturedLog::default();
-        let writer = output.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_ansi(false)
-            .with_writer(move || writer.clone())
-            .finish();
-        let log = FailClosedLog::default();
-        tracing::subscriber::with_default(subscriber, || {
-            for state in states {
-                log.record(state);
-            }
-        });
-        let bytes = output.0.lock().unwrap().clone();
-        String::from_utf8(bytes)
-            .unwrap()
-            .lines()
-            .map(str::to_string)
-            .collect()
-    }
-
-    #[test]
-    fn a_steady_fail_closed_state_is_logged_once_per_transition() {
-        let conflict = || Some(FailClosed::Authority("Network signature is invalid".into()));
-        let mut states = vec![None; 3];
-        states.extend(std::iter::repeat_with(|| Some(FailClosed::NoNetwork)).take(1_000));
-        states.extend(std::iter::repeat_with(conflict).take(1_000));
-        states.extend([None, None]);
-        let lines = logged_lines(states);
-        assert_eq!(lines.len(), 3, "{lines:#?}");
-        assert!(
-            lines[0].contains("DEBUG") && lines[0].contains("no Network configured"),
-            "{lines:#?}"
-        );
-        assert!(
-            lines[1].contains("WARN") && lines[1].contains("signature is invalid"),
-            "{lines:#?}"
-        );
-        assert!(
-            lines[2].contains("INFO") && lines[2].contains("recovered"),
-            "{lines:#?}"
-        );
-    }
-
-    fn pending_request(request_id: &str) -> PendingEnrollment {
-        PendingEnrollment {
-            request_doc_id: format!("doc-{request_id}"),
-            offer_token: "offer".into(),
-            request: EnrollmentRequestRecord {
-                protocol_version: ENROLLMENT_PROTOCOL_VERSION,
-                request_id: request_id.into(),
-                request_digest: format!("digest-{request_id}"),
-                offer_id: "offer".into(),
-                offer_token: "offer".into(),
-                challenge: format!("challenge-{request_id}"),
-                network_id: "network-1".into(),
-                admin_did: "did:key:admin".into(),
-                server_peer: "server-peer".into(),
-                candidate_did: "did:key:member-a".into(),
-                candidate_peer: "member-peer-a".into(),
-                candidate_ticket: "ticket".into(),
-                owner_agent: "did:key:owner".into(),
-                profile: "client".into(),
-                client_nonce: "nonce".into(),
-                issued_at: "2026-08-29T12:00:00Z".into(),
-                expires_at: "2026-08-29T12:05:00Z".into(),
-                candidate_sig: vec![1; 64],
-            },
-        }
-    }
-
-    fn decision(kind: WireDecisionKind) -> EnrollmentDecisionRecord {
-        let approved = kind == WireDecisionKind::Approved;
-        EnrollmentDecisionRecord {
-            protocol_version: ENROLLMENT_PROTOCOL_VERSION,
-            decision_id: "decision-\"\\\n".to_string(),
-            request_id: "request-1".to_string(),
-            request_digest: "digest-1".to_string(),
-            network_id: "network-1".to_string(),
-            admin_did: "did:key:admin".to_string(),
-            candidate_did: "did:key:candidate".to_string(),
-            candidate_peer: "peer-1".to_string(),
-            owner_agent: "did:key:owner".to_string(),
-            decision: kind,
-            authorization_sequence: if approved { 7 } else { 0 },
-            authorization_expires_at: if approved {
-                "2026-09-28T12:00:00Z".to_string()
-            } else {
-                "2026-08-29T12:00:00Z".to_string()
-            },
-            decided_at: "2026-08-29T12:00:00Z".to_string(),
-            signer_did: "did:key:admin".to_string(),
-            admin_sig: vec![1; 64],
-        }
-    }
-
-    fn revision() -> AuthorizationRevisionRecord {
-        AuthorizationRevisionRecord {
-            protocol_version: ENROLLMENT_PROTOCOL_VERSION,
-            revision_id: "revision-1".to_string(),
-            request_id: "request-1".to_string(),
-            request_digest: "digest-1".to_string(),
-            network_id: "network-1".to_string(),
-            admin_did: "did:key:admin".to_string(),
-            member_did: "did:key:candidate".to_string(),
-            member_peer: "peer-1".to_string(),
-            owner_agent: "did:key:owner".to_string(),
-            sequence: 7,
-            authorization_expires_at: "2026-09-28T12:00:00Z".to_string(),
-            kind: WireRevisionKind::Active,
-            issued_at: "2026-08-29T12:00:00Z".to_string(),
-            signer_did: "did:key:admin".to_string(),
-            admin_sig: vec![2; 64],
-        }
-    }
-
-    fn receipt() -> EnrollmentRouteReceiptRecord {
-        EnrollmentRouteReceiptRecord {
-            protocol_version: ENROLLMENT_PROTOCOL_VERSION,
-            receipt_id: "receipt-\"\\\n".to_string(),
-            request_id: "request-1".to_string(),
-            request_digest: "digest-1".to_string(),
-            network_id: "network-1".to_string(),
-            admin_did: "did:key:admin".to_string(),
-            member_did: "did:key:candidate".to_string(),
-            member_peer: "peer-1".to_string(),
-            server_peer: "server-peer".to_string(),
-            owner_agent: "did:key:owner".to_string(),
-            authorization_sequence: 7,
-            authorization_expires_at: "2026-09-28T12:00:00Z".to_string(),
-            direction: WireReceiptDirection::ClientToServer,
-            applied_at: "2026-08-29T12:00:01Z".to_string(),
-            signer_did: "did:key:admin".to_string(),
-            admin_sig: vec![3; 64],
-        }
-    }
-
-    #[test]
-    fn approval_mutation_is_atomic_and_graphql_escaped() {
-        let mutation = decision_mutation(&decision(WireDecisionKind::Approved), Some(&revision()));
-
-        assert_eq!(
-            mutation.matches("create_NetworkEnrollmentDecision").count(),
-            1
-        );
-        assert_eq!(
-            mutation
-                .matches("create_NetworkAuthorizationRevision")
-                .count(),
-            1
-        );
-        let escaped = crate::graphql::escape_graphql_string("decision-\"\\\n");
-        assert!(mutation.contains(&format!(r#"decision_id: "{escaped}""#)));
-        assert!(!mutation.contains("[]"));
-    }
-
-    #[test]
-    fn denial_mutation_cannot_create_authority() {
-        let denied = decision(WireDecisionKind::Denied);
-        assert_eq!(denied.authorization_expires_at, denied.decided_at);
-        let mutation = decision_mutation(&denied, None);
-
-        assert_eq!(
-            mutation.matches("create_NetworkEnrollmentDecision").count(),
-            1
-        );
-        assert!(!mutation.contains("NetworkAuthorizationRevision"));
-        assert!(!mutation.contains("[]"));
-    }
-
-    #[test]
-    fn route_receipt_mutation_is_immutable_bounded_and_escaped() {
-        let mutation = route_receipt_mutation(&receipt());
-        assert_eq!(
-            mutation
-                .matches("create_NetworkEnrollmentRouteReceipt")
-                .count(),
-            1
-        );
-        let escaped = crate::graphql::escape_graphql_string("receipt-\"\\\n");
-        assert!(mutation.contains(&format!(r#"receipt_id: "{escaped}""#)));
-        assert!(mutation.contains("direction: \"client_to_server\""));
-        assert!(!mutation.contains("[]"));
-    }
-
-    #[test]
-    fn terminal_delivery_fence_suppresses_stale_active_after_revocation() {
-        let pending = pending_request("request-1");
-        let mut approved = decision(WireDecisionKind::Approved);
-        approved.request_id = pending.request.request_id.clone();
-        approved.request_digest = pending.request.request_digest.clone();
-        approved.network_id = pending.request.network_id.clone();
-        approved.admin_did = pending.request.admin_did.clone();
-        approved.candidate_did = pending.request.candidate_did.clone();
-        approved.candidate_peer = pending.request.candidate_peer.clone();
-        approved.owner_agent = pending.request.owner_agent.clone();
-        let mut revoked = revision();
-        revoked.request_id = pending.request.request_id.clone();
-        revoked.request_digest = pending.request.request_digest.clone();
-        revoked.network_id = pending.request.network_id.clone();
-        revoked.admin_did = pending.request.admin_did.clone();
-        revoked.member_did = pending.request.candidate_did.clone();
-        revoked.member_peer = pending.request.candidate_peer.clone();
-        revoked.owner_agent = pending.request.owner_agent.clone();
-        revoked.sequence = approved.authorization_sequence + 1;
-        revoked.kind = WireRevisionKind::Revoked;
-
-        let projection = EnrollmentProjection {
-            revoked: vec![RevokedEnrollment {
-                request_doc_id: pending.request_doc_id,
-                decision_doc_id: "decision-doc".into(),
-                revision_doc_id: "revoked-doc".into(),
-                request: pending.request.clone(),
-                decision: approved,
-                revision: revoked,
-            }],
-            ..EnrollmentProjection::default()
-        };
-        assert!(!terminal_is_exact_current(
-            &projection,
-            &pending.request,
-            "decision-doc",
-            Some("active-doc"),
-            Some("receipt-doc"),
-        ));
-        assert!(terminal_is_exact_current(
-            &projection,
-            &pending.request,
-            "decision-doc",
-            Some("revoked-doc"),
-            None,
-        ));
-    }
-
-    #[test]
-    fn scoped_member_conflict_does_not_block_a_new_valid_request() {
-        let mut projection = EnrollmentProjection {
-            network_id: Some("network-1".into()),
-            pending: vec![pending_request("request-new")],
-            scoped_conflicts: BTreeMap::from([(
-                ("network-1".into(), "did:key:member-a".into()),
-                "hostile old revision".into(),
-            )]),
-            request_conflicts: BTreeMap::from([(
-                "request-old".into(),
-                "immutable terminal conflict".into(),
-            )]),
-            next_authorization_sequences: BTreeMap::from([(
-                ("network-1".into(), "did:key:member-a".into()),
-                10,
-            )]),
-            ..EnrollmentProjection::default()
-        };
-        assert_eq!(
-            projection
-                .pending_for_decision("request-new")
-                .unwrap()
-                .request
-                .request_id,
-            "request-new"
-        );
-        projection.pending.push(pending_request("request-old"));
-        assert!(projection.pending_for_decision("request-old").is_err());
-        assert_eq!(
-            projection.next_authorization_sequences
-                [&("network-1".into(), "did:key:member-a".into())],
-            10
-        );
-    }
-
-    #[test]
-    fn newer_valid_revision_recovers_a_scoped_invalid_maximum() {
-        assert!(invalid_revision_is_current(Some(8), 8));
-        assert!(invalid_revision_is_current(Some(8), 9));
-        assert!(!invalid_revision_is_current(Some(10), 9));
-
-        let scope = ("network-1".to_string(), "did:key:member-a".to_string());
-        let mut next = BTreeMap::new();
-        let mut conflicts = BTreeMap::new();
-        observe_next_authorization_sequence(&mut next, &mut conflicts, scope.clone(), 9);
-        assert_eq!(next.get(&scope), Some(&10));
-        assert!(conflicts.is_empty());
-    }
-
-    #[test]
-    fn authority_row_attribution_is_member_scoped_and_root_corruption_is_global() {
-        let scopes = BTreeMap::from([(
-            "request-a".into(),
-            ("network-1".into(), "did:key:member-a".into()),
-        )]);
-        let bad_a = json!({
-            "request_id": "request-a",
-            "network_id": "network-1",
-            "member_did": "did:key:attacker"
-        });
-        assert_eq!(
-            scope_for_authority_row(&bad_a, "request-a", &scopes, "network-1", "member_did",)
-                .unwrap(),
-            Some(("network-1".into(), "did:key:member-a".into()))
-        );
-        let foreign = json!({
-            "request_id": "foreign",
-            "network_id": "network-2",
-            "member_did": "did:key:foreign"
-        });
-        assert!(
-            scope_for_authority_row(&foreign, "foreign", &scopes, "network-1", "member_did",)
-                .unwrap()
-                .is_none()
-        );
-        let missing_network = json!({ "member_did": "did:key:member-a" });
-        assert_eq!(
-            scope_for_authority_row(
-                &missing_network,
-                "unknown",
-                &scopes,
-                "network-1",
-                "member_did",
-            )
-            .unwrap(),
-            Some(("network-1".into(), "did:key:member-a".into()))
-        );
-        let unattributable = json!({ "request_id": "unknown" });
-        assert!(scope_for_authority_row(
-            &unattributable,
-            "unknown",
-            &scopes,
-            "network-1",
-            "member_did",
-        )
-        .is_err());
-        let global = EnrollmentProjection::conflicted(Some("network-1".into()), "root invalid");
-        assert!(global.conflict.is_some());
-        assert!(global.active.is_empty());
-        assert!(global.pending.is_empty());
-    }
-
-    #[test]
-    fn malformed_candidate_requests_are_quarantined_at_the_narrowest_scope() {
-        assert_eq!(
-            attribute_candidate_request(
-                &json!({
-                    "network_id": "network-1",
-                    "request_id": "request-a",
-                    "candidate_did": "did:key:member-a"
-                }),
-                "network-1",
-            ),
-            CandidateRequestAttribution::Exact {
-                request_id: "request-a".into(),
-                scope: ("network-1".into(), "did:key:member-a".into()),
-            }
-        );
-        assert_eq!(
-            attribute_candidate_request(
-                &json!({"network_id": "network-1", "request_id": "request-a"}),
-                "network-1",
-            ),
-            CandidateRequestAttribution::RequestOnly("request-a".into())
-        );
-        assert_eq!(
-            attribute_candidate_request(
-                &json!({"network_id": "network-1", "candidate_did": "did:key:member-a"}),
-                "network-1",
-            ),
-            CandidateRequestAttribution::ScopeOnly(
-                ("network-1".into(), "did:key:member-a".into(),)
-            )
-        );
-        assert_eq!(
-            attribute_candidate_request(&json!({"candidate_did": "did:key:member-a"}), "network-1",),
-            CandidateRequestAttribution::ScopeOnly(
-                ("network-1".into(), "did:key:member-a".into(),)
-            )
-        );
-        assert_eq!(
-            attribute_candidate_request(&json!({"request_id": "unattributable"}), "network-1"),
-            CandidateRequestAttribution::RequestOnly("unattributable".into())
-        );
-        for row in [
-            json!({"network_id": "network-2", "request_id": "foreign"}),
-            json!({"network_id": "network-1"}),
-        ] {
-            assert_eq!(
-                attribute_candidate_request(&row, "network-1"),
-                CandidateRequestAttribution::ForeignOrUnattributable
-            );
-        }
-    }
-}

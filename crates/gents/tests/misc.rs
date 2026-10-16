@@ -1,9 +1,4 @@
-//! Aggregated small integration suites.
-//!
-//! Each submodule was previously its own test binary; four of them paid a
-//! 116–152MB DefraDB/wasmtime link to run two tests apiece, and each carried
-//! its own copy of the `support/` tree. One binary pays the link once.
-//! Submodules stay self-contained files under `misc/` — run one with
+//! Aggregated small integration suites; run one with
 //! `cargo test -p gents --test misc <module>::`.
 
 mod support;

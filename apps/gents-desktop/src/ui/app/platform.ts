@@ -1,6 +1,3 @@
-/* What the window does for itself, apart from any screen: its theme and
-   platform styling, links that leave the app, the simulator's end-to-end
-   boot, and the title macOS shows. */
 import { useEffect } from "react";
 
 import { installExternalLinkGuard } from "../../lib/externalLinks";

@@ -241,8 +241,8 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
         Some("user")
     );
 
-    // An empty thread stays ephemeral until its first turn creates the
-    // durable session, so the Goal is set between two real turns.
+    // An empty thread only becomes durable after its first turn, so the Goal
+    // is set between two real turns.
     send_client_request(
         &mut ws,
         codex::ClientRequest::ThreadGoalSet {

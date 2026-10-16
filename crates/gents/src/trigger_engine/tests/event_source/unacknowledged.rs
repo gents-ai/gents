@@ -1,6 +1,3 @@
-//! #2094: an arrival whose fire is not acknowledged stays pending, and its
-//! own `Trigger` runtime-field write must not re-drive it without bound.
-
 use super::*;
 
 const RESCAN: Duration = Duration::from_millis(50);
@@ -67,8 +64,6 @@ async fn seeded_arrival_delivery_does_not_wait_for_the_mutation_gate() {
     assert_eq!(intent.trigger_id.as_deref(), Some("ping-trigger"));
 }
 
-/// One `OutcomePing` without `handoff_id`, created after the trigger's cursor
-/// is seeded, delivered once through the durable arrival path.
 async fn first_delivery(emit_outcome: bool) -> (Delivery, FireIntent) {
     first_delivery_on("type OutcomePing { message: String }", emit_outcome).await
 }
@@ -160,7 +155,6 @@ impl Delivery {
             .collect()
     }
 
-    /// Every intent the source emits within `window`, each answered by `answer`.
     async fn drain(
         &mut self,
         window: Duration,
@@ -209,11 +203,6 @@ fn lean_cursor_case(name: &str) -> serde_json::Value {
         .clone()
 }
 
-/// The L4 ladder's Task opts into `emit_outcome` for a collection with no
-/// `handoff_id`. Admission refuses the fire once, visibly on the Trigger, and
-/// the arrival stays pending (Lean `unadmitted_match_cannot_checkpoint`)
-/// without being re-driven by its own bookkeeping write or the rescan tick.
-/// A configuration change delivers it exactly once.
 #[tokio::test]
 async fn refused_fire_fails_once_visibly_and_is_delivered_once_after_reconfiguration() {
     let model = lean_cursor_case("unadmitted_match_cannot_checkpoint");
@@ -277,8 +266,6 @@ async fn refused_fire_fails_once_visibly_and_is_delivered_once_after_reconfigura
     assert_eq!(receipts["TriggerFire"].as_array().unwrap().len(), 1);
 }
 
-/// A transient failure keeps the arrival pending and is retried, but on a
-/// capped exponential backoff rather than on every source event.
 #[tokio::test]
 async fn transient_fire_failure_retries_on_a_bounded_backoff() {
     let (mut delivery, intent) = first_delivery(false).await;
@@ -287,8 +274,6 @@ async fn transient_fire_failure_retries_on_a_bounded_backoff() {
         error: "injected transient admission failure".into(),
     };
     (intent.on_result)(transient());
-    // Backoff from a 50ms interval retries at about 50, 150, 350, 750 and
-    // 1550ms; an unbounded re-drive would fire once per runtime-field write.
     let retries = delivery
         .drain(Duration::from_secs(2), |_| Some(transient()))
         .await;
@@ -301,18 +286,10 @@ async fn transient_fire_failure_retries_on_a_bounded_backoff() {
     );
 }
 
-/// A fire whose result never reaches the acknowledgment channel records the
-/// reason on its `Trigger` instead of parking silently, keeps the arrival
-/// pending, and is still retried only on the capped backoff — its own
-/// `Trigger` write must not re-drive it without bound.
 #[tokio::test]
 async fn an_unacknowledged_fire_records_its_reason_on_the_trigger() {
     let (mut delivery, intent) = first_delivery(false).await;
     let before = delivery.cursor().await;
-    // The guard the intent carries owns the write. Dropping the intent
-    // unacknowledged is the state a driver that dies before any result
-    // leaves behind, so the reason is recorded without the source ever
-    // being polled again.
     drop(intent);
     let trigger = delivery
         .trigger_status(crate::trigger_engine::UNACKNOWLEDGED_STATUS)
@@ -348,9 +325,6 @@ async fn an_unacknowledged_fire_records_its_reason_on_the_trigger() {
     );
 }
 
-/// A driver that dies between emitting the intent and seeing it answered —
-/// here a panic inside dispatch — is the loss mode no live owner can report;
-/// the guard dropped during the unwind still records the fire's reason.
 #[tokio::test]
 async fn a_driver_that_dies_mid_dispatch_records_the_fire_as_unacknowledged() {
     let (delivery, intent) = first_delivery(false).await;
@@ -376,8 +350,6 @@ async fn a_driver_that_dies_mid_dispatch_records_the_fire_as_unacknowledged() {
     );
 }
 
-/// A fire that is acknowledged disarms the guard: its `on_result` writer is
-/// the only `Trigger` write the fire produces.
 #[tokio::test]
 async fn an_acknowledged_fire_records_no_unacknowledged_status() {
     let (delivery, intent) = first_delivery(false).await;
@@ -400,8 +372,6 @@ async fn an_acknowledged_fire_records_no_unacknowledged_status() {
     );
 }
 
-/// Kills the driver inside dispatch, the one production loss mode the guard
-/// exists for.
 struct PanicMaterializer;
 
 impl MaterializerHandle for PanicMaterializer {
@@ -459,14 +429,11 @@ impl MaterializerHandle for PanicMaterializer {
     }
 }
 
-/// A refusal decided by the source document is retried when that document is
-/// repaired, without a configuration change, and delivered exactly once.
 #[tokio::test]
 async fn refused_fire_is_retried_once_when_its_source_document_is_repaired() {
     repaired_document_is_delivered_once(false).await;
 }
 
-/// The same repair is found by the rescan when its notification is lost.
 #[tokio::test]
 async fn refused_fire_repair_is_found_without_its_notification() {
     repaired_document_is_delivered_once(true).await;
@@ -510,8 +477,6 @@ async fn repaired_document_is_delivered_once(drop_notification: bool) {
     assert!(delivery.pending_documents().await.is_empty());
 }
 
-/// A refused document deleted while notifications are lost releases its
-/// trigger: the arrival owner excludes it without a fire.
 #[tokio::test]
 async fn deleted_refused_document_releases_its_trigger() {
     let (mut delivery, intent) = first_delivery(true).await;

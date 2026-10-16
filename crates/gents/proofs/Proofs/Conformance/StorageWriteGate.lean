@@ -49,5 +49,4 @@ def casesJson : String := jsonArray (cases.map caseJson)
 
 end Conformance.StorageWriteGateContracts
 
-/-- Standalone narrow fixture; regeneration must not change unrelated contracts. -/
 def main : IO Unit := IO.println Conformance.StorageWriteGateContracts.casesJson

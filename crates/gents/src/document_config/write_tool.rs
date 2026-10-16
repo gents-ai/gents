@@ -11,10 +11,9 @@ use anyhow::Result;
 /// One field of a [`WriteToolDecl`]: a named slot the bound write tool exposes,
 /// and whether the agent must provide it.
 ///
-/// `name` is trimmed at deserialization so the stored value, the runtime
-/// [`crate::defra_write::BoundedWriteTool`], and `config validate` all agree on
-/// the same canonical identifier (the field name is interpolated verbatim as a
-/// GraphQL input key, so stray whitespace would otherwise corrupt the mutation).
+/// `name` is trimmed at deserialization; the field name is interpolated verbatim
+/// as a GraphQL input key, so stray whitespace would otherwise corrupt the
+/// mutation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(rename_all = "snake_case"))]
@@ -68,11 +67,9 @@ impl<'de> serde::Deserialize<'de> for WriteToolFieldFill {
 }
 
 impl WriteToolFieldFill {
-    /// Resolve this fill from the current tool-call runtime context.
-    ///
-    /// Shared by [`crate::defra_write::BoundedWriteTool`] and
-    /// [`crate::defra_query::bounded::BoundedQueryTool`] so the correlation /
-    /// source-field vocabulary cannot drift.
+    /// Resolve this fill from the current tool-call runtime context. Shared by
+    /// the bounded write and query tools so the correlation / source-field
+    /// vocabulary cannot drift.
     pub fn resolve(&self, field_name: &str) -> Result<String> {
         let runtime = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
             .ok_or_else(|| {
@@ -143,10 +140,8 @@ impl<'de> serde::Deserialize<'de> for WriteToolField {
 /// one runtime `BoundedWriteTool` that writes exactly one validated document to
 /// one collection. DatastoreToolSurface.entries owns these canonical declarations;
 /// Tools.datastore selects the surfaces by their owner-scoped document IDs.
-///
-/// `tool_name` and `collection` are trimmed at deserialization (see
-/// [`WriteToolField`] for the rationale); `description` is free text and is
-/// preserved verbatim.
+/// `tool_name` and `collection` are trimmed at deserialization; `description`
+/// is preserved verbatim.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct WriteToolDecl {
@@ -412,13 +407,9 @@ pub(crate) fn validate_write_tool_declarations(
 /// file/shell tools, the meta tools, the agent/process control tools, or the
 /// built-in singletons (including the durable goal tools).
 ///
-/// A `write_tools` declaration whose `tool_name` collides with one of these
-/// would be appended to the runtime tool vector under a name an existing
-/// built-in already advertises: [`crate::tool_surface::ToolSurface::tool_names`]
-/// dedupes the advertised list (so the model sees a single name) while
-/// `build_tools` registers two `ToolDyn` impls and `BackgroundToolRegistry`
-/// keys them by name with last-write-wins — silently shadowing the built-in.
-/// The apply/ingest validators reject the collision instead.
+/// A colliding `write_tools` declaration would register two tools under one
+/// advertised name with last-write-wins — silently shadowing the built-in — so
+/// the apply/ingest validators reject the collision instead.
 pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
     let name = name.trim();
 
@@ -433,8 +424,6 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
         READ_PROCESS_TOOL_NAME,
         CANCEL_PROCESS_TOOL_NAME,
     ];
-    // `memory` is reserved unconditionally: the `agent-memory` feature gates the
-    // tool's availability, not the legitimacy of the name as a write-tool id.
     const SINGLETON_TOOL_NAMES: &[&str] = &[
         DEFRA_QUERY_TOOL_NAME,
         crate::application_write::WRITE_TOOL_NAME,
@@ -456,9 +445,8 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
         || crate::graph_pipeline::GRAPH_PIPELINE_TOOL_NAMES.contains(&name)
 }
 
-/// Collections no datastore tool may read or write. They hold protected eval
-/// material and promotion evidence; an agent in the launching home, including
-/// the live version of an agent under optimization, must not reach them.
+/// Collections no datastore tool may read or write: protected eval material
+/// and promotion evidence.
 pub const PROTECTED_DATASTORE_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::EVAL_DEFINITION_NAME,
     gents_protocol::schemas::EVAL_RUN_NAME,
@@ -467,11 +455,9 @@ pub const PROTECTED_DATASTORE_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::OPTIMIZATION_JOB_NAME,
 ];
 
-/// Reject a collection a datastore create/query tool may never name.
-///
-/// Sits beside the [`crate::graphql::validate_collection_identifier`] calls in
-/// the datastore surface validators rather than inside them: that identifier
-/// check lives in `gents-protocol` and is shared far beyond datastore surfaces.
+/// Reject a collection a datastore create/query tool may never name. Sits
+/// beside `validate_collection_identifier` rather than inside it: that check
+/// lives in `gents-protocol` and is shared far beyond datastore surfaces.
 pub(crate) fn reject_protected_collection_name(collection: &str) -> Result<()> {
     if PROTECTED_DATASTORE_COLLECTIONS.contains(&collection) {
         anyhow::bail!(
@@ -531,8 +517,6 @@ mod tests {
             );
         }
         assert!(super::reject_protected_collection_name("Notes").is_ok());
-        // The list is now entirely schema constants: a literal here would drift
-        // from the catalog the moment a collection is renamed.
         assert!(
             super::PROTECTED_DATASTORE_COLLECTIONS
                 .iter()

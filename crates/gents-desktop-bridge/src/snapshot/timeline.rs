@@ -131,9 +131,6 @@ pub(super) fn build_rendered_timeline(
     tool_calls: &[ToolCallView],
     pending_turns: &[(PendingTurnView, Option<i64>)],
 ) -> Vec<RenderedTimelineItem> {
-    // Group tool calls by their owning message sequence (rich lookup for the
-    // mapping-back step); the presentation-neutral ORDER is decided by the
-    // shared, Lean-fenced skeleton, not here.
     let mut tool_groups: BTreeMap<Option<i64>, Vec<ToolCallView>> = BTreeMap::new();
     for tool in tool_calls.iter().cloned() {
         tool_groups
@@ -143,10 +140,6 @@ pub(super) fn build_rendered_timeline(
     }
     let group_sequences: Vec<Option<i64>> = tool_groups.keys().copied().collect();
 
-    // Candidate messages (step-2 filter: drop tool-result rows and rows with no
-    // rendered content/reasoning/tool-calls — a presentation decision). For each
-    // candidate, project the ordering-relevant fields the skeleton consumes, and
-    // remember the rich content by key for mapping the slots back.
     let mut inputs: Vec<TimelineMessageInput> = Vec::new();
     let mut rendered_message: BTreeMap<String, RenderedTimelineItem> = BTreeMap::new();
     for message in messages.iter() {
@@ -226,9 +219,6 @@ pub(super) fn build_rendered_timeline(
                 .entry(message.message_key.clone())
                 .or_insert(item);
         }
-        // Presentation dedup token: the desktop only dedups by presentation when
-        // the message carries a sequence (None opts out). Serialize the same
-        // tuple the old `message_presentation_key` used, as an opaque token.
         let dedup_token =
             message_presentation_key(message, role, &normalized_content, &normalized_reasoning)
                 .map(|key| format!("{key:?}"));
@@ -278,8 +268,7 @@ pub(super) fn build_rendered_timeline(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        build_rendered_timeline, render_tool_call, tool_status_kind, MessageReconstructionView,
+    use super::{build_rendered_timeline, render_tool_call, MessageReconstructionView,
         MessageView, ReconstructionState, RenderedTimelineItem, ToolCallView,
     };
 
@@ -332,16 +321,6 @@ mod tests {
                 if request_id == "interrupted")
             );
         }
-    }
-
-    #[test]
-    fn status_kind_maps_active_and_terminal_states() {
-        assert_eq!(tool_status_kind(Some("completed")), "success");
-        assert_eq!(tool_status_kind(Some("failed")), "error");
-        assert_eq!(tool_status_kind(Some("cancelled")), "error");
-        assert_eq!(tool_status_kind(Some("timedOut")), "error");
-        assert_eq!(tool_status_kind(Some("running")), "running");
-        assert_eq!(tool_status_kind(None), "unknown");
     }
 
     #[test]

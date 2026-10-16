@@ -1,9 +1,5 @@
 //! A launching home for the `gents eval` and `gents optimization` command
-//! tests. `gents::eval::runner::freeze::tests::Launching` and the optimizer's
-//! matrix `Harness` are `#[cfg(test)] pub(crate)` inside `gents`, so this
-//! crate builds its own from the same public pieces: an embedded home, the
-//! documents a run and a job read, and a directory pack whose agent's
-//! prompt matches the installed context (the optimizer's freeze checks that).
+//! tests.
 //!
 //! This file duplicates `write_fixture_pack` and `Launching` in
 //! `crates/gents/src/eval/runner/freeze.rs` (its `tests` module) and the
@@ -40,7 +36,6 @@ pub(crate) const VALIDATION_CASES: [&str; 6] =
 pub(crate) const HELD_OUT_CASES: [&str; 6] = ["ho-a", "ho-b", "ho-c", "ho-d", "ho-e", "ho-f"];
 pub(crate) const TRIALS: u32 = 2;
 pub(crate) const BASELINE_PROMPT: &str = "Watch the mailbox.\n";
-/// What a scripted proposer offers: the optimizer matrix's candidate text.
 pub(crate) const CANDIDATE_PROMPT: &str = "Watch the mailbox, and name the collection.\n";
 
 pub(crate) struct Fixture {
@@ -76,7 +71,6 @@ impl Fixture {
         self.pack.display().to_string()
     }
 
-    /// Two cells over the six validation cases, two trials each: 24 slots.
     pub(crate) fn request(&self, run_id: &str) -> RunRequest {
         RunRequest {
             run_id: run_id.into(),
@@ -109,7 +103,6 @@ impl Fixture {
         }
     }
 
-    /// A run produced by the library with a scripted executor.
     pub(crate) async fn scripted_run(
         &self,
         run_id: &str,
@@ -137,18 +130,14 @@ pub(crate) fn fast() -> RunOptions {
     }
 }
 
-/// A stage whose `findings` capture holds a row: `in_range`, 10000.
 pub(crate) fn pass() -> TrialEvidence {
     ScriptedExecutor::passed_evidence("did:key:trial", "check", "findings", vec![json!({})])
 }
 
-/// A stage whose `findings` capture is empty: `below_min`, 0.
 pub(crate) fn fail() -> TrialEvidence {
     ScriptedExecutor::passed_evidence("did:key:trial", "check", "findings", Vec::new())
 }
 
-/// Every trial passes, except the `baseline` cell's first attempts on
-/// `failing_baseline_cases`.
 pub(crate) fn executor(failing_baseline_cases: &[&str]) -> ScriptedExecutor {
     let mut executor = ScriptedExecutor::new().with_default(pass());
     for case_id in failing_baseline_cases {
@@ -167,7 +156,6 @@ pub(crate) fn executor(failing_baseline_cases: &[&str]) -> ScriptedExecutor {
     executor
 }
 
-/// `gents eval <argv…>` as clap parses it.
 pub(crate) fn eval_command(argv: &[&str]) -> EvalCommand {
     let cli = Cli::try_parse_from(["gents", "eval"].into_iter().chain(argv.iter().copied()))
         .unwrap_or_else(|error| panic!("{error}"));
@@ -190,7 +178,6 @@ pub(crate) fn deps<'a>(
     }
 }
 
-/// Run `gents eval <argv…>` with `deps` and return what it wrote.
 pub(crate) async fn eval_with(
     fixture: &Fixture,
     argv: &[&str],
@@ -201,7 +188,6 @@ pub(crate) async fn eval_with(
     Ok(String::from_utf8(out)?)
 }
 
-/// Run `gents eval <argv…>` with a scripted executor where every trial passes.
 pub(crate) async fn eval(fixture: &Fixture, argv: &[&str]) -> anyhow::Result<String> {
     let executor = executor(&[]);
     let registry = CheckRegistry::builtin();
@@ -213,8 +199,6 @@ pub(crate) async fn eval(fixture: &Fixture, argv: &[&str]) -> anyhow::Result<Str
     .await
 }
 
-/// The whitespace-split row of `output` that starts with `first` and has
-/// exactly `width` columns.
 pub(crate) fn row<'a>(output: &'a str, first: &str, width: usize) -> Vec<&'a str> {
     output
         .lines()
@@ -282,8 +266,6 @@ fn documents(owner: &str) -> Vec<(Collection, Value)> {
                 "sampling_id": "sampling",
             }),
         ),
-        // The subject pack's own Tools and context: an optimization job's
-        // baseline pack must be the live configuration.
         (
             Collection::Tools,
             json!({
@@ -337,8 +319,6 @@ async fn install(access: &ConfigAccess, documents: Vec<(Collection, Value)>) {
         .unwrap();
 }
 
-/// The shape of `gents::eval::runner::freeze::tests::write_fixture_pack`:
-/// one `monitor` agent whose context prompt is [`BASELINE_PROMPT`].
 fn write_pack(root: &Path) {
     std::fs::create_dir_all(root.join("agents/monitor")).unwrap();
     std::fs::write(root.join("README.md"), "# monitor fixture\n").unwrap();

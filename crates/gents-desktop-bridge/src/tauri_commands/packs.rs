@@ -1,6 +1,3 @@
-//! Packs from the desktop: the same operations `gents pack` runs, through
-//! `gents_server::packs`, against the managed local Node's home.
-
 use serde::Deserialize;
 use serde_json::Value;
 use tauri::State;
@@ -22,9 +19,6 @@ fn failed(error: anyhow::Error) -> BridgeError {
     BridgeError::untyped(format!("{error:#}"))
 }
 
-/// Runs a pack operation on a blocking thread that drives it to completion:
-/// opening the local node holds state that must stay on one thread, which a
-/// command future may not.
 async fn run<F, Fut>(operation: F) -> Result<Value, BridgeError>
 where
     F: FnOnce() -> Fut + Send + 'static,
@@ -72,19 +66,15 @@ pub async fn desktop_pack_info(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PackInstallRequest {
-    /// A registry name, `sha256:<hex>`, a `.pack` file, or a directory.
     pub package: String,
     #[serde(default)]
     pub registry: Option<String>,
-    /// `SLOT=PROFILE_ID` bindings for the pack's inference slots.
     #[serde(default)]
     pub inference_slots: Vec<String>,
     #[serde(default)]
     pub edited: EditedDocuments,
-    /// The person approved the authority the pack's plugins ask for.
     #[serde(default)]
     pub grant_authority: bool,
-    /// Report what would be written, writing nothing.
     #[serde(default)]
     pub preview: bool,
 }
@@ -183,9 +173,7 @@ pub async fn desktop_pack_plugin_slots(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginBindRequest {
-    /// An installed plugin, as `namespace/name`.
     pub plugin: String,
-    /// The inference profile to call through; absent leaves the slot unbound.
     #[serde(default)]
     pub profile: Option<String>,
 }

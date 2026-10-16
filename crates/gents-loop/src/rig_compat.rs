@@ -35,19 +35,14 @@ where
 /// InferenceCall column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CachedInputTokensObservation {
-    /// The raw response is not a Responses API payload; retain Rig's behavior.
     NotAvailable,
-    /// Responses usage was present but had no cached-token detail.
     Unreported,
-    /// The provider explicitly supplied a cached-token count, including zero.
     Reported(u64),
 }
 
-/// Read cached-token presence from a serializable raw provider response.
-///
-/// The Responses final streaming item and non-streaming raw response both carry
-/// `usage.output_tokens_details`; this identifies the Responses usage shape
-/// without changing other providers' existing accounting behavior.
+/// Read cached-token presence from a serializable raw provider response; this
+/// identifies the Responses usage shape without changing other providers'
+/// accounting behavior.
 pub fn cached_input_tokens_observation<T: serde::Serialize>(
     raw_response: &T,
 ) -> CachedInputTokensObservation {
@@ -488,10 +483,8 @@ pub fn from_rig_user_content(
         }),
         R::ToolResult(result) => message::UserContent::ToolResult(from_rig_tool_result(result)),
         R::Image(image) => message::UserContent::Image(from_rig_image(image)),
-        // Audio/Video/Document inbound conversions are lossy-stubbed: nothing
-        // upstream produces them on the consume seam today, and the native
-        // variants exist for outbound fidelity. Extend when a provider sends
-        // them.
+        // Audio/Video/Document inbound conversions are lossy stubs; extend when
+        // a provider sends them.
         R::Audio(_) => {
             tracing::warn!("audio content discarded at the inbound rig seam (lossy stub)");
             message::UserContent::Audio(message::Audio::default())
@@ -708,8 +701,6 @@ mod tests {
         assert_eq!(format!("{:#}", anyhow::Error::new(native)), expected);
     }
 
-    // ===== #589/#590: argument-shape normalization at both converter seams =====
-
     fn native_tool_call(arguments: Value) -> message::ToolCall {
         message::ToolCall {
             id: "call-1".to_string(),
@@ -736,9 +727,6 @@ mod tests {
         }
     }
 
-    /// Ingest seam (#589): nothing non-object is ever accumulated into durable
-    /// history. A wire `"[]"` (rig parses it to `Value::Array`) and a raw
-    /// corrupt string both normalize; a healthy object is untouched.
     #[test]
     fn from_rig_tool_call_normalizes_arguments_to_object_shape() {
         let object = json!({"city": "NYC"});
@@ -747,7 +735,6 @@ mod tests {
                 .function
                 .arguments,
             object,
-            "object arguments must pass through unchanged"
         );
 
         assert_eq!(
@@ -755,7 +742,6 @@ mod tests {
                 .function
                 .arguments,
             json!({}),
-            "a non-object array must never be persisted"
         );
 
         let salvaged = from_rig_tool_call(&rig_tool_call(Value::String(
@@ -763,17 +749,10 @@ mod tests {
         )))
         .function
         .arguments;
-        assert!(
-            salvaged.is_object(),
-            "the #589 corrupt raw string must not reach history as a string"
-        );
+        assert!(salvaged.is_object());
         assert_eq!(salvaged["tool_name"], "list_hosts");
     }
 
-    /// Egress seam (#590): already-poisoned durable history self-heals at
-    /// request build — the provider can never receive a non-object
-    /// `arguments`, so the deterministic template-render jam clears on the
-    /// next turn without a DB edit.
     #[test]
     fn to_rig_tool_call_normalizes_persisted_poison_on_egress() {
         let object = json!({"city": "NYC"});
@@ -782,7 +761,6 @@ mod tests {
                 .function
                 .arguments,
             object,
-            "object arguments must pass through unchanged"
         );
 
         assert_eq!(
@@ -790,26 +768,20 @@ mod tests {
                 .function
                 .arguments,
             json!({}),
-            "a persisted [] must egress as {{}}"
         );
         assert_eq!(
             to_rig_tool_call(&native_tool_call(Value::Null))
                 .function
                 .arguments,
             json!({}),
-            "persisted null args must egress as {{}}"
         );
 
-        // Amy's actual poisoned row: a Value::String of corrupt bytes.
         let healed = to_rig_tool_call(&native_tool_call(Value::String(
             crate::test_support::CORRUPT_TOOL_ARGS_589.into(),
         )))
         .function
         .arguments;
-        assert!(
-            healed.is_object(),
-            "the persisted #589 poison must egress object-shaped"
-        );
+        assert!(healed.is_object());
         assert_eq!(healed["tool_name"], "list_hosts");
     }
 }

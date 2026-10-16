@@ -62,8 +62,6 @@ impl AdmissionPermit {
         &self.call.backend_config_fingerprint
     }
 
-    /// The armed attempt this call serves; its stall reason names a drop
-    /// caused by the owned loop's provider idle window.
     pub(crate) fn observe_provider_activity(
         &mut self,
         activity: Option<Arc<gents_loop::provider_activity::ProviderActivity>>,
@@ -104,12 +102,6 @@ impl AdmissionPermit {
         self.finish().await
     }
 
-    /// Mark this permit as cancelled due to user-initiated interrupt.
-    /// On `finish()` or `Drop`, the controller persists the InferenceCall
-    /// with `call_state = "cancelled"` and `failure_reason = "Cancelled"`.
-    /// Idempotent with the existing `finished` guard — callers should not
-    /// invoke `finish_*` after `mark_interrupted` and instead rely on the
-    /// Drop path (or explicit `finish_success`/`finish_failure`) to persist.
     pub(crate) fn mark_interrupted(&mut self) {
         if self.finished {
             return;
@@ -142,10 +134,8 @@ impl AdmissionPermit {
         )
         .await
         {
-            // Charged usage must land durably before the request continues:
-            // live ledger charge already happened, and rehydrate reads only
-            // InferenceCall rows. Silent warn would mint a fresh allowance on
-            // crash redrive.
+            // Charged usage must land durably before the request continues;
+            // rehydrate reads only InferenceCall rows.
             if terminal.usage.is_some() {
                 return Err(AdmissionError(format!(
                     "persisting terminal InferenceCall usage failed for call {}: {error:#}",
@@ -196,8 +186,7 @@ impl StreamGuardLifecycle for AdmissionPermit {
 
 impl Drop for AdmissionPermit {
     fn drop(&mut self) {
-        // Field drop runs only after this body, which can block on the
-        // observer lock below; return capacity first.
+        // Return capacity before field drop, which can block on the observer lock.
         drop(self.permit.take());
         if self.finished {
             return;
@@ -247,9 +236,7 @@ impl Drop for AdmissionPermit {
         let call_id = self.call.call_id.clone();
         let call = self.call.clone();
         let charged_usage = terminal.usage;
-        // Explicit stream finalization awaits charged usage before exposing the
-        // provider's terminal item. Drop remains the abort/cancellation repair
-        // path and must never block a Tokio runtime thread.
+        // Drop must never block a Tokio runtime thread.
         spawn_persistence(async move {
             if let Err(error) = persist_existing_call_terminal(
                 node,

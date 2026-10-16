@@ -1,18 +1,11 @@
-//! The structural gate: everything that can be decided about a candidate
-//! before a single validation trial is spent.
+//! The structural gate, pure: [`text_gate`] judges the proposed text alone,
+//! [`structural_gate`] compares two materialized packs byte for byte.
 //!
-//! The gate is pure. [`text_gate`] judges the proposed text alone, so a driver
-//! can refuse a bad text before it materializes anything. [`structural_gate`]
-//! then compares two materialized packs byte for byte, so "the patch touches
-//! only the allowed field" is a statement about files rather than about intent.
-//!
-//! The gate does not validate the candidate's reference closure. Pack
-//! agents name inference-slot markers that are bound only when the executor
-//! runs, so a pack-level closure check would refuse every real candidate. It is
-//! also unnecessary: the byte comparison proves that only the target prompt
-//! differs from the baseline, so the candidate's references are exactly the
-//! baseline's. The live closure is validated by promotion, where a transaction
-//! exists.
+//! The gate does not validate the candidate's reference closure: pack agents
+//! name inference-slot markers bound only at execution, so a pack-level check
+//! would refuse every real candidate. The byte comparison proves the
+//! candidate's references are exactly the baseline's; the live closure is
+//! validated by promotion, where a transaction exists.
 
 use std::collections::BTreeSet;
 
@@ -31,11 +24,7 @@ pub(crate) use seeds::seed_gate;
 const CONFIG_ASSET: &str = "pack_config.json";
 
 /// Why a candidate never reached a validation run. `reason` is a closed
-/// vocabulary for the journal — `empty_text`, `text_too_long`,
-/// `template_invalid`, `template_variables_dropped`,
-/// `template_seed_invalid`, `unexpected_change`,
-/// `text_mismatch` or `duplicate_candidate` — and `detail` is diagnostics for
-/// an operator.
+/// vocabulary for the journal; `detail` is operator diagnostics.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StructuralRejection {
     pub reason: &'static str,
@@ -100,8 +89,7 @@ fn split_prompt(
     Ok((prompt, raw))
 }
 
-/// Decide whether `text` may become a candidate of `baseline` at all, before
-/// anything is written to disk.
+/// Decide whether `text` may become a candidate of `baseline` at all.
 pub fn text_gate(
     baseline: &MaterializedPack,
     text: &str,
@@ -141,11 +129,6 @@ pub fn text_gate(
     Ok(())
 }
 
-/// The checks the owner runs on a task at desired-state apply, on the
-/// baseline's task with `text` as its template: the catalog for `node.*` and
-/// `ctx.*`, and the roots its triggers' sources forbid. Only the task and its
-/// triggers are validated, because the pack's other documents name
-/// inference-slot markers that bind at execution.
 fn owner_validation(baseline: &MaterializedPack, text: &str) -> Result<(), StructuralRejection> {
     let invalid = |error: anyhow::Error| reject("template_invalid", format!("{error:#}"));
     let mut config = baseline.config.clone();
@@ -200,12 +183,8 @@ fn template_variables(template: &str) -> Result<BTreeSet<String>, StructuralReje
 /// Decide whether `candidate` may be evaluated at all.
 ///
 /// The checks run in the order a rejection is cheapest to explain, and the
-/// first failure decides. [`text_gate`] runs first. `seen_digests` holds the
-/// checkpoint's digest and every earlier candidate's, and it is consulted
-/// before the file comparison, so a proposer that repeats itself — including
-/// one that returns the checkpoint's own text — is a duplicate and spends
-/// nothing. The gate reads nothing owner-specific, because reference validity
-/// is inherited from the baseline.
+/// first failure decides. `seen_digests` holds the checkpoint's digest and
+/// every earlier candidate's, so a repeating proposer spends nothing.
 pub fn structural_gate(
     baseline: &MaterializedPack,
     candidate: &MaterializedPack,
@@ -265,7 +244,6 @@ pub fn structural_gate(
     }
 
     match &baseline.prompt_asset {
-        // Sidecar: the one changed asset holds exactly the proposed bytes.
         Some(asset) => {
             if candidate.files.get(asset).map(Vec::as_slice) != Some(text.as_bytes()) {
                 return Err(reject(
@@ -274,8 +252,6 @@ pub fn structural_gate(
                 ));
             }
         }
-        // Inline: the configs agree once the target is masked, and the
-        // candidate's target is exactly the proposed text's escaped form.
         None => {
             let (_, baseline_rest) = split_prompt(raw_config(baseline)?, baseline)?;
             let (prompt, candidate_rest) = split_prompt(raw_config(candidate)?, candidate)?;
@@ -289,8 +265,7 @@ pub fn structural_gate(
                     ),
                 ));
             }
-            // materialize_candidate writes the text escaped, because the
-            // loader interpolates this file.
+            // The loader interpolates this file, so the text is compared escaped.
             if prompt.as_str() != Some(interpolate::escape(text).as_str()) {
                 return Err(reject(
                     "text_mismatch",
@@ -425,9 +400,6 @@ mod tests {
         );
     }
 
-    /// A task's trigger renders the template with its variables when a seed
-    /// stage fires it; a candidate that drops one would render another prompt
-    /// shape.
     #[test]
     fn a_task_candidate_that_drops_a_template_variable_is_rejected() {
         let task = task_fixture(false);
@@ -452,14 +424,10 @@ mod tests {
         )
         .unwrap();
 
-        // A context prompt is not a template: braces there are only text.
         let context = fixture(false);
         text_gate(&context.baseline, "Watch {{ nothing }}.\n", 32 * 1024).unwrap();
     }
 
-    /// The owner's install-time checks run on the candidate: a `node.*` or
-    /// `ctx.*` variable the catalog lacks, or a root the task's trigger source
-    /// forbids, would be refused at promotion and must not spend a trial.
     #[test]
     fn a_task_candidate_the_owner_would_refuse_at_install_is_rejected() {
         let task = task_fixture(false);
@@ -539,7 +507,6 @@ mod tests {
         );
     }
 
-    /// F6: the one changed asset must hold exactly the proposed bytes.
     #[test]
     fn a_sidecar_whose_bytes_are_not_the_proposed_text_is_rejected() {
         let fixture = fixture(false);
@@ -548,7 +515,6 @@ mod tests {
         assert_eq!(rejection.reason, "text_mismatch");
     }
 
-    /// F6: in an inline pack the whole config may differ only at the target.
     #[test]
     fn an_inline_candidate_that_changed_another_config_field_is_rejected() {
         let fixture = fixture(true);
@@ -573,8 +539,6 @@ mod tests {
         assert_eq!(rejection.reason, "text_mismatch");
     }
 
-    /// The pack loader reads an inline value beginning with `./` as a sidecar
-    /// path, so such a text would silently become a different field's meaning.
     #[test]
     fn an_inline_text_that_reads_as_a_sidecar_path_is_rejected() {
         let fixture = fixture(true);
@@ -583,7 +547,6 @@ mod tests {
         assert!(rejection.detail.contains("./"), "{}", rejection.detail);
     }
 
-    /// P-N5: the text checks decide before any candidate is materialized.
     #[test]
     fn the_text_gate_decides_before_materialization() {
         let sidecar = fixture(false);
@@ -601,7 +564,6 @@ mod tests {
         assert_eq!(rejection.reason, "text_too_long");
         assert!(rejection.detail.contains('4'), "{}", rejection.detail);
 
-        // A leading ./ is only a sidecar path where the prompt is inline.
         text_gate(&sidecar.baseline, "./README.md", 32 * 1024).unwrap();
         assert_eq!(
             text_gate(&inline.baseline, "./README.md", 32 * 1024)
@@ -611,8 +573,6 @@ mod tests {
         );
     }
 
-    /// An inline prompt is stored escaped; the gate admits the escaped form of
-    /// exactly the proposed text and nothing else.
     #[test]
     fn an_inline_candidate_with_dollar_signs_passes() {
         let text = "Home is ${HOME}, pay $$5, and ${GENTS_T21_SURELY_UNSET}.\n";

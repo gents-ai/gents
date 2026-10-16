@@ -18,12 +18,13 @@ export function SessionStatus({
   const glyph =
     turnState === "waitingForClaim" ? (
       <Clock className="size-3.5 text-muted-foreground" />
-    ) : /* anything the runtime has not settled is working, whatever it calls
-       it: isLive knows every name for done, so a state this build has not
-       met still reads as working */
-    isLive(turnState) ? (
-      <Spinner className="text-foreground" />
-    ) : turnState === "failed" ? (
+    ) : (
+      /* anything the runtime has not settled is working, whatever it calls
+         it: isLive knows every name for done, so a state this build has not
+         met still reads as working */
+      isLive(turnState) ? (
+        <Spinner className="text-foreground" />
+      ) : turnState === "failed" ? (
       <CircleX className="size-3.5 text-destructive" />
     ) : turnState === "interrupted" || turnState === "superseded" ? (
       <CircleMinus className="size-3.5 text-muted-foreground" />

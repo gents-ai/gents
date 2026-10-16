@@ -128,15 +128,9 @@ async fn observer_survives_malformed_interrupt_timestamp() {
     }
 }
 
-/// Regression test for the "2-second blind spot" bug: the observer used to
-/// skip its first tick, so any interrupt latched before observer spawn (or in
-/// the first ~`OBSERVER_POLL_INTERVAL` after spawn) was invisible until the
-/// second tick — short requests could even finish inside that window and never
-/// observe the interrupt at all.
-///
-/// After the fix, `tokio::time::interval`'s first-tick-is-immediate behavior
-/// gives us a prompt first poll, and a pre-set latch is caught well under
-/// the poll-interval window.
+/// Regression: an interrupt latched before observer spawn must be observed on
+/// the first poll, not skipped to the second tick (the historical "2-second
+/// blind spot").
 #[tokio::test]
 async fn observer_picks_up_already_set_interrupt_on_first_poll() {
     let db = test_db("observer-initial-poll").await;

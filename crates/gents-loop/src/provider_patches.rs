@@ -1,8 +1,7 @@
 //! Deterministic post-serialization body rewrites `provider_input` applies
-//! before projecting a request's byte size, mirroring what the live
-//! transport does at send time (`gents::chatgpt_codex`,
-//! `gents::xai_grok_oauth`, native, wrap the actual HTTP client around the
-//! same two functions so accounting and the wire never diverge).
+//! before projecting a request's byte size; the native transports wrap the
+//! actual HTTP client around the same two functions so accounting and the
+//! wire never diverge.
 
 use bytes::Bytes;
 use serde_json::Value;
@@ -51,7 +50,6 @@ pub fn patch_instructions_body(body: &[u8]) -> Option<Bytes> {
     serde_json::to_vec(&value).ok().map(Bytes::from)
 }
 
-// pub, not private: gents' own chatgpt_codex test pins this exact list.
 pub const CHATGPT_CODEX_UNSUPPORTED_PARAMS: &[&str] =
     &["max_output_tokens", "temperature", "top_p"];
 
@@ -102,8 +100,7 @@ fn content_text(content: &Value) -> Option<String> {
     }
 }
 
-/// Grok/xAI quirk: force `store:false` when the caller left it unset, which
-/// makes the request stateless.
+/// Force `store:false` when the caller left it unset.
 pub fn patch_store_false(body: &[u8]) -> Option<Bytes> {
     let mut value = serde_json::from_slice::<Value>(body).ok()?;
     let mut changed = false;
@@ -120,12 +117,10 @@ pub fn patch_store_false(body: &[u8]) -> Option<Bytes> {
 
 pub const ENCRYPTED_REASONING_INCLUDE: &str = "reasoning.encrypted_content";
 
-/// A `store:false` Responses server keeps no reasoning items, so replayed
-/// reasoning is only resolvable from the `encrypted_content` the previous
-/// response returned, and the server returns it only when `include` asks,
-/// whether or not the request sets `reasoning`. Only reasoning-model
-/// transports (xAI, ChatGPT Codex) may call this: OpenAI rejects the include
-/// for non-reasoning models (gpt-4o, gpt-4.1) with a 400.
+/// A `store:false` Responses server returns reasoning only from the
+/// `encrypted_content` of the previous response, and only when `include`
+/// asks. Only reasoning-model transports (xAI, ChatGPT Codex) may call this:
+/// OpenAI rejects the include for non-reasoning models with a 400.
 pub fn request_encrypted_reasoning_when_stateless(value: &mut Value) -> bool {
     if value.get("store") != Some(&Value::Bool(false)) {
         return false;

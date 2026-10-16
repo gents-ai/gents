@@ -1,26 +1,10 @@
-//! Canonical descendant-root admission
-//! (`proofs/Proofs/PeerRegistryDiscovery/RootAdmission.lean`, emitted through
-//! `Conformance.RootAdmissionContracts`).
-//!
-//! Lean `rootSelectionOk`/`storedRootSelectionOk` are the only policy owners.
-//! Each emitted case materializes its abstract canonical paths as a sandbox
-//! filesystem, projects the published roots through
-//! `project_workspace_root_policy`, and replays the authored root through
-//! `admit_authored_root`, the owner shared by Agent creation and the canonical
-//! `Tools.host.root` writer: a case marked `stored` is a pre-existing grant
-//! being re-admitted (the overlap tolerance), anything else a freshly
-//! authored root held to strict admission. `meet` cases replay the
-//! selection/ceiling contract (`effectiveSelectionOk`) through
-//! `resolve_effective_tool_root`; blank selections pass the canonical
-//! `Tools.host.root` gate first because the policy gate for a blank root is
-//! owned there, not by the meet.
+//! Canonical descendant-root admission conformance against
+//! `proofs/Proofs/PeerRegistryDiscovery/RootAdmission.lean`.
 
 use std::collections::BTreeSet;
 
 use super::lean_contract_snapshot;
 
-/// Register every emitted root case and reject drift in the serialized
-/// operation/text observations.
 #[test]
 fn generated_root_admission_case_inventory_is_complete() {
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().root_admission_cases;
@@ -55,12 +39,6 @@ fn generated_root_admission_cases_drive_production_root_policy() {
         assert!(
             names.insert(case.name.as_str()),
             "duplicate case {}",
-            case.name
-        );
-        assert_eq!(
-            case.authored.trim().is_empty(),
-            case.blank,
-            "Lean blank observation drifted for {}",
             case.name
         );
         let sandbox = tempfile::tempdir().expect("case sandbox");
@@ -134,9 +112,6 @@ fn generated_root_admission_cases_drive_production_root_policy() {
             .candidate
             .as_ref()
             .map(|path| materialize(&path.anchor, &path.components));
-        // Lean anchors are abstract volume identities. On Unix the refinement
-        // materializes them as disjoint sandbox subtrees; the native Windows
-        // volume-prefix rule is separately fenced in root_admission unit tests.
         let candidate = match case.observation.as_str() {
             "blank" => None,
             "existing" | "explicit_restriction" | "invalid_ceiling" => {

@@ -34,21 +34,14 @@ pub struct VerdictView {
 
 /// The one verdict per `(stage_index, check)` that consumers should read.
 ///
-/// Drops every verdict that another verdict names in `regrade_of`. The rows stay
-/// in the database; this only selects what consumers read.
+/// Drops every verdict that another verdict names in `regrade_of`; supersession
+/// alone is not total, so the tie-break is the lexicographic maximum
+/// `verdict_id`, keeping the result independent of the order rows arrived in.
+/// Ordered by `(stage_index, check)`.
 ///
-/// Supersession alone is not total: two regrades of the same verdict, or two
-/// unrelated rows for one check, both survive it. The tie-break is the
-/// lexicographic maximum `verdict_id`, the strongest total order this view
-/// offers, so the survivor never depends on the order rows arrived in. (If a
-/// creation timestamp is ever added to this view it takes precedence, with
-/// `verdict_id` breaking ties within one instant.) The result is ordered by
-/// `(stage_index, check)`.
-///
-/// Precondition: every verdict passed in belongs to one case-trial. [`VerdictView`]
-/// carries no trial id, so the key is `(stage_index, check)` alone and mixing two
-/// trials' verdicts merges them into one row per key instead of failing. Callers
-/// select by trial before they get here.
+/// Precondition: every verdict passed in belongs to one case-trial — the key is
+/// `(stage_index, check)` alone, so mixing trials' verdicts merges them instead
+/// of failing. Callers select by trial before they get here.
 pub fn latest_verdicts(verdicts: Vec<VerdictView>) -> Vec<VerdictView> {
     let superseded: BTreeSet<String> = verdicts
         .iter()
@@ -86,12 +79,9 @@ pub enum CaseTrialScore {
 
 /// What one verdict contributes to a mean, clamped into the basis-point range.
 ///
-/// An acceptance check is expected to emit a `score_bp`; the defaults here exist
-/// only for a binary check that reports nothing beyond its outcome. A pass with
-/// no score is that check's full credit, and a fail kind with no score (the
-/// stage never ran) is zero. They are a floor under malformed rows, not a
-/// licence to omit the number: a graded check that forgets `score_bp` would
-/// otherwise silently read as perfect.
+/// These defaults are a floor under malformed rows, not a licence to omit the
+/// number: a graded check that forgets `score_bp` would otherwise silently read
+/// as perfect.
 fn verdict_bp(verdict: &VerdictView) -> u32 {
     match classify(verdict.kind, verdict.provider_reason) {
         EvidenceClass::Pass => verdict.score_bp.unwrap_or(SCORE_BP_MAX).min(SCORE_BP_MAX),
@@ -100,14 +90,8 @@ fn verdict_bp(verdict: &VerdictView) -> u32 {
 }
 
 /// The weight-weighted mean of `items`, in basis points, or `None` when the
-/// items carry no weight at all.
-///
-/// Rounding: integer division, truncating toward zero. With non-negative basis
-/// points that is a floor, so the mean never rounds up and two runs of the same
-/// verdicts always produce the same number. A zero-weight verdict contributes
-/// nothing to either side of the division; if that leaves no weight there is
-/// nothing to average, and the caller turns the `None` into `Unknown` rather
-/// than into a score of zero.
+/// items carry no weight at all. Truncating division keeps the mean from
+/// rounding up; a zero-weight verdict contributes to neither side.
 fn weighted_mean_bp(items: &[&VerdictView]) -> Option<u32> {
     let weight: u64 = items.iter().map(|verdict| u64::from(verdict.weight)).sum();
     if weight == 0 {
@@ -123,12 +107,10 @@ fn weighted_mean_bp(items: &[&VerdictView]) -> Option<u32> {
 /// `Eval.caseClass`, then the declared reducer over the acceptance-tier verdicts
 /// that carry weight.
 ///
-/// A zero weight disables a check completely: it enters no reducer and it does
-/// not contribute its evidence class, so a disabled infrastructure check cannot
-/// make the case-trial `NotEvidence`. Development-tier verdicts are excluded the
-/// same way. A case-trial left with no weighted acceptance verdict — none were
-/// emitted, or every one is disabled — is `Unknown`: totality was violated, and
-/// that is never a score of zero.
+/// A zero weight disables a check completely: it enters no reducer and does not
+/// contribute its evidence class. A case-trial left with no weighted acceptance
+/// verdict is `Unknown`: totality was violated, and that is never a score of
+/// zero.
 pub fn case_trial_score(reducer: EvalReducer, verdicts: &[VerdictView]) -> CaseTrialScore {
     let acceptance: Vec<&VerdictView> = verdicts
         .iter()
@@ -147,8 +129,6 @@ pub fn case_trial_score(reducer: EvalReducer, verdicts: &[VerdictView]) -> CaseT
     if classes.contains(&EvidenceClass::Unknown) {
         return CaseTrialScore::Unknown;
     }
-    // Only `Pass` and `Fail` remain, so the reducers decide on classes, never on
-    // a check's own number: `all` asks whether every check passed.
     let reduced = match reducer {
         EvalReducer::WeightedMean => weighted_mean_bp(&acceptance),
         EvalReducer::All => Some(
@@ -158,10 +138,6 @@ pub fn case_trial_score(reducer: EvalReducer, verdicts: &[VerdictView]) -> CaseT
                 0
             },
         ),
-        // `LastStage` takes the maximum `stage_index` among the weighted
-        // acceptance verdicts, not the case's declared final stage. Zero-weighting
-        // every check of the final stage removes it from this set and promotes an
-        // earlier stage to "last".
         EvalReducer::LastStage => {
             let last = acceptance
                 .iter()
@@ -201,12 +177,10 @@ pub struct Pair {
 
 /// The kept pairs and the audit trail of what the denominator policy removed.
 ///
-/// The denominator is `pairs.len()`, and the keys it was drawn from are `keys`;
-/// every kept pair carries its own `(case_id, trial_index)` so a consumer can
-/// audit exactly which pairs counted. The two counters below are per-cell rates
-/// for a health gate, not parts of a partition: when neither side is evidence a
-/// key increments both. Never sum them, and never subtract either from `keys` —
-/// use [`PairedEvidence::dropped_keys`] for how many keys were lost.
+/// The per-cell counters are rates for a health gate, not parts of a partition:
+/// when neither side is evidence a key increments both. Never sum them, and
+/// never subtract either from `keys` — use [`PairedEvidence::dropped_keys`] for
+/// how many keys were lost.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PairedEvidence {
     pub pairs: Vec<Pair>,
@@ -219,22 +193,18 @@ pub struct PairedEvidence {
 }
 
 impl PairedEvidence {
-    /// How many keys produced no pair. Exactly `keys - pairs.len()`, which the
-    /// overlapping per-cell counters cannot tell you.
     pub fn dropped_keys(&self) -> usize {
         self.keys.saturating_sub(self.pairs.len())
     }
 }
 
 /// `exclude_not_evidence_v1`. A pair is `(case, trial_index)`, joined by the
-/// shared seed. It counts only when both sides are evidence. An unknown is
+/// shared seed; it counts only when both sides are evidence. An unknown is
 /// imputed worst-case: it fails the candidate and passes the baseline.
 ///
-/// Precondition: each cell holds at most one score per `(case_id, trial_index)`,
-/// the latest completed attempt. A cell that nevertheless repeats a key has not
-/// told us which attempt counts, so that key's score in that cell is read as
-/// `Unknown` and the worst-case imputation applies. The result depends only on
-/// the set of rows, never on the order they arrived in.
+/// Precondition: each cell holds at most one score per `(case_id, trial_index)`;
+/// a repeated key reads as `Unknown` and takes the worst-case imputation. The
+/// result depends only on the set of rows, never on their order.
 pub fn pair_trials(baseline: &[TrialScore], candidate: &[TrialScore]) -> PairedEvidence {
     let index = |trials: &[TrialScore]| -> BTreeMap<(String, u32), CaseTrialScore> {
         let mut scores: BTreeMap<(String, u32), CaseTrialScore> = BTreeMap::new();

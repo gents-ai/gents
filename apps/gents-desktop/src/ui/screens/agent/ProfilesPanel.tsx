@@ -14,7 +14,6 @@ import { RowMenu } from "./RowMenu";
 import { useApp } from "@/app/AppContext";
 import { ProfileEditor } from "./ProfileEditor";
 
-/* why a model cannot serve right now */
 function modelProblem(deployment: NodeView, p: InferenceProfile): string | null {
   const backend = deployment.inferenceBackends.find(
     (b) => b.backendId === p.backend_id,
@@ -39,7 +38,6 @@ export function ProfilesPanel({
     nodeDid: deployment.nodeDid,
     section: "profiles",
   };
-  /* Add profile under a backend: the dialog opens on it */
   const [creating, setCreating] = useState<string | null>(null);
   const profileRow = (p: InferenceProfile): ListRow => {
     const problem = modelProblem(deployment, p);
@@ -136,8 +134,6 @@ export function ProfilesPanel({
       <InferencePanel
         deployment={deployment}
         under={modelRows}
-        /* a profile whose backend is gone has no row to sit under; it stays
-           listed, with its problem, so it can be repointed or deleted */
         orphans={deployment.inferenceProfiles
           .filter(
             (p) =>

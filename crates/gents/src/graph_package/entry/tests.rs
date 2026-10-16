@@ -73,8 +73,6 @@ fn git_diff_host_step_runs_the_declared_diff() {
 
 use crate::plugin::tests::constant_output_wat;
 
-/// Installs a constant-output plugin under a fresh home, qualified
-/// `fixture/prepare_fixture`.
 fn install_prepare_fixture_plugin(output: &Value) -> (tempfile::TempDir, String) {
     let wat_source = constant_output_wat(&serde_json::to_vec(output).unwrap());
     let (plugin, afb) =
@@ -285,12 +283,6 @@ async fn prepare_entry_run_refuses_a_document_outside_declared_writes() {
     );
 }
 
-/// The batched aliased-mutation path (D4 step 7): more than
-/// [`PREPARE_DOCUMENTS_BATCH_LIMIT`] documents forces the count-based split
-/// into multiple batches, and one oversized document forces a byte-based
-/// split mid-batch (and must still land, alone, in its own batch rather than
-/// being silently dropped). Every document must survive with its exact
-/// fields, and none may be dropped, duplicated, or truncated.
 #[tokio::test]
 async fn persist_prepared_documents_batches_and_never_drops_a_document() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
@@ -306,9 +298,7 @@ async fn persist_prepared_documents_batches_and_never_drops_a_document() {
         })
         .collect();
     let oversized_note = "z".repeat(PREPARE_DOCUMENTS_BATCH_BYTES + 1);
-    // Inserted mid-list (not first in its would-be batch), so this document
-    // alone tripping the byte budget forces an early batch break rather than
-    // only ever being exercised as a batch's first, always-admitted alias.
+    // Mid-list, so the byte budget forces an early batch break.
     documents.insert(
         40,
         PreparePluginDocument {

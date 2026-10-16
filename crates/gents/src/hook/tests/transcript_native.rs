@@ -193,10 +193,8 @@ async fn generated_transcript_cases_drive_reachable_native_canonical_owners() {
     );
 
     let dedupe = crate::lean_vocab_test::lean_transcript_case("dedupe_duplicate_reuses_sequence");
-    // Lost-ack replay occurs inside ToolCallLifecycle's private idempotent
-    // terminal-delivery transaction. Re-entering the hook after it relinquishes
-    // ownership is an illegal transition, not the modeled duplicate action.
-    // Keep the generated case visible, but do not claim runtime coverage here.
+    // Runtime re-entry after ToolCallLifecycle's idempotent terminal delivery
+    // is an illegal transition, not the modeled duplicate action.
     assert_eq!(dedupe.action, "observe_duplicate_tool_result");
     assert!(dedupe.expected_duplicate_reused_sequence);
 

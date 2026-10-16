@@ -10,8 +10,6 @@ npm ci
 node scripts/check-desktop-package-boundaries.mjs
 [[ "$(node -p 'require("./package.json").version')" == "$RELEASE_VERSION" ]]
 
-# The release workflow already built and signed the CLI in this target dir.
-# Stage that exact binary as Tauri's target-suffixed sidecar.
 bash scripts/stage-tauri-sidecar.sh --source "$CARGO_TARGET_DIR/release/gents"
 
 notary_dir=$(mktemp -d "$RUNNER_TEMP/gents-desktop-notary.XXXXXX")
@@ -22,7 +20,6 @@ printf '%s\n' "$MACOS_NOTARY_API_KEY" > "$APPLE_API_KEY_PATH"
 unset MACOS_NOTARY_API_KEY
 umask 022
 
-# Reuse the CLI job's signing identity/keychain; Tauri signs and notarizes the app.
 (
   cd apps/gents-desktop
   npm run tauri -- build --config src-tauri/tauri.bundle.conf.json --ci --bundles app,dmg -- --locked
@@ -42,7 +39,6 @@ bundled_cli="$app/Contents/MacOS/gents"
 shopt -s nullglob
 images=("$CARGO_TARGET_DIR"/release/bundle/dmg/*"${RELEASE_VERSION}"*.dmg)
 [[ ${#images[@]} == 1 ]]
-# Staple the installer too, so installation does not depend on a Gatekeeper lookup.
 codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "${images[0]}"
 codesign --verify --strict "${images[0]}"
 xcrun notarytool submit "${images[0]}" --key "$APPLE_API_KEY_PATH" \

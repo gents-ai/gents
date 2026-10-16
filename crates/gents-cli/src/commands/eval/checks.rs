@@ -1,5 +1,3 @@
-//! `gents eval checks`: the builtin catalog, from the registry alone.
-
 use std::io::Write;
 
 use anyhow::{Context, Result};
@@ -46,9 +44,6 @@ fn read_case(source: &str) -> Result<String> {
     std::fs::read_to_string(source).with_context(|| format!("reading {source}"))
 }
 
-/// Prints `{"violations": [...]}` for one case's JSON text and fails when it
-/// holds any, so a pack's contract test can pipe a case in and trust the exit
-/// status.
 fn validate_case(registry: &CheckRegistry, text: &str, out: &mut dyn Write) -> Result<()> {
     let case: EvalCase = serde_json::from_str(text).context("parsing the eval case")?;
     let violations: Vec<String> = case_catalog_conformance(&case, registry)

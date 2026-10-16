@@ -1,8 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-/// Reusable event-driven action-plan callback. Existing modules, host actions,
-/// and journals remain supported. General task command hooks do not require this
-/// workspace-oriented planner; their integration with workspace callbacks is TODO.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -16,7 +13,6 @@ pub struct Callback {
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub description: Option<String>,
     pub handler: CallbackHandler,
-    /// Empty grants no host-action capabilities.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null"
@@ -31,7 +27,6 @@ pub struct Callback {
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
     pub enabled: bool,
-    /// Optional UI/discovery labels. References, never tags, determine execution.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -52,23 +47,17 @@ pub enum CallbackHandler {
     Module {
         module_id: String,
     },
-    /// An installed plugin reads the source document, and its JSON result
-    /// becomes the declared output documents.
     Plugin {
-        /// `namespace/name` of the installed plugin.
+        // The artifact is referenced by content hash: any other installed
+        // artifact is refused.
         plugin: String,
-        /// `sha256:<hex>` of the artifact to run; any other installed artifact
-        /// is refused.
         digest: String,
-        /// Source field whose value is written to each output's correlation field.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "typescript", ts(optional = nullable))]
         correlation_field: Option<String>,
-        /// How many times a failed call may run in all; absent is once.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "typescript", ts(optional = nullable))]
         max_attempts: Option<u32>,
-        /// Where the result is written. Empty writes nothing.
         #[serde(
             default,
             deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -89,9 +78,6 @@ pub enum BuiltInCallback {
     CreateWorkspace,
 }
 
-/// Event delivery selects a reusable callback, without duplicating its handler.
-/// Uses the same EventSource configuration as task triggers. Event grouping
-/// support must follow the shared delivery contract rather than be ignored.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -100,9 +86,8 @@ pub struct CallbackBinding {
     pub node_did: String,
     pub event_source_id: String,
     pub callback_id: String,
-    /// Exact source field names projected for this invocation. Empty passes no
-    /// source data. Apply the existing schema-safe field validation. For grouped
-    /// delivery, apply this projection to every member, preserving group identity.
+    // Projection applies to every member of a grouped delivery, preserving
+    // group identity.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -117,7 +102,6 @@ pub struct CallbackBinding {
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
     pub enabled: bool,
-    /// Optional UI/discovery labels. References, never tags, determine execution.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -127,8 +111,8 @@ pub struct CallbackBinding {
     pub tags: Vec<String>,
 }
 
-/// Existing WASM callback module configuration. Resource limits retain their
-/// executor defaults when absent; signer_did is provenance, not execution owner.
+// Resource limits retain their executor defaults when absent; signer_did is
+// provenance, not execution owner.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -169,7 +153,6 @@ pub struct CallbackModule {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_output_bytes: Option<i64>,
-    /// Optional UI/discovery labels. References, never tags, determine execution.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -179,8 +162,6 @@ pub struct CallbackModule {
     pub tags: Vec<String>,
 }
 
-/// Durable event callback origin. General task commands use request execution
-/// ownership, not a fabricated event or a workspace callback invocation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[serde(deny_unknown_fields)]
@@ -192,8 +173,8 @@ pub enum CallbackInvocationOrigin {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source_version: Option<String>,
     },
-    /// One invocation for one sealed delivery group, never an arbitrary member.
-    /// The existing delivery owner persists membership and deduplicates the group.
+    // One invocation for one sealed delivery group, never an arbitrary member;
+    // the delivery owner deduplicates the group.
     EventGroup {
         binding_id: String,
         group_key: String,
@@ -201,7 +182,6 @@ pub enum CallbackInvocationOrigin {
 }
 
 impl CallbackInvocationOrigin {
-    /// The binding that created this invocation.
     pub fn binding_id(&self) -> &str {
         match self {
             Self::Event { binding_id, .. } | Self::EventGroup { binding_id, .. } => binding_id,

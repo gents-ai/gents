@@ -3,11 +3,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-/// In-process hosts share memory with inference, tools and their UI. Keep the
-/// server's value/key limits, isolation and durability; the upstream embedded
-/// profile restricts document sizes and disables background compaction.
-/// These are per-store working-set targets, not a process RSS limit: snapshots,
-/// compaction, large values and additional nodes consume memory separately.
+/// In-process hosts keep the server's value/key limits, isolation and
+/// durability; the upstream embedded profile restricts document sizes and
+/// disables background compaction. These are per-store working-set targets,
+/// not a process RSS limit.
 pub fn regolith_options() -> storage::RegolithStoreOptions {
     let mut options = storage::RegolithStoreOptions::default();
     options.engine.write_buffer_size = 32 * 1024 * 1024;
@@ -49,10 +48,8 @@ impl IncompatibleStoreKind {
     }
 }
 
-/// A data directory this build refuses to open, and why.
-///
-/// Carried in the error chain so hosts can recognize the refusal by type
-/// (process exit status, desktop bridge error code) instead of by message.
+/// A data directory this build refuses to open, and why. Carried in the error
+/// chain so hosts can recognize the refusal by type instead of by message.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{}", describe(*kind, data_path))]
 pub struct IncompatibleStore {
@@ -92,10 +89,6 @@ fn describe(kind: IncompatibleStoreKind, data_path: &Path) -> String {
 
 /// Inspect the exact on-disk markers owned by the storage backend without
 /// opening or mutating the store.
-///
-/// A Regolith store from an older build has no distinguishing marker; it is
-/// recognized when opened, by [`incompatible_store`] over the migration
-/// engine's lineage refusal.
 pub fn incompatible_store_kind(data_path: &Path) -> Result<Option<IncompatibleStoreKind>> {
     if data_path.join("CURRENT").is_file() {
         return Ok(Some(IncompatibleStoreKind::LegacyRocksDb));
@@ -143,9 +136,7 @@ pub(crate) fn require_existing_store(data_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The store refusal carried by `error`, if any: a legacy-backend rejection,
-/// an identity key refused for unsafe permissions (reported at the key's
-/// path), or the migration engine refusing a lineage it does not know. The engine
+/// The store refusal carried by `error`, if any. The migration engine
 /// refuses before it registers or patches anything, so the store is left
 /// exactly as the older build wrote it.
 pub fn incompatible_store(error: &anyhow::Error, data_path: &Path) -> Option<IncompatibleStore> {
@@ -295,8 +286,6 @@ mod tests {
         );
     }
 
-    /// A Regolith store written by an older build: a managed collection
-    /// exists with a root this release's baseline does not pin.
     #[tokio::test]
     async fn older_regolith_lineage_is_refused_by_type_without_writing_the_baseline() {
         let tempdir = tempfile::tempdir().unwrap();
@@ -331,8 +320,6 @@ mod tests {
         node.shutdown().await;
     }
 
-    /// A key an older build wrote with ambient (0644) permissions is refused
-    /// by the identity owner and classified as a home needing a fresh start.
     #[cfg(unix)]
     #[test]
     fn an_older_home_key_with_open_permissions_is_classified_insecure() {

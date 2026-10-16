@@ -7,10 +7,7 @@ import type {
   PackSlotProfile,
 } from "../types/packs.js";
 import type { createDesktopInvoker } from "./invoke.js";
-import type { DesktopApiAdapter, PackCommand } from "./types.js";
 
-/* the operations `gents pack` runs, through the bridge */
-export function createPackCommands(
   invokeDesktop: ReturnType<typeof createDesktopInvoker>,
 ): Pick<DesktopApiAdapter, PackCommand> {
   return {

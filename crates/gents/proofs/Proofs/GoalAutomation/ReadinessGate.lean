@@ -1,18 +1,9 @@
 import Proofs.Goals
 
-/-! Agent-readiness gate and infrastructure-retry accounting for durable
-Goal continuation. The existing `Goals.decide` owner still chooses the
-continuation; this layer only decides whether that choice may publish a child
-now and which terminals may spend the bounded infrastructure retry budget.
--/
 namespace GoalAutomation.ReadinessGate
 
 open Goals
 
-/-- Readiness of the continuation's agent, projected from the canonical
-runtime-authored readiness row (`project_agent_readiness`). The projection
-already folds process state, generation alignment, explicit unavailability and
-startup demotion through the same predicate that request routing uses. -/
 inductive Observation where
   /-- `newerThanTerminal`: the row was written after the observed terminal
   request ended. Routing and the row are separate observations of the same
@@ -41,12 +32,6 @@ inductive Readiness where
   | unavailable
   deriving DecidableEq, Repr
 
-/-- `settled` is the runtime reconcile phase being idle after a reconcile that
-did not fail. Before then an unavailable verdict may describe control documents
-that are still arriving, so it only defers the continuation. Once settled, the
-verdict reflects configuration that only an operator edit changes, so the Goal
-reports it instead of waiting without bound. An offline node or backend never
-settles into that verdict: it only waits. -/
 def observe : Observation → Bool → Readiness
   | .ready _, _ => .ready
   | .backendRecovering, _ => .waiting
@@ -77,9 +62,6 @@ structure Input where
   wrapupCompleted : Bool
   deriving DecidableEq, Repr
 
-/-- A rejected-before-execution request did no work, so the existing owner
-decides as though the previous turn had ended normally: the same continuation
-(or pending wrap-up) is issued again rather than a charged recovery. -/
 def baseDecision (cause : Cause) (i : Input) : Decision :=
   match cause with
   | .attempt =>
@@ -101,8 +83,6 @@ inductive Gated where
   | agentUnavailable
   deriving DecidableEq, Repr
 
-/-- An uncharged re-issue needs readiness written after the rejection it
-replaces; otherwise the retry budget no longer bounds how often it publishes. -/
 def gate (observation : Observation) (settled : Bool) (cause : Cause) (i : Input) : Gated :=
   let base := baseDecision cause i
   if publishes base then
@@ -117,18 +97,12 @@ def gate (observation : Observation) (settled : Bool) (cause : Cause) (i : Input
 
 def maxInfrastructureRetries : Nat := 2
 
-/-- Persisted `infrastructure_retry_count` after GoalSource applies a gated
-decision. A clean completed attempt clears the count; everything else that
-does not retry leaves it unchanged. -/
 def nextRetries (cause : Cause) (i : Input) : Gated → Nat
   | .decided .retry => i.retries + 1
   | .decided .continue | .decided .wrapup =>
       if cause = .attempt ∧ i.terminal = .completed then 0 else i.retries
   | _ => i.retries
 
-/-- Legal Goal transition for a settled-unavailable agent. Only Goals whose
-existing decision would publish reach it: active Goals pause, and a pending
-budget wrap-up is abandoned rather than retried. -/
 def resolveUnavailable (state : State) : Option State :=
   if state.status = .active then step? state .pause else step? state .wrapupAbandoned
 
@@ -140,9 +114,6 @@ inductive ClaimedDecision where
   | inactive
   deriving DecidableEq, Repr
 
-/-- A claimed continuation has already charged its retry and advanced its
-sequence. Readiness may stop its existing Goal, but cannot replay either effect.
-A completed wrap-up and an existing child have no pending publication to stop. -/
 def claimedGate (observation : Observation) (settled childExists : Bool)
     (state : State) : ClaimedDecision :=
   if childExists || state.wrapupCompleted ||
@@ -153,11 +124,12 @@ def claimedGate (observation : Observation) (settled childExists : Bool)
     | .waiting => .awaitReadiness
     | .unavailable => .stop
 
-/-- These are the existing durable claim fields, not another Goal lifecycle.
-`lastFailure` reconstructs an infrastructure retry prompt after a crash or a
-transient readiness wait. A readiness stop preserves it; explicit operator
-resume retains its separate contract of starting a fresh continuation epoch.
-The canonical agent-readiness row owns the unavailability reason. -/
+/-- Readiness may stop an existing Goal but cannot replay the claim's charged
+retry or advanced sequence. `lastFailure` reconstructs an infrastructure retry
+prompt after a crash or transient readiness wait; a readiness stop preserves
+it. Explicit operator resume retains its separate contract of starting a fresh
+continuation epoch. The canonical agent-readiness row owns the unavailability
+reason. -/
 structure ClaimedRecovery where
   goal : State
   retries : Nat
@@ -282,18 +254,6 @@ theorem ready_attempt_refines_existing_decision
         i.hasActivity i.requestIsWrapup i.retries i.wrapupRequested i.wrapupCompleted) := by
   simp [gate, observe, baseDecision]
 
-/-- No continuation child is published unless the agent is ready. -/
-theorem publication_requires_ready_agent
-    (observation : Observation) (settled : Bool) (cause : Cause) (i : Input)
-    (decision : Decision) (h : gate observation settled cause i = .decided decision)
-    (hpublish : publishes decision = true) :
-    observe observation settled = .ready := by
-  have hbase := gate_decided_is_base observation settled cause i decision h
-  simp only [gate, hbase, hpublish, if_true] at h
-  cases hr : observe observation settled <;> simp [hr] at h ⊢
-
-/-- A readiness rejection is re-issued only after readiness was republished
-following it. -/
 theorem stale_readiness_never_reissues_a_rejection
     (settled : Bool) (i : Input) (decision : Decision)
     (h : gate (.ready false) settled .agentUnavailable i = .decided decision) :
@@ -303,7 +263,6 @@ theorem stale_readiness_never_reissues_a_rejection
   · rfl
   · simp [gate, observe, Observation.newerThanTerminal, hbase, hp] at h
 
-/-- While the agent is not ready, the retry budget is untouched. -/
 theorem unready_agent_preserves_retry_budget
     (observation : Observation) (settled : Bool) (cause : Cause) (i : Input)
     (hready : observe observation settled ≠ .ready) :
@@ -316,8 +275,6 @@ theorem unready_agent_preserves_retry_budget
   | awaitReadiness => simp [nextRetries]
   | agentUnavailable => simp [nextRetries]
 
-/-- A request rejected because its agent was unavailable never spends the
-retry budget, whatever readiness is observed afterwards. -/
 theorem unavailable_agent_rejection_is_never_charged
     (observation : Observation) (settled : Bool) (i : Input) :
     nextRetries .agentUnavailable i (gate observation settled .agentUnavailable i)
@@ -330,7 +287,6 @@ theorem unavailable_agent_rejection_is_never_charged
   | awaitReadiness => simp [nextRetries]
   | agentUnavailable => simp [nextRetries]
 
-/-- Retries are charged only for an attempt observed against a ready agent. -/
 theorem charge_requires_ready_attempt
     (observation : Observation) (settled : Bool) (cause : Cause) (i : Input)
     (h : i.retries < nextRetries cause i (gate observation settled cause i)) :
@@ -374,8 +330,6 @@ theorem retry_budget_is_bounded
   | awaitReadiness => simpa only [nextRetries] using hbound
   | agentUnavailable => simpa only [nextRetries] using hbound
 
-/-- A settled-unavailable verdict always has a legal Goal transition, so the
-Goal leaves automatic continuation instead of waiting without bound. -/
 theorem settled_unavailable_resolution_is_legal
     (observation : Observation) (settled : Bool) (cause : Cause) (i : Input) (state : State)
     (h : gate observation settled cause i = .agentUnavailable)
@@ -402,14 +356,12 @@ theorem unsettled_observation_never_ends_continuation (observation : Observation
 theorem backend_recovery_always_waits (settled : Bool) :
     observe .backendRecovering settled = .waiting := rfl
 
-/-- Existing exactly-once suppression is preserved by the gate. -/
 theorem existing_child_is_never_duplicated
     (observation : Observation) (settled : Bool) (cause : Cause) (i : Input)
     (hchild : i.childExists = true) :
     gate observation settled cause i = .decided .none := by
   cases cause <;> simp only [gate, baseDecision, hchild, existing_child_never_duplicates] <;> rfl
 
-/-- A scan sequence folds the persisted count through gated decisions. -/
 structure Scan where
   observation : Observation
   settled : Bool
@@ -421,8 +373,6 @@ def applyScan (retries : Nat) (scan : Scan) : Nat :=
   let i := { scan.input with retries }
   nextRetries scan.cause i (gate scan.observation scan.settled scan.cause i)
 
-/-- Any interleaving of unready observations and readiness rejections leaves
-the retry budget exactly where it was. -/
 theorem readiness_trace_preserves_budget (retries : Nat) (scans : List Scan)
     (h : ∀ scan ∈ scans,
       observe scan.observation scan.settled ≠ .ready ∨ scan.cause = .agentUnavailable) :
@@ -440,7 +390,6 @@ theorem readiness_trace_preserves_budget (retries : Nat) (scans : List Scan)
       rw [hscan]
       exact ih retries (fun s hs => h s (List.mem_cons_of_mem _ hs))
 
-/-- Every scan sequence keeps the persisted count within the bound. -/
 theorem trace_retry_budget_is_bounded (retries : Nat) (scans : List Scan)
     (hbound : retries ≤ maxInfrastructureRetries) :
     scans.foldl applyScan retries ≤ maxInfrastructureRetries := by
@@ -533,7 +482,6 @@ theorem race_step_preserves_invariant (s : RaceState) (event : RaceEvent)
         omega
       · exact h
 
-/-- Uncharged re-issues never outnumber readiness publications. -/
 theorem reissues_bounded_by_readiness_writes (events : List RaceEvent) :
     let s := events.foldl raceStep ⟨0, 0, false, false⟩
     s.reissues ≤ s.readinessWrites := by

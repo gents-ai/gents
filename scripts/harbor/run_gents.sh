@@ -1,7 +1,6 @@
 #!/bin/sh
 set -eu
 
-# Read only the canonical request metadata, never model-authored output.
 response_status() {
   python3 - "$1" <<'PYSTATUS'
 import json, sys
@@ -14,9 +13,6 @@ except (OSError, ValueError, AttributeError):
 PYSTATUS
 }
 
-# Read one non-negative integer from the root final_metrics.extra object in
-# Gents' pretty-printed ATIF. Exact indentation anchors this to the top-level
-# metrics object, so model-authored tool arguments cannot forge the outcome.
 atif_final_metrics_extra_u64() {
   atif_path=$1
   atif_key=$2
@@ -74,8 +70,6 @@ print(outcome)
 PYCLASSIFY
 }
 
-# Fixture-driven check of terminal-response classification. Runs without any
-# Gents environment; CI executes it next to the shell-syntax check.
 run_self_test() {
   self_test_dir=$(mktemp -d /tmp/gents-harbor-self-test.XXXXXX)
   trap 'rm -rf "${self_test_dir}"' EXIT
@@ -281,7 +275,6 @@ EOF
   }
 }
 EOF
-  # Canonical request metadata carries the terminal failure independently of output.
   cat >"${self_test_dir}/envelope-max-turns.json" <<'EOF'
 {
   "request": {
@@ -297,8 +290,6 @@ EOF
   }
 }
 EOF
-  # A provider error may embed upstream response text that mentions the
-  # MaxTurn token; that is still an infrastructure failure.
   cat >"${self_test_dir}/provider-echoes-max-turn.json" <<'EOF'
 {
   "request": {
@@ -314,7 +305,6 @@ EOF
   }
 }
 EOF
-  # A noncanonical failure that mentions MaxTurnError must stay an agent error.
   cat >"${self_test_dir}/envelope-nested-max-turn-only.json" <<'EOF'
 {
   "request": {
@@ -491,8 +481,6 @@ case "${GENTS_SEED}" in
     ;;
 esac
 
-# GENTS_MAX_TURNS is interpolated into the outcome document as a JSON number,
-# so leading zeros are as invalid as non-digits.
 case "${GENTS_MAX_TURNS}" in
   ''|*[!0-9]*|0?*)
     echo "GENTS_MAX_TURNS must be a non-negative integer without leading zeros" >&2
@@ -676,10 +664,9 @@ wait_for_server_ready() {
   server_ready=0
   attempt=0
   while [ "${attempt}" -lt "${GENTS_SERVER_STARTUP_TIMEOUT_SECS}" ]; do
-    # The persisted status file can still describe the bootstrap server for a
-    # brief window after restart. Requiring the new process's serving marker
-    # prevents a concurrent home-opening CLI (notably `tools explain`) from
-    # racing the restarted server for the persistent store.
+    # The persisted status file can still describe the bootstrap server after
+    # restart; require the new process's serving marker before racing it for
+    # the persistent store.
     if grep -qF 'gents server is running with' "${server_log}" &&
       "${GENTS_BINARY}" status --home "${GENTS_HOME}" >"${status_log}" 2>/dev/null &&
       grep -q '"process_state": "ready"' "${status_log}" &&
@@ -802,11 +789,6 @@ trap 'exit 130' INT TERM
 
 configure_profile
 configure_tools
-
-# Configure through GraphQL before requiring node readiness. This also
-# bootstraps binaries whose schema materializes an omitted nullable string as
-# an empty value. Restarting makes the persisted profile part of the startup
-# snapshot before any benchmark request can exist.
 kill "${server_pid}" >/dev/null 2>&1 || true
 wait "${server_pid}" || true
 mv "${server_log}" "${bootstrap_server_log}"
@@ -916,8 +898,8 @@ while :; do
   exit "${waiter_status}"
 done
 
-# Persist terminal classification before projection. If projection cannot
-# reopen the store, diagnostics still retain the response-derived outcome.
+# Persist the response-derived outcome before projection; if projection
+# cannot reopen the store, diagnostics still carry the outcome.
 response_status=$(response_status "${response_log}")
 outcome=$(classify_response "${response_log}")
 printf '{\n  "outcome": "%s",\n  "response_status": "%s",\n  "max_turns": %s,\n  "max_total_tokens": %s,\n  "request_id": "%s"\n}\n' \
@@ -942,14 +924,10 @@ if [ "${normalized_outcome}" != "${outcome}" ]; then
 fi
 outcome=${normalized_outcome}
 
-# `response wait` exits successfully after any terminal response, including a
-# provider/runtime failure. Do not let Harbor run the verifier against an
-# untouched task filesystem and record that infrastructure failure as a model
-# zero. The exceptions are explicit agent-budget exhaustion (turns or aggregate
-# provider tokens): the workspace holds real work, so return control to Harbor
-# and let the verifier score it. Preserve the response and trajectory above in
-# every case; genuine failures stay agent exceptions so they can be retried or
-# recovered separately.
+# `response wait` succeeds on any terminal response; infrastructure failures
+# must not be handed to the verifier as a model zero, while agent-budget
+# exhaustion (turns or aggregate tokens) returns the workspace for scoring.
+# Genuine failures stay agent exceptions for retry/recovery.
 if [ -n "${classification_reason}" ]; then
   printf '{\n  "outcome": "%s",\n  "response_status": "%s",\n  "max_turns": %s,\n  "max_total_tokens": %s,\n  "request_id": "%s",\n  "classification_reason": "%s"\n}\n' \
     "${outcome}" "${response_status:-missing}" "${GENTS_MAX_TURNS}" "${GENTS_MAX_TOTAL}" "${request_id}" "${classification_reason}" \

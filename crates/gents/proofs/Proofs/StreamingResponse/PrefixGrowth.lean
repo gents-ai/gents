@@ -6,8 +6,6 @@ namespace StreamingResponse
 
 open CanonicalOutput
 
-/-- Reordered immutable arrivals may fill the first gap. They cannot shorten the
-selected contiguous list when they preserve earlier successful ordinal lookups. -/
 theorem contiguousFlushes_prefix_of_extension
     (before after : List Segment) (writer : Writer)
     (hstable : ∀ ordinal flush, flushAt before writer ordinal = .ok flush →
@@ -91,9 +89,6 @@ theorem reconstructOpen_witness (observation : Observation) (streams : Streams)
                 subst raw
                 exact ⟨flushes, actual, rfl, hc, hstreams⟩
 
-/-- Benign source arrival is a relation on immutable records, not on rendered
-bytes: old facts remain, writer/source stay fixed, and no new competing fact is
-introduced at an already observed ordinal. Missing ordinals may freely arrive. -/
 structure BenignSourceExtension (before after : Observation) : Prop where
   coordinate : before.target.coordinate = after.target.coordinate
   writer : before.target.writer = after.target.writer
@@ -106,9 +101,9 @@ structure BenignSourceExtension (before after : Observation) : Prop where
     old.flush.any (fun flush => flush.ordinal == ordinal) = true →
     new.flush.any (fun flush => flush.ordinal == ordinal) = true → old = new
 
-/-- Universal non-rewind for the actual shared reconstruction. Publication,
+/-- Universal non-rewind for the actual shared reconstruction: publication,
 retraction, authorization changes and conflicts are deliberately not benign
-extensions; recovery or presentation may intentionally narrow the final view. -/
+extensions. -/
 theorem reconstructOpen_grows_under_benign_arrival
     (before after : Observation) (initial extended : Streams)
     (hextension : BenignSourceExtension before after)

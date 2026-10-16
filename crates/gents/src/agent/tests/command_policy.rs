@@ -90,9 +90,6 @@ fn readonly_bash_mode_custom_allowlist_flows_through_to_policy() {
 
 #[test]
 fn readonly_bash_mode_empty_allowlist_falls_back_to_default() {
-    // An explicitly-empty allowlist must behave identically to absent: no
-    // override, so command_policy stays None and the builder applies the
-    // hardcoded default_read_only_commands() list (never a deny-all surface).
     let mut doc = tools_doc("ReadOnly");
     doc.host
         .as_mut()

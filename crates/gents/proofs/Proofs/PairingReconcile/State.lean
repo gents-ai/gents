@@ -13,7 +13,6 @@ structure CollectionFilterKey where
   value : String
   deriving DecidableEq, Repr
 
-/-- Filter atoms are interpreted conjunctively for each collection. -/
 abbrev ReplicatorFilter := Finset CollectionFilterKey
 
 abbrev ReplicatorCollections := Finset String
@@ -28,14 +27,11 @@ def filter (r : ReplicatorId) : ReplicatorFilter := r.2.1
 
 def collections (r : ReplicatorId) : ReplicatorCollections := r.2.2
 
-/-- Transport ownership is keyed by endpoint, not by the route's mutable
-configuration. A filter or collection change must not create a second owner. -/
 def sameEndpoint (left right : ReplicatorId) : Bool :=
   left.address == right.address
 
 end ReplicatorId
 
-/-- Remove every observed configuration for one owned transport endpoint. -/
 def eraseReplicatorsAtAddress
     (replicators : Finset ReplicatorId) (address : String) : Finset ReplicatorId :=
   replicators.filter fun candidate => candidate.address != address

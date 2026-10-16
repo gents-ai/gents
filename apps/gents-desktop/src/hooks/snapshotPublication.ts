@@ -5,7 +5,6 @@ export type SnapshotPublication = {
   publish: (snapshot: DesktopClientSnapshot) => boolean;
 };
 
-/** Orders reads, not mutations: only the newest issued read may publish. */
 export function createSnapshotPublicationOwner(
   publish: (snapshot: DesktopClientSnapshot) => void,
 ) {

@@ -41,8 +41,7 @@ impl super::StreamGuardLifecycle for ContendedFinalizeProbe {
     }
 }
 
-/// The daemon can select a response-flush branch while stream finalization owns
-/// the same write gate. The finalizer must progress without stream.next() polls.
+/// Finalization must progress without stream.next() polls.
 #[tokio::test]
 async fn terminal_persistence_progresses_while_consumer_waits_for_shared_write_gate() {
     let gate = Arc::new(tokio::sync::Mutex::new(()));

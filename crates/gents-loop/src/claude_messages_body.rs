@@ -1,7 +1,6 @@
-//! Anthropic Messages request-body assembly, moved out of `gents::claude_messages`
-//! (G-1): `provider_input` projects this exact body for token accounting, and
-//! the real transport (native, in `gents`) builds the identical body to send.
-//! The SSE response parser and the OAuth-bearing HTTP client stay native.
+//! Anthropic Messages request-body assembly: `provider_input` projects this
+//! exact body for token accounting, and the real transport (native, in
+//! `gents`) builds the identical body to send.
 
 use base64::Engine as _;
 use gents_protocol::message::{
@@ -132,10 +131,9 @@ pub enum ReplayCheckpointError {
     Codec(#[from] AssistantCodecError),
 }
 
-/// Lean `ClaudeMap.prepareReplayCheckpoint`: the selected rows and required
-/// coordinates are independent inputs. Splitting is exact and keeps source
-/// sidecars attached to their row occurrences; it never discovers a tag from
-/// equal native bytes or a provider-generated message ID.
+/// Lean `ClaudeMap.prepareReplayCheckpoint`. Splitting is exact and keeps
+/// source sidecars attached to their row occurrences; it never discovers a
+/// tag from equal native bytes or a provider-generated message ID.
 pub fn prepare_replay_checkpoint(
     required: Vec<ReplayTag>,
     rows: Vec<TaggedAssistantRow>,
@@ -189,9 +187,6 @@ pub fn prepare_replay_checkpoint(
     })
 }
 
-/// Lean `ClaudeMap.restoreContiguousReplay`: validate the carried split, then
-/// encode each already selected row with the strict codec the live body
-/// builder uses.
 pub fn restore_contiguous_replay(
     checkpoint: &ReplayCheckpoint,
 ) -> Result<Vec<Vec<Value>>, ReplayCheckpointError> {
@@ -236,8 +231,7 @@ fn row_candidates(row: &TaggedAssistantRow) -> Vec<ReasoningCandidate<'_>> {
         .collect()
 }
 
-/// Lean `ClaudeMap.TurnGroup`: one accepted row's reasoning and whether the row
-/// keeps an encodable ordinary block once its reasoning is removed.
+/// Lean `ClaudeMap.TurnGroup`.
 struct TurnGroup<'a> {
     candidates: Vec<ReasoningCandidate<'a>>,
     ordinary: bool,
@@ -418,8 +412,7 @@ impl<'a> Selection<'a> {
     }
 }
 
-/// Lean `ClaudeMap.locateTurns`: each assembled turn's ordinary prefix and its
-/// own anchored reasoning items. Any disagreement with the expected wire
+/// Lean `ClaudeMap.locateTurns`. Any disagreement with the expected wire
 /// counts fails closed.
 fn locate_turns(
     offset: usize,
@@ -458,8 +451,7 @@ fn locate_turns(
     Some(layouts)
 }
 
-/// Lean `ClaudeMap.stripFirstReasoningRows`: ordinary blocks and their original
-/// indices stay in place.
+/// Lean `ClaudeMap.stripFirstReasoningRows`.
 fn strip_first_reasoning(rows: &[TaggedAssistantRow], mut count: usize) -> Vec<TaggedAssistantRow> {
     rows.iter()
         .map(|row| {
@@ -486,8 +478,7 @@ fn strip_first_reasoning(rows: &[TaggedAssistantRow], mut count: usize) -> Vec<T
         .collect()
 }
 
-/// Lean `ClaudeMap.replayStage`: the rows the owned loop assembles so the
-/// provenance-valid turns can be located in the actual provider body.
+/// Lean `ClaudeMap.replayStage`.
 pub fn replay_stage(
     rows: &[TaggedAssistantRow],
     issuer: &ReplayIssuer,
@@ -498,11 +489,9 @@ pub fn replay_stage(
     strip_first_reasoning(rows, selection.candidates_before(selection.base_start()))
 }
 
-/// Lean `ClaudeMap.restoreHistoricalReasoningSuffix`. `stage_body` is the
-/// flattened provider body the owned loop assembled from `replay_stage`. Only
-/// the longest suffix of whole accepted turns whose assembled prefix is their
-/// accepted producing prefix minus a leading reasoning run keeps reasoning;
-/// ordinary blocks stay in their rows.
+/// Lean `ClaudeMap.restoreHistoricalReasoningSuffix`. Only the longest suffix
+/// of whole accepted turns whose assembled prefix is their accepted producing
+/// prefix minus a leading reasoning run keeps reasoning.
 pub fn select_replay(
     rows: &[TaggedAssistantRow],
     issuer: &ReplayIssuer,
@@ -544,9 +533,7 @@ pub fn select_replay(
     strip_first_reasoning(selection.rows, total - kept)
 }
 
-/// Anthropic Messages JSON body from a rig `CompletionRequest`. The history
-/// crosses the converter seam once (`rig_compat::from_rig_message`) and the
-/// body is assembled over the native message family.
+/// Anthropic Messages JSON body from a rig `CompletionRequest`.
 pub fn build_messages_body(model: &str, request: &CompletionRequest) -> anyhow::Result<Value> {
     let history: Vec<Message> = request
         .chat_history
@@ -567,7 +554,7 @@ pub fn build_messages_body(model: &str, request: &CompletionRequest) -> anyhow::
 }
 
 /// Lean `ClaudeMap.selectedEffort`: permit one supported effort field, not a
-/// wholesale merge of additional_params. Sampling and arbitrary keys stay out.
+/// wholesale merge of additional_params.
 pub fn apply_reasoning_parameters(_model: &str, params: &Value, body: &mut Value) {
     let Some(supported) = params
         .get(ADVERTISED_REASONING_EFFORTS_PARAM)
@@ -586,12 +573,9 @@ pub fn apply_reasoning_parameters(_model: &str, params: &Value, body: &mut Value
     }
 }
 
-/// Body assembly over the native message family (no rig vocabulary).
-///
 /// Lean: `systemBlocks`, `splitSystem`, `toolsField`. Two `cache_control`
-/// breakpoints: the last `system` block (identity + preamble + System rows +
-/// tools prefix) and the last content block of the last message (moving
-/// breakpoint across tool_result turns).
+/// breakpoints: the last `system` block and the last content block of the
+/// last message.
 pub fn build_messages_body_native(
     model: &str,
     preamble: Option<&str>,
@@ -657,7 +641,6 @@ fn system_rows(history: &[Message]) -> Vec<String> {
         })
         .collect()
 }
-
 fn anthropic_messages(history: &[Message]) -> anyhow::Result<Vec<Value>> {
     let mut omissions = image_omissions(history).into_iter();
     let mut out = Vec::new();
@@ -697,12 +680,6 @@ fn anthropic_messages(history: &[Message]) -> anyhow::Result<Vec<Value>> {
     Ok(out)
 }
 
-/// A text-only result is one string, as it always was. A result with an image
-/// is Anthropic's block array: text blocks, and an image block per image in a
-/// source the API accepts (base64 JPEG/PNG/GIF/WebP, or a URL). Any other
-/// image becomes [`TOOL_RESULT_IMAGE_OMITTED`], and an image over Claude's
-/// limits becomes the note [`image_omissions`] wrote for it, rather than a
-/// request the API refuses whole.
 fn tool_result_content(
     content: &[ToolResultContent],
     omissions: &mut impl Iterator<Item = Option<String>>,

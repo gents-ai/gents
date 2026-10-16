@@ -1,5 +1,3 @@
-/* What screens read about inference providers, from the provider store.
-   Every panel showing the same agent shows the same read. */
 import { useCallback, useEffect } from "react";
 import { useStore } from "zustand";
 
@@ -16,8 +14,6 @@ const NO_ACCOUNTS: readonly ProviderAccountView[] = [];
 const NO_USAGE: readonly BackendUsageView[] = [];
 const NO_PROVIDERS: readonly InferenceProviderOption[] = [];
 
-/** A node's provider accounts: read while shown, and again whenever the
-    client changes. `reload` resolves once the read it asked for has landed. */
 export function useAccounts(nodeDid: string) {
   const { stores, actions } = useApp();
   const { watchProviderAccounts, loadProviderAccounts } = actions;
@@ -33,9 +29,6 @@ export function useAccounts(nodeDid: string) {
   return { accounts, reload };
 }
 
-/** A node's usage: read when shown and on Refresh (both skip accounts
-    read in the last five minutes); nothing polls, and a snapshot change
-    does not read again. */
 export function useProviderUsage(nodeDid: string) {
   const { stores, actions } = useApp();
   const { loadProviderUsage, refreshProviderUsage } = actions;
@@ -52,8 +45,6 @@ export function useProviderUsage(nodeDid: string) {
   return { usage, refresh };
 }
 
-/** The provider catalog the bridge publishes, read once for the app; a
-    failed read is said, with a way to ask again. */
 export function useSetupCatalog() {
   const { stores, actions } = useApp();
   const { loadSetupCatalog, retrySetupCatalog } = actions;
@@ -65,7 +56,6 @@ export function useSetupCatalog() {
   return {
     catalog,
     providers: catalog?.providers ?? NO_PROVIDERS,
-    /* worded without the bridge's internal detail */
     error: failure ? setupErrorMessage(failure.cause) : null,
     retry: retrySetupCatalog,
   };

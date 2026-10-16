@@ -129,12 +129,6 @@ impl LimitViolation {
     }
 }
 
-/// Every requested limit outside the platform policy, in `GraphLimits` field
-/// order: the one comparison of `GraphLimits` against a `CompilerPolicy`.
-/// The invocation and runtime budgets must be at least 1, because a zero
-/// budget fails every run at its first request or at once; the structural
-/// limits accept zero and leave it to the graph-content checks
-/// (`NodeLimitExceeded` and its siblings).
 pub(crate) fn platform_limit_violations(
     limits: &GraphLimits,
     policy: &CompilerPolicy,
@@ -251,8 +245,8 @@ fn validate_capability_ports(
                     ),
                 );
             }
-            // Ports come from installed packs, registry packs included, so
-            // they are a datastore surface for the protected eval collections.
+            // Ports come from installed packs, so they are a datastore surface
+            // for the protected eval collections.
             if validate_collection_identifier(&port.collection).is_err()
                 || reject_protected_collection_name(&port.collection).is_err()
             {
@@ -406,9 +400,7 @@ pub fn compile_graph(
         resolved.insert(node.node_id.as_str(), *capability);
     }
 
-    // Event-source triggers route by physical collection, not producer node. Reusing
-    // one output collection for two graph nodes would make `from.node_id`
-    // decorative, so v1 rejects that ambiguity instead of approximating it.
+    // Event-source triggers route by physical collection, not producer node.
     let mut output_collections = BTreeMap::new();
     for (node_id, capability) in &resolved {
         for port in &capability.output_ports {
@@ -1136,9 +1128,6 @@ pub fn compile_graph(
     Ok(plan)
 }
 
-/// Recompute the content identity of a plan while excluding its `digest`
-/// field. Publication controllers use this to reject a tampered plan before
-/// materializing any artifact.
 pub fn graph_plan_digest(plan: &GraphPlan) -> String {
     #[derive(Serialize)]
     struct DigestPayload<'a> {
@@ -1169,8 +1158,6 @@ pub fn graph_plan_digest(plan: &GraphPlan) -> String {
 }
 
 /// Bind typed package/configuration provenance to an already validated graph.
-/// Package validation owns uniqueness and digest checks; this function only
-/// canonicalizes order and advances the immutable revision identity.
 pub fn bind_package_plan(mut plan: GraphPlan, mut package: PackagePlan) -> GraphPlan {
     package.artifacts.sort();
     package.required_schema_digests.sort();

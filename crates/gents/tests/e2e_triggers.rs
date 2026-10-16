@@ -1,11 +1,9 @@
 mod support;
 
-/// The embedded P2P transport is process-global enough that independent
-/// scenarios contend when libtest runs them concurrently. Event-source
-/// reconciliation also boots that transport even in its single-node test, so
-/// it must share this guard with the multi-node harnesses. Acquire the guard
-/// before starting a node so per-test readiness deadlines measure runtime work
-/// rather than time blocked behind another process-global transport.
+/// The embedded P2P transport is process-global: scenarios contend when libtest
+/// runs them concurrently, and event-source reconciliation boots the transport
+/// even single-node. Acquire before starting a node so readiness deadlines
+/// measure runtime work, not time blocked behind another transport user.
 static P2P_E2E_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[path = "e2e_triggers/app_collection_pairing_p2p_e2e.rs"]

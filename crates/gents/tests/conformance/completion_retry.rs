@@ -88,8 +88,8 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
         }
     }
 
-    // Native policy regressions remain independent implementation checks. They
-    // intentionally do not pretend to execute the newer phaseful Lean machine.
+    // Native policy regressions are independent implementation checks; they do
+    // not execute the phaseful Lean machine.
     let native = &cases[0];
     assert_transport_ladder_progresses(native);
     assert_transport_exhausts_after_budget(native);
@@ -198,9 +198,8 @@ fn assert_failure_origin_bridge(case: &LeanCompletionRetryCase, origin: &str) {
                 case.name
             );
             if origin == "provider_stream_malformed" {
-                // A preview item before EOF takes the native mid-stream
-                // branch. Lean's `.streaming` means an in-flight attempt,
-                // not a claim that an item has already been observed.
+                // A preview item before EOF takes the native mid-stream branch;
+                // Lean's `.streaming` means an in-flight attempt.
                 let mut parser = gents::claude_messages::MessagesSseState::new(Default::default());
                 let preview_sse = "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"partial\"}}\n\n";
                 let mut saw_preview = false;

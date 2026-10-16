@@ -6,8 +6,7 @@
 //! them: the pack writer and reader for files, paths and the digest, the
 //! configuration loader and apply plan, the graph compiler with a
 //! placeholder owner, and DefraDB itself for every event-source filter
-//! against the runtime and pack schemas. Every problem is reported by name,
-//! not only the first.
+//! against the runtime and pack schemas.
 
 use std::path::{Path, PathBuf};
 
@@ -19,7 +18,6 @@ use serde_json::json;
 
 use crate::cli::{PackCheckArgs, PackGraphArgs};
 
-/// The owner a checked pack is bound to. Never written anywhere.
 const PLACEHOLDER_OWNER: &str = "did:key:zPackCheckPlaceholderOwner";
 const TOPOLOGY_START: &str = "<!-- pack-topology:start -->";
 const TOPOLOGY_END: &str = "<!-- pack-topology:end -->";
@@ -56,7 +54,6 @@ pub(crate) async fn check(args: PackCheckArgs) -> Result<()> {
     Ok(())
 }
 
-/// Checks the pack directory `dir`.
 pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
     let mut report = CheckReport {
         dir: dir.to_path_buf(),
@@ -78,7 +75,6 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
         return report;
     }
     if !unbuilt.is_empty() {
-        // `gents pack build` compiles these; the digest exists only after it.
         if let Err(error) = gents::pack::validate_manifest(&manifest.name, &manifest) {
             report.problems.push(format!("{error:#}"));
         }
@@ -138,11 +134,6 @@ fn read_manifest(dir: &Path) -> Result<PackManifest> {
     serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
 }
 
-/// Declared files that are missing, and present files that are not declared.
-/// Plugin sources are built into their artifacts and never travel, and
-/// directories a pack may never carry (`runs/`, `target/`, dotfiles) are
-/// skipped. Returns the plugins whose artifact is missing but has a source
-/// to build it from.
 fn check_files(dir: &Path, manifest: &PackManifest, problems: &mut Vec<String>) -> Vec<String> {
     let declared = declared_paths(manifest);
     let mut unbuilt = Vec::new();
@@ -223,8 +214,6 @@ fn load_config(archive: &PackArchive) -> Result<gents::document_config::PackConf
     Ok(config)
 }
 
-/// Runs every event-source filter as a query against the runtime schemas and
-/// the pack's own, in a throwaway in-memory node.
 async fn check_filters(
     dir: &Path,
     config: &gents::document_config::PackConfig,
@@ -282,7 +271,6 @@ fn check_topology(
     }
 }
 
-/// The README's generated diagram: every graph's nodes and port edges.
 pub(crate) fn topology_block(config: &gents::document_config::PackConfig) -> String {
     let mut labels: Vec<&str> = Vec::new();
     fn id<'a>(labels: &mut Vec<&'a str>, label: &'a str) -> usize {
@@ -318,8 +306,6 @@ pub(crate) fn topology_block(config: &gents::document_config::PackConfig) -> Str
     )
 }
 
-/// `gents pack graph`: prints the topology diagram, or writes it into the
-/// README in place of the previous one.
 pub(crate) fn graph(args: PackGraphArgs) -> Result<()> {
     let dir = args.dir.unwrap_or_else(|| PathBuf::from("."));
     let (bytes, _) = pack_dir(&dir).with_context(|| format!("packing {}", dir.display()))?;
@@ -336,8 +322,6 @@ pub(crate) fn graph(args: PackGraphArgs) -> Result<()> {
     write_topology(&dir)
 }
 
-/// Writes the graph pack at `dir`'s topology diagram into its README, in
-/// place of the previous one or as a new section at the end.
 pub(crate) fn write_topology(dir: &Path) -> Result<()> {
     let (bytes, _) = pack_dir(dir).with_context(|| format!("packing {}", dir.display()))?;
     let block = topology_block(&load_config(&PackArchive::from_bytes(&bytes)?)?);
@@ -364,9 +348,6 @@ pub(crate) fn write_topology(dir: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// Every fixture pack passes the check: the machinery gate for gents
-    /// itself. The CI gate for real (packs-repo) packs moved to packs CI
-    /// (`gents pack test`), which builds against this checkout's gents.
     #[tokio::test]
     async fn every_fixture_pack_passes_the_check() {
         let dirs = super::super::test_support::every_fixture_dir();
@@ -474,8 +455,6 @@ mod tests {
         assert!(report.problems.is_empty(), "{:#?}", report.problems);
     }
 
-    /// `gents pack check` validates `experiment.json` at its declared
-    /// defaults, so a scenario that fails to load fails the check too.
     #[tokio::test]
     async fn a_scenario_that_fails_validation_fails_the_check() {
         let dir = copy_pack(&super::super::test_support::fixture_dir(
@@ -483,8 +462,6 @@ mod tests {
         ));
         let experiment_path = dir.path().join("experiment.json");
         let text = std::fs::read_to_string(&experiment_path).unwrap();
-        // A tool package the loader does not recognize; `validate_tool_package`
-        // refuses it before any run ever starts.
         std::fs::write(
             &experiment_path,
             text.replacen(
@@ -498,9 +475,6 @@ mod tests {
         assert!(!report.problems.is_empty(), "{:#?}", report.problems);
     }
 
-    /// An allowed folder must stay inside `init.tool_root`, so `gents pack
-    /// check` refuses a scenario that allows one without declaring it, before
-    /// any run initializes a home.
     #[tokio::test]
     async fn allowed_folders_without_a_tool_root_fail_the_check() {
         let dir = copy_pack(&super::super::test_support::fixture_dir(

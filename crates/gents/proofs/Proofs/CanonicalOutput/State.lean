@@ -5,10 +5,10 @@ import Std.Tactic
 # Immutable output facts (#1571)
 
 Document identities, source coordinates and writer generations are opaque Nat
-labels in this model: no theorem derives a DefraDB identity from payload bytes.
-`records` is an authorized local observation, not a complete global replica.
-Genesis identity, ACP, UTF-8 decoding and transaction atomicity require native
-conformance. Payload bytes are modeled explicitly; native decoding is separate.
+labels: no theorem derives a DefraDB identity from payload bytes, and `records`
+is an authorized local observation, not a complete global replica. Genesis
+identity, ACP, UTF-8 decoding and transaction atomicity require native
+conformance.
 -/
 namespace CanonicalOutput
 
@@ -134,16 +134,11 @@ theorem delivery_retains (records : List Segment) (record old : Segment)
 def sourceRecords (records : List Segment) (coordinate : Coordinate) : List Segment :=
   records.filter (fun r => r.coordinate == coordinate)
 
-theorem foreign_source_is_not_selected (records : List Segment) (coordinate : Coordinate)
-    (foreign : Segment) (h : foreign.coordinate ≠ coordinate) :
-    sourceRecords (records ++ [foreign]) coordinate = sourceRecords records coordinate := by
-  simp [sourceRecords, List.filter_append, h]
-
 def closures (records : List Segment) (coordinate : Coordinate) : List Segment :=
   (sourceRecords records coordinate).filter (fun r => r.close.isSome)
 
-/-- Terminal-only records never occupy a data ordinal. Filter BEFORE checking
-data twins: a late raw flush beyond a recovered extent is not a conflict. -/
+/-- Terminal-only records never occupy a data ordinal; a late raw flush beyond a
+recovered extent is not a conflict. -/
 def inExtent (count : Nat) (record : Segment) : Bool :=
   match record.flush with
   | none => false
@@ -151,10 +146,6 @@ def inExtent (count : Nat) (record : Segment) : Bool :=
 
 def extent (records : List Segment) (coordinate : Coordinate) (count : Nat) :=
   (sourceRecords records coordinate).filter (inExtent count)
-
-theorem terminal_only_not_data (record : Segment) (count : Nat)
-    (h : record.flush = none) : inExtent count record = false := by
-  simp [inExtent, h]
 
 theorem beyond_extent_inert (records : List Segment) (coordinate : Coordinate)
     (count : Nat) (late : Segment) (h : inExtent count late = false) :

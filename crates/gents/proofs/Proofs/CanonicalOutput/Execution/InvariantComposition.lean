@@ -1,8 +1,6 @@
 import Proofs.CanonicalOutput.Execution.SequenceInvariant
 import Proofs.CanonicalOutput.Execution.SessionComposition
 
-/-! Preservation over the existing application trace, not a second transition
-system or a trace whose constructors assume their own postconditions. -/
 namespace CanonicalOutput.Execution.SessionComposition
 
 private theorem claim_sequenceBound (before after : World) (actor : Gate.Actor)
@@ -58,9 +56,6 @@ private theorem wake_sequenceBound (before after : World) (actor : Gate.Actor)
       simpa [BackgroundContinuation.publishNotification, hbefore, hdocument,
         hmessage, hbinding] using result.published
 
-/-- A bound on the initial canonical headers remains true after every admitted
-application transition, including physical handover and late tool publication.
-The trace contains no invariant premises: preservation is proved here. -/
 theorem Trace.sequenceBound {before after : World} (trace : Trace before after)
     (bound : SequenceBound before) : SequenceBound after := by
   induction trace with

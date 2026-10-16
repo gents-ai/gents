@@ -1,7 +1,5 @@
-//! The "Allowed folders" setting and the plugin access questions: the same
-//! list `gents plugin dirs` edits and the same questions `gents chat` answers,
-//! through `gents::plugin::{allowed, approval}`, in the managed local Node's
-//! home.
+//! The desktop surface of `gents::plugin::{allowed, approval}` for the
+//! managed local Node's home.
 
 use gents::pack::BindAccess;
 use gents::plugin::{allowed, approval};
@@ -55,7 +53,6 @@ pub fn desktop_allowed_dirs_remove(
     view(&home)
 }
 
-/// The questions running plugin calls are waiting on, oldest first.
 #[tauri::command]
 pub fn desktop_plugin_approvals_pending<R: Runtime>(
     window: WebviewWindow<R>,
@@ -87,8 +84,6 @@ pub fn desktop_plugin_approvals_pending<R: Runtime>(
     }))
 }
 
-/// Answers one question: `once`, `file` (also allows that exact file from now
-/// on), `always` (also allows its folder from now on) or `deny`.
 #[tauri::command]
 pub fn desktop_plugin_approval_decide(
     id: String,

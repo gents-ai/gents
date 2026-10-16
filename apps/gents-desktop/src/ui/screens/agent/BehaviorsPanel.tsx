@@ -1,5 +1,3 @@
-/* Agents: the node's list, each row's controls, and the default it
-   runs; a agent opens in its editor. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { setEnabled } from "./enabled";
 import { useState } from "react";
@@ -27,10 +25,6 @@ import type { ShellActions } from "@/../hooks/shellActions";
 import { listNames, newAgentView } from "./behaviorDraft";
 import { AgentEditor } from "./BehaviorEditor";
 
-/* one-click changes that a agent's row and its header share */
-
-/* One apply enables the agent and names it the default: publication
-   rejects a disabled default, and it decides whether the agent can run. */
 export async function saveDefault(
   changeConfig: ShellActions["changeConfig"],
   deployment: NodeView,
@@ -45,7 +39,6 @@ export async function saveDefault(
 export const DEFAULT_STAYS_ENABLED =
   "The default agent stays enabled. Choose another default before turning it off.";
 
-/* the end of a agent's row: its enable switch and a menu */
 function RowControls({
   deployment,
   agent,
@@ -53,12 +46,10 @@ function RowControls({
 }: {
   deployment: NodeView;
   agent: AgentView;
-  /* at the top of the agent's page: the switch says its state, and there is no Edit */
   inEditor?: boolean;
 }) {
   const { changeConfig } = useApp().actions;
   const [busy, setBusy] = useState(false);
-  /* the current default is never turned off in place */
   const keptOn = agent.enabled && agent.isDefault;
   const toggle = async (next: boolean) => {
     setBusy(true);
@@ -169,13 +160,11 @@ export function AgentsPanel({
     nodeDid: deployment.nodeDid,
     section: "agents",
   };
-  /* New agent: a draft page, nothing saved until Save */
   const [draft, setDraft] = useState<AgentView | null>(null);
   const inUse = new Set(deployment.agents.map((b) => b.contextId));
   const unusedContexts = deployment.contexts.filter(
     (c) => !inUse.has(c.context_id),
   ).length;
-  /* who uses each context, so a row can say when its instructions are shared */
   const byContext = new Map<string, AgentView[]>();
   for (const b of deployment.agents) {
     if (!b.contextId) continue;
@@ -251,7 +240,6 @@ export function AgentsPanel({
           const b = agentOf(deployment, id);
           return b ? <RowControls deployment={deployment} agent={b} inEditor /> : null;
         }}
-        /* the default is pinned first and named beside its title */
         rows={[...deployment.agents]
           .sort((a, b) => Number(b.isDefault) - Number(a.isDefault))
           .map((b) => ({

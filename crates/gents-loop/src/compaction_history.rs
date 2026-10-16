@@ -1,7 +1,6 @@
 //! Pure message-history shaping for compaction. Every item here is `pub`
 //! (not `pub(super)`): gents' own compaction test suite reaches this module
-//! through `crate::compaction::history`, and a `pub(super)` item in this
-//! crate is invisible to a dependent crate's own test build.
+//! through `crate::compaction::history`.
 
 use std::collections::HashMap;
 
@@ -60,11 +59,8 @@ pub fn strip_tool_results_sourced(
     {
         match message {
             Message::Assistant { id, content } => {
-                // Scope the lookup to the turn being opened. Call ids are
-                // provider-generated and can repeat across turns, so a stale
-                // entry could label a later stub with the wrong tool. Only an
-                // assistant message that actually announces calls opens a new
-                // turn — a text-only one must not orphan the pending lookups.
+                // Scope the lookup to the turn being opened: provider-generated
+                // call ids can repeat across turns.
                 let opens_turn = content
                     .iter()
                     .any(|item| matches!(item, AssistantContent::ToolCall(_)));
@@ -114,12 +110,9 @@ pub fn strip_tool_results_sourced(
     (stripped_messages, file_activity)
 }
 
-/// Which tool results close each assistant turn.
-///
-/// Resolution is scoped to the *active turn*, mirroring the `pending_calls`
-/// reset in [`drop_orphaned_tool_results`]. A single global set of resolved keys
-/// is wrong: when a call id is reused by a later turn, the earlier turn's result
-/// would "resolve" it and a dangling call would survive into provider input.
+/// Which tool results close each assistant turn; resolution is scoped to the
+/// active turn, mirroring [`drop_orphaned_tool_results`] so a reused call id
+/// cannot be closed by an earlier turn's result.
 fn resolved_keys_per_turn<'a>(
     len: usize,
     messages: impl IntoIterator<Item = &'a Message>,
@@ -282,17 +275,9 @@ pub fn drop_orphaned_tool_results_sourced(messages: Vec<SourcedMessage>) -> Vec<
     kept_messages
 }
 
-/// Select the provider's assistant content order at the send boundary.
-/// Grouped providers require text, then reasoning (and any other non-call
-/// content), then tool calls; Claude retains the exact native block order.
-///
-/// `AssistantTurnAccumulator::build_message` writes grouped order for newly
-/// persisted turns, but transcripts persisted before the ordering fix can carry
-/// text *after* tool calls, which grouped strict providers reject on reload. Like
-/// `drop_unpaired_tool_calls`, this narrows the durable transcript to the
-/// provider format at the request-build boundary; the stored messages and the
-/// conformance-fenced reducers are untouched. Relative order within each
-/// category is preserved.
+/// Select the provider's assistant content order at the send boundary:
+/// text, then other non-call content, then tool calls (Claude keeps native
+/// block order); relative order within each category is preserved.
 pub fn normalize_assistant_content_order(
     profile: ProviderInputProfile,
     messages: Vec<Message>,
@@ -307,8 +292,8 @@ pub fn normalize_assistant_content_order_sourced(
     profile: ProviderInputProfile,
     messages: Vec<SourcedMessage>,
 ) -> Vec<SourcedMessage> {
-    // Claude continuation replays native blocks in their original order.
-    // Signatures do not select this branch; the configured provider wire does.
+    // Claude continuation replays native blocks in their original order; the
+    // configured provider wire, not signatures, selects this branch.
     if profile == ProviderInputProfile::ClaudeMessages {
         return messages;
     }
@@ -425,21 +410,12 @@ pub fn split_messages_for_summary_with_counter_bounded(
         }
     }
 
-    // The token budget can land the boundary between an assistant message
-    // carrying a ToolCall and the user message carrying its ToolResult. Left
-    // alone, the call is summarized away while the result stays in the retained
-    // tail, and `sanitize_history_for_provider` then drops the orphaned result
-    // at loop entry — the tool's output is lost from the provider view entirely
-    // while the summary describes only the call.
-    //
-    // Retreat to the nearest turn boundary. Moving *earlier* over-retains by at
-    // most one turn and never loses context; moving later would summarize a turn
-    // the budget wanted kept. For provider-input assembly, over-retaining is the
-    // correct failure direction.
-    //
-    // Modelled as `Compaction.pairSafeBoundary`, with
-    // `Compaction.raw_split_can_orphan` witnessing that the unadjusted index is
-    // unsound.
+    // A budget split landing inside a ToolCall/ToolResult pair would drop the
+    // tool's output from the provider view; retreat to the nearest turn
+    // boundary. Moving earlier over-retains by at most one turn and never
+    // loses context. Modelled as `Compaction.pairSafeBoundary`, with
+    // `Compaction.raw_split_can_orphan` witnessing that the unadjusted index
+    // is unsound.
     let raw_split_index = split_index;
     let mut split_index = pair_safe_boundary(&messages, raw_split_index);
 
@@ -448,24 +424,13 @@ pub fn split_messages_for_summary_with_counter_bounded(
             .ok_or(super::ReductionError::CannotFit)?;
     }
 
-    // The raw budget can land inside an assistant ToolCall / user ToolResult
-    // pair. Retreating keeps the pair valid, but an exceptionally large
-    // reasoning-bearing assistant turn can make that atomic tail exceed the
-    // retention budget by itself. In that case retaining it cannot satisfy the
-    // caller's dispatch budget, so summarize every row: the retained provider
-    // view becomes empty and the generated summary becomes the caller's next
-    // prompt. That over-summarizes any complete turns following the oversized
-    // pair, which the budget would otherwise have kept; fitting the dispatch
-    // budget wins over retaining them, and the summary still covers them.
-    //
-    // Modelled as `Compaction.summarize_oversized_complete_turn`.
-    //
-    // The retreat guard (`split_index < raw_split_index`) is what keeps a
-    // never-compacted transcript intact: with nothing to retreat over there is
-    // no earlier conversation to compact, and silently replacing an oversized
-    // initial user prompt with a summary would change the request rather than
-    // compact its history. The full-list check then refuses to end on a tool
-    // call still awaiting its result.
+    // An oversized pair-closed tail that exceeds the retention budget cannot
+    // fit dispatch, so summarize every row; over-summarizing complete turns
+    // beats not fitting. Modelled as
+    // `Compaction.summarize_oversized_complete_turn`. The retreat guard
+    // (`split_index < raw_split_index`) keeps a never-compacted transcript
+    // intact; the full-list check then refuses to end on a call awaiting its
+    // result.
     let retained_tokens = counter.estimate_message_request(&messages[split_index..])?;
     if max_compacted_prefix_messages.is_none()
         && split_index < raw_split_index
@@ -514,10 +479,8 @@ pub fn split_messages_for_summary(
 }
 
 /// Greatest `j <= limit` at which no tool call is awaiting its result.
-///
 /// Mirrors `Compaction.pairSafeBoundary` and the pending-set discipline in
-/// [`drop_orphaned_tool_results`]: an assistant message replaces the pending set
-/// with its own call ids, a tool result erases one, and anything else clears it.
+/// [`drop_orphaned_tool_results`].
 pub fn pair_safe_boundary(messages: &[Message], limit: usize) -> usize {
     let limit = limit.min(messages.len());
     pair_safe_boundaries(&messages[..limit])
@@ -526,10 +489,8 @@ pub fn pair_safe_boundary(messages: &[Message], limit: usize) -> usize {
         .unwrap_or(0)
 }
 
-/// Every positive prefix length at which no tool call is awaiting its result.
-///
-/// This is the linear-time form used by rolling compaction. Calling
-/// `pair_safe_boundary` once per candidate makes a long prefix quadratic.
+/// Every positive prefix length at which no tool call is awaiting its result;
+/// the linear-time form used by rolling compaction.
 pub fn pair_safe_boundaries(messages: &[Message]) -> Vec<usize> {
     let mut pending: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut boundaries = Vec::new();
@@ -568,19 +529,11 @@ pub fn pair_safe_boundaries(messages: &[Message]) -> Vec<usize> {
     boundaries
 }
 
-/// File activity credited only to tool calls that actually produced a result.
-///
-/// Classifying from the call alone recorded writes that never happened: a call
-/// whose result never arrived because the turn was interrupted or the run
-/// crashed still counted as a modification. These lists are persisted on
-/// `AgentCompactionEntry` and rendered into later prompts, so a false "Files
-/// modified" entry injects state the run never produced. Dry runs are excluded
-/// at classification time — see [`ToolCallInfo::from`].
-///
-/// A failed call that *did* return an error result is still credited: tool
-/// results carry no error flag (`gents_protocol::message::ToolResult`), so
-/// there is nothing reliable to test. That is a known over-credit, narrower
-/// than the previous one.
+/// File activity credited only to tool calls that actually produced a result:
+/// an interrupted call whose result never arrived must not be counted as a
+/// write, since these lists are persisted and rendered into later prompts.
+/// A failed call that returned an error result is still credited (results
+/// carry no error flag); dry runs are excluded at classification time.
 pub fn extract_file_activity(messages: &[Message]) -> FileActivity {
     extract_file_activity_iter(messages.iter())
 }
@@ -625,9 +578,7 @@ fn extract_file_activity_iter<'a>(messages: impl IntoIterator<Item = &'a Message
 fn truncate_tool_result_content(content: ToolResultContent, max_chars: usize) -> ToolResultContent {
     match content {
         ToolResultContent::Text(text) if text.text.len() > max_chars => {
-            // `max_chars` is a byte budget but tool output is arbitrary UTF-8,
-            // so slicing at that index panics whenever it lands inside a
-            // codepoint. Floor to the nearest boundary.
+            // Byte-budget slicing must land on a codepoint boundary.
             let cut = floor_char_boundary(&text.text, max_chars);
             let truncated = format!(
                 "{}… [pre-truncated {}/{} chars for compaction]",
@@ -672,13 +623,8 @@ struct StubFacts {
     truncated: bool,
 }
 
-/// Recover the byte count and truncation flag from stub-shaped text.
-///
-/// Shape recognition is a *hint*, never a licence to skip the rewrite: tool
-/// output is arbitrary text and a command or MCP server can return something
-/// with this shape. Misreading such a result costs a wrong byte count in the
-/// stub; skipping the rewrite would let its entire payload survive every
-/// provider-view pass, which is the thing compaction exists to prevent.
+/// Recover the byte count and truncation flag from stub-shaped text. Shape
+/// recognition is a hint only: a rewrite is never skipped on a misread.
 fn parse_stub(tool_result: &ToolResult) -> Option<StubFacts> {
     let [ToolResultContent::Text(text)] = tool_result.content.as_slice() else {
         return None;
@@ -704,14 +650,9 @@ fn parse_stub(tool_result: &ToolResult) -> Option<StubFacts> {
     })
 }
 
-/// Replace a tool result's payload with a pointer stub.
-///
-/// Always rewrites. When the input is already a stub the facts are recovered
-/// rather than re-measured, which makes the rewrite a fixed point — production's
-/// half of `Compaction.strip_idempotent`. The request path really does strip
-/// twice, once in `agent/daemon/request.rs` and again inside `compact()`, and
-/// before this the second pass re-measured the stub and reported *its* length
-/// instead of the tool's.
+/// Replace a tool result's payload with a pointer stub, recovering facts from
+/// an existing stub so the rewrite is a fixed point (production's half of
+/// `Compaction.strip_idempotent`; the request path strips twice).
 fn strip_tool_result(
     mut tool_result: ToolResult,
     tool_calls: &HashMap<String, ToolCallInfo>,
@@ -728,9 +669,6 @@ fn strip_tool_result(
     let call_id = tool_result_key(&tool_result);
     let info = tool_calls.get(&call_id);
     let tool_name = info.map_or("unknown", |info| info.name.as_str());
-    // The primary path argument is already extracted for `FileActivity`.
-    // Carrying it turns the stub from "a file was read" into "this file was
-    // read", which is most of what a pointer stub exists to do.
     let argument = info
         .and_then(|info| info.file_path.as_deref())
         .map(|path| format!("({path})"))
@@ -798,13 +736,9 @@ struct ToolCallInfo {
     is_write: bool,
 }
 
-/// Tools whose calls mean "this path was read".
-///
-/// The first group is the registered native file tools (`toolset/file_tools.rs`);
-/// the second is the generic names MCP servers commonly use. Keep this in sync
-/// with the tool registry — `every_registered_file_tool_is_classified` fails if
-/// a file tool is added without a classification, which would silently empty the
-/// compaction summary's file lists.
+/// Tools whose calls mean "this path was read"; keep in sync with the tool
+/// registry — `every_registered_file_tool_is_classified` fails if a file tool
+/// is added without a classification.
 pub fn is_read_tool(name: &str) -> bool {
     matches!(
         name,
@@ -829,9 +763,7 @@ impl From<&ToolCall> for ToolCallInfo {
             .and_then(|value| value.as_str())
             .map(ToOwned::to_owned);
         let name = tool_call.function.name.clone();
-        // `edit_file` previews a diff and writes nothing under `dry_run`, so it
-        // must not be reported as a modification — it did read the file, which
-        // is what it gets credited for instead.
+        // A dry-run preview writes nothing; credit only the read.
         let dry_run = arguments
             .get("dry_run")
             .and_then(|value| value.as_bool())

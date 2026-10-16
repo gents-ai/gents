@@ -46,8 +46,6 @@ impl StoreScope {
         }
     }
 
-    /// This inventory must stay exhaustive with ClientStoreRows; missing any
-    /// collection can accept stale scoped publications after that row changed.
     pub(super) fn extend_rows(&mut self, rows: &ClientStore) {
         if matches!(self, Self::All) {
             return;

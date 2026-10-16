@@ -1,23 +1,7 @@
-//! Grok shim message projection.
-//!
-//! Projects immutable canonical headers and output segments of one request
-//! into the Grok pager's streaming `session/update` notification payloads:
-//! `agent_message_chunk`, `agent_thought_chunk`, and `user_message_chunk`.
-//!
-//! The Grok decoder expects the chunk field name
-//! `content` (not `contentBlock`): each update payload is
-//! `{"sessionUpdate":"agent_message_chunk","content":{"type":"text",
-//! "text":"<delta>"}}`. `_meta` is stamped by the projection engine
-//! (totalTokens, promptId, isReplay, eventId); this leaf returns the
-//! split update shapes and the engine renders the final notification.
-//!
-//! The projection is bounded and physical-request scoped. Strict reconstruction
-//! owns published messages; `output::live` owns pre-publication visibility.
-//! Missing dependencies remain loading and conflicts fail closed.
-//!
-//! All queries go through the in-process embedded node with every
-//! interpolated value passed through `escape_graphql_string`; no HTTP
-//! GraphQL helper is used.
+//! Grok shim message projection: projects canonical headers and output
+//! segments of one request into the Grok pager's streaming `session/update`
+//! payloads. The Grok decoder expects the chunk field name `content`, not
+//! `contentBlock`.
 
 use std::sync::Arc;
 
@@ -34,31 +18,25 @@ pub(super) const AGENT_MESSAGE_CHUNK: &str = "agent_message_chunk";
 pub(super) const AGENT_THOUGHT_CHUNK: &str = "agent_thought_chunk";
 pub(super) const USER_MESSAGE_CHUNK: &str = "user_message_chunk";
 
-/// One projected streaming chunk, split by kind so the projection engine
-/// only needs to stamp `_meta` and wrap it in a `session/update`
-/// notification.
+/// One projected streaming chunk.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum MessageUpdate {
-    /// Assistant body text delta → `agent_message_chunk`.
     AgentMessageChunk { text: String },
-    /// Assistant reasoning delta → `agent_thought_chunk`.
     AgentThoughtChunk { text: String },
-    /// Echoed user prompt text → `user_message_chunk`.
     UserMessageChunk { text: String },
 }
 
 impl MessageUpdate {
     /// Echo a persisted runtime completion without presenting it as something
-    /// the human typed. This is Grok's native ContentChunk metadata; task and
-    /// subagent lifecycle projections provide the visible activity instead.
-    /// Call only after classifying the durable message key, never from text.
+    /// the human typed; `hideFromScrollback` is Grok's native ContentChunk
+    /// metadata. Call only after classifying the durable message key, never
+    /// from text.
     pub fn background_completion_payload(text: impl Into<String>) -> Value {
         let mut payload = Self::chunk_payload(USER_MESSAGE_CHUNK, text);
         payload["_meta"] = json!({"hideFromScrollback": true});
         payload
     }
 
-    /// The `sessionUpdate` discriminator for this update.
     pub fn session_update_kind(&self) -> &'static str {
         match self {
             MessageUpdate::AgentMessageChunk { .. } => AGENT_MESSAGE_CHUNK,
@@ -67,12 +45,6 @@ impl MessageUpdate {
         }
     }
 
-    /// Build the chunk payload for one `session_update_kind` discriminator
-    /// plus delta text, without constructing an intermediate enum value.
-    ///
-    /// The live/durable reconciliation in the projection engine emits plain
-    /// `(kind, delta)` pairs (a kind string observed from canonical output
-    /// or a durable row's chunk kind, plus the byte-exact suffix to send).
     /// `kind` must be one of
     /// [`AGENT_MESSAGE_CHUNK`]/[`AGENT_THOUGHT_CHUNK`]/[`USER_MESSAGE_CHUNK`]; any other value
     /// falls back to `agent_message_chunk` rather than fabricating an
@@ -97,12 +69,9 @@ impl MessageUpdate {
 /// order, plus the projection bookkeeping the engine needs to stamp `_meta`.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct MessageProjection {
-    /// Ordered streaming updates: `user_message_chunk` echoes precede
-    /// assistant output, and assistant rows project in `sequence` order.
     pub updates: Vec<MessageUpdate>,
     /// Durable chronology key per update, aligned 1:1 with `updates`: the
-    /// row's `sequence` in the shared transcript sequence space (the same
-    /// space `AgentToolCall.message_sequence` allocates from). `None` when
+    /// row's `sequence` in the shared transcript sequence space. `None` when
     /// the row carries no sequence — such updates sort after every
     /// positioned event of the family.
     pub chronology: Vec<Option<i64>>,
@@ -110,24 +79,20 @@ pub(super) struct MessageProjection {
     /// `"{message_key}:{update kind}:{per-row ordinal of that kind}"`. The
     /// live projection poll deduplicates streamed chunks by these keys, so
     /// two distinct rows carrying identical text both stream *and* one row's
-    /// reasoning thought and body text are distinct chunks. An entry is
-    /// empty only if the aligned update's row could not be identified (never
-    /// happens today: every update comes from a decoded row).
+    /// reasoning thought and body text are distinct chunks.
     pub update_keys: Vec<String>,
     /// Generated-token accounting is not part of canonical output.
     pub total_tokens: u64,
     /// Whether the projected request is terminal (complete, error, or
-    /// non-empty `interrupted_at`). A still-running request is not terminal
-    /// and the engine keeps the pending prompt unresolved.
+    /// non-empty `interrupted_at`). A still-running request keeps the pending
+    /// prompt unresolved.
     pub terminal: bool,
     /// Terminal stop reason projection when `terminal` is true. This is an
-    /// adapter projection, not a persisted field: `cancelled` for an
-    /// interrupted turn, `error` for a failed one, `end_turn` otherwise.
+    /// adapter projection, not a persisted field.
     pub stop_reason: Option<&'static str>,
     /// Context window tokens used to bound `totalTokens`; falls back to the
     /// catalog default when the bound configuration did not supply one.
     pub context_window_tokens: u64,
-    /// Canonical live projection for the currently eligible source.
     pub live_tail: LiveResponseTail,
     /// Exact canonical source-to-header bindings derived from payload close
     /// document identities. Text equality is never used as provenance.
@@ -140,9 +105,6 @@ pub(super) struct MessageProjection {
     /// Durable terminal timestamp bounds the retained streaming tail during
     /// replay. Arrival time is not historical generation time.
     pub response_ended_at_ms: Option<i64>,
-    /// Request-local transcript timestamps observed by this bounded read.
-    /// Projection retains these across polls to derive the start of later
-    /// tool-loop generations from the preceding durable input row.
     pub timeline: Vec<MessageTimelineRow>,
 }
 
@@ -154,16 +116,12 @@ pub(super) struct MessageTimelineRow {
     pub timestamp_ms: Option<i64>,
 }
 
-/// One protocol-owned canonical live observation.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct LiveResponseTail {
-    /// Live content prefix, verbatim.
     pub content: Option<String>,
-    /// Live reasoning prefix, verbatim.
     pub reasoning: Option<String>,
-    /// Sequence of the current assistant `AgentMessage` row (the row the
-    /// live tail belongs to), when one exists. Used as the live segment's
-    /// chronology position.
+    /// Sequence of the current assistant `AgentMessage` row, used as the live
+    /// segment's chronology position.
     pub assistant_sequence: Option<i64>,
     pub source_key: Option<String>,
 }
@@ -175,15 +133,10 @@ pub(super) struct CanonicalSourceBinding {
     pub message_key: String,
 }
 
-/// The query execution seam this leaf reads through.
-///
-/// Production reads through `gents::graphql::graphql_with_transaction_retry`,
-/// which rejects GraphQL errors; a sink reports any failure as `Err` and the
-/// loader propagates it. The seam exists so tests can supply bounded canonical
-/// header/segment facts. `QuerySink` is internal to this leaf (the public
-/// [`project_messages`] entry point keeps the `Arc<EmbeddedNode>` signature).
-/// The returned future is `Send` so the loader's futures stay `Send` end to
-/// end without a proc-macro crate.
+/// Query seam so tests can supply bounded canonical header/segment facts;
+/// production reads through
+/// `gents::graphql::graphql_with_transaction_retry`. The returned future is
+/// `Send` so the loader's futures stay `Send` end to end.
 pub(super) trait QuerySink: Send + Sync {
     fn execute(
         &self,
@@ -191,7 +144,6 @@ pub(super) trait QuerySink: Send + Sync {
     ) -> impl std::future::Future<Output = Result<defra_node::QueryResponse>> + Send;
 }
 
-/// The production sink: the canonical read owner over the embedded node.
 struct NodeSink<'a> {
     node: &'a Arc<EmbeddedNode>,
 }
@@ -202,14 +154,8 @@ impl QuerySink for NodeSink<'_> {
     }
 }
 
-/// Project the streaming message chunks for one request id.
-///
-/// Bounded and request-id-scoped: the query set is exactly
-/// The single query reads bounded immutable headers and segment facts.
-///
-/// It never replays the session, never duplicates durable materialization
-/// (the projection is read-only), and every payload is a fresh notification
-/// value. Returns an empty projection when the request has no rows.
+/// Project the streaming message chunks for one request id. Returns an empty
+/// projection when the request has no rows.
 pub(super) async fn project_messages(
     node: &Arc<EmbeddedNode>,
     message_sequence_high_water: Option<i64>,
@@ -226,8 +172,6 @@ pub(super) async fn project_messages(
     .await
 }
 
-/// The loader body on one query sink; see [`project_messages`] for the
-/// contract and [`QuerySink`] for why the seam is separated out.
 async fn project_messages_with_sink<S: QuerySink>(
     sink: &S,
     message_sequence_high_water: Option<i64>,
@@ -524,9 +468,8 @@ fn push_nonempty(updates: &mut Vec<MessageUpdate>, update: MessageUpdate) {
     }
 }
 
-/// Text pieces of a reasoning block, rendered the way the transcript
-/// presents them (plain text and summary text stream; encrypted/redacted
-/// payloads are opaque and never stream as thought text).
+/// Text pieces of a reasoning block that stream as thought text; encrypted
+/// and redacted payloads are opaque.
 fn reasoning_texts(reasoning: &gents_protocol::message::Reasoning) -> Vec<String> {
     use gents_protocol::message::ReasoningContent;
     reasoning
@@ -541,8 +484,7 @@ fn reasoning_texts(reasoning: &gents_protocol::message::Reasoning) -> Vec<String
         .collect()
 }
 
-/// Streamable chunk text: verbatim (never trimmed) but whitespace-only
-/// blocks are skipped so a blank block does not emit an empty chunk.
+/// Streamable chunk text: verbatim, but whitespace-only blocks are skipped.
 fn streamable_owned(value: &str) -> Option<String> {
     (!value.trim().is_empty()).then(|| value.to_string())
 }
@@ -645,13 +587,6 @@ mod canonical_selection_tests {
         project_messages_with_sink(facts, None, &request(), 8192).await
     }
 
-    async fn project_with_request(
-        facts: &Facts,
-        request: &gents_protocol::row::AgentRequestRow,
-    ) -> Result<MessageProjection> {
-        project_messages_with_sink(facts, None, request, 8192).await
-    }
-
     #[tokio::test]
     async fn latest_provider_source_wins_over_older_partial_and_published_history() {
         let facts = Facts {
@@ -702,7 +637,7 @@ mod canonical_selection_tests {
         terminal_request.lifecycle_state = Some(RequestLifecycleState::Failed);
         terminal_request.terminal_output = Some(gents_protocol::output::TerminalOutput::NoMessage);
         assert_eq!(
-            project_with_request(&partial, &terminal_request)
+            project_messages_with_sink(&partial, None, &terminal_request, 8192)
                 .await
                 .unwrap()
                 .live_tail

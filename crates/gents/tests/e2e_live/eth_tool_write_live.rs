@@ -63,9 +63,9 @@ impl Drop for LocalChain {
         let Some(child) = self.child.as_mut() else {
             return;
         };
-        // Signal the chain's own process group directly: procps-ng 4 `kill
-        // -TERM -<pgid>` parses the group operand as kill(-1, SIGTERM) and
-        // terminates every process of the invoking user.
+        // Signal the child's process group directly; do not use procps-ng 4
+        // `kill -TERM -<pgid>`, which parses the group operand as
+        // kill(-1, SIGTERM) and terminates every process of the invoking user.
         #[cfg(unix)]
         if let Some(pgid) = child.id().and_then(|pid| libc::pid_t::try_from(pid).ok()) {
             if pgid > 1 {

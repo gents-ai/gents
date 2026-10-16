@@ -38,10 +38,8 @@ async fn message_ids(db: &TestDb) -> Vec<String> {
         .collect()
 }
 
-/// Lean `r6GoalOwnerCase` for every Goal status, including a Paused and a
-/// Complete Goal: a Goal set while a completion is being published never
-/// suppresses it. The notification and its wake are published, and the Goal
-/// is left as it was.
+/// Lean `r6GoalOwnerCase`: a Goal set while a completion is being published
+/// never suppresses the notification or its wake.
 #[tokio::test]
 async fn canonical_publication_wakes_whatever_goal_owns_the_session() {
     let cases = crate::lean_vocab_test::lean_r6_backgrounding_cases()

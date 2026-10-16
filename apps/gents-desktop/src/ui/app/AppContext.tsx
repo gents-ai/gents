@@ -1,6 +1,3 @@
-/* The desktop app for every screen: its stores to select from and its
-   actions to call. Made once at the root, so the value never changes and
-   providing it re-renders nothing. */
 import { createContext, useContext } from "react";
 import { useStore } from "zustand";
 
@@ -16,7 +13,6 @@ export function useApp(): DesktopApp {
   return app;
 }
 
-/** A value from what the shell decides; re-renders when it changes by identity. */
 export function useView<T>(select: (view: ShellView) => T): T {
   return useStore(useApp().view, select);
 }

@@ -10,52 +10,32 @@ const DELETE_CONSEQUENCE: &str =
 const FULL_ARCHIVE_CONSEQUENCE: &str = "The managed home, client state and service definition are backed up. Browser storage and caches are permanently cleared and are not included in the backup.";
 const FULL_DELETE_CONSEQUENCE: &str = "The managed home, client state and service definition are permanently deleted. Browser storage and caches are permanently cleared.";
 
-/// How the desktop client state relates to the managed home, as
-/// `managed-server.json`'s `reviewedFor` records it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientBinding {
-    /// No reviewed home is remembered, or its home cannot be read.
     Unbound,
-    /// The client was paired with this exact home and identity.
     BoundToHome,
-    /// The reviewed home is gone or now carries another identity: the
-    /// pairing names a node that no longer exists here.
     Orphaned,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagedServerResetResult {
-    /// The managed runtime home whose own entries are in scope, if any.
     pub managed_home: Option<String>,
-    /// The desktop client state root whose client entries are in scope, if any.
     pub desktop_home: Option<String>,
-    /// The stores this version refused, and why.
     pub stores: Vec<IncompatibleStoreView>,
-    /// Confirmation text for archiving.
     pub confirmation: String,
-    /// Confirmation text for permanent deletion; absent when deletion is not
-    /// offered (a store another, possibly newer, version wrote).
     pub delete_confirmation: Option<String>,
     pub consequence: String,
     pub completed: bool,
-    /// What a completed reset did.
     pub disposition: Option<HomeResetDisposition>,
-    /// Where an archive moved the retired entries.
     pub backup_path: Option<String>,
-    /// Entries an archive moves, exactly.
     pub planned_paths: Vec<String>,
-    /// Entries a deletion removes, exactly. Refusal recovery can archive
-    /// more keys; explicit full reset preserves unrelated keys in both modes.
+    /// Refusal recovery can archive more keys; explicit full reset preserves
+    /// unrelated keys in both modes.
     pub delete_paths: Vec<String>,
-    /// Entries a completed reset archived or deleted.
-    pub retired_paths: Vec<String>,
-    /// Entries of the managed home left untouched: other nodes' homes,
-    /// backups, user files and anything outside the runtime's inventory.
     pub retained_paths: Vec<String>,
-    /// Browser data cleared through WebKit in both modes; never archived.
+    /// Cleared through WebKit in both modes; never archived.
     pub browser_paths: Vec<String>,
-    /// Browser data whose native clearing completed during this reset.
     pub cleared_browser_paths: Vec<String>,
 }
 
@@ -71,9 +51,7 @@ pub enum HomeResetDisposition {
 #[serde(rename_all = "lowercase")]
 #[ts(rename_all = "lowercase")]
 pub enum IncompatibleStoreScope {
-    /// The managed runtime's store in its home.
     Runtime,
-    /// The desktop client's own store.
     Client,
 }
 
@@ -83,17 +61,12 @@ pub struct IncompatibleStoreView {
     pub scope: IncompatibleStoreScope,
     pub path: String,
     pub detail: String,
-    /// The store is known to come from an earlier release. A store another
-    /// (possibly newer) build wrote is not offered for deletion by default.
     pub older: bool,
-    /// An identity key an older build wrote with unsafe permissions; `path`
-    /// is the key (or the home's key directory).
     pub unsafe_key: bool,
 }
 
-/// The canonical user home a reset measures its roots against. Without it a
-/// broad root cannot be recognized, so the reset is refused rather than
-/// guessed at.
+/// Without the canonical user home a broad root cannot be recognized, so the
+/// reset is refused rather than guessed at.
 pub fn resolve_user_home(user_home: Option<PathBuf>) -> Result<PathBuf, BridgeError> {
     let user_home = user_home
         .filter(|home| !home.as_os_str().is_empty())
@@ -114,9 +87,8 @@ pub fn resolve_user_home(user_home: Option<PathBuf>) -> Result<PathBuf, BridgeEr
     })
 }
 
-/// A root whose entries a reset may retire: not the filesystem root, and
-/// neither the user's home directory nor any ancestor of it. `root` and
-/// `user_home` are canonical, so aliases of either compare equal.
+/// Not the filesystem root, and neither the user's home directory nor
+/// any ancestor of it.
 pub fn ensure_retirable_root(
     root: &Path,
     label: &str,
@@ -147,31 +119,24 @@ fn canonical_root(path: &Path, label: &str) -> Result<PathBuf, BridgeError> {
 /// The exact owned entries retired by a refused-store or explicit full reset.
 #[derive(Debug)]
 pub struct HomeResetPlan {
-    /// The canonical managed home and its refused store. A home without a
-    /// refused store is in scope when explicitly reset or when the retired
-    /// client state was paired with it.
     pub runtime: Option<(PathBuf, Option<gents::storage_backend::IncompatibleStore>)>,
     client: Option<gents::storage_backend::IncompatibleStore>,
-    /// The client state is retired because its paired node is gone.
     orphaned_client: bool,
     desktop_root: PathBuf,
     runtime_entries: gents::home::HomeEntries,
-    /// The runtime entries a Delete removes: the owned entries, except that
-    /// `keys/` is narrowed to the managed home's identity and recorded store key (other homes
-    /// may keep keys there). Explicit full reset also uses this scope for
-    /// archiving; refused-store recovery can archive the whole key directory.
+    /// Narrowed to the managed home's own key (other homes may keep keys
+    /// there); refused-store recovery can archive the whole key directory.
     delete_home_entries: Vec<PathBuf>,
-    /// `keys/`, removed after a Delete only if nothing else is left in it.
     delete_prunes_keys: Option<PathBuf>,
     archive_home_entries: Vec<PathBuf>,
     archive_keys: Vec<PathBuf>,
-    /// Present client-state entries in scope.
     client_entries: Vec<PathBuf>,
     store_keys: Vec<RetiredStoreKey>,
     full_reset: bool,
     host_entries: Vec<(String, PathBuf)>,
     browser_entries: Vec<PathBuf>,
-    /// The decoded records that prove each root is Gents'; retired last.
+    /// Retired last: an interrupted retirement keeps the evidence that lets
+    /// the next plan finish the remaining entries.
     ownership_records: Vec<PathBuf>,
 }
 
@@ -215,10 +180,6 @@ fn add_store_key(keys: &mut Vec<RetiredStoreKey>, key: RetiredStoreKey) {
     }
 }
 
-/// The regular files the desktop client wrote that decode, through their
-/// owners, as its records: the identity record, the store's custody record
-/// or pending upgrade journal, and a preference reviewed for a node. A path
-/// that merely exists proves nothing.
 fn decoded_desktop_records(paths: &crate::client::DesktopPaths, preference: &Path) -> Vec<PathBuf> {
     let read = |path: &Path| {
         std::fs::symlink_metadata(path)
@@ -282,8 +243,6 @@ fn upgrade_retirement(
     })
 }
 
-/// The managed home's own key file inside its `keys/` directory, as its
-/// `init.json` names it (`key_path`, else the default for `node_name`).
 fn own_home_key(home: &Path, keys: &Path) -> Option<PathBuf> {
     let record: serde_json::Value =
         serde_json::from_slice(&std::fs::read(gents::home::init_config_path(home)).ok()?).ok()?;
@@ -353,9 +312,9 @@ pub fn plan_home_reset(
 }
 
 /// Explicit reset owns only the selected home, its client, and the desktop's
-/// service definition. Browser data is listed separately for WebKit clearing
-/// in either mode; only WebKit completion authorizes reporting it cleared.
-/// Service shutdown and client exclusion precede filesystem retirement.
+/// service definition; only WebKit completion authorizes reporting browser
+/// data cleared. Service shutdown and client exclusion precede filesystem
+/// retirement.
 pub fn plan_full_reset(
     runtime_home: Option<&Path>,
     desktop_paths: &crate::client::DesktopPaths,
@@ -500,9 +459,8 @@ fn plan_reset(
         .or(client_store);
     let orphaned_client = binding == ClientBinding::Orphaned;
     let runtime = runtime_home.filter(|(home, store)| {
-        // Starting fresh retires the client's pairing with this home; left in
-        // place, first-run setup would provision onto it and relaunch the
-        // runtime on a store that may not open.
+        // Left in place, first-run setup would provision onto this home and
+        // relaunch the runtime on a store that may not open.
         full_reset
             || store.is_some()
             || (client.is_some()
@@ -539,8 +497,6 @@ fn plan_reset(
         }
         None => gents::home::HomeEntries::default(),
     };
-    // A home proves it is a Gents home only through a readable init marker;
-    // names from the runtime inventory alone also occur in user projects.
     let initialized = match runtime.as_ref() {
         Some((home, _)) => {
             let record =
@@ -580,13 +536,9 @@ fn plan_reset(
         .filter(|_| initialized)
         .map(|(home, _)| gents::home::init_config_path(home));
     let mut client_entries = Vec::new();
-    // Like a runtime home, a desktop home proves itself only through a record
-    // the desktop wrote; its entry names alone also occur in user projects.
     let mut desktop_owned = client.is_some();
     let mut ownership_records = Vec::new();
     if retires_client_state {
-        // Entries are derived from the canonical root, never from the raw
-        // configured path.
         let canonical = crate::client::DesktopPaths::from_root(&desktop_root);
         let preference = desktop_root.join(MANAGED_SERVER_CONFIG);
         ownership_records.extend(decoded_desktop_records(&canonical, &preference));
@@ -744,14 +696,10 @@ fn plan_reset(
 }
 
 impl HomeResetPlan {
-    /// The desktop client state is retired with its runtime: its pairing
-    /// names the runtime identity being retired.
     pub fn retires_client_state(&self) -> bool {
         self.full_reset || self.client.is_some() || self.runtime.is_some() || self.orphaned_client
     }
 
-    /// Only records that decoded as evidence wait for the final pass; every
-    /// other entry, including undecoded records, goes first.
     fn is_ownership_record(&self, path: &Path) -> bool {
         self.ownership_records.iter().any(|record| record == path)
     }
@@ -784,12 +732,6 @@ impl HomeResetPlan {
             .chain(self.host_entries.iter().map(|(_, path)| path))
     }
 
-    /// Recovery offers deletion only for known older stores; a store another
-    /// build wrote may still be wanted by that build. Explicit full reset
-    /// allows deletion because the user chooses to retire even healthy state.
-    ///
-    /// A paired runtime retired without a refusal was never opened, so its
-    /// store is unclassified and may belong to a newer build: archive only.
     fn deletable(&self) -> bool {
         if self.full_reset {
             return true;
@@ -801,8 +743,7 @@ impl HomeResetPlan {
             && self.refused_stores().all(|store| store.kind.is_older())
     }
 
-    /// A digest of everything the action would touch or leave, so a
-    /// confirmation authorizes exactly the previewed set.
+    /// A confirmation authorizes exactly the previewed set.
     pub fn digest(&self, disposition: HomeResetDisposition) -> String {
         let mut hasher = blake3::Hasher::new();
         let mut line = |label: &str, path: &Path| {
@@ -936,7 +877,6 @@ impl HomeResetPlan {
         }
     }
 
-    /// A fresh sibling of the anchor: `<anchor>-backup-<stamp>`.
     pub fn backup_path(&self, stamp: &str) -> Result<PathBuf, BridgeError> {
         let anchor = self.anchor();
         let (Some(parent), Some(name)) = (anchor.parent(), anchor.file_name()) else {
@@ -1082,8 +1022,6 @@ impl HomeResetPlan {
                     entries: std::slice::from_ref(path),
                 }),
         );
-        // Ownership records go last: an interrupted retirement keeps the
-        // evidence that lets the next plan finish the remaining entries.
         let (dependents, records): (Vec<_>, Vec<_>) = groups
             .iter()
             .map(|group| {
@@ -1124,8 +1062,6 @@ impl HomeResetPlan {
         }
         if disposition == HomeResetDisposition::Delete {
             if let Some(keys) = self.delete_prunes_keys.as_ref() {
-                // Only an empty directory is removed; another home's key
-                // file keeps it in place.
                 if std::fs::remove_dir(keys).is_ok() {
                     retired.push(keys.clone());
                 }
@@ -1182,9 +1118,8 @@ fn reject_symlink_if_present(path: &Path, label: &str) -> Result<(), BridgeError
     }
 }
 
-/// Held across browser startup and shutdown, including setup screens without a
-/// client store. Lock files are never retired: replacing their inode would let
-/// another process open the state while retirement is still in progress.
+/// Lock files are never retired: replacing their inode would let another
+/// process open the state while retirement is still in progress.
 pub fn lock_desktop_process(
     paths: &crate::client::DesktopPaths,
     wait: bool,

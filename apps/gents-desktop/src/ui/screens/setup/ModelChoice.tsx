@@ -1,5 +1,3 @@
-/* The model the inference step saves: chosen from what discovery found,
-   or typed by hand where it allows, and its recommended defaults. */
 import type { Dispatch } from "react";
 import { ArrowRight } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
@@ -23,9 +21,7 @@ export function ModelChoice({
   busy: boolean;
   dispatch: Dispatch<SetupEvent>;
   purpose: "onboarding" | "add-backend";
-  /** asks the provider for its models again */
   onDiscover: () => void;
-  /** asks for a hand-typed model's defaults */
   onDescribe: () => void;
   onSave: () => void;
 }) {

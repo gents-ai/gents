@@ -1,6 +1,4 @@
-/* One line per tool call, in words a person would use: the desktop's
-   ToolGroup summary, as data so the transcript steps and the trace can
-   both label a call the same way. */
+/* One line per tool call. */
 import type {
   RenderedToolCallView,
   ToolDiffLineKind,
@@ -9,13 +7,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import type { ToolStepStatus } from "@gents/ui/conversation";
 
-/* An absolute path inside a checkout is mostly the checkout: every row in a
-   real session began with the same forty characters of home directory and
-   repo. Keep the tail, which is what tells two rows apart, and let the
-   title carry the rest. */
 export const shortPath = (path: string, keep = 3): string => {
-  /* a machine that separates with a backslash has the same long prefix to
-     lose, and a drive letter is as absolute as a leading slash */
   const sep = path.includes("\\") && !path.includes("/") ? "\\" : "/";
   const absolute = path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path);
   const segments = path.split(/[\\/]/).filter(Boolean);
@@ -23,7 +15,7 @@ export const shortPath = (path: string, keep = 3): string => {
   return `…${sep}${segments.slice(-keep).join(sep)}`;
 };
 
-/* leading VAR=value assignments before a command; the command is what reads */
+/* leading VAR=value assignments before a command */
 const ASSIGNMENTS = /^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)(?:\s+|$))+/;
 
 export const spoken = (command: string): string => {
@@ -43,7 +35,6 @@ export const DIFF_MARK: Record<ToolDiffLineKind, string> = {
 export const diffText = (diff: ToolDiffLineView[]) =>
   diff.map((line) => `${DIFF_MARK[line.kind]}${line.text}`).join("\n");
 
-/* a final newline ends the last line; it does not start another */
 export const lineCount = (text: string) =>
   text ? text.replace(/\r?\n$/, "").split("\n").length : 0;
 
@@ -79,8 +70,7 @@ const readCount = (p: Extract<ToolPresentationView, { kind: "fileRead" }>) => {
   return `${p.returnedCount}${total}${p.truncated ? " · truncated" : ""}`;
 };
 
-/* one line: what the tool did, in words a person would use */
-/* a policy denial reads as what was refused, not as a failed tool */
+/* a policy denial is not a failed tool */
 export function toolSummary(t: RenderedToolCallView): {
   kind: string;
   primary: string;
@@ -149,7 +139,6 @@ export function toolSummary(t: RenderedToolCallView): {
   }
 }
 
-/* how big the change is, the way an editor says it: +18 −2 */
 export function diffTally(diff: readonly ToolDiffLineView[]) {
   let added = 0;
   let removed = 0;
@@ -163,21 +152,8 @@ export function diffTally(diff: readonly ToolDiffLineView[]) {
     .join(" ");
 }
 
-/* Reasoning a provider will not hand over.
-
-   `ReasoningContent` has four shapes — Text, Summary, Encrypted, Redacted
-   — and the runtime renders the last two as fixed placeholders rather than
-   leak ciphertext: crates/gents-protocol/src/transcript.rs writes
-   "[encrypted reasoning]" and "[redacted reasoning]". That is the right
-   call upstream, but a transcript that offers it behind a disclosure
-   promises something to read and delivers an apology.
-
-   Matching the wording is sniffing a presentation detail: it is a constant
-   in that crate today, and if it changes we silently start showing it
-   again. The honest fix is a typed signal on the timeline item. */
 const WITHHELD = /^\s*\[(encrypted|redacted) reasoning\]\s*$/;
 
-/* what of a turn's reasoning is actually readable */
 export function readableReasoning(reasoning: string | null | undefined): string | null {
   if (!reasoning) return null;
   const kept = reasoning
@@ -188,33 +164,16 @@ export function readableReasoning(reasoning: string | null | undefined): string 
   return kept || null;
 }
 
-/* whether a turn had reasoning that the provider would not hand over: the
-   fact is worth a quiet line, where the text itself is not */
 export function reasoningWithheld(reasoning: string | null | undefined): boolean {
   if (!reasoning) return false;
   return reasoning.split("\n").some((line) => WITHHELD.test(line));
 }
 
-/* The outcome belongs on the row: a failure is the row a person is looking
-   for, and a refusal is not a failure but the policy declining, which is
-   why it reads as stopped.
-
-   statusKind alone does not carry it. It is the call's lifecycle, and a
-   command that exits non-zero still completes its lifecycle — the
-   runtime puts that judgement on the presentation instead:
-
-     failed = tool_status_is_error(tool) || meta.ok == false || timed_out
-           || status == "exit_nonzero" || exit_code != 0
-
-   (crates/.../tool_presentation.rs). So `completed` + `failed: true` is
-   the ordinary shape of a test that did not pass, and reading only the
-   lifecycle would mark nothing on the transcripts this is for. */
 export const stepStatus = (tool: RenderedToolCallView): ToolStepStatus => {
   if (tool.denial) return "stopped";
   const kind = tool.statusKind;
   if (kind === "running") return "running";
   if (kind === "error") return "failed";
-  /* the runtime's own call, for the case the lifecycle calls complete */
   if (tool.presentation.kind === "command" && tool.presentation.failed) return "failed";
   return kind === "success" ? "done" : "pending";
 };

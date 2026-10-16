@@ -1,12 +1,8 @@
-/* An agent as its editor drafts it: the fields, the context choice
-   (an existing one, a duplicate or an empty one), what makes a draft
-   unsavable, and a new agent's starting draft. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import type { AgentContext, AgentView } from "@source-inc/gents-desktop-client";
 import { newId } from "./draft";
 import { defaultAgentOf } from "@/lib/agents";
 
-/* picker values for a context that does not exist until Save */
 export const DUPLICATE = "new:duplicate";
 
 export const EMPTY = "new:empty";
@@ -17,9 +13,7 @@ export type Draft = {
   displayName: string;
   description: string;
   tags: string[];
-  /* an existing context_id, '' for none, or DUPLICATE / EMPTY */
   contextChoice: string;
-  /* for a new context: its name, and the context it copies */
   contextName: string;
   copiedFrom: string;
   systemPrompt: string;
@@ -29,7 +23,6 @@ export type Draft = {
   inferenceProfileId: string;
 };
 
-/* what a save should also do: make the change its own copy */
 export type SaveIntent = { copy?: boolean };
 
 export const contextFields = (c: AgentContext | null) => ({
@@ -41,21 +34,18 @@ export const contextFields = (c: AgentContext | null) => ({
 
 export const nameOf = (c: AgentContext) => c.display_name ?? c.context_id;
 
-/* the agents that point at a context, as saved */
 export const usersOf = (deployment: NodeView, contextId: string) =>
   deployment.agents.filter((b) => b.contextId === contextId);
 
 export const listNames = (names: string[]) =>
   names.length <= 2 ? names.join(" and ") : `${names[0]} and ${names.length - 1} more`;
 
-/* a context name no other context has */
 export function freshName(deployment: NodeView, base: string) {
   const taken = new Set(deployment.contexts.map((c) => c.display_name));
   if (!taken.has(base)) return base;
   for (let n = 2; ; n++) if (!taken.has(`${base} ${n}`)) return `${base} ${n}`;
 }
 
-/* what stops a save, keyed by the field that shows it */
 export function problems(deployment: NodeView, next: Draft, draft = false) {
   const out: Partial<Record<keyof Draft, string>> = {};
   if (!next.displayName.trim()) out.displayName = "Give the agent a name.";
@@ -67,7 +57,6 @@ export function problems(deployment: NodeView, next: Draft, draft = false) {
     !deployment.contexts.some((c) => c.context_id === next.contextChoice)
   )
     out.contextChoice = "That context no longer exists. Choose another.";
-  /* a draft's context is named after the agent at save */
   if (!draft && isNew(next.contextChoice) && !next.contextName.trim())
     out.contextName = "Name the new context.";
   if (!next.inferenceProfileId)
@@ -93,7 +82,6 @@ export function problems(deployment: NodeView, next: Draft, draft = false) {
   return out;
 }
 
-/* the order the fields appear in, for focusing the first problem */
 export const FIELD_ORDER: [keyof Draft, string][] = [
   ["displayName", "name"],
   ["contextChoice", "context"],
@@ -104,7 +92,6 @@ export const FIELD_ORDER: [keyof Draft, string][] = [
   ["inferenceProfileId", "profile"],
 ];
 
-/* the agent a draft starts from: nothing saved, the default model */
 export function newAgentView(deployment: NodeView): AgentView {
   return {
     agentId: newId("agent"),
@@ -125,9 +112,7 @@ export function newAgentView(deployment: NodeView): AgentView {
 
 /** A new agent drafted beside another page, before its first save. */
 export type DraftMode = {
-  /* the new agent's id once saved */
   onSaved: (agentId: string) => void;
   onCancel: () => void;
-  /* from a session's composer: saved enabled, to be used at once */
   enabled?: boolean;
 };

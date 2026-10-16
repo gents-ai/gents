@@ -1,6 +1,3 @@
-//! Defra ACP permission owner coverage after agent resolution. Scoped
-//! agent selection/ambiguity and catalog well-formedness require a production
-//! resolver; constructing a test-local map cannot establish those contracts.
 use crate::lean_vocab_test::{lean_identity_permission_cases, LeanIdentityPermissionCase};
 use acp::{
     AcpStore, DocumentACP, DocumentPermission, Identity, LocalDocumentACP, MemoryAcpStore,
@@ -75,9 +72,6 @@ fn did_from_lean_case(value: &str, case: &LeanIdentityPermissionCase, field: &st
 #[tokio::test]
 async fn resolved_identity_permission_cases_drive_defra_acp() -> anyhow::Result<()> {
     for case in lean_identity_permission_cases() {
-        // Missing/ambiguous selection must be denied before ACP. This test has
-        // no production selection operation and therefore makes no assertion
-        // about those cases (recorded as gaps in the conformance handoff).
         if case.expected_actor_node.is_none() || case.expected_peer_node.is_none() {
             continue;
         }

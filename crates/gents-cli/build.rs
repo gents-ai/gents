@@ -8,10 +8,9 @@ fn main() {
     println!("cargo:rerun-if-env-changed=GENTS_BUILD_GIT_TAG");
     println!("cargo:rerun-if-env-changed=GENTS_BUILD_GIT_DIRTY");
 
-    // Release workflows provide immutable metadata explicitly. In that mode,
-    // do not watch Git's administrative files: actions/checkout rewrites them
-    // on every retry, which used to invalidate and relink gents-cli even when
-    // the source commit and trusted Cargo target were unchanged.
+    // With explicit metadata, do not watch Git's administrative files:
+    // actions/checkout rewrites them on every retry, which would invalidate
+    // builds whose source commit and trusted Cargo target are unchanged.
     let explicit_git_metadata = nonempty_env("GENTS_BUILD_GIT_SHA").is_some();
     if !explicit_git_metadata {
         if let Some(head_path) = git_path("HEAD") {

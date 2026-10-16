@@ -1,53 +1,33 @@
-//! Explicit execution-lease policy for durable request work (#1571).
+//! Native counterpart of the executable Lean owners in
+//! `Proofs/RequestExecutionLease/`: turns observed durable facts into
+//! admission, bounded-renewal, and revocation decisions. Policy helper only —
+//! it never reads or writes. Lifecycle-changing writes (begin, renewal,
+//! producer decisions, finalization, revocation) must CAS the exact observed
+//! generation — and, where the decision reads it, the deadline — in the same
+//! transaction under `config_client::txn::MutationWriteGate`. Raw output
+//! appends only check the live lease and must not write the request row.
 //!
-//! This is the native production counterpart of the executable Lean owners in
-//! `Proofs/RequestExecutionLease/`: it turns observed durable facts into
-//! admission, bounded-renewal, and revocation decisions. It is a policy helper,
-//! not a state machine: it never reads or writes. Lifecycle-changing writes
-//! (begin, renewal, producer decisions, finalization, revocation) must CAS the
-//! exact observed generation — and, where the decision reads it, the deadline —
-//! in the same transaction under `config_client::txn::MutationWriteGate`. Raw
-//! output appends only check the live lease and must not write the request
-//! row: admission here never adds a per-flush request CAS.
-//!
-//! Canonical rules implemented here:
-//! - One explicit deadline. Effective expiry is exactly the stored deadline;
-//!   there is no output scan. Expiry is inclusive: `now >= deadline` rejects.
-//! - Outputs never renew. Raw appends, producer decisions, socket activity and
-//!   replay check the live lease without extending it; only
-//!   [`authorize_renewal`] advances the deadline.
-//! - Bounded renewal: due at `deadline - max(1, duration / 2)`, CAS on the
-//!   expected deadline, strictly extending to `now + duration`, and only in
-//!   renewable lifecycles (`claimed`, `processing`).
-//! - Revocation is external policy authority, independent of wall-clock expiry.
-//!
-//! The millisecond timeline is the native instantiation of the model's discrete
-//! time. The configured duration is a runtime obligation, not chosen here: it
-//! must leave scheduling and commit-latency margin, and a duration that cannot
-//! strictly extend before expiry is rejected per renewal below.
+//! The configured duration is a runtime obligation, not chosen here: it must
+//! leave scheduling and commit-latency margin.
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-/// Durable lease facts from the request owner's authoritative snapshot. There is no
-/// `response_streaming` or `progress_seq` input: output-derived liveness is
-/// retired, and the stored deadline is the only expiry.
+/// Durable lease facts from the request owner's authoritative snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LeaseObservation<'a> {
     pub request: RequestLifecycleState,
     pub generation: &'a str,
-    /// Stored `execution_lease_expires_at` on the millisecond timeline.
+    /// Stored `execution_lease_expires_at` on the millisecond timeline; the
+    /// only expiry (inclusive: `now >= deadline` rejects).
     pub deadline_ms: i64,
 }
 
-/// Exact liveness: the observed generation matches and the deadline has not
-/// passed. Expiry is inclusive — `now == deadline` is already expired, so the
-/// old owner cannot append, publish, dispatch, finalize or renew there even if
-/// its generation still matches.
+/// The observed generation matches and the deadline has not passed.
 pub fn is_live(observed: LeaseObservation<'_>, expected_generation: &str, now_ms: i64) -> bool {
     now_ms >= 0 && observed.generation == expected_generation && observed.deadline_ms > now_ms
 }
 
 /// Lifecycles in which the owned completion loop may keep its explicit lease
-/// alive. This is not an implicit relinquishment or output-derived timeout policy.
+/// alive.
 pub fn renewable_lifecycle(request: RequestLifecycleState) -> bool {
     matches!(
         request,
@@ -55,10 +35,9 @@ pub fn renewable_lifecycle(request: RequestLifecycleState) -> bool {
     )
 }
 
-/// Half-duration renewal cadence, the native instantiation of the modeled
-/// `renewalInterval duration = max 1 (duration / 2)`. The model's duration is
-/// a Nat; a nonpositive native duration is not a valid instantiation and fails
-/// closed instead of wrapping.
+/// Half-duration renewal cadence (modeled `renewalInterval duration = max 1
+/// (duration / 2)`). The model's duration is a Nat; a nonpositive native
+/// duration is not a valid instantiation and fails closed instead of wrapping.
 pub fn renewal_interval_ms(duration_ms: i64) -> Option<i64> {
     if duration_ms <= 0 {
         return None;
@@ -67,7 +46,7 @@ pub fn renewal_interval_ms(duration_ms: i64) -> Option<i64> {
 }
 
 /// First instant at which renewal is due, using the model's natural-number
-/// subtraction. Negative timestamps are outside this timeline.
+/// subtraction.
 pub fn renewal_due_ms(duration_ms: i64, deadline_ms: i64) -> Option<i64> {
     if deadline_ms < 0 {
         return None;
@@ -75,9 +54,7 @@ pub fn renewal_due_ms(duration_ms: i64, deadline_ms: i64) -> Option<i64> {
     Some((deadline_ms - renewal_interval_ms(duration_ms)?).max(0))
 }
 
-/// Deadline a successful renewal installs: `now + duration`. Whenever
-/// [`authorize_renewal`] returns `Some`, this strictly extends the observed
-/// deadline. Fails closed on a nonpositive duration or on addition overflow.
+/// Deadline a successful renewal installs: `now + duration`.
 pub fn renewed_deadline_ms(now_ms: i64, duration_ms: i64) -> Option<i64> {
     if now_ms < 0 || duration_ms <= 0 {
         return None;
@@ -88,21 +65,11 @@ pub fn renewed_deadline_ms(now_ms: i64, duration_ms: i64) -> Option<i64> {
 /// Decide an explicit, bounded lease renewal.
 ///
 /// Returns the new deadline to CAS into `execution_lease_expires_at`, or
-/// `None` when the write must be skipped or the owner must stop:
-/// - generation or expected-deadline CAS mismatch (reread the authoritative
-///   lease; retrying the same expected deadline cannot extend it again),
-/// - the lease is already expired (`now >= deadline`),
-/// - the renewal is early (`now < renewal_due`): a skipped write, not a
-///   failed request,
-/// - the new deadline would not strictly extend the observed one,
-/// - the lifecycle is not renewable,
-/// - the duration is nonpositive (the model's duration is a Nat) or the
-///   checked arithmetic overflows.
-///
-/// Only the owned completion loop's independent renewal poll reaches this
-/// decision. Output, publication, dispatch, socket activity and replay never
-/// do; a due renewal that wins before expiry prevents recovery, output alone
-/// does not.
+/// `None` when the write must be skipped or the owner must stop (CAS mismatch,
+/// expiry, early renewal, non-strict extension, non-renewable lifecycle,
+/// nonpositive duration, or overflow). Only the owned completion loop's
+/// independent renewal poll reaches this decision; output, publication,
+/// dispatch, socket activity and replay never do.
 pub fn authorize_renewal(
     observed: LeaseObservation<'_>,
     expected_generation: &str,
@@ -123,8 +90,8 @@ pub fn authorize_renewal(
     Some(new_deadline_ms)
 }
 
-/// Modeled `admitted` plus the `processing` lifecycle that producer writes
-/// require. Identity: the caller's transaction must not extend the deadline.
+/// Modeled `admitted` plus the `processing` lifecycle producer writes require;
+/// the caller's transaction must not extend the deadline.
 fn authorize_processing_write(
     observed: LeaseObservation<'_>,
     expected_generation: &str,
@@ -134,9 +101,7 @@ fn authorize_processing_write(
         && is_live(observed, expected_generation, now_ms)
 }
 
-/// A raw output append (or other non-semantic response write) checks the live
-/// lease but never updates it. It requires `processing`, matching the modeled
-/// `appendOutput` admission.
+/// A raw output append checks the live lease but never renews it.
 pub fn authorize_output_append(
     observed: LeaseObservation<'_>,
     expected_generation: &str,
@@ -146,9 +111,7 @@ pub fn authorize_output_append(
 }
 
 /// Authorizes the request-side generation CAS for a producer transaction
-/// (close/retract, accept-and-publish, dispatch). Identity: it never extends
-/// the deadline and never changes the lifecycle; the canonical output and
-/// publication effects remain composition obligations of their own owners.
+/// (close/retract, accept-and-publish, dispatch); never extends the deadline.
 pub fn authorize_producer_decision(
     observed: LeaseObservation<'_>,
     expected_generation: &str,
@@ -167,9 +130,8 @@ pub fn authorize_begin(
         && is_live(observed, expected_generation, now_ms)
 }
 
-/// Terminalization admission (modeled `canFinalize`): completion requires an
-/// accepted, processing turn; every other outcome may still terminalize
-/// claimed work (provider EOF on a claimed request fails it atomically).
+/// Terminalization admission (modeled `canFinalize`): completion requires a
+/// processing turn; every other outcome may terminalize claimed work.
 pub fn can_finalize(request: RequestLifecycleState, completed: bool) -> bool {
     if completed {
         request == RequestLifecycleState::Processing
@@ -181,8 +143,7 @@ pub fn can_finalize(request: RequestLifecycleState, completed: bool) -> bool {
     }
 }
 
-/// Authorizes normal finalization under the live lease. At or after the
-/// deadline the owner cannot finalize, even with a matching generation.
+/// Authorizes normal finalization under the live lease.
 pub fn authorize_finalize(
     observed: LeaseObservation<'_>,
     expected_generation: &str,
@@ -192,13 +153,9 @@ pub fn authorize_finalize(
     can_finalize(observed.request, completed) && is_live(observed, expected_generation, now_ms)
 }
 
-/// External cancellation and policy revocation are intentionally independent
-/// of wall-clock expiry: they may terminate a live or already-expired lease.
-/// They must match the exact observed lifecycle, generation and deadline, take
-/// a fresh generation, and may only end the request as `dead` or `superseded`.
-///
-/// The caller CASes every observed field (lifecycle, generation, deadline) in
-/// the same transaction and installs the fresh generation on success.
+/// External cancellation and policy revocation are independent of wall-clock
+/// expiry. The caller CASes every observed field (lifecycle, generation,
+/// deadline) in the same transaction and installs the fresh generation.
 pub fn authorize_execution_revocation(
     observed: LeaseObservation<'_>,
     expected: LeaseObservation<'_>,
@@ -240,8 +197,6 @@ mod tests {
         }
     }
 
-    // Modeled boundary: `admitted` requires `now < deadline`; the conformance
-    // case `deadline_boundary_rejects_raw_append` fixes now == deadline.
     #[test]
     fn expiry_is_inclusive_across_every_admission() {
         let observed = observation(RequestLifecycleState::Processing, 10);
@@ -269,8 +224,6 @@ mod tests {
         assert!(authorize_renewal(observed, OTHER, 20, 5, 10).is_none());
     }
 
-    // Modeled `renewalInterval duration = max 1 (duration / 2)`. A nonpositive
-    // duration is not a valid Nat instantiation and fails closed.
     #[test]
     fn renewal_interval_matches_model() {
         assert_eq!(renewal_interval_ms(5), Some(2));
@@ -282,43 +235,31 @@ mod tests {
         assert_eq!(renewal_due_ms(0, 10), None);
     }
 
-    // Conformance: `explicit_owner_heartbeat_extends_at_due_time`
-    // (duration 5, deadline 10, now 8 → 13).
     #[test]
     fn due_renewal_extends_to_now_plus_duration() {
         let observed = observation(RequestLifecycleState::Processing, 10);
         assert_eq!(authorize_renewal(observed, GEN, 10, 5, 8), Some(13));
-        // Boundary: now == due - 1 is still early.
         assert_eq!(authorize_renewal(observed, GEN, 10, 5, 7), None);
     }
 
-    // Conformance: `early_renewal_is_rejected` (now 5 < due 8 for deadline 10,
-    // duration 5). An early timer poll is a skipped write, not a failure.
     #[test]
     fn early_renewal_is_rejected() {
         let observed = observation(RequestLifecycleState::Processing, 10);
         assert_eq!(authorize_renewal(observed, GEN, 10, 5, 4), None);
     }
 
-    // Conformance: `stale_expected_deadline_cannot_renew` and
-    // `same_deadline_replay_after_renewal_is_rejected` — the CAS is on the
-    // exact expected deadline.
     #[test]
     fn stale_expected_deadline_cas_is_rejected() {
         let observed = observation(RequestLifecycleState::Processing, 13);
         assert_eq!(authorize_renewal(observed, GEN, 10, 5, 8), None);
     }
 
-    // Conformance: `one_tick_duration_cannot_advance_before_expiry` — a
-    // one-tick lease cannot both advance its deadline and renew strictly
-    // before expiry, so it is not a usable native renewal configuration.
     #[test]
     fn one_tick_duration_cannot_renew_before_expiry() {
         let observed = observation(RequestLifecycleState::Processing, 10);
         assert_eq!(authorize_renewal(observed, GEN, 10, 1, 9), None);
     }
 
-    // Conformance: `terminal_lifecycle_rejects_renewal_even_with_active_lease`.
     #[test]
     fn renewable_lifecycle_includes_claimed_and_processing_and_excludes_terminal() {
         let deadline = 10;
@@ -343,13 +284,8 @@ mod tests {
         }
     }
 
-    // Modeled theorem: renewal success strictly advances the deadline
-    // (`deadline < now + duration`). The one-tick case above is the modeled
-    // `one_tick_duration_cannot_advance_before_expiry` boundary where the
-    // strictly-extending guard, not the due check, rejects.
     #[test]
     fn renewal_must_strictly_extend_deadline() {
-        // duration 0 can never strictly extend.
         assert_eq!(
             authorize_renewal(
                 observation(RequestLifecycleState::Processing, 10),
@@ -362,9 +298,6 @@ mod tests {
         );
     }
 
-    // Modeled: `appendOutput` is identity and never renews; producer
-    // decisions (`closeOrRetract`, `acceptAndPublish`, `dispatch`) are also
-    // identity. Admission requires `processing`.
     #[test]
     fn output_and_producer_writes_never_renew_and_require_processing() {
         let claimed = observation(RequestLifecycleState::Claimed, 10);
@@ -375,8 +308,6 @@ mod tests {
         assert!(authorize_producer_decision(observed, GEN, 5));
     }
 
-    // Conformance: `completion_rejects_claimed_request` and
-    // `provider_eof_fails_claimed_request_atomically`.
     #[test]
     fn finalize_admission_follows_can_finalize() {
         let claimed = observation(RequestLifecycleState::Claimed, 10);
@@ -387,15 +318,10 @@ mod tests {
         assert!(authorize_finalize(processing, GEN, 5, false));
     }
 
-    // Modeled: `policy_authority_can_supersede_live_generation`,
-    // `policy_revocation_rejects_wrong_expected_generation`,
-    // `policy_revocation_rejects_non_policy_outcome`. Revocation is
-    // independent of wall-clock expiry.
     #[test]
     fn revocation_matches_exact_observation_and_is_expiry_independent() {
         let observed = observation(RequestLifecycleState::Processing, 10);
         let expected = observation(RequestLifecycleState::Processing, 10);
-        // Live and expired alike: revocation does not consult the clock.
         assert!(authorize_execution_revocation(
             observed,
             expected,
@@ -408,7 +334,6 @@ mod tests {
             OTHER,
             RequestLifecycleState::Dead
         ));
-        // Wrong expected deadline.
         assert!(!authorize_execution_revocation(
             observed,
             LeaseObservation {
@@ -418,7 +343,6 @@ mod tests {
             OTHER,
             RequestLifecycleState::Dead
         ));
-        // Wrong expected generation.
         assert!(!authorize_execution_revocation(
             observed,
             LeaseObservation {
@@ -428,14 +352,12 @@ mod tests {
             OTHER,
             RequestLifecycleState::Dead
         ));
-        // Fresh generation must differ from the observed one.
         assert!(!authorize_execution_revocation(
             observed,
             expected,
             GEN,
             RequestLifecycleState::Dead
         ));
-        // Only dead/superseded are policy outcomes.
         for outcome in [
             RequestLifecycleState::Completed,
             RequestLifecycleState::Failed,
@@ -448,17 +370,12 @@ mod tests {
         }
     }
 
-    // Modeled: `provider_eof_without_final_fails` and the generated case
-    // vocabulary (`providerEofCases`).
     #[test]
     fn provider_eof_requires_explicit_final() {
         assert!(provider_eof_is_failure(false));
         assert!(!provider_eof_is_failure(true));
     }
 
-    // The model's duration is a Nat; the native i64 instantiation must fail
-    // closed on nonpositive durations and on checked-add/sub overflow instead
-    // of panicking or wrapping.
     #[test]
     fn nonpositive_duration_fails_closed() {
         let observed = observation(RequestLifecycleState::Processing, 10);
@@ -477,7 +394,6 @@ mod tests {
         assert_eq!(renewed_deadline_ms(i64::MIN, 1), None);
         assert_eq!(renewal_due_ms(1, i64::MIN), None);
         assert_eq!(renewal_due_ms(1, 0), Some(0));
-        // A due renewal whose new deadline overflows is rejected, not wrapped.
         let observed = observation(RequestLifecycleState::Processing, i64::MAX - 5);
         assert_eq!(
             authorize_renewal(observed, GEN, i64::MAX - 5, 10, i64::MAX - 5),
@@ -485,8 +401,6 @@ mod tests {
         );
     }
 
-    // The revocation CAS covers the lifecycle too: a stale expected lifecycle
-    // (the request moved on since the caller read it) must be rejected.
     #[test]
     fn stale_expected_lifecycle_rejects_revocation() {
         let observed = observation(RequestLifecycleState::Processing, 10);
@@ -497,7 +411,6 @@ mod tests {
             OTHER,
             RequestLifecycleState::Dead
         ));
-        // Symmetrically, a claimed observation against a processing expectation.
         let observed = observation(RequestLifecycleState::Claimed, 10);
         let expected = observation(RequestLifecycleState::Processing, 10);
         assert!(!authorize_execution_revocation(

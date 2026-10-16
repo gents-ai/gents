@@ -1,8 +1,7 @@
 import type { Page } from "@playwright/test";
 import { expect, gotoHarness, test } from "./desktopTest";
 
-/* every frame's width of the pane and of the dock's surface, while `act` runs */
-async function widthsDuring(page: Page, act: () => Promise<void>) {
+const widthsDuring = (page: Page, act: () => Promise<void>) => {
   await page.evaluate(() => {
     const widths: { pane: number; dock: number }[] = [];
     const surface = () =>
@@ -15,7 +14,6 @@ async function widthsDuring(page: Page, act: () => Promise<void>) {
           document.querySelector('[data-testid="pane"] > main')!.getBoundingClientRect()
             .width,
         ),
-        /* the surface while its column shows any of it */
         dock:
           (document.querySelector('[data-testid="dock-cell"]')?.getBoundingClientRect()
             .width ?? 0) > 16
@@ -37,9 +35,6 @@ async function widthsDuring(page: Page, act: () => Promise<void>) {
 
 const distinct = (values: number[]) => [...new Set(values)];
 
-/* The dock opens and closes without re-laying out what it sits beside: the
-   pane and the dock's surface each take one width for the whole settle, so
-   a long transcript is re-wrapped once, not at every frame of the motion. */
 test("opening and closing the dock lays the pane out once", async ({
   page,
 }, testInfo) => {
@@ -56,9 +51,7 @@ test("opening and closing the dock lays the pane out once", async ({
     await page.getByRole("button", { name: "More" }).first().click();
     await page.getByRole("menuitem", { name: "Started sessions" }).click();
   });
-  /* the pane: its width before, then the one it settles at */
   expect(distinct(opening.map((w) => w.pane))).toHaveLength(2);
-  /* the dock's surface: absent, then the width it opens to */
   expect(distinct(opening.map((w) => w.dock).filter((w) => w > 0))).toHaveLength(1);
 
   const closing = await widthsDuring(page, async () => {
@@ -68,9 +61,6 @@ test("opening and closing the dock lays the pane out once", async ({
   expect(distinct(closing.map((w) => w.dock).filter((w) => w > 0))).toHaveLength(1);
 });
 
-/* A drag holds the pane at the width it had when the drag began: the
-   transcript slides under the moving dock and is re-wrapped once, where
-   the divider is let go. */
 test("dragging the divider lays the pane out once, on release", async ({
   page,
 }, testInfo) => {
@@ -106,9 +96,6 @@ test("dragging the divider lays the pane out once, on release", async ({
   expect(distinct(widths.map((w) => w.pane))).toHaveLength(2);
 });
 
-/* WebKit restyles everything inside a size container at each width it
-   takes, so a container over the transcript would restyle every row of a
-   long session at each step of a drag or a dock settling. */
 test("nothing over the transcript is a size container", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "webkit-desktop", "one engine");
   await gotoHarness(page, "mobile-performance");
@@ -124,7 +111,6 @@ test("nothing over the transcript is a size container", async ({ page }, testInf
   expect(containers).toEqual([]);
 });
 
-/* every frame's left edge of the dock's first tab, while `act` runs */
 async function tabEdgeDuring(page: Page, act: () => Promise<void>) {
   await page.evaluate(() => {
     const lefts: number[] = [];
@@ -145,11 +131,6 @@ async function tabEdgeDuring(page: Page, act: () => Promise<void>) {
   );
 }
 
-/* The dock's tabs ride the divider as the pane hides behind a full dock and
-   comes back: they only ever move the way the divider does. The inset the
-   tabs take once first in the bar, and the room after the session tab, grow
-   and shrink with the divider's last stretch rather than stepping at either
-   end, including for a dock that rests at its widest. */
 for (const rest of ["remembered", "widest"] as const) {
   test(`the dock's tabs follow the divider as the pane hides and returns (${rest})`, async ({
     page,

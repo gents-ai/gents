@@ -38,8 +38,6 @@ impl ScheduleSource {
         }
     }
 
-    /// Override the tick cadence. Primarily used by tests to tighten the loop
-    /// from the 1s default so `next_fire` resolves quickly.
     #[cfg(test)]
     pub(crate) fn with_tick_every(mut self, tick_every: Duration) -> Self {
         self.tick_every = tick_every;
@@ -50,13 +48,9 @@ impl ScheduleSource {
 impl TriggerSource for ScheduleSource {
     fn next_fire(&mut self) -> Pin<Box<dyn Future<Output = Option<FireIntent>> + Send + '_>> {
         Box::pin(async move {
-            // Loop until either (a) some schedule becomes due and we return
-            // `Some(intent)`, or (b) the cancellation token fires and we
-            // return `None`. The contract of this method: `None` means
-            // "source is permanently done, drop it" — an idle tick (no due
-            // schedule) must NOT exit. The engine's outer loop treats `None`
-            // as source exhaustion and breaks, so a premature `None` here
-            // used to kill the schedule driver after the first idle tick.
+            // `None` means "source permanently done, drop it"; an idle tick
+            // must not exit, or the engine's outer loop kills the schedule
+            // driver.
             loop {
                 tokio::select! {
                     _ = tokio::time::sleep(self.tick_every) => {}

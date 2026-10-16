@@ -1,13 +1,9 @@
-//! Grok-side session record for the pager's `/resume` picker.
-//!
-//! Stock Grok lists whatever the leader returns from `x.ai/session/list`, but
-//! it only sends `session/load` for a session that also has a local record at
-//! `<grok home>/sessions/<percent-encoded cwd>/<session id>/summary.json`.
-//! Grok's own leader writes that record; when Gents is the leader nothing
-//! does, so shim sessions are listed but silently unresumable. The shim writes
-//! the minimal record Grok needs at `session/new`. The record is Grok's file
-//! and Gents never reads it back; the durable session is the `AgentSession`
-//! document.
+//! Grok-side session record for the pager's `/resume` picker: stock Grok only
+//! sends `session/load` for a session that also has a local record under
+//! `<grok home>/sessions/<percent-encoded cwd>/<session id>/summary.json`, so
+//! the shim writes the minimal record at `session/new`. The record is Grok's
+//! file and Gents never reads it back; the durable session is the
+//! `AgentSession` document.
 
 use std::path::{Path, PathBuf};
 
@@ -24,8 +20,8 @@ pub(super) fn default_grok_home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".grok"))
 }
 
-/// Grok names the per-cwd session directory with the percent-encoded path:
-/// everything but unreserved characters (`A-Z a-z 0-9 - _ . ~`) is `%XX`.
+/// Grok names the per-cwd session directory with the percent-encoded path
+/// (RFC 3986 unreserved characters stay literal).
 pub(super) fn encode_cwd(cwd: &str) -> String {
     let mut out = String::with_capacity(cwd.len() * 3);
     for byte in cwd.bytes() {
@@ -38,8 +34,7 @@ pub(super) fn encode_cwd(cwd: &str) -> String {
     out
 }
 
-/// Session ids come from the pager, so only a plain id may become a path
-/// segment inside the operator's grok home.
+/// Only a plain id may become a path segment inside the operator's grok home.
 fn is_plain_segment(session_id: &str) -> bool {
     !session_id.is_empty()
         && session_id
@@ -47,8 +42,8 @@ fn is_plain_segment(session_id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
-/// Write the minimal record unless one already exists (Grok owns it after
-/// that). Returns the path written, or `None` when nothing was written.
+/// Returns the path written, or `None` when one already exists (Grok owns it
+/// after that).
 pub(super) fn write_record(
     grok_home: &Path,
     cwd: &str,
@@ -85,8 +80,7 @@ mod tests {
 
     #[test]
     fn encodes_the_cwd_the_way_grok_names_session_directories() {
-        // Observed on disk: ~/.grok/sessions/%2FUsers%2Fedjroz%2FRepos%2Fgents
-        // and %2FRepos%2FSource%2Fdefradb.rs, %2F...%2Fdefradb-rustffi.
+        // Observed on disk: ~/.grok/sessions/%2FUsers%2Fedjroz%2FRepos%2Fgents.
         assert_eq!(
             encode_cwd("/Users/edjroz/Repos/gents"),
             "%2FUsers%2Fedjroz%2FRepos%2Fgents"

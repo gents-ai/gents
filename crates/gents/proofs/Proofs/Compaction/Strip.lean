@@ -1,40 +1,15 @@
 import Proofs.Compaction.State
 import Proofs.PromptAssembly.State
 
-/-!
-# The real tool-result strip
-
-The previous model of this reducer (`stubMessageKind` in
-`Proofs/Compaction/Transition.lean`) was literally
-`| .toolResult callId key => .toolResult callId key`, so every preservation
-property in `Proofs/Compaction/Properties.lean` quantified over `id`. It proved
-that doing nothing preserves meaning — true, and useless (#993).
-
-Production's `strip_tool_results` replaces each tool result's payload with a
-pointer stub and touches nothing else: same rows, same order, same call ids.
-That last part is the whole reason `strip` commutes with `sanitizeGlobal`
-(`Proofs/Compaction/ProviderView.lean`), which is what licenses the production
-reordering of the compacted-prefix drop.
--/
-
 namespace Compaction
 
 open Transcript (MessageRow MessageKind ToolResultKey)
 
-/-- The canonical pointer payload a stripped tool result carries.
-
-Production writes `[tool: NAME(ARG), call_id: ID, N bytes — full output:
-sessions {"action":"output","call_id":ID}]`, naming the read that pages the
-call's full stored output; the model abstracts that to a single canonical
-payload hash. Collapsing distinct payloads is deliberate — `ViewCoherent` does
-not require `UniqueToolResultKeys`. -/
 def stubKey (key : ToolResultKey) : ToolResultKey := { key with payloadHash := 0 }
 
 @[simp] theorem stubKey_idempotent (key : ToolResultKey) :
     stubKey (stubKey key) = stubKey key := rfl
 
-/-- Strip rewrites the *payload* of a tool result and nothing else. It never
-changes a constructor and never changes a call id. -/
 def stripKind : MessageKind → MessageKind
   | .toolResult callId key => .toolResult callId (stubKey key)
   | k => k
@@ -81,10 +56,6 @@ theorem stripKind_idempotent (k : MessageKind) : stripKind (stripKind k) = strip
 theorem stripRow_idempotent (row : MessageRow) : stripRow (stripRow row) = stripRow row := by
   simp only [stripRow, stripRow_kind, stripKind_idempotent]
 
-/-- The honest replacement for the old `strip_tool_results_is_strictly_idempotent`,
-which was true only because the modelled strip was `id`. Production earns this
-by recovering a stub's recorded facts instead of re-measuring it — it always
-rewrites, so text that merely looks like a stub cannot bypass the reduction. -/
 theorem strip_idempotent (msgs : List MessageRow) : strip (strip msgs) = strip msgs := by
   induction msgs with
   | nil => rfl

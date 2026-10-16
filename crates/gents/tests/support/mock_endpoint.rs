@@ -1,17 +1,4 @@
 //! Robust shared mock OpenAI-compatible backend for full-daemon tests.
-//!
-//! Built on `axum` rather than a hand-rolled `TcpListener` accept loop so it
-//! cannot flake the way the previous nonblocking-poll servers did (a transient
-//! `accept()` error there killed the listener via `Err(_) => break`, causing
-//! "error sending request" failures under CI load). One robust implementation
-//! replaces the several near-identical hand-rolled copies that used to live in
-//! this support module and inline in individual test files.
-//!
-//! Serves the routes the startup probe and oneshot/inference paths touch:
-//! `GET /v1/models` (+ `/models`), `GET /v1/key` (+ `/key`), and
-//! `POST /v1/chat/completions` (+ `/chat/completions`) with a fixed
-//! non-streaming completion. An optional required bearer token gates every
-//! route (401 on mismatch), and every request is recorded for inspection.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -64,9 +51,7 @@ impl MockModelEndpoint {
             .fallback(handle_fallback)
             .with_state(state);
 
-        // Bind synchronously so the port is reserved before we return, then
-        // serve on the ambient tokio runtime (every consumer is a
-        // `#[tokio::test]`). `from_std` requires the listener be nonblocking.
+        // Bind synchronously so the port is reserved before we return.
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
         listener.set_nonblocking(true)?;
         let port = listener.local_addr()?.port();
@@ -184,9 +169,8 @@ async fn handle_chat(
     headers: HeaderMap,
     body: String,
 ) -> Response {
-    // The owned loop (#400) streams (`"stream":true`); other callers send a
-    // non-streaming request. Mirror the real OpenAI API: reply with an SSE chunk
-    // stream when streaming is requested, otherwise the JSON completion below.
+    // Mirror the real OpenAI API: reply with an SSE chunk stream when
+    // streaming is requested, otherwise the JSON completion below.
     let streaming = body.contains("\"stream\":true") || body.contains("\"stream\": true");
     record(&state, "POST", uri.path(), &headers, body);
     if !bearer_authorized(&state, &headers) {

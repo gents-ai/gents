@@ -35,8 +35,6 @@ const shellState = extract((state) => {
   };
 });
 
-// Navigation must not replace a loading document before the readiness
-// properties can observe whether that document settles within their bound.
 export const defaultActions = actions(() =>
   shellState.current.shellMounted ? browserActions.generate() : ["Wait"],
 );
@@ -176,9 +174,6 @@ const emptyPrimarySurfaceProblems = extract((state) => {
     .filter((surface) => surface.mounted && surface.textLength === 0);
 });
 
-// Startup and Bombadil's Reload action can be observed before React mounts the
-// shell and restores the route surface. Require both to settle promptly while
-// still rejecting a persistently blank shell or overlapping primary surfaces.
 export const desktop_shell_stays_mounted = always(
   eventually(() => shellState.current.shellMounted).within(5, "seconds"),
 );
@@ -218,21 +213,12 @@ export const desktop_shell_does_not_stack_dialogs = always(
   () => dialogProblems.current.length === 0,
 );
 
-// A mounted primary surface with no text and no declared loading state
-// ([role="status"] / [aria-busy="true"]) is blank — a rendering bug, caught
-// immediately.
 export const desktop_primary_surfaces_are_never_blank = always(
   () =>
     emptyPrimarySurfaceProblems.current.filter((surface) => !surface.declaresLoading)
       .length === 0,
 );
 
-// The transcript panel legitimately renders a text-free loading skeleton
-// between selecting a session and its snapshot arriving (issue #996), so a
-// continuous "never textually empty" assertion is wrong by design. What the
-// app does guarantee is settling: a loading surface must produce content
-// within the bound. A skeleton stuck past the bound (e.g. a dropped session
-// subscription) still fails.
 export const desktop_primary_surfaces_settle = always(
   eventually(() => emptyPrimarySurfaceProblems.current.length === 0).within(
     5,

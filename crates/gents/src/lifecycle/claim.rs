@@ -1,8 +1,6 @@
 use super::*;
 use anyhow::Context;
 
-/// Durable claim receipt. Scheduling a renewal and retaining local ownership
-/// are deliberately separate from the atomic request/session claim below.
 pub(crate) struct DurableClaimReceipt {
     request: AgentRequest,
     request_commit_cid: String,
@@ -222,8 +220,8 @@ impl RequestLifecycle {
     }
 
     /// The one durable claim entry: pre-claim gates and the atomic claim /
-    /// mailbox / session projection. The clock closures are invoked at the
-    /// original observation boundaries, after their preceding async reads.
+    /// mailbox / session projection. Clock closures are invoked after their
+    /// preceding async reads.
     pub(crate) async fn claim_pending_durable_with_inputs<T, F>(
         &mut self,
         ttl_now: T,
@@ -266,17 +264,16 @@ impl RequestLifecycle {
     }
 
     /// Commit the modeled claimed → processing boundary before allocating a
-    /// local stream buffer. Beginning creates no output document and does not
-    /// renew the lease. A committed begin is the durable replay fact. Every
-    /// provider-capable path, including title dispatch and pre-inference
-    /// compaction, must cross this fence before starting: terminalization uses
-    /// an owned Claimed state as positive evidence of no provider work.
+    /// local stream buffer. Every provider-capable path, including title
+    /// dispatch and pre-inference compaction, must cross this fence before
+    /// starting: terminalization uses an owned Claimed state as positive
+    /// evidence of no provider work.
     pub async fn begin_owned_execution(
         &mut self,
         stream_writer: &crate::streaming::DefraStreamWriter,
     ) -> Result<()> {
-        // Repeating an acknowledged begin is a read-only ownership check.
-        // In particular it must not reset buffered output on the live writer.
+        // Repeating an acknowledged begin is a read-only ownership check; it
+        // must not reset buffered output on the live writer.
         if self.state == LocalLifecycleState::Streaming {
             return self.validate_owned_execution().await;
         }
@@ -297,9 +294,8 @@ impl RequestLifecycle {
         Ok(())
     }
 
-    /// The single durable claimed-to-processing transaction. The live owner
-    /// adds its process-local stream buffer after this commit; the native
-    /// adapter exercises the same CAS with modeled time.
+    /// The single durable claimed-to-processing transaction; the live owner
+    /// adds its process-local stream buffer after this commit.
     pub(crate) async fn begin_owned_execution_durable_with_clock<F>(
         node: &Arc<EmbeddedNode>,
         request_doc_id: &str,
@@ -341,7 +337,7 @@ impl RequestLifecycle {
                     };
                     let now = now().timestamp_millis();
                     // A lost acknowledgement must not reapply the transition
-                    // or reset its lease. It may acknowledge the exact live
+                    // or reset its lease; it may acknowledge the exact live
                     // generation's already committed processing state.
                     if state == RequestLifecycleState::Processing {
                         anyhow::ensure!(super::execution_policy::authorize_producer_decision(
@@ -661,8 +657,7 @@ impl RequestLifecycle {
     }
 
     /// Persist the exact pending-to-claimed transaction without arming the
-    /// process-local renewal scheduler. The native conformance adapter supplies
-    /// model time/generation here; production supplies wall time and a fresh UUID.
+    /// process-local renewal scheduler.
     async fn persist_pending_claim_at(
         &self,
         now: chrono::DateTime<chrono::Utc>,
@@ -704,7 +699,7 @@ impl RequestLifecycle {
         let request_fields = crate::watcher::AGENT_REQUEST_FIELDS;
 
         // The generation is written on every successful claim and never cleared
-        // when the same physical request resumes. It distinguishes an unclaimed
+        // when the same physical request resumes; it distinguishes an unclaimed
         // request from a previously pinned unlimited (null) budget.
         let prior_generation = gents_protocol::graphql::graphql_input_literal(
             &serde_json::to_value(&self.request.execution_generation)?,
@@ -779,9 +774,9 @@ impl RequestLifecycle {
         let background_completion_input_through_sequence = snapshot.through_sequence;
 
         // The mutation response is the only response that can carry the exact
-        // commit produced by this claim. Do not fall back to a post-update
-        // query: another branchable write may win that read and falsely bind
-        // this lifecycle to a commit it did not author.
+        // commit produced by this claim; a post-update query could read another
+        // branchable write and falsely bind this lifecycle to a commit it did
+        // not author.
         let claimed_request =
             crate::watcher::agent_request_from_mutation_response(&resp, "update_AgentRequest")?
                 .ok_or_else(|| {
@@ -1461,7 +1456,6 @@ mod tests {
     #[tokio::test]
     async fn concurrent_serial_claims_follow_durable_arrival_order() {
         let node = test_node().await;
-        // The later request sorts first by both logical ID and wall time.
         let first = insert_pending_request(
             &node,
             "z-first",
@@ -1676,8 +1670,6 @@ mod tests {
             "scheduled",
         )
         .await;
-        // The claim owner observes already-published canonical history; this
-        // fixture tests snapshot isolation, not notification authorization.
         session::import_history_observation(
             &node,
             "prior-request-doc",
@@ -1794,8 +1786,6 @@ mod tests {
                 "interactive",
             )
             .await;
-            // Even an old envelope carrying a value cannot select first-claim
-            // allowance: only the invoking runtime configuration may do that.
             request.max_total_tokens = Some(999);
             let mut first = RequestLifecycle::new_with_execution_binding(
                 node.clone(),

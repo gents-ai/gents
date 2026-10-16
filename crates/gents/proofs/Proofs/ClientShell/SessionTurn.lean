@@ -1,25 +1,5 @@
 import Proofs.ClientShell.Types
 
-/-!
-# The turn a session is on
-
-A client holds a session's request rows and must name the request whose turn
-the session is on, starting from its newest request. A claim selects queued
-messages (`SessionQueue.claimFolding`) and each is superseded by the claiming
-request only in the transaction that publishes it as that request's folded
-entry, so a folded row is answered by that request and is never a turn. A
-selected message not yet published is still an unclaimed row queued behind
-the running request, and returns to the queue if that request ends first.
-An unclaimed request queued behind another waits until the request it was
-queued after — resolved through folds and retries — is terminal. A retry
-replaces a terminal attempt with its successor. Every step stays within the
-starting row's requester scope; physical identity (`doc`) names fold owners,
-logical identity (`request`) names queue predecessors and retry parents.
-
-`SessionObservation.latestObservedRequest`, `queuedRequests` and
-`foldedRequests` are computed here from rows rather than assumed.
--/
-
 namespace ClientShell.SessionTurn
 
 inductive RowState where
@@ -47,7 +27,6 @@ def findRequest (rows : List Row) (requester : Nat) (request : RequestId) : Opti
 def retrySuccessor (rows : List Row) (row : Row) : Option Row :=
   rows.find? (fun r => r.retryParent == some row.request && r.requester == row.requester)
 
-/-- `fuel` bounds the walk; `rows.length + 1` covers every acyclic chain. -/
 def resolve (rows : List Row) : Nat → Row → Row
   | 0, row => row
   | fuel + 1, row =>
@@ -73,7 +52,6 @@ def resolve (rows : List Row) : Nat → Row → Row
 def turnOf (rows : List Row) (newest : Row) : Row :=
   resolve rows (rows.length + 1) newest
 
-/-- Unclaimed rows waiting behind `turn`, in arrival (list) order. -/
 def queuedBehind (rows : List Row) (turn : Row) : List Row :=
   rows.filter (fun r =>
     r.state == .unclaimed && r.doc != turn.doc && (turnOf rows r).doc == turn.doc)
@@ -104,8 +82,6 @@ theorem resolve_follows_fold_owner (rows : List Row) (fuel : Nat) (row owner : R
     resolve rows (fuel + 1) row = resolve rows fuel owner := by
   simp [resolve, hfold, hown]
 
-/-- A message queued behind a row that was folded waits behind the turn that
-row was folded into while that turn runs. -/
 theorem queued_waits_behind_resolved_predecessor (rows : List Row) (fuel : Nat)
     (row ahead : Row) (request : RequestId)
     (hunfolded : row.foldedInto = none) (hunclaimed : row.state = .unclaimed)
@@ -120,7 +96,6 @@ theorem find_preserves_requester {rows : List Row} {requester : Nat} {p : Row �
     (hfind : rows.find? p = some r) : r.requester = requester :=
   hp r (List.find?_some hfind)
 
-/-- Resolution never leaves the starting row's requester scope. -/
 theorem resolve_stays_in_requester_scope (rows : List Row) :
     ∀ (fuel : Nat) (row : Row), (resolve rows fuel row).requester = row.requester := by
   intro fuel

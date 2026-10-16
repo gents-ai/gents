@@ -34,10 +34,6 @@ impl CallToolTool {
     }
 }
 
-/// Return the concrete MCP dispatch identity carried by a `call_tool`
-/// invocation. `call_tool` has no alias-resolution step: these are the exact
-/// registry and native-tool keys used by execution after typed argument
-/// parsing succeeds.
 pub(crate) fn selected_tool_identity(tool_name: &str, args: &str) -> Option<(String, String)> {
     if tool_name != CALL_TOOL_NAME {
         return None;
@@ -614,11 +610,8 @@ mod tests {
         );
     }
 
-    /// Synthesize an oversized MCP text result and confirm that `call_tool`
-    /// caps the returned string and appends an honest truncation marker.
     #[test]
     fn oversized_mcp_result_is_capped_and_truncation_is_signalled() {
-        // Build a string larger than CALL_TOOL_MAX_BYTES (50 KiB).
         let big_line = "x".repeat(200);
         let lines: Vec<String> = (0..500).map(|_| big_line.clone()).collect();
         let big_text = lines.join("\n"); // ~100 KiB, well over the 50 KiB cap
@@ -637,13 +630,11 @@ mod tests {
             capped.len(),
             big_text.len()
         );
-        // Slack: capped output should be within 2× the byte cap (marker overhead)
         assert!(
             capped.len() < CALL_TOOL_MAX_BYTES * 2,
             "capped output should be near the cap, got {}",
             capped.len()
         );
-        // Honest marker must be present so the model knows it was truncated.
         assert!(
             capped.contains("[Showing lines"),
             "honest truncation marker must be present: {capped}"
@@ -654,7 +645,6 @@ mod tests {
         );
     }
 
-    /// Small result under the cap must pass through verbatim (no marker added).
     #[test]
     fn small_mcp_result_passes_through_unchanged() {
         let small_text = "hello from MCP tool";

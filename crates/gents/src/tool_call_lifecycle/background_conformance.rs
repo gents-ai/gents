@@ -54,8 +54,8 @@ async fn generated_background_lifecycle_cases_use_canonical_admission_owner() {
         let request_doc_id = admission.tool.request_doc_id().unwrap().to_owned();
         match case.action.as_str() {
             "background" => admission.tool.background().await.unwrap(),
-            // A started session is background-only: its result arrives as a
-            // message, so no caller can wait on it in the foreground.
+            // A started session is background-only: no caller can wait on it
+            // in the foreground.
             "foreground" => assert_eq!(
                 admission.tool.foreground().await.is_ok(),
                 case.legal,
@@ -81,7 +81,6 @@ async fn generated_background_lifecycle_cases_use_canonical_admission_owner() {
         let lifecycle_state = if case.legal {
             case.terminal_state.as_str()
         } else {
-            // A refused transition leaves the running row untouched.
             "running"
         };
         assert_eq!(actual["lifecycle_state"], lifecycle_state, "{}", case.name);

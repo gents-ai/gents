@@ -62,8 +62,6 @@ export function StreamText({ text }: { text: string }) {
 
   const shown = !enabled || visible >= text.length ? text : text.slice(0, visible);
   const display = shown.length < text.length ? closeOpenFence(shown) : shown;
-  /* a frame that did not reach the next word boundary changes nothing */
-  /* returned bare, for the reason in ReplyText: a wrapper here
-     takes the spacing off every block inside it */
+  // returned bare: a wrapper here takes the spacing off every block inside it
   return useMemo(() => (display ? <Markdown>{display}</Markdown> : null), [display]);
 }

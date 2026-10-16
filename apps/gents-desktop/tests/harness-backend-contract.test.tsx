@@ -1,8 +1,6 @@
-/* The UI harness stands in for the bridge in browser tests and Bombadil. A
-   backend it projects must have the bridge's shape: InferenceBackendView.tags
-   is a Vec<String> on the bridge, so it is always a list. Bombadil found the
-   harness adding a backend with no tags, and the backend editor's Tags row
-   then crashed on the Providers page. */
+/* The UI harness must project backends with the bridge's shape:
+   InferenceBackendView.tags is a Vec<String> on the bridge, so it is always
+   a list, even when unset. */
 import { screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { renderIn, testApp } from "./app-fixture";
@@ -71,7 +69,7 @@ describe("harness backends keep the bridge's contract", () => {
   it("shows an Anthropic key backend as an API-key backend", async () => {
     const harness = createDesktopUiHarness();
     const api = harness.adapter;
-    /* applied, not saved: the harness save path reports any env var as a
+    /* the apply path, not save: the harness save path reports any env var as a
        stored key, while its apply path matches the bridge */
     await api.applyConfigComponents({
       document: {

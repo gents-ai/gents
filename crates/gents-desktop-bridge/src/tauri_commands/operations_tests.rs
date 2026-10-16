@@ -6,9 +6,6 @@ use super::operations::{
 
 #[allow(dead_code)]
 fn _assert_command_signatures() {
-    // These let bindings only check the function items exist and are
-    // visible. The Tauri `#[tauri::command]` macro wraps the real function
-    // in a synthetic one we don't reference here.
     let _ = desktop_operations_snapshot;
     let _ = desktop_session_provenance;
     let _ = desktop_interrupt_request;

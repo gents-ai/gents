@@ -15,7 +15,6 @@ pub async fn load_inference_backend_in_txn(
         .transpose()
 }
 
-/// Every backend of `node_did` in this transaction's snapshot.
 pub async fn list_inference_backends_in_txn(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
@@ -35,8 +34,6 @@ pub async fn list_inference_backends_in_txn(
         .collect()
 }
 
-/// Replace one backend inside a caller's transaction; the whole principal's
-/// configuration is validated before the caller commits.
 pub(crate) async fn write_inference_backend_in_txn(
     txn: &ConfigApplyTxn<'_>,
     backend: &InferenceBackend,
@@ -52,8 +49,6 @@ pub(crate) async fn write_inference_backend_in_txn(
     Ok(())
 }
 
-/// Full canonical replacement through the shared retained-candidate owner.
-/// Runtime catalogs and health never enter the authored configuration.
 pub async fn write_inference_backend_document(
     access: &ConfigAccess,
     backend: &InferenceBackend,
@@ -77,7 +72,6 @@ pub async fn write_inference_backend_document(
         .await
 }
 
-/// Each backend of `node_did` with the account it runs on.
 pub async fn serving_accounts(
     access: &ConfigAccess,
     node_did: &str,

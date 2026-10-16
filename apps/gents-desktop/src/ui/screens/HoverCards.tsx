@@ -1,9 +1,3 @@
-/* Delayed cards on avatars: what a reader most wants to know without
-   opening anything. The node: online, what it may touch, how much it
-   has, its DID. An agent: what it is for, whether it is enabled, what it
-   runs on, its access, whether its instructions are shared, and a way to
-   its settings. Shown where an avatar stands in for an agent, not where
-   the agent is already on screen. */
 import { useState, type ReactElement } from "react";
 import { ArrowUpRight } from "lucide-react";
 import type { NodeView } from "../../hooks/fleetStore";
@@ -32,9 +26,6 @@ function Line({ label, children }: { label: string; children: React.ReactNode })
 const shortDid = (did: string) =>
   did.length > 22 ? `${did.slice(0, 12)}…${did.slice(-4)}` : did;
 
-/* What a node may touch. The tool root and ceiling this machine was set up
-   with are its own node's; any other node says it through its default
-   agent's environment. */
 function NodeReach({ deployment }: { deployment: NodeView }) {
   const homeDid = useHomeDid();
   const own = useToolAuthority();
@@ -61,8 +52,7 @@ export function NodeHoverCard({
   children,
 }: {
   deployment: NodeView;
-  /** where the card opens; the default suits the rail and lists, a
-      neighbor that must stay hoverable wants 'bottom' */
+  /** where the card opens; a neighbor that must stay hoverable wants 'bottom' */
   side?: "right" | "bottom" | "top" | "left";
   children: ReactElement;
 }) {

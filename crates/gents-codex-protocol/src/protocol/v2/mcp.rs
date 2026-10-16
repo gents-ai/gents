@@ -17,12 +17,8 @@ wire_enum!(
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ListMcpServerStatusParams {
-    /// Opaque pagination cursor returned by a previous call.
     pub cursor: Option<String>,
-    /// Optional page size; defaults to a server-defined value.
     pub limit: Option<u32>,
-    /// Controls how much MCP inventory data to fetch for each server.
-    /// Defaults to `Full` when omitted.
     pub detail: Option<McpServerStatusDetail>,
 }
 
@@ -47,8 +43,6 @@ pub struct McpServerStatus {
 #[serde(rename_all = "camelCase")]
 pub struct ListMcpServerStatusResponse {
     pub data: Vec<McpServerStatus>,
-    /// Opaque cursor to pass to the next call to continue after the last item.
-    /// If None, there are no more items to return.
     pub next_cursor: Option<String>,
 }
 
@@ -93,8 +87,6 @@ pub struct McpServerToolCallResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct McpToolCallResult {
-    // Keep the arbitrary MCP payload at the JSON boundary so this wire-only crate does not couple
-    // its public API or dependency graph to the MCP runtime's Rust model types.
     pub content: Vec<JsonValue>,
     pub structured_content: Option<JsonValue>,
     #[serde(rename = "_meta")]
@@ -177,25 +169,13 @@ pub enum McpServerElicitationAction {
 #[serde(rename_all = "camelCase")]
 pub struct McpServerElicitationRequestParams {
     pub thread_id: String,
-    /// Active Codex turn when this elicitation was observed, if app-server could correlate one.
-    ///
-    /// This is nullable because MCP models elicitation as a standalone server-to-client request
-    /// identified by the MCP server request id. It may be triggered during a turn, but turn
-    /// context is app-server correlation rather than part of the protocol identity of the
-    /// elicitation itself.
     pub turn_id: Option<String>,
     pub server_name: String,
     #[serde(flatten)]
     pub request: McpServerElicitationRequest,
-    // TODO: When core can correlate an elicitation with an MCP tool call, expose the associated
-    // McpToolCall item id here as an optional field. The current core event does not carry that
-    // association.
 }
 
 /// Typed form schema for MCP `elicitation/create` requests.
-///
-/// This matches the `requestedSchema` shape from the MCP 2025-11-25
-/// `ElicitRequestFormParams` schema.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpElicitationSchema {
@@ -459,11 +439,7 @@ pub enum McpServerElicitationRequest {
 #[serde(rename_all = "camelCase")]
 pub struct McpServerElicitationRequestResponse {
     pub action: McpServerElicitationAction,
-    /// Structured user input for accepted elicitations, mirroring RMCP `CreateElicitationResult`.
-    ///
-    /// This is nullable because decline/cancel responses have no content.
     pub content: Option<JsonValue>,
-    /// Optional client metadata for form-mode action handling.
     #[serde(rename = "_meta")]
     pub meta: Option<JsonValue>,
 }

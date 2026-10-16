@@ -1,13 +1,6 @@
 //! LIVE qualification for sampling-seed propagation through the complete
 //! request path and a real OpenAI-compatible provider.
 //!
-//! The deterministic tests retain the schema, hydration, precedence, and exact
-//! body-shape contracts. This test establishes the provider-facing behavior
-//! they cannot: the configured live provider accepts the request produced by
-//! Gents, the request completes, and the pre-send durable capture contains the
-//! effective profile seed for ordinary inference and a model-backed compaction
-//! continuation.
-//!
 //! ```bash
 //! GENTS_EVAL_TARGET=workstation-1 cargo test -p gents --features live-e2e --test e2e_live \
 //!   live_seeds_reach_the_provider \
@@ -52,8 +45,6 @@ async fn live_seeds_reach_the_provider() {
     let profile_id = default_inference_profile_id_for_agent(&agent_id);
     configure_seed_and_compaction(&db.node, &node_did, &agent_id, &profile_id).await;
 
-    // Create requests before boot so every provider call resolves the same
-    // profile-owned sampling document before the daemon can claim them.
     let profile_request_id = "req-live-profile-seed";
     create_runtime_request(
         &db.node,
@@ -244,8 +235,6 @@ async fn configure_seed_and_compaction(
     .expect("configure live seed and compaction");
 }
 
-/// History is scoped to the signed LocalSelf request's agent and requester;
-/// rows under any other scope are invisible to its transcript.
 async fn seed_compaction_history(node: &EmbeddedNode, node_did: &str, session_id: &str) {
     let timestamp = chrono::Utc::now().to_rfc3339();
     for turn in 0..10 {

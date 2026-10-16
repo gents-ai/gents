@@ -1,4 +1,3 @@
-# Frozen source input and origin survive planner retries; journals own recovery.
 type CallbackInvocation @branchable
     @index(fields: ["owner_node_did", "invocation_id"], unique: true)
     @index(fields: ["owner_node_did", "idempotency_key"], unique: true) {

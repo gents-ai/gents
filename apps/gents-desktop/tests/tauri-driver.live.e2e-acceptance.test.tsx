@@ -13,20 +13,9 @@ import {
 } from "./tauri-driver-live/helpers";
 import { isTerminalTurnState } from "./live-bridge-runner/observations";
 
-/* Native e2e acceptance against the live fixture runtime — NOT the managed
-   backend product path. The real App is rendered against bridge_runner with
-   the live fixture (isolated desktop/remote/node homes under a tempdir); the
-   configured live inference endpoint/model is asserted through the canonical
-   generated DeploymentView types; a scripted acceptance prompt forces one
-   harmless file write + read-back through the live tool surface; a real
-   nonterminal streaming observation is required; and the session is reloaded
-   afterwards to prove the assistant final text and tool calls are durable.
-   The fixture ships only the generic "Live Repo Audit Default" agent; The
-   Engineer agent is NOT exercised here. Real
-   DMG install, first-run setup/start/config, and manual acceptance remain
-   separate requirements.
-   Requires GENTS_TAURI_LIVE=1 (set by tests/run-live-test.mjs) and real
-   inference. Run with:
+/* Native e2e acceptance against the live fixture runtime, not the managed
+   backend product path. Requires GENTS_TAURI_LIVE=1 (set by
+   tests/run-live-test.mjs) and real inference. Run with:
      npm run test:live:e2e-acceptance -- \
        --inference-url http://workstation-1:8000/v1 \
        --model-name GLM-5.3-Flash-NVFP4 */
@@ -41,19 +30,12 @@ describeLive("Tauri app native e2e acceptance (live fixture runtime)", () => {
   it("writes and reads back a sentinel file through the fixture tool surface, observes real streaming, and survives a session reload", async () => {
     const sentinel = `e2e-acceptance-${Date.now()}`;
     await withLiveDesktop(async ({ runner, driver, deployment }) => {
-      // (1) Isolated homes: the fixture runs the desktop client, the remote
-      // node, and the agent home under its own tempdir, never the daily
-      // user home. The runner tool root is inside that tempdir.
       expect(deployment.nodeDid).toContain("did:key");
       expect(runner.toolRoot).not.toContain(process.env.HOME ?? "/Users/");
       logTurn(
         `isolated deployment=${runner.deploymentLabel} nodeDid=${runner.nodeDid} toolRoot=${runner.toolRoot}`,
       );
 
-      // (2) Fixture runtime configuration, asserted through the canonical
-      // generated DeploymentView types (no guessed fields). bridge_runner
-      // here is the test fixture runtime, not the managed backend; the
-      // real setup/start/config acceptance is separate.
       const expectedInferenceUrl =
         process.env.GENTS_TAURI_LIVE_INFERENCE_URL ??
         process.env.GENTS_DESKTOP_LIVE_BACKEND_ENDPOINT ??
@@ -81,9 +63,6 @@ describeLive("Tauri app native e2e acceptance (live fixture runtime)", () => {
           deployment.agents,
         )}`,
       ).toBeDefined();
-      // The fixture ships a generic repository-audit agent, not The
-      // Engineer; Engineer agent acceptance is out of scope for this
-      // fixture and stays uncovered.
       expect(defaultAgent?.displayName).toBe(FIXTURE_DEFAULT_AGENT_DISPLAY_NAME);
       const profile = deployment.inferenceProfiles.find(
         (candidate) => candidate.profile_id === defaultAgent?.inferenceProfileId,
@@ -102,8 +81,6 @@ describeLive("Tauri app native e2e acceptance (live fixture runtime)", () => {
       await driver.ready();
       await driver.openChat();
 
-      // (3) Scripted acceptance prompt that forces a real, harmless file
-      // operation through the live tool surface.
       await driver.typeComposer(e2eAcceptancePrompt(sentinel));
       await driver.pressEnter();
       await waitFor(() => {
@@ -114,11 +91,6 @@ describeLive("Tauri app native e2e acceptance (live fixture runtime)", () => {
         `turn submitted sessionId=${submitted.sessionId} requestId=${submitted.requestId}`,
       );
 
-      // (4) Real nonterminal streaming observation: poll the same adapter
-      // path the UI uses and require the canonical liveAssistant item to carry
-      // actual streamed model output while the turn is still non-terminal.
-      // Reaching a terminal state with no streamed overlay observation is
-      // an explicit failure, not a silent pass.
       let streamingObservation: {
         contentChars: number;
         reasoningChars: number;
@@ -176,8 +148,6 @@ describeLive("Tauri app native e2e acceptance (live fixture runtime)", () => {
       expect(session.sessionId).toBe(submitted.sessionId);
       expect(session.latestRequestId).toBe(submitted.requestId);
 
-      // (5) Tool output surfaced in the session timeline: one bash command
-      // call that succeeded, plus the read-back of the written file.
       const toolCalls = session.timelineItems.flatMap((item) =>
         item.kind === "toolGroup" ? item.tools : [],
       );
@@ -209,24 +179,17 @@ describeLive("Tauri app native e2e acceptance (live fixture runtime)", () => {
           toolCalls.map((tool) => tool.toolName),
         )}`,
       ).toBeDefined();
-      // Assert the canonical presentation kind BEFORE checking the body so
-      // a projection change fails loudly instead of silently skipping the
-      // body assertion.
       expect(
         readBack?.presentation.kind,
         `read-back did not project a fileRead presentation: ${JSON.stringify(readBack)}`,
       ).toBe("fileRead");
       if (readBack?.presentation.kind === "fileRead") {
-        // Canonical read_file rendering of a one-line file after envelope
-        // stripping and trim_end: "content:\nL1: <line>".
         expect(
           readBack.presentation.body,
           `read-back body must be the canonical read_file rendering of the single sentinel line: ${JSON.stringify(readBack.presentation)}`,
         ).toBe(`content:\nL1: ${sentinel}`);
       }
 
-      // The file must exist on disk under the isolated tool root with
-      // exactly the sentinel line — the tool operation really happened.
       const notePath = join(runner.toolRoot, E2E_NOTE_RELATIVE);
       expect(existsSync(notePath), `missing written file ${notePath}`).toBe(true);
       const noteContents = readFileSync(notePath, "utf8");
@@ -235,9 +198,6 @@ describeLive("Tauri app native e2e acceptance (live fixture runtime)", () => {
         `written file must contain exactly the sentinel line: ${JSON.stringify(noteContents)}`,
       ).toBe(`${sentinel}\n`);
 
-      // (6) The actual assistant final text (not only tool calls) must
-      // carry the sentinel, and the turn must be terminal with nothing
-      // pending and no leftover liveAssistant item.
       const assistantTexts = session.timelineItems.flatMap((item) =>
         item.kind === "assistantMessage" ? [item.content ?? ""] : [],
       );
@@ -250,10 +210,6 @@ describeLive("Tauri app native e2e acceptance (live fixture runtime)", () => {
         false,
       );
 
-      // (7) Session reload: re-fetch the session through the same adapter
-      // path the UI uses on reload and re-drive the UI into the session.
-      // The reloaded snapshot must keep the actual assistant final text and
-      // the tool calls, with no liveAssistant item after the terminal turn.
       const reloaded = await runner.adapter.fetchSessionSnapshot(
         submitted.sessionId,
         runner.nodeDid,

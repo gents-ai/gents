@@ -1,6 +1,3 @@
-//! Inference targets, backend binding, runtime boot and durable observation
-//! for live tests and evals.
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,13 +22,8 @@ use serde::Deserialize;
 use crate::support::interrupt::BootedAgent;
 use crate::support::{first_optional_row, TestDb};
 
-/// Names the inference targets for live tests and evals: a comma-separated
-/// list of target names (files under `scripts/evals/targets/`) or paths to
-/// target files. Relative paths resolve against the workspace root.
 pub const EVAL_TARGET_VARIABLE: &str = "GENTS_EVAL_TARGET";
 
-/// Owner bound while validating a target; binding replaces it with the
-/// node under test. Target files must not author `node_did`.
 const TARGET_VALIDATION_OWNER: &str = "did:key:inference-target-validation";
 
 fn workspace_root() -> PathBuf {
@@ -44,10 +36,9 @@ pub fn targets_dir() -> PathBuf {
 
 /// One inference target: a canonical configuration bundle (the
 /// `pack_config.json` shape) that authors exactly one `InferenceBackend` and
-/// one `InferenceProfile` selecting its model. Decoding and validation use the
-/// runtime's own configuration owners, so a target is exactly what an operator
-/// could apply. Credentials are selected through `BackendAuth` (for example an
-/// environment variable name), never stored in the file.
+/// one `InferenceProfile` selecting its model. Credentials are selected
+/// through `BackendAuth` (for example an environment variable name), never
+/// stored in the file.
 #[derive(Clone, Debug)]
 pub struct InferenceTarget {
     pub name: String,
@@ -56,7 +47,6 @@ pub struct InferenceTarget {
 }
 
 impl InferenceTarget {
-    /// Resolve a target name or path.
     pub fn load(selector: &str) -> Result<Self> {
         let (name, path) = resolve_selector(selector)?;
         Self::load_path(name, &path)
@@ -130,7 +120,7 @@ impl InferenceTarget {
         })
     }
 
-    /// Every target named by `GENTS_EVAL_TARGET`, in order. Each target's
+    /// Every target named by `GENTS_EVAL_TARGET`, in order; each target's
     /// environment credential must be present before any trial starts.
     pub fn selected_all() -> Result<Vec<Self>> {
         let value = std::env::var(EVAL_TARGET_VARIABLE).map_err(|_| {
@@ -160,7 +150,6 @@ impl InferenceTarget {
         Ok(())
     }
 
-    /// The single target a live test runs against.
     pub fn selected() -> Result<Self> {
         let mut targets = Self::selected_all()?;
         anyhow::ensure!(
@@ -191,7 +180,6 @@ impl InferenceTarget {
         &self.backend.auth
     }
 
-    /// The target backend owned by `node_did`.
     pub fn backend(&self, node_did: &str) -> InferenceBackend {
         InferenceBackend {
             node_did: node_did.to_owned(),
@@ -199,8 +187,8 @@ impl InferenceTarget {
         }
     }
 
-    /// The target's model selection owned by `node_did`. Callers that install
-    /// several profiles replace `profile_id` and their own eval settings.
+    /// Callers that install several profiles replace `profile_id` and their
+    /// own eval settings.
     pub fn profile(&self, node_did: &str) -> InferenceProfile {
         InferenceProfile {
             node_did: node_did.to_owned(),
@@ -236,8 +224,6 @@ impl InferenceTarget {
     }
 }
 
-/// Resolve one selector to its target name and file. Names are files under
-/// `scripts/evals/targets/`; relative paths resolve against the workspace root.
 fn resolve_selector(selector: &str) -> Result<(String, PathBuf)> {
     let selector = selector.trim();
     anyhow::ensure!(!selector.is_empty(), "inference target selector is blank");
@@ -260,8 +246,8 @@ fn resolve_selector(selector: &str) -> Result<(String, PathBuf)> {
     Ok((name, path))
 }
 
-/// Parse a comma-separated selection. A repeated file is selected once; two
-/// different files with one name would make report rows ambiguous.
+/// A repeated file is selected once; two different files with one name would
+/// make report rows ambiguous.
 pub fn parse_selection(value: &str) -> Result<Vec<(String, PathBuf)>> {
     let mut selected: Vec<(String, PathBuf)> = Vec::new();
     for selector in value
@@ -286,7 +272,6 @@ pub fn parse_selection(value: &str) -> Result<Vec<(String, PathBuf)>> {
     Ok(selected)
 }
 
-/// The one target selected for a live test; panics with the selection rule.
 pub fn live_target() -> InferenceTarget {
     InferenceTarget::selected().unwrap_or_else(|error| panic!("{error:#}"))
 }
@@ -442,8 +427,6 @@ pub async fn wait_for_request_terminal(
         }
         if tokio::time::Instant::now() >= deadline {
             let escaped = escape_graphql_string(request_id);
-            // Bounded lifecycle evidence only: never dump provider payloads,
-            // prompts, tool arguments, or credentials into failure logs.
             let evidence = node
                 .execute(&format!(
                     r#"{{
@@ -467,9 +450,9 @@ pub async fn wait_for_request_terminal(
 }
 
 /// Resolve the one assistant message selected by a terminal request's physical
-/// canonical output reference.  This deliberately has no latest-message or
-/// legacy response-content fallback: callers polling a still-running request
-/// observe an empty value, while a malformed terminal projection fails loudly.
+/// canonical output reference, with no latest-message fallback: callers polling
+/// a still-running request observe an empty value, while a malformed terminal
+/// projection fails loudly.
 pub async fn terminal_assistant_answer(node: &EmbeddedNode, request_id: &str) -> String {
     let escaped = escape_graphql_string(request_id);
     let query = format!(

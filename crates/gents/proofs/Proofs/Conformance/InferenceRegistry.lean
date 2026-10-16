@@ -5,7 +5,6 @@ namespace Conformance.InferenceRegistry
 open InferenceCall.Registry
 open Conformance.Contracts
 
-/-- Metadata labels are intentionally projected out of resource identity. -/
 structure Desired where
   config : Config
   name : String
@@ -14,13 +13,10 @@ structure Desired where
 
 inductive Action where
   | reconcile (desired : Option Desired)
-  /-- A caller whose provider client was built for connection `slot`. -/
   | acquire (slot : Nat)
-  /-- The oldest admitted call releases its permit. -/
   | release
   deriving DecidableEq, Repr
 
-/-- `attributed` is order-free: Rust observes admissions as calls finish. -/
 structure Observation where
   admittingGeneration : Option Nat
   capacity : Nat
@@ -56,7 +52,6 @@ structure Case where
   actions : List Action
   deriving DecidableEq, Repr
 
-/-- Traces only: every expected observation is derived by `replay`. -/
 def cases : List Case := [
   ⟨"metadata_name_catalog_stutter",
     [up 7 1 2 0, .acquire 7, up 7 2 2 0 (name := "renamed"), .acquire 7, .acquire 7, .release]⟩,
@@ -87,8 +82,6 @@ def cases : List Case := [
      .acquire 8]⟩
   ]
 
-/-- Coverage the generated traces must keep: queueing, an admission from a
-replaced connection, and closed admission are exercised. -/
 theorem cases_cover_queueing_snapshots_and_closure :
     (cases.map fun c => (replay initial c.actions).any (fun o => 0 < o.queued)).any id = true ∧
       (cases.any fun c => c.actions.any (· == up 8 2 1 2) &&

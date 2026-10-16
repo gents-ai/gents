@@ -11,15 +11,11 @@ static NEXT_TEST_PORT: OnceLock<Mutex<u16>> = OnceLock::new();
 static PORT_RESERVATIONS: OnceLock<Mutex<Vec<(u16, File)>>> = OnceLock::new();
 
 pub fn allocate_port() -> Result<u16> {
-    // Binding port 0 chooses from the OS ephemeral range. Once that probe is
-    // dropped, any outbound test connection may claim the same port before the
-    // server child binds it. Allocate monotonically from a fixed range
-    // instead. That range is not free of ephemeral collisions -- it overlaps
-    // Linux's default 32768-60999 -- so this only narrows the window, it does
-    // not close it. Keep an advisory reservation until this test process exits
-    // so other test binaries/worktrees cannot allocate the same currently
-    // unbound port during child startup.
-    // Do not unlink reservation files: replacing an inode defeats its lock.
+    // Allocate monotonically from a fixed range instead of probing port 0:
+    // dropping the probe lets an outbound test connection claim the port
+    // before the server child binds it. The range still overlaps Linux's
+    // ephemeral range, so this only narrows the collision window. Reservation
+    // files must not be unlinked: replacing an inode defeats their lock.
     let reservations = std::env::temp_dir().join("gents-cli-test-port-reservations");
     std::fs::create_dir_all(&reservations).context("creating test port reservation directory")?;
     let next_port = NEXT_TEST_PORT.get_or_init(|| Mutex::new(FIRST_TEST_PORT));
@@ -62,14 +58,9 @@ pub fn allocate_port() -> Result<u16> {
     bail!("no free test port in {FIRST_TEST_PORT}..={LAST_TEST_PORT}")
 }
 
-/// True while this process still holds `allocate_port`'s advisory
-/// reservation for `port`.
-///
-/// The reservation is a lock on a file named after the port, not on the
-/// socket: it stops other Gents test processes from handing out the same
-/// number, and does nothing to stop an unrelated process from binding it.
-/// A true answer therefore means "this process asked for that port", not
-/// "that port is ours".
+/// True while this process still holds `allocate_port`'s advisory reservation
+/// for `port`; it stops other Gents test processes from handing out the same
+/// number, not unrelated processes from binding it.
 pub fn is_reserved(port: u16) -> bool {
     PORT_RESERVATIONS
         .get()
@@ -83,10 +74,9 @@ pub fn is_reserved(port: u16) -> bool {
         .unwrap_or(false)
 }
 
-/// Give up this process's advisory reservation for `port` after positive
-/// evidence (a captured bind-conflict diagnostic) that an unrelated process
-/// now owns it, so neither a later `is_reserved` check nor another
-/// `allocate_port` caller in this process treats it as still ours.
+/// Drop this process's advisory reservation for `port` after evidence an
+/// unrelated process now owns it, so later `is_reserved` checks and
+/// `allocate_port` callers here do not treat it as still ours.
 pub fn release(port: u16) {
     if let Some(reservations) = PORT_RESERVATIONS.get() {
         reservations

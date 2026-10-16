@@ -1,24 +1,18 @@
 //! Tool lookup inside a packaged build.
 //!
-//! An AppImage's `AppRun` prepends the mounted `usr/bin` to `PATH`, so the
-//! tools the package carries shadow the host's own. Those copies come from the
-//! distribution the package was built on, and an older copy can be silently
-//! wrong on a newer desktop rather than absent: the `xdg-open` shipped by
-//! Debian's `xdg-utils` matches `KDE_SESSION_VERSION` 4 and 5 only, so on
-//! Plasma 6 its `open_kde` falls through, opens nothing, and still exits 0.
-//! A caller asking for a browser is told it succeeded, and a sign-in that was
-//! waiting on the resulting callback waits for something that cannot arrive.
-//!
-//! Dropping those entries would leave a host without `xdg-open` no fallback,
-//! so they keep their place on `PATH` and only stop coming first.
+//! An AppImage launcher prepends the mounted `usr/bin` to `PATH` and search
+//! lists, so the package's tools shadow the host's. Those copies come from the
+//! distribution the package was built on and can be silently wrong on a newer
+//! host (e.g. Debian `xdg-open` matches Plasma 4/5 only: on Plasma 6 it opens
+//! nothing yet exits 0). Package entries keep their place on `PATH` — a host
+//! without `xdg-open` needs a fallback — but stop coming first.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Search lists an AppImage launcher rewrites so the application finds its own
-/// copies first. A host program must not search them at all: it would load
-/// this package's libraries, plugins and data in place of its own.
+// A host program must not search these: it would load the package's libraries,
+// plugins and data in place of its own.
 const PACKAGE_SEARCH_LISTS: &[&str] = &[
     "PATH",
     "LD_LIBRARY_PATH",
@@ -48,14 +42,12 @@ const PACKAGE_LOCATIONS: &[&str] = &[
     "OWD",
 ];
 
-/// Values the launcher forces for the application's own sake. The original is
-/// not recoverable, so a host program is better off with none: it then picks
-/// the session's own display backend and theme rather than this package's.
+// The launcher forces these; the original is not recoverable, so a host program
+// picks the session's own display backend and theme rather than the package's.
 const LAUNCHER_OVERRIDES: &[&str] = &["GDK_BACKEND", "GTK_THEME", "APPIMAGE_GTK_THEME"];
 
-/// Put the host's tools ahead of a temporary package mount's copies. Called
-/// once during startup, before anything spawns, so every child process the
-/// application launches inherits the order.
+/// Called once during startup, before anything spawns, so every child process
+/// inherits the order.
 pub fn prefer_host_tools() {
     let Some(reordered) = host_first_search_path(
         std::env::var_os("PATH").as_deref(),
@@ -69,11 +61,9 @@ pub fn prefer_host_tools() {
 }
 
 /// Give `command` the environment a program would have had if it were not
-/// launched from inside this package: no package library paths, no package
-/// data directories, no forced display backend.
-///
-/// Only for programs that are not ours. This package's own helpers are built
-/// against the libraries it carries and must keep the launcher's environment.
+/// launched from inside this package. Only for programs that are not ours:
+/// this package's own helpers are built against the libraries it carries and
+/// must keep the launcher's environment.
 pub fn prepare_host_command(command: &mut Command) {
     for (name, value) in host_environment_changes(
         |name| std::env::var_os(name),
@@ -87,9 +77,6 @@ pub fn prepare_host_command(command: &mut Command) {
     }
 }
 
-/// What a host program's environment needs changed. `Some` replaces the value,
-/// `None` removes it. Empty when this is not a packaged launch, so an ordinary
-/// install spawns with the environment it already has.
 fn host_environment_changes(
     read: impl Fn(&str) -> Option<OsString>,
     app_dir: Option<&Path>,
@@ -137,8 +124,7 @@ fn host_environment_changes(
 }
 
 /// `search` with every entry inside the package mount moved after the host's,
-/// each group keeping its own order. `None` when there is nothing to move, so
-/// an ordinary install never rewrites its own environment.
+/// each group keeping its own order. `None` when there is nothing to move.
 fn host_first_search_path(
     search: Option<&OsStr>,
     app_dir: Option<&Path>,
@@ -171,8 +157,8 @@ mod tests {
         Some(Path::new("/tmp/.mount_gents123"))
     }
 
-    /// The environment a released AppImage hands its process, read from a
-    /// running 0.18.5 build on a Plasma 6 Wayland session.
+    /// A released AppImage's launch environment, read from a running build on
+    /// a Plasma 6 Wayland session.
     fn measured_launch_environment() -> Vec<(&'static str, &'static str)> {
         vec![
             (
@@ -227,7 +213,6 @@ mod tests {
     fn a_host_program_loses_every_one_of_the_packages_contributions() {
         let changes = changes_for(&measured_launch_environment());
 
-        // Libraries and plugins: the host program must load its own.
         assert_eq!(
             changes["LD_LIBRARY_PATH"], None,
             "wholly inside the package"
@@ -235,23 +220,19 @@ mod tests {
         assert_eq!(changes["QT_PLUGIN_PATH"], None);
         assert_eq!(changes["GTK_EXE_PREFIX"], None);
         assert_eq!(changes["GDK_PIXBUF_MODULE_FILE"], None);
-        // Mixed lists keep the host's entries, in order.
         assert_eq!(changes["PATH"].as_deref(), Some("/usr/local/bin:/usr/bin"));
         assert_eq!(
             changes["XDG_DATA_DIRS"].as_deref(),
             Some("/usr/share:/usr/local/share"),
             "handler lookup must not search the package's applications first"
         );
-        // Forced for the application: a browser picks the session's own.
         assert_eq!(
             changes["GDK_BACKEND"], None,
             "Wayland sessions keep Wayland"
         );
         assert_eq!(changes["GTK_THEME"], None);
-        // The program is not running inside a package.
         assert_eq!(changes["APPDIR"], None);
         assert_eq!(changes["APPIMAGE"], None);
-        // Untouched: nothing the package did not contribute.
         assert!(!changes.contains_key("HOME"));
         assert!(!changes.contains_key("WAYLAND_DISPLAY"));
     }
@@ -276,7 +257,6 @@ mod tests {
 
     #[test]
     fn a_packaged_launch_keeps_its_tools_but_stops_preferring_them() {
-        // The order AppRun hands the process.
         let launched = OsString::from(
             "/tmp/.mount_gents123/usr/bin/:/tmp/.mount_gents123/usr/sbin/:/usr/local/bin:/usr/bin",
         );
@@ -284,17 +264,15 @@ mod tests {
             host_first_search_path(Some(&launched), mount(), app_image()),
             Some(OsString::from(
                 "/usr/local/bin:/usr/bin:/tmp/.mount_gents123/usr/bin/:/tmp/.mount_gents123/usr/sbin/"
-            )),
-            "the package's own tools remain reachable, behind the host's"
+            ))
         );
     }
 
     #[test]
     fn an_ordinary_install_is_left_alone() {
         let path = OsString::from("/usr/local/bin:/usr/bin");
-        // No launcher: a .deb, a macOS bundle, a developer build.
         assert_eq!(host_first_search_path(Some(&path), None, None), None);
-        // An extracted AppRun exports APPDIR and no APPIMAGE.
+        // An extracted AppRun exports APPDIR without APPIMAGE.
         assert_eq!(
             host_first_search_path(
                 Some(&OsString::from("/opt/gents/squashfs-root/usr/bin:/usr/bin")),

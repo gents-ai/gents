@@ -11,8 +11,6 @@ def boolValues : List Bool := [false, true]
 def boolJson (value : Bool) : String :=
   if value then "true" else "false"
 
-/-- The one revision every family starts from: whole-graph valid, so a case
-varies only the inputs it names. -/
 def fixtureRevision
     (status : GraphPipeline.RevisionStatus)
     (artifactsComplete : Bool := true) : GraphPipeline.Revision :=
@@ -33,11 +31,6 @@ def transitionAllowed
     (action : GraphPipeline.Action) : Bool :=
   (GraphPipeline.step? state action).isSome
 
-/-- Which native compiler diagnostic realizes `topologyValid = false`. The
-model keeps topology opaque (`GraphPipeline.Revision.topologyValid`);
-acyclicity is decided by the native Kahn pass in `compile_graph`. Both faults
-project to `topologyValid = false`; the selector only tells the consumer which
-intent to build, so a rejection is checked through that diagnostic. -/
 inductive TopologyFault where
   | valid
   | missingInputBinding
@@ -55,11 +48,6 @@ def TopologyFault.wireName : TopologyFault → String
 
 def topologyFaults : List TopologyFault := [.valid, .missingInputBinding, .cycle]
 
-/-- Which native compiler diagnostic realizes `withinBounds = false`: an
-intent that exceeds its own node limit (`node_limit_exceeded`), or one that
-asks for more invocations than the platform ceiling
-(`platform_limit_exceeded`). The model keeps `withinBounds` opaque and orders
-no graph limits; the native compiler compares them. -/
 inductive BoundsFault where
   | within
   | nodeLimit
@@ -94,7 +82,6 @@ def ValidationCase.revision (c : ValidationCase) : GraphPipeline.Revision :=
     withinBounds := c.bounds.withinBounds,
     terminalResultDeclared := c.terminalResultDeclared }
 
-/-- The compile gate is the `validate` transition of a fresh proposal. -/
 def ValidationCase.expectedValid (c : ValidationCase) : Bool :=
   transitionAllowed (GraphPipeline.initial c.revision) .validate
 
@@ -119,13 +106,11 @@ def validationCases : List ValidationCase :=
 
 theorem validationCases_count : validationCases.length = 72 := by native_decide
 
-/-- The executable gate agrees with the Prop-level whole-graph predicate. -/
 theorem validationCases_agree_with_wholeGraphValid :
     validationCases.all
       (fun c => c.expectedValid == decide c.revision.wholeGraphValid) = true := by
   native_decide
 
-/-- A cyclic topology never validates, whatever the other inputs say. -/
 theorem cycle_never_validates :
     validationCases.all (fun c => c.topology != .cycle || !c.expectedValid) = true := by
   native_decide
@@ -150,12 +135,6 @@ def validationCaseJson (testCase : ValidationCase) : String :=
 def validationCasesJson : String :=
   jsonArray (validationCases.map validationCaseJson)
 
-/-- Where `GraphDefinition.active_revision_digest` points relative to the
-candidate revision. `GraphPipeline.State.activeRevision` is one `Option`, so
-an empty slot (the activation precondition) and a pointer at this revision
-(the start precondition) exclude each other. `activate` requires an empty
-slot; the native activation's replacement of a predecessor is not covered by
-this family. -/
 inductive ActivePointer where
   | empty
   | current
@@ -201,8 +180,6 @@ def RevisionGateCase.expectedActivate (c : RevisionGateCase) : Bool :=
 def RevisionGateCase.expectedStart (c : RevisionGateCase) : Bool :=
   transitionAllowed (gateState c) (.startRun 4 true)
 
-/-- The native gate's two inputs, projected from the one pointer so the
-adapter translates representation and decides nothing. -/
 def RevisionGateCase.activationPreconditionMet (c : RevisionGateCase) : Bool :=
   c.pointer == .empty
 
@@ -225,8 +202,6 @@ def revisionGateCases : List RevisionGateCase :=
 
 theorem revisionGateCases_count : revisionGateCases.length = 24 := by native_decide
 
-/-- Activation needs a validated, complete revision and an empty slot; a start
-needs an active, complete revision that the pointer selects. -/
 theorem revisionGate_agrees_with_ready_predicate :
     revisionGateCases.all (fun c =>
       c.expectedActivate ==
@@ -333,10 +308,6 @@ def runTerminalCaseJson (testCase : RunTerminalCase) : String :=
 def runTerminalCasesJson : String :=
   jsonArray (runTerminalCases.map runTerminalCaseJson)
 
-/-- Delivery shapes on both sides of the shared group validator, kept inside
-what the native compiler also enforces: timeouts at most 86400 seconds,
-source fields that are GraphQL names, and the 256-document bound shared by
-`Triggers.Groups.maxGroupDocs` and `CompilerPolicy.max_group_size`. -/
 def edgeDeliveryShapes : List (String × Option Triggers.Groups.GroupConfig) :=
   [ ("ungrouped", none)
   , ("fixed_1", some { expected := some (.fixed 1) })
@@ -359,7 +330,6 @@ def concurrencyModes : List (ConcurrencyMode × String) :=
   , (.latestOnly, "latest_only")
   ]
 
-/-- The correlation field every port of the native edge fixture uses. -/
 def edgeCorrelation : String := "graph_run_id"
 
 structure EdgeDeliveryCase where
@@ -399,7 +369,6 @@ theorem edgeDeliveryCases_cover_both_verdicts :
       edgeDeliveryCases.any (fun c => !c.expectedConcurrencyValid)) = true := by
   native_decide
 
-/-- The `EventGroup` wire shape (`expected_count`, `timeout_secs`, `min_count`). -/
 def groupConfigJson (g : Triggers.Groups.GroupConfig) : String :=
   let expected : List String := match g.expected with
     | none => []

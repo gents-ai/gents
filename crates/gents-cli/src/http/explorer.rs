@@ -1,10 +1,6 @@
-//! Serves the vendored DefraDB Explorer on the runtime HTTP listener.
-//!
-//! The build under `third_party/defradb-explorer/dist` is compiled in
-//! embedded mode: it pins its connection to the origin that serves it, so
-//! mounting it on the same listener as the DefraDB API needs no CORS
-//! configuration. See `third_party/defradb-explorer/README.md` for the pin
-//! and refresh workflow.
+//! Serves the vendored DefraDB Explorer; the embedded build pins its
+//! connection to the serving origin, so no CORS setup is needed.
+//! See `third_party/defradb-explorer/README.md` for the pin and refresh workflow.
 
 use axum::extract::Path;
 use axum::http::{header, HeaderValue, StatusCode};
@@ -44,8 +40,6 @@ fn serve_file(path: &str) -> Response {
         "woff2" => "font/woff2",
         _ => "application/octet-stream",
     };
-    // Vite content-hashes everything under assets/; the rest (index.html and
-    // public files) must revalidate so a refreshed vendored build shows up.
     let cache_control = if path.starts_with("assets/") {
         "public, max-age=31536000, immutable"
     } else {
@@ -185,6 +179,13 @@ mod tests {
                 .get(reqwest::header::CONTENT_TYPE)
                 .and_then(|value| value.to_str().ok()),
             Some("image/svg+xml")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(reqwest::header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-cache")
         );
         Ok(())
     }

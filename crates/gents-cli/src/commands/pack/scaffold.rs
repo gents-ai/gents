@@ -1,12 +1,3 @@
-//! `gents pack new` and `gents pack init`: scaffold a pack from a template
-//! embedded in the binary.
-//!
-//! The manifest is generated from the files the template writes, so its
-//! asset list cannot drift from the directory. A plugin is scaffolded as its
-//! own Afterburner package under `plugins/<name>/` through Afterburner's
-//! library, and `gents pack build` compiles it. Every template passes
-//! `gents pack check` as written and builds unchanged.
-
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -24,13 +15,10 @@ pub(crate) struct ScaffoldReport {
     pub(crate) files: Vec<String>,
 }
 
-/// The names a template is filled with, all derived from the pack name.
 struct Names {
     name: String,
     namespace: String,
-    /// `review_toolkit` -> `review-toolkit`, for document ids.
     kebab: String,
-    /// `review_toolkit` -> `ReviewToolkit`, for collection names.
     title: String,
 }
 
@@ -76,7 +64,6 @@ fn to_snake_case(name: &str) -> String {
     out.trim_end_matches('_').to_owned()
 }
 
-/// `gents pack new <name>`: scaffolds into a new `./<name>/`.
 pub(crate) fn new(args: PackNewArgs) -> Result<()> {
     let dir = PathBuf::from(&args.name);
     if dir.exists() {
@@ -90,7 +77,6 @@ pub(crate) fn new(args: PackNewArgs) -> Result<()> {
     crate::print_json(&serde_json::to_value(report)?)
 }
 
-/// `gents pack init`: scaffolds into the current directory, named after it.
 pub(crate) fn init(args: PackScaffoldArgs) -> Result<()> {
     let dir = std::env::current_dir().context("reading the current directory")?;
     let name = dir
@@ -102,7 +88,6 @@ pub(crate) fn init(args: PackScaffoldArgs) -> Result<()> {
     crate::print_json(&serde_json::to_value(report)?)
 }
 
-/// Writes the template into `dir`, which must not already hold a pack.
 pub(crate) fn scaffold(dir: &Path, name: &str, args: &PackScaffoldArgs) -> Result<ScaffoldReport> {
     anyhow::ensure!(
         !dir.join("manifest.json").exists(),
@@ -252,8 +237,6 @@ fn list_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
     Ok(())
 }
 
-/// Where plugin `name`'s `TOOL.md` lives, and a starter for it: the markdown a
-/// model reads to use the plugin as a tool.
 pub(crate) fn tool_markdown(name: &str) -> (String, String) {
     (
         format!("plugins/{name}/TOOL.md"),
@@ -268,7 +251,6 @@ pub(crate) fn tool_markdown(name: &str) -> (String, String) {
     )
 }
 
-/// Writes the plugin's source for the plugin-tool template.
 fn scaffold_plugin(dir: &Path, names: &Names, language: Option<&str>) -> Result<String> {
     write_plugin_source(
         &dir.join("plugins").join(&names.name),
@@ -277,9 +259,6 @@ fn scaffold_plugin(dir: &Path, names: &Names, language: Option<&str>) -> Result<
     )
 }
 
-/// Writes a plugin's source into `source`: a program that returns its JSON
-/// input, in `language` (rust when absent), at the entry the build compiles.
-/// Returns the language.
 pub(crate) fn write_plugin_source(
     source: &Path,
     name: &str,
@@ -318,8 +297,6 @@ pub(crate) fn write_plugin_source(
     Ok(language)
 }
 
-/// The template program for an entry file: read the JSON arguments from
-/// standard input and write them back as the result.
 fn echo_source(entry: &str) -> String {
     match entry {
         "source/main.rs" => "use std::io::{Read, Write};\n\n\
@@ -535,8 +512,6 @@ mod tests {
         }
     }
 
-    /// A shipped plan that is not what this build compiles is refused by
-    /// name, the same way install refuses it.
     #[tokio::test]
     async fn a_shipped_plan_that_differs_from_compilation_is_refused() {
         let root = tempfile::tempdir().unwrap();

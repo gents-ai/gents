@@ -1,17 +1,6 @@
 import Mathlib.Data.List.Basic
 import Proofs.Request.State
 
-/-! Eval core contract (#1515): the closed outcome vocabulary and its projection
-onto evidence classes.
-
-The governing rule: anything the subject under evaluation could cause counts
-against it; only what it cannot cause is excluded. A `provider` outcome needs a
-reason, because a candidate prompt can cause a context overflow (`rejected`) but
-not an outage (`unavailable`). A `provider` outcome with no reason is `unknown`:
-the evaluator could not tell, and an unknown never helps a candidate.
-
-Refinement boundaries: checks, reducers over numeric scores, and trial scheduling
-are outside this model. -/
 namespace Eval
 
 inductive OutcomeKind where
@@ -51,9 +40,6 @@ structure RequestEvidence where
   toolFailed : Bool
   deriving DecidableEq, Repr
 
-/-- Native execution leases belong to runtime infrastructure. Their loss alone
-does not establish a subject failure. A completed request, an observed stage
-deadline, or an explicit tool budget result retains its existing attribution. -/
 def classifyRequestOutcome (e : RequestEvidence) : Option OutcomeKind :=
   if e.interruptedOnDeadline then some .deadline
   else if e.state == .completed then none
@@ -146,7 +132,6 @@ def subjectCausable : OutcomeKind → Option ProviderReason → Bool
   | .provider, some .rejected => true
   | _, _ => false
 
-/-- A subject can never move one of its own failures out of the denominator. -/
 theorem subject_causable_is_never_excluded (k : OutcomeKind) (r : Option ProviderReason)
     (h : subjectCausable k r = true) : classify k r ≠ .notEvidence := by
   cases k <;> cases r <;> simp_all [subjectCausable, classify]
@@ -161,8 +146,6 @@ theorem only_passed_passes (k : OutcomeKind) (r : Option ProviderReason) :
     classify k r = .pass ↔ k = .passed := by
   cases k <;> cases r <;> simp [classify]
   all_goals (rename_i reason; cases reason <;> simp [classify])
-
-/-! ## Case class: the class of a case-trial is the class of its worst verdict -/
 
 inductive CaseClass where
   | scored | unknown | notEvidence

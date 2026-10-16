@@ -9,10 +9,8 @@ import {
 
 type Locator = ReturnType<Page["locator"]>;
 
-/* the scrolling body of an editor sheet */
 const bodyOf = (sheet: Locator) => sheet.locator(".overflow-y-auto").first();
 
-/* the Open button on the row labelled `label` */
 function openFor(scope: Locator, label: string) {
   return scope
     .getByText(label, { exact: true })
@@ -32,8 +30,6 @@ async function stackTwoSheets(page: Page) {
     .first()
     .click();
   await openFor(page.locator("main"), "Inference profile").click();
-  /* the sheet below is hidden from the accessibility tree while one stacks
-     above it, so the sheets are found by their slot */
   const sheets = page.locator("[data-slot=sheet-content]");
   await expect(sheets).toHaveCount(1);
   const below = sheets.first();

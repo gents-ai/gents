@@ -40,25 +40,15 @@ pub(crate) struct InitSummary {
     pub(crate) created_default_agent: bool,
 }
 
-/// This home's persisted `init.json`, in gents-cli's own CLI-facing
-/// tool-policy vocabulary. The struct itself now lives in `gents::home`
-/// (moved so `gc-cell`, which provisions gents homes from outside this
-/// binary, writes the exact same shape rather than a second, drifting
-/// copy); this alias keeps every existing field access in this crate
-/// (`config.tool_ceiling`, `StoredInitConfig { .. }` literals, and so on)
-/// unchanged.
+/// This home's persisted `init.json` shape, shared with `gc-cell` so it
+/// provisions gents homes with the exact same document rather than a
+/// second, drifting copy.
 pub(crate) type StoredInitConfig = gents::home::StoredInitConfig<ToolPackageArg, ToolCeilingArg>;
 
-/// Operator-visible P2P admission bounds in effect for this server process.
-///
-/// The Codex shim's live binding, as `/healthz` sees it (#699).
-///
-/// The shim used to be invisible to every health surface, so a node could report
-/// `ok: true` while its advertised WebSocket port was closed — which is exactly
-/// how a fleet-wide bring-up looked healthy while no operator could reach a
-/// single agent. The state is shared because the shim may bind *after* the HTTP
-/// surface is already serving: the supervisor flips it when a published
-/// generation makes the bound agent_config runnable.
+/// Operator-visible P2P admission bounds in effect for this server process,
+/// as the Codex shim's live binding reports them (`/healthz`, #699). The shim
+/// may bind *after* the HTTP surface is already serving: the supervisor flips
+/// this when a published generation makes the bound agent_config runnable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CodexShimHealth {
     /// `--no-codex-shim`: not an error, and not a thing to report as degraded.

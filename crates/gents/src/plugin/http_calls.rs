@@ -1,43 +1,11 @@
-//! HTTP for a plugin that holds no socket.
-//!
-//! A plugin's guest never runs with network authority (WASI preview 1 has no
-//! sockets, and [`super::PluginRunner`] strips the `net` axis before a run).
-//! A plugin whose granted manifold carries an `OutboundHttp` allow-list
-//! instead answers a call with a batch of HTTP requests; the host performs
-//! the ones the grant admits and resumes the plugin with the responses,
-//! through the same round loop as model calls ([`super::rounds`]).
-//!
-//! The wire:
-//!
-//! - input: the caller's input plus `"http_calls": true`, then on later
-//!   rounds `"http_results": {id: {"status", "headers": {name: value},
-//!   "body" | "body_base64"} | {"error": ...}}` and the `"state"` the plugin
-//!   last returned. `body` is used when the response is UTF-8, `body_base64`
-//!   otherwise.
-//! - output: `{"http_calls": {"requests": [{"id", "method", "url", "headers":
-//!   {name: value}, "body" | "body_base64"}], "state": ...}}`.
-//!
-//! Allow-list entries are `host`, `*.domain` (strict subdomains), an IPv4
-//! literal or a bracketed IPv6 literal, optionally prefixed `http://` to also
-//! allow plaintext and suffixed `:port`; an entry without a port admits only
-//! the scheme's default port. A grant of any host (`OutboundHttp(null)`)
-//! admits any public host over HTTPS on port 443. The admission rule is
-//! `ToolPolicy.PluginNetwork.allowed`, bound by
-//! `generated_plugin_network_cases_drive_admission`. The host never follows
-//! a redirect: a 3xx comes back to the plugin with its `location` header, and
-//! following it is a new request, admitted like any other. A request carries
-//! only what the plugin put in it (no proxy, cookie store or credentials of
-//! the host's).
-//!
-//! Bounds beyond the round loop's: [`MAX_REQUESTS_PER_ROUND`] requests a
-//! round, [`MAX_IN_FLIGHT`] of them at once, [`MAX_REQUESTS_PER_CALL`]
-//! requests and [`MAX_RESPONSE_BYTES_PER_CALL`] response bytes over the call
-//! (charged as they are read, whether or not the response is then refused;
-//! a request past either gets an error result), [`MAX_REQUEST_BODY_BYTES`]
-//! a request body, [`MAX_RESPONSE_BYTES`] a response body, and
-//! [`REQUEST_TIMEOUT`] a request
-//! (lowered by the manifold's `http_timeout_ms`, which a manifest may not
-//! set to 0), inside the call's wall clock.
+//! HTTP for a plugin that holds no socket: the host performs the requests a
+//! granted `OutboundHttp` allow-list admits and resumes the plugin with the
+//! responses through the same round loop as model calls. Allow-list entries
+//! are `host`, `*.domain` (strict subdomains), an IP literal, optionally
+//! prefixed `http://` and suffixed `:port`; an entry without a port admits
+//! only the scheme's default port; `OutboundHttp(null)` admits any public
+//! host over HTTPS on port 443. Admission is `ToolPolicy.PluginNetwork.allowed`.
+//! The host never follows a redirect and carries no credentials of its own.
 
 use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -56,17 +24,11 @@ use serde_json::{json, Map, Value};
 
 /// Requests one round may carry.
 pub const MAX_REQUESTS_PER_ROUND: usize = 16;
-/// Requests of one round in flight at once.
 pub const MAX_IN_FLIGHT: usize = 8;
-/// Requests one call may send over all its rounds.
 pub const MAX_REQUESTS_PER_CALL: usize = 256;
-/// Bytes of one request body.
 pub const MAX_REQUEST_BODY_BYTES: usize = 1024 * 1024;
-/// Bytes of one response body handed back to the plugin.
 pub const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
-/// Response bytes one call may take in over all its rounds.
 pub const MAX_RESPONSE_BYTES_PER_CALL: usize = 16 * 1024 * 1024;
-/// Longest one request may take.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -120,7 +82,6 @@ pub(crate) enum NetGrant {
     Hosts(Vec<Entry>),
 }
 
-/// The grant `net` describes, or why the host cannot enforce it.
 pub(crate) fn net_grant(net: &NetAccess) -> Result<NetGrant, String> {
     match net {
         NetAccess::None => Ok(NetGrant::Sealed),
@@ -138,7 +99,6 @@ pub(crate) fn net_grant(net: &NetAccess) -> Result<NetGrant, String> {
     }
 }
 
-/// One allow-list entry, in the grammar of this module's doc.
 fn parse_entry(text: &str) -> Result<Entry, String> {
     let invalid = |why: &str| format!("network allow-list entry {text:?} {why}");
     let lower = text.trim().to_ascii_lowercase();
@@ -215,8 +175,6 @@ fn target_host(url: &Url) -> Option<TargetHost> {
     (!domain.is_empty()).then_some(TargetHost::Name(domain))
 }
 
-/// Whether an address is outside every internal range: the classification
-/// is `ToolPolicy.PluginNetwork.ipPublic`'s.
 pub(crate) fn ip_public(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => v4_public(ip),
@@ -244,7 +202,6 @@ fn v6_public(ip: &Ipv6Addr) -> bool {
     }
     let segments = ip.segments();
     if segments[0] == 0x2002 {
-        // 6to4 carries the IPv4 address it routes to.
         let [hi, lo] = [segments[1].to_be_bytes(), segments[2].to_be_bytes()];
         return v4_public(&Ipv4Addr::new(hi[0], hi[1], lo[0], lo[1]));
     }
@@ -253,8 +210,7 @@ fn v6_public(ip: &Ipv6Addr) -> bool {
             && (segments[1] == 0 || segments[1] == 0x0db8 || (0x10..0x30).contains(&segments[1])))
 }
 
-/// How a target was admitted: whether an entry naming its IP literal admits
-/// it, and the literal itself when the URL names one.
+/// How a target was admitted and the IP literal itself when the URL names one.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Admission {
     explicit: bool,
@@ -399,8 +355,6 @@ pub(super) struct Batch {
     pub(super) state: Option<Value>,
 }
 
-/// The requests a plugin's output asks for: `None` when the output is a
-/// final result, an error naming what is malformed otherwise.
 pub(super) fn parse_batch(output: &Value) -> Result<Option<Batch>, String> {
     let Some(calls) = output
         .as_object()
@@ -537,7 +491,6 @@ pub(super) struct Session {
     client: reqwest::Client,
     request_timeout: Duration,
     requests_sent: usize,
-    /// Charged by every concurrent request as its body is read.
     response_bytes: AtomicUsize,
     max_requests: usize,
     max_response_bytes: usize,
@@ -548,8 +501,6 @@ impl Session {
         self.request_timeout.as_millis() as u64
     }
 
-    /// The session `manifold`'s granted `net` axis allows, or `None` when it
-    /// allows nothing and the plugin runs as a sealed one.
     pub(super) fn for_grant(coordinate: &str, manifold: &Manifold) -> Result<Option<Self>> {
         Self::with_lookup(coordinate, manifold, Arc::new(SystemLookup))
     }
@@ -612,8 +563,6 @@ impl Session {
         let answers: Vec<(String, Result<Value, String>)> = futures::stream::iter(plan)
             .map(|(request, refusal)| async move {
                 let id = request.id.clone();
-                // The budget is checked as each request starts: earlier
-                // ones of this round may already have used it up.
                 let refusal = refusal.or_else(|| {
                     (this.response_bytes.load(Ordering::Relaxed) >= this.max_response_bytes)
                         .then_some(Refusal::ResponseBudget)
@@ -649,8 +598,6 @@ impl Session {
         }
     }
 
-    /// Admits `url` and, for an IP literal, the address itself; a name's
-    /// addresses are checked by [`Guarded`] as the connection resolves them.
     fn check(&self, url: &Url) -> Result<(), String> {
         let admission = admit(&self.grant, url, &self.coordinate).inspect_err(|why| {
             tracing::warn!(plugin = %self.coordinate, url = %url, "{why}");

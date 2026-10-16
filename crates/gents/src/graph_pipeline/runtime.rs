@@ -45,17 +45,13 @@ pub enum GraphArtifactIdentityScope {
     Node,
 }
 
-/// Stable prospective identity of an artifact an approved publication would
-/// inspect. This does not predict whether publication will create, reuse, or
-/// reject the stored document.
-///
-/// This is a pure preview of the revision materializer's owned ID scheme. It
-/// deliberately does not inspect storage.
+/// Pure preview of the revision materializer's owned ID scheme for an artifact
+/// an approved publication would inspect; it does not predict whether
+/// publication will create, reuse, or reject the stored document.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub struct ProspectiveGraphArtifactIdentity {
     pub collection: String,
     pub identity_scope: GraphArtifactIdentityScope,
-    /// Present only for node-scoped identities.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_did: Option<String>,
     /// Unique-key fields used by the existing materializer. GraphRevision has
@@ -82,14 +78,12 @@ pub struct GraphRunReceipt {
 }
 
 /// The durable `run_graph` tool result. Session observers find the run a
-/// session started through this reply, so its only writer and its only
-/// reader ([`run_receipt_from_tool_result`]) live together.
-///
-/// The loop persists only a bounded head of every tool result
+/// session started through this reply, so its only writer and reader
+/// ([`run_receipt_from_tool_result`]) live together. The loop persists only a
+/// bounded head of every tool result
 /// ([`TruncationLimits::default`](crate::truncation::TruncationLimits)), and a
-/// cut reply is not JSON, so its run would never be observed. The reply
-/// therefore stays within those limits: it sheds the run's entry `input`, and
-/// then the rest of `observed`, before it would exceed them.
+/// cut reply is not JSON, so its run would never be observed: the reply sheds
+/// the run's entry `input`, then the rest of `observed`, before exceeding them.
 pub fn run_graph_tool_result(
     node: &str,
     receipt: &GraphRunReceipt,
@@ -135,11 +129,10 @@ pub fn run_receipt_from_tool_result(result: &str) -> Option<GraphRunReceipt> {
         .map(|envelope| envelope.receipt)
 }
 
-/// Where a graph run's entry input came from. `Operator` is caller-supplied
-/// input, admitted against the entry's `input_schema` (when it declares one)
-/// inside the start transaction; it conveys no trust beyond that admission,
-/// and an entry that declares `prepare` refuses it. `Prepared` is the output
-/// of the host's own prepare step (host facts plus a pack plugin), already
+/// `Operator` is caller-supplied input, admitted against the entry's
+/// `input_schema` (when declared) inside the start transaction; it conveys no
+/// trust beyond that admission, and an entry that declares `prepare` refuses
+/// it. `Prepared` is the output of the host's own prepare step, already
 /// admitted and persisted as the entry's evidence documents.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntryInputOrigin {
@@ -161,8 +154,6 @@ pub struct GraphRunTerminalDecision {
 }
 
 /// Executable refinement of the Lean GraphRun terminal transition guards.
-/// Persisted terminal writes still use a transaction/CAS; this pure decision
-/// keeps every caller on the same legal-transition contract.
 pub fn graph_run_terminal_decision(
     status: &str,
     cancellation_requested: bool,
@@ -179,9 +170,8 @@ pub fn graph_run_terminal_decision(
 }
 
 /// Executable refinement of the Lean publication gate for a single revision.
-/// `activation_precondition_met` means the active pointer matched the
-/// caller's compare-and-swap expectation;
-/// `pointer_matches` means the active pointer selects this exact revision.
+/// `activation_precondition_met` is the caller's compare-and-swap expectation;
+/// `pointer_matches` is the active pointer selecting this exact revision.
 pub fn revision_gate_decision(
     status: &str,
     artifacts_complete: bool,
@@ -222,7 +212,7 @@ pub(crate) fn graph_trigger_id(digest: &str, route: &str) -> Result<String> {
 }
 
 /// Extract the immutable revision identity from the reserved artifact ID
-/// namespace. Ordinary operator-authored task and trigger IDs return `None`.
+/// namespace.
 pub(crate) fn graph_artifact_revision_digest(id: &str) -> Option<String> {
     let tail = id.strip_prefix(TRIGGER_PREFIX)?;
     let (digest, component) = tail.split_once('-')?;
@@ -256,8 +246,6 @@ fn revision_visibility_authorized(status: &str, active_pointer: bool, run_pin: b
     (active_pointer && status == "active") || (run_pin && matches!(status, "active" | "retired"))
 }
 
-/// Read graph activation and live-run pins in the runtime candidate's own
-/// transaction. Revision and artifact verification use that same snapshot.
 pub(crate) async fn load_runtime_graph_artifacts_in_txn(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
@@ -294,10 +282,6 @@ pub(crate) async fn load_runtime_graph_artifacts_in_txn(
     load_visible_package_artifact_ids_in_txn(txn, node_did, &active, &pinned).await
 }
 
-/// Resolve package-owned ordinary configuration resources through the same
-/// active-revision/nonterminal-run pin set used for task-trigger
-/// visibility. The plan remains the only ownership ledger; no package catalog
-/// or mutable install state is consulted at runtime.
 #[cfg(test)]
 pub(crate) async fn load_visible_package_artifact_ids(
     node: &std::sync::Arc<EmbeddedNode>,
@@ -478,7 +462,6 @@ async fn verify_package_artifacts_in_txn(
 }
 
 /// Preflight and transactional publication consume the same admission policy.
-/// Only the transaction's read plus generation write authorizes publication.
 pub(super) fn graph_publication_denial(
     runs: &[Value],
     revision_digest: &str,
@@ -504,8 +487,6 @@ pub(super) fn graph_publication_denial(
     None
 }
 
-/// Root publication knows its immutable graph route before the request exists.
-/// Continuations instead resolve their authenticated physical predecessor.
 pub(crate) async fn fence_graph_root_request_in_txn(
     txn: &ConfigApplyTxn<'_>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
@@ -513,9 +494,9 @@ pub(crate) async fn fence_graph_root_request_in_txn(
     super::run::fence_root_workspace_in_txn(txn, request).await
 }
 
-/// Serialize publication with the existing GraphRun completion owner. The caller
-/// stages its request/Goal writes in this same native transaction; rollback
-/// therefore removes both publication and this generation change.
+/// Serialize publication with the caller's staged request/Goal writes in this
+/// same native transaction; rollback removes both publication and this
+/// generation change.
 pub(crate) async fn fence_graph_publication_in_txn(
     txn: &ConfigApplyTxn<'_>,
     run_id: &str,
@@ -535,8 +516,6 @@ pub(crate) async fn fence_graph_publication_in_txn(
     fence_observed_graph_publication_in_txn(txn, run, revision_digest).await
 }
 
-/// The single existing generation mutation, shared by newly loaded and
-/// resolver-validated observations within the same ConfigApplyTxn.
 pub(super) async fn fence_observed_graph_publication_in_txn(
     txn: &ConfigApplyTxn<'_>,
     run: &Value,
@@ -547,8 +526,6 @@ pub(super) async fn fence_observed_graph_publication_in_txn(
     Ok(())
 }
 
-/// Exact mutation emitted by the existing transaction owner. Exposed within
-/// GraphPipeline so native conflict tests consume the production fence query.
 pub(super) fn graph_publication_generation_update(
     run: &Value,
     revision_digest: &str,
@@ -608,10 +585,10 @@ fn materialization_receipt(plan: &GraphPlan) -> Result<MaterializedRevision> {
     })
 }
 
-/// Return prospective artifact identities without reading or writing storage.
-/// `GraphPlan` is intentionally node-neutral; `owner_did` scopes only
-/// the artifacts whose canonical keys are node-scoped. Approved
-/// publication owns lookup and the resulting create/reuse/conflict decision.
+/// Pure preview of prospective artifact identities without reading or writing
+/// storage; `owner_did` scopes only the artifacts whose canonical keys are
+/// node-scoped. Approved publication owns lookup and the resulting
+/// create/reuse/conflict decision.
 pub fn prospective_graph_artifact_identities(
     owner_did: &str,
     plan: &GraphPlan,
@@ -636,10 +613,6 @@ pub fn prospective_graph_artifact_identities(
             ]),
         },
     ];
-    // Shares its route id and target-to-collection mapping with the
-    // materializer (`super::routes`), so a plugin-target route is predicted
-    // here exactly as `Callback`/`CallbackBinding`, the same shape
-    // `planned_route_documents` actually writes, never as a `Trigger`.
     for (collection, id) in super::routes::revision_artifact_ids(plan)? {
         let field = match collection {
             crate::Collection::EventSource => "event_source_id",
@@ -783,10 +756,6 @@ async fn update_document(
     Ok(())
 }
 
-/// Persist a compiled revision and its revision-derived EventTriggers in one
-/// transaction. Stage Tasks are ordinary package/operator configuration and
-/// must already exist and be enabled. The triggers remain invisible to runtime
-/// reconciliation until activation advances the graph definition pointer.
 pub async fn materialize_graph_revision(
     node: &std::sync::Arc<EmbeddedNode>,
     identity: Option<Did>,
@@ -812,8 +781,6 @@ pub async fn materialize_graph_revision(
     .await
 }
 
-/// Publish through the immutable revision machinery while preserving the
-/// foundation tool's compact receipt. Publication never starts execution.
 pub async fn publish_graph_plan(
     node: &std::sync::Arc<EmbeddedNode>,
     identity: Did,
@@ -931,8 +898,7 @@ async fn materialize_in_txn(
     }
 
     // The route ids come from the one shared `planned_routes` list a preview
-    // and the installation record also iterate: computing them independently
-    // here let the three diverge on what a plan actually materializes (#10).
+    // and the installation record also iterate.
     let routes = super::routes::planned_routes(plan)?;
     let (entry_routes, edge_routes) = routes.split_at(plan.entries.len());
     let mut trigger_documents = Vec::new();
@@ -1003,9 +969,6 @@ async fn materialize_in_txn(
     materialization_receipt(plan)
 }
 
-/// The documents that deliver a route's source documents to its target node:
-/// an event source, plus a trigger that starts the Task for an agent node, or
-/// a callback that runs the plugin for a plugin node.
 #[allow(clippy::too_many_arguments)]
 async fn planned_route_documents(
     txn: &ConfigApplyTxn<'_>,
@@ -1059,8 +1022,6 @@ async fn planned_route_documents(
                     source_collection,
                 )?)
                 .await?;
-            // The plugin sees the source document's own fields, never a
-            // secret-bearing one: the binding would refuse those anyway.
             let input_fields = crate::trigger_engine::event_source::source_fields_from(
                 introspected.get("data"),
                 source_collection,
@@ -1068,7 +1029,6 @@ async fn planned_route_documents(
             .into_iter()
             .filter(|field| !crate::toolset::is_secret_env_name(field))
             .collect::<Vec<_>>();
-            // DefraDB takes null, never [], for an empty list.
             let input_fields = (!input_fields.is_empty()).then_some(input_fields);
             vec![
                 (
@@ -1128,8 +1088,6 @@ pub async fn activate_graph_revision(
     .await
 }
 
-/// Activate through the existing local-or-GraphQL control-plane seam used by
-/// CLI and desktop consumers.
 pub async fn activate_graph_revision_with_access(
     access: &ConfigAccess,
     owner_did: &str,
@@ -1303,8 +1261,6 @@ pub(crate) async fn load_active_graph_plan_in_txn(
     )?))
 }
 
-/// Load the active immutable plan through the same ownership and identity
-/// checks used by activation and run start.
 pub async fn load_active_graph_plan_with_access(
     access: &ConfigAccess,
     owner_did: &str,
@@ -1370,7 +1326,6 @@ async fn set_graph_enabled_in_txn(
     .await
 }
 
-/// Enable or disable a graph through the runtime-owned document control plane.
 pub async fn set_graph_enabled_with_access(
     access: &ConfigAccess,
     owner_did: &str,
@@ -1388,8 +1343,6 @@ pub async fn set_graph_enabled_with_access(
         .await
 }
 
-/// Pin a run to the active immutable manifest and seed exactly one compiled
-/// entry collection in the same transaction as the GraphRun record.
 #[allow(clippy::too_many_arguments)]
 pub async fn start_graph_run(
     node: &std::sync::Arc<EmbeddedNode>,
@@ -1425,7 +1378,6 @@ pub async fn start_graph_run(
     .await
 }
 
-/// Start through the ordinary local-or-GraphQL transaction seam.
 pub async fn start_graph_run_with_access(
     access: &ConfigAccess,
     caller_did: &str,

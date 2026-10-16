@@ -4,9 +4,6 @@ import { InferenceSetup } from "./InferenceSetup";
 import type { ProviderId } from "./inferenceSetupForm";
 import { OnboardingWizard } from "./OnboardingWizard";
 
-/** Setup, in either of its flows: first run (from where the agent lives
-    through its first provider, or straight to the provider when the agent
-    exists), or adding a backend to an agent from its settings. */
 export function SetupScreen({
   onDone,
   initialStep,
@@ -20,7 +17,6 @@ export function SetupScreen({
   purpose?: "onboarding" | "add-backend";
   nodeDid?: string;
   onCancel?: () => void;
-  /* a catalog row was chosen, so the form is that provider's inputs only */
   provider?: ProviderId;
 }) {
   if (purpose === "add-backend")

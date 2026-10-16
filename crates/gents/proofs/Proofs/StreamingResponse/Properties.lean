@@ -313,9 +313,6 @@ private theorem resolvedReferencingHeaders_error_ne_live
         (resolveReferencingCandidate observation)) = .error view at h
   exact resolveReferencingCandidates_error_ne_live observation _ view streams h
 
-/-- Once the exact source has a unique closing record, the live-preview branch
-is unreachable. Closed output may still be loading while terminal selection or
-dependencies arrive, but it is never represented as a live writer. -/
 theorem projectUnheadedClosed_ne_live (observation : Observation)
     (closing : Segment) (outcome : Outcome) (streams : Streams) :
     projectUnheadedClosed observation closing outcome ≠ .live streams := by
@@ -365,8 +362,6 @@ theorem segment_delivery_retains_old (observation : Observation)
     old ∈ CanonicalOutput.deliver observation.records record :=
   CanonicalOutput.delivery_retains _ _ _ hold
 
-/-- Every modeled observation transition is append-only with respect to segment
-facts. Owner changes, selection and terminal observation also leave them intact. -/
 theorem transition_never_removes_segments {before after : Observation}
     (htransition : Transition before after) (old : Segment)
     (hold : old ∈ before.records) : old ∈ after.records := by

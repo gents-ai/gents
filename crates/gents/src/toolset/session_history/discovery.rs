@@ -166,8 +166,6 @@ fn compact(row: &Value, current_session: Option<&str>, agent: &str) -> Value {
     json!({"session_id":row["session_id"],"title":row["title"]["text"],"created_at":row["created_at"],"closed_at":row["closed_at"],"agent_id":row["agent_id"],"tags":row["tags"],"node_did":row["node_did"],"requester_did":row["requester_did"],"is_current":current_session.is_some_and(|id|super::is_current_session(agent,id,row["node_did"].as_str().unwrap_or_default(),row["session_id"].as_str().unwrap_or_default())),"session_doc_id":row["_docID"]})
 }
 
-/// Bytes per `output` page. With JSON escaping the result stays below the
-/// 50 KiB model-view truncation limit for ordinary text.
 const OUTPUT_PAGE_BYTES: usize = 16_000;
 
 pub(super) const OUTPUT_ORDER: &[&str] = &[
@@ -476,7 +474,6 @@ async fn execute(
     })
 }
 
-/// The one session row ACP lets the caller read under this ID.
 async fn authorized_session(txn: &ConfigApplyTxn<'_>, id: &str) -> Result<Value> {
     let mut session = rows(
         txn.execute(&format!(
@@ -493,9 +490,6 @@ async fn authorized_session(txn: &ConfigApplyTxn<'_>, id: &str) -> Result<Value>
     Ok(session.remove(0))
 }
 
-/// Full stored output of one tool call, paged by bytes. The model-facing
-/// result is bounded at the provider-input boundary; this reads the canonical
-/// stream behind it through the tool-call read owner.
 async fn tool_output(
     txn: &ConfigApplyTxn<'_>,
     current_session: Option<&str>,
@@ -916,8 +910,6 @@ resources:
         .await
         .unwrap();
         let mut lifecycle = fixture.tool;
-        // Beyond the 50 KiB model view, with scalars of every UTF-8 width so
-        // page ends must back off to boundaries.
         let raw: String = (0..9_000)
             .map(|line| format!("{line:05} aé€😀\n"))
             .collect();

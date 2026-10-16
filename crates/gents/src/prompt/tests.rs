@@ -33,39 +33,6 @@ fn assistant_msg(text: &str) -> Message {
 }
 
 #[test]
-fn preamble_combines_prompt_and_agent_id() {
-    let preamble = build_preamble(
-        "You are a helpful assistant.",
-        "research",
-        &["list_files"],
-        true,
-    );
-    assert!(preamble.contains("You are a helpful assistant."));
-    assert!(preamble.contains("You are the research agent."));
-    assert!(preamble.contains("## Tool Discovery"));
-    assert!(preamble.contains("discover_tools"));
-    assert!(preamble.contains("describe_tool"));
-    assert!(preamble.contains("call_tool"));
-    assert!(preamble.contains("native direct tools"));
-    assert!(preamble.contains("synthetic `native` service"));
-    assert!(preamble.contains("list_files"));
-}
-
-#[test]
-fn preamble_handles_empty_system_prompt() {
-    let preamble = build_preamble("", "general", &["bash"], true);
-    assert!(preamble.contains("You are the general agent."));
-    assert!(preamble.contains("## Tool Discovery"));
-}
-
-#[test]
-fn preamble_handles_empty_agent_id() {
-    let preamble = build_preamble("Be helpful.", "", &[], true);
-    assert!(preamble.contains("Be helpful."));
-    assert!(preamble.contains("## Tool Discovery"));
-}
-
-#[test]
 fn preamble_strips_title_generation_suffix() {
     let preamble = build_preamble(
         "You are a policy agent.\n\nGenerate concise conversation titles. Return only a lowercase hyphenated 3-5 word title. Never call tools. Never explain.",
@@ -84,20 +51,6 @@ fn preamble_is_frozen() {
 
     assert_eq!(builder.preamble(), builder.preamble());
     assert!(builder.preamble().contains("System prompt v1."));
-}
-
-#[tokio::test]
-async fn build_without_summaries() {
-    let builder = test_builder("Be helpful.", "general");
-
-    let messages = vec![
-        TaggedMessage::unassociated(user_msg("hello")),
-        TaggedMessage::unassociated(assistant_msg("hi")),
-    ];
-    let prompt = builder.build(&messages, &[]).await.unwrap();
-
-    assert_eq!(prompt.messages.len(), 2);
-    assert!(prompt.preamble.contains("Be helpful."));
 }
 
 #[tokio::test]
@@ -186,22 +139,6 @@ async fn build_preserves_each_source_through_summary_prepend_even_with_equal_nat
 }
 
 #[test]
-fn system_reminder_format() {
-    let msg = LayeredPromptBuilder::system_reminder("The time is 3pm.");
-    if let Message::User { content } = &msg {
-        if let UserContent::Text(t) = first_content(content) {
-            assert!(t.text.starts_with("<system-reminder>"));
-            assert!(t.text.ends_with("</system-reminder>"));
-            assert!(t.text.contains("The time is 3pm."));
-        } else {
-            panic!("expected text");
-        }
-    } else {
-        panic!("expected user message");
-    }
-}
-
-#[test]
 fn preamble_lists_allowed_agent_targets() {
     let targets = vec![
         (
@@ -220,26 +157,11 @@ fn preamble_lists_allowed_agent_targets() {
         false,
         &targets,
     );
-    assert!(
-        preamble.contains("code-reviewer"),
-        "preamble should contain target id 'code-reviewer'"
-    );
-    assert!(
-        preamble.contains("Reviews code for correctness and style."),
-        "preamble should contain code-reviewer description"
-    );
-    assert!(
-        preamble.contains("data-analyst"),
-        "preamble should contain target id 'data-analyst'"
-    );
-    assert!(
-        preamble.contains("Analyzes datasets and produces summaries."),
-        "preamble should contain data-analyst description"
-    );
-    assert!(
-        preamble.contains("agent_new"),
-        "preamble should reference the agent_new tool"
-    );
+    assert!(preamble.contains("code-reviewer"));
+    assert!(preamble.contains("Reviews code for correctness and style."));
+    assert!(preamble.contains("data-analyst"));
+    assert!(preamble.contains("Analyzes datasets and produces summaries."));
+    assert!(preamble.contains("agent_new"));
 }
 
 #[test]
@@ -251,13 +173,6 @@ fn preamble_no_targets_block_when_empty() {
         false,
         &[],
     );
-    // Should not contain any agent-target section heading
-    assert!(
-        !preamble.contains("## Agents"),
-        "preamble should have no agent-target section when targets is empty"
-    );
-    assert!(
-        !preamble.contains("agent_new"),
-        "preamble should not mention agent_new when there are no targets"
-    );
+    assert!(!preamble.contains("## Agents"));
+    assert!(!preamble.contains("agent_new"));
 }

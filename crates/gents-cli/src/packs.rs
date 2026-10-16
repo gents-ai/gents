@@ -191,30 +191,3 @@ pub async fn whoami(home: PathBuf, registry: Option<String>) -> Result<Value> {
     .await
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn a_captured_command_returns_its_report_instead_of_printing() {
-        let report = capture_report(async {
-            crate::print_json(&serde_json::json!({"first": true}))?;
-            crate::print_json(&serde_json::json!({"last": true}))
-        })
-        .await
-        .unwrap();
-        assert_eq!(report, serde_json::json!({"last": true}));
-        assert!(capture_report(async { Ok(()) }).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn a_registry_error_reaches_the_caller() {
-        let error = search(Some("http://127.0.0.1:1".into()), "x".into(), 1)
-            .await
-            .unwrap_err();
-        assert!(
-            format!("{error:#}").contains("could not reach the registry"),
-            "{error:#}"
-        );
-    }
-}

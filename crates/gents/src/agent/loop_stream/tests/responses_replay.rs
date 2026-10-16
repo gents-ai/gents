@@ -1,8 +1,3 @@
-/// Two Responses turns through the owned loop against a local SSE server:
-/// an encrypted reasoning item plus `function_call echo` → gents executes
-/// echo → the continuation replays the reasoning item's exact
-/// `encrypted_content`, resolved from the first turn's real DefraDB capture →
-/// text `done`.
 #[tokio::test]
 async fn responses_encrypted_reasoning_round_trip_through_owned_loop() {
     use axum::extract::State;

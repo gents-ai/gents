@@ -25,9 +25,6 @@ structure Result where
   inFlight : Bool
   deriving DecidableEq, Repr
 
-/-- Inputs are executed against the same world left by the preceding call,
-including after lost receipts. Gate release observes storage completion even
-when the attempted commit was rejected. -/
 def runStep (world : World) (input : Input) : Option (World × Result) := do
   let held ← acquire world 1 true
   let (after, observation) := attempt held 1 5 7
@@ -55,17 +52,11 @@ def parentOutcome : RequestExecutionLease.Outcome := .failed
 
 def completionProbeOutcome : RequestExecutionLease.Outcome := .completed
 
-/-- Probe the actual terminal owner before handoff. A committed foreground
-dispatch remains a completion obligation even when its receipt was lost;
-the caller's volatile handle map is not evidence that the obligation vanished. -/
 def completionProbe (inputs : List Input) : Option Bool := do
   let (after, _) ← runWorld inputs
   let held ← acquire after 1 true
   pure (commit held 1 5 (.terminalize 7 completionProbeOutcome (.message 501))).isSome
 
-/-- Request failure hands the unacknowledged running call to recovery. It does
-not invent tool completion, remove committed intent, or retain the parent's
-foreground claim. No fact here asserts that an external process stopped. -/
 def afterParentFailure (inputs : List Input) : Option (Bool × Bool × Bool × Nat) := do
   let (after, _) ← runWorld inputs
   let held ← acquire after 1 true
@@ -82,12 +73,6 @@ structure PolicySettlement where
   completionAccepted : Bool
   deriving DecidableEq, Repr
 
-/-- A policy rejection of a direct call leaves the exact accepted call Pending,
-so the rejected call must still be settled with a result. Settlement reuses the
-existing pre-dispatch failure of that lifecycle: close and result delivery
-commit together, the call never records a start, and the request may then
-complete. A call that already won Running cannot be settled this way; a
-`spawn_process` whose target is denied is such a call (`afterSpawnedTargetRejection`). -/
 def policySettlement : ToolExecution.ToolCallContext.Action :=
   .spawnFailed .policyDenied
 
@@ -109,7 +94,6 @@ def spawnAccepted : Option World := do
     Gate.Cases.spawnProviderMessage [foregroundAdmission])
   scheduling published 1 .release
 
-/-- The accepted `spawn_process` call after it won its own dispatch election. -/
 def spawnRunning : Option World := do
   let (running, result) ← runStep (← spawnAccepted) ⟨true, true⟩
   if result.mayInvoke then some running else none
@@ -122,11 +106,6 @@ structure SpawnedTargetRejection where
   completionAccepted : Bool
   deriving DecidableEq, Repr
 
-/-- `spawn_process` evaluates its target only after it won its own dispatch,
-so a target denied by its command policy is a Running failure of the parent,
-not a pre-dispatch settlement. The parent fails with `policyDenied` and its
-result is delivered before any spawned lifecycle is admitted; once the parent
-is terminal, no spawned lifecycle can be admitted for it. -/
 def spawnedTargetRejection : ToolExecution.ToolCallContext.Action :=
   .fail .policyDenied
 
@@ -142,8 +121,6 @@ def afterSpawnedTargetRejection : Option SpawnedTargetRejection := do
     settled.toolContexts.any (fun spawned => spawned.provenance == .spawnedBackground 600),
     (commit probeHeld 1 5 (.terminalize 7 completionProbeOutcome (.message 501))).isSome⟩
 
-/-- Whether a spawned lifecycle may still be admitted for the parent: before
-the target rejection it may, after it it may not. -/
 def spawnedAdmissionAccepted (rejected : Bool) : Option Bool := do
   let running ← spawnRunning
   let world ← if rejected then do
@@ -155,7 +132,6 @@ def spawnedAdmissionAccepted (rejected : Bool) : Option Bool := do
   let held ← acquire world 1 true
   pure (commit held 1 5 (.admitSpawned 7 Gate.Cases.spawnedAdmission)).isSome
 
-/-- The Running parent cannot take the pre-dispatch settlement of a direct call. -/
 def spawnedPreDispatchSettlementAccepted : Option Bool := do
   let held ← acquire (← spawnRunning) 1 true
   pure (commit held 1 5 (.toolComplete 600 (.native policySettlement)
@@ -183,17 +159,9 @@ structure ParentFailureRecovery where
   terminalized : Nat
   deriving DecidableEq, Repr
 
-/-- The sweep's view of an owned tool once its parent failed. -/
 def terminalParentRow (tool : ToolExecution.ToolCallContext) : Recovery.TerminalParentToolRow :=
   { call := tool, parentTerminal := true, parentInterrupted := false }
 
-/-- Eventual settlement of a call handed off by parent failure. The existing
-terminal-parent sweep owns it, projected from the exact handed-off context.
-Its premise is that a foreground executor lives only inside the owning loop,
-which has ended once the parent is terminal; it does not observe that any
-external effect ran or stopped. The settled context is terminal, so neither a
-lost receipt nor a replay can reopen it for dispatch. `none` means the sweep
-has nothing to settle. -/
 def afterParentFailureRecovery (inputs : List Input) : Option (Option ParentFailureRecovery) := do
   let (after, _) ← runWorld inputs
   let held ← acquire after 1 true

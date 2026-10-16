@@ -1,6 +1,3 @@
-/* An inference profile as its editor drafts it: the profile with its
-   sampling and execution documents as text, the numbers among them with
-   their labels and bounds, and what makes a draft unsavable. */
 import type { InferenceProfile } from "@source-inc/gents-desktop-client";
 
 import type { NodeView } from "../../../hooks/fleetStore";
@@ -89,11 +86,7 @@ const EXECUTION_FIELDS = [
 
 export type ProfileContext = {
   deployment: NodeView;
-  /** a model that advertises only its maximum context has no model-aware
-      control, but that maximum still bounds the profile's window */
   contextMax: number | undefined;
-  /** the window and output limits are fields of their own, the model's
-      recommendation having none for them */
   limitsShown: { contextWindow: boolean; maxOutputTokens: boolean };
 };
 
@@ -127,10 +120,9 @@ export function profileNumbers(
 }
 
 /**
- * What is wrong with a profile draft, at the fields the editor draws. The
- * sampling values beyond temperature and top-p have no field here, and
- * the model-aware settings are checked against the recommendation when
- * saved, so neither is said at a field.
+ * What is wrong with a profile draft, at the fields the editor draws.
+ * Sampling values beyond temperature and top-p, and model-aware settings
+ * (checked at save), have no field here.
  */
 export function profileProblems(
   draft: ProfileDraft,

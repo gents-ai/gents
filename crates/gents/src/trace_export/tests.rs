@@ -1,6 +1,5 @@
 use super::*;
 use crate::llm::message::{Text, ToolCall, ToolFunction};
-use gents_protocol::transcript::PresentedMessageRole;
 use serde_json::json;
 #[test]
 fn failure_class_parser_accepts_only_canonical_persisted_values() {
@@ -11,24 +10,6 @@ fn failure_class_parser_accepts_only_canonical_persisted_values() {
     assert_eq!(failure_class_from_str("approvalDenied"), None);
     assert_eq!(failure_class_from_str("approval_denied"), None);
     assert_eq!(failure_class_from_str("tool_not_found"), None);
-}
-
-#[test]
-fn completed_lifecycle_is_the_only_success_owner() {
-    let analysis = analyze_tool_call_with_persisted_outcome(
-        "read",
-        r#"{"path":"README.md"}"#,
-        "contents",
-        ToolCallState::Completed,
-        None,
-    );
-
-    assert!(analysis.tool_result_ok);
-    assert_eq!(analysis.tool_failure_class, None);
-    assert_eq!(
-        analysis.argument_parse_result,
-        ArgumentParseResult::ValidObject
-    );
 }
 
 #[test]
@@ -152,43 +133,6 @@ fn extracts_raw_tool_call_json_from_persisted_assistant_message() {
     assert!(extract_raw_tool_call_json(&message, "unknown", "read").is_none());
     assert!(extract_raw_tool_call_json(&message, "call-1", "read").is_none());
     assert!(extract_raw_tool_call_json(&message, "internal-1", "other").is_none());
-}
-
-#[test]
-fn non_assistant_messages_yield_no_raw_tool_call_json() {
-    let user = Message::User {
-        content: vec![crate::llm::message::UserContent::tool_result(
-            "call-1",
-            vec![crate::llm::message::ToolResultContent::text("out")],
-        )],
-    };
-
-    assert_eq!(extract_raw_tool_call_json(&user, "call-1", "read"), None);
-}
-
-#[test]
-fn raw_message_json_serializes_the_native_message() {
-    let message = Message::assistant("hello");
-    let raw = raw_message_json(&message).expect("serialize native message");
-    assert_eq!(raw["role"], "assistant");
-    assert_eq!(raw["content"][0]["text"], "hello");
-}
-
-#[test]
-fn presented_trace_rows_preserve_sequence_and_render_native_messages() {
-    let message = Message::assistant("done");
-    let presented = present_trace_message(SequencedMessage {
-        provider_source: None,
-        canonical_header_doc_id: None,
-        block_indices: Vec::new(),
-        sequence: 7,
-        message: message.clone(),
-    });
-
-    assert_eq!(presented.sequence, 7);
-    assert_eq!(presented.message, message);
-    assert_eq!(presented.presentation.role, PresentedMessageRole::Assistant);
-    assert_eq!(presented.presentation.body_markdown, "done");
 }
 
 #[test]

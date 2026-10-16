@@ -142,7 +142,6 @@ async fn seed_demo_documents(
                     "auth":BackendAuth::Unauthenticated,"max_concurrent":2,"max_queue_depth":100
                 }))?,
             };
-            // Endpoint changes do not replace authentication, provider, or capacity controls.
             backend.name = backend_id.to_owned();
             backend.endpoint = model_endpoint.to_owned();
             backend.enabled = true;

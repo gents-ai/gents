@@ -369,7 +369,6 @@ async fn graph_fixture_install_is_idempotent_shared_home_safe_and_runnable() {
     .await
     .unwrap();
     assert_eq!(run.revision_digest, first.revision_digest);
-    // A metadata-only successor still pins the active predecessor exactly.
     let mut successor = load_test_graph_package("review_graph", &options);
     successor.manifest.version.push_str("-successor");
     successor.package_digest = digest_bytes(b"successor distribution");
@@ -386,7 +385,6 @@ async fn graph_fixture_install_is_idempotent_shared_home_safe_and_runnable() {
             .as_deref(),
         Some(first.revision_digest.as_str())
     );
-    // Identical authored logical IDs may coexist under another selected DID.
     let foreign = GraphPackageInstallBindings {
         node_did: "did:key:second-owner".into(),
         inference_slots: BTreeMap::from([
@@ -430,12 +428,6 @@ async fn graph_fixture_install_is_idempotent_shared_home_safe_and_runnable() {
     );
 }
 
-/// #1651: the graph's active revision digest is read outside the write
-/// transaction while preparing an install, to compute the new revision's
-/// predecessor pointer. If another install activates a different revision
-/// after that read but before this one commits, committing the stale
-/// preparation must refuse rather than silently writing a revision whose
-/// predecessor no longer reflects the graph's true history.
 #[tokio::test]
 async fn a_revision_activated_after_prepare_but_before_commit_is_refused() {
     let (node, access, options) = fixture().await;
@@ -453,7 +445,6 @@ async fn a_revision_activated_after_prepare_but_before_commit_is_refused() {
     .await
     .unwrap();
 
-    // Prepare a successor install: it observes `first` as the active revision.
     let mut successor = load_test_graph_package("review_graph", &options);
     successor.manifest.version.push_str("-successor");
     successor.package_digest = digest_bytes(b"successor distribution");
@@ -465,8 +456,6 @@ async fn a_revision_activated_after_prepare_but_before_commit_is_refused() {
         Some(first.revision_digest.as_str())
     );
 
-    // Edit the document between the check and the install: another install
-    // activates a different revision of the same graph.
     let mut concurrent = load_test_graph_package("review_graph", &options);
     concurrent.manifest.version.push_str("-concurrent");
     concurrent.package_digest = digest_bytes(b"concurrent distribution");
@@ -512,7 +501,6 @@ async fn a_revision_activated_after_prepare_but_before_commit_is_refused() {
         Some(concurrent_receipt.revision_digest.as_str())
     );
 
-    // The stale install wrote nothing: only the concurrent revision exists.
     let response = node.execute("{ GraphRevision { digest } }").await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let digests: BTreeSet<String> = response.data.unwrap()["GraphRevision"]

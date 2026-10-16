@@ -1,7 +1,5 @@
 use super::*;
 
-/// Eligibility is shared by trigger and callback groups. Durable typed-key
-/// suppression/capture is exercised only after its production owner migrates.
 pub(super) async fn event_group_eligibility_matches_lean_generated_contract_cases() {
     let cases = lean_event_group_cases();
     assert_eq!(cases.len(), lean_event_group_case_count());
@@ -45,9 +43,6 @@ pub(super) async fn trigger_engine_dispatch_matches_lean_generated_contract_case
         let target_key = case.trigger_id.as_ref();
         let expects_target_supersede =
             target_key.is_some_and(|id| case.expected_supersede_call_keys.contains(id));
-        // Lean emits both lists by scanning `before.requests` in order; consume
-        // superseded ids as we seed matching prior target keys to preserve that
-        // request-id alignment.
         let mut superseded_prior_ids = case.superseded_prior_ids.iter();
         for key in &case.prior_nonterminal_keys {
             let prior_trigger_id = key;

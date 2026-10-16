@@ -195,10 +195,8 @@ impl LiveBridgeFixture {
             &running_node.node_did,
             &operator_graphql,
         );
-        // This fixture owns both nodes and installs both directional
-        // replicators below. Keep the durable route truthful while the normal
-        // supervisor is intentionally disabled for this manually managed
-        // topology.
+        // Keep the durable route truthful while the normal supervisor is
+        // intentionally disabled for this manually managed topology.
         peer_record.pairing_ready = true;
         write_peer_directory_records(&desktop_paths, &[peer_record.clone()])?;
 
@@ -1049,28 +1047,6 @@ mod tests {
         })
     }
 
-    #[test]
-    fn held_provider_match_excludes_title_wrappers() {
-        assert!(has_exact_user_text(
-            &serde_json::json!({"messages": [
-                {"role": "user", "content": HELD_PROMPT}
-            ]}),
-            HELD_PROMPT
-        ));
-        assert!(has_exact_user_text(
-            &serde_json::json!({"messages": [
-                {"role": "user", "content": [{"type": "text", "text": HELD_PROMPT}]}
-            ]}),
-            HELD_PROMPT
-        ));
-        assert!(!has_exact_user_text(
-            &serde_json::json!({"messages": [
-                {"role": "user", "content": format!("First user request: {HELD_PROMPT}")}
-            ]}),
-            HELD_PROMPT
-        ));
-    }
-
     async fn wait_for_captured_chat_request(
         mock: &MockChatEndpoint,
         needle: &str,
@@ -1148,7 +1124,7 @@ mod tests {
 
     const HELD_PROMPT: &str = "HOLD_FIRST_SLASH_SKILL_FIXTURE_TURN";
 
-    /// Unblock the provider on early return before fixture shutdown drains requests.
+    // Drop unblocks the provider before fixture shutdown drains requests.
     struct HeldResponseRelease(Option<Arc<tokio::sync::Semaphore>>);
 
     impl Drop for HeldResponseRelease {

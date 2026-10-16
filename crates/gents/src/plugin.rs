@@ -1,101 +1,35 @@
-//! Running one of a pack's plugins.
+//! Running one of a pack's plugins: a complete Afterburner `.afb`
+//! ([`crate::pack::PackPlugin`]), handed to `afterburner::afb_run::run_afb_bytes`.
+//! The call ABI is deliberately narrow: canonical JSON arguments on stdin, one
+//! JSON value on stdout, stderr is diagnostics for a human.
 //!
-//! A plugin is a complete Afterburner `.afb` ([`crate::pack::PackPlugin`]).
-//! Only Afterburner knows how to dispatch every language it supports (a
-//! Python plugin compiles to an emscripten-pyodide bundle, not a WASI
-//! command; a compiled Ruby plugin runs as a WASI command; a JS/TS/Rust/
-//! Go/C/C++ plugin always runs as a WASI command), so this file never runs
-//! a plugin itself - it hands the `.afb` bytes to
-//! `afterburner::afb_run::run_afb_bytes`, the library entry point built for
-//! exactly this: an embedder that needs to run a package without the `burn`
-//! CLI's registry-client weight.
+//! Called as a model tool ([`tool::PluginTool`]), the output is split by
+//! `gents_protocol::message::ToolResultContent::from_tool_output`; text parts
+//! are held to the loop's tool-result text bound, image parts are passed whole
+//! bounded only by `limits.max_output_mib` and replayed as a note per image
+//! (`gents_loop::loop_stream::replayed_tool_result_text`). Called as a graph
+//! stage ([`crate::callback::plugin`]), the value is the stage's output
+//! documents and is never split.
 //!
-//! The call ABI is deliberately narrow: canonical JSON arguments arrive on
-//! stdin, a single JSON value is written to stdout, and anything on stderr
-//! is diagnostics for a human. Nothing else carries the call: no second
-//! channel, no shared memory, no side import for passing data.
+//! Invariants enforced here rather than trusted from the caller:
 //!
-//! Called as a model tool ([`tool::PluginTool`]), that value is the tool's
-//! output, which the loop splits the way it splits every tool's output
-//! (`gents_protocol::message::ToolResultContent::from_tool_output`):
-//!
-//! - `{"response": <any JSON>, "parts": [...]}` (either key alone is enough)
-//!   is split into parts. `response` becomes one text part, written as compact
-//!   JSON. Each `parts` entry `{"type": "image", "data": "<base64>",
-//!   "mimeType": "image/png"}` becomes one image part, in order. Other entries
-//!   are dropped.
-//! - A lone `{"type": "image", "data", "mimeType"}` is one image part.
-//! - Anything else is one text part holding the value as JSON.
-//!
-//! Text parts are held to the loop's tool-result text bound. Image parts are
-//! passed whole and are bounded only by the plugin's output limit
-//! (`limits.max_output_mib`). Only a provider whose wire carries images in
-//! tool results receives them (Claude Messages today, see
-//! `ProviderInputProfile::carries_tool_result_images`). For any other provider
-//! the loop puts a short note in place of each image instead of failing the
-//! request, and Claude gets a note in place of an image over its vision limits.
-//! The model sees an image only within the request that ran the call. Later
-//! requests replay the transcript, which presents the same bounded text parts
-//! and a note per image (`gents_loop::loop_stream::replayed_tool_result_text`).
-//! Called as a graph stage ([`crate::callback::plugin`]), the value is the
-//! stage's output documents and is never split.
-//!
-//! Seven invariants hold for every call, each enforced here rather than
-//! trusted from the caller:
-//!
-//! 1. **One run per instantiation.** `run_afb_bytes` parses, compiles, and
-//!    instantiates fresh on every call (its own module doc: "nothing is
-//!    written to the calling process's real stdout or stderr" and no store
-//!    is reused across calls); [`PluginRunner`] holds nothing but the raw
-//!    `.afb` bytes and the granted manifold between calls, so a plugin
-//!    keeps nothing between them either.
-//! 2. **The manifold is a ceiling, narrowed, never widened.**
-//!    [`narrow_manifold`] intersects what the plugin declared
-//!    (`PackPlugin::manifold`) with what this runner is willing to grant,
-//!    on every axis, and forces `listen` to `None` regardless of either
-//!    side. See [`PluginRunner::compile`] for why the ceiling is
-//!    `Manifold::sealed()` today.
-//! 3. **A plugin never listens and never holds a socket.** WASI preview 1
-//!    command modules (what every bounded dispatch path in `run_afb_bytes`
-//!    runs) have no socket import wired at all, so this holds structurally;
-//!    [`narrow_manifold`] forces `listen` off and every run strips `net`
-//!    regardless, as defense in depth. A granted `net` axis is served by the
-//!    host instead ([`http_calls`]).
-//! 4. **A plugin that cannot be run with every bound enforced is refused
-//!    before it is ever called, not run with the bound silently dropped.**
-//!    `run_afb_bytes` does not enforce `stdin`, `fuel`, `memory_bytes`, or
-//!    the manifold's grants for every language it can dispatch (its own
-//!    module doc's "Known gaps": Python, compiled or source, and Ruby
-//!    source, all drop at least one of them). [`PluginRunner::compile_within`]
-//!    parses the real `.afb` and refuses admission with
-//!    [`unbounded_dispatch_reason`] naming exactly what would not be
-//!    enforced, rather than letting [`PluginRunner::call`] silently run it
-//!    under a weaker guarantee than the caller asked for. The effective
-//!    authority claim in rule 2 is only honest for a plugin admitted this
-//!    way.
-//! 5. **Every bound is real, and a default is one the artifact can start
-//!    under.** `budget.memory_bytes` and `budget.wall_clock` go straight to
-//!    `AfbRunRequest`, where the wall clock is a genuine preemption rather
-//!    than a deadline the host stops waiting at. `budget.fuel` is `None` by
-//!    default (no instruction ceiling): Afterburner's own `None` means its
-//!    family's default budget instead, not "unlimited" (100 million for a
-//!    WASI command guest), so [`PluginRunner::call`] maps a `None` budget to
-//!    the largest ceiling Wasmtime accepts rather than passing `None`
-//!    through. [`PluginBudget::for_artifact`] raises a default that could
-//!    not host this artifact at all, because a ceiling below what a guest
-//!    spends before its own code runs bounds nothing. Stdout and stderr are
-//!    each capped after the run, truncation is named in `diagnostics`,
-//!    never silently applied.
-//! 6. **Output is validated, `input_schema` is not.** Stdout that is not
-//!    exactly one JSON value is [`PluginVerdict::BadOutput`] naming why.
-//!    `input_schema` describes the *arguments*, not the result, so this
-//!    file never checks arguments against it; a caller that wants that
-//!    checks before calling and reports [`PluginVerdict::Refused`] itself.
-//! 7. **Failures are typed, never silent.** A routine bound (fuel, memory,
-//!    wall clock, malformed output) is a [`PluginOutcome`] with its own
-//!    verdict; a genuine trap (division by zero, unreachable, a missing
-//!    precompiled artifact) is a hard `Err` from [`PluginRunner::compile`]
-//!    or [`PluginRunner::call`], never swallowed into a generic verdict.
+//! 1. One run per instantiation: `run_afb_bytes` parses, compiles, and
+//!    instantiates fresh on every call; nothing is reused across calls.
+//! 2. The manifold is a ceiling, narrowed, never widened: [`narrow_manifold`]
+//!    intersects what the plugin declared with what this runner grants.
+//! 3. A plugin never listens and never holds a socket: `listen` is forced off
+//!    and every run strips `net`; a granted `net` axis is served by the host
+//!    ([`http_calls`]).
+//! 4. A plugin whose dispatch path cannot enforce every bound is refused at
+//!    admission ([`PluginRunner::compile`]) rather than run with a bound
+//!    silently dropped: `run_afb_bytes` does not enforce `stdin`, `fuel`,
+//!    `memory_bytes`, or manifold grants for every language it dispatches.
+//! 5. Every bound is real, and a default is one the artifact can start under
+//!    ([`PluginBudget::for_artifact`]). Stdout and stderr are each capped
+//!    after the run, truncation named in `diagnostics`, never silent.
+//! 6. Output is validated, `input_schema` is not (it describes arguments).
+//! 7. Failures are typed, never silent: routine bounds are verdicts, genuine
+//!    traps are hard errors.
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -108,46 +42,32 @@ use anyhow::{Context, Result};
 use crate::pack::{BindAccess, PackPlugin};
 
 /// Default bytes of a plugin's JSON result kept before the call is judged
-/// [`PluginVerdict::BadOutput`] for running past this bound. A result is a
-/// small JSON value describing one call's outcome, not a file; anything
-/// larger is treated as a bad result rather than silently accepted
-/// truncated (rules 5 and 6 in this module's own doc). [`PluginBudget::for_plugin`]
-/// raises this to a plugin's declared `limits.max_output_mib`.
+/// [`PluginVerdict::BadOutput`]; [`PluginBudget::for_plugin`] raises this to
+/// a plugin's declared `limits.max_output_mib`.
 const DEFAULT_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 
 /// Host ceiling on what a plugin's `limits` may declare, enforced by
-/// [`crate::pack::PackPlugin::validate`] at manifest load. Independent of
-/// [`PluginBudget::default`]: that is what a call gets when a plugin
-/// declares nothing, this is the most a pack may ask for at all.
+/// [`crate::pack::PackPlugin::validate`] at manifest load.
 pub const MAX_DECLARED_MEMORY_MIB: u32 = 4096;
 pub const MAX_DECLARED_WALL_CLOCK_SECS: u32 = 900;
-/// `run_afb_bytes`'s WASI-command dispatch (every compiled plugin language)
-/// captures guest stdout into a fixed 4 MiB pipe
-/// (`afterburner_wasi::embedder_vm::run_command_raw`); a write past it fails
-/// inside the guest before this host ever sees the bytes. Declaring more
-/// than that ceiling here would promise an output size this host can never
-/// actually deliver, so the declared limit is capped at the real capture
-/// size rather than a larger, unreachable number. Raising this ceiling
-/// needs a change to that fixed pipe in the external `afterburner` engine,
-/// outside this crate; until then, a guest that traps having filled the
-/// pipe is reclassified as [`PluginVerdict::BadOutput`] rather than
-/// surfaced as an opaque trap (see `STDOUT_CAPTURE_PIPE_BYTES`).
+/// `run_afb_bytes`'s WASI-command dispatch captures guest stdout into a fixed
+/// 4 MiB pipe inside the guest, so declaring more than that would promise an
+/// output size this host can never deliver. A guest that traps having filled
+/// the pipe is reclassified as [`PluginVerdict::BadOutput`] rather than
+/// surfaced as an opaque trap (see `STDOUT_CAPTURE_TRAP_MARGIN_BYTES`).
 pub const MAX_DECLARED_OUTPUT_MIB: u32 = 4;
 
-/// [`MAX_DECLARED_OUTPUT_MIB`]'s own fixed pipe, in bytes: the real hard
-/// ceiling on captured guest stdout regardless of what a plugin declared.
+/// The real hard ceiling on captured guest stdout regardless of what a plugin
+/// declared.
 const STDOUT_CAPTURE_PIPE_BYTES: usize = MAX_DECLARED_OUTPUT_MIB as usize * 1024 * 1024;
 
-/// How close a [`AfbRunOutcome::Trapped`] guest's captured stdout must sit
-/// to [`STDOUT_CAPTURE_PIPE_BYTES`] to be judged an output-capacity trap
-/// rather than a genuine guest crash. `wasmtime_wasi`'s preview1 `fd_write`
-/// shim writes into the capture pipe in 4 KiB chunks regardless of the
-/// guest's own write size, so a guest that overflows it has always filled
-/// the pipe to within one such chunk of capacity before the write that
-/// traps; an unrelated trap (divide by zero, an out-of-bounds index) has no
-/// reason to have written stdout anywhere near that boundary first. The
-/// margin is generous relative to that 4 KiB granularity so it stays
-/// correct even if the shim's chunk size changes.
+/// How close a trapped guest's captured stdout must sit to
+/// [`STDOUT_CAPTURE_PIPE_BYTES`] to be judged an output-capacity trap rather
+/// than a genuine guest crash: the preview1 `fd_write` shim writes in 4 KiB
+/// chunks, so an overflowing guest has filled the pipe to within one chunk of
+/// capacity; an unrelated trap has no reason to sit near that boundary. The
+/// margin is generous relative to that granularity so it survives a change in
+/// the shim's chunk size.
 const STDOUT_CAPTURE_TRAP_MARGIN_BYTES: usize = 64 * 1024;
 
 /// Bytes of a plugin's stderr kept for a human to read. Diagnostics, not a
@@ -159,51 +79,28 @@ const MAX_STDERR_BYTES: usize = 64 * 1024;
 #[derive(Debug, Clone, Copy)]
 pub struct PluginBudget {
     /// Wasmtime fuel: a deterministic instruction ceiling. `None` means no
-    /// ceiling at all (the default: the wall clock is the real backstop
-    /// against a guest that never returns); `Some(n)` bounds the call at
-    /// `n` instructions, for a caller or a later configuration that wants
-    /// one. See [`PluginRunner::call`] for how `None` is actually carried
-    /// to Afterburner, which has no "no ceiling" value of its own.
+    /// ceiling; the wall clock is the backstop against a guest that never
+    /// returns.
     pub fuel: Option<u64>,
     /// Linear-memory ceiling in bytes, enforced by wasmtime on every
     /// `memory.grow`.
     pub memory_bytes: u64,
-    /// Wall-clock deadline for the whole call, enforced by
-    /// `run_afb_bytes` itself as a real preemption: a guest that runs past
-    /// it is interrupted and nothing keeps running behind the call (see
-    /// `AfbRunRequest::timeout`'s own doc). Granularity is one epoch tick,
-    /// 10 ms today, so a guest can overshoot by up to a tick.
+    /// Wall-clock deadline for the whole call, enforced by `run_afb_bytes`
+    /// as a real preemption. Granularity is one epoch tick, 10 ms today.
     pub wall_clock: std::time::Duration,
     /// Bytes of a plugin's JSON result kept before the call is judged
-    /// [`PluginVerdict::BadOutput`] for running past this bound (see
-    /// `outcome_from_exit`). [`Self::default`] carries
-    /// `DEFAULT_MAX_OUTPUT_BYTES`; [`Self::for_plugin`] raises it to a
-    /// plugin's declared `limits.max_output_mib`.
+    /// [`PluginVerdict::BadOutput`].
     pub max_output_bytes: usize,
 }
 
 impl PluginBudget {
-    /// [`Self::default`], raised where it could not host `afb` at all.
-    ///
-    /// A bound below what a guest spends before its own code runs is not a
-    /// bound: the run fails during startup, the plugin never executes a
-    /// line, and the ceiling never bounds the thing it was meant to bound.
-    /// A Pyodide-backed plugin carries CPython, which needs more memory to
-    /// instantiate than [`Self::default`] allows, so admitting one and then
-    /// handing it the default budget would admit a language whose runtime
-    /// cannot even start. The floor comes from
-    /// [`afterburner::afb_run::startup_floor`], which is where the dispatch
-    /// shape is known, rather than from a copy of that knowledge here.
-    ///
-    /// The wall clock is raised with it, for the same reason and no other:
-    /// booting an interpreter is work the caller waits through before the
-    /// plugin's own code starts, and a budget that cannot cover the boot
-    /// reports `Timeout` on every call.
-    ///
-    /// Fuel is left as the caller's own choice: `None` (the default) stays
-    /// unbounded, since a startup floor only matters against a finite
-    /// ceiling; a caller that did set one gets it raised by the
-    /// interpreter's own startup cost, saturating rather than wrapping.
+    /// [`Self::default`], raised where it could not host `afb` at all: a
+    /// bound below what a guest spends before its own code runs fails during
+    /// startup and bounds nothing. The floor comes from
+    /// [`afterburner::afb_run::startup_floor`], where the dispatch shape is
+    /// known, rather than a copy of that knowledge here. The wall clock is
+    /// raised with it for the same reason; fuel stays the caller's choice,
+    /// raised by the interpreter's own startup cost, saturating.
     pub fn for_artifact(afb: &afterburner_afb::Afb) -> Self {
         let default = Self::default();
         match afterburner::afb_run::startup_floor(afb) {
@@ -258,21 +155,12 @@ impl PluginBudget {
 }
 
 /// What a plugin that has to boot an interpreter before its own code runs
-/// is allowed for the whole call, when the caller does not say otherwise.
-///
-/// Booting CPython is a second or two warm and more cold, all of it inside
-/// the wall clock the caller asked for, so [`PluginBudget::default`]'s five
-/// seconds would time out before the plugin's first line.
+/// is allowed for the whole call: booting CPython is a second or two warm
+/// and more cold, all inside the wall clock, so [`PluginBudget::default`]'s
+/// five seconds would time out before the plugin's first line.
 const INTERPRETER_BOOT_ALLOWANCE: std::time::Duration = std::time::Duration::from_secs(60);
 
 impl Default for PluginBudget {
-    /// `fuel` is `None`: a plugin's instruction count grows with its input,
-    /// so any fixed ceiling refuses valid calls on large inputs; the wall
-    /// clock is the backstop against a guest that never returns. `memory_bytes`
-    /// (64 MiB) is comfortable for a small compiled transform without
-    /// giving a runaway allocation the run of the host; `wall_clock` (5 s)
-    /// is long enough for a cold-ish compute-bound call and short enough
-    /// that a caller waiting on a plugin result is not left hanging.
     fn default() -> Self {
         Self {
             fuel: None,
@@ -289,12 +177,9 @@ pub enum PluginVerdict {
     /// The plugin ran and produced exactly one JSON value.
     Success,
     /// A caller's own pre-call check (e.g. `input_schema` validation)
-    /// declined to make the call. Never produced by [`PluginRunner`]
-    /// itself; part of the shared vocabulary so a caller can report a
-    /// refusal in the same [`PluginOutcome`] shape as a real call would
-    /// have used (rule 6 in this module's own doc). A plugin that cannot
-    /// be run with every bound enforced is refused earlier, at
-    /// [`PluginRunner::compile`], never here (rule 4).
+    /// declined to make the call. Never produced by [`PluginRunner`] itself;
+    /// part of the shared vocabulary so a caller reports a refusal in the
+    /// same [`PluginOutcome`] shape.
     Refused,
     /// `budget.fuel` ran out before the plugin returned.
     OutOfFuel,
@@ -303,12 +188,10 @@ pub enum PluginVerdict {
     /// `budget.wall_clock` elapsed before the plugin returned.
     Timeout,
     /// The plugin ran but stdout was not exactly one JSON value (not
-    /// parseable, more than one value, or truncated past the output
-    /// bound).
+    /// parseable, more than one value, or truncated past the output bound).
     BadOutput,
     /// The plugin exited with a non-zero code. Its stdout is not taken as
-    /// a result even when it parses: the exit code is the plugin's own
-    /// statement that the call failed.
+    /// a result even when it parses.
     Failed,
 }
 
@@ -328,11 +211,9 @@ pub struct PluginOutcome {
     /// [`serde_json::Value::Null`] for every other verdict.
     pub output: serde_json::Value,
     /// Bounded stderr text, for a human. Carries a truncation note when
-    /// stdout or stderr ran past this module's own bound.
+    /// stdout or stderr ran past a bound.
     pub diagnostics: String,
-    /// Fuel actually consumed, as `run_afb_bytes` reports it: exact on
-    /// every outcome for the bounded dispatch family this module ever
-    /// admits (rule 4), including `OutOfMemory` and `OutOfFuel`. `0` on
+    /// Fuel actually consumed, as `run_afb_bytes` reports it. `0` on
     /// `Timeout`, where the store is torn down with the interrupted guest
     /// and the figure is unknowable rather than estimated.
     pub fuel_used: u64,
@@ -341,10 +222,8 @@ pub struct PluginOutcome {
 
 /// A plugin, ready to be called more than once.
 pub struct PluginRunner {
-    /// The plugin's raw `.afb` bytes. Kept whole (not pre-compiled)
-    /// because `run_afb_bytes` parses, compiles, and instantiates fresh on
-    /// every call - there is nothing cheaper to cache across calls without
-    /// re-implementing part of that function (rule 1).
+    /// The plugin's raw `.afb` bytes; `run_afb_bytes` parses, compiles, and
+    /// instantiates fresh on every call, so there is nothing to cache.
     afb_bytes: Vec<u8>,
     plugin: PackPlugin,
     /// What this runner will actually grant a call: the intersection of
@@ -364,41 +243,24 @@ impl std::fmt::Debug for PluginRunner {
 impl PluginRunner {
     /// This runner's own capability ceiling. `compile`'s fixed signature
     /// carries no admission-time ceiling from a caller, and the plugin ABI
-    /// itself carries nothing beyond stdin/stdout/stderr (this module's
-    /// own doc), so the honest ceiling today is "nothing". `narrow_manifold`
-    /// takes the ceiling as an ordinary argument; a caller that gains a
-    /// real admission ceiling to enforce plugs it in in place of this
-    /// constant, and every declared manifold is narrowed against it
-    /// exactly the way it already is here.
+    /// carries nothing beyond stdin/stdout/stderr, so the honest ceiling
+    /// today is "nothing". `narrow_manifold` takes the ceiling as an
+    /// ordinary argument.
     const CEILING: Manifold = Manifold::sealed();
 
-    /// Admits one plugin's compiled `.afb`.
-    ///
-    /// `plugin` is the pack's own declaration for it (name, description,
-    /// schema, manifold); `afb_bytes` is the artifact that declaration
-    /// names (`PackArchive::plugin_artifact`'s own doc: an artifact cannot
-    /// be swapped underneath the name it was admitted under). Refuses
-    /// admission outright, before any call is attempted, when the real
-    /// `.afb` would dispatch through a path `run_afb_bytes` does not fully
-    /// bound (rule 4) - this is the definitive check, independent of
-    /// whatever `crate::pack::SUPPORTED_PLUGIN_LANGUAGES` already screened
-    /// at manifest-authoring time, because a plugin can arrive as a raw
-    /// `.afb` without ever passing through that validator.
+    /// Admits one plugin's compiled `.afb`. Refuses admission outright,
+    /// before any call, when the real `.afb` would dispatch through a path
+    /// `run_afb_bytes` does not fully bound — the definitive check,
+    /// independent of `crate::pack::SUPPORTED_PLUGIN_LANGUAGES`' earlier
+    /// manifest-authoring screen, because a plugin can arrive as a raw
+    /// `.afb` without passing that validator.
     pub fn compile(afb_bytes: &[u8], plugin: &PackPlugin) -> Result<Self> {
         Self::compile_within(afb_bytes, plugin, &Self::CEILING)
     }
 
-    /// The same, under a ceiling the caller supplies.
-    ///
-    /// This is the seam an admitting caller uses. Effective authority is
-    /// the intersection of what the plugin declared and what the operator
-    /// allows, so a ceiling can only ever take capability away: passing a
-    /// wide one does not grant anything the plugin did not ask for, and
-    /// passing none at all leaves [`Self::compile`]'s sealed default.
-    ///
-    /// It exists as its own entry point rather than as a field on the
-    /// budget because authority is decided once, when a plugin is admitted,
-    /// and a per-call knob would invite deciding it again at the call.
+    /// The same, under a ceiling the caller supplies: the seam an admitting
+    /// caller uses. A ceiling can only ever take capability away. It is
+    /// decided once at admission, never per call.
     pub fn compile_within(
         afb_bytes: &[u8],
         plugin: &PackPlugin,
@@ -421,9 +283,6 @@ impl PluginRunner {
             // is the right default for a pure transform (rule 2).
             None => Manifold::sealed(),
         };
-        // Narrowed first: what a call actually asks for is the *granted*
-        // manifold, so gating on the declared one would refuse a plugin
-        // over authority the ceiling had already taken away.
         let manifold = narrow_manifold(&declared, ceiling);
         if let Some(reason) = unbounded_dispatch_reason(&afb, &manifold) {
             anyhow::bail!(
@@ -433,11 +292,6 @@ impl PluginRunner {
             );
         }
         if let Some(binding) = &plugin.bind_dir {
-            // `bind_dir` grants a directory per call ([`Self::call_bound`]),
-            // outside the declared/ceiling manifold this admission just
-            // narrowed - so the one axis that matters for it is whether
-            // this artifact's dispatch path can honour that grant at all,
-            // independent of whether one was declared here.
             let supported = afterburner::afb_run::bounds_for(&afb);
             let reads = binding.access == BindAccess::Read || !binding.write_fields.is_empty();
             let writes = binding.access == BindAccess::ReadWrite;
@@ -571,20 +425,10 @@ impl PluginRunner {
         budget: &PluginBudget,
         manifold: Manifold,
     ) -> Result<PluginOutcome> {
-        // Re-checked at every call, not just once at `compile` time: a
-        // plugin is called, never a server (rule 3), so a granted manifold
-        // that somehow carried a listen grant must never reach a run.
-        // `narrow_manifold` already guarantees this for `self.manifold`,
-        // and [`Self::call_bound`] never touches `listen`; this is the
-        // second, independent place that would have to break for it to
-        // matter.
         debug_assert!(
             matches!(manifold.listen, ListenAccess::None),
             "a granted manifold must never carry a listen capability"
         );
-        // The guest never holds network authority, even on a dispatch path
-        // that might honour it: the host serves the grant through
-        // `http_calls`, where its allow-list and address checks apply.
         let manifold = Manifold {
             net: NetAccess::None,
             ..manifold
@@ -673,12 +517,9 @@ fn plugin_run_request(stdin: Vec<u8>, manifold: Manifold, budget: &PluginBudget)
     AfbRunRequest {
         stdin,
         manifold,
-        // Afterburner's own `None` means its family's default fuel
-        // budget (100 million for a WASI command guest), not
-        // "unlimited" - so a `budget.fuel` of `None` is carried as the
-        // largest ceiling Wasmtime's `Store::set_fuel` accepts, the
-        // same sentinel Afterburner's own daemon runtime uses for an
-        // unbounded guest.
+        // Afterburner's own `None` means its family's default fuel budget,
+        // not "unlimited"; the sentinel is the largest ceiling
+        // `Store::set_fuel` accepts, as Afterburner's own runtime uses.
         fuel: Some(budget.fuel.unwrap_or(u64::MAX)),
         memory_bytes: Some(budget.memory_bytes),
         timeout: Some(budget.wall_clock),
@@ -699,15 +540,14 @@ const PLUGIN_NAN_MODE: NanMode = NanMode::Native;
 /// signal, before any plugin runs.
 ///
 /// Afterburner's engines keep Wasmtime's macOS default of Mach-port trap
-/// handling. Wasmtime starts that handler's process-wide thread from the first
-/// engine created, and the thread aborts the process when a signal interrupts
-/// its `mach_msg` receive (`MACH_RCV_INTERRUPTED`). The runtime installs signal
-/// handlers (tokio's `SIGCHLD` for child processes), and the kernel may deliver
-/// such a signal to any thread that does not block it. A new thread inherits
-/// its creator's signal mask, so the handler thread started here never
-/// receives one. Opting that engine out of Mach ports instead is not
-/// available: Afterburner exposes no Wasmtime configuration, and Wasmtime
-/// panics on an engine whose trap mode differs from the first one's.
+/// handling; its handler thread aborts the process when a signal interrupts
+/// its `mach_msg` receive. The runtime installs signal handlers (tokio's
+/// `SIGCHLD` for child processes), and the kernel may deliver one to any
+/// thread that does not block it, so the handler thread is started from a
+/// creator whose own mask blocks every signal. Opting the engine out of
+/// Mach ports instead is not available: Afterburner exposes no Wasmtime
+/// configuration, and Wasmtime panics on an engine whose trap mode differs
+/// from the first one's.
 ///
 /// Fails closed: if the masked thread cannot be started, cannot mask its
 /// signals, or cannot create the engine, every plugin call is refused with
@@ -758,23 +598,15 @@ fn start_wasm_trap_handler_with_signals_blocked(
 /// cannot actually enforce.
 ///
 /// `None` means every bound this runner applies is real; `Some(reason)`
-/// names, in one sentence, the axes that would be silently dropped - the
-/// message [`PluginRunner::compile_within`] refuses with.
-///
-/// The classification is Afterburner's own
-/// ([`afterburner::afb_run::bounds_for`], the same table
-/// `run_afb_bytes` dispatches on), never re-derived here. This file only
-/// contributes the half it actually knows: which axes a plugin call asks
-/// for. An earlier version did re-derive the classification from the
-/// manifest's language and runtime target, and that copy drifted - it went
-/// on refusing Python after Python's bounds had been wired, so a language
-/// that ran fully bounded was reported as unsafe.
+/// names the axes that would be silently dropped — the message
+/// [`PluginRunner::compile_within`] refuses with. The classification is
+/// Afterburner's own ([`afterburner::afb_run::bounds_for`]), never
+/// re-derived from the manifest here; an earlier re-derived copy drifted
+/// and reported a fully bounded language as unsafe.
 fn unbounded_dispatch_reason(afb: &afterburner_afb::Afb, granted: &Manifold) -> Option<String> {
     let supported = afterburner::afb_run::bounds_for(afb);
     let mut missing: Vec<String> = Vec::new();
 
-    // Every call carries its arguments on stdin and all three budget axes
-    // (see [`PluginRunner::call`]), so these are always asked for.
     if !supported.stdin {
         missing.push("the arguments on stdin".to_owned());
     }
@@ -788,8 +620,7 @@ fn unbounded_dispatch_reason(afb: &afterburner_afb::Afb, granted: &Manifold) -> 
         missing.push("the wall-clock budget".to_owned());
     }
 
-    // The manifold axes are asked for only when this plugin was actually
-    // granted them. An empty grant list is not a grant.
+    // An empty grant list is not a grant.
     match &granted.fs {
         FsAccess::ReadOnly(paths) if !paths.is_empty() && !supported.manifold_fs_ro => {
             missing.push("the read-only filesystem grant".to_owned())
@@ -802,8 +633,6 @@ fn unbounded_dispatch_reason(afb: &afterburner_afb::Afb, granted: &Manifold) -> 
     if !matches!(granted.env, EnvAccess::None) && !supported.manifold_env {
         missing.push("the environment grant".to_owned());
     }
-    // The network axis is the host's to enforce on every dispatch path, so
-    // only a grant the host cannot serve is unbounded.
     if let Err(why) = http_calls::net_grant(&granted.net) {
         missing.push(format!("the network grant ({why})"));
     }
@@ -814,10 +643,9 @@ fn unbounded_dispatch_reason(afb: &afterburner_afb::Afb, granted: &Manifold) -> 
     Some(format!("{} would not be enforced", missing.join(", ")))
 }
 
-/// Validates and bounds a completed run's stdout/stderr (rules 5 and 6).
-/// `max_output_bytes` is the calling [`PluginBudget`]'s own bound, not a
-/// fixed constant, so a plugin that declared `limits.max_output_mib` is
-/// judged against what it asked for.
+/// Validates and bounds a completed run's stdout/stderr. `max_output_bytes`
+/// is the calling [`PluginBudget`]'s own bound, so a plugin that declared
+/// `limits.max_output_mib` is judged against what it asked for.
 fn outcome_from_exit(
     code: i32,
     output: afterburner::afb_run::AfbRunOutput,
@@ -874,8 +702,7 @@ fn outcome_from_exit(
     }
 }
 
-/// Caps `bytes` at `max`, recording a truncation note when it does
-/// (rule 5: "say so in the diagnostics when you truncate").
+/// Caps `bytes` at `max`, recording a truncation note when it does.
 fn bound<'a>(bytes: &'a [u8], max: usize, label: &str, notes: &mut Vec<String>) -> &'a [u8] {
     if bytes.len() > max {
         notes.push(format!(
@@ -904,14 +731,11 @@ fn elapsed_ms(started: Instant) -> u64 {
 
 /// The manifold actually granted: never wider than `declared`, never
 /// wider than `ceiling`, on every axis, and `listen` forced to `None`
-/// regardless of either side (rule 2 and rule 3).
+/// regardless of either side.
 ///
 /// Written out field by field, mirroring `pack_archive::union_manifold`'s
-/// own shape (that function computes the wider of two grants for a
-/// package's declared manifold; this one computes the narrower, for what
-/// a single call is actually allowed), so a capability axis added to
-/// `Manifold` upstream fails this to compile instead of silently
-/// defaulting one way or the other.
+/// shape, so a capability axis added to `Manifold` upstream fails this to
+/// compile instead of silently defaulting one way or the other.
 fn narrow_manifold(declared: &Manifold, ceiling: &Manifold) -> Manifold {
     /// Two host allow-lists narrow to their common hosts; `None` means
     /// "any host" (the wider option), so it defers to the other side.
@@ -928,9 +752,8 @@ fn narrow_manifold(declared: &Manifold, ceiling: &Manifold) -> Manifold {
         }
     }
 
-    /// An empty root list means "every root" (`Manifold::open`'s own
-    /// convention); the narrower side wins when one is empty, and two
-    /// finite lists narrow to their common roots.
+    /// An empty root list means "every root"; the narrower side wins when
+    /// one is empty, and two finite lists narrow to their common roots.
     fn narrower_roots(a: &[PathBuf], b: &[PathBuf]) -> Vec<PathBuf> {
         match (a.is_empty(), b.is_empty()) {
             (true, true) => Vec::new(),
@@ -986,10 +809,8 @@ fn narrow_manifold(declared: &Manifold, ceiling: &Manifold) -> Manifold {
                 EnvAccess::AllowList(merged)
             }
         },
-        // A plugin is called, never a server (rule 3): forced here
-        // regardless of what either side asked, not merely because
-        // `PackPlugin::validate` already refused a declared `listen`
-        // upstream - this function is a correct ceiling on its own.
+        // A plugin is called, never a server: forced here regardless of
+        // what either side asked.
         listen: ListenAccess::None,
         crypto: declared.crypto && ceiling.crypto,
         child_process: declared.child_process && ceiling.child_process,

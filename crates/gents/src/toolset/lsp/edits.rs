@@ -115,10 +115,9 @@ pub async fn apply_prepared_with_held_locks(
     client: &LspClient,
     prepared: &[PreparedEdit],
 ) -> Result<usize, ToolError> {
-    // Validate the entire edit set while all mutation locks are held before
-    // performing the first write. This is not an OS-level transaction, but a
-    // stale hash/version in a later file must never leave earlier files
-    // rewritten.
+    // Validate the entire edit set while all mutation locks are held, before
+    // the first write: a stale hash/version in a later file must never leave
+    // earlier files rewritten.
     for edit in prepared {
         if let Some(expected) = &edit.expected_hash {
             let current = std::fs::read(&edit.path).map_err(|err| {
@@ -173,9 +172,9 @@ pub async fn apply_prepared_with_held_locks(
 
 const URI_KEYS: &[&str] = &["uri", "targetUri", "newUri", "oldUri"];
 
-/// Rewrite structured URI fields. Out-of-root, malformed, and unsupported
-/// scheme URIs are omitted.
-/// Returns the rewritten value and how many locations were dropped.
+/// Rewrite structured URI fields; out-of-root, malformed, and unsupported
+/// scheme URIs are omitted. Returns the rewritten value and how many
+/// locations were dropped.
 pub fn redact_structured_uris(context: &ToolContext, value: &Value) -> (Value, usize) {
     let mut omitted = 0usize;
     let redacted = redact_value(context, value, &mut omitted);

@@ -3,9 +3,8 @@
 //! A local pack is admitted exactly like a downloaded one: a `.pack` file is
 //! verified into the home's [`PackStore`] and opened from there, and a
 //! directory is packed with the same writer `gents pack build` uses first. A
-//! bare name is never a path, so `mailbox` always means the stored or
-//! registry pack even when a `mailbox/` directory sits in the working
-//! directory; a local directory is named `./mailbox`.
+//! bare name is never a path: `mailbox` always means the stored or registry
+//! pack; a local directory is named `./mailbox`.
 
 use std::path::Path;
 

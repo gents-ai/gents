@@ -1,13 +1,4 @@
 //! Generated field tables and patch results checked against the existing patch owner.
-//! Every Tools row replays the Lean always-on operator-grant verdict through
-//! `guard_tools_keep_grants`, and every Context and Agent row replays it
-//! through `reselection_keeps_grants` on the Tools documents Lean resolves;
-//! guarded rows also replay the Lean guard verdict through the production guard
-//! of their target (Tools and Agent no-lockout, Backend auth, and the Profile
-//! account choice). Reference validation and
-//! transactional rejection need an end-to-end ConfigApplyTxn consumer; this
-//! test does not simulate them.
-//! Agent management and sibling selection replay their Lean owners.
 use crate::lean_vocab_test::{
     lean_agent_decision_cases, lean_agent_materialization_cases, lean_self_config_cases,
     lean_self_config_field_tables, lean_self_config_selection_cases, lean_sibling_tools_cases,
@@ -108,9 +99,6 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
             "{}: runtime patch admissibility",
             case.name
         );
-        // Accepted rows expose the merge result. Rejected rows expose stored
-        // state, so comparing a locally selected fallback would prove nothing
-        // about the real transaction or reference/no-lockout validator.
         if case.accepted {
             assert_eq!(
                 apply_patch(target, &stored, &patch),
@@ -164,7 +152,6 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
                                 .map(typed_backend)
                         };
                         match backend(&candidate) {
-                            // The Lean rows fix the default account to the original one (`fun _ => none`).
                             Some(next) => {
                                 guard_backend_choice(backend(&stored).as_ref(), &next, None)
                             }
@@ -201,14 +188,11 @@ fn typed_backend(
     .unwrap_or_else(|error| panic!("{}: {error}", backend.backend_id))
 }
 
-/// Lean rows abstract nested Tools groups as their canonical JSON text.
 fn parse_nested(value: Value) -> Value {
     let text = value.as_str().expect("Lean group value is text");
     serde_json::from_str(text).unwrap_or_else(|error| panic!("{text}: {error}"))
 }
 
-/// The stored document and the merged candidate in their typed shapes; Lean
-/// rows carry nested groups as canonical JSON text.
 fn typed_merge(
     target: SelfConfigTarget,
     case: &LeanSelfConfigCase,
@@ -283,8 +267,6 @@ fn agent_operation(inputs: &LeanAgentDecisionInputs) -> AgentOperation {
     }
 }
 
-/// Lean `agentOperationAdmitted` through the production agent admission owner.
-#[test]
 fn generated_agent_decision_cases_drive_production_agent_admission() {
     let cases = lean_agent_decision_cases();
     assert!(!cases.is_empty());
@@ -311,9 +293,6 @@ fn generated_agent_decision_cases_drive_production_agent_admission() {
     }
 }
 
-/// Native registry documents decoded from the serialized Lean `CandidateFixture`.
-/// Fields the model does not carry (backend endpoint/auth, provider kind) take
-/// the canonical unauthenticated local-backend values, which no Lean owner reads.
 fn decode_candidate(candidate: &LeanAgentCandidate) -> AgentCandidate {
     let node_did = &candidate.node_did;
     AgentCandidate {
@@ -382,8 +361,6 @@ fn decode_candidate(candidate: &LeanAgentCandidate) -> AgentCandidate {
     }
 }
 
-/// Lean `materializedAgent`: admitted create/edit rows resolve one context and
-/// inference session; rejected and disable rows materialize nothing.
 #[test]
 fn generated_agent_materialization_cases_drive_production_agent_materialization() {
     let cases = lean_agent_materialization_cases();
@@ -436,8 +413,6 @@ fn network_mode(name: &str) -> CommandNetworkMode {
         .unwrap_or_else(|error| panic!("network mode {name}: {error}"))
 }
 
-/// Lean `SiblingToolsOperation.admitted` and `resultNetwork` through the
-/// production target fence, network admission fence and canonical Tools writer.
 #[test]
 fn generated_sibling_tools_cases_drive_production_tools_selection() {
     let cases = lean_sibling_tools_cases();
@@ -475,8 +450,6 @@ fn generated_sibling_tools_cases_drive_production_tools_selection() {
     }
 }
 
-/// Lean `selectedToolFlag`: omission preserves the stored selection and an
-/// explicit value overrides it, through the canonical Tools adapter.
 #[test]
 fn generated_self_config_selection_cases_drive_production_tools_selection() {
     let cases = lean_self_config_selection_cases();
@@ -507,7 +480,6 @@ fn generated_self_config_selection_cases_drive_production_tools_selection() {
     }
 }
 
-/// Lean `graphToolPresented` through the production self-config tool surface.
 #[test]
 fn generated_graph_presentation_cases_drive_production_tool_surface() {
     let cases = lean_self_config_selection_cases();

@@ -1,6 +1,3 @@
-/* Packs for this agent: what is installed and whether it is current, the
-   registry to find more, and the registry account. Every action is the same
-   operation `gents pack` runs, through the desktop bridge. */
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
@@ -19,8 +16,8 @@ import { Group, Row } from "./rows";
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
-/* An install or update that would replace documents someone edited stops
-   and names them; the person chooses to keep or overwrite. */
+/** An install or update that would replace documents someone edited stops and
+ * names them; the person chooses keep or overwrite. */
 function editedChoice(error: unknown): boolean {
   return message(error).includes("--overwrite");
 }

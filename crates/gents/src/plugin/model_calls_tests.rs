@@ -20,9 +20,7 @@ enum Reply {
     Text,
     Status(u16),
     Hang,
-    /// An answer whose text is this many bytes.
     Big(usize),
-    /// A redirect to this URL.
     Redirect(String),
 }
 
@@ -31,8 +29,6 @@ struct Seen {
     body: Value,
 }
 
-/// A chat completions server on a loopback port: records what it is sent and
-/// answers `answer:<prompt>`, an HTTP status, or never.
 struct Fake {
     url: String,
     seen: Arc<Mutex<Vec<Seen>>>,
@@ -157,7 +153,6 @@ impl ModelResolver for Fixed {
     }
 }
 
-/// A resolver that fails the test if the host asks it for anything.
 struct Never;
 
 impl ModelResolver for Never {
@@ -178,7 +173,6 @@ fn asking(requests: Vec<Value>) -> Value {
     json!({"model_calls": {"requests": requests, "state": {"page": 7}}})
 }
 
-/// A `team/plugin` whose model slot is bound (or not), under a fresh home.
 fn installed(canned: &Value, forever: bool, bound: bool) -> (tempfile::TempDir, InstalledPlugin) {
     let (home, mut record) = installed_plugin(&model_plugin_wat(canned, forever), None);
     record.declaration.model_slot = Some("remote_ocr".to_owned());
@@ -566,7 +560,6 @@ async fn a_model_tool_gets_its_model_answers_through_the_same_path() {
     assert_eq!(fake.requests(), 1);
 }
 
-/// A resolver whose profile is gone.
 struct Stale;
 
 impl ModelResolver for Stale {
@@ -575,7 +568,6 @@ impl ModelResolver for Stale {
     }
 }
 
-/// `installed`, but with the plugin's wall clock set to `secs`.
 fn installed_within(
     canned: &Value,
     forever: bool,
@@ -694,7 +686,6 @@ async fn requests_past_the_call_request_limit_get_error_results() {
 async fn answers_past_the_call_byte_budget_become_errors_and_stop_sending() {
     let fake = Fake::start(Reply::Text, Duration::ZERO).await;
     let mut session = session(&fake);
-    // "answer:p" is 8 bytes: two fit, the third crosses 16.
     session.max_answer_bytes = 16;
     let deadline = Instant::now() + Duration::from_secs(30);
     let results = session.serve(requests(&["a", "b", "c"]), deadline).await;

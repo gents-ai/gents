@@ -62,8 +62,7 @@ impl CausedThreadUpdateFilter {
     }
 }
 
-/// A session started from a Codex-owned root, projected as a read-only
-/// Codex sub-agent thread.
+/// A Codex-owned-root session projected as a read-only sub-agent thread.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct CausedThread {
     pub(super) session_id: String,
@@ -84,8 +83,6 @@ pub(super) struct CausedThread {
     pub(super) latest_request_created_at: Option<String>,
 }
 
-/// Resolve one wire thread ID to the caused thread it names, when its
-/// causal chain reaches a Codex root thread.
 pub(super) async fn load_caused_thread(
     state: &ShimState,
     thread_id: &str,
@@ -113,7 +110,6 @@ impl CausedThread {
         }
     }
 
-    /// Re-read this thread's latest request; its origin and parent are fixed.
     pub(super) async fn refresh(&mut self, state: &ShimState) -> Result<()> {
         if let Some(latest) = load_session_head(&state.node, &self.scope()).await? {
             self.apply_latest(&latest);
@@ -157,7 +153,6 @@ pub(super) async fn load_caused_threads_for_root_ids(
     let mut labels = HashMap::<String, SessionScope>::new();
     let mut models = HashMap::<(String, String), Option<String>>::new();
     for session in sessions {
-        // A wire thread ID has no node/requester component.
         if let Some(existing) = labels.get(&session.scope.session_id) {
             anyhow::ensure!(
                 existing == &session.scope,

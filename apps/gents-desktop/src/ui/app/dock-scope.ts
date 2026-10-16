@@ -1,6 +1,3 @@
-/* Which of the dock's tabs apply on a route, and which one shows there.
-   A tab out of scope is kept, not dropped: it is back when the person
-   returns to where it belongs. */
 import type { Placement, Surface } from "./surfaces";
 import type { DockState } from "./workspace";
 

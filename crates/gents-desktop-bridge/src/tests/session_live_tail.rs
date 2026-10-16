@@ -38,9 +38,6 @@ fn request(request_id: &str, state: &str, created_at: &str) -> Value {
     })
 }
 
-/// H streams; Q was then sent and queued behind it, or F was folded into
-/// it. A bounded session read that names Q or F still loads H's open output,
-/// so the snapshot keeps H's streaming text as its live tail.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_queued_or_folded_submission_keeps_the_running_turns_streaming_text() {
     let (core, _tmp) = boot_core().await;

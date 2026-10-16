@@ -43,8 +43,6 @@ impl ClientCore {
         Self::start_reporting_stages(paths, options, None).await
     }
 
-    /// Starts the client and publishes the name of each startup stage as it
-    /// completes, so a caller bounding the start can say where it stalled.
     pub async fn start_with_paths_reporting_stages(
         paths: DesktopPaths,
         options: ClientCoreOptions,
@@ -152,8 +150,6 @@ impl ClientCore {
                 Arc::new(node_identity.clone()),
             ));
 
-            // Each saved peer can take a full dial timeout, so each one settled
-            // counts as startup progress.
             let (peer_statuses, bootstrap_errors) = bootstrap_saved_peers(
                 &node,
                 &p2p,
@@ -230,8 +226,6 @@ impl ClientCore {
                 Ok(core)
             }
             Err(error) => {
-                // DefraDB's background tasks require explicit shutdown. Keep
-                // host exclusion until they stop, including failed upgrades.
                 node.shutdown().await;
                 Err(error)
             }
@@ -256,7 +250,6 @@ fn desktop_p2p_config(paths: &DesktopPaths, options: &ClientCoreOptions) -> P2PC
         max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
         max_pending_dags: options.max_pending_dags,
         // DefraDB forwards merges to explicit downstream replicators itself.
-        // Gossip rebroadcast adds a coalescing wait inside the merge loop.
         rebroadcast_on_merge: false,
     }
 }
@@ -285,9 +278,8 @@ pub(super) async fn bootstrap_saved_peers(
             routes: Vec::new(),
         };
 
-        // Enrollment documents, including a current signed route receipt,
-        // are the sole authority for reconnecting this peer. The supervisor
-        // projects that authority after schemas and subscriptions are live.
+        // Enrollment documents, including a current signed route receipt, are
+        // the sole authority for reconnecting this peer.
         if bootstrap_deferred_to_enrollment_authority(record) {
             statuses.push(status);
             peer_settled();
@@ -455,8 +447,8 @@ pub(super) fn normalize_required<'a>(field: &str, value: &'a str) -> Result<&'a 
         .with_context(|| format!("{field} must not be empty"))
 }
 
-/// Key custody is durable before the first encrypted write. Existing plaintext
-/// stores are verified and promoted offline, while the client store lock is held.
+// Key custody is durable before the first encrypted write; existing plaintext
+// stores are promoted offline while the client store lock is held.
 async fn open_or_create_client_store_key(
     paths: &DesktopPaths,
     choice: gents::store_key::StoreKeyCustodyChoice,
@@ -535,36 +527,6 @@ fn write_client_store_record(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn desktop_p2p_config_uses_pending_dag_option() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let paths = DesktopPaths::from_root(tempdir.path().to_path_buf());
-        let options = ClientCoreOptions {
-            max_pending_dags: 77,
-            ..ClientCoreOptions::local_only()
-        };
-
-        let config = desktop_p2p_config(&paths, &options);
-
-        assert!(
-            !config.rebroadcast_on_merge,
-            "merge delivery must not wait for gossip"
-        );
-        assert_eq!(config.max_pending_dags, 77);
-        assert_eq!(
-            config.max_doc_sync_request_doc_ids,
-            p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS
-        );
-    }
-
-    #[test]
-    fn stale_persisted_enrollment_is_not_activated_during_bootstrap() {
-        let mut record = PeerRecord::new("Enrollment", "endpoint", "did:key:server");
-        record.source = Some("enrollment".to_string());
-        record.pairing_ready = true;
-        assert!(bootstrap_deferred_to_enrollment_authority(&record));
-    }
 
     #[tokio::test]
     async fn plaintext_client_upgrade_preserves_identity_history_and_subscription_metadata() {

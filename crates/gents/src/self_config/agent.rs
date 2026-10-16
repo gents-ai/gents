@@ -27,7 +27,7 @@ pub enum AgentOperation {
     Disable,
 }
 
-/// Native adapter for `SelfConfig.agentOperationAdmitted`.
+/// Native adapter for the Lean `SelfConfig.agentOperationAdmitted` decision.
 pub fn decide_agent_operation(
     view: &AgentCatalogView,
     op: &AgentOperation,
@@ -137,7 +137,7 @@ pub struct MaterializedAgentSession {
     pub effort: Option<crate::config::ReasoningEffort>,
 }
 
-/// Resolves the native candidate projection of `Configuration.resolveAgent`.
+/// Native adapter for the Lean `Configuration.resolveAgent` projection.
 pub fn materialize_agent(
     view: &AgentCatalogView,
     op: &AgentOperation,

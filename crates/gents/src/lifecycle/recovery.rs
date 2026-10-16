@@ -38,36 +38,25 @@ impl RequestLifecycle {
 
     /// Owner-scoped terminal-convergence re-drive (#664).
     ///
-    /// Under `agent-target-host` replication a routed `AgentRequest` is replicated
-    /// to its `requester_did` peer. Safety already holds (the watcher
-    /// `node_did` filter never lets that peer claim a foreign replica), but
-    /// liveness does not: when the owner terminalizes, the terminal delta
-    /// reaches the requester via a single one-shot PushLog that can drop, and
-    /// there is no per-doc anti-entropy on a running peer (defradb.rs#1074) to
-    /// re-request it. This re-drive is the owner side of the fix — periodically
-    /// re-asserting the current terminal value of recently-terminalized routed
-    /// requests. Local-only requests, whose requester is absent or the owner
-    /// itself, are excluded: no peer acts on their request state (#683). A
-    /// same-value re-write is a genuine higher-priority CRDT delta (it does not
-    /// no-op), so it flows through the normal PushLog path and a lagging
-    /// requester accepts it (LWW, higher priority ⇒ applied).
+    /// Under `agent-target-host` replication the owner's terminal delta reaches
+    /// the requester via a single one-shot PushLog that can drop, and there is
+    /// no per-doc anti-entropy on a running peer (defradb.rs#1074) to
+    /// re-request it. This periodically re-asserts the current terminal value
+    /// of recently-terminalized routed requests: a same-value re-write is a
+    /// genuine higher-priority CRDT delta (it does not no-op), so a lagging
+    /// requester applies it (LWW).
     ///
-    /// BOUNDED, NOT CONVERGENCE-OBSERVING. The owner has no back-channel telling
-    /// it whether a peer caught up. Each successful re-assert atomically advances
-    /// the persisted `terminal_redrive_attempts` counter, and eligibility stops
-    /// at [`TERMINAL_REDRIVE_CAP`] across process restarts. Candidate ordering is
-    /// `terminalized_at ASC`, not request creation time; exhausted rows leave the
-    /// query, so bounded batches eventually cover an arbitrarily old request that
-    /// terminalized late. A peer unavailable through the whole budget is repaired
-    /// by a bounded full replicator replay when the pairing reconnects; that path
-    /// authors no same-value request delta and therefore grows no request history.
+    /// BOUNDED, NOT CONVERGENCE-OBSERVING: the owner has no back-channel telling
+    /// it whether a peer caught up, so eligibility stops at
+    /// [`TERMINAL_REDRIVE_CAP`] across process restarts, ordered by
+    /// `terminalized_at ASC`; exhausted rows leave the query, so bounded batches
+    /// eventually cover an arbitrarily old late-terminalized request.
     ///
-    /// `node_did` MUST be the runtime's own DID: only the owner re-asserts its
-    /// own documents; peers stay passive (a peer-authored delta to a foreign doc
-    /// would fork the CRDT, not converge it). `node_did` itself is never
-    /// written (it is `@immutable`); only the mutable terminal `lifecycle_state`
-    /// and bounded attempt counter are written together in one document update.
-    ///
+    /// SAFETY: `node_did` must be the runtime's own DID — only the owner
+    /// re-asserts its own documents; a peer-authored delta to a foreign doc
+    /// would fork the CRDT. `node_did` is never written (it is `@immutable`).
+    /// Local-only requests (requester absent or the owner itself) are excluded:
+    /// no peer acts on their request state (#683).
     pub async fn redrive_terminal_convergence(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
@@ -131,9 +120,9 @@ impl RequestLifecycle {
             let next_attempts = attempts.saturating_add(1);
             let escaped_doc_id = escape_graphql_string(doc_id);
             let escaped_lifecycle_state = escape_graphql_string(lifecycle_state.as_str());
-            // Defense-in-depth: the candidate query is already `node_did == self`
-            // scoped, but keep the mutation itself owner-scoped too, matching the
-            // queue.rs seam guards — a re-drive must never touch a foreign replica.
+            // Defense-in-depth: keep the mutation owner-scoped even though the
+            // candidate query already is — a re-drive must never touch a
+            // foreign replica.
             let mutation = format!(
                 r#"mutation {{
                     update_AgentRequest(

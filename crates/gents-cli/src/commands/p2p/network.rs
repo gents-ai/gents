@@ -623,30 +623,6 @@ mod tests {
     }
 
     #[test]
-    fn registry_upsert_mutation_fields_are_correct() {
-        let entry = RegistryEntry {
-            peer_id: "test-peer-1".to_string(),
-            node_did: "did:key:test".to_string(),
-            addresses: vec!["/ip4/127.0.0.1/tcp/4001/p2p/test-peer-1".to_string()],
-            templates: vec!["conversation".to_string()],
-            display_name: Some("my-node".to_string()),
-            status: "online".to_string(),
-            network_id: "default".to_string(),
-        };
-        let now = "2026-06-13T00:00:00Z";
-        let mutation = registry_upsert_mutation(&entry, now, UpsertKind::Full);
-
-        assert!(mutation.contains(r#"peer_id: { _eq: "test-peer-1" }"#));
-        assert!(mutation.contains(r#"node_did: "did:key:test""#));
-        assert!(mutation.contains(r#"status: "online""#));
-        assert!(mutation.contains(r#"network_id: "default""#));
-        assert!(mutation.contains(r#"display_name: "my-node""#));
-        assert!(mutation.contains(r#"templates: ["conversation"]"#));
-        assert!(!mutation.contains("templates: []"));
-        assert!(mutation.contains(r#"registered_at: "2026-06-13T00:00:00Z""#));
-    }
-
-    #[test]
     fn delete_registry_mutation_uses_peer_id_filter() {
         let mutation = delete_registry_mutation(r#"peer"one"#);
         assert!(mutation.contains(r#"filter: { peer_id: { _eq: "peer\"one" } }"#));

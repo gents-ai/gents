@@ -44,15 +44,6 @@ occurrence, or run the owned work. -/
 inductive HookInvocation where | hook (hookId : String) | work
   deriving DecidableEq, Repr
 
-/-- The sequence in which `runTask` asked for those observations, read off the
-run result it produced. Which occurrences were attempted, and which after-phase
-was chosen, are the owner's own recorded traces, so this projection cannot
-disagree with `runTask` about either; it only linearizes them in `runTask`'s
-order: preparation, the owned work once preparation admitted it, the selected
-after-phase, then every cleanup occurrence. Concatenating both after-phases is
-unambiguous because at most one is ever non-empty (`runCases_one_after_phase`).
-A pure `HookExec` cannot observe invocation order, so this is the contract a
-host executor's actual invocations are compared against. -/
 def invocationTrace (r : RunResult) : List HookInvocation :=
   r.beforeAttempted.map (fun a => HookInvocation.hook a.hookId)
     ++ (if r.agentResult.isSome then [HookInvocation.work] else [])
@@ -281,13 +272,9 @@ theorem runCases_replay : ∀ c ∈ runCases,
       (runOf c).finalOutcome = c.expectedFinalOutcome ∧
       (runOf c).agentResult.isSome = c.expectedAgentRan := by decide
 
-/-- One ordinary after-phase at most, so the emitted trace's order between them
-is not a choice this projection makes. -/
 theorem runCases_one_after_phase : ∀ c ∈ runCases,
     (runOf c).afterSuccessAttempted = [] ∨ (runOf c).afterFailureAttempted = [] := by decide
 
-/-- The emitted trace carries the owned work exactly when preparation admitted
-it, so a case's `expectedAgentRan` cannot drift from the trace consumers read. -/
 theorem runCases_trace_records_the_agent_attempt : ∀ c ∈ runCases,
     ((invocationTrace (runOf c)).filter
         (fun i => match i with | HookInvocation.work => true | HookInvocation.hook _ => false)).length
@@ -323,7 +310,6 @@ def runCasesJson : String := jsonArray (runCases.map runCaseJson)
 
 structure RecoveryCase where
   name : String
-  /-- The latch request recovery read when it terminalized the request. -/
   interruptRequested : Bool := false
   started : Bool
   hooks : List TaskHook

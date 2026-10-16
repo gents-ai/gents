@@ -19,8 +19,6 @@ use crate::watcher::AgentRequest;
 use std::collections::HashMap;
 
 const AGENT_EXECUTOR_QUEUE_CAPACITY: usize = 32;
-// A configured backend may advertise a very large inference limit. Local
-// request workers are a separate bounded resource.
 const MAX_BEHAVIOR_WORKERS: usize = 256;
 
 fn bounded_active_limit(requested: usize) -> usize {
@@ -379,8 +377,6 @@ where
         if *shutdown.borrow() || *state_rx.borrow() == AgentSlotState::Retiring {
             return Ok(());
         }
-        // A sibling worker may have spent the budget already; a demoted slot
-        // must not keep rebuilding against a verdict that is already final.
         if standing
             .lock()
             .map(|standing| *standing == BuildStanding::Demoted)

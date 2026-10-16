@@ -1,22 +1,7 @@
 //! Installation records: what a pack install created, so an upgrade can tell
 //! an operator's edit from the pack's own document and removal deletes only
-//! what the pack created.
-//!
-//! One `PackInstallation` document per owner and pack coordinate, written in
-//! the same transaction as the documents it describes. For each document it
-//! holds the content digest the install wrote and whether the install created
-//! it (a document that already existed is adopted, never later deleted).
-//! `documents` and `history` and mutation writers are shared by the
-//! documents installer ([`install_in_txn`]), the graph installer
-//! ([`graph::record_graph_install_in_txn`]) and plugin-store changes
-//! ([`record_plugin_store_change`]) through [`write_record_in_txn`],
-//! so the three paths cannot diverge on how a record is written.
-//!
-//! On install, a document the record lists whose live content no longer
-//! matches the recorded digest was edited by someone else. Install stops and
-//! names each one unless the caller chose [`DriftPolicy::Overwrite`] or
-//! [`DriftPolicy::Keep`]. A document the previous version created and the new
-//! version dropped is removed, under the same rule. A graph pack's
+//! what the pack created. Drift stops install and removal unless the caller
+//! chose [`DriftPolicy::Overwrite`] or [`DriftPolicy::Keep`]; a graph pack's
 //! runtime-derived documents (see [`graph`]) are never drift-checked.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -45,26 +30,19 @@ mod graph;
 pub(crate) use graph::{observe_graph_install_in_txn, record_graph_install_in_txn};
 
 const RECORD: &str = "PackInstallation";
-/// Previous digests kept for rollback, newest first.
 const HISTORY_LIMIT: usize = 32;
 
-/// Which pack an install is.
 #[derive(Debug, Clone)]
 pub struct PackIdentity {
-    /// `{namespace}/{name}`.
     pub coordinate: String,
     pub version: String,
     pub digest: String,
-    /// The plugins this install put in the host's plugin store.
     pub plugins: Vec<InstalledPackPlugin>,
-    /// Coordinates of other packs this install depends on. Only a documents
-    /// pack may declare these (`pack::validate_pack_manifest` refuses a
-    /// graph pack any dependency of its own).
+    /// Only a documents pack may declare these.
     pub dependencies: Vec<String>,
 }
 
 impl PackIdentity {
-    /// The identity of the pack `manifest` describes, whose contents hash to `digest`.
     pub fn new(
         manifest: &super::PackManifest,
         digest: impl Into<String>,
@@ -80,7 +58,6 @@ impl PackIdentity {
     }
 }
 
-/// A plugin a pack install stored, by name and artifact digest.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InstalledPackPlugin {
     pub name: String,
@@ -90,12 +67,9 @@ pub struct InstalledPackPlugin {
 /// What to do with a document someone edited since the pack wrote it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum DriftPolicy {
-    /// Stop and name every edited document.
     #[default]
     Refuse,
-    /// Replace (or remove) it with the pack's version.
     Overwrite,
-    /// Leave the edit in place.
     Keep,
 }
 
@@ -115,22 +89,16 @@ struct Record {
     documents: BTreeMap<String, RecordedDocument>,
     plugins: Vec<InstalledPackPlugin>,
     history: Vec<String>,
-    /// Coordinates of installed packs that depend on this one. Non-empty
-    /// blocks a direct `gents pack remove` of this coordinate.
+    /// Coordinates of installed packs that depend on this one.
     required_by: BTreeSet<String>,
-    /// Whether this pack was installed for its own sake (`gents pack
-    /// install <it>` directly), rather than only as another pack's
-    /// dependency. A legacy record with no `explicit` field reads as `true`.
+    /// A legacy record with no `explicit` field reads as `true`.
     explicit: bool,
-    /// A plugin-store record ([`record_plugin_store_change`]), not a pack
-    /// install.
     plugin_store: bool,
 }
 
-/// What an install or removal did, each document as `Collection/id`.
+/// What an install or removal did.
 #[derive(Debug, Default, Serialize)]
 pub struct InstallReport {
-    /// Documents written, per collection.
     #[serde(flatten)]
     pub applied: crate::config_client::DesiredStateApplyCounts,
     pub created: Vec<String>,
@@ -138,22 +106,17 @@ pub struct InstallReport {
     pub adopted: Vec<String>,
     pub kept: Vec<String>,
     pub removed: Vec<String>,
-    /// Plugins the install recorded, or the removal released.
     pub plugins: Vec<InstalledPackPlugin>,
 }
 
-/// Something removal left in place, and why: a run's result view that needs
-/// its graph reinstalled, or a package SDL schema DefraDB cannot drop.
+/// Something removal left in place.
 #[derive(Debug, Serialize)]
 pub struct Retained {
     pub item: String,
     pub reason: String,
 }
 
-/// What `gents pack remove` did: the documents its own record listed (in the
-/// same shape [`InstallReport`] already reports for an install), anything
-/// removal could not or should not take with it, and any dependency the
-/// removal released in turn.
+/// What `gents pack remove` did.
 #[derive(Debug, Default, Serialize)]
 pub struct RemoveReport {
     pub pack: String,
@@ -161,8 +124,6 @@ pub struct RemoveReport {
     pub documents: InstallReport,
     pub retained: Vec<Retained>,
     pub dependencies: Vec<RemoveReport>,
-    /// The current and history digests of the removed record, so a caller
-    /// can tell which archives and plugin bytes nothing references any more.
     pub digests: Vec<String>,
 }
 
@@ -215,9 +176,6 @@ async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) ->
     })
 }
 
-/// Decodes `row[field]` as `T`, defaulting only a genuinely absent (missing
-/// or null) field; a present-but-malformed field fails loudly naming the
-/// record and field, rather than silently reading as empty.
 fn decode_record_field<T: serde::de::DeserializeOwned + Default>(
     row: &Value,
     field: &str,
@@ -246,11 +204,7 @@ async fn live_digest(
     }
 }
 
-/// Batched form of [`live_digest`]: one query per collection (through
-/// [`read_desired_state_records_in_txn`]'s own paging) instead of one query
-/// per document, grouping `docs` by collection first. A document absent from
-/// the result is simply missing from the map, the same as `live_digest`
-/// returning `None`.
+/// Batched form of [`live_digest`], grouping `docs` by collection first.
 async fn live_digests<'a>(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
@@ -285,11 +239,6 @@ fn edited_error(coordinate: &str, edited: &[String]) -> anyhow::Error {
     )
 }
 
-/// Writes `documents` as `pack`'s installation record for `owner`, updating
-/// the existing record named by `prior.doc_id` or creating one. The one
-/// writer both [`install_in_txn`] and [`graph::record_graph_install_in_txn`]
-/// use, so history, `required_by` and `explicit` are kept exactly the same
-/// way by either installer.
 async fn write_record_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
@@ -321,9 +270,8 @@ async fn write_record_in_txn(
             json!(pack.plugins)
         },
         "history": history,
-        // A nanosecond, process-monotonic stamp, not a plain timestamp: a
-        // remove immediately followed by a reinstall must not regenerate the
-        // just-tombstoned record's content-addressed docID (see
+        // A remove immediately followed by a reinstall must not regenerate
+        // the just-tombstoned record's content-addressed docID (see
         // `mint_recreate_identity_timestamp`).
         "installed_at": crate::config_client::mint_recreate_identity_timestamp(),
         "required_by": if required_by.is_empty() { Value::Null } else { json!(required_by) },
@@ -364,8 +312,6 @@ async fn write_record_in_txn(
     Ok(())
 }
 
-/// Installs `documents` for `owner` as `pack` and records what it did, in
-/// the transaction `txn`.
 pub(crate) async fn install_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
@@ -490,9 +436,7 @@ pub(crate) async fn install_in_txn(
     crate::config_client::validate_desired_state_plan(txn, &plan).await?;
     report.applied = crate::config_client::apply_desired_state_plan(txn, &plan).await?;
     report.plugins = pack.plugins.clone();
-    // The record holds what is stored, not what was authored: the stored
-    // document carries merged tags and normalized fields, and drift is judged
-    // against it.
+    // The record holds what is stored, not what was authored.
     let written: Vec<(Collection, &str)> = recorded
         .iter()
         .filter(|(name, _)| !keep.contains(name))
@@ -530,19 +474,15 @@ pub(crate) async fn install_in_txn(
 }
 
 /// Records a change to `coordinate`'s plugins in the host plugin store under
-/// `home`: `installed` is what an install just stored, `None` a removal. The
-/// write is what wakes the control watcher (the `PackInstallation` match in
-/// `agent::document_view`), so an Agent that names a changed plugin is
-/// re-resolved on the next reconcile; callers change the store first.
+/// `home`: `installed` is what an install just stored, `None` a removal.
+/// The write is what wakes the control watcher, so an Agent that names a
+/// changed plugin is re-resolved on the next reconcile; callers change the
+/// store first.
 ///
-/// Over a pack install of `coordinate` the record keeps the documents and
-/// identity that install recorded (a later upgrade drift-checks them, a
-/// removal deletes by them); only installed plugin names join its plugins.
-/// Otherwise the record is marked `plugin_store`: the installed-pack listings
-/// skip it, and it goes once the store holds none of `coordinate`'s plugins.
-/// A removal with no record (installed before the home had a node) writes
-/// nothing; the next call of the removed plugin fails closed at
-/// `PluginExecutor::run`.
+/// A removal of the coordinate's plugins releases by these names, so an
+/// install's names join them. Otherwise the record is marked `plugin_store`:
+/// the installed-pack listings skip it, and it goes once the store holds
+/// none of `coordinate`'s plugins.
 pub async fn record_plugin_store_change(
     access: &ConfigAccess,
     owner: &str,
@@ -611,23 +551,10 @@ pub async fn record_plugin_store_change(
         .await
 }
 
-/// Whether an installation record row is a plugin-store record
-/// ([`record_plugin_store_change`]). Such a record installed nothing in the
-/// node, so the installed-pack listings (and `pack outdated`/`update` through
-/// them) skip it, keeping a plugin-only install from becoming a full-pack
-/// update target.
 fn is_plugin_store_row(row: &Value) -> bool {
     row["plugin_store"].as_bool() == Some(true)
 }
 
-/// Removes what `record` lists for `coordinate`/`owner`: a graph-owned
-/// document (see [`graph::is_graph_owned`]) unconditionally when this install
-/// created it, a pack-authored one only when its live content still matches
-/// what the pack wrote (subject to `policy` otherwise); either kind is left
-/// alone, adopted, when the record says this install did not create it.
-/// Refuses while any of the record's graphs has a nonterminal run. Deletes
-/// the record itself. Does not touch dependency bookkeeping on other
-/// records; see [`remove_pack`] and [`dependencies`].
 async fn remove_record_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
@@ -667,9 +594,6 @@ async fn remove_record_in_txn(
     let mut removals = Vec::new();
     let mut revision_digests = Vec::new();
 
-    // Every created document that needs a live check (everything except an
-    // adopted one and a `GraphRevision`, checked separately below), read in
-    // one batched pass instead of one query per document.
     let checked: Vec<(Collection, &str)> = record
         .documents
         .values()
@@ -747,10 +671,6 @@ async fn remove_record_in_txn(
     Ok(report)
 }
 
-/// Removes what the install of `coordinate` for `owner` created, and its
-/// record. Documents it adopted stay. Refused while another installed pack
-/// still depends on `coordinate`. Releases (and reports) any dependency this
-/// was the last non-explicit claim on.
 pub async fn remove_pack(
     access: &ConfigAccess,
     owner: &str,
@@ -798,8 +718,7 @@ pub struct InstalledPack {
 }
 
 /// Every pack installed for `owner`, by coordinate.
-pub async fn list_installed_packs(
-    access: &ConfigAccess,
+pub async fn list_installed_packs(    access: &ConfigAccess,
     owner: &str,
 ) -> Result<Vec<InstalledPack>> {
     let response = access
@@ -823,9 +742,7 @@ pub async fn list_installed_packs(
         .collect()
 }
 
-/// The installed record for `coordinate`, if any: one query bounded to two
-/// rows, so a duplicate record (which should never exist) fails loud
-/// instead of silently picking one.
+/// The installed record for `coordinate`, if any.
 pub async fn read_installed_pack(
     access: &ConfigAccess,
     owner: &str,
@@ -858,10 +775,7 @@ pub async fn read_installed_pack(
 }
 
 /// Every pack installed for `owner`, combining node-recorded installs
-/// (documents and graph packs) with `home`'s file-recorded ones (assets and
-/// plugins packs), sorted by coordinate. `pack outdated`/`update` and the
-/// desktop installed-pack listing use this rather than each keeping their
-/// own merge of the two sources.
+/// with `home`'s file-recorded ones, sorted by coordinate.
 pub async fn installed_packs(
     home: Option<&Path>,
     node: Option<(&ConfigAccess, &str)>,

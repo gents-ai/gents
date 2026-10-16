@@ -1,8 +1,3 @@
-/* One agent's editor, with its context edited inline. The data model
-   is unchanged (Agent and AgentContext stay two documents), but the
-   context is a visible block on the agent: pick one, see who else uses
-   it, duplicate it or start empty, and edit its instructions and
-   capabilities in place. Everything waits for one Save. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { dependentsWarning } from "./dependents";
 import { Fragment, useRef, useState } from "react";
@@ -77,9 +72,7 @@ export function AgentEditor({
 }: {
   deployment: NodeView;
   agent: AgentView;
-  /* a new agent that exists only on this page until Save */
   draft?: DraftMode;
-  /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
 }) {
   const { changeConfig } = useApp().actions;
@@ -94,23 +87,18 @@ export function AgentEditor({
     displayName: agent.displayName,
     description: agent.description ?? "",
     tags: agent.tags ?? [],
-    /* a draft starts its own empty instructions; Save creates them */
     contextChoice: draftMode ? EMPTY : (agent.contextId ?? ""),
     contextName: "",
     copiedFrom: "",
     ...contextFields(context),
     inferenceProfileId: agent.inferenceProfileId ?? "",
   };
-  /* an unused context offered for deletion after a save: the typed-name
-     confirmation every delete goes through */
   const [confirmUnused, setConfirmUnused] = useState<AgentContext | null>(null);
-  /* the inline create dialogs' resolvers while one is open */
   const [newProfile, setNewProfile] = useState<((id: string | null) => void) | null>(
     null,
   );
   const [newTools, setNewTools] = useState<((id: string | null) => void) | null>(null);
   const [newSkill, setNewSkill] = useState<((id: string | null) => void) | null>(null);
-  /* a just-created document whose full editor is open beside the page */
   const [configure, setConfigure] = useState<{
     kind: "tools" | "profile";
     id: string;
@@ -127,9 +115,6 @@ export function AgentEditor({
         next,
         asCopy: Boolean(want.copy),
         draftMode,
-        /* one id per new context for the life of this editor, so a retry
-           after a failure writes the same document instead of minting
-           another */
         newContextId: () => (pendingContextId.current ??= newId("ctx")),
       });
       if (written.creating) pendingContextId.current = null;
@@ -149,12 +134,10 @@ export function AgentEditor({
   );
   const id = (f: string) => `${agent.agentId}-${f}`;
   const errors = d.problems;
-  /* a draft closes only once the bridge has the agent */
   const finish = async (intent: SaveIntent) => {
     const ok = await d.save(intent);
     if (ok && draftMode) draftMode.onSaved(agent.agentId);
   };
-  /* problems stay at their fields; Save takes you to the first one */
   const fields = Object.fromEntries(
     FIELD_ORDER.map(([field, slug]) => [field, id(slug)]),
   );
@@ -168,7 +151,6 @@ export function AgentEditor({
     return finish(intent);
   };
 
-  /* the context the draft points at, or the one a new context copies */
   const creating = isNew(d.draft.contextChoice);
   const selected = creating
     ? null
@@ -180,14 +162,10 @@ export function AgentEditor({
         (b) => b.agentId !== agent.agentId,
       )
     : [];
-  /* a change to shared instructions asks, at Save, whose change it is */
   const [confirmShared, setConfirmShared] = useState(false);
-  /* what the save waiting on that question should also do */
   const [pendingIntent, setPendingIntent] = useState<SaveIntent>({});
-  /* switching to another agent's instructions opens the picker inline */
   const [switching, setSwitching] = useState(false);
   const shared = others.length > 0;
-  /* a changed field on instructions other agents also use */
   const sharedEdit =
     selected !== null &&
     shared &&
@@ -205,7 +183,6 @@ export function AgentEditor({
       `${d.draft.displayName.trim() || "New"} context`,
     );
     if (choice === DUPLICATE) {
-      /* the copy starts from what the fields hold now */
       d.set("contextChoice", DUPLICATE);
       d.set("copiedFrom", selected?.context_id ?? "");
       d.set("contextName", name);
@@ -231,7 +208,6 @@ export function AgentEditor({
     d.set("skillIds", fields.skillIds);
   };
   const newLabel = d.draft.contextName.trim() || "New context";
-  /* who points at each context, counted once per render */
   const usersByContext = new Map<string, AgentView[]>();
   for (const b of deployment.agents) {
     if (!b.contextId) continue;
@@ -252,7 +228,6 @@ export function AgentEditor({
   const contextLink = selected
     ? href({ ...base, section: "contexts", item: selected.context_id })
     : null;
-  /* so the context page's Back returns here */
   const rememberOrigin = () => {
     if (selected) rememberContextOrigin(selected.context_id, agent.agentId);
   };
@@ -266,16 +241,16 @@ export function AgentEditor({
     : toolsSharers.length
       ? `Also used by ${toolsSharers.length} other ${toolsSharers.length === 1 ? "context" : "contexts"}; edits to the document reach them too.`
       : "Only this agent uses these tools.";
-  /* the block only speaks up when there is something to act on: shared
-     instructions, or ones that Save will create */
   const sharedWith = listNames(others.map((b) => b.displayName));
   const ownership = creating
     ? copiedFrom
       ? `A copy of ${nameOf(copiedFrom)} for this agent, created when you save.`
       : "New empty instructions for this agent, created when you save."
+  const ownership = creating
+    ? copiedFrom
+      ? `A copy of ${nameOf(copiedFrom)} for this agent, created when you save.`
+      : "New empty instructions for this agent, created when you save."
     : null;
-  /* the agents that share these instructions, each a link; past two,
-     the rest are counted and the count opens the context, which lists them */
   const agentLink = (b: AgentView) => (
     <a
       href={href({ ...base, item: b.agentId })}
@@ -309,9 +284,7 @@ export function AgentEditor({
         )}
       </>
     ) : null;
-  /* its context id points at nothing: deleted from under it */
   const dangling = Boolean(d.draft.contextChoice) && !creating && !selected;
-  /* a context only this agent uses can go with it */
   const soleContext =
     context &&
     (usersByContext.get(context.context_id) ?? []).every(
@@ -321,7 +294,6 @@ export function AgentEditor({
       : null;
   const readiness = agentReadiness(deployment, agent.agentId);
   const env = deployment.agentEnvironments.find((e) => e.agentId === agent.agentId);
-  /* said under the summary only when something needs attention */
   const attention =
     agent.enabled && !readiness.ready ? `It can’t run: ${readiness.reason}.` : null;
   return (
@@ -330,7 +302,6 @@ export function AgentEditor({
         data-testid="agent-header"
         className="mb-8 rounded-3xl bg-raised px-5 py-4 shadow-sm ring-1 ring-foreground/5"
       >
-        {/* avatar top-aligned beside the text; above it on phones */}
         <div className="flex min-w-0 items-start gap-3 max-md:flex-col">
           <AgentInitials
             name={draftMode ? d.draft.displayName.trim() || "New" : agent.displayName}

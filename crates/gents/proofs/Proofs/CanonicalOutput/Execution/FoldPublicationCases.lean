@@ -2,25 +2,15 @@ import Proofs.CanonicalOutput.Execution.HandoverCases
 import Proofs.CanonicalOutput.Execution.Transition
 import Proofs.Session.Management
 
-/-! Composed folded-turn scripts through the handover and gate owners: claim
-with a verified selection, authored publication of the prompt and each
-selected message, lease recovery under a fresh generation, and finish. Each
-step records whether the owner accepted it, the session queue, and the
-request's authored transcript keys. Native tests replay the same scripts
-through the native claim, publication, recovery and terminal owners. -/
 namespace CanonicalOutput.Execution.FoldPublication
 
 open Handover Handover.Cases CanonicalOutput.Execution.Examples
 
-/-- The selected message the head's turn answers. -/
 def activeEntry : SessionQueue.QueueEntry := { nextEntry with requester := some 1 }
 
 def selectedEntry : SessionQueue.QueueEntry :=
   { followingEntry 903 7 with requester := some 1 }
 
-/-- Intake is a queue selection under the same live execution fence as
-publication. It neither publishes nor consumes input. The native safe-boundary
-observation excludes an open provider stream; in-flight tools also block it. -/
 private def selectSteering (world : World) (actor : Gate.Actor) (now : Time)
     (generation : Generation) (active : SessionQueue.QueueEntry)
     (admitted : List RequestId) (safeBoundary : Bool) : Option World := do
@@ -41,10 +31,6 @@ def intakeSteering (world : World) (actor : Gate.Actor) (now : Time)
   let selected ← selectSteering world actor now generation active admitted safeBoundary
   pure { selected with gateSchedule := { selected.gateSchedule with phase := .releasable } }
 
-/-- Natural completion and late-input selection share one observed world and
-execution fence. A selected prefix continues the same request; only an empty
-prefix permits successful terminalization. Error and cancellation paths keep
-their existing terminal owner. -/
 def finishOrIntake (world : World) (actor : Gate.Actor) (now : Time)
     (generation : Generation) (active : SessionQueue.QueueEntry)
     (admitted : List RequestId) (safeBoundary : Bool)
@@ -56,19 +42,14 @@ def finishOrIntake (world : World) (actor : Gate.Actor) (now : Time)
 
 inductive Step where
   | observeDeadline (now deadline : Time)
-  /-- Publish the head's own prompt under `generation`. -/
   | publishPrompt (generation : Generation)
   | enqueueSteering (requestId : RequestId)
   | cancelFirstPending
   | intake (generation : Generation) (safeBoundary : Bool)
   | finishOrIntake (generation : Generation) (safeBoundary : Bool)
-  /-- Publish the prompt under `generation` with different content. -/
   | publishChangedPrompt (generation : Generation)
-  /-- Publish selected message `requestId` under `generation`. -/
   | publishFolded (generation : Generation) (requestId : RequestId)
-  /-- Accept a provider turn under `generation`. -/
   | acceptTurn (generation : Generation)
-  /-- The lease expires; the request is recovered under `fresh`. -/
   | recover (expected fresh : Generation)
   | terminalize (generation : Generation)
   | finish
@@ -86,7 +67,6 @@ structure Observation where
 private structure RunState where
   world : World
   now : Time
-  /-- The first accepted provider turn, replayed by later `acceptTurn` steps. -/
   turn : Option (Segment × MessageEnvelope)
 
 private def held (world : World) : Option World := reacquire world
@@ -107,7 +87,6 @@ private def authoredMessage (world : World) (closing : Segment) (key : String)
     key, sequence := world.transcript.nextSeq, nativeId := none
     blocks := [.text ⟨⟨closing.id, 0⟩, .full⟩], createdAt := now }
 
-/-- The entry already accepted under `key`, if any: replay reuses it. -/
 private def accepted? (world : World) (key : String) : Option (Segment × MessageEnvelope) := do
   let message ← world.messages.find? (·.key == key)
   let ref ← message.header.refs.head?
@@ -147,7 +126,6 @@ private def turnMessage (world : World) (closing : Segment) (generation : Genera
     key := "assistant-0", sequence := world.transcript.nextSeq, nativeId := none, blocks := []
     createdAt := now }
 
-/-- Apply one step. A rejected step leaves the durable world unchanged. -/
 private def apply (state : RunState) : Step → RunState × Bool
   | .observeDeadline now deadline =>
       ({ state with now, world := { state.world with
@@ -220,7 +198,6 @@ private def observe (world : World) (accepted : Bool) : Observation :=
       message.header.request == some world.requestId && message.header.role == .user).map
         (·.key) }
 
-/-- Claim the head with `[903]` verified, then begin its execution. -/
 def claimed : Option World := do
   let parent ← terminalRunningParent
   let gate ← Gate.acquire (Gate.initial parent) 1 true
@@ -305,8 +282,6 @@ private def summary (observation : Observation) :
   (observation.accepted, observation.pending, observation.folding, observation.terminal,
     observation.authoredKeys)
 
-/-- Consumption is part of the authored commit, finishing returns only what
-was not published, and reuse is exact and fenced by the live lease. -/
 theorem composed_scripts_consume_publish_and_reuse :
     ((cases.map fun c => ((run c.2).getD []).map summary).map (·.getLast?) ==
     [ some (true, [], [], [902, 903], ["prompt", "folded:903"])

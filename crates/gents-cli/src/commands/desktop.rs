@@ -88,8 +88,6 @@ async fn reset(
             .unwrap_or_else(|| crate::resolve_home_dir(None)),
     };
     let home = crate::absolutize(home)?;
-    // Retirement removes the preference that names the reviewed home, so a
-    // retry must name both roots explicitly.
     *retry = retry_command(&home, desktop.root())?;
     let config = NativeServiceConfig::new(home.clone(), std::env::current_exe()?)?;
     let user_home = resolve_user_home(Some(config.user_home.clone()))?;
@@ -155,8 +153,6 @@ async fn reset(
     })
 }
 
-/// Browser clearing cannot be undone, so it follows the completed archive or
-/// deletion; a failure then names what was already retired.
 fn retire_then_clear(
     settled: &HomeResetPlan,
     disposition: HomeResetDisposition,
@@ -178,8 +174,7 @@ fn retire_then_clear(
     Ok(result)
 }
 
-/// The desktop root from `--desktop-home`, else `GENTS_DESKTOP_HOME`, else
-/// the platform default, made absolute against `cwd` so a retry run from
+/// The desktop root is made absolute against `cwd` so a retry run from
 /// another directory selects the same state.
 fn select_desktop(
     flag: Option<std::path::PathBuf>,
@@ -236,7 +231,6 @@ async fn wait_for_exit(pid: u32) -> Result<()> {
             bail!("invalid desktop process ID");
         }
         loop {
-            // Signal zero observes process existence without sending a signal.
             let result = unsafe { libc::kill(pid, 0) };
             if result != 0 {
                 let error = std::io::Error::last_os_error();
@@ -264,7 +258,6 @@ const BROWSER_CLEAR_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 /// never removes browser directories itself.
 #[derive(Debug, Clone, Copy)]
 enum BrowserHelper {
-    /// Confirms no desktop of any home holds the shared store.
     Check,
     Clear,
 }

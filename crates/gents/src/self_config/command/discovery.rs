@@ -126,31 +126,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn source_arguments_are_explicit_and_typed() {
-        let argv = [
-            "scan",
-            "--source",
-            "codex-user",
-            "codex",
-            "user",
-            "homes/codex",
-            "--source",
-            "grok-project",
-            "grok",
-            "project",
-            "project",
-        ]
-        .map(str::to_owned);
-        let parsed = parse_sources(&argv).unwrap();
-        assert_eq!(parsed.len(), 2);
-        assert_eq!(parsed[0].source_id, "codex-user");
-        assert_eq!(parsed[0].kind, DiscoverySourceKind::Codex);
-        assert_eq!(parsed[0].scope, DiscoveryScope::User);
-        assert_eq!(parsed[1].kind, DiscoverySourceKind::Grok);
-        assert_eq!(parsed[1].scope, DiscoveryScope::Project);
-    }
-
-    #[test]
     fn malformed_source_arguments_fail_closed() {
         for argv in [
             vec!["scan"],

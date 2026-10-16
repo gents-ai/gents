@@ -2,14 +2,9 @@ import Proofs.Eval
 import Mathlib.Data.List.Basic
 
 /-! Configuration optimization (#1455), on the eval core contract.
-
-Models what must stay outside model control: worst-case imputation of an unknown
-case-trial, the two integer-arithmetic gates over per-case paired sums, the cost
-sub-gate, the ordered decision, and the append-only job journal.
-
-Refinement boundaries: the improvement test (a paired sign-flip permutation test
-in Rust) is an abstract `Bool`; eval runs, the proposer and candidate
-construction are outside the fence. -/
+Refinement boundary: the improvement test (a paired sign-flip permutation test
+in Rust) is an abstract `Bool`; eval runs, proposer and candidate construction
+are outside the fence. -/
 namespace Optimization
 
 inductive SeedSplit where
@@ -48,12 +43,9 @@ def splitSeedsTask (taskId : String) (split : SeedSplit) (triggers : List SeedTr
   cases.any fun c => decide (c.split = split) &&
     c.seedCollections.any (fun collection => seedReachesTask taskId collection triggers sources)
 
-/-- A task-template optimization needs a seed route in both development splits.
-The pack loader has already bound owners and resolved the target task's agent.
-Only stage seeds count: fixtures precede runtime boot, and prompt stages do not
-render the target template. Filters, grouping and the contents of seed documents
-remain runtime evidence; this admission rule establishes structural reachability,
-not successful delivery. A context target has no seed requirement. -/
+/-- A task-template optimization needs a seed route in both development splits;
+only stage seeds count (fixtures precede runtime boot), and only structural
+reachability, not delivery. A context target has no seed requirement. -/
 def missingTaskSeedSplits (target : Option String) (taskEnabled : Bool)
     (triggers : List SeedTrigger) (sources : List SeedSource) (cases : List SeedCase) :
     List SeedSplit :=
@@ -97,15 +89,10 @@ structure SeedRendering where
   rendered : Bool
   deriving DecidableEq, Repr
 
-/-- Exact seed rendering is structural admission, not a grade. All frozen stage
-seeds with a created-event route to the target task are checked. MiniJinja owns
-rendering against the seed's actual values; schema fields cannot substitute for
-those values. Generated fire metadata uses stable structural probes; it does not
-predict the identifiers or timestamp of a live fire. The native source reader
-always supplies `_docID`; no schema-derived user field is supplied. `$trial`
-bindings are resolved by the evaluation fixture owner. Seed data and case
-diagnostics stay outside proposer feedback.
-Scoring, split selection and the reserved held-out confirmation are unchanged. -/
+/-- Exact seed rendering is structural admission, not a grade: all frozen stage
+seeds with a created-event route to the target task are checked; rendering is
+owned by MiniJinja against the seed's actual values (schema fields cannot
+substitute). -/
 def failedTaskSeedRenders (target : Option String) (taskEnabled : Bool)
     (triggers : List SeedTrigger) (sources : List SeedSource)
     (seeds : List SeedRendering) : List SeedRendering :=
@@ -143,8 +130,8 @@ inductive Arm where
 
 def scoreBpMax : Nat := 10000
 
-/-- The score imputed to an unknown case-trial. It fails the candidate and passes
-the baseline, so an unknown can never help a candidate. -/
+/-- The score imputed to an unknown case-trial: fails the candidate, passes the
+baseline, so an unknown can never help a candidate. -/
 def unknownBp : Arm → Nat
   | .baseline => scoreBpMax
   | .candidate => 0
@@ -187,8 +174,8 @@ def alphaEffectivePpm (p : Params) : Nat := p.alphaPpm / (max p.maxRounds 1)
 
 def absDiff (a b : Nat) : Nat := (a - b) + (b - a)
 
-/-- Gate 1. The last conjunct says the permutation test can reach significance at
-all: `2^-n ≤ alpha`, written without division. -/
+/-- Gate 1. The last conjunct: the permutation test can reach significance at
+all, `2^-n ≤ alpha`, written without division. -/
 def sufficient (p : Params) (e : Evidence) : Bool :=
   e.casesMatch && !e.cases.isEmpty
     && e.cases.all (fun c => decide (p.minPairs ≤ c.pairs))
@@ -241,8 +228,8 @@ theorem inconclusive_iff (mode : Mode) (s r c i : Bool) :
     decideGates mode s r c i = .inconclusive ↔ s = false := by
   cases mode <;> cases s <;> cases r <;> cases c <;> cases i <;> decide
 
-/-- Accept is monotone in the gate flags: if a stricter assignment accepts, so does every
-weaker one; equivalently, failing a gate can never manufacture an accept. -/
+/-- Accept is monotone in the gate flags: failing a gate can never manufacture
+an accept. -/
 theorem accept_monotone (mode : Mode) (s r c i s' r' c' i' : Bool)
     (hs : s' = true → s = true) (hr : r' = true → r = true)
     (hc : c' = true → c = true) (hi : i' = true → i = true)

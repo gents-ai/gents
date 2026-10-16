@@ -119,11 +119,6 @@ impl DesiredStateDiffCollectionsCounts {
         self.0.values()
     }
 
-    #[cfg(test)]
-    pub(crate) fn get(&self, collection: Collection) -> &DesiredStateDiffCounts {
-        &self.0[collection.dir_name().unwrap_or("node")]
-    }
-
     pub(crate) fn is_exact_match(&self) -> bool {
         self.iter().all(|count| {
             count.create == 0 && count.update == 0 && count.delete == 0 && count.live_only == 0

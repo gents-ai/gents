@@ -1,5 +1,3 @@
-//! Desired-state/config CLI suites (server-backed).
-
 mod support;
 
 #[path = "suites/cli_config_agent.rs"]

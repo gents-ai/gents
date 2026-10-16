@@ -72,8 +72,6 @@ theorem coalescePending_preserves_active
   repeat' split at h <;> try contradiction
   all_goals cases h; rfl
 
-/-- Existing queue step behind its database selection boundary. A missing requester
-is an exact scope value, never a wildcard over requester-owned queues. -/
 def scopedStep? (target : AgentSession.Scope) (pre : SessionQueueState)
     (action : Action) : Option SessionQueueState :=
   if pre.scope = target then step? pre action else none

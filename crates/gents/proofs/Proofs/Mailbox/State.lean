@@ -1,14 +1,6 @@
 import Proofs.Basic
 import Mathlib.Data.Finset.Basic
 
-/-!
-# Mailbox state
-
-Model for the human-attention index. `Item` models one immutable identity plus
-its mutable terminal projection. `RegistryState` keeps one row collection;
-open-prefix and key observations are derived from it.
--/
-
 namespace Mailbox
 
 inductive Status where
@@ -96,7 +88,6 @@ def toDefraDB : SourceKind → String
 
 end SourceKind
 
-/-- Immutable envelope identity relevant to safety and idempotence. -/
 structure Identity where
   itemKey : String
   requesterDid : String
@@ -106,15 +97,12 @@ structure Identity where
   kind : Kind
   deriving DecidableEq, Repr
 
-/-- One persisted mailbox row.  `resolvedDocId` abstracts the satisfying
-AgentRequest/domain document and is empty for non-acted terminals. -/
 structure Item where
   identity : Identity
   status : Status
   resolvedDocId : String
   deriving DecidableEq, Repr
 
-/-- The owner-scoped prefix on which open-row retries coalesce. -/
 structure OwnerPrefix where
   requesterDid : String
   sourceKind : SourceKind
@@ -129,7 +117,6 @@ def Identity.ownerPrefix (identity : Identity) : OwnerPrefix :=
   , kind := identity.kind
   }
 
-/-- Runtime context that must stamp a create. -/
 structure StampContext where
   requesterDid : String
   nodeDid : String
@@ -138,7 +125,6 @@ structure StampContext where
 structure CreateRequest where
   identity : Identity
   context : StampContext
-  /-- Physical document identity allocated by the storage create owner. -/
   docId : String := ""
   handling : Handling := .ack
   sessionId : String := ""
@@ -146,7 +132,6 @@ structure CreateRequest where
   content : String := ""
   deriving DecidableEq, Repr
 
-/-- Immutable fields of a row actually written by the stamped-create owner. -/
 structure StoredEnvelope where
   docId : String
   identity : Identity
@@ -169,7 +154,6 @@ def CreateRequest.storedEnvelope (request : CreateRequest) : StoredEnvelope :=
   , requestId := request.requestId
   , content := request.content }
 
-/-- The one stored collection used by stamped create and open-row reuse. -/
 structure RegistryState where
   rows : List StoredRow := []
   deriving DecidableEq

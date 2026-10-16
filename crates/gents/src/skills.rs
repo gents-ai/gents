@@ -1,16 +1,7 @@
 //! Runtime skill resolution — the executable realization of the privilege
-//! algebra proved in `proofs/Proofs/Skills.lean`.
-//!
-//! A [`Skill`] declares the tools it *depends on* (`tool_refs`); it never
-//! *grants* them (decision D3, Codex-faithful). [`effective_skills`] computes
-//! the context's explicit skill whitelist, filtered by owner and enablement. [`skill_tools`] intersects a skill's
-//! declared refs with the agent's resolved tool ceiling and degrades when a
-//! dep is missing, so activation can never widen the tool surface beyond the
-//! ceiling — the executable counterpart of `Skills.activation_subset_ceiling`.
-//!
-//! This module is pure (no DB / request plumbing). The runtime wiring that
-//! loads `Skill` documents and feeds these results into `prompt.rs` and
-//! `tool_surface` is layered on top of it.
+//! algebra proved in `proofs/Proofs/Skills.lean`. Activation can never widen
+//! the tool surface beyond the agent ceiling
+//! (`Skills.activation_subset_ceiling`).
 
 use std::collections::BTreeSet;
 
@@ -432,7 +423,6 @@ mod tests {
         }
     }
 
-    /// A restricted ceiling (MCP not unrestricted) listing exactly `tools`.
     fn ceiling(tools: &[&str]) -> SkillToolCeiling {
         SkillToolCeiling::new(tools.iter().map(|s| s.to_string()).collect(), false)
     }
@@ -441,7 +431,7 @@ mod tests {
         skills.iter().map(|s| s.skill_id.clone()).collect()
     }
 
-    /// Conformance to Skills.source_directory_preserves_tool_authority.
+    /// Skills.source_directory_preserves_tool_authority.
     #[test]
     fn source_directory_informs_references_without_granting_tools() {
         let mut imported = skill("review", "did:p", &["read_file", "bash"]);
@@ -482,8 +472,7 @@ mod tests {
         );
     }
 
-    /// S-Skill-3 (candidate_set respects ownership): every effective skill
-    /// belongs to the requesting node and is enabled.
+    /// S-Skill-3: candidate_set respects ownership.
     #[test]
     fn effective_skills_respect_node_ownership() {
         let skills = vec![
@@ -497,9 +486,7 @@ mod tests {
         }
     }
 
-    /// S-Skill-1 (activation_subset_ceiling): the union of every active skill's
-    /// resolved tools is a subset of the agent ceiling — activation never
-    /// widens the tool surface.
+    /// S-Skill-1: activation_subset_ceiling.
     #[test]
     fn skill_tools_never_widen_the_ceiling() {
         let ceiling = ceiling(&["read", "bash"]);
@@ -522,7 +509,6 @@ mod tests {
         assert!(catalog.contains("a-name"));
         assert!(catalog.contains("a-desc"));
         assert!(catalog.contains("b-name"));
-        // Progressive disclosure: bodies are NOT in the catalog.
         assert!(!catalog.contains("a-instructions"));
         assert!(!catalog.contains("b-instructions"));
     }
@@ -554,7 +540,6 @@ mod tests {
         let skills = vec![skill("research", "did:p", &["read", "net"])];
         let tool = LoadSkillTool::new(skills, ceiling);
 
-        // load by name -> full body + degrade note for the ungranted "net" ref.
         let body = tool
             .call(LoadSkillArgs {
                 name: "research-name".to_string(),
@@ -562,9 +547,7 @@ mod tests {
             .await
             .expect("load_skill");
         assert!(body.contains("research-instructions"));
-        assert!(body.contains("net"));
 
-        // load by skill_id also works.
         assert!(tool
             .call(LoadSkillArgs {
                 name: "research".to_string(),
@@ -573,7 +556,6 @@ mod tests {
             .expect("load by id")
             .contains("research-instructions"));
 
-        // unknown skill -> readable Ok message listing what is available.
         let miss = tool
             .call(LoadSkillArgs {
                 name: "nope".to_string(),
@@ -586,7 +568,6 @@ mod tests {
 
     #[test]
     fn skill_tool_ceiling_folds_in_explicit_mcp_service_ids() {
-        // Restricted allowlist: built tools AND the explicit MCP ids are allowed.
         let ceiling = skill_tool_ceiling(
             vec!["read".to_string(), "bash".to_string()],
             &["x-data".to_string(), "observability-mcp".to_string()],
@@ -595,7 +576,7 @@ mod tests {
         assert!(ceiling.allows("read"));
         assert!(ceiling.allows("x-data"));
         assert!(ceiling.allows("observability-mcp"));
-        assert!(!ceiling.allows("unlisted-service")); // restricted: unknown is denied
+        assert!(!ceiling.allows("unlisted-service"));
 
         let mut mcp_skill = skill("a", "did:p", &["x-data"]);
         mcp_skill.tool_refs = vec!["x-data".to_string()];
@@ -604,16 +585,13 @@ mod tests {
 
     #[test]
     fn skill_tool_ceiling_unrestricted_mcp_allows_any_service() {
-        // Default: meta tools on + EMPTY allowlist == any MCP service
-        // allowed. A skill's MCP tool_ref must NOT be flagged unavailable, since
-        // it may well be a reachable service we cannot enumerate.
         let ceiling = skill_tool_ceiling(
             vec!["read".to_string()],
-            &[], // empty allowlist
+            &[],
             /*mcp_enabled*/ true,
         );
         assert!(ceiling.allows("read"));
-        assert!(ceiling.allows("some-mcp-service")); // benefit of the doubt
+        assert!(ceiling.allows("some-mcp-service"));
         let mut mcp_skill = skill("a", "did:p", &["some-mcp-service"]);
         mcp_skill.tool_refs = vec!["some-mcp-service".to_string()];
         assert!(
@@ -621,7 +599,6 @@ mod tests {
             "unrestricted MCP must not flag a service ref as unavailable"
         );
 
-        // But with MCP disabled (no call_tool), an empty allowlist grants nothing.
         let no_mcp = skill_tool_ceiling(vec!["read".to_string()], &[], /*mcp_enabled*/ false);
         assert!(!no_mcp.allows("some-mcp-service"));
         assert_eq!(
@@ -636,8 +613,6 @@ mod tests {
         let mut s = skill("research", "did:p", &["read"]);
         s.display_name = Some("Deep Research".to_string());
         let tool = LoadSkillTool::new(vec![s], ceiling(&["read"]));
-        // The catalog labels it "Deep Research"; load_skill with that label must
-        // resolve (else a cataloged skill is unloadable).
         let body = tool
             .call(LoadSkillArgs {
                 name: "Deep Research".to_string(),

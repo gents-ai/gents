@@ -1,5 +1,3 @@
-//! Explicitly gated live inference smoke; shared fixtures live in support.
-
 use crate::support::fixtures::test_identity;
 use crate::support::interrupt::create_runtime_request;
 use crate::support::live_inference::*;

@@ -1,6 +1,6 @@
-//! Preserve provider bytes while refusing EOF without a protocol terminal event.
-//! Some provider adapters synthesize a final response on raw EOF; this guard
-//! makes transport truncation an error before that adapter can report success.
+//! Preserve provider bytes while refusing EOF without a protocol terminal
+//! event: some provider adapters synthesize a final response on raw EOF, and
+//! this guard makes transport truncation an error first.
 use std::sync::Arc;
 
 use futures::StreamExt;
@@ -136,8 +136,6 @@ impl TerminalEvents {
                 if self.event_bytes <= MAX_EVENT_BYTES {
                     self.line.push(byte);
                 } else {
-                    // Discard oversized events, but keep recognizing subsequent
-                    // event boundaries and a later small terminal marker.
                     self.oversized = true;
                     // A nonempty sentinel distinguishes this line from a blank.
                     if self.line.is_empty() {

@@ -1,16 +1,10 @@
 //! HTTP client wrapper that tags outbound inference requests with the current
-//! agent session id and trace context.
-//!
-//! Emitting `x-session-id` lets a load balancer in front of a multi-replica,
-//! prefix-caching inference backend pin every turn of a conversation to the
-//! same replica (sticky-session routing), keeping that replica's prefix cache
-//! warm so only the new turn's delta is prefilled instead of paying the full
-//! prefill tax on each hop. See issue #447.
-//!
-//! The session id is resolved per request from the admission task-local request
-//! context, because the rig completion client is built once per agent while
-//! the session id varies per request. This mirrors the per-request injection
-//! seam already used by [`crate::chatgpt_codex::ChatGptCodexHttpClient`].
+//! agent session id and trace context. `x-session-id` lets a load balancer in
+//! front of a multi-replica, prefix-caching inference backend pin every turn
+//! of a conversation to the same replica (sticky-session routing), keeping its
+//! prefix cache warm. The session id is resolved per request from the
+//! admission task-local context because the rig completion client is built
+//! once per agent while the session id varies per request.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -421,7 +415,6 @@ mod tests {
 
     #[test]
     fn tag_is_noop_without_session_context() {
-        // Outside any admission scope there is no session id to attach.
         let req = Request::new(Bytes::from_static(b""));
         let tagged = SessionTaggingHttpClient::<ReqwestClient>::tag(req);
         assert!(

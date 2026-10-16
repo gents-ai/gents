@@ -95,10 +95,8 @@ pub(crate) async fn load_bound_context_window(
     Ok(value)
 }
 
-/// Resolve the agent the Codex shim binds to.
-///
-/// An explicit override always wins. Otherwise the exact principal document
-/// and its configured default agent are required.
+/// The Codex shim's bound agent: an explicit override wins, else the node's
+/// default agent.
 pub(crate) async fn resolve_bound_agent_id(
     node: &EmbeddedNode,
     override_agent_id: Option<&str>,
@@ -117,7 +115,7 @@ pub(crate) async fn resolve_bound_agent_id(
         .ok_or_else(|| anyhow!("node {node_did:?} has no default agent binding"))
 }
 
-/// Normalize an optional adapter agent selector before resolving documents.
+/// Normalize an optional adapter agent selector.
 pub(crate) fn explicit_agent_override(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)

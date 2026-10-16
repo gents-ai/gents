@@ -17,8 +17,8 @@ export function useShellLayout(route: Route) {
   const surfaces = useSurfaces();
   const dockOpen = dockView(dock, route.name, surfaces).shown;
   const shellRef = useRef<HTMLDivElement>(null);
-  /* Observed on the shell itself: the window's resize event fires before the
-     frame's width variable has caught up, so it would measure the old width */
+  // The window's resize event fires before the frame's width variable has
+  // caught up, so it would measure the old width.
   const [shellWidth, setShellWidth] = useState(0);
   useEffect(() => {
     const el = shellRef.current;
@@ -31,11 +31,8 @@ export function useShellLayout(route: Route) {
   }, []);
   const wide = useMediaQuery("(min-width: 768px)");
   const roomy = useMediaQuery(ROOMY_WINDOW);
-  /* the preference is kept; a narrow window shows the rail in its place */
   const shownNav: NavMode = nav === "expanded" && !roomy ? "hover" : nav;
   const rail = wide ? (shownNav === "expanded" ? 304 : 56) : 0;
-  /* the dock is a column only where the window has the room; a half-screen
-     window shows it as a sheet over the pane */
   const docked = wide && roomy;
   const divider = useDivider({
     key: "gents-prototype-trace-width",
@@ -50,24 +47,15 @@ export function useShellLayout(route: Route) {
     onClosed: closeDock,
   });
   const { jumpClosed } = divider;
-  /* the dock is the pane's: leaving for a route where none of its tabs
-     apply closes it, and it opens again only when asked */
   useEffect(() => {
     if (dock.open && !dockView(dock, route.name, surfaces).shown) {
       closeDock();
       jumpClosed();
     }
   }, [route.name, dock, surfaces, jumpClosed, closeDock]);
-  /* the dock stays in the grid while it settles shut */
   const dockVisible = docked && (dockOpen || divider.pos > 0);
   const dockCol = dockVisible ? divider.pos + 8 : 0;
   const paneCol = Math.max(0, shellWidth - rail - dockCol);
-  /* The pane is laid out once per move of the divider, not at every width
-     on the way: a long transcript re-wraps every row at each width, and real
-     sessions took 100 ms and more a frame. Settling, it takes the width it is
-     settling to and the dock slides over or off it; dragged, it keeps the
-     width it had when the drag began, slides under the moving dock, and
-     re-wraps once where the divider is let go. */
   const settlingTo = docked && !divider.dragging ? divider.target : null;
   const dragFrom = useRef<number | null>(null);
   if (!(docked && divider.dragging)) dragFrom.current = null;
@@ -78,15 +66,10 @@ export function useShellLayout(route: Route) {
       : settlingTo === null
         ? null
         : Math.max(0, shellWidth - rail - (settlingTo > 0 ? settlingTo + 8 : 0));
-  /* the dock's surface likewise: laid out once at the width it opens to,
-     revealed as its column widens; closing, it keeps the width it had open
-     and its column clips it away */
   const openWidth = useRef(divider.pos);
   if (settlingTo === null && divider.pos > 0) openWidth.current = divider.pos;
   const dockWidth =
     settlingTo === null ? divider.pos : settlingTo > 0 ? settlingTo : openWidth.current;
-  /* every column is a length so the bar above and the row below share one
-     set of tracks, and the divider's motion is the spring's, frame by frame */
   const columns = !wide
     ? "minmax(0,1fr)"
     : shellWidth
@@ -102,8 +85,6 @@ export function useShellLayout(route: Route) {
     divider,
     dockVisible,
     paneCol,
-    /** the pane's width while the divider moves: where a settle is going, or
-        where a drag began */
     paneWidth,
     dockWidth,
     columns,

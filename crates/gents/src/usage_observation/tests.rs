@@ -92,7 +92,6 @@ fn api_key_account(node_did: &str) -> UsageAccount {
     }
 }
 
-/// Every stored row as `(node_did, provider, usage_key)`.
 async fn rows(node: &Arc<EmbeddedNode>) -> Vec<(String, String, String)> {
     let response = node
         .execute("{ ProviderAccountUsage { node_did provider usage_key } }")
@@ -349,9 +348,6 @@ async fn store_new_first_account_never_shows_the_removed_accounts_usage() {
     assert_eq!(for_backend, None);
 }
 
-/// Remove-all then sign in again within the same second: `connected_at` has
-/// seconds precision, so only a key the new sign-in does not inherit keeps
-/// the removed account's usage apart.
 #[tokio::test]
 async fn store_next_original_account_never_shows_the_removed_accounts_usage() {
     let node = node().await;
@@ -736,7 +732,6 @@ const CODEX_USAGE_BODY: &str = r#"{"plan_type":"plus","rate_limit":{"primary_win
 const OPENROUTER_KEY_BODY: &str =
     r#"{"data":{"limit":20,"limit_remaining":15,"limit_reset":"daily"}}"#;
 
-/// A signed-in account of `provider` for `node_did`, expiring at `expires_at`.
 async fn sign_in(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
@@ -760,7 +755,6 @@ async fn sign_in(
     }
 }
 
-/// The server origin of a `one_shot_token_server` URL.
 fn origin(url: &str) -> String {
     url.trim_end_matches("/v1/oauth/token").to_string()
 }
@@ -796,7 +790,6 @@ async fn read(
         .expect("read")
 }
 
-/// The server got no connection within a short wait.
 async fn never_called(handle: tokio::task::JoinHandle<String>) {
     let mut handle = handle;
     let waited = tokio::time::timeout(std::time::Duration::from_millis(300), &mut handle).await;
@@ -1173,8 +1166,6 @@ async fn read_guard_recent_read_is_skipped() {
     );
     never_called(handle).await;
 
-    // A recent read skips before any token is touched: an expired sign-in
-    // is not refreshed.
     let did = "did:key:z6MkUsageReadRecent";
     sign_in(&node, did, CODEX, now - Duration::hours(1), None).await;
     let account = UsageAccount::Credential {
@@ -1573,7 +1564,6 @@ const GROK: &str = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
 const CLAUDE: &str = crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
 const GROK_BILLING_BODY: &str = r#"{"config":{"creditUsagePercent":30,"currentPeriod":{"start":"2100-01-01T00:00:00Z","end":"2100-01-08T00:00:00Z"}}}"#;
 
-/// A second account of `provider` with reference `account_ref`.
 async fn sign_in_ref(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
@@ -1915,8 +1905,6 @@ async fn node_read_outcomes_hold_no_secrets() {
     assert!(!json.contains("did:"), "{json}");
 }
 
-/// Account `acct-a` with usage under its fallback key (before its key was
-/// known) and under its key, account `acct-b`, and an API-key backend.
 async fn seed_remove_fixture(node: &Arc<EmbeddedNode>) -> (OAuthCredential, String) {
     let mut first = credential(A, Some("acct-a"), None);
     first.connected_at = Some(Utc::now());

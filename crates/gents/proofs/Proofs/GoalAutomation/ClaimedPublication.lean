@@ -1,11 +1,8 @@
 import Proofs.GoalAutomation.OperatorResume
 
-/-! Transaction-boundary refinement of the existing claimed → childPresent
-phase. Claim has already consumed the Goal sequence. `commit` means the SAME
-native ConfigApplyTxn committed the Goal CAS write and signed AgentRequest;
-false includes native conflict and discard. No new durable state or clock.
-The Goal write must participate even though modeled Goal fields are unchanged.
--/
+/-- `commit` means the SAME native ConfigApplyTxn committed the Goal CAS write
+and signed AgentRequest; false includes native conflict and discard. The Goal
+write must participate even though modeled Goal fields are unchanged. -/
 namespace GoalAutomation.OperatorResume
 
 structure ClaimedRequest extends Request where
@@ -13,18 +10,17 @@ structure ClaimedRequest extends Request where
   requester : Option String
   deriving DecidableEq, Repr
 
-/-- `completionPending` is terminal with its completion notification and
-wake not yet delivered: the process result is not yet in the session. -/
+/-- `completionPending` means the process result is not yet in the session. -/
 inductive BackgroundState where
   | pending | running | completionPending | terminal
   deriving DecidableEq, Repr
 
-/-- The waited process's result is not yet in the session: it is still
-running, or it ended and its completion notification and wake are still
-owed. Continuing the Goal now would run without that result, and the wake
-would then run as well. This predicate only decides local admission. That the
-deferral ends rests on a premise not proved here: recovery redrives an owed
-delivery, and the Goal continues from that wake. -/
+/-- The process result is not yet in the session: it is still running, or it
+ended and its completion notification and wake are still owed. Continuing the
+Goal now would run without that result, and the wake would then run as well.
+This predicate only decides local admission. That the deferral ends rests on a
+premise not proved here: recovery redrives an owed delivery, and the Goal
+continues from that wake. -/
 def BackgroundState.resultOwed : BackgroundState → Bool
   | .running | .completionPending => true
   | _ => false
@@ -48,11 +44,10 @@ inductive WaitResult where
   | timedOutRunning | other | argumentError | settledDiagnostic | malformed
   deriving DecidableEq, Repr
 
-/-- One row represents a physical accepted control and its canonical invocation
-reply. The native projection must reject missing/ambiguous accepted arguments or
+/-- The native projection must reject missing/ambiguous accepted arguments or
 replies rather than synthesize these fields from untrusted message text. It
-enumerates accepted RequestExecution header bindings, not mutable tool-name
-row indexes, before re-reading exact physical rows.
+enumerates accepted RequestExecution header bindings, not mutable tool-name row
+indexes, before re-reading exact physical rows.
 `timedOutRunning` requires both status=running and reason=wait_timeout;
 `other` includes valid terminal, caller-interrupted, and caller-deadline envelopes.
 `argumentError` is a canonical control error without a handle-bearing envelope.
@@ -79,12 +74,9 @@ structure WaitControl where
 
 structure PublicationObservation where
   waits : List WaitControl
-  /-- `none` means the target rows were read but could not be decoded into an
-  authoritative observation; it is not a proven empty scan. -/
+  /-- `none` means the target rows could not be decoded into an authoritative
+  observation; it is not a proven empty scan. -/
   backgrounds : Option (List BackgroundTool)
-  /-- A transaction read failed at the storage owner (conflict after its own
-  retries, storage failure, or step timeout). Nothing about the evidence is
-  known, so this is neither invalid nor absent. -/
   storageFailed : Bool
   deriving DecidableEq, Repr
 
@@ -113,21 +105,12 @@ def matchingBackground (r : ClaimedRequest) (w : WaitControl)
     (b : BackgroundTool) : Bool :=
   targetCandidate r w b && validBackgroundOrigin b
 
-/-- Evidence that a relevant control cannot be interpreted. Settled
-diagnostics are exempt before any reply requirement is applied. -/
 def malformedControl (w : WaitControl) : Bool :=
   !w.terminal ||
     (w.reply != .settledDiagnostic &&
       (!w.replied || w.reply == .malformed ||
         (w.reply != .argumentError && w.replyHandle != w.acceptedHandle)))
 
-/-- A completed bounded wait is intentional only while its exact physical
-background generation still owes its result (`BackgroundState.resultOwed`). A malformed same-parent canonical receipt
-blocks publication; an unrelated wait or a mere background launch does not.
-The native projection must bind spawned origin to the accepted physical
-spawn_process parent, not trust a row's claimed handle or key alone. Ordinary
-direct background calls have no immediate invocation receipt, so no legal
-terminal predecessor can leave one running; generic tools use spawned children. -/
 def assessWait (r : ClaimedRequest) (o : PublicationObservation) : WaitAssessment :=
   let relevant := o.waits.filter (matchingWait r)
   if o.storageFailed then .unavailable
@@ -145,10 +128,7 @@ def assessWait (r : ClaimedRequest) (o : PublicationObservation) : WaitAssessmen
           (backgrounds.filter (matchingBackground r w)).any (·.state.resultOwed) then .pending
       else .absent
 
-/-- Temporary storage trouble is not evidence: publication makes no Goal write
-and a later reconciliation retries, as the readiness gate lets Goals ride out
-temporary trouble without an operator. Only uninterpretable evidence stops.
-Fail-closed evidence must stop automatic continuation visibly rather than
+/-- Fail-closed evidence must stop automatic continuation visibly rather than
 be retried silently forever. It uses the existing Goal transitions: an active
 Goal pauses; a budget-limited Goal abandons its wrap-up. Native records the
 reason in `last_failure`. A paused Goal leaves the automatic candidate set.
@@ -241,8 +221,6 @@ theorem invalid_evidence_result (s : Snapshot) (r : ClaimedRequest)
   repeat' split at *
   all_goals simp_all
 
-/-- Invalid evidence on an active Goal pauses it when the transaction commits,
-so the rejection is durable and visible instead of a silent rescan loop. -/
 theorem invalid_evidence_pauses_active_goal (s : Snapshot) (r : ClaimedRequest)
     (o : PublicationObservation)
     (hactive : s.goal.status = .active)
@@ -251,8 +229,6 @@ theorem invalid_evidence_pauses_active_goal (s : Snapshot) (r : ClaimedRequest)
   rw [invalid_evidence_result s r o true h]
   simp [stopGoal, stopForInvalidEvidence, Goals.step?, hactive]
 
-/-- A finished or abandoned wrap-up is the end of automatic continuation: its
-claim can never publish or stop again, whatever the wait evidence says. -/
 theorem completed_wrapup_admits_no_publication (s : Snapshot) (r : ClaimedRequest)
     (o : PublicationObservation) (commit : Bool) (h : s.goal.wrapupCompleted = true) :
     (publishClaimed s r o commit).1 = s ∧ (publishClaimed s r o commit).2 ≠ .created := by
@@ -260,9 +236,6 @@ theorem completed_wrapup_admits_no_publication (s : Snapshot) (r : ClaimedReques
   repeat' split
   all_goals simp_all
 
-/-- Anti-suppression: a deferral exists only because a matching accepted
-wait_process timed out on a matching, correctly-originated target that still
-owes its result. -/
 theorem pending_requires_matching_running_wait (r : ClaimedRequest)
     (o : PublicationObservation) (h : assessWait r o = .pending) :
     ∃ w ∈ o.waits, matchingWait r w = true ∧ w.reply = .timedOutRunning ∧
@@ -293,8 +266,6 @@ theorem pending_requires_matching_running_wait (r : ClaimedRequest)
         exact ⟨w, hw, hm, hreply, backgrounds, rfl, b, hb', hmb, hrun⟩
       · cases h
 
-/-- A storage failure during the evidence reads never transitions the Goal
-and never publishes; the claim stays for a later reconciliation. -/
 theorem storage_failure_is_retryable_noop (s : Snapshot) (r : ClaimedRequest)
     (o : PublicationObservation) (commit : Bool) (h : o.storageFailed = true) :
     (publishClaimed s r o commit).1 = s ∧
@@ -305,7 +276,6 @@ theorem storage_failure_is_retryable_noop (s : Snapshot) (r : ClaimedRequest)
   repeat' split
   all_goals simp_all
 
-/-- A background launch without an accepted matching wait never defers. -/
 theorem launch_without_wait_never_defers (r : ClaimedRequest)
     (o : PublicationObservation) (h : ∀ w ∈ o.waits, matchingWait r w = false) :
     assessWait r o ≠ .pending := by

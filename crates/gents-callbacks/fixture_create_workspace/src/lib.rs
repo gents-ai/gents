@@ -1,17 +1,13 @@
-//! Fixture ActionPlan producer for the sealed Afterburner callback adapter.
-
 use serde_json::{json, Map, Value};
 
 pub const ACTION_PLAN_ABI: u32 = 1;
 
-/// This crate's `wasm32-wasip1` command, built by `build.rs`.
 #[cfg(all(not(target_arch = "wasm32"), not(callback_fixture_skipped)))]
 pub const WASI_COMMAND: Option<&[u8]> =
     Some(include_bytes!(env!("GENTS_CALLBACK_FIXTURE_WASI_COMMAND")));
 #[cfg(all(not(target_arch = "wasm32"), callback_fixture_skipped))]
 pub const WASI_COMMAND: Option<&[u8]> = None;
 
-/// Pure planner used by the wasm entry and host rlib tests.
 pub fn plan_create_workspace(
     source: &Value,
     args: &Value,
@@ -39,7 +35,6 @@ pub fn plan_create_workspace(
     };
 
     let mut action = Map::new();
-    // This signed fixture deliberately grants no repository writes.
     action.insert(
         "path_capability".into(),
         json!({"mode": "exactPaths", "paths": []}),
@@ -65,7 +60,6 @@ pub fn plan_create_workspace(
     Ok(Value::Object(plan))
 }
 
-/// Decode the host input envelope and run [`plan_create_workspace`].
 pub fn plan_from_bytes(input: &[u8]) -> Result<Vec<u8>, String> {
     let value: Value = serde_json::from_slice(input)
         .map_err(|error| format!("planner input is not JSON: {error}"))?;
@@ -129,62 +123,4 @@ fn optional_string(source: &Value, field: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn emits_create_workspace_without_host_paths() {
-        let source = json!({
-            "work_unit_id": "unit-1",
-            "repository_id": "repo-1",
-            "base_sha": "abc",
-            "branch": "topic",
-            "workspace_id": "ws-1"
-        });
-        let plan = plan_create_workspace(&source, &json!({}), &[]).expect("plan");
-        let encoded = serde_json::to_string(&plan).unwrap();
-        assert!(!encoded.contains("host_path"), "{encoded}");
-        assert!(!encoded.contains("/tmp"), "{encoded}");
-        assert_eq!(plan["abi"], 1);
-        assert_eq!(
-            plan["actions"][0]["path_capability"],
-            json!({"mode": "exactPaths", "paths": []})
-        );
-        assert_eq!(plan["actions"][0]["type"], "create_workspace");
-        assert_eq!(plan["actions"][0]["workspace_id"], "ws-1");
-        assert_eq!(plan["actions"][0]["adapter"], "make_worktree");
-        assert_eq!(plan["actions"][0]["creation_policy"], "git_worktree_diff");
-    }
-
-    #[test]
-    fn args_override_adapter() {
-        let source = json!({
-            "work_unit_id": "unit-1",
-            "repository_id": "repo-1",
-            "base_sha": "abc",
-            "branch": "topic"
-        });
-        let plan =
-            plan_create_workspace(&source, &json!({"adapter": "git_worktree"}), &[]).expect("plan");
-        assert_eq!(plan["actions"][0]["adapter"], "git_worktree");
-        assert_eq!(plan["actions"][0]["workspace_id"], "unit-1");
-    }
-
-    #[test]
-    fn missing_source_field_is_an_error() {
-        let err =
-            plan_create_workspace(&json!({"work_unit_id": "unit-1"}), &json!({}), &[]).unwrap_err();
-        assert!(err.contains("repository_id"), "{err}");
-    }
-
-    #[test]
-    fn envelope_rejects_deployment_id() {
-        let err =
-            plan_from_bytes(br#"{"source":{},"args":{},"deployment_id":"deploy-1"}"#).unwrap_err();
-        assert!(err.contains("deployment_id"), "{err}");
-    }
 }

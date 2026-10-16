@@ -1,9 +1,8 @@
 use std::future::Future;
 
-/// A stream generator can retain a queued write-gate acquisition when its
-/// `next()` borrow is dropped. Keep that acquisition progressing while the
-/// consumer flushes through the same gate, and retain at most one produced
-/// item until the earlier output has been flushed.
+/// Keep a retained stream write-gate acquisition progressing while the
+/// consumer flushes through the same gate; retain at most one produced item
+/// until earlier output has been flushed.
 pub async fn flush_while_polling<F, P>(flush: F, progress: P) -> (F::Output, Option<P::Output>)
 where
     F: Future,

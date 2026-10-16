@@ -20,12 +20,8 @@ pub struct OneShotProviderFailure {
     source: Option<anyhow::Error>,
 }
 
-/// The owned loop ended a tool-free turn without visible text (for example,
-/// reasoning only) after its resample budget. This is an unusable model
-/// result a caller may retry or replace, distinct from provider transport
-/// failures and from auxiliary persistence or ownership invariants. Reasoning
-/// the turn received was already emitted to the auxiliary sink before this
-/// error, and its partial closure goes through the ordinary cleanup owners.
+/// The owned loop ended a tool-free turn without visible text (e.g. reasoning
+/// only) after its resample budget.
 #[derive(Debug, thiserror::Error)]
 #[error("one-shot completion produced no visible output")]
 pub struct OneShotNoVisibleOutput {
@@ -114,8 +110,6 @@ async fn close_received_auxiliary_after_error(error: anyhow::Error) -> anyhow::E
 async fn finish_one_shot_result<T>(result: anyhow::Result<T>) -> anyhow::Result<T> {
     match result {
         Ok(value) => Ok(value),
-        // A persistence failure already attempted cleanup. Preserve that
-        // failure without an unauthorized retry of the canonical writer.
         Err(error) if error.is::<AuxiliaryPersistenceFailure>() => Err(error),
         Err(error) => {
             match crate::rendered_request::scope::flush_received_auxiliary_partial().await {
@@ -298,10 +292,6 @@ where
                 LoopStreamItem::SteeringBoundary { .. }
                 | LoopStreamItem::AuthoredInputReady { .. }
                 | LoopStreamItem::FinishOrIntake { .. } => {
-                    // This event carries persistence authority and may only be
-                    // consumed by the owned StreamProcessor. The auxiliary has no
-                    // hook, so observing it here means authority leaked past the
-                    // ownership boundary: fail loudly instead of discarding it.
                     anyhow::bail!(
                         "AuthoredInputReady reached the nonpersistent one-shot auxiliary; \
                      authored-input persistence belongs to the owned StreamProcessor consumer"
@@ -491,9 +481,8 @@ where
 }
 
 /// Runs a typed completion without surrendering the runtime's owned-loop
-/// chokepoint to Rig's `Agent` orchestration. Rig's schema is attached to every
-/// provider request, while the owned loop validates before accepting a final
-/// turn and applies its normal bounded recovery policy on malformed output.
+/// chokepoint to Rig's `Agent` orchestration; the owned loop validates the
+/// schema before accepting a final turn.
 pub async fn run_loop_to_typed<M, T>(
     model: M,
     prompt: Message,

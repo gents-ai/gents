@@ -79,7 +79,6 @@ def newRequest? (scenario : TriggerScenario) : Option AgentRequest :=
 
 def causedById? (request : AgentRequest) : Option String := request.causedBy
 
-/-- Lineage source comes from the selected seed independently of gate identity. -/
 def causedByKind? (scenario : TriggerScenario) : Option String :=
   (dispatch scenario.snap scenario.intent).bind fun seed =>
     seed.causedByTriggerId.map fun _ => seed.causedByTriggerKind.toDefraDB

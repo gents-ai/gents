@@ -1,8 +1,5 @@
-//! The configuration-only research desk capstone: a definition pack and one subject pack per
-//! kickoff variant, run with `gents eval run factory-setup`. These tests keep
-//! the packs loadable, the definition valid against the shipped check
-//! registry, and each subject's Engineer the Engineer the desktop first run
-//! creates, so a variant differs only in its `factory/` kickoff files.
+//! Keeps the factory-setup eval packs loadable and their definition valid
+//! against the shipped check registry.
 
 use std::path::{Path, PathBuf};
 
@@ -18,7 +15,7 @@ fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/configurator_evals/factory_setup")
 }
 
-/// Every directory under the fixture root holding a subject pack.
+/// Subject pack directories under the fixture root.
 fn subjects() -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(root())
         .unwrap()
@@ -81,8 +78,6 @@ fn every_subject_is_the_desktop_engineer_on_an_eval_node() {
             "{name}: one slot binds the Engineer and, through its backend, the crew"
         );
         let context = &config.contexts[0];
-        // A `_preview` variant appends one instruction to the shipped prompt
-        // (the preview A/B); every other subject runs it unchanged.
         let prompt = context.system_prompt.as_deref().unwrap_or_default();
         if dir.to_string_lossy().ends_with("_preview") {
             assert!(
@@ -121,8 +116,6 @@ fn every_subject_is_the_desktop_engineer_on_an_eval_node() {
             Some(&["engineer-mailbox".to_string()][..]),
             "{name}"
         );
-        // Embedded trials refuse host bash; the Engineer configures through
-        // the native config tool and reads its kickoff with file tools.
         let host = tools.host.as_ref().unwrap();
         assert_eq!(
             host.bash.as_ref().map(|bash| bash.mode),
@@ -187,8 +180,7 @@ fn the_definition_validates_and_every_check_accepts_its_params() {
         .checks
         .iter()
         .all(|c| c.tier == gents::document_config::EvalTier::Acceptance));
-    // Evidence with every capture empty: each check must reach a verdict about
-    // the subject (or say no fire happened), never reject its own params.
+    // Empty captures must still reach a verdict, never reject their params.
     let mut evidence =
         ScriptedExecutor::passed_evidence(OWNER, &stage.stage_id, "unused", Vec::new())
             .stages

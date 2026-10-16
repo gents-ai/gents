@@ -272,10 +272,11 @@ impl LspClient {
         }
     }
 
-    /// Waits until the server stops reporting work, exits, or `deadline`
-    /// passes. Returns whether the server was busy. rust-analyzer answers
-    /// file requests with null while it reloads the crate graph and rescans
-    /// roots, so a null answer is not final until it settles.
+    /// rust-analyzer answers file requests with null while it reloads the
+    /// crate graph and rescans roots, so a null answer is not final until it
+    /// settles. `experimental/serverStatus` is authoritative once sent;
+    /// open `$/progress` tokens mean busy only for servers that never send
+    /// it.
     pub async fn wait_while_busy(&self, deadline: Instant) -> bool {
         let mut busy = false;
         while Instant::now() < deadline && self.is_busy().await {
@@ -285,10 +286,6 @@ impl LspClient {
         busy
     }
 
-    /// `experimental/serverStatus` is authoritative once sent: progress such
-    /// as rust-analyzer's post-quiescence cache priming does not block
-    /// answers. Open `$/progress` tokens mean busy only for servers that
-    /// never send it.
     async fn is_busy(&self) -> bool {
         if !self.is_alive() {
             return false;

@@ -27,8 +27,6 @@ fn assert_diagnostic(error: &anyhow::Error, endpoint: &GraphqlEndpoint) {
     assert!(!message.starts_with("Next:"), "the cause precedes the hint");
 }
 
-/// Destination port zero cannot name a TCP listener; binding zero allocates
-/// a nonzero port, so this connection failure cannot race another test server.
 #[tokio::test]
 async fn graphql_connection_errors_keep_their_source_and_diagnostic() {
     let endpoint = GraphqlEndpoint::anonymous("http://127.0.0.1:0/graphql");
@@ -48,7 +46,6 @@ async fn graphql_connection_errors_keep_their_source_and_diagnostic() {
 
 #[tokio::test]
 async fn graphql_timeouts_keep_their_source_and_diagnostic() {
-    // The listening socket accepts the TCP handshake but never supplies an HTTP response.
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint =
         GraphqlEndpoint::anonymous(format!("http://{}/graphql", listener.local_addr().unwrap()));

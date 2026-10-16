@@ -97,8 +97,7 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
     )
     .await;
     assert!(
-        interrupt_request(&node, "same-parent-label").await.is_err(),
-        "global label collision must not choose one principal"
+        interrupt_request(&node, "same-parent-label").await.is_err()
     );
     assert!(
         interrupt_request_by_doc_id(&node, &parent, foreign_owner, None)

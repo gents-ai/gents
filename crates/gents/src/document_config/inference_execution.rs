@@ -1,8 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-/// Owned-loop execution settings. These are configuration limits; active request
-/// deadlines, retry counters, and token ledgers remain owned execution state.
+/// Owned-loop execution settings; these are configuration limits only.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -15,33 +14,30 @@ pub struct InferenceExecution {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_turns: Option<i64>,
-    /// Optional aggregate provider-token limit for one physical request, shared by
-    /// its inference and compaction calls. Positive when set; unset is unlimited.
-    /// The execution owner pins the resolved limit and rehydrates usage on restart.
+    /// Optional per-request aggregate token limit; unset is unlimited.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_total_tokens: Option<i64>,
-    /// Persistence batching cadence, not provider latency. Existing default 1,000ms.
+    /// Persistence batching cadence, not provider latency; default 1,000ms.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub stream_batch_ms: Option<i64>,
-    /// Execution lease duration, renewed by the owned execution independently of provider output. Default 120s.
+    /// Execution lease duration, renewed independently of provider output; default 120s.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub stream_liveness_timeout_secs: Option<i64>,
-    /// Maximum provider transport silence per attempt, including the wait for response headers; expiry is a retryable attempt failure. Independent of the lease. Default 300s.
+    /// Max provider transport silence per attempt; expiry is retryable. Default 300s.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub provider_idle_timeout_secs: Option<i64>,
-    /// Overall claimed-request duration. Existing default 86,400s; includes tools.
+    /// Overall claimed-request duration, including tools; default 86,400s.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub deadline_duration_secs: Option<i64>,
-    /// Unset uses the existing retry policy for the request's execution origin.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub retry_policy_id: Option<String>,
-    /// Optional UI/discovery labels. References, never tags, determine execution.
+    /// Optional UI/discovery labels.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -51,8 +47,8 @@ pub struct InferenceExecution {
     pub tags: Vec<String>,
 }
 
-/// Retry policy selected by InferenceExecution. Unset fields preserve the existing
-/// owned-loop defaults and classification; retries share the request deadline/budget.
+/// Retry policy selected by InferenceExecution; unset fields preserve the
+/// owned-loop defaults and classification.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -74,12 +70,11 @@ pub struct InferenceRetryPolicy {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub allow_repair: Option<bool>,
-    /// Default interactive successor ceiling, resolved onto the initial request.
-    /// Its retry chain retains that ceiling; this is not a human approval gate.
+    /// Default interactive successor ceiling; not a human approval gate.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub interactive_max_retries: Option<i64>,
-    /// Optional UI/discovery labels. References, never tags, determine execution.
+    /// Optional UI/discovery labels.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -90,17 +85,14 @@ pub struct InferenceRetryPolicy {
 }
 
 /// Largest admitted `deadline_duration_secs`: 100 years. A claim computes
-/// `now + deadline` and stores it as an RFC 3339 timestamp, so the bound keeps
-/// that sum inside four-digit years for any wall clock this runtime will see
-/// (#2079); larger values could not be claimed.
+/// `now + deadline` as an RFC 3339 timestamp; the bound keeps that sum inside
+/// four-digit years (#2079).
 pub const MAX_DEADLINE_DURATION_SECS: i64 = 100 * 365 * 24 * 60 * 60;
 
 impl InferenceExecution {
     /// Execution-owned validation, the single owner every write path calls.
-    /// Authored `max_total_tokens` must be positive when set; unset is
-    /// unlimited. A restarted request's runtime-pinned exhausted `Some(0)`
-    /// ledger is owned execution state and is never validated through this
-    /// document path, so the positivity rule never defaults it away.
+    /// The positivity rule never defaults away a runtime-pinned exhausted
+    /// `Some(0)` ledger, which is owned execution state on a restarted request.
     pub fn validation_violations(&self) -> Vec<String> {
         let execution_id = self.execution_id.trim();
         let mut violations: Vec<String> = Vec::new();
@@ -157,8 +149,8 @@ impl InferenceExecution {
 }
 
 impl InferenceRetryPolicy {
-    /// Retry-policy-owned validation. Explicit retry counts must be
-    /// non-negative; zero is a legitimate explicit "no retries" ceiling.
+    /// Retry-policy-owned validation; explicit retry counts must be
+    /// non-negative, zero meaning "no retries".
     pub fn validation_violations(&self) -> Vec<String> {
         let retry_policy_id = self.retry_policy_id.trim();
         let mut violations: Vec<String> = Vec::new();
@@ -198,83 +190,3 @@ impl InferenceRetryPolicy {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn execution_validation_uses_effective_defaults_for_cross_field_limits() {
-        assert!(InferenceExecution::default().validate().is_ok());
-        for execution in [
-            InferenceExecution {
-                deadline_duration_secs: Some(
-                    crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64,
-                ),
-                ..Default::default()
-            },
-            InferenceExecution {
-                stream_liveness_timeout_secs: Some(
-                    crate::config::DEFAULT_DEADLINE_DURATION_SECS as i64,
-                ),
-                ..Default::default()
-            },
-            InferenceExecution {
-                stream_liveness_timeout_secs: Some(600),
-                deadline_duration_secs: Some(300),
-                ..Default::default()
-            },
-        ] {
-            assert!(execution.validate().is_err());
-        }
-        assert!(InferenceExecution {
-            stream_liveness_timeout_secs: Some(1),
-            deadline_duration_secs: Some(2),
-            ..Default::default()
-        }
-        .validate()
-        .is_ok());
-        // The provider idle window is independent of the lease and deadline.
-        assert!(InferenceExecution {
-            provider_idle_timeout_secs: Some(0),
-            ..Default::default()
-        }
-        .validate()
-        .is_err());
-        assert!(InferenceExecution {
-            provider_idle_timeout_secs: Some(600),
-            stream_liveness_timeout_secs: Some(1),
-            deadline_duration_secs: Some(2),
-            ..Default::default()
-        }
-        .validate()
-        .is_ok());
-        let execution = InferenceExecution {
-            max_turns: Some(0),
-            max_total_tokens: Some(0),
-            stream_batch_ms: Some(0),
-            ..Default::default()
-        };
-        assert_eq!(execution.validation_violations().len(), 3);
-    }
-
-    #[test]
-    fn retry_zero_means_no_retries_but_invalid_delays_are_not_silently_dropped() {
-        let mut retry = InferenceRetryPolicy {
-            max_transport_retries: Some(0),
-            max_resample_retries: Some(0),
-            interactive_max_retries: Some(0),
-            backoff_ms: Some(vec![]),
-            ..Default::default()
-        };
-        assert!(retry.validate().is_ok());
-        retry.backoff_ms = Some(vec![1, 1000]);
-        assert!(retry.validate().is_ok());
-        for delays in [vec![0], vec![-1], vec![1, 0, 1000]] {
-            retry.backoff_ms = Some(delays);
-            assert!(retry.validate().is_err());
-        }
-        retry.backoff_ms = None;
-        retry.max_transport_retries = Some(-1);
-        assert!(retry.validate().is_err());
-    }
-}

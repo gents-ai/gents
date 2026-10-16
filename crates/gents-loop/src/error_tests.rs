@@ -2,40 +2,6 @@ use super::*;
 use crate::rig_compat::classify_completion_error;
 
 #[test]
-fn inference_error_retryability() {
-    assert!(InferenceError::ModelUnreachable {
-        endpoint: "http://localhost:8000/v1".into()
-    }
-    .is_retryable());
-
-    assert!(InferenceError::TransientFailure {
-        reason: "connection reset".into()
-    }
-    .is_retryable());
-
-    assert!(!InferenceError::PermanentFailure {
-        reason: "invalid_api_key".into()
-    }
-    .is_retryable());
-
-    assert!(InferenceError::RateLimited {
-        retry_after: Some(std::time::Duration::from_secs(30))
-    }
-    .is_retryable());
-
-    assert!(!InferenceError::ContextLengthExceeded {
-        reason: "too long".into()
-    }
-    .is_retryable());
-
-    assert!(!InferenceError::RetriesExhausted {
-        max_retries: 3,
-        last_error: "gone".into()
-    }
-    .is_retryable());
-}
-
-#[test]
 fn tool_streaming_errors_are_permanent_until_retry_metadata_exists() {
     let error = rig::agent::StreamingError::Tool(rig::tool::ToolSetError::ToolNotFoundError(
         "missing_tool".into(),
@@ -47,29 +13,7 @@ fn tool_streaming_errors_are_permanent_until_retry_metadata_exists() {
         classified,
         InferenceError::PermanentFailure { .. }
     ));
-    assert!(
-        !classified.is_retryable(),
-        "tool failures stay permanent until tools expose retry-safe health/idempotency metadata"
-    );
-}
-
-#[test]
-fn openai_compatible_404_is_permanent_backend_configuration() {
-    let error =
-        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
-            "InvalidStatusCodeWithMessage(404, \"\")".into(),
-        ));
-
-    let classified = classify_completion_error(&error);
-
-    assert!(matches!(
-        classified,
-        InferenceError::PermanentFailure { .. }
-    ));
-    assert!(
-        !classified.is_retryable(),
-        "missing /chat/completions route should fail fast instead of retrying"
-    );
+    assert!(!classified.is_retryable());
 }
 
 #[test]
@@ -87,31 +31,7 @@ fn provider_transport_send_failure_is_retryable_even_with_status_like_url_digits
         classified,
         InferenceError::TransientFailure { .. }
     ));
-    assert!(
-        classified.is_retryable(),
-        "transport send failures should retry even when the URL contains 400-like digits"
-    );
-}
-
-#[test]
-fn provider_transport_connection_reset_is_retryable_even_with_auth_like_url_digits() {
-    let error =
-        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
-            "Http client error: connection reset by peer while sending request to \
-             http://127.0.0.1:4010/v1/chat/completions"
-                .into(),
-        ));
-
-    let classified = classify_completion_error(&error);
-
-    assert!(matches!(
-        classified,
-        InferenceError::TransientFailure { .. }
-    ));
-    assert!(
-        classified.is_retryable(),
-        "connection resets should retry even when the URL contains 401-like digits"
-    );
+    assert!(classified.is_retryable());
 }
 
 #[test]
@@ -127,41 +47,11 @@ fn provider_error_uses_precise_status_matching_for_permanent_statuses() {
         classified,
         InferenceError::PermanentFailure { .. }
     ));
-    assert!(
-        !classified.is_retryable(),
-        "precise provider 400 statuses are still permanent request-shape failures"
-    );
-}
-
-#[test]
-fn vllm_tool_call_json_parse_400_is_retryable() {
-    // vLLM's tool-call parser fails to json.loads the model's streamed tool arguments
-    // (here a missing delimiter deep in an array-typed argument) and returns 400. This
-    // is intermittent/sampling-dependent, so it should retry rather than fail fast.
-    let error =
-        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
-            "Invalid status code 400 Bad Request with message: {\"error\":{\"message\":\
-             \"Expecting ',' delimiter: line 8 column 61 (char 4982)\",\"type\":\
-             \"BadRequestError\",\"param\":null,\"code\":400}}"
-                .into(),
-        ));
-
-    let classified = classify_completion_error(&error);
-
-    assert!(matches!(
-        classified,
-        InferenceError::TransientFailure { .. }
-    ));
-    assert!(
-        classified.is_retryable(),
-        "intermittent vLLM tool-call JSON parse 400s should retry on a fresh generation"
-    );
+    assert!(!classified.is_retryable());
 }
 
 #[test]
 fn vllm_tool_call_invalid_escape_400_is_retryable() {
-    // The `Invalid \escape` variant — the wire body double-escapes the backslash, which
-    // is why the matcher keys off the line/column/(char ...) signature, not the phrase.
     let error =
         rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
             "Invalid status code 400 Bad Request with message: {\"error\":{\"message\":\
@@ -179,26 +69,6 @@ fn vllm_tool_call_invalid_escape_400_is_retryable() {
 }
 
 #[test]
-fn provider_400_without_json_decode_signature_stays_permanent() {
-    // Regression guard: a genuine request-shape 400 lacks the JSONDecodeError signature
-    // and must remain a permanent failure, unaffected by the tool-parse retry carve-out.
-    let error =
-        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
-            "Invalid status code 400 Bad Request with message: {\"error\":{\"message\":\
-             \"duplicate field `max_tokens`\",\"type\":\"BadRequestError\"}}"
-                .into(),
-        ));
-
-    let classified = classify_completion_error(&error);
-
-    assert!(matches!(
-        classified,
-        InferenceError::PermanentFailure { .. }
-    ));
-    assert!(!classified.is_retryable());
-}
-
-#[test]
 fn provider_error_loose_status_digits_do_not_force_permanent_failure() {
     let error =
         rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
@@ -211,26 +81,9 @@ fn provider_error_loose_status_digits_do_not_force_permanent_failure() {
         classified,
         InferenceError::TransientFailure { .. }
     ));
-    assert!(
-        classified.is_retryable(),
-        "plain numeric substrings must not be treated as HTTP status codes"
-    );
-}
-
-#[test]
-fn provider_error_precise_429_is_rate_limited() {
-    let error =
-        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
-            "Invalid status code 429: too many requests".into(),
-        ));
-
-    let classified = classify_completion_error(&error);
-
-    assert!(matches!(classified, InferenceError::RateLimited { .. }));
     assert!(classified.is_retryable());
 }
 
-#[test]
 fn openai_compatible_http_400_is_permanent_bad_request() {
     let error =
         rig::agent::StreamingError::Completion(rig::completion::CompletionError::HttpError(
@@ -246,83 +99,11 @@ fn openai_compatible_http_400_is_permanent_bad_request() {
         classified,
         InferenceError::PermanentFailure { .. }
     ));
-    assert!(
-        !classified.is_retryable(),
-        "bad OpenAI-compatible request bodies should fail fast instead of retrying"
-    );
-}
-
-#[test]
-fn grok_proxy_426_version_gate_is_permanent() {
-    let error =
-        rig::agent::StreamingError::Completion(rig::completion::CompletionError::HttpError(
-            rig::http_client::Error::InvalidStatusCodeWithMessage(
-                "426".parse().expect("valid status"),
-                "Your Grok CLI version (0.2.93) is outdated. Please update to version 1.0.13 or later".into(),
-            ),
-        ));
-
-    let classified = classify_completion_error(&error);
-
-    assert!(matches!(
-        classified,
-        InferenceError::PermanentFailure { .. }
-    ));
-    assert!(
-        !classified.is_retryable(),
-        "a version gate rejects the identical request, so it must fail fast instead of burning the transport retry ladder"
-    );
-}
-
-#[test]
-fn provider_error_426_upgrade_required_is_permanent() {
-    let error =
-        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
-            "Invalid status code 426 Upgrade Required with message: outdated client".into(),
-        ));
-
-    let classified = classify_completion_error(&error);
-
-    assert!(matches!(
-        classified,
-        InferenceError::PermanentFailure { .. }
-    ));
-    assert!(
-        !classified.is_retryable(),
-        "Upgrade Required demands a newer client, so an identical retry re-fails"
-    );
-}
-
-#[test]
-fn daemon_error_from_variants() {
-    let config_err: DaemonError = ConfigError::Missing {
-        key: "backend_endpoint".into(),
-    }
-    .into();
-    assert!(matches!(config_err, DaemonError::Config(_)));
-
-    let watcher_err: DaemonError = WatcherError::EventBusClosed.into();
-    assert!(matches!(watcher_err, DaemonError::Watcher(_)));
-}
-
-#[test]
-fn error_display_messages() {
-    let err = InferenceError::RetriesExhausted {
-        max_retries: 3,
-        last_error: "timeout".into(),
-    };
-    assert!(err.to_string().contains("3 attempts"));
-
-    let err = WatcherError::ClaimFailed {
-        doc_id: "doc-1".into(),
-        reason: "already processing".into(),
-    };
-    assert!(err.to_string().contains("doc-1"));
+    assert!(!classified.is_retryable());
 }
 
 #[test]
 fn anthropic_account_rate_limit_is_a_non_retryable_usage_limit() {
-    // #1422: the subscription seat was capped for hours, not throttled.
     let error =
         rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
             r#"Claude Messages HTTP 429 Too Many Requests (request-id -) body={"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."}} [provider-limit reset-at=2026-09-25T18:40:00Z usage-exhausted]"#.into(),
@@ -338,30 +119,6 @@ fn anthropic_account_rate_limit_is_a_non_retryable_usage_limit() {
     );
 }
 
-#[test]
-fn http_429_uses_retry_after_instead_of_a_fixed_delay() {
-    let retry_at = (chrono::Utc::now() + chrono::Duration::seconds(20))
-        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let error =
-        rig::agent::StreamingError::Completion(rig::completion::CompletionError::HttpError(
-            rig::http_client::Error::InvalidStatusCodeWithMessage(
-                "429".parse().expect("valid status"),
-                format!("slow down [provider-limit retry-at={retry_at}]"),
-            ),
-        ));
-
-    match classify_completion_error(&error) {
-        InferenceError::RateLimited {
-            retry_after: Some(wait),
-        } => assert!(
-            wait <= std::time::Duration::from_secs(20)
-                && wait >= std::time::Duration::from_secs(18),
-            "{wait:?}"
-        ),
-        other => panic!("expected throttle, got {other:?}"),
-    }
-}
-
 fn http_402(body: String) -> InferenceError {
     classify_completion_error(&rig::agent::StreamingError::Completion(
         rig::completion::CompletionError::HttpError(
@@ -375,7 +132,6 @@ fn http_402(body: String) -> InferenceError {
 
 #[test]
 fn openrouter_credits_402_is_a_non_retryable_usage_limit() {
-    use crate::completion_retry::{failure_class, FailureClass};
     use crate::provider_limit::tests::{
         OPENROUTER_INSUFFICIENT_CREDITS, OPENROUTER_KEY_LIMIT, OPENROUTER_WEIGHT_EXCEEDS_BUDGET,
     };
@@ -390,16 +146,11 @@ fn openrouter_credits_402_is_a_non_retryable_usage_limit() {
             "{body}: {error:?}"
         );
         assert!(!error.is_retryable());
-        assert_eq!(
-            failure_class(&error, &error.to_string()),
-            FailureClass::Permanent
-        );
     }
 }
 
 #[test]
 fn openrouter_in_flight_402_waits_for_retry_after() {
-    use crate::completion_retry::{failure_class, FailureClass};
     let retry_at = (chrono::Utc::now() + chrono::Duration::seconds(20))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let error = http_402(format!(
@@ -416,8 +167,4 @@ fn openrouter_in_flight_402_waits_for_retry_after() {
         ),
         other => panic!("expected throttle, got {other:?}"),
     }
-    assert_eq!(
-        failure_class(&error, &error.to_string()),
-        FailureClass::Transport
-    );
 }

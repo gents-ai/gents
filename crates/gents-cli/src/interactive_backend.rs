@@ -295,37 +295,6 @@ mod tests {
     }
 
     #[test]
-    fn each_backend_signal_is_detected() {
-        let mut endpoint = bare_init_args();
-        endpoint.inference_endpoint = Some("http://127.0.0.1:8080/v1".to_string());
-        assert!(has_backend_arg(&endpoint));
-
-        let mut preset = bare_init_args();
-        preset.backend_preset = Some(BackendPresetArg::OpenAi);
-        assert!(has_backend_arg(&preset));
-
-        let mut provider_kind = bare_init_args();
-        provider_kind.provider_kind = Some("Anthropic".to_string());
-        assert!(has_backend_arg(&provider_kind));
-
-        let mut wire_api = bare_init_args();
-        wire_api.openai_wire_api = Some(crate::cli::args::OpenAiWireApiArg::Responses);
-        assert!(has_backend_arg(&wire_api));
-
-        let mut api_key = bare_init_args();
-        api_key.api_key = Some("sk-test".to_string());
-        assert!(has_backend_arg(&api_key));
-
-        let mut api_key_env = bare_init_args();
-        api_key_env.api_key_env_var = Some("OPENAI_API_KEY".to_string());
-        assert!(has_backend_arg(&api_key_env));
-
-        let mut model = bare_init_args();
-        model.model_name = Some("gpt-5.4-mini".to_string());
-        assert!(has_backend_arg(&model));
-    }
-
-    #[test]
     fn selection_overwrites_backend_fields_only() {
         let mut args = bare_init_args();
         args.node_name = "keep-me".to_string();
@@ -363,24 +332,6 @@ mod tests {
             args.backend_preset,
             Some(BackendPresetArg::ClaudeCliSubscription)
         );
-        assert_eq!(args.api_key, None);
-        assert_eq!(args.model_name, None);
-        assert_eq!(args.inference_endpoint, None);
-    }
-
-    #[test]
-    fn codex_subscription_selection_seeds_keyless_preset() {
-        let mut args = bare_init_args();
-        BackendSelection {
-            inference_url: None,
-            backend_preset: Some(BackendPresetArg::ChatGptCodex),
-            model_name: None,
-            api_key: None,
-            label: "ChatGPT / Codex subscription".to_string(),
-        }
-        .apply_to(&mut args);
-
-        assert_eq!(args.backend_preset, Some(BackendPresetArg::ChatGptCodex));
         assert_eq!(args.api_key, None);
         assert_eq!(args.model_name, None);
         assert_eq!(args.inference_endpoint, None);

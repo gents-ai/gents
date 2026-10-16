@@ -112,9 +112,6 @@ async fn encrypted_local_budget_accepts_and_reopens_a_megabyte_document() {
     reopened.shutdown().await;
 }
 
-/// The written credential's tokens reach disk only as ciphertext, while the
-/// same writes to an unencrypted store leave them readable, so the scan
-/// proves the encryption rather than the storage format.
 #[tokio::test]
 async fn an_encrypted_store_keeps_credential_tokens_off_disk_and_reopens_with_its_key() {
     let temp = tempfile::tempdir().unwrap();
@@ -226,9 +223,6 @@ fn recorded_creation_intent_resumes_without_replacing_a_stores_missing_key() {
     assert!(!key_file.exists());
 }
 
-/// Only `errSecItemNotFound` proves the key is gone. A locked keychain or a
-/// denied prompt is a plain error that no host treats as a store refusal,
-/// so no reset or deletion is offered for it.
 #[test]
 fn only_a_definitely_absent_keychain_item_is_a_missing_key() {
     let data = Path::new("/tmp/gents-home/data");

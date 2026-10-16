@@ -1,8 +1,6 @@
-/* The folder the user works in, per chat. A new chat holds its pick under
-   the empty key until the first send gives the session an id; every later
-   message of that session carries the same folder. Kept in the webview's
-   storage, which is a per-viewer convenience: without it the chat simply
-   has no folder and the agent's own tool root applies. */
+/* Per-viewer localStorage convenience; when absent the agent's own tool root
+   applies. A new chat holds its pick under the empty key until the first send
+   gives the session an id. */
 import type { ChatStore } from "./chatStore";
 
 const KEY = "gents.chatFolders";
@@ -27,12 +25,9 @@ export function loadChatFolders(): ChatFolders {
 function saveChatFolders(folders: ChatFolders) {
   try {
     localStorage.setItem(KEY, JSON.stringify(folders));
-  } catch {
-    /* storage unavailable: the pick lasts for this run only */
-  }
+  } catch {}
 }
 
-/* the folder after `folder` is chosen (or cleared with null) for `sessionId` */
 export function withFolder(
   folders: ChatFolders,
   sessionId: string | null,
@@ -42,7 +37,6 @@ export function withFolder(
   return folder ? { ...rest, [sessionId ?? NEW_CHAT]: folder } : rest;
 }
 
-/* the new chat's pick, handed to the session the first send created */
 export function adoptNewChatFolder(
   folders: ChatFolders,
   sessionId: string,
@@ -52,7 +46,6 @@ export function adoptNewChatFolder(
   return withFolder(withFolder(folders, null, null), sessionId, pick);
 }
 
-/** The folder chosen for a session, or for the new chat under null. */
 export function folderOf(
   folders: ChatFolders,
   sessionId: string | null,
@@ -60,7 +53,6 @@ export function folderOf(
   return folders[sessionId ?? NEW_CHAT] ?? null;
 }
 
-/** Commits the folders and keeps them for the next run. */
 export function writeChatFolders(
   chat: ChatStore,
   next: (current: ChatFolders) => ChatFolders,

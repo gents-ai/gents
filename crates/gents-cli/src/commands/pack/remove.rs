@@ -1,13 +1,3 @@
-//! `gents pack remove`, for every pack kind.
-//!
-//! An assets or plugins pack has a file record and no node: this checks for
-//! one before ever resolving an owner or opening a node, and releases its
-//! cache directory, plugin records and unreferenced bytes locally. A
-//! documents or graph pack goes through `gents::pack::remove_pack` (which
-//! also releases a dependency this was the last claim on), and this then
-//! releases whatever that record's own plugins and archive digests leave
-//! unreferenced on the filesystem.
-
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -23,9 +13,6 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
     let coordinate = format!("{namespace}/{name}");
     let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
 
-    // `--graphql` always means a remote node; only a local home can hold a
-    // file record, so this check is skipped for a remote target (a remote
-    // node's local assets are not this process's to release either way).
     if args.scope.graphql.is_none() {
         if let Some(record) = gents::pack::read_home_install(&home, &coordinate)? {
             anyhow::ensure!(
@@ -68,10 +55,6 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
     for dependency in &report.dependencies {
         archive_digests.extend(dependency.digests.iter().cloned());
     }
-    // A `--graphql` target is a remote node: this process has no visibility
-    // into its `PackInstallation` records, so releasing local archives here
-    // could delete one a local install still uses (see the module doc: a
-    // remote node's local assets are not this process's to release).
     let archives = if args.scope.graphql.is_none() {
         release_archives(&home, Some(&access), &archive_digests).await?
     } else {
@@ -88,13 +71,6 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
     crate::print_json(&json!({ "pack": coordinate, "owner": owner, "removed": removed }))
 }
 
-/// [`RemoveReport`], serialized, with the filesystem side effects this
-/// process also released. `RemoveReport` itself only knows about documents;
-/// bytes on disk are this crate's own concern (it is the one with a home).
-/// `pack_plugin_records`/`dependency_plugin_records` replace the report's own
-/// (flattened) `plugins` field in the printed shape: the record lists every
-/// plugin the pack owned, not only the ones this remove actually released (a
-/// name another pack now owns is kept and must not be printed as released).
 fn augment_report(
     report: &RemoveReport,
     pack_plugin_records: &[InstalledPackPlugin],
@@ -126,10 +102,6 @@ fn augment_report(
     Ok(value)
 }
 
-/// Removes the plugin records `coordinate`'s install still owns among
-/// `plugins`, returning what was actually removed, and adds every plugin's
-/// digest to `candidates` regardless (a digest still referenced elsewhere is
-/// simply kept by [`plugin_release_result`]'s own scan).
 fn release_plugin_records(
     home: &Path,
     coordinate: &str,
@@ -161,8 +133,6 @@ fn plugin_release_result(home: &Path, candidates: &BTreeSet<String>) -> Result<V
     gents::plugin::store::release_unreferenced_bytes(home, candidates)
 }
 
-/// Removes each of `digests` that nothing installed in `home` (file
-/// records) or reachable through `node` still references.
 async fn release_archives(
     home: &Path,
     node: Option<&ConfigAccess>,
@@ -186,9 +156,6 @@ async fn release_archives(
     Ok(released)
 }
 
-/// Removes an assets or plugins pack's file-recorded install: no node is
-/// opened, and a second call reports the same "not installed" a documents
-/// pack's remove does (the record is already gone).
 async fn remove_home_install(
     home: &Path,
     coordinate: &str,
@@ -216,9 +183,6 @@ async fn remove_home_install(
         );
     }
 
-    // Forget the record before scanning for unreferenced archives: the scan
-    // reads every file record currently on disk, and this one must not count
-    // as still referencing its own digest.
     gents::pack::forget_home_install(home, coordinate)?;
     let mut archive_digests = BTreeSet::new();
     archive_digests.insert(record.digest.clone());

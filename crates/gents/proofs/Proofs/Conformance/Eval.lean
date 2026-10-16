@@ -1,8 +1,6 @@
 import Proofs.Eval
 import Proofs.Conformance.ContractTypes
 
-/-! Generated witnesses for the eval outcome projection. Rust must classify every
-(kind, provider reason) combination exactly as the model does. -/
 namespace Conformance.Eval
 
 open Conformance.Contracts

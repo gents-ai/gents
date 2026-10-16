@@ -99,7 +99,6 @@ describe("task and schedule async intent ordering", () => {
       sessionId: "accepted-session",
     });
     expect(reportFailure).not.toHaveBeenCalled();
-    /* the failed read is the client's own state, in the banner */
     expect(app.stores.client.getState().error).toContain("observation unavailable");
   });
 });

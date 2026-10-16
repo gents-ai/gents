@@ -82,16 +82,10 @@ pub fn parse_fallback_checkpoint(raw: &str) -> Result<ContinuationCheckpoint, St
     Ok(checkpoint)
 }
 
-/// Strips a `json` or untyped Markdown fence around the checkpoint object. The
-/// closing fence is optional: models sometimes emit a complete object after an
-/// opening fence and stop without closing it (#1015).
-///
-/// The fallback prompt asks for raw JSON, but this path is only reached once
-/// guided decoding has already failed — against exactly the providers that
-/// ignore that instruction — and it gets a single attempt with no retry.
-/// `serde_json::from_str` still requires the payload to be one JSON object and
-/// nothing else, so tolerating the fence does not widen into extracting an
-/// object out of prose.
+/// Strips a `json` or untyped Markdown fence around the checkpoint object; the
+/// closing fence is optional (#1015). Guided decoding has already failed and
+/// `serde_json::from_str` still requires exactly one JSON object, so
+/// tolerating the fence does not widen into extracting an object out of prose.
 fn strip_markdown_fence(raw: &str) -> &str {
     let trimmed = raw.trim();
     let Some(body) = trimmed
@@ -113,8 +107,8 @@ fn bounded_raw_output_preview(raw: &str) -> String {
         .unwrap_or_else(|_| "\"<unavailable>\"".to_string())
 }
 
-/// Byte bound for one rendered list item. Structural paths are copied verbatim
-/// from tool arguments; an item-count cap alone cannot bound bytes (#1017).
+/// Byte bound for one rendered list item; an item-count cap alone cannot
+/// bound bytes (#1017).
 const SUMMARY_ITEM_MAX_BYTES: usize = 512;
 const SUMMARY_ITEM_TRUNCATION_SUFFIX: &str = "…";
 /// Defensive cap on model-authored lists; the prompt asks for ~8 items.
@@ -170,7 +164,7 @@ pub fn format_summary(
     file_list_max: usize,
 ) -> String {
     // Continuation state renders before the high-cardinality file lists so
-    // that head truncation (`bounded_summary`) can never erase it (#1017).
+    // head truncation (`bounded_summary`) can never erase it (#1017).
     [
         Some(format!(
             "# Continuation checkpoint\n\n## Goal\n\n{}",

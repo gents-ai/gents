@@ -1,8 +1,3 @@
-/* Which nodes a list shows, in the sessions bar's style. "All nodes" is
-   the open state: it clears the pick, and the chips narrow to some. The
-   trigger wears the picked nodes' avatars, stacked when there are several,
-   and the first few nodes, local first, when it is open to all. Hidden when the client
-   can see only one node, since there is nothing to choose. */
 import type { NodeView } from "../../hooks/fleetStore";
 import { ChevronDown, Waypoints } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
@@ -36,7 +31,6 @@ export function NodeAxis({
   const working = workingNode(nodes, homeDid);
   const nameOf = (n: NodeView) => n.node.displayName ?? n.label;
   const picked = nodes.filter((n) => value.includes(nodeDidOf(n)));
-  /* open to all: the first few nodes stand in, the local one leading */
   const shown =
     picked.length > 0
       ? picked
@@ -56,7 +50,6 @@ export function NodeAxis({
           />
         }
       >
-        {/* a phone has room for one mark on the axis: the rest come back at sm */}
         <span className="flex shrink-0 -space-x-1.5">
           {shown.slice(0, 3).map((n, i) => (
             <NodeAvatar

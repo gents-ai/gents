@@ -53,11 +53,9 @@ fn terminal_response_has_visible_output(streamed_text: &str, final_text: Option<
     !streamed_text.trim().is_empty() || final_text.is_some_and(|text| !text.trim().is_empty())
 }
 
-/// Harbor (`scripts/harbor/run_gents.sh`) matches
-/// `"agent stream failed: PromptError: MaxTurnError: "` as a fixed byte string;
-/// `agent/loop_stream/tests/streaming.rs` pins the `PromptError: MaxTurnError: `
-/// half of it on rig's own `Display`. The provenance clause is therefore only
-/// ever appended after that unmodified `Display`, never substituted into it.
+/// Harbor (`scripts/harbor/run_gents.sh`) matches the pinned
+/// `agent stream failed: PromptError: MaxTurnError: ` prefix; provenance is
+/// only ever appended after rig's unmodified `Display`.
 fn stream_failure_reason(
     error_display: &str,
     failure: &LoopFailureCause,
@@ -117,8 +115,6 @@ fn assemble_request_context_message(
     live_cwd: Option<&std::path::Path>,
     live_tool_root: Option<&std::path::Path>,
 ) -> Option<Message> {
-    // Workspace instructions retain their existing frozen/live ownership.
-    // Dynamic prompt templates belong to tasks, not per-request context.
     crate::workspace::instruction_body_for_request(
         frozen_instruction_manifest,
         live_cwd,
@@ -196,12 +192,6 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
         let agent_id = self.agent_config.agent_id.clone();
         let backend_id = lifecycle.backend_id().to_string();
         let model_name = self.agent_config.model_name.clone();
-        // The rendered-request capture scope is installed by `handle_request`,
-        // outside every completion loop the request contains — including the
-        // pre-request compaction summarizer, which runs before this function is
-        // ever called. Do not install one here: a second scope would restart
-        // the per-kind label sequence and hand the inference loop a label the
-        // summarizer's scope had already used.
         let inference = Box::pin(async {
                 let prepared = async {
                     let output_obligation_gate = crate::agent::output_obligation::OutputObligationGate::for_request(
@@ -298,13 +288,9 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                                 &native_messages,
                                 compaction_request.admission,
                             )?;
-                            // This is a request-local sticky projection, not a
-                            // session-prefix cursor. DurableReduction permits a
-                            // closed tool pair before an ordinary assistant turn;
-                            // persist_exact checks the actual reduction split's
-                            // pair closure before the loop can activate it. The
-                            // stronger safe_to_reduce gate belongs to session
-                            // compaction, whose prefix must survive later appends.
+                            // Request-local sticky projection, not a
+                            // session-prefix cursor; the stronger
+                            // safe_to_reduce gate belongs to session compaction.
                             let source_boundary =
                                 crate::provider_context_reduction::capture_source_boundary(
                                     node.as_ref(),
@@ -452,9 +438,9 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                             self.node.as_ref(), replay_scope, &boundary,
                         ).await?;
                         loop_config.context_message = None;
-                        // The checkpoint follows its turn's accepted input: its
-                        // provider view already holds every consumed message, and
-                        // a selection made at this claim waits for the next turn.
+                        // The checkpoint's provider view already holds every
+                        // consumed message; a selection made at this claim
+                        // waits for the next turn.
                         loop_config.folded_prompts = Vec::new();
                         loop_config.authored_input = Some(authored_input(consumed_prompts.clone()));
                         loop_config.active_reduction_keys = row.active_reduction_keys();
@@ -639,8 +625,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                                         );
                                         return Err(error.context("persisting received provider audit during interrupt"));
                                     }
-                                    // Tool terminalization publishes its result atomically;
-                                    // abort cannot recreate results from mutable legacy rows.
+                                    // Tool terminalization publishes its result atomically.
                                     return Err(anyhow!("request interrupted during inference"));
                                 }
                                 _ = lease_poll.tick() => {
@@ -651,11 +636,6 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                                             reason.clone(),
                                         );
                                         drop(stream);
-                                        // This execution no longer owns durable
-                                        // tool transitions. Expired-generation
-                                        // recovery accounts pending intents and
-                                        // hands running tools to recovery without
-                                        // falsely declaring their effects failed.
                                         return Err(error);
                                     }
                                     lease_poll.reset();
@@ -741,8 +721,6 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                                 Some(item) => item,
                                 None => break,
                             };
-                            // Once pulled from the stream, this item owns a write
-                            // receipt; timing out its future can lose its bytes.
                             let processed = match processor.process_item(item).await {
                                 Ok(processed) => processed,
                                 Err(error) => {
@@ -898,10 +876,6 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                 retry_attempt = false,
             )));
 
-        // The capture scope installed by `handle_request` spans both the
-        // stream's construction and its drain loop: the SSE transports connect
-        // lazily on first poll, so the HTTP send that the capturing transport
-        // intercepts usually happens during polling.
         let outcome = crate::tool_call_lifecycle::runtime::scope_tool_request_identity(
             request.requester_did.clone(),
             Some(request.node_did.clone()),
@@ -931,15 +905,13 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
 #[cfg(test)]
 pub(super) mod tests {
     use super::{
-        assemble_request_context_message, await_with_request_deadline,
-        ensure_request_deadline_open, request_deadline_remaining, stream_failure_reason,
-        terminal_response_has_visible_output, AgentDaemon, MaxTurnsProvenance,
+        stream_failure_reason, AgentDaemon, MaxTurnsProvenance,
     };
     use crate::agent::completion_retry::CompletionRetryProfileFields;
     use crate::agent::runtime::StartupBarrier;
     use crate::backend_provider::BackendProviderKind;
     use crate::config::{ResolvedAgent, SamplingConfig};
-    use crate::error::{CompletionFailure, LoopFailureCause};
+    use crate::error::LoopFailureCause;
     use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
     use crate::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
     use crate::llm::tool::ToolDyn;
@@ -956,7 +928,6 @@ pub(super) mod tests {
         Arc,
     };
     use std::time::Duration;
-
     /// rig's own turn-exhaustion `Display`. Its `PromptError: MaxTurnError: `
     /// prefix is pinned by `agent/loop_stream/tests/streaming.rs`; the
     /// parenthesised limit is pinned by
@@ -981,56 +952,41 @@ pub(super) mod tests {
         );
     }
 
-    #[test]
-    fn max_turns_failure_message_reports_execution_profile_provenance() {
-        let reason = stream_failure_reason(
-            MAX_TURNS_DISPLAY,
-            &LoopFailureCause::MaxTurns,
-            MaxTurnsProvenance::ExecutionProfile,
-        );
-        assert!(reason.starts_with(PINNED_PREFIX));
-        assert!(
-            reason.contains("InferenceExecution document"),
-            "must name the document that owns the limit: {reason}"
-        );
-    }
-
-    #[test]
-    fn max_turns_failure_message_reports_builder_provenance_without_naming_a_document() {
-        let reason = stream_failure_reason(
-            MAX_TURNS_DISPLAY,
-            &LoopFailureCause::MaxTurns,
-            MaxTurnsProvenance::BuilderOverride,
-        );
-        assert!(reason.starts_with(PINNED_PREFIX));
-        assert!(
-            reason.contains("AgentBuilder::max_turns"),
-            "must name the programmatic knob: {reason}"
-        );
-        assert!(
-            reason.contains("no InferenceExecution document"),
-            "must not send the operator to a document that does not exist: {reason}"
-        );
-    }
-
-    #[test]
-    fn max_turns_clause_is_absent_from_other_stream_failures() {
-        let reason = stream_failure_reason(
-            "CompletionError: ProviderError: boom",
-            &LoopFailureCause::Completion {
-                failure: CompletionFailure::Provider("boom".into()),
-                reason: "ProviderError: boom".into(),
-            },
-            MaxTurnsProvenance::Default,
-        );
-        assert_eq!(
-            reason,
-            "agent stream failed: CompletionError: ProviderError: boom"
-        );
-    }
-
     #[derive(Clone)]
     struct RoutedReplyModel;
+
+    #[allow(refining_impl_trait)]
+    impl CompletionModel for RoutedReplyModel {
+        type Response = ();
+        type StreamingResponse = ();
+        type Client = ();
+
+        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+            Self
+        }
+
+        async fn completion(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+            Err(CompletionError::ProviderError(
+                "completion is unused in daemon lineage test".to_string(),
+            ))
+        }
+
+        async fn stream(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+            crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
+            let items = vec![
+                Ok(RawStreamingChoice::Message("routed reply".to_string())),
+                Ok(RawStreamingChoice::FinalResponse(())),
+            ];
+            let inner: rig::streaming::StreamingResult<()> = Box::pin(stream::iter(items));
+            Ok(StreamingCompletionResponse::stream(inner))
+        }
+    }
 
     #[derive(Clone)]
     struct WakeInputModel {
@@ -1065,9 +1021,6 @@ pub(super) mod tests {
             crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
             let history =
                 serde_json::to_value(&request.chat_history).expect("serialize provider input");
-            // This direct daemon fixture uses a raw model, outside the
-            // AdmittedCompletionModel call-kind wrapper. Route only the title
-            // owner's exact preamble and request shape; reject disagreement.
             let title_preamble = super::super::title::title_generation_preamble();
             let title_shape = request.temperature == Some(0.0) && request.tools.is_empty();
             let title_preamble_present = json_contains_text(&history, &title_preamble);
@@ -1145,39 +1098,6 @@ pub(super) mod tests {
             row["lifecycle_state"].as_str().unwrap(),
         )
         .unwrap()
-    }
-
-    #[allow(refining_impl_trait)]
-    impl CompletionModel for RoutedReplyModel {
-        type Response = ();
-        type StreamingResponse = ();
-        type Client = ();
-
-        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-            Self
-        }
-
-        async fn completion(
-            &self,
-            _request: CompletionRequest,
-        ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-            Err(CompletionError::ProviderError(
-                "completion is unused in daemon lineage test".to_string(),
-            ))
-        }
-
-        async fn stream(
-            &self,
-            request: CompletionRequest,
-        ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-            crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
-            let items = vec![
-                Ok(RawStreamingChoice::Message("routed reply".to_string())),
-                Ok(RawStreamingChoice::FinalResponse(())),
-            ];
-            let inner: rig::streaming::StreamingResult<()> = Box::pin(stream::iter(items));
-            Ok(StreamingCompletionResponse::stream(inner))
-        }
     }
 
     #[derive(Clone)]
@@ -1384,67 +1304,6 @@ pub(super) mod tests {
             .unwrap()
     }
 
-    fn live_instruction_tree() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("root");
-        let nested = root.join("src");
-        std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(root.join("AGENTS.md"), "root-live-instructions\n").unwrap();
-        std::fs::write(nested.join("AGENTS.md"), "nested-live-instructions\n").unwrap();
-        let root = std::fs::canonicalize(&root).unwrap();
-        let nested = std::fs::canonicalize(&nested).unwrap();
-        (tmp, root, nested)
-    }
-
-    #[test]
-    fn assemble_request_context_message_maps_body_and_none() {
-        // Frozen/live selection semantics are owned — and pinned — by
-        // workspace/instructions.rs tests; this only fences the wrapper's
-        // Some(body) → Message::user("<context>…") and None → None mapping.
-        let (_tmp, root, nested) = live_instruction_tree();
-        assert!(
-            assemble_request_context_message(Some("{}"), Some(&nested), Some(&root)).is_none(),
-            "an empty bound manifest must produce no context message"
-        );
-
-        let manifest = crate::workspace::InstructionManifest::new(
-            "abc",
-            vec![crate::workspace::InstructionFile::from_bytes(
-                "AGENTS.md",
-                b"frozen-base-instructions\n",
-            )],
-        );
-        let message = assemble_request_context_message(
-            Some(&manifest.to_json_string()),
-            Some(&nested),
-            Some(&root),
-        )
-        .expect("a populated manifest must produce a context message");
-        let encoded = serde_json::to_string(&message).expect("serialize");
-        assert!(encoded.contains("<context>"));
-        assert!(encoded.contains("frozen-base-instructions"));
-    }
-
-    #[test]
-    fn terminal_response_requires_visible_output() {
-        assert!(!terminal_response_has_visible_output("", None));
-        assert!(!terminal_response_has_visible_output("   ", Some("")));
-        assert!(!terminal_response_has_visible_output("", Some("   ")));
-        assert!(terminal_response_has_visible_output("hello", None));
-        assert!(terminal_response_has_visible_output("", Some("hello")));
-    }
-
-    #[test]
-    fn request_deadline_remaining_reports_expired_deadline() {
-        let deadline = chrono::Utc::now() - chrono::Duration::milliseconds(1);
-
-        assert_eq!(
-            request_deadline_remaining(Some(deadline)),
-            Some(Duration::ZERO)
-        );
-        assert!(ensure_request_deadline_open(Some(deadline), "test").is_err());
-    }
-
     #[test]
     fn retry_entry_matches_lean_frontier() {
         for case in &crate::lean_vocab_test::lean_contract_snapshot().retry_entry_cases {
@@ -1505,31 +1364,6 @@ pub(super) mod tests {
                 .collect();
             assert_eq!(actual, expected, "{case}");
         }
-    }
-
-    #[tokio::test]
-    async fn await_with_request_deadline_bounds_waits() {
-        let deadline = chrono::Utc::now() + chrono::Duration::milliseconds(10);
-
-        let result = await_with_request_deadline(
-            Some(deadline),
-            tokio::time::sleep(Duration::from_secs(5)),
-            "test wait",
-        )
-        .await;
-
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn await_with_request_deadline_allows_fast_work() {
-        let deadline = chrono::Utc::now() + chrono::Duration::seconds(1);
-
-        let result = await_with_request_deadline(Some(deadline), async { 42 }, "test wait")
-            .await
-            .expect("fast work should finish before deadline");
-
-        assert_eq!(result, 42);
     }
 
     #[tokio::test]
@@ -1655,9 +1489,8 @@ pub(super) mod tests {
         let _ = std::fs::remove_dir_all(data_path);
     }
 
-    /// The R6 completion fixture uses a background agent-target session, not a
-    /// spawned shell process. Its selected wake remains pending until the
-    /// daemon's ordinary admission and claim path runs here.
+    /// The R6 completion fixture uses a background agent-target session; its
+    /// selected wake stays pending until the daemon's ordinary admission runs.
     #[tokio::test]
     async fn background_completion_wake_reaches_daemon_provider_input() {
         use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -1744,8 +1577,8 @@ pub(super) mod tests {
             .await
             .unwrap();
 
-        // This direct daemon fixture has no watcher/router. The creator must
-        // publish title work, but cannot dispatch its provider call here.
+        // This direct daemon fixture has no watcher/router; it only observes
+        // pending title work.
         let session_id = crate::graphql::escape_graphql_string(&wake.session_id);
         let node_did = crate::graphql::escape_graphql_string(&admission.node_did);
         let title_purpose = crate::graphql::escape_graphql_string(

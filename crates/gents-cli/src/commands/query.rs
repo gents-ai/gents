@@ -134,11 +134,6 @@ mod tests {
         assert!(scope.ensure_allowed("OtherReport").is_err());
     }
 
-    /// `gents query` with no `--allow-collection` is the widest scope the CLI
-    /// offers, and it is the one an operator reaches for by default. A protected
-    /// collection must still be refused there, before any request leaves the
-    /// process — the endpoint below is never listening, so a refusal that named a
-    /// transport failure would not name the collection.
     fn protected_args(fields: Vec<String>) -> QueryArgs {
         QueryArgs {
             text: None,

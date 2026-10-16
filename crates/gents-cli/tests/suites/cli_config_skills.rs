@@ -201,8 +201,6 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
     )?;
     assert_eq!(list.get("count").and_then(Value::as_u64), Some(0));
 
-    // Local source locations are rediscovered on import, not copied into an
-    // exported SKILL.md as if they were portable identity.
     let source = tempdir.path().join("coding-check");
     fs::create_dir_all(&source)?;
     fs::write(

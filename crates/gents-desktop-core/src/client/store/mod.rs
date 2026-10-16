@@ -103,7 +103,6 @@ pub struct ClientStoreRows {
     #[serde(skip)]
     pub chain_key_binding_source_node_dids: Vec<Option<String>>,
     #[serde(skip)]
-    /// Node DIDs whose current operator overlay fully decoded first-run config roots.
     pub operator_config_authoritative_node_dids: HashSet<String>,
     #[serde(skip)]
     pub inference_backend_source_node_dids: Vec<Option<String>>,
@@ -166,7 +165,6 @@ pub struct ClientStore {
     pub datastore_tool_surface_source_node_dids: Vec<Option<String>>,
     pub chain_key_bindings: Vec<ChainKeyBindingDocument>,
     pub chain_key_binding_source_node_dids: Vec<Option<String>>,
-    /// Provenance of the current operator config projection, not transport history.
     pub operator_config_authoritative_node_dids: HashSet<String>,
     pub inference_backend_source_node_dids: Vec<Option<String>>,
     pub backend_observation_source_node_dids: Vec<Option<String>>,
@@ -191,15 +189,6 @@ pub struct TranscriptView<'a> {
     pub tool_calls: Vec<&'a AgentToolCallRow>,
 }
 
-/// Aggregated recent-run bookkeeping for a task, rolled up across all
-/// canonical triggers that reference it.
-///
-/// The apply path owns the `Task` description while the trigger engine
-/// owns per-trigger fire bookkeeping on `Trigger`.
-/// Operators looking at a single task need to see "how often has this
-/// task actually been fired, and what happened last time?" without
-/// having to click into every trigger individually -- this struct rolls
-/// those numbers up for the Task detail view.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct TaskRecentRuns {
     pub total_fires: u64,
@@ -291,10 +280,6 @@ impl ClientStore {
         }
     }
 
-    /// The observer retains request/config facts only. Immutable transcript
-    /// facts are read through the exact session projection scope, so an
-    /// observer snapshot cannot accidentally turn a missing dependency into
-    /// an empty rendered message.
     pub(crate) fn into_observer_projection(mut self) -> Self {
         self.transcript_messages.clear();
         self.output_segments.clear();

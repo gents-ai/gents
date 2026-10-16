@@ -54,7 +54,6 @@ const stillBooting = () =>
     endpoint: null,
   });
 
-/** The bridge reports the runtime still migrating, then running. */
 function statusSequence(...statuses: ManagedServerStatus[]) {
   let index = 0;
   return vi.fn(async () => statuses[Math.min(index++, statuses.length - 1)]);
@@ -190,7 +189,6 @@ describe("the local server's status", () => {
         .fn()
         .mockResolvedValue(stopped)
         .mockResolvedValueOnce(base)
-        /* read when the client changed, answered only after the stop */
         .mockReturnValueOnce(new Promise((resolve) => (late = resolve))),
       stopManagedServer: vi.fn(async () => stopped),
       fetchDesktopSnapshot: vi.fn(async () => ({ bootstrap: {}, client: null })),

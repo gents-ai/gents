@@ -66,7 +66,7 @@ WARNING: --yolo bootstraps UNRESTRICTED tools. The agent can run any command\n\
 and write any file your user account can reach — no sandbox, no containment.\n\
 Use --write for sandboxed writes scoped to the tool root.";
 
-/// Takes the store lock for the rest of init. An overwrite wipes the home
+/// Takes the store lock for the rest of init; an overwrite wipes the home
 /// under that same lock, keeping the lock file itself, so no runtime can open
 /// the store while it is removed or hold a second lock afterwards.
 pub(crate) fn lock_init_store(
@@ -74,7 +74,6 @@ pub(crate) fn lock_init_store(
     data_dir: &Path,
     overwrite: bool,
 ) -> Result<gents::home::StoreLock> {
-    // $HOME first, then the password database.
     let user_home = std::env::home_dir();
     lock_init_store_for_user(home_dir, data_dir, overwrite, user_home.as_deref())
 }
@@ -343,8 +342,8 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
     Ok(())
 }
 
-/// What `init` says when its sign-in added an account beside others instead
-/// of taking the provider's original slot, which the setup backend runs on.
+/// What `init` says when its sign-in added an account beside the provider's
+/// original one, which the setup backend runs on.
 fn added_account_note(sign_in: &gents::oauth_credential::SignIn) -> Option<String> {
     (sign_in.result == gents::oauth_credential::SignInResult::Added
         && sign_in.credential.account_ref.is_some())
@@ -407,7 +406,8 @@ async fn maybe_inline_grok_login(
         return InlineGrokLoginState::Unauthenticated;
     }
     let provider = gents::xai_grok_oauth::normalize_provider("xai-oauth");
-    // `init` writes a backend with no account reference, which runs on the original account.
+    // `init` writes a backend with no account reference, which runs on the
+    // provider's original account.
     match gents::oauth_credential::resolve_oauth_credential(
         access,
         node_did,
@@ -481,7 +481,8 @@ async fn maybe_inline_claude_login(
     }
     let provider =
         gents::claude_oauth::normalize_provider(gents::claude_oauth::CLAUDE_OAUTH_PROVIDER);
-    // `init` writes a backend with no account reference, which runs on the original account.
+    // `init` writes a backend with no account reference, which runs on the
+    // provider's original account.
     match gents::oauth_credential::resolve_oauth_credential(
         access,
         node_did,
@@ -538,7 +539,8 @@ async fn maybe_inline_codex_login(
         return InlineCodexLoginState::Unauthenticated;
     }
     let provider = gents::chatgpt_codex::normalize_provider("chatgpt-codex");
-    // `init` writes a backend with no account reference, which runs on the original account.
+    // `init` writes a backend with no account reference, which runs on the
+    // provider's original account.
     match gents::oauth_credential::resolve_oauth_credential(
         access,
         node_did,
@@ -878,21 +880,12 @@ async fn initialize_runtime_home(
     let tools_id = default_tools_id_for_agent(&default_agent_id);
     let tool_ceiling = tool_ceiling_for_package(tool_package);
     let tool_root = resolve_tool_root_for_package(tool_package, args.tool_root.as_deref())?;
-    // A blank Tools.host.root inherits the operator root recorded in
-    // init.json only while no explicit WorkspaceRoot policy exists: the
-    // execution guard refuses rootless host tools under configured policy, so
-    // init pins the resolved operator root exactly when the operator has
-    // authored one, and init.json stays the single record otherwise.
     let explicit_workspace_policy = gents::tool_surface::load_workspace_root_policy(node, None)
         .await?
         .configured;
     let pinned_tool_root = explicit_workspace_policy
         .then(|| tool_root.clone())
         .flatten();
-    // Canonical auth is a typed selection, never a raw key copy: an
-    // environment-key endpoint reads the key from the runtime host at call
-    // time, and agent-scoped OAuth providers keep using the node's
-    // existing OAuthCredential owner.
     let backend_auth = backend_auth_for_init(&backend)?;
     let backend_doc = InferenceBackend {
         node_did: node_did.to_string(),
@@ -906,9 +899,8 @@ async fn initialize_runtime_home(
         discovery_timeout_secs: None,
         max_concurrent: Some(args.max_concurrent),
         max_queue_depth: Some(args.max_queue_depth),
-        // First-run must not activate the placeholder model merely because an
-        // unrelated service happens to answer on the default localhost port.
-        // Selecting inference enables this backend through the normal config owner.
+        // First-run must not activate the placeholder model because an
+        // unrelated service answers on the default localhost port.
         enabled: initial_backend_enabled(args),
         tags: Vec::new(),
     };
@@ -927,9 +919,8 @@ async fn initialize_runtime_home(
         enable_defra_query,
         args.defra_query_collections.clone(),
     );
-    // Every first run carries the Engineer's configuration tools, as the
-    // desktop first run does; the stored tool ceiling still bounds any host
-    // tool change they make.
+    // Every first run carries the Engineer's configuration tools, bounded by
+    // the stored tool ceiling.
     tools.self_config = Some(engineer_self_config());
     tools
         .built_ins
@@ -967,9 +958,6 @@ async fn initialize_runtime_home(
         &model_name.to_string(),
     );
     inference_profile.execution_id = Some(inference_execution_id);
-    // Canonical chain: agent -> context (system prompt, tools, compaction)
-    // and agent -> inference profile. No backend/model copies on the
-    // agent.
     let agent = Agent {
         agent_id: default_agent_id.clone(),
         node_did: node_did.to_string(),
@@ -993,13 +981,9 @@ async fn initialize_runtime_home(
         },
         created_at: Some(chrono::Utc::now().to_rfc3339()),
     };
-    // One canonical publication: every init-owned document is staged into a
-    // shared DesiredStateApplyPlan so the whole home bootstraps atomically and
-    // references are validated against the complete staged candidate, not
-    // publication order. Per-type writers and duplicate upsert seams go away.
-    // The retired per-type writers each validated their document before
-    // publication; the shared plan owner normalizes but does not re-validate,
-    // so init preserves that guarantee explicitly before staging.
+    // Every init-owned document is staged into one shared DesiredStateApplyPlan
+    // so the whole home bootstraps atomically; the shared plan owner normalizes
+    // but does not re-validate, so each document is validated before staging.
     if let Some(error) = tools
         .validation_violations()
         .into_iter()
@@ -1034,10 +1018,8 @@ async fn initialize_runtime_home(
     )
     .await?;
     // Health and discovery are runtime-owned observations, so the desired
-    // config plan deliberately omits them. Preserve init's established
-    // bootstrap contract by publishing the selected endpoint as initially
-    // healthy after its canonical backend document exists; the health owner
-    // will replace this observation with measured state once the server runs.
+    // config plan omits them; this publishes the selected endpoint as
+    // initially healthy until the server replaces it with measured state.
     gents::backend_registry::set_backend_probe_status_with_last_probe(
         node,
         node_did,
@@ -1072,9 +1054,9 @@ async fn initialize_runtime_home(
     })
 }
 
-/// Publish init's documents and the node_document that names their default
-/// agent as one validated plan: a failed init leaves no default pointing at
-/// a missing or disabled agent.
+/// Publish init's documents and the node document naming their default agent
+/// as one validated plan: a failed init leaves no default pointing at a
+/// missing or disabled agent.
 async fn publish_home_config(
     access: &ConfigAccess,
     node_did: &str,
@@ -1113,8 +1095,7 @@ async fn publish_home_config(
         .await
 }
 
-/// Serialize a canonical config document into a complete-replacement plan
-/// entry (same add/update value; the plan normalizes owner/logical identity).
+/// Serialize a canonical config document as a complete-replacement plan entry.
 fn replacement<T: serde::Serialize>(
     collection: Collection,
     document: &T,
@@ -1135,17 +1116,10 @@ fn default_context_id_for_agent(agent_id: &str) -> String {
     format!("{agent_id}-context")
 }
 
-/// Canonical `Tools` document for an init tool package. Typed nested groups
-/// replace the flat selection rows: absent groups and unset flags expose no
-/// capability, a blank `Tools.host.root` inherits the operator root recorded in
-/// init.json while no WorkspaceRoot policy is configured (so a narrowed
-/// operator root moves every default behavior without re-authoring documents),
-/// and an explicit policy pins the resolved operator root because the
-/// execution guard refuses rootless host tools under it. The execution policy
-/// stays an explicit typed selection (macOS `--write` keeps the sandboxed
-/// workspace_write policy; `--yolo` is always unrestricted). Backgrounding is
-/// per-capability: only write-capable bash may run in the background, which
-/// the derived allowlist materializes as `bash_unrestricted`.
+/// Canonical `Tools` document for an init tool package. A blank `Tools.host.root`
+/// inherits the operator root recorded in init.json while no WorkspaceRoot
+/// policy is configured, and an explicit policy pins the resolved operator root
+/// because the execution guard refuses rootless host tools under it.
 fn tools_for_package(
     node_did: &str,
     tools_id: &str,
@@ -1234,9 +1208,8 @@ fn tools_for_package(
 }
 
 /// The seeded permissive preset, migrated to the canonical nested `Tools`
-/// shape: explicitly enabled meta-adjacent and DefraDB query capabilities,
-/// every privilege-bearing host capability absent. Absence grants nothing —
-/// the permissive surface is explicit, never implied by a policy version.
+/// shape: every privilege-bearing host capability is absent; the permissive
+/// surface is explicit, never implied by a policy version.
 fn wide_open_tools_document(node_did: &str) -> Tools {
     Tools {
         tools_id: wide_open_tools_id_for_node(node_did),
@@ -1254,11 +1227,9 @@ fn wide_open_tools_document(node_did: &str) -> Tools {
     }
 }
 
-/// The Engineer builds, starts, observes and steers its crew (#1796): the
-/// agents tools, the sessions tool, read-only query and an escalation surface
-/// holding the canonical `file_mailbox_item` declaration (default event/flag/ack
-/// policy). `agent_new` appears once these Tools select a AgentTarget, which
-/// the Engineer creates through self-config.
+/// The Engineer's agents tools, sessions tool, read-only query and an
+/// escalation surface holding the canonical `file_mailbox_item` declaration
+/// (default event/flag/ack policy).
 fn engineer_tools(
     tools: &mut Tools,
     node_did: &str,
@@ -1297,11 +1268,10 @@ fn wide_open_tools_id_for_node(node_did: &str) -> String {
     format!("{node_did}:wide-open")
 }
 
-/// Canonical typed auth for an init-resolved backend. Agent-scoped OAuth
-/// providers resolve the node's existing `OAuthCredential` at call time;
-/// a raw key is stored under DefraDB ACP in the backend document; an
-/// environment key is read from the runtime host per call; a deliberately
-/// unauthenticated endpoint (local model server) stays explicit.
+/// Canonical typed auth for an init-resolved backend: agent-scoped OAuth
+/// resolves the node's existing `OAuthCredential` at call time; a raw key is
+/// stored under DefraDB ACP; an environment key is read from the runtime host
+/// per call; a deliberately unauthenticated endpoint stays explicit.
 fn backend_auth_for_init(backend: &ResolvedBackendConfig) -> Result<BackendAuth> {
     if backend.provider_kind.is_node_scoped_oauth() {
         return Ok(BackendAuth::NodeOAuth { account_ref: None });
@@ -1316,8 +1286,8 @@ fn backend_auth_for_init(backend: &ResolvedBackendConfig) -> Result<BackendAuth>
         (None, Some(variable)) => Ok(BackendAuth::Environment {
             variable: variable.to_string(),
         }),
-        // Local model servers (llama-server, ollama) listen unauthenticated;
-        // an explicit absent auth is the honest record, never a silent grant.
+        // Local model servers listen unauthenticated; an explicit absent auth
+        // is the honest record, never a silent grant.
         (None, None) => Ok(BackendAuth::Unauthenticated),
     }
 }
@@ -1386,8 +1356,6 @@ fn init_enable_defra_query(
     (package_enables_defra_query(tool_package) || enable_defra_query) && !disable_defra_query
 }
 
-/// Whether the package's canonical `Tools` document enables the datastore
-/// query capability by default. `Introspection` is the only opt-in package.
 fn package_enables_defra_query(tool_package: ToolPackageArg) -> bool {
     matches!(tool_package, ToolPackageArg::Introspection)
 }
@@ -1415,9 +1383,8 @@ fn resolve_tool_root_for_package(
     }
 }
 
-/// Sampling stays unbound. `initialize_runtime_home` binds the execution
-/// document this leaves unset, because the self-config tool can only edit an
-/// execution its profile already names.
+/// Sampling stays unbound; `initialize_runtime_home` binds the execution
+/// document this leaves unset.
 fn standard_inference_profile(
     node_did: &str,
     profile_id: &str,
@@ -1444,8 +1411,6 @@ fn default_inference_execution_id_for_profile(profile_id: &str) -> String {
     format!("{profile_id}-execution")
 }
 
-/// Every limit stays unset so the canonical defaults keep owning each bound;
-/// the document exists only so the configurator has an execution to reach.
 fn standard_inference_execution(node_did: &str, execution_id: &str) -> InferenceExecution {
     InferenceExecution {
         node_did: node_did.to_string(),
@@ -1608,7 +1573,6 @@ mod tests {
         );
     }
 
-    /// A fake user home, so no test ever resolves a real broad path.
     fn overwrite(home: &Path, user_home: &Path) -> Result<gents::home::StoreLock> {
         lock_init_store_for_user(home, &home.join("data"), true, Some(user_home))
     }
@@ -1763,10 +1727,6 @@ mod tests {
     }
     use gents::BackendProviderKind;
 
-    /// Compile-only guard that the retired flat Tools vocabulary is
-    /// gone from the init test surface: preset classification now goes through
-    /// the shared `tool_surface::presets::classify_tools` owner against the
-    /// canonical nested `Tools` document.
     #[test]
     fn tests_reference_canonical_tools_not_flat_selection() {
         let tools = tools_for_package(
@@ -1860,9 +1820,6 @@ mod tests {
         );
     }
 
-    /// The grant exercised here is the configurator's own profile category;
-    /// its no-lockout and preview guardrails are separate policy, not this
-    /// fence.
     #[tokio::test]
     async fn the_engineer_sets_max_turns_on_a_freshly_initialized_home() {
         use gents::llm::tool::ToolDyn;
@@ -1961,7 +1918,6 @@ mod tests {
         };
         let node_document = || async { load_node(&node, owner).await.unwrap() };
 
-        // The named agent is missing, then disabled: neither publishes a node_document.
         let missing = vec![
             entry(Collection::InferenceBackend, backend.clone()),
             entry(Collection::InferenceProfile, profile.clone()),
@@ -2327,15 +2283,6 @@ mod tests {
         }
     }
 
-    /// Drift fence between init's tool packages and the directory agent
-    /// catalog's preset templates (`gents::tool_surface::presets`): the
-    /// templates are copied verbatim from init's package profiles, and
-    /// nothing else ties the two together. Classify the exact canonical
-    /// `Tools` document init mints — projected into `PresetFields`
-    /// through the shared `classify_tools` owner with the same
-    /// None-means-default reads the directory projection applies to stored
-    /// rows — so a change to either side fails here instead of silently
-    /// mislabeling directory rows.
     #[test]
     fn init_minted_selections_classify_as_their_agent_preset() {
         use gents::tool_surface::presets::{classify_tools, PRESET_READONLY, PRESET_WRITE};
@@ -2355,8 +2302,6 @@ mod tests {
 
         assert_eq!(classify(ToolPackageArg::Readonly), Some(PRESET_READONLY));
         assert_eq!(classify(ToolPackageArg::Write), Some(PRESET_WRITE));
-        // Yolo differs from Write only in fields the classifier deliberately
-        // excludes (display name, exec policy), so it badges as "write".
         assert_eq!(classify(ToolPackageArg::Yolo), Some(PRESET_WRITE));
         assert_eq!(classify(ToolPackageArg::Minimal), None);
         assert_eq!(classify(ToolPackageArg::Introspection), None);
@@ -2446,17 +2391,10 @@ mod tests {
                 tools.datastore.as_ref().unwrap().enable_defra_query,
                 Some(case.enable_defra_query)
             );
-            // Canonical agent capability is absent unless authored: no
-            // targets, no spawn/steering/background, no cross-node_document grant.
             assert!(tools.agents.is_none());
             assert!(tools.remote.is_none());
             assert!(tools.self_config.is_none());
-            assert_eq!(
-                // Write-capable bash may run in the background; the runtime
-                // adapter materializes that as the `bash_unrestricted` entry.
-                bash.map(|bash| bash.background_enabled),
-                case.background_enabled
-            );
+            assert_eq!(bash.map(|bash| bash.background_enabled), case.background_enabled);
         }
     }
 
@@ -2603,9 +2541,6 @@ mod tests {
             preset.datastore.as_ref().unwrap().enable_defra_query,
             Some(true)
         );
-        // No host tools, remote services, agents, integrations, or
-        // self-config: the permissive surface is explicit, never implied by a
-        // policy version.
         assert!(preset.host.is_none());
         assert!(preset.remote.is_none());
         assert!(preset.agents.is_none());
@@ -2642,8 +2577,6 @@ mod tests {
                 variable: "PROVIDER_KEY".to_string()
             }
         );
-        // Agent-scoped OAuth providers resolve the node's existing
-        // OAuthCredential; the backend never copies tokens or keys.
         backend.provider_kind = gents::BackendProviderKind::ChatGptCodex;
         backend.api_key = Some("ignored".to_string());
         assert_eq!(

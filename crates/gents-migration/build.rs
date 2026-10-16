@@ -1,7 +1,4 @@
 //! Build the generic fixture lens WASM artifact for `include_bytes!`.
-//!
-//! Isolated target dir under OUT_DIR avoids deadlocking the parent cargo flock.
-//! GENTS_SKIP_LENS_BUILD can skip the fixture build for source-only checks.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -50,9 +47,8 @@ fn build_lens(workspace_root: &Path, pkg: &str, artifact_name: &str, env_var: &s
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     let lens_target_dir = out_dir.join("lens-target");
 
-    // Match DefraDB's integration harness: lens_sdk 0.8 transport buffers are
-    // corrupted by optimized WASM builds, producing null or invalid type IDs.
-    // Tracked upstream: https://github.com/sourcenetwork/lens/issues/166
+    // lens_sdk 0.8 transport buffers are corrupted by optimized WASM builds
+    // (https://github.com/sourcenetwork/lens/issues/166).
     let mut command = Command::new("cargo");
     command
         .args([
@@ -78,14 +74,7 @@ fn build_lens(workspace_root: &Path, pkg: &str, artifact_name: &str, env_var: &s
         Err(e) => panic!("failed to spawn cargo for lens build: {e}"),
     }
 
-    // cdylib artifact name uses underscores from the package name.
     let artifact = lens_target_dir
-        .join("wasm32-unknown-unknown")
-        .join("debug")
-        .join(artifact_name);
-
-    // cargo may emit lib{name}.wasm depending on crate name mangling
-    let alt = lens_target_dir
         .join("wasm32-unknown-unknown")
         .join("debug")
         .join(format!("{}.wasm", pkg.replace('-', "_")));
@@ -95,7 +84,6 @@ fn build_lens(workspace_root: &Path, pkg: &str, artifact_name: &str, env_var: &s
     } else if alt.exists() {
         alt
     } else {
-        // list dir for diagnostics
         let dir = lens_target_dir.join("wasm32-unknown-unknown").join("debug");
         let listing = std::fs::read_dir(&dir)
             .map(|rd| {
@@ -126,7 +114,6 @@ fn workspace_root() -> PathBuf {
 fn emit_stub(env_var: &str, stub_name: &str) {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     let stub_path = out_dir.join(stub_name);
-    // Minimal valid WASM module header: magic + version.
     let bytes: [u8; 8] = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
     std::fs::write(&stub_path, bytes).expect("write stub WASM");
     println!("cargo:rustc-env={}={}", env_var, stub_path.display());

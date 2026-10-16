@@ -4,7 +4,6 @@ namespace Recovery
 
 inductive RecoveryCadence where
   | startup
-  /-- Included at startup and repeated by the periodic recovery registry. -/
   | periodic
   deriving DecidableEq, Repr
 
@@ -33,7 +32,6 @@ inductive PersistedRecoveryCollection where
   | agentRequest
   | agentToolCall
   | inferenceCall
-  /-- Host task hook records (`Recovery.TaskHookRecordRow`). -/
   | taskHookRecord
   deriving DecidableEq, Repr
 

@@ -22,7 +22,6 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
     let cases = crate::lean_vocab_test::lean_queue_management_cases();
     assert!(!cases.is_empty());
     let mut exercised = Vec::new();
-    // Each model freshness value has two native TTL encodings; both must bind.
     for (case, variant) in cases.iter().flat_map(|case| [(case, 0), (case, 1)]) {
         let LeanQueueManagementOperation::Replace {
             caller,
@@ -42,8 +41,7 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
             .collect::<Vec<_>>();
         let selected =
             &originals[(*offset).min(originals.len())..(offset + count).min(originals.len())];
-        // The native API generates fresh identities and derives positions itself;
-        // forged identity/slot cases belong to admission, not this API's inputs.
+        // The native API generates fresh identities and derives positions itself.
         if replacements.iter().any(|replacement| {
             originals
                 .iter()
@@ -119,8 +117,6 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
                     .unwrap();
                 let mut mutation = create.graphql_mutation().unwrap();
                 if ttl(entry) == Some("malformed") {
-                    // Malformed TTLs cannot be canonically signed. Insert an adversarial
-                    // signature-mismatched row directly; never mutate immutable fields.
                     mutation = mutation.replacen(
                         "create_AgentRequest(input: {",
                         "create_AgentRequest(input: { valid_until: \"malformed\",",

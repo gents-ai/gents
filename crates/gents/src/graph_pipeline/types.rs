@@ -17,11 +17,8 @@ pub enum PortCardinality {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct PortSpec {
     pub name: String,
-    /// Existing DefraDB collection carried on this port.
     pub collection: String,
-    /// Stable schema reference used for compile-time compatibility checks.
     pub schema: String,
-    /// Source field used by event-trigger correlation and fan-in.
     pub correlation_field: String,
     pub cardinality: PortCardinality,
     #[serde(default)]
@@ -36,20 +33,18 @@ pub struct PortSpec {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum StageTarget {
-    /// An agent node: the Task's agent, prompt and tools run as a model turn.
     Task { task_id: String },
-    /// A plugin node: deterministic WASM execution of an installed plugin.
     Plugin {
-        /// `namespace/name` of the installed plugin. A pack names its own
-        /// plugin by `name`, and loading the pack qualifies it.
+        /// `namespace/name` of the installed plugin; a pack's own plugin is
+        /// qualified to `ns/name` when the pack loads.
         plugin: String,
-        /// `sha256:<hex>` of the artifact that runs. A pack's own plugin is
-        /// pinned when the pack is loaded; compiling an unpinned one fails.
+        /// `sha256:<hex>` of the artifact that runs; a pack's own plugin is
+        /// pinned when the pack is loaded, and compiling an unpinned one fails.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "typescript", ts(optional = nullable))]
         digest: Option<String>,
-        /// How many times a failed call may run in all; absent is once. A
-        /// retry never follows a call whose results were written.
+        /// Total attempts a failed call may get; a retry never follows a call
+        /// whose results were written.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "typescript", ts(optional = nullable))]
         max_attempts: Option<u32>,
@@ -57,7 +52,6 @@ pub enum StageTarget {
 }
 
 impl StageTarget {
-    /// The attempts a plugin node's call gets in all.
     pub fn max_attempts(&self) -> u32 {
         match self {
             Self::Plugin { max_attempts, .. } => crate::plugin::attempts_allowed(*max_attempts),
@@ -67,7 +61,6 @@ impl StageTarget {
 }
 
 impl StageTarget {
-    /// The Task an agent node runs, if this is one.
     pub fn task_id(&self) -> Option<&str> {
         match self {
             Self::Task { task_id } => Some(task_id),
@@ -76,16 +69,15 @@ impl StageTarget {
     }
 }
 
-/// Operator-approved interface around a Task or an installed plugin.
-///
-/// The model can select a capability revision, but cannot author the Task's
-/// agent, prompt, tools, model, or output permissions, nor the plugin that runs.
+/// Operator-approved interface around a Task or an installed plugin. The
+/// model can select a capability revision but cannot author its agent, prompt,
+/// tools, model, output permissions, or the plugin that runs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct StageCapability {
-    /// Owner of this capability and its referenced task. Every caller,
-    /// including this owner, needs explicit allowed_callers admission and ACP.
+    /// Every caller, including the owner, needs explicit allowed_callers
+    /// admission and ACP.
     pub node_did: String,
     pub capability_id: String,
     pub revision: String,
@@ -112,12 +104,11 @@ pub struct StageCapability {
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
     pub allowed_callers: Vec<String>,
-    /// Optional graph execution ceiling; does not select a different agent
-    /// or inference profile from the referenced task.
+    /// Optional graph execution ceiling; does not select a different agent or
+    /// inference profile from the referenced task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub workspace_authority: Option<WorkspaceAuthority>,
-    /// UI/discovery metadata; explicit task/capability references define topology.
     #[serde(
         default,
         deserialize_with = "crate::document_config::deserialize_default_on_null",
@@ -138,15 +129,15 @@ pub struct PortRef {
 }
 
 // Graph edges compile into the same event-group configuration used by ordinary
-// triggers. No graph-only count or delivery-policy model.
+// triggers; no graph-only count or delivery-policy model.
 pub type GroupCount = crate::document_config::EventGroupCount;
 pub type DeliveryMode = Option<crate::document_config::EventGroup>;
 /// Trigger concurrency on a graph edge. Compilation refuses `latest_only` on
 /// every edge (`DiagnosticCode::InvalidEdgeConcurrency`; Lean
 /// `GraphPipeline.graphEdgeConcurrencyValid`): on a per-document edge a
 /// `latest_only` trigger supersedes the same trigger's in-flight requests,
-/// which would cancel earlier fan-out items; on a grouped edge the trigger
-/// engine never applies the mode.
+/// cancelling earlier fan-out items; on a grouped edge the trigger engine
+/// never applies the mode.
 pub type DeliveryConcurrency = crate::document_config::ConcurrencyMode;
 
 /// Selects a singleton Task invocation in the same pinned graph correlation.
@@ -203,14 +194,11 @@ pub struct EntryBinding {
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub input_contract: Option<String>,
     pub to: PortRef,
-    /// JSON Schema for the operator-facing input this entry accepts. Absent
-    /// means the entry takes an unvalidated JSON object, as before.
+    /// Absent means the entry takes an unvalidated JSON object.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(type = "unknown", optional = nullable))]
     pub input_schema: Option<serde_json::Value>,
-    /// Host-computed facts and a pack plugin that shape the operator input
-    /// into this entry's actual seed before a run starts. Absent means the
-    /// admitted operator input is the entry input directly.
+    /// Absent means the admitted operator input is the entry input directly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub prepare: Option<EntryPrepare>,
@@ -223,16 +211,13 @@ pub struct EntryBinding {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct EntryPrepare {
-    /// Collected in order before the plugin runs.
     pub host: Vec<HostInput>,
-    /// This pack's plugin by name; qualified to `ns/name` when the pack is
-    /// loaded.
+    /// This pack's plugin by name; qualified to `ns/name` when the pack loads.
     pub plugin: String,
     /// `sha256:<hex>` of the artifact that runs; pinned when the pack loads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub digest: Option<String>,
-    /// Collections the plugin's returned documents may be created in.
     pub writes: Vec<String>,
 }
 
@@ -242,7 +227,6 @@ pub struct EntryPrepare {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum HostInput {
-    /// The Git diff between two admitted operator input fields.
     GitDiff {
         repository_field: String,
         base_field: String,
@@ -250,7 +234,7 @@ pub enum HostInput {
         unified_context_lines: u32,
         rename_similarity_percent: u8,
     },
-    /// A read-only workspace over the `GitDiff` head; requires an earlier
+    /// Read-only workspace over the `GitDiff` head; requires an earlier
     /// `GitDiff` in the same `host` list.
     ReadOnlyWorkspace,
 }
@@ -284,9 +268,7 @@ pub struct GraphLimits {
     pub max_edges: u32,
     pub max_depth: u32,
     pub max_fan_out: u32,
-    /// Whole-run ceiling enforced by the durable GraphRun reconciler.
     pub max_total_invocations: u32,
-    /// Wall-clock run bound enforced from the durable `GraphRun.started_at`.
     pub max_runtime_secs: u64,
 }
 
@@ -313,7 +295,6 @@ pub struct GraphIntent {
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<ResultContract>>", optional = nullable))]
     pub results: Vec<ResultContract>,
     pub limits: GraphLimits,
-    /// UI/discovery metadata; explicit task/capability references define topology.
     #[serde(
         default,
         deserialize_with = "crate::document_config::deserialize_default_on_null",
@@ -375,7 +356,6 @@ pub enum DiagnosticCode {
 #[serde(deny_unknown_fields)]
 pub struct Diagnostic {
     pub code: DiagnosticCode,
-    /// Stable JSON-pointer-like location in the submitted intent.
     pub path: String,
     pub message: String,
 }
@@ -389,8 +369,8 @@ pub struct PlannedNode {
     pub target: StageTarget,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<GraphSessionSelection>,
-    /// Where a plugin node writes its result. Empty for an agent node, whose
-    /// model writes its outputs through its own tools.
+    /// Empty for an agent node, whose model writes its outputs through its own
+    /// tools.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub output_ports: Vec<PortSpec>,
 }
@@ -450,7 +430,7 @@ pub use crate::toolset::WorkspaceAuthority;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlannedPackageArtifact {
-    /// Canonical collection and owner-scoped authored identity. Resolve the
+    /// Canonical collection and owner-scoped authored identity; resolve the
     /// physical Defra document through the shared configuration owner.
     pub collection: crate::Collection,
     pub logical_id: String,
@@ -462,9 +442,8 @@ pub struct PlannedPackageArtifact {
 pub struct RequiredSchemaDigest {
     pub namespace: String,
     pub digest: String,
-    /// Canonical full-contract digest for each collection in the pinned SDL.
-    /// Peers can compare their active DefraDB collection versions without
-    /// needing the originating binary's bundled catalog.
+    /// Peers compare their active DefraDB collection versions through these
+    /// without the originating binary's bundled catalog.
     pub collection_contract_digests: BTreeMap<String, String>,
 }
 

@@ -150,8 +150,6 @@ impl QueueWatch {
     }
 }
 
-/// Subscription removal waits only for an in-flight freshness write, never a
-/// queue scan or native watch attachment.
 fn renew_listener(home: &Path, subscriptions: &watch::Receiver<bool>) -> Result<bool> {
     let active = subscriptions.borrow();
     if !*active {

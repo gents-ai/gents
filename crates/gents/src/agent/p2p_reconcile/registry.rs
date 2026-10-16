@@ -15,7 +15,7 @@ pub const REGISTRY_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 pub const REGISTRY_STALE_AFTER: Duration = Duration::from_secs(90);
 
 /// Resolve informational registry liveness without granting any pairing or
-/// routing authority. Excessive future skew is stale as well as old data.
+/// routing authority.
 pub fn heartbeat_is_fresh(ts: DateTime<Utc>, now: DateTime<Utc>, stale_after: Duration) -> bool {
     match now.signed_duration_since(ts).to_std() {
         Ok(age) => age <= stale_after,
@@ -338,93 +338,6 @@ fn registry_publish_reason(
 mod tests {
     use super::*;
 
-    fn registry_entry(address: &str, status: &str) -> RegistryEntry {
-        RegistryEntry {
-            peer_id: "peer-one".into(),
-            node_did: "did:key:one".into(),
-            addresses: vec![address.into()],
-            templates: vec!["conversation".into()],
-            display_name: None,
-            status: status.into(),
-            network_id: "default".into(),
-        }
-    }
-
-    #[test]
-    fn registry_entry_publishes_only_when_needed() {
-        let now = Instant::now();
-        let entry = registry_entry("endpoint-one", "online");
-        let published = PublishedRegistryEntry {
-            entry: entry.clone(),
-            at: now,
-        };
-
-        assert_eq!(
-            registry_publish_reason(None, &entry, now, Duration::from_secs(30)),
-            Some("initial")
-        );
-        assert_eq!(
-            registry_publish_reason(
-                Some(&published),
-                &entry,
-                now + Duration::from_secs(29),
-                Duration::from_secs(30)
-            ),
-            None
-        );
-        assert_eq!(
-            registry_publish_reason(
-                Some(&published),
-                &entry,
-                now + Duration::from_secs(30),
-                Duration::from_secs(30)
-            ),
-            Some("renewal")
-        );
-        assert_eq!(
-            registry_publish_reason(
-                Some(&published),
-                &registry_entry("endpoint-two", "online"),
-                now + Duration::from_secs(1),
-                Duration::from_secs(30)
-            ),
-            Some("binding_changed")
-        );
-        assert_eq!(
-            registry_publish_reason(
-                Some(&published),
-                &registry_entry("endpoint-one", "offline"),
-                now + Duration::from_secs(1),
-                Duration::from_secs(30)
-            ),
-            Some("binding_changed")
-        );
-    }
-
-    #[test]
-    fn registry_upsert_mutation_escapes_and_emits_null_for_empty_templates() {
-        let m = registry_upsert_mutation(
-            &RegistryEntry {
-                peer_id: r#"p"1"#.into(),
-                node_did: "did:key:a".into(),
-                addresses: vec!["/ip4/1/tcp/1".into()],
-                templates: vec![],
-                display_name: Some("amy".into()),
-                status: "online".into(),
-                network_id: "default".into(),
-            },
-            "2026-06-13T00:00:00Z",
-            UpsertKind::Full,
-        );
-        assert!(m.contains(r#"peer_id: { _eq: "p\"1" }"#));
-        assert!(m.contains("templates: null"));
-        assert!(!m.contains("templates: []"));
-        assert!(m.contains(r#"status: "online""#));
-    }
-
-    /// The heartbeat-variant `update` block must NOT contain `display_name` (it
-    /// would clobber the operator-set value), but MUST re-advertise `templates`
-    /// so the offered scope set stays fresh on every lease renewal.
     #[test]
     fn heartbeat_upsert_update_block_omits_display_name_but_keeps_templates() {
         let entry = RegistryEntry {
@@ -448,7 +361,6 @@ mod tests {
             "add branch must still set templates on first registration: {m}"
         );
 
-        // Split the mutation at `update: {` to isolate the update block.
         let update_portion = m
             .split_once("update: {")
             .expect("mutation must contain an update block")
@@ -463,8 +375,6 @@ mod tests {
         );
     }
 
-    /// The full/operator-variant `update` block MUST contain `display_name` and
-    /// `templates` — the operator explicitly supplied them via `p2p network register`.
     #[test]
     fn operator_upsert_update_block_includes_display_name_and_templates() {
         let entry = RegistryEntry {

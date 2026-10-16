@@ -100,9 +100,7 @@ pub struct ExternalToolEventMapping {
 #[derive(Debug, Clone)]
 pub struct ExternalAdapterImport {
     pub projection: AdapterProjectionKind,
-    /// An external capture is a derived import view, never a set of canonical
-    /// DefraDB timeline rows.  In particular it has no AgentMessage header,
-    /// physical document identity, execution generation, or lease claim.
+    /// A derived import view, never a set of canonical DefraDB timeline rows.
     pub view: ExternalAdapterView,
     pub actor_did: Option<String>,
     pub source_system: String,
@@ -120,8 +118,8 @@ pub struct ExternalAdapterView {
 
 #[derive(Debug, Clone)]
 pub struct ExternalAdapterMessage {
-    /// Stable only within this imported capture. It is a derived label, not a
-    /// DefraDB document identifier or an asserted framework physical ID.
+    /// Stable only within this imported capture; never a DefraDB document
+    /// identifier.
     pub capture_message_label: String,
     /// External participant role retained for adapter export; it grants no
     /// native message role or request authority.
@@ -141,10 +139,6 @@ struct ImportedMessage {
 }
 
 /// Interpret an external capture as a derived export view.
-///
-/// This intentionally does not produce `RunTimelineRows`: an external
-/// framework capture has neither canonical message headers nor DefraDB
-/// physical-document provenance.
 pub fn import_external_adapter_capture_to_derived_view(
     capture: &ExternalAdapterCapture,
 ) -> Result<ExternalAdapterImport> {
@@ -921,8 +915,7 @@ fn import_multi_agent_capture(
                 "child_request_id": delegation.child_request_id,
             })
             .to_string(),
-            // Mapping metadata establishes the delegation but supplies no
-            // delivered tool-result payload.
+            // Mapping metadata supplies no delivered tool-result payload.
             result: None,
             status: delegation
                 .status
@@ -945,7 +938,7 @@ fn import_multi_agent_capture(
             tool_name: event.tool_name.clone(),
             tool_call_id: event.id.clone(),
             args: json!({ "source_system": capture.source.system }).to_string(),
-            // An event mapping is not evidence of a delivered result body.
+            // Not evidence of a delivered result body.
             result: None,
             status: event
                 .status
@@ -1266,9 +1259,8 @@ fn strip_final_answer_prefix(value: &str) -> &str {
     value.strip_prefix("Final Answer: ").unwrap_or(value)
 }
 
-/// External captures are converted into native message values for a derived
-/// view. This is an import fixture, not a persistence decoder: it never
-/// fabricates a canonical transcript header or physical document identity.
+/// An import fixture, not a persistence decoder: it never fabricates a
+/// canonical transcript header or physical document identity.
 fn imported_external_message(
     session_id: &str,
     request_id: &str,
@@ -1322,8 +1314,7 @@ fn first_owned<'a>(values: impl IntoIterator<Item = Option<&'a str>>) -> Option<
         .map(ToOwned::to_owned)
 }
 
-/// Captures with partial mappings remain usable without inventing a session owner.
-/// This is a read-only projection of supplied capture identity, never a persisted doc.
+/// A read-only projection of supplied capture identity, never a persisted doc.
 fn imported_session(
     session_id: &str,
     node_did: Option<&str>,

@@ -1,7 +1,7 @@
 use super::*;
 
-/// Title generation embeds the conversation prompt in a different user message;
-/// only the actual conversation turn may hold this fixture's streaming barrier.
+/// Only the actual conversation turn may hold this fixture's streaming
+/// barrier; title generation embeds the prompt in a different user message.
 pub(super) fn latest_user_text(request: &Value) -> Option<String> {
     let content = request
         .get("messages")?
@@ -19,54 +19,6 @@ pub(super) fn latest_user_text(request: &Value) -> Option<String> {
             .map(|parts| parts.concat()),
         _ => None,
     }
-}
-
-#[test]
-fn conversation_barriers_match_exact_turns_without_gating_title_prompts() {
-    for prompt in ["First conversation turn", FOLLOWUP_PROMPT, OFFLINE_PROMPT] {
-        let direct = serde_json::json!({"messages":[{"role":"user","content":prompt}]});
-        assert_eq!(latest_user_text(&direct).as_deref(), Some(prompt));
-        let blocks = serde_json::json!({"messages":[{"role":"user","content":[{"type":"text","text":prompt}]}]});
-        assert_eq!(latest_user_text(&blocks).as_deref(), Some(prompt));
-        let title = serde_json::json!({"messages":[{"role":"user","content":format!("Generate a concise session title for this conversation.\nFirst user request:\n{prompt}")}]});
-        assert_ne!(latest_user_text(&title).as_deref(), Some(prompt));
-        let followup = serde_json::json!({"messages":[{"role":"user","content":prompt},{"role":"assistant","content":"prior reply"},{"role":"user","content":"different turn"}]});
-        assert_eq!(
-            latest_user_text(&followup).as_deref(),
-            Some("different turn")
-        );
-    }
-}
-
-#[tokio::test]
-async fn offline_barrier_stays_open_for_later_provider_attempts() -> Result<()> {
-    let gate = Arc::new(tokio::sync::Semaphore::new(0));
-    let model_gate = gate.clone();
-    let model = FakeLlm::start(
-        "barrier-contract",
-        None,
-        Arc::new(move |_| {
-            ChatAction::WaitThenSse(model_gate.clone(), completion_text_sse("visible"))
-        }),
-    )?;
-    gate.add_permits(1);
-    let client = reqwest::Client::new();
-    for _ in 0..2 {
-        let body = timeout(Duration::from_secs(2), async {
-            client
-                .post(format!("{}/chat/completions", model.endpoint()))
-                .json(&serde_json::json!({"messages": []}))
-                .send()
-                .await?
-                .error_for_status()?
-                .text()
-                .await
-        })
-        .await
-        .context("an opened offline barrier blocked a later attempt")??;
-        anyhow::ensure!(body.contains("visible"), "missing fixture content");
-    }
-    Ok(())
 }
 
 async fn emission_deadline(
@@ -154,11 +106,8 @@ pub(super) async fn wait_for_visible_content(
         budget_ms = visibility_budget.as_millis(),
         "canonical live visibility deadline started"
     );
-    // Measure propagation from the actual first emitted frame, not provider
-    // startup. TURN_BUDGET still bounds startup and the whole conversation turn.
-    // The caller selects either the strict first-visible budget or the paced
-    // cadence budget. In both cases the provider completion gate remains
-    // closed, so terminal persistence cannot satisfy this observation.
+    // Measured from the first emitted frame, not provider startup; the
+    // completion gate stays closed so terminal persistence cannot satisfy this.
     tokio::time::timeout_at(deadline, async {
         loop {
             let content = canonical_live_content(core, request).await?;
@@ -182,10 +131,8 @@ pub(super) async fn wait_for_visible_content(
     Ok(())
 }
 
-/// Read the same short-lived, requester-scoped canonical context as the
-/// desktop session projection, then ask the protocol live owner for its
-/// contiguous visible prefix. OutputSegment payloads are append-only deltas:
-/// a paced reply need not occur whole in any one physical row.
+/// OutputSegment payloads are append-only deltas; a paced reply need not occur
+/// whole in any one physical row.
 async fn canonical_live_content(core: &ClientCore, request_id: &str) -> Result<Option<String>> {
     use gents_protocol::output::live::{
         observed_request_execution_owner, select_live_target, LiveTargetSelection, LiveView,

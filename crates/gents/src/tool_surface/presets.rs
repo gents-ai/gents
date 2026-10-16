@@ -3,14 +3,10 @@
 pub const PRESET_READONLY: &str = "readonly";
 pub const PRESET_WRITE: &str = "write";
 
-/// All built-in preset names, in a stable order.
 pub fn builtin_preset_names() -> &'static [&'static str] {
     &[PRESET_READONLY, PRESET_WRITE]
 }
 
-/// The discriminating permission fields of a canonical `Tools` document —
-/// everything a preset determines. Root is deliberately absent (a
-/// dimension, not a permission).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PresetFields {
     pub enable_file_tools: bool,
@@ -24,7 +20,6 @@ pub struct PresetFields {
     pub write_tools: Vec<String>,
 }
 
-/// Template for a built-in preset; `None` for unknown names.
 pub fn preset_fields(name: &str) -> Option<PresetFields> {
     match name {
         PRESET_READONLY => Some(PresetFields {
@@ -53,7 +48,6 @@ pub fn preset_fields(name: &str) -> Option<PresetFields> {
     }
 }
 
-/// `Some(name)` iff `fields` exactly equals a built-in template.
 pub fn preset_name(fields: &PresetFields) -> Option<&'static str> {
     builtin_preset_names()
         .iter()
@@ -61,8 +55,6 @@ pub fn preset_name(fields: &PresetFields) -> Option<&'static str> {
         .find(|name| preset_fields(name).as_ref() == Some(fields))
 }
 
-/// Classify canonical tools after the common datastore surface resolver has
-/// expanded selected declarations. Callers keep document loading and scope checks.
 pub fn classify_tools(
     tools: &crate::document_config::Tools,
     merged: &crate::document_config::MergedSurfaceTools,

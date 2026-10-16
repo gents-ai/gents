@@ -52,9 +52,6 @@ async fn snapshot_for_agents(
     snapshot_for_agents_with_node(node, default_agent_id, agents, stub_runtime_node()).await
 }
 
-/// `runtime_snapshot::configuration_fingerprint` hashes the node's DID
-/// alongside each agent_config, so isolating one agent_config field requires both
-/// snapshots to carry the same node.
 async fn snapshot_for_agents_with_node(
     node: &Arc<defra_node::EmbeddedNode>,
     default_agent_id: &str,
@@ -253,10 +250,6 @@ async fn pairing_desired_read_failure_applies_no_operations() {
     assert!(read_failure_is_noop_self_loop(test_node().await).await);
 }
 
-/// Probe for the `readFailure` transition: a failed `load_desired` read makes a
-/// tick a no-op self-loop — `desired_read_failed` is set and NO ops are applied,
-/// so the state is unchanged. Exercises the real `reconcile_peer_tick` with a
-/// store whose desired read errors (the admin is never reached on this path).
 async fn read_failure_is_noop_self_loop(node: Arc<defra_node::EmbeddedNode>) -> bool {
     use crate::agent::p2p_reconcile::{
         reconcile_peer_tick, EmbeddedRemoteP2pAdmin, LoadedPairingApplied, PairingDesired,
@@ -409,8 +402,6 @@ async fn slot_panic_restarts_agent() {
         shutdown_rx,
     );
 
-    // One initial start per worker task does not demonstrate that the
-    // panicked runner restarted.
     let restarted_start = slot.worker_task_count + 1;
     let restarted = tokio::time::timeout(
         Duration::from_secs(30),
@@ -582,8 +573,6 @@ async fn agent_slot_fans_out_background_children_to_backend_capacity() {
             .unwrap();
     }
 
-    // One fixed worker per active permit: the fourth request stays queued
-    // until a worker frees, with no extra task holding it.
     let started = tokio::time::timeout(Duration::from_secs(1), async {
         let mut request_ids = BTreeSet::new();
         while request_ids.len() < 3 {
@@ -739,9 +728,6 @@ async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
         .unwrap();
 }
 
-/// N1: rotating only a backend API key must restage the agent_config slot.
-/// `ResolvedAgent`'s Debug redacts the key, so without the keyed
-/// connection identity the old slot would keep its old client forever.
 #[tokio::test]
 async fn generation_supervisor_restages_slot_on_api_key_rotation() {
     let node = test_node().await;
@@ -768,8 +754,6 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
     );
     let admission = |connection: String| {
         let mut config = backend_admission_config("backend-general", 1, 100);
-        // Production admission configs key their fingerprint on the
-        // credentials; mirror that so the rotated snapshot differs.
         config.config_fingerprint = connection;
         HashMap::from([("backend-general".to_string(), config)])
     };
@@ -856,7 +840,6 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
         !initial_dispatcher.same_channel(&updated_dispatcher),
         "a key rotation must restage the slot"
     );
-    // Each slot starts several workers; skip the first generation's reports.
     let rebuilt = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let built = built_rx.recv().await.unwrap();
@@ -923,7 +906,6 @@ async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
         snapshot_for_agents_with_node(&node, "general", vec![Arc::new(switched)], runtime_node)
             .await;
 
-    // (request id, generation, backend id, account ref) of each finished request.
     let (done_tx, mut done_rx) =
         mpsc::unbounded_channel::<(String, u64, Option<String>, Option<String>)>();
     let (held_tx, mut held_rx) = mpsc::unbounded_channel::<String>();
@@ -2068,9 +2050,6 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         .unwrap();
 }
 
-/// #559: a slot retired by a generation change must release its agent_config from
-/// the startup barrier (superseded) instead of orphaning the pending entry —
-/// the policy's retirement hook is the only path that knowledge can take.
 #[tokio::test]
 async fn retiring_a_slot_notifies_the_failure_policy() {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2115,8 +2094,6 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
             .build_with_identity_for_test(test_identity("policy-retirement-559")),
     );
     let initial_snapshot = snapshot_for_agents(&node, "general", vec![agent_config.clone()]).await;
-    // A runner that parks until shutdown: the agent_config never "starts", exactly
-    // the mid-startup window the retirement release exists for.
     let runner = |_agent: Arc<ResolvedAgent>,
                   _tool_surface: Arc<ToolSurface>,
                   _request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
@@ -2150,8 +2127,6 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
     let (proposal_tx, proposal_rx) = mpsc::channel(4);
     let task = tokio::spawn(supervisor.run(active_tx, proposal_rx, shutdown_rx));
 
-    // A valid generation that replaces the default agent_config retires the old
-    // slot outright without manufacturing an unassigned default snapshot.
     let replacement = Arc::new(
         PendingAgent::new("replacement")
             .build_with_identity_for_test(test_identity("policy-replacement-559")),
@@ -2163,7 +2138,6 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
         .expect("removal generation should publish")
         .unwrap();
 
-    // The retirement callback is part of the ordered generation apply.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
     loop {
         if policy
@@ -2189,8 +2163,6 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
         .unwrap();
 }
 
-/// One Agent whose Tools selection names `fixture/list_files`, resolved
-/// against two plugin homes: one without the record, one with it.
 async fn plugin_resolution_surfaces(
     node: &Arc<defra_node::EmbeddedNode>,
 ) -> (Arc<ResolvedAgent>, Arc<ToolSurface>, Arc<ToolSurface>) {
@@ -2258,13 +2230,11 @@ async fn plugin_resolution_surfaces(
     };
     assert_eq!(
         absent.plugin_resolutions(),
-        &[(plugin_ref.clone(), None)],
-        "a missing plugin record resolves to no identity, never an error"
+        &[(plugin_ref.clone(), None)]
     );
     assert_eq!(
         installed.plugin_resolutions(),
-        &[(plugin_ref, Some(record.clone()))],
-        "an installed plugin records its installed record"
+        &[(plugin_ref, Some(record.clone()))]
     );
     (agent_config, absent, installed)
 }
@@ -2323,8 +2293,6 @@ async fn a_changed_plugin_resolution_changes_the_fingerprint_and_recreates_the_s
     let _ = shutdown_tx.send(true);
     retire_slot(slot);
 
-    // A same-artifact reinstall with a changed declaration is a change too:
-    // the built tool renders and enforces it.
     let mut reinstalled = installed_surface
         .plugin_resolutions()
         .first()

@@ -88,8 +88,6 @@ function harness() {
       .fn()
       .mockResolvedValue({ bootstrap, client: { deployments: [deployment] } }),
   };
-  /* the node the panels configure is listed, and so selected, as it is
-     whenever the app shows its settings */
   const app = testApp({
     api,
     snapshot: { bootstrap, client: { deployments: [deployment] } },
@@ -607,7 +605,6 @@ describe("configuration panels", () => {
           wrapper: withApp(app),
         });
         await waitFor(() => expect(result.current.accounts).toEqual(accounts));
-        /* a later snapshot read asks again */
         act(() =>
           publishSnapshot(app, {
             ...app.stores.client.getState().snapshot!,
@@ -699,7 +696,6 @@ describe("configuration panels", () => {
         let endLogin!: (error: Error) => void;
         const login = {
           grokLogin: vi.fn(() => new Promise((_, fail) => (endLogin = fail))),
-          /* the bridge ends the waiting login when it is cancelled */
           cancelGrokLogin: vi.fn(async () => endLogin(new Error("login cancelled"))),
         };
         Object.assign(api, login);
@@ -708,7 +704,6 @@ describe("configuration panels", () => {
         await user.click(await screen.findByRole("button", { name: "Reconnect" }));
         const signingIn = await screen.findByRole("button", { name: "Signing in…" });
         expect(signingIn).toBeDisabled();
-        /* the row's own Cancel, beside the sign-in it stops */
         const row = within(signingIn.parentElement!);
         await user.click(row.getByRole("button", { name: "Cancel" }));
         expect(login.cancelGrokLogin).toHaveBeenCalledTimes(1);
@@ -720,7 +715,6 @@ describe("configuration panels", () => {
       });
 
       describe("rename, disconnect and remove an account from its row", () => {
-        /* Work runs two backends: one a profile uses, one nothing uses */
         const usedDeployment = {
           ...rowsDeployment,
           inferenceBackends: [
@@ -751,7 +745,6 @@ describe("configuration panels", () => {
           user.click(
             (await screen.findAllByRole("button", { name: `More for ${row}` }))[0]!,
           );
-        /* none of the account actions edits a profile or a backend */
         const expectNoConfigWrite = (api: MockApi) => {
           expect(api.patchConfigComponents).not.toHaveBeenCalled();
           expect(api.applyConfigComponents).not.toHaveBeenCalled();
@@ -918,10 +911,8 @@ describe("configuration panels", () => {
           read: null,
           ...fields,
         });
-        /* built when a test renders, so the times shown are exact */
         const usage = () => [
           view_("claude-work", {
-            /* the most-used window is neither the first, the last nor the longest */
             windows: [window("7d", 30), window("5h", 81), window("1h", 10)],
           }),
           view_("chatgpt-team", {
@@ -995,7 +986,6 @@ describe("configuration panels", () => {
           setup();
           expect(await screen.findByText("5h 81%")).toBeVisible();
           expect(screen.getByText("5h 20%")).toBeVisible();
-          /* the disabled Side account draws no usage; no other row has a window */
           expect(screen.getAllByText(/\d+%$/).map((e) => e.textContent)).toEqual([
             "5h 81%",
             "5h 20%",
@@ -1103,7 +1093,6 @@ describe("configuration panels", () => {
           expect(
             screen.getByRole("option", { name: /^Grok\s*Grok \/ xAI$/ }),
           ).toBeVisible();
-          /* Side is disabled; Gone's account is not on this node */
           expect(
             screen.queryByRole("option", { name: /^Side/ }),
           ).not.toBeInTheDocument();
@@ -1362,7 +1351,6 @@ describe("configuration panels", () => {
 
     await user.type(screen.getByLabelText("Display name"), "Reviewer");
     await user.click(screen.getByRole("button", { name: "Create" }));
-    /* the new context and the agent that points at it are one apply */
     await waitFor(() => expect(api.applyConfigComponents).toHaveBeenCalledTimes(1));
     const request = api.applyConfigComponents.mock.calls[0][0];
     expect(request.document.agents).toEqual([
@@ -1411,7 +1399,6 @@ describe("configuration panels", () => {
       .mockRejectedValueOnce(new Error("write refused"))
       .mockResolvedValueOnce({});
     const onSaved = vi.fn();
-    /* a prefilled draft, as Add profile under a backend opens it */
     const profile = {
       ...newProfileDocument(deployment, "backend-a"),
       model_name: deployment.inferenceProfiles[0]!.model_name,
@@ -1427,7 +1414,6 @@ describe("configuration panels", () => {
       />,
     );
     const user = userEvent.setup();
-    /* model-aware defaults arrive before a profile can be written */
     await waitFor(() =>
       expect(api.getInferenceBackendRecommendation).toHaveBeenCalled(),
     );
@@ -1566,7 +1552,6 @@ describe("configuration panels", () => {
       );
       await userEvent.setup().click(toggle);
       expect(api.patchConfigComponents).not.toHaveBeenCalled();
-      /* another behavior still turns off */
       expect(
         screen.getAllByRole("switch", { name: "Ops is enabled" })[0],
       ).toBeEnabled();
@@ -1771,7 +1756,6 @@ describe("configuration panels", () => {
     const user = await replace("Endpoint", "file:///tmp/model");
     await replace("Max concurrent", "0");
     await user.click(screen.getByRole("button", { name: "Save" }));
-    /* each problem at its own field, and Save at the first of them */
     const alerts = screen.getAllByRole("alert").map((alert) => alert.textContent);
     expect(alerts).toEqual([
       "Endpoint must use http or https",
@@ -1983,7 +1967,6 @@ describe("configuration panels", () => {
       }),
     ]);
     expect(second.tasks).toBeUndefined();
-    /* a retry writes the same documents, never a second copy */
     expect(second.schedules[0].schedule_id).toBe(first.schedules[0].schedule_id);
     expect(second.triggers[0].trigger_id).toBe(first.triggers[0].trigger_id);
     expect(api.saveScheduleConfig).not.toHaveBeenCalled();
@@ -2040,7 +2023,6 @@ describe("configuration panels", () => {
       nodeDid: deployment.nodeDid,
       args: {},
     });
-    /* the person navigates while the run is in flight */
     act(() => selection.advanceIntent(app.stores.selection));
     await act(async () => {
       resolve({ requestId: "stale-request", sessionId: "stale-session" });
@@ -2078,7 +2060,6 @@ describe("configuration panels", () => {
     renderIn(app, <SchedulesPanel deployment={deployment} item="timer-a" />);
     const user = await replace("Interval seconds", "ninety");
 
-    /* said where it is, before any Save */
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Interval seconds must be a whole number",
     );
@@ -2104,7 +2085,6 @@ describe("configuration panels", () => {
       nodeDid: deployment.nodeDid,
     });
     expect(await screen.findByText("request-schedule")).toBeInTheDocument();
-    /* the accepted run is observed with one fresh read */
     expect(api.fetchDesktopSnapshot).toHaveBeenCalledTimes(1);
   });
 
@@ -2275,7 +2255,6 @@ describe("configuration panels", () => {
     await user.click(screen.getAllByRole("button", { name: `More for ${name}` })[0]!);
     await user.click(await screen.findByRole("menuitem", { name: /Delete/ }));
     const dialog = screen.getByRole("alertdialog");
-    /* the row's warning is the same owner's wording as the Danger zone's */
     expect(
       within(dialog).getByText(/Used by 1 trigger; they lose this reference\./),
     ).toBeVisible();
@@ -2359,7 +2338,6 @@ describe("configuration panels", () => {
         screen.getByTestId("danger-zone").getElementsByTagName("button")[0]!,
       );
       expect(api[testCase.method], testCase.method).not.toHaveBeenCalled();
-      /* every delete asks for the document's name, as it did before the sync */
       const confirmation = screen.getByRole("textbox", {
         name: /^Type .+ to confirm$/,
       });

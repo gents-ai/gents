@@ -1,16 +1,8 @@
-//! Opening a URL in the person's own browser.
-//!
-//! The generic crates run whichever opener they find first and treat exit 0 as
-//! proof. Neither holds inside a packaged build: the package puts its own
-//! copies of the host's tools first on `PATH`, and an opener from an older
-//! distribution can return 0 on a desktop it does not know while opening
-//! nothing at all. Both failures are silent, and a sign-in waiting on the
-//! browser then waits for a callback that cannot arrive.
-//!
-//! So this resolves each candidate against the host's own directories, runs it
-//! with the package's environment stripped ([`package_tools::prepare_host_command`]),
-//! and reports what happened. Nothing here can prove a window appeared, which
-//! is why every caller also offers the URL.
+//! Opening a URL in the person's own browser: resolved against the host's own
+//! directories and run with the package's environment stripped
+//! ([`package_tools::prepare_host_command`]), because a packaged opener from an
+//! older distribution can exit 0 on an unknown desktop having opened nothing.
+//! Nothing here can prove a window appeared, so every caller also offers the URL.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -19,13 +11,10 @@ use std::time::{Duration, Instant};
 
 use crate::package_tools;
 
-/// How long an opener may run before it counts as launched. A dispatcher like
-/// `xdg-open` returns in milliseconds; a browser started directly runs for as
-/// long as the browser does, and staying alive is its success signal.
+/// How long an opener may run before it counts as launched; staying alive is
+/// a browser holding the session, not a dispatcher refusing.
 const SETTLE: Duration = Duration::from_millis(1500);
 
-/// Dispatchers first, in the order a desktop session expects them, then the
-/// browsers themselves for a session that has no dispatcher at all.
 const OPENERS: &[&[&str]] = &[
     &["xdg-open"],
     &["gio", "open"],
@@ -68,11 +57,10 @@ impl std::fmt::Display for OpenError {
 impl std::error::Error for OpenError {}
 
 /// Open `url` in the person's browser. `Ok` means an opener was started, not
-/// that a window appeared: an opener can exit 0 having done nothing, so the
-/// caller keeps offering the URL either way.
+/// that a window appeared; the caller keeps offering the URL either way.
 pub fn open_url(url: &str) -> Result<(), OpenError> {
-    // macOS and Windows have none of the openers below; their launch service
-    // opens the page in-process, so no package environment reaches a child.
+    // macOS and Windows use their launch service in-process, so no package
+    // environment reaches a child.
     if cfg!(any(target_os = "macos", windows)) {
         return webbrowser::open(url).map_err(|error| OpenError {
             attempted: vec![format!("the system launch service ({error})")],
@@ -98,8 +86,7 @@ pub fn open_url(url: &str) -> Result<(), OpenError> {
             continue;
         };
         attempted.push(program.clone());
-        // A `%s` in BROWSER is the URL's place; without one the URL is the
-        // last argument.
+        // A `%s` in BROWSER marks the URL's place.
         if args.iter().any(|arg| arg.to_string_lossy().contains("%s")) {
             for arg in &mut args {
                 let filled = arg.to_string_lossy().replace("%s", url);
@@ -124,9 +111,8 @@ pub fn open_url(url: &str) -> Result<(), OpenError> {
     Err(OpenError { attempted })
 }
 
-/// Whether `program` started and did not fail. Still running once it has had
-/// time to settle counts as launched: that is a browser holding the session,
-/// not a dispatcher refusing the URL.
+/// Whether `program` started and did not fail: still running once it has had
+/// time to settle is a browser holding the session, not a dispatcher refusing.
 fn launched(program: &PathBuf, args: &[OsString]) -> std::io::Result<bool> {
     let mut command = Command::new(program);
     command
@@ -141,8 +127,7 @@ fn launched(program: &PathBuf, args: &[OsString]) -> std::io::Result<bool> {
         match child.try_wait()? {
             Some(status) => return Ok(status.success()),
             None if Instant::now() >= deadline => {
-                // Reap it on its own thread so a long-lived browser leaves no
-                // zombie behind.
+                // Reap on its own thread so a long-lived browser leaves no zombie.
                 std::thread::spawn(move || {
                     let _ = child.wait();
                 });
@@ -153,8 +138,8 @@ fn launched(program: &PathBuf, args: &[OsString]) -> std::io::Result<bool> {
     }
 }
 
-/// `BROWSER` as the desktop convention defines it: a colon-separated list of
-/// commands, each optionally placing the URL with `%s`.
+/// `BROWSER` as the desktop convention defines it: colon-separated commands,
+/// each optionally placing the URL with `%s`.
 fn browser_env_openers() -> Vec<Vec<String>> {
     let Some(browser) = std::env::var_os("BROWSER") else {
         return Vec::new();
@@ -174,7 +159,7 @@ fn browser_env_openers() -> Vec<Vec<String>> {
 }
 
 /// Find `program` in the host's own directories, skipping any the package
-/// contributed, so the copy that runs is the one built for this system.
+/// contributed.
 fn resolve_host_program(program: &str) -> Option<PathBuf> {
     if program.contains('/') {
         let path = PathBuf::from(program);
@@ -212,9 +197,8 @@ fn executable(path: &std::path::Path) -> bool {
     }
 }
 
-/// Whether `url` is safe to hand to a system opener. An opener dispatches by
-/// scheme, so anything beyond the web schemes could start an unrelated local
-/// handler, and a leading `-` would read as an option rather than a URL.
+/// Whether `url` is safe to hand to a system opener: web schemes only, no
+/// leading option-like `-`, no embedded line breaks or NULs.
 pub fn is_openable(url: &str) -> bool {
     !url.starts_with('-')
         && url.split_once(':').is_some_and(|(scheme, rest)| {
@@ -235,8 +219,6 @@ mod tests {
         assert!(is_openable("https://claude.ai/oauth/authorize?code=1"));
         assert!(is_openable("http://localhost:8123/callback"));
         assert!(is_openable("mailto:someone@example.com"));
-        // A local handler, a shell-ish argument, or an embedded newline is
-        // never dispatched.
         assert!(!is_openable("file:///etc/passwd"));
         assert!(!is_openable("javascript:alert(1)"));
         assert!(!is_openable("-version"));

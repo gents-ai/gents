@@ -22,6 +22,7 @@ invalid allowance charges, a call the persistence hook handles itself (unless
 the guard already decided to stop it, which happens before the hook runs), and
 an ordinary failure without a derivable identity. Interleaved repeats are left to
 the turn cap and other budgets. -/
+
 namespace CompletionRetry.RepeatedToolFailure
 
 open CompletionRetry
@@ -128,7 +129,6 @@ theorem suppressed_bounded (s : State) (call : Nat)
     · simp [hr, hlt] at hd
   · simp [hr] at hd
 
-/-- After `failureLimit` identical failures the same call is not dispatched. -/
 theorem limit_blocks_identical (s : State) (call error : Nat)
     (hstreak : s.streak = some (call, error)) (hlimit : failureLimit ≤ s.failures) :
     decide s call ≠ .dispatch := by
@@ -136,7 +136,6 @@ theorem limit_blocks_identical (s : State) (call error : Nat)
   simp [repeatsStreak, hstreak, hlimit]
   split <;> simp
 
-/-- A call with other arguments is always dispatched. -/
 theorem different_call_dispatches (s : State) (call streakCall error : Nat)
     (hstreak : s.streak = some (streakCall, error)) (hne : streakCall ≠ call) :
     decide s call = .dispatch := by
@@ -144,10 +143,7 @@ theorem different_call_dispatches (s : State) (call streakCall error : Nat)
 
 /-! ### Composition with `InvalidToolProgress`
 
-The suppression notice is a policy denial, so the invalid allowance charges
-it like any other refused call; an execution whose allowance is nearly spent
-can therefore end at a suppression with `invalidExhausted`. A hook-handled call
-is not charged and restarts the streak. -/
+A hook-handled call is not charged and restarts the streak. -/
 
 structure Composed where
   invalid : InvalidToolProgress.State := {}
@@ -171,7 +167,6 @@ inductive Step
   | ended (action : Action) (ending : Ending) (invalid : InvalidToolProgress.State)
   deriving DecidableEq, Repr
 
-/-- The admitted call's outcome is durably observed, then charged. -/
 def admit (s : Composed) (e : Event) (suppressed : Bool) : Step :=
   if e.outcome = .skipped then .continue .skip { s with repeats := {} }
   else
@@ -184,8 +179,6 @@ def admit (s : Composed) (e : Event) (suppressed : Bool) : Step :=
     if InvalidToolProgress.exhausted invalid then .ended action .invalidExhausted invalid
     else .continue action ⟨invalid, repeats⟩
 
-/-- A stop is decided before the hook admits the call, so the accepted call is
-never admitted and its intent is settled by the terminal owner. -/
 def step (s : Composed) (e : Event) : Step :=
   match decide s.repeats e.call with
   | .stop => .ended .stop .repeatedFailure s.invalid
@@ -201,7 +194,6 @@ def run (s : Composed) : List Event → List Action × Option Ending
           let (actions, ending) := run next rest
           (action :: actions, ending)
 
-/-- Invalid allowance spent when the trace ends or is exhausted. -/
 def invalidUsed (s : Composed) : List Event → Nat
   | [] => s.invalid.invalidUsed
   | e :: rest =>
@@ -219,7 +211,6 @@ def endingName : Ending → String
   | .repeatedFailure => "repeatedFailure"
   | .invalidExhausted => "invalidExhausted"
 
-/-- The streak and suppression bounds hold across every composed step. -/
 theorem step_bounded (s : Composed) (e : Event) (h : Bounded s.repeats) :
     ∀ action next, step s e = .continue action next → Bounded next.repeats := by
   intro action next hstep
@@ -251,8 +242,6 @@ theorem step_bounded (s : Composed) (e : Event) (h : Bounded s.repeats) :
           rcases hstep with ⟨-, rfl⟩
           exact suppressed_bounded _ _ h hd
 
-/-- A call the hook answers itself restarts the streak unless it is the
-stopped repeat. -/
 theorem skipped_resets (s : Composed) (e : Event) (hskip : e.outcome = .skipped)
     (hd : decide s.repeats e.call ≠ .stop) :
     step s e = .continue .skip { s with repeats := {} } := by
@@ -262,7 +251,6 @@ theorem skipped_resets (s : Composed) (e : Event) (hskip : e.outcome = .skipped)
   | dispatch => simp [admit, hskip]
   | suppress => simp [admit, hskip]
 
-/-- The suppression spends one unit of the invalid allowance. -/
 theorem suppression_is_charged (s : Composed) (e : Event)
     (hd : decide s.repeats e.call = .suppress) (hskip : e.outcome ≠ .skipped)
     (action : Action) (next : Composed) (hstep : step s e = .continue action next) :
@@ -278,15 +266,11 @@ theorem suppression_is_charged (s : Composed) (e : Event)
 
 private def fail (call error : Nat) : Event := ⟨call, .ordinaryFailure, some error⟩
 
-/-- The observed failure: an identical failing call runs three times, is
-answered once with a notice, and stops the execution on the fifth call. -/
 theorem identical_failures_stop_on_fifth (rest : List Event) :
     run {} (List.replicate 5 (fail 0 0) ++ rest) =
       ([.dispatch, .dispatch, .dispatch, .suppress, .stop], some .repeatedFailure) := by
   rfl
 
-/-- With seven invalid outcomes spent, the charged suppression exhausts the
-allowance and ends the execution before the repeat can stop it. -/
 theorem suppression_can_exhaust_invalid_allowance :
     run { invalid := ⟨7⟩ } (List.replicate 4 (fail 0 0)) =
       ([.dispatch, .dispatch, .dispatch, .suppress], some .invalidExhausted) := by

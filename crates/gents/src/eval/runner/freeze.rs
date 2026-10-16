@@ -1,11 +1,7 @@
-//! Freezing a run: the request is validated, each cell's pack is materialized
-//! under the run directory, and one `EvalRun` row records the comparability
-//! facts every later stage reads.
-//!
-//! Freezing is idempotent: the same request for the same `run_id` returns the
-//! run that is already there. Anything else about that `run_id` — a different
-//! origin, a different capture list, an invalidation — is a [`FreezeRefused`]
-//! rather than a second interpretation of the same id.
+//! Freezing a run: packs are materialized under the run directory and one
+//! `EvalRun` row records the comparability facts later stages read. Freezing
+//! is idempotent per `run_id`: the same request reuses the run that is already
+//! there; anything else about that id is a [`FreezeRefused`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -31,15 +27,11 @@ use crate::pack::{declared_paths, digest_declared_assets, PackInstallOptions, Pa
 use crate::tool_surface::BashMode;
 use crate::Collection;
 
-/// Where a cell's subject pack comes from. A named pack is resolved and
-/// materialized into a directory before it reaches a cell, so a pack compared
-/// across sources is one pack.
 #[derive(Clone, Debug)]
 pub enum CellSource {
     Directory(PathBuf),
 }
 
-/// One arm of the comparison.
 #[derive(Clone, Debug)]
 pub struct CellRequest {
     pub cell_id: String,
@@ -49,16 +41,12 @@ pub struct CellRequest {
     pub inference_profile_id: String,
 }
 
-/// Everything an operator chose about a run, before any of it is checked.
 #[derive(Clone, Debug)]
 pub struct RunRequest {
     pub run_id: String,
     pub owner: String,
     /// The DID of the home that launched the run, recorded on the `EvalRun`
-    /// unchanged. It is who asked, which is not always who owns the run, so it
-    /// is supplied rather than defaulted to [`Self::owner`]; an empty value is
-    /// refused rather than guessed at. It is not comparability data and takes
-    /// no part in [`RunOrigin`].
+    /// unchanged; empty is refused rather than defaulted to [`Self::owner`].
     pub evaluator_did: String,
     pub definition_id: String,
     pub split: EvalSplit,
@@ -75,16 +63,13 @@ pub struct RunRequest {
     pub purpose: String,
     pub source_commit: String,
     pub source_dirty: bool,
-    /// The request-level captures: what a stage reads out of its trial home
-    /// when it declares no captures of its own. Not comparability data, so it
-    /// rides beside the run rather than in its origin.
+    /// Not comparability data, so they ride beside the run rather than in its
+    /// origin.
     pub captures: Vec<Capture>,
     /// `<launching home>/eval/runs`.
     pub runs_dir: PathBuf,
 }
 
-/// A validated cell: its frozen spec, its materialized pack and the inference
-/// documents every trial of the cell runs against.
 #[derive(Clone, Debug)]
 pub struct FrozenCell {
     pub spec: CellSpec,
@@ -93,8 +78,6 @@ pub struct FrozenCell {
     pub tools_unrestricted_bash: bool,
 }
 
-/// A run that exists: its row, its directory, the definition it froze and its
-/// cells.
 #[derive(Clone, Debug)]
 pub struct FrozenRun {
     pub record: RunRecord,
@@ -103,11 +86,10 @@ pub struct FrozenRun {
     pub cells: Vec<FrozenCell>,
     pub captures: Vec<Capture>,
     /// How many consecutive trials may produce no evidence before the loop
-    /// stops the run. Frozen beside the run in `run.json`.
+    /// stops the run.
     pub breaker_threshold: u32,
 }
 
-/// A request that will not become a run, and why.
 #[derive(Debug)]
 pub struct FreezeRefused(pub String);
 
@@ -127,10 +109,9 @@ fn refused(reason: impl Into<String>) -> anyhow::Error {
     anyhow::Error::from(FreezeRefused(reason.into()))
 }
 
-/// The run-level settings that have no slot on the frozen [`RunOrigin`]:
-/// `breaker_threshold` (an M1 amendment to request) and the request's captures
-/// (M3 moves them onto the definition). Neither is comparability data, so both
-/// live beside the run rather than widening the replicating row.
+/// Run-level settings with no slot on the frozen [`RunOrigin`]; neither is
+/// comparability data, so both live beside the run rather than widening the
+/// replicating row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct RunSidecar {
     breaker_threshold: u32,
@@ -140,10 +121,9 @@ struct RunSidecar {
     captures: Vec<Capture>,
 }
 
-/// Validate `request`, materialize its packs and write its run.
-///
-/// Returns the run that exists for `request.run_id`: a new one, or the one
-/// already frozen from the same request.
+/// Validate `request`, materialize its packs and write its run. Returns the
+/// run that exists for `request.run_id`: a new one, or the one already frozen
+/// from the same request.
 pub async fn freeze(
     access: &ConfigAccess,
     request: &RunRequest,
@@ -228,18 +208,11 @@ pub async fn freeze(
     })
 }
 
-/// Rebuild the run `run_id` from its row and the directory it already wrote.
-///
-/// Resuming re-reads what freezing decided rather than deciding it again: the
-/// packs under the run directory are the run's own copy, and so is
-/// [`DEFINITION_FILE`] (a run frozen before that file existed reads the
-/// installed definition instead); either is held to the digest the run
-/// froze. What is checked again is what could
-/// have changed underneath and would change what a trial means: the
-/// definition's digest, each materialized pack's digest, the inference
-/// documents the cells name, and — because the resuming executor need not be
-/// the one the run froze under — `isolation` against the host bash each pack
-/// grants.
+/// Rebuild the run `run_id` from its row and the directory it already wrote:
+/// resuming re-reads what freezing decided rather than deciding it again. The
+/// definition's digest, each materialized pack's digest, the named inference
+/// documents and `isolation` are checked again, because they could have
+/// changed underneath and would change what a trial means.
 pub(crate) async fn thaw(
     access: &ConfigAccess,
     owner: &str,
@@ -308,11 +281,9 @@ pub(crate) async fn thaw(
         });
     }
 
-    // The origin carries the breaker threshold now. A row frozen before the
-    // field existed reads the documented default, so only there does
-    // `run.json` still decide: an origin that holds anything but the default
-    // was frozen with the field, and one that holds the default either agrees
-    // with `run.json` or predates the field.
+    // An origin frozen before `breaker_threshold` joined it holds the default,
+    // indistinguishable from a run that chose the default, so only there does
+    // `run.json` still decide.
     let breaker_threshold =
         if record.origin.breaker_threshold != crate::eval::documents::default_breaker_threshold() {
             record.origin.breaker_threshold
@@ -406,7 +377,6 @@ fn validate_seed_range(request: &RunRequest) -> Result<()> {
     )))
 }
 
-/// One configuration document of the launching home, in its canonical form.
 async fn read_document<T: serde::de::DeserializeOwned>(
     access: &ConfigAccess,
     collection: Collection,
@@ -503,8 +473,6 @@ fn select_cases(request: &RunRequest, definition: &EvalDefinition) -> Result<Vec
     Ok(selected)
 }
 
-/// A cell's subject pack, whichever source it came from: what it declares, what
-/// it digests to, and the files a trial home needs.
 pub(crate) struct LoadedPack {
     pub(crate) digest: String,
     pub(crate) config: PackConfig,
@@ -531,8 +499,6 @@ pub(crate) fn load_pack(source: &CellSource, owner: &str) -> Result<LoadedPack> 
             .get(path)
             .with_context(|| format!("pack has no asset {path:?}"))
     };
-    // The same digest an installed pack resolves to: over the declared
-    // contents, so a pack compared across sources is one pack.
     let digest = digest_declared_assets(&manifest, |path| asset(path).map(Vec::as_slice))?;
     let config = crate::pack::load_pack_config(
         &manifest,
@@ -540,9 +506,8 @@ pub(crate) fn load_pack(source: &CellSource, owner: &str) -> Result<LoadedPack> 
         &|path| asset(path).cloned(),
         &|name| std::env::var(name).ok(),
     )?;
-    // Only the declared assets travel: a trial must receive the bytes
-    // the digest covers, not whatever else the authoring directory
-    // happened to hold.
+    // Only the declared assets travel: a trial must receive the bytes the
+    // digest covers.
     let files = declared_paths(&manifest)
         .into_iter()
         .map(|path| {
@@ -558,11 +523,9 @@ pub(crate) fn load_pack(source: &CellSource, owner: &str) -> Result<LoadedPack> 
     })
 }
 
-/// Every regular file under `root`, keyed by its path relative to `root`.
-///
-/// This is the reader, not the copy: [`load_pack`] narrows the result to the
-/// manifest's declared assets. A symlink is refused rather than followed,
-/// because a pack's bytes are its own and not a pointer out of the run.
+/// Every regular file under `root`, keyed by its path relative to `root`;
+/// [`load_pack`] narrows the result to the manifest's declared assets. A
+/// symlink is refused rather than followed: a pack carries its own bytes.
 fn copyable_files(root: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
     let mut files = BTreeMap::new();
     let mut pending = vec![root.to_path_buf()];
@@ -597,9 +560,6 @@ fn copyable_files(root: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
     Ok(files)
 }
 
-/// Everything one cell has to satisfy before the run exists: its pack resolves
-/// and carries the behavior, its inference documents exist, its backend is not
-/// a borrowed subscription, and an embedded trial is not handed host bash.
 async fn validate_cell(
     access: &ConfigAccess,
     request: &RunRequest,
@@ -653,7 +613,6 @@ async fn validate_cell(
 
 /// The inference documents one cell runs against, copied verbatim, and the
 /// guarantee that no run spends the launching principal's own subscription.
-///
 /// Both freezing and resuming read them here, so a run that would now borrow a
 /// subscription credential is refused at either door.
 async fn inference_binding(
@@ -750,24 +709,14 @@ async fn inference_binding(
             .as_ref()
             .map(serde_json::to_value)
             .transpose()?,
-        // The loop fills the per-trial seed: `seed_base + trial_index`.
         seed: 0,
     })
 }
 
-/// The id of the tools document granting unrestricted host bash, if the pack
-/// grants it at all — and a refusal when the trial would run host bash of any
-/// kind on this host.
-///
-/// An embedded trial runs in this process, on this machine. `Unrestricted` is
-/// plainly the host's shell; `ReadOnly` is an argv allowlist (`cat`, `find`,
-/// `ls`, `grep`, `stat`, `git`) with this host's network and no confining
-/// root, which is an argument about what the subject is likely to do rather
-/// than a boundary the executor can enforce. So under
-/// [`Isolation::Embedded`] the only host bash mode a pack may grant is
-/// [`BashMode::Off`]; [`Isolation::Process`] is unchanged, because there the
-/// trial has a process boundary of its own.
-///
+/// Under [`Isolation::Embedded`] the only host bash mode a pack may grant is
+/// [`BashMode::Off`]: an embedded trial shares this host, and `ReadOnly` is an
+/// argv allowlist with this host's network and no confining root, not a
+/// boundary the executor can enforce. [`Isolation::Process`] is unchanged.
 /// Freezing and resuming both go through here, so a run frozen under a
 /// sandboxed executor cannot be resumed into an embedded one and quietly lose
 /// the guarantee it was frozen with.
@@ -783,7 +732,6 @@ fn refuse_host_bash(config: &PackConfig, isolation: Isolation) -> Result<Option<
     Ok(unrestricted_bash(config))
 }
 
-/// The first tools document granting any host bash, with the mode it grants.
 fn host_bash(config: &PackConfig) -> Option<(String, BashMode)> {
     config.tools.iter().find_map(|tools| {
         let bash = tools.host.as_ref().and_then(|host| host.bash.as_ref())?;
@@ -791,7 +739,6 @@ fn host_bash(config: &PackConfig) -> Option<(String, BashMode)> {
     })
 }
 
-/// The id of the first tools document granting unrestricted host bash, if any.
 fn unrestricted_bash(config: &PackConfig) -> Option<String> {
     config
         .tools
@@ -806,11 +753,8 @@ fn unrestricted_bash(config: &PackConfig) -> Option<String> {
         .map(|tools| tools.tools_id.clone())
 }
 
-/// Copy the pack's declared assets under the run, once.
-///
-/// A materialized pack is already the run's own copy, so a resumed freeze
-/// leaves it alone. The marker for that has to be honest, so the copy lands in
-/// a sibling `pack.tmp` and is renamed into place after its last byte: a crash
+/// Copy the pack's declared assets under the run, once. The copy lands in a
+/// sibling `pack.tmp` and is renamed into place after its last byte: a crash
 /// mid-copy leaves a staging directory that the next freeze discards, never a
 /// half-written `pack/` that every later reader accepts as complete.
 fn materialize_pack(cell: &FrozenCell, pack: &LoadedPack) -> Result<()> {
@@ -886,7 +830,6 @@ fn write_sidecar(run_dir: &Path, sidecar: &RunSidecar) -> Result<()> {
 /// A report and a resume read this copy, so a later edit of the installed
 /// definition cannot change what a finished run means.
 pub const DEFINITION_FILE: &str = "definition.json";
-
 fn write_frozen_definition(run_dir: &Path, definition: &EvalDefinition) -> Result<()> {
     std::fs::create_dir_all(run_dir).with_context(|| format!("creating {}", run_dir.display()))?;
     let path = run_dir.join(DEFINITION_FILE);
@@ -919,13 +862,9 @@ pub fn read_frozen_definition(
     Ok(Some(definition))
 }
 
-/// A `run_id` means one run. The same request reuses it; anything else about
-/// it is refused rather than reinterpreted.
-///
-/// What is compared is what would change the run's result: its origin, and the
-/// settings frozen beside it. The evaluator DID is neither — it records who
-/// asked, so a second caller re-freezing the same run keeps the first one's
-/// row rather than being refused over it.
+/// A `run_id` means one run: the same request reuses it, anything else is
+/// refused rather than reinterpreted. The evaluator DID is not compared — it
+/// records who asked, so a second caller re-freezing keeps the first one's row.
 fn reuse_or_refuse(
     record: &RunRecord,
     origin: &RunOrigin,
@@ -965,8 +904,6 @@ pub(crate) mod tests {
 
     pub(crate) const OWNER: &str = "did:key:eval-owner";
 
-    /// A launching home with an eval definition, a profile, its sampling and a
-    /// usable backend already installed.
     pub(crate) struct Launching {
         home: EmbeddedHome,
         pub(crate) access: ConfigAccess,
@@ -1028,8 +965,6 @@ pub(crate) mod tests {
                 .unwrap();
         }
 
-        /// Remove one document the way an operator editing configuration
-        /// later would, leaving whatever still references it dangling.
         pub(crate) async fn delete(&self, collection: Collection, id: &str) {
             self.access
                 .transact_write("freeze.test_delete", |txn| {
@@ -1055,14 +990,10 @@ pub(crate) mod tests {
             self.dirs.path().join("eval/runs")
         }
 
-        /// The launching home's own DID, which every request records as its
-        /// evaluator. It is not [`OWNER`]: the home that runs an eval is not
-        /// necessarily the principal the run belongs to.
         pub(crate) fn evaluator_did(&self) -> String {
             self.home.did().to_string()
         }
 
-        /// A fixture pack written under this home's scratch directory.
         pub(crate) fn pack(&self, name: &str, bash_mode: &str) -> PathBuf {
             let root = self.dirs.path().join(name);
             write_fixture_pack(&root, bash_mode);
@@ -1186,8 +1117,6 @@ pub(crate) mod tests {
     /// The monitor behavior's system prompt in [`write_fixture_pack`].
     pub(crate) const FIXTURE_PROMPT: &str = "Watch the mailbox.\n";
 
-    /// The shape of a documents pack: a manifest, a README, the canonical
-    /// config bundle and one behavior sidecar holding [`FIXTURE_PROMPT`].
     pub(crate) fn write_fixture_pack(root: &Path, bash_mode: &str) {
         std::fs::create_dir_all(root.join("agents/monitor")).unwrap();
         std::fs::write(root.join("README.md"), "# monitor fixture\n").unwrap();
@@ -1304,9 +1233,6 @@ pub(crate) mod tests {
         assert_eq!(again.record, frozen.record, "a frozen run is reused whole");
     }
 
-    /// The evaluator is who launched the run. It reaches the `EvalRun` row
-    /// unchanged, it is never the owner by default, and a request that names
-    /// none is refused rather than attributed to the owner.
     #[tokio::test]
     async fn freeze_records_the_requested_evaluator_and_refuses_an_empty_one() {
         let launching = Launching::new().await;
@@ -1381,9 +1307,6 @@ pub(crate) mod tests {
         assert!(refusal(&error).contains("run_id"), "{error:#}");
     }
 
-    /// A pack's identity is its declared assets, so those are the bytes a trial
-    /// receives. Whatever else the authoring directory holds — scratch files, a
-    /// checkout's own metadata — is not part of the pack and must not travel.
     #[tokio::test]
     async fn freeze_materializes_only_the_declared_assets() {
         let launching = Launching::new().await;
@@ -1412,9 +1335,6 @@ pub(crate) mod tests {
         );
     }
 
-    /// A trial's seed is `seed_base + trial_index`, so the last trial's seed
-    /// has to fit in an i64. A range past it is refused before anything is
-    /// written; a base of `i64::MAX` with one trial per case still fits.
     #[tokio::test]
     async fn freeze_refuses_a_seed_range_past_i64() {
         let launching = Launching::new().await;
@@ -1486,10 +1406,6 @@ pub(crate) mod tests {
         );
     }
 
-    /// An embedded trial runs on this host, so the only host bash mode it may
-    /// be handed is `Off`. `ReadOnly` is an argv allowlist with this host's
-    /// network and no confining root, not an isolation boundary the executor
-    /// can enforce, so it is refused with the rest.
     #[tokio::test]
     async fn freeze_refuses_any_host_bash_under_embedded_but_not_under_process() {
         let launching = Launching::new().await;
@@ -1514,8 +1430,6 @@ pub(crate) mod tests {
             );
         }
 
-        // Off is what an embedded trial may have, and a process-isolated trial
-        // may have the rest.
         let off = launching.pack("pack", "Off");
         let frozen = freeze(
             &launching.access,
@@ -1579,9 +1493,6 @@ pub(crate) mod tests {
         assert!(refusal(&error).contains("node_oauth"), "{error:#}");
     }
 
-    /// A profile's sampling document can be deleted after the profile was
-    /// authored, and a run must not silently freeze with the provider's
-    /// defaults where the profile asked for chosen sampling.
     #[tokio::test]
     async fn freeze_refuses_a_profile_whose_sampling_document_is_missing() {
         let launching = Launching::new().await;
@@ -1676,11 +1587,6 @@ pub(crate) mod tests {
         }
     }
 
-    #[test]
-    fn a_pilot_purpose_is_valid() {
-        validate_purpose(PILOT_PURPOSE).unwrap();
-    }
-
     #[tokio::test]
     async fn freeze_persists_request_captures_and_refuses_a_changed_list() {
         let launching = Launching::new().await;
@@ -1729,7 +1635,6 @@ pub(crate) mod tests {
             .expect("the file is there");
         assert_eq!(read, frozen.definition);
 
-        // The live definition changes; the run keeps the one it froze.
         let mut edited = serde_json::to_value(&frozen.definition).unwrap();
         edited["title"] = json!("edited after the freeze");
         launching
@@ -1746,7 +1651,6 @@ pub(crate) mod tests {
         .unwrap();
         assert_eq!(thawed.definition, frozen.definition);
 
-        // A file that no longer digests to the origin is refused.
         let mut tampered = serde_json::to_value(&frozen.definition).unwrap();
         tampered["comparability_version"] = json!(99);
         std::fs::write(&path, serde_json::to_vec(&tampered).unwrap()).unwrap();

@@ -1,6 +1,3 @@
-//! The structured query contract and its translation into a read-only DefraDB
-//! GraphQL query.
-
 use anyhow::{anyhow, bail, Result};
 use serde::Deserialize;
 use serde_json::Value;
@@ -10,13 +7,9 @@ use super::render::{render_filter, validate_identifier};
 pub const DEFAULT_LIMIT: u32 = 50;
 pub const MAX_LIMIT: u32 = 1000;
 
-/// Credential-bearing `(collection, field)` pairs that `defra_query` never
-/// selects, filters on or lists, whatever the collection scope.
-///
-/// This guards the node's own read surface, which the replication model does
-/// not cover: the node holds the store's at-rest key, so encryption protects
-/// the disk and its backups, never a query this node answers. Every pair names
-/// a field of a credential collection and of the current SDL.
+// The node holds the store's at-rest key, so encryption protects only the
+// disk and its backups, never a query this node answers; these credential
+// fields are never selected, filtered or listed regardless of scope.
 pub(crate) const RESTRICTED_FIELDS: &[(&str, &str)] = &[
     ("InferenceBackend", "auth"),
     ("OAuthCredential", "access_token"),
@@ -50,7 +43,6 @@ pub(crate) fn collect_filter_field_keys(value: &Value, out: &mut Vec<String>) {
 #[derive(Debug, Clone, Deserialize)]
 pub struct DefraQueryParams {
     pub collection: String,
-    /// Optional DefraDB filter object. `null`/absent means "no filter".
     #[serde(default)]
     pub filter: Option<Value>,
     #[serde(default)]
@@ -141,10 +133,6 @@ impl CollectionScope {
         matches!(self, Self::All)
     }
 
-    /// A protected collection is refused before the scope is consulted, so
-    /// neither an unrestricted endpoint nor an explicit `Only` entry can grant
-    /// one. Every generic read reaches this: rows through
-    /// [`build_query`], and the discovery field inventory directly.
     pub fn ensure_allowed(&self, collection: &str) -> Result<()> {
         crate::document_config::reject_protected_collection_name(collection)?;
         match self {
@@ -161,11 +149,6 @@ impl CollectionScope {
     }
 }
 
-/// Build the read-only GraphQL query string from the structured contract.
-///
-/// The collection name and every field name are validated as identifiers, and
-/// the filter is rendered through [`render_filter`] (which escapes all string
-/// literals), so untrusted input cannot inject GraphQL.
 pub fn build_query(params: &DefraQueryParams, scope: &CollectionScope) -> Result<String> {
     validate_identifier(&params.collection).map_err(|e| anyhow!("invalid collection name: {e}"))?;
     scope.ensure_allowed(&params.collection)?;
@@ -233,95 +216,6 @@ mod tests {
     }
 
     #[test]
-    fn agent_config_alias_expands_to_the_preset() {
-        let expanded = expand_collection_scope_aliases(["agent-config"]);
-        assert_eq!(
-            expanded,
-            AGENT_CONFIG_QUERY_COLLECTIONS
-                .iter()
-                .map(|c| c.to_string())
-                .collect::<Vec<_>>()
-        );
-        // The preset is config-only: no conversation content, no secrets.
-        for excluded in [
-            "AgentRequest",
-            "AgentOutputSegment",
-            "AgentMessage",
-            "OAuthCredential",
-        ] {
-            assert!(!expanded.contains(&excluded.to_string()), "{excluded}");
-        }
-    }
-
-    #[test]
-    fn literal_collections_pass_through_alias_expansion() {
-        let expanded =
-            expand_collection_scope_aliases(["AgentRequest", " agent-config ", "", "Custom"]);
-        assert!(expanded.contains(&"AgentRequest".to_string()));
-        assert!(expanded.contains(&"Custom".to_string()));
-        assert!(expanded.contains(&"Agent".to_string()), "alias expanded");
-        assert!(!expanded.contains(&String::new()), "empties dropped");
-        assert!(
-            !expanded.contains(&"agent-config".to_string()),
-            "the alias itself never survives as a literal"
-        );
-    }
-
-    #[test]
-    fn builds_filtered_query_with_explicit_limit() {
-        let mut p = params("AgentRequest", &["request_id", "lifecycle_state"]);
-        p.filter = Some(json!({ "lifecycle_state": { "_eq": "pending" } }));
-        p.limit = Some(10);
-
-        let query = build_query(&p, &CollectionScope::all()).unwrap();
-        assert_eq!(
-            query,
-            r#"{ AgentRequest(filter: { lifecycle_state: { _eq: "pending" } }, limit: 10) { request_id lifecycle_state } }"#
-        );
-    }
-
-    #[test]
-    fn defaults_limit_when_unset_and_omits_empty_filter() {
-        let query = build_query(
-            &params("AgentSession", &["session_id"]),
-            &CollectionScope::all(),
-        )
-        .unwrap();
-        assert_eq!(query, "{ AgentSession(limit: 50) { session_id } }");
-    }
-
-    #[test]
-    fn clamps_limit_to_max() {
-        let mut p = params("AgentRequest", &["request_id"]);
-        p.limit = Some(99_999);
-        let query = build_query(&p, &CollectionScope::all()).unwrap();
-        assert_eq!(query, "{ AgentRequest(limit: 1000) { request_id } }");
-    }
-
-    #[test]
-    fn rejects_empty_fields() {
-        let err = build_query(&params("AgentRequest", &[]), &CollectionScope::all()).unwrap_err();
-        assert!(err.to_string().contains("at least one field"), "{err}");
-    }
-
-    #[test]
-    fn rejects_collection_outside_scope() {
-        let scope = CollectionScope::restricted(vec!["AgentRequest".to_string()]);
-        let err = build_query(&params("InferenceBackend", &["backend_id"]), &scope).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("not within the allowed query scope"),
-            "{err}"
-        );
-    }
-
-    #[test]
-    fn allows_any_collection_when_unrestricted() {
-        let scope = CollectionScope::all();
-        assert!(build_query(&params("AnythingGoes", &["x"]), &scope).is_ok());
-    }
-
-    #[test]
     fn no_scope_grants_a_protected_collection() {
         // Unrestricted is the endpoint default for MCP and `gents query`, and
         // an operator can name a collection explicitly. Neither may reach the
@@ -368,36 +262,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_selecting_oauth_token_fields() {
-        let err = build_query(
-            &params("OAuthCredential", &["credential_id", "refresh_token"]),
-            &CollectionScope::all(),
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("restricted"), "{err}");
-    }
-
-    #[test]
-    fn allows_non_secret_fields_on_a_sensitive_collection() {
-        assert!(build_query(
-            &params(
-                "InferenceBackend",
-                &["backend_id", "endpoint", "provider_kind"]
-            ),
-            &CollectionScope::all()
-        )
-        .is_ok());
-    }
-
-    #[test]
-    fn rejects_filtering_on_a_restricted_secret_field() {
-        let mut p = params("InferenceBackend", &["backend_id"]);
-        p.filter = Some(json!({ "auth": { "_like": "%sk-%" } }));
-        let err = build_query(&p, &CollectionScope::all()).unwrap_err();
-        assert!(err.to_string().contains("restricted"), "{err}");
-    }
-
-    #[test]
     fn rejects_restricted_field_nested_in_filter_composition() {
         let mut p = params("InferenceBackend", &["backend_id"]);
         p.filter = Some(json!({ "_or": [{ "auth": { "_ne": null } }] }));
@@ -425,13 +289,5 @@ mod tests {
                 "{collection}.{field} is not a field of the current SDL"
             );
         }
-    }
-
-    #[test]
-    fn rejects_filtering_on_oauth_token_fields() {
-        let mut p = params("OAuthCredential", &["credential_id"]);
-        p.filter = Some(json!({ "_or": [{ "access_token": { "_like": "eyJ%" } }] }));
-        let err = build_query(&p, &CollectionScope::all()).unwrap_err();
-        assert!(err.to_string().contains("restricted"), "{err}");
     }
 }

@@ -77,8 +77,6 @@ impl BackgroundToolRegistry {
         }
     }
 
-    /// Register the behavior's allowed background tools with its configured
-    /// lifetimes and observation waits.
     pub(crate) fn from_config(
         tools: Vec<Box<dyn ToolDyn>>,
         config: &crate::tool_surface::BackgroundToolConfig,
@@ -141,10 +139,6 @@ impl BackgroundLiveOutputState {
     }
 }
 
-/// Process-wide volatile state for ordinary background tool calls.
-///
-/// Sharing this registry across request hooks keeps both cancellation tokens
-/// and live output buffers reachable until each process becomes terminal.
 #[derive(Clone, Default)]
 pub struct BackgroundExecutionRegistry {
     inner: Arc<std::sync::Mutex<HashMap<String, BackgroundExecution>>>,
@@ -158,17 +152,13 @@ const LIVE_STOP_RELEASE_WAIT: std::time::Duration = std::time::Duration::from_se
 
 impl BackgroundExecutionRegistry {
     /// Keep durable host records of spawned background processes in `dir`,
-    /// which must belong to this runtime's exclusively locked store. Records
-    /// are otherwise volatile: a restarted runtime cannot prove it owns a
-    /// surviving process and settles its row as lost.
+    /// which must belong to this runtime's exclusively locked store; a
+    /// restarted runtime otherwise cannot prove it owns a surviving process.
     pub fn with_process_records(mut self, dir: PathBuf) -> Self {
         self.process_records = crate::managed_exec::ownership::ProcessRecordStore::Durable(dir);
         self
     }
 
-    /// Keep durable records of task hook attempts in `dir`, under the same
-    /// store-lock condition as background process records, so a restarted
-    /// runtime can finish an interrupted execution's cleanup.
     pub fn with_task_hook_records(mut self, dir: PathBuf) -> Self {
         self.task_hook_records = crate::task_hooks::TaskHookRecordStore::durable(dir);
         self
@@ -178,7 +168,7 @@ impl BackgroundExecutionRegistry {
         &self.task_hook_records
     }
 
-    /// Recorder installed around one background execution. Each spawned
+    /// Recorder installed around one background execution; each spawned
     /// process replaces the execution's record.
     pub(crate) fn process_recorder(
         &self,
@@ -219,8 +209,8 @@ impl BackgroundExecutionRegistry {
     }
 
     /// Forgets a finished execution's record once its leader is observed
-    /// gone. A leader that outlives its execution keeps the record so a later
-    /// sweep can stop it.
+    /// gone; a leader that outlives its execution keeps the record so a
+    /// later sweep can stop it.
     pub(crate) async fn release_process_record(&self, tool_call_id: &str, tool_call_doc_id: &str) {
         if let Some(record) = self.process_record(tool_call_id, tool_call_doc_id) {
             let observed = record
@@ -245,10 +235,9 @@ impl BackgroundExecutionRegistry {
 
     /// Stops one background execution through its owner and reports the
     /// verdict (Lean `ManagedExec.stopOutcome`). A live worker in this
-    /// runtime is proven ownership: it is signalled and must release its
-    /// execution, and any recorded group must then be observed empty. With
-    /// no live worker, only a durable record whose leader matches proves
-    /// ownership. The caller persists the row's terminal state first.
+    /// runtime is proven ownership; otherwise only a durable record whose
+    /// leader matches proves it. The caller persists the row's terminal
+    /// state first.
     pub(crate) async fn stop_execution(
         &self,
         tool_call_id: &str,
@@ -283,9 +272,6 @@ impl BackgroundExecutionRegistry {
         ProcessStopOutcome::from_observations(before, after)
     }
 
-    /// Authorized observation of the runtime-owned output buffer. Adapters
-    /// use the same output and identity boundary as read_process, but read one
-    /// complete retained snapshot without changing the model's page budget.
     pub async fn read_process_output_snapshot(
         &self,
         node: &EmbeddedNode,
@@ -350,18 +336,11 @@ impl BackgroundExecutionRegistry {
         self.remove_now(tool_call_id);
     }
 
-    /// Returns whether this process still owns a live background execution.
     pub(crate) async fn contains(&self, tool_call_id: &str) -> bool {
         self.lock_executions().contains_key(tool_call_id)
     }
 
     /// Waits until this process releases ownership of a background execution.
-    ///
-    /// Normal worker completion releases ownership after durable terminal
-    /// persistence, completion projection, and live-output cleanup. An
-    /// unexpected task panic or abort drops the same ownership guard earlier,
-    /// allowing recovery to observe the abandoned durable execution.
-    ///
     /// Subscribing while holding the registry lock makes the boundary
     /// missed-event-safe: an execution removed before this call returns
     /// immediately, while an execution removed afterward signals this waiter.
@@ -454,12 +433,10 @@ struct SessionState {
 }
 
 impl SessionState {
-    /// Reset on a genuine user message only. Tool-result messages must NOT
-    /// reset the turn state: with several parallel tool calls accumulated in
-    /// one persisted assistant turn, the first streamed result's user message
-    /// would otherwise revoke the persisted-turn gate the remaining results
-    /// still need (Lean: `Transcript.parallel_results_complete_independently`;
-    /// `completeToolWithResult` never removes a persisted reservation).
+    // Reset on a genuine user message only. Tool-result messages must not
+    // reset the turn state: the first streamed result of several parallel
+    // calls must not revoke the persisted-turn gate the remaining results
+    // still need (Lean: `Transcript.parallel_results_complete_independently`).
     fn reset_after_user_message(&mut self) {
         self.transcript_turn = TranscriptTurnState::Idle;
     }
@@ -663,8 +640,6 @@ impl DefraSessionHook {
         }));
         self
     }
-    /// Register provider-published physical calls before dispatch.  The next
-    /// matching hook invocation adopts, rather than creates, that exact row.
     pub(crate) async fn adopt_accepted_tool_calls(
         &self,
         calls: Vec<(String, crate::streaming::AcceptedToolCall)>,
@@ -679,9 +654,7 @@ impl DefraSessionHook {
         Ok(())
     }
 
-    /// Binds hooks to an admitted physical call. Plugin effects require their
-    /// exact parent-admitted arguments; provider calls require StreamProcessor's
-    /// native identity and immutable accepted header. Internal keys alone never
+    /// Binds hooks to an admitted physical call; internal keys alone never
     /// authorize dispatch.
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn adopt_accepted_tool_dispatch(
@@ -882,9 +855,6 @@ impl DefraSessionHook {
         self
     }
 
-    /// Install the already-intersected goal authority for this request hook.
-    /// Defaults are deny-all so a forgotten wiring site cannot turn the
-    /// pre-dispatch persistence hook into an authority bypass.
     pub fn with_goal_tool_authority(
         mut self,
         goal_tools_enabled: bool,
@@ -895,7 +865,6 @@ impl DefraSessionHook {
         self
     }
 
-    /// Share this request's configured output gate with the owned completion loop.
     pub(crate) fn with_output_obligation_gate(
         mut self,
         gate: Option<crate::agent::output_obligation::OutputObligationGate>,
@@ -930,9 +899,7 @@ impl DefraSessionHook {
         }
     }
 
-    /// Call-hook failure never authorizes ordinary dispatch: the election may
-    /// have committed without a receipt, or a control tool may already have
-    /// performed its effect. Result-write policy cannot grant that authority.
+    /// Call-hook failure never authorizes ordinary dispatch.
     fn on_tool_persistence_error(
         &self,
         context: &str,
@@ -1001,9 +968,6 @@ impl DefraSessionHook {
     }
 
     async fn active_request_doc_id_for(&self, request_id: &str) -> anyhow::Result<Option<String>> {
-        // Hooks may also be used for session-only transcript capture, where
-        // there is deliberately no AgentRequest to bind. Keep that state
-        // wholly unbound instead of trying to resolve an empty logical id.
         if request_id.trim().is_empty() {
             return Ok(None);
         }
@@ -1063,8 +1027,6 @@ impl DefraSessionHook {
                 .canonical_writer_for(binding)
                 .await;
         }
-        // The caller will fail terminalization without a physical accepted
-        // binding; this registration has no payload fallback.
         self.background_live_outputs
             .writer_for(internal_call_id)
             .await
@@ -1115,9 +1077,6 @@ impl DefraSessionHook {
         Ok(count)
     }
 
-    /// Apply the interrupt disposition to this hook's in-flight calls and
-    /// return how many were cancelled. Background work, including spawned
-    /// processes in the background registry, is not reachable from here.
     pub async fn cancel_in_flight_tool_calls(&self) -> anyhow::Result<usize> {
         let lifecycles = {
             let mut map = self.in_flight_lifecycles.lock().await;
@@ -1130,8 +1089,6 @@ impl DefraSessionHook {
         let mut first_error = None;
         for mut lifecycle in lifecycles {
             let applied = match lifecycle.interrupt_disposition() {
-                // A pending intent is cancelled by the request's terminal
-                // tool accounting; only a running call has an executor here.
                 InterruptDisposition::Cancel if lifecycle.is_running() => lifecycle
                     .cancel_during_run(CancelCause::Interrupted)
                     .await

@@ -1,5 +1,5 @@
-//! Native task cards derived exclusively from persisted background Bash calls.
-//! There is no process registry here: IDs, lifecycle and output remain runtime-owned.
+//! Native task cards derived exclusively from persisted background Bash calls;
+//! no process registry: IDs, lifecycle and output remain runtime-owned.
 
 use super::{observed_status, ToolCallRow, ToolCallStatus};
 use serde_json::{json, Value};
@@ -28,7 +28,8 @@ fn update(kind: &'static str, id: &str, payload: Value) -> BackgroundTaskUpdate 
 }
 
 /// The shell's TaskSnapshot uses serde's SystemTime representation, not an
-/// RFC3339 string. Missing durable timestamps must not become wall-clock state.
+/// RFC3339 string; missing durable timestamps must not become wall-clock
+/// state.
 fn system_time(timestamp: Option<&str>) -> Option<Value> {
     let time = chrono::DateTime::parse_from_rfc3339(timestamp?).ok()?;
     let seconds = u64::try_from(time.timestamp()).ok()?;
@@ -97,8 +98,8 @@ pub(super) fn project(
     }
     let args: Value = serde_json::from_str(args_json).ok()?;
     let command = args["command"].as_str()?;
-    // Without a durable start, retain the standard ACP lifecycle instead
-    // of creating a native task that cannot later be completed faithfully.
+    // Without a durable start, retain the standard ACP lifecycle instead of
+    // creating a native task that cannot later be completed faithfully.
     let start = system_time(row.started_at.as_deref())?;
     let (metadata, output) = output(result);
     let cwd = args["cwd"]
@@ -115,8 +116,6 @@ pub(super) fn project(
     );
     let status = observed_status(row);
     let completed = if status.is_completed() {
-        // Native end_time is optional; a legacy missing end must not leave
-        // an otherwise terminal background card permanently running.
         let end = system_time(row.completed_at.as_deref());
         Some({
             let cancelled = row.lifecycle_state.as_deref() == Some("cancelled");
@@ -136,7 +135,6 @@ pub(super) fn project(
                 .iter()
                 .filter_map(|field| metadata[field]["total_bytes"].as_u64())
                 .fold(0_u64, u64::saturating_add);
-            // Native pager considers exit 0 successful even with a signal.
             // A stale success output must not override terminal failure.
             let exit_code = if signal.is_some() && metadata["exit_code"].as_i64() == Some(0) {
                 Value::Null

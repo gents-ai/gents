@@ -23,7 +23,6 @@ const INIT_CONFIG_FILE_NAME: &str = "init.json";
 const RUNTIME_STATE_FILE_NAME: &str = gents::home::RUNTIME_STATE_FILE_NAME;
 const LOCAL_STANDARD_SOURCE: &str = "local-standard";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
-/// How long discovery waits for a bound runtime to report it finished starting.
 const SERVE_READY_TIMEOUT: Duration = Duration::from_secs(60);
 const SERVE_READY_POLL: Duration = Duration::from_millis(500);
 
@@ -113,9 +112,6 @@ pub fn operator_endpoint(
     })
 }
 
-/// Loads a co-hosted runtime's signing key so this process can act as its
-/// node identity toward that runtime's own endpoint.
-///
 /// Only a record for a runtime this desktop hosts qualifies, and only when
 /// its home's live `runtime.json` names both the record's endpoint and node,
 /// so a bearer is never sent to a remote or re-pointed endpoint.
@@ -132,8 +128,6 @@ fn load_operator_node_identity(record: &crate::client::PeerRecord) -> Result<()>
     Ok(())
 }
 
-/// The home of a runtime this desktop hosts, when its live `runtime.json`
-/// names both the record's endpoint and node.
 fn hosted_runtime_home(record: &crate::client::PeerRecord) -> Result<&Path> {
     let endpoint = record
         .operator_graphql()
@@ -156,9 +150,8 @@ fn hosted_runtime_home(record: &crate::client::PeerRecord) -> Result<&Path> {
     Ok(home)
 }
 
-/// The co-hosted runtime's own identity, which signs the operator commands
-/// its HTTP routes take (the usage read), under the same checks as
-/// [`load_operator_node_identity`].
+/// Signs the operator commands the co-hosted runtime's HTTP routes take,
+/// under the same checks as [`load_operator_node_identity`].
 pub fn operator_signer(
     record: &crate::client::PeerRecord,
 ) -> Result<Arc<dyn gents::identity::NodeIdentity>> {
@@ -389,10 +382,6 @@ pub fn dangerously_overwrite_desktop_home(desktop_root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Clears the desktop client's embedded store, leaving its identity and peer
-/// directory in place. Retiring the whole client state (after an upgrade that
-/// cannot open it) retires [`DesktopPaths::client_state_entries`] through the
-/// same [`gents::home::retire_entries`] owner.
 pub fn reset_desktop_runtime_state(paths: &DesktopPaths) -> Result<bool> {
     let node_data_dir = [paths.node_data_dir().to_path_buf()];
     let cleared = gents::home::retire_entries(
@@ -498,10 +487,8 @@ pub(crate) async fn discover_standard_runtime(
     })
 }
 
-/// A runtime.json left by an earlier process names a runtime that may still be
-/// migrating or not listening yet. Discovery proceeds only once the live
-/// `/status` reports this identity ready. This is the one place discovery
-/// binds the saved route to the live DID.
+/// Discovery proceeds only once the live `/status` reports this identity
+/// ready; this is the one place discovery binds the saved route to the live DID.
 async fn await_serving_runtime(
     client: &reqwest::Client,
     runtime: &StoredRuntimeState,
@@ -545,8 +532,6 @@ async fn await_serving_runtime_within(
     }
 }
 
-/// Rejects a live identity other than the initialized one before readiness
-/// is considered, so a stale route is never saved for another runtime.
 fn serving_runtime(status: &Value, expected_did: &str) -> Result<ObservedServeLifecycle> {
     if !well_formed_did(expected_did) {
         anyhow::bail!("this home has no usable initialized node DID ({expected_did:?})");

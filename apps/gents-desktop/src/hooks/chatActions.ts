@@ -24,18 +24,14 @@ import type { ShellProjection, ShellStores } from "./shellProjection";
 type ChatActionParams = {
   api: DesktopApiAdapter;
   stores: ShellStores;
-  /** the shell as the stores hold it now: a send is admitted by it */
   project: () => ShellProjection;
   refreshSession: (
     nextSessionId: string | null,
   ) => Promise<DesktopSessionSnapshot | null>;
   refreshSnapshot: () => Promise<void>;
-  /** shows a failed action to the person, once */
   reportFailure: (message: string) => void;
 };
 
-/* Why a change to waiting messages was refused, in the person's terms: the
-   agent took them first, or something else changed the queue first. */
 function queueEditFailure(
   after: DesktopSessionSnapshot | null,
   requestIds: string[],
@@ -57,10 +53,6 @@ function queueEditFailure(
   return actionFailure("change pending messages", error);
 }
 
-/**
- * Sending, retrying and renaming in the selected chat. Each reads the
- * selection, the node and the shell projection when it runs.
- */
 export function createChatActions({
   api,
   stores,
@@ -70,11 +62,8 @@ export function createChatActions({
   reportFailure,
 }: ChatActionParams) {
   const store = stores.selection;
-  /* Synchronous admission implements startSubmit before React renders
-     sending. Every send and retry entry point shares it. */
   let submissionInFlight = false;
 
-  /** the selected node; a send with none selected goes to the first */
   const selectedNode = () => nodeOf(stores.fleet.getState(), store.getState().nodeDid);
 
   async function sendMessage(
@@ -205,7 +194,6 @@ export function createChatActions({
       await api.editPendingQueue(request);
       if (showing()) await refreshSession(request.sessionId);
     } catch (error) {
-      /* a rejected edit usually means the queue moved; show the queue it met */
       const after = showing() ? await refreshSession(request.sessionId) : null;
       reportFailure(queueEditFailure(after, requestIdsIn(before), error));
       throw shownFailure(error);
@@ -213,8 +201,6 @@ export function createChatActions({
   }
 
   async function renameSession(sessionId: string, title: string) {
-    /* the selection, not the fleet read: a read can briefly not list the
-       node while the session it holds is still shown */
     const nodeDid =
       heldFor(readSession(stores.session), sessionId, null)?.nodeDid ??
       store.getState().nodeDid;
@@ -246,42 +232,11 @@ export function createChatActions({
   }
 
   return {
-    /**
-     * Sends a message to the selected node (the first node while none is
-     * selected), under the selected agent or the one given, admitted by
-     * the shell projection as the stores hold it now. Returns null without
-     * sending for empty content or no node, while another send or retry is
-     * in flight, or when admission refuses (whose reason is reported).
-     * Carries the chat's folder and a held mailbox item as the cause; on
-     * acceptance the session becomes the selected one and its turn shows at
-     * once, unless the person has moved on.
-     */
     sendMessage,
     editPendingQueue,
-    /**
-     * Retries a failed request through the bridge's fenced retry, admitted
-     * under the session's own agent rather than the composer's. Shares
-     * sendMessage's single submission in flight and drops its result if the
-     * person has moved on. A failure is reported once.
-     */
     retryMessage,
-    /**
-     * Renames a session on the node holding it (the selected node), then
-     * reads the client and the session again. A failure, or no node to ask,
-     * is reported once, then rethrown.
-     */
     renameSession,
-    /**
-     * Stops one request, as the person asked: sessions it started keep their
-     * own work. The request's screen settles when it is terminal. A failure
-     * is reported once and rethrown.
-     */
     interruptRequest,
-    /**
-     * Sets, or clears with null, the folder the selected chat works in; on the
-     * new-session screen it is held for the session the first send creates.
-     * Kept in this viewer's storage only.
-     */
     setChatFolder,
   };
 }

@@ -47,10 +47,8 @@ pub(super) struct ParkedArrival {
 }
 
 impl EventSource {
-    /// Re-check parks held by a notified source document, so a repaired
-    /// document is retried under the same configuration. The notification may
-    /// be the document's own late creation event, so only changed content
-    /// releases a park.
+    /// A park releases only on changed source content (the notification may
+    /// be the document's own late creation event).
     pub(super) async fn release_parked_document(&mut self, collection: &str, doc_id: &str) {
         if collection == crate::Collection::Trigger.graphql_type() {
             return;
@@ -86,8 +84,8 @@ impl EventSource {
 }
 
 impl EventSource {
-    /// Runs at most once per rescan interval: durable passes also follow
-    /// every notification, and a notified repair is released directly.
+    /// Runs at most once per rescan interval; durable passes also follow
+    /// every notification.
     async fn release_changed_refusals(&mut self) {
         let now = Instant::now();
         if self
@@ -110,9 +108,8 @@ impl EventSource {
             })
             .collect::<Vec<_>>();
         for (trigger_id, collection, doc_id) in refused {
-            // A document this reader no longer sees (deleted, or hidden by
-            // ACP) is released too; the arrival owner then excludes it
-            // without a fire. A failed read keeps the park.
+            // A document this reader no longer sees (deleted or ACP-hidden)
+            // releases too; a failed read keeps the park.
             let Ok(current) = self.read_source_doc(&collection, &doc_id).await else {
                 continue;
             };
@@ -413,8 +410,8 @@ impl EventSource {
         if next != record.cursor.after {
             self.advance_arrival(&owner, trigger, next).await?;
         }
-        // The existing source timer provides the next bounded page; a source
-        // with no matching documents cannot monopolize the trigger driver.
+        // The existing source timer bounds paging; a source with no matching
+        // documents cannot monopolize the trigger driver.
         Ok(None)
     }
 

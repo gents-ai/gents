@@ -140,13 +140,6 @@ fn generated_backend_health_admission_cases_match_registry_and_admission_policy(
     }
 }
 
-/// Operator-UI projection of `(enabled, probe_status)`. Drives every Lean
-/// witness through `derive_display_state` and compares availability with Lean.
-/// An explicit input table checks the display labels, including unknown status.
-///
-/// This is the bridge-snapshot consumer test for the
-/// `backend-health.operatorUi` row of the feature matrix — registered in
-/// `CoverageLedger.lean` and `conformance_consumers.rs`.
 #[test]
 fn display_state_matches_every_lean_backend_health_admission_case() {
     let cases = lean_backend_health_admission_cases();
@@ -658,8 +651,8 @@ async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Re
     Ok(())
 }
 
-/// Serve one `/v1/models` response whose rows carry the request's bearer back
-/// in unrelated fields, as a hostile or careless provider might.
+// Serve one `/v1/models` response whose rows carry the request's bearer back
+// in unrelated fields, as a hostile or careless provider might.
 async fn spawn_echoing_models_server(secret: &'static str) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

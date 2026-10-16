@@ -374,9 +374,6 @@ mod tests {
 
     #[test]
     fn dst_spring_forward_skips_nonexistent_local_time() {
-        // 2024-03-10 America/Los_Angeles: clocks jump 02:00 PST -> 03:00 PDT, so
-        // local 02:30 never occurs that day. A `30 2 * * *` schedule must skip
-        // 03-10 and fire on 03-11 at 02:30 PDT (= 09:30 UTC).
         let after = Utc.with_ymd_and_hms(2024, 3, 10, 0, 0, 0).unwrap();
         let next = next_cron_run_after("30 2 * * *", "America/Los_Angeles", after).unwrap();
         assert_eq!(next, Utc.with_ymd_and_hms(2024, 3, 11, 9, 30, 0).unwrap());
@@ -386,10 +383,6 @@ mod tests {
 
     #[test]
     fn dst_fall_back_fires_at_each_repeated_local_time() {
-        // 2024-11-03 America/Los_Angeles: clocks fall 02:00 PDT -> 01:00 PST, so
-        // local 01:30 occurs twice. The first call returns the earlier UTC
-        // instant (01:30 PDT = 08:30 UTC); a follow-up call returns the second
-        // occurrence (01:30 PST = 09:30 UTC) before moving to the next day.
         let after = Utc.with_ymd_and_hms(2024, 11, 3, 0, 0, 0).unwrap();
         let first = next_cron_run_after("30 1 * * *", "America/Los_Angeles", after).unwrap();
         assert_eq!(first, Utc.with_ymd_and_hms(2024, 11, 3, 8, 30, 0).unwrap());

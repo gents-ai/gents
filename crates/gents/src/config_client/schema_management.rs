@@ -25,8 +25,7 @@ impl ConfigAccess {
         }
     }
 
-    /// Native DefraDB patch semantics, shared by CLI and model-facing schema administration.
-    /// DefraDB owns version creation, activation, validation and node authorization.
+    /// Native DefraDB patch semantics; DefraDB owns version creation, activation, validation and node authorization.
     pub async fn patch_collection_schema(&self, collection: &str, patch: &Value) -> Result<Value> {
         match self {
             Self::Local(local) => {
@@ -47,7 +46,7 @@ impl ConfigAccess {
                     Some(json!({"Patch":patch})),
                 )
                 .await?;
-                // The HTTP endpoint returns no version receipt. Reading the active
+                // The HTTP endpoint returns no version receipt; reading the active
                 // version would misidentify a patch that created an inactive one.
                 Ok(
                     json!({"committed":true,"collection":collection,"VersionID":null,
@@ -84,8 +83,7 @@ impl ConfigAccess {
         }
     }
 
-    /// Inline modules keep local and HTTP schema administration within the same
-    /// file-access boundary. A schema grant never grants host filesystem access.
+    /// A schema grant never grants host filesystem access.
     pub async fn set_schema_migration(
         &self,
         config: crate::defra_node::LensConfig,

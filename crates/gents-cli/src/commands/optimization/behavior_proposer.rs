@@ -1,5 +1,5 @@
-//! A proposer that asks an agent on the served home: one rendered turn
-//! per round, answered with exactly one fenced json block.
+//! A proposer that asks an agent on the served home: one turn per round,
+//! answered with exactly one fenced json block.
 
 use anyhow::{anyhow, Result};
 use gents::optimization::{Proposal, ProposalInput, Proposer};
@@ -11,8 +11,7 @@ use crate::commands::eval::render::percent;
 
 pub(crate) struct AgentProposer<T> {
     turn: Mutex<T>,
-    /// Sent as the session's first user turn, before the first round; its
-    /// reply is required but not read.
+    /// Sent before the first round; its reply is required but not read.
     preamble: Mutex<Option<String>>,
 }
 
@@ -55,8 +54,7 @@ impl<T: Turn + Send> Proposer for AgentProposer<T> {
     }
 }
 
-/// One user turn for a round, in a fixed order so a transcript is comparable
-/// across rounds.
+/// One user turn for a round, in a fixed order so transcripts are comparable.
 pub(crate) fn render(input: &ProposalInput) -> String {
     let mut out = format!(
         "Current instruction:\n{}\n\nFeedback from the train run:\n",
@@ -102,8 +100,7 @@ pub(crate) fn render(input: &ProposalInput) -> String {
     out
 }
 
-/// `text` in a fence one backtick longer than its longest backtick run, so
-/// a text holding its own fence cannot end the block early.
+/// `text` in a fence one backtick longer than its longest backtick run.
 fn fenced(text: &str) -> String {
     let longest = text.split(|c| c != '`').map(str::len).max().unwrap_or(0);
     let fence = "`".repeat(longest.max(2) + 1);

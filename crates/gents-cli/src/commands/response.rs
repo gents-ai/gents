@@ -14,9 +14,6 @@ pub(crate) async fn dispatch(command: ResponseCommand) -> Result<()> {
     }
 }
 
-/// Typed canonical request/output envelope. The signed admission input stays on
-/// the request row and is never rewritten into response-shaped JSON; `Published`
-/// observations are nonterminal and stay distinct from `TerminalMessage`.
 pub(crate) async fn response_show(args: ResponseShowArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let request_id =

@@ -5,8 +5,6 @@ mod ports;
 #[test]
 fn unbound_port_is_reserved_across_test_processes() -> anyhow::Result<()> {
     let port = ports::allocate_port()?;
-    // No listener exists yet: the CLI child has not started. A second test
-    // process must still avoid the port while this process owns its allocation.
     let output = std::process::Command::new(std::env::current_exe()?)
         .args(["allocate_in_child", "--exact", "--nocapture"])
         .env("GENTS_TEST_RESERVED_PORT", port.to_string())

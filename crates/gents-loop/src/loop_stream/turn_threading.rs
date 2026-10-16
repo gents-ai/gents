@@ -10,14 +10,6 @@ pub const TOOL_RESULT_IMAGE_OMITTED: &str =
 pub const TOOL_RESULT_IMAGE_NOT_REPLAYED: &str =
     "[image omitted: images from earlier tool calls are not replayed; call the tool again to see it]";
 
-/// A dispatched tool's output as the provider receives it. Output with no
-/// image part is bounded whole and then split, as it always was. Output that
-/// splits into image parts (`{"response", "parts"}`, the plugin ABI in
-/// `gents::plugin`) is split first and each text part is bounded. Every image
-/// passes whole where `profile` carries tool-result images, because a
-/// byte-bounded image is not an image; the tool's own output limit bounds it.
-/// Elsewhere each image becomes [`TOOL_RESULT_IMAGE_OMITTED`]: the OpenAI-family
-/// converters refuse a whole request over one tool-result image.
 pub(super) fn bounded_tool_result(
     profile: crate::provider_input::ProviderInputProfile,
     tool_name: &str,
@@ -43,10 +35,6 @@ pub(super) fn bounded_tool_result(
     bound_split_parts(tool_name, content, note, &TruncationLimits::default())
 }
 
-/// The text a later request replays for output that splits into image parts:
-/// the parts [`bounded_tool_result`] threads, text bounded by `limits`, one per
-/// line, each image [`TOOL_RESULT_IMAGE_NOT_REPLAYED`]. `None` for output
-/// without an image part, which replays as bounded text.
 pub fn replayed_tool_result_text(
     tool_name: &str,
     output: &str,
@@ -102,11 +90,8 @@ pub(super) fn close_streaming_turn(
     assistant_source: Option<crate::claude_messages_body::ReplayTag>,
     pending_results: Vec<(ToolCall, String, Vec<ToolResultContent>)>,
 ) -> Vec<LoopStreamItem> {
-    // Thread the assistant turn (text + reasoning + tool calls) ahead of its
-    // tool results, matching rig's history ordering. Carry the provider
-    // message id (captured into `stream.message_id` from the stream's
-    // `MessageId` event) onto the threaded message — rig threads this same id,
-    // and OpenAI Responses / ChatGPT Codex follow-up requests reference prior
+    // Carry the provider message id onto the threaded assistant message:
+    // OpenAI Responses / ChatGPT Codex follow-up requests reference prior
     // `msg_` ids, so dropping it breaks them.
     if let Some(mut assistant_message) = accumulator.take_message() {
         if let Message::Assistant { id, .. } = &mut assistant_message {
@@ -216,8 +201,6 @@ mod tests {
         );
     }
 
-    /// `carries_tool_result_images` matches what each wire's converter
-    /// accepts: every profile projects a bounded image result.
     #[cfg(feature = "native")]
     #[test]
     fn every_profile_projects_a_bounded_image_result() {

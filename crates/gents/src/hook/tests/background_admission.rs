@@ -236,9 +236,8 @@ async fn spawned_target_rejection_case(
 }
 
 /// Input outside the advertised `spawn_process` schema fails the call that
-/// carries it, so the model sees the rejection in the same turn instead of a
-/// running receipt for a process whose target arguments cannot decode. The
-/// first input is the live shape GLM emitted for the desktop operations smoke.
+/// carries it (model-visible in the same turn); the first input is the live
+/// shape GLM emitted for the desktop operations smoke.
 #[tokio::test]
 async fn spawn_process_rejects_unadvertised_arguments_before_spawned_admission() {
     for args in [

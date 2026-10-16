@@ -7,11 +7,8 @@ export function bridgeErrorCode(cause: unknown): string | null {
 
 const INTERNAL_DETAIL = /https?:\/\/|graphql|\/api\/v\d/i;
 
-/**
- * User-facing text for a setup failure. Bridge setup commands already return
- * user-facing messages; anything that still carries an endpoint URL or an
- * internal GraphQL error is replaced, and the detail goes to the console log.
- */
+/** Replaces messages carrying endpoint URLs or internal GraphQL errors;
+    the detail goes to the console log. */
 export function setupErrorMessage(
   cause: unknown,
   fallback = "Something went wrong. Try again.",

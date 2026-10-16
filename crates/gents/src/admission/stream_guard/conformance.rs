@@ -1,5 +1,4 @@
 //! Executes Lean-derived scheduling scenarios against the real stream wrapper.
-//! The shared-task arm is the negative control, not a second runtime path.
 
 use std::{sync::Arc, time::Duration};
 
@@ -68,8 +67,6 @@ async fn lean_storage_gate_scenarios_drive_stream_finalization() {
                 assert!(guarded.next().await.is_some());
             })
         } else {
-            // Reproduce a finalizer polled only by the consumer task. Once the
-            // sibling branch wins below, this owner cannot make progress.
             Box::pin(async move { finalizer.finish_stream().await.unwrap() })
         };
         tokio::select! {
@@ -130,8 +127,8 @@ impl StreamGuardLifecycle for NativeFinalizer {
     }
 }
 
-/// The same positive model scenario through native transactions and the actual
-/// canonical gate; no test-only access to gate internals or bypass writer.
+/// The same positive model scenario through native transactions and the
+/// canonical gate.
 #[tokio::test]
 async fn lean_independent_completion_releases_native_canonical_gate() {
     let cases: Vec<Case> = serde_json::from_str(include_str!(
@@ -168,7 +165,6 @@ async fn lean_independent_completion_releases_native_canonical_gate() {
         () = tokio::time::sleep(Duration::from_secs(10)) => panic!("native finalizer never entered"),
     }
     storage_return.notify_one();
-    // Do not poll guarded.next(): the consumer is occupied by response flush.
     tokio::time::timeout(
         Duration::from_secs(10),
         ConfigAccess::write_local_response(

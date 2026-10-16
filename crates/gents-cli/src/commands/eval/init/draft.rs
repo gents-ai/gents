@@ -1,10 +1,5 @@
-//! The author's reply as a draft: exactly one fenced `json` block whose top
-//! level is `{"definition": {...}, "cases": [...]}`. A reply without one is
-//! an interview turn.
-
 use serde_json::Value;
 
-/// What the author drafted. The CLI assembles the rest of the definition.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Draft {
     pub(crate) definition_id: Option<String>,
@@ -12,7 +7,7 @@ pub(crate) struct Draft {
     pub(crate) cases: Vec<Value>,
 }
 
-/// `Ok(None)` when the reply carries no fenced json block (an interview turn).
+/// `Ok(None)` when the reply carries no fenced json block.
 pub(crate) fn parse_reply(reply: &str) -> Result<Option<Draft>, String> {
     let blocks = json_blocks(reply);
     let block = match blocks.as_slice() {
@@ -53,10 +48,6 @@ pub(crate) fn parse_reply(reply: &str) -> Result<Option<Draft>, String> {
     }))
 }
 
-/// The bodies of the reply's fenced `json` blocks: a line that is
-/// ```` ```json ```` (any case, spaces allowed around `json`) up to the next
-/// line that is exactly ```` ``` ````. An unterminated block runs to the end
-/// of the reply.
 pub(crate) fn json_blocks(reply: &str) -> Vec<String> {
     let mut blocks = Vec::new();
     let mut current: Option<Vec<&str>> = None;
@@ -77,8 +68,6 @@ pub(crate) fn json_blocks(reply: &str) -> Vec<String> {
     blocks
 }
 
-/// ```` ```json ````, ```` ```JSON ```` or ```` ``` json ````: an opening
-/// fence whose info string is `json` in any case.
 fn is_json_fence(fence: &str) -> bool {
     fence
         .strip_prefix("```")

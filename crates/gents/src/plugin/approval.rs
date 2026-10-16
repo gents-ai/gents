@@ -8,9 +8,6 @@
 //! file; the desktop app and `gents chat` list the pending questions and write
 //! the decision. This is operator consent within the existing host trust
 //! boundary, not isolation from shell commands running as the same OS user.
-//! Sandboxed plugins cannot access this queue. "Always allow" is applied by [`decide`]
-//! on the answering side, adding the folder to the operator's list; the
-//! waiting call only learns allow or deny.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -71,9 +68,6 @@ pub fn interactive() -> bool {
     INTERACTIVE.try_with(|_| ()).is_ok()
 }
 
-/// Runs `future` as a child call composed by another plugin. The marker is
-/// the composed axis of `consentRoute`: the generated cases run a real
-/// composed scope and prove composition does not change the operator's gate.
 pub(crate) async fn scope_composed<F: std::future::Future>(future: F) -> F::Output {
     COMPOSED.scope((), future).await
 }
@@ -88,9 +82,9 @@ pub(crate) enum Consent {
     Deny,
 }
 
-/// Lean `ToolPolicy.PluginCalls.consentRoute`. The composed axis is the
-/// owner's input; a child another plugin composes waits on the operator like
-/// a directly issued call.
+/// The composed axis of `consentRoute` (Lean `ToolPolicy.PluginCalls`):
+/// a child another plugin composes waits on the operator like a directly
+/// issued call.
 pub(crate) fn consent_route(interactive: bool, _composed: bool) -> Consent {
     if interactive {
         Consent::Ask
@@ -113,7 +107,6 @@ pub struct Request {
     pub path: String,
     /// The folder "always allow" remembers.
     pub folder: PathBuf,
-    /// Whether the path is a folder, so "always allow this file" is the folder.
     #[serde(default)]
     pub is_dir: bool,
     pub access: BindAccess,
@@ -172,7 +165,7 @@ fn listener_file(home: &Path) -> PathBuf {
     dir(home).join(".listening")
 }
 
-/// Preparing the queue does not advertise a listener. Native watchers mark
+/// Preparing the queue does not advertise a listener: native watchers mark
 /// listening only after their filesystem subscription succeeds.
 pub fn prepare_listener(home: &Path) -> Result<PathBuf> {
     let queue = dir(home);

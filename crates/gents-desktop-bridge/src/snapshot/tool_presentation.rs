@@ -432,7 +432,6 @@ fn project_agent(tool: &ToolCallView, name: &str) -> ToolPresentationView {
     let result = json_object(tool.result.as_deref());
     let session_id = string_field(args.as_ref(), "session_id")
         .or_else(|| string_field(result.as_ref(), "session_id"));
-    /* `agent_new` carries its text as `prompt`, `agent_message` as `message` */
     let body = if name == AGENT_NEW_TOOL_NAME {
         "prompt"
     } else {

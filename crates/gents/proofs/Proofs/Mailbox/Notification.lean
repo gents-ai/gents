@@ -7,7 +7,6 @@ inductive Mode where
   | condition
   deriving DecidableEq, Repr
 
-/-- Configuration supplies condition identity; runtime supplies event identity. -/
 structure Key where
   mode : Mode
   nodeDid : String
@@ -59,7 +58,6 @@ theorem unchanged_condition_reuses : decideWrite .condition true true = .reused 
 
 theorem changed_condition_updates : decideWrite .condition true false = .updated := by rfl
 
-/-- Content updates cannot change tenancy/identity or revive terminal rows. -/
 structure ContentRow where
   item : Item
   content : String

@@ -1,13 +1,6 @@
 import Proofs.CanonicalOutput.Execution.CoherenceFrame
 import Proofs.CanonicalOutput.Execution.Properties
 
-/-!
-# Request-owned accounting frames
-
-The fold step reuses the existing metadata accounting operation. Unowned and
-already-terminal tools are unchanged; pending and running cases are proved in
-their respective accounting modules and joined by `AccountingInvariant`.
--/
 namespace CanonicalOutput.Execution
 
 def accountMetadataStep (generation : Generation) (current : World)

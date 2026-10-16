@@ -1,27 +1,9 @@
-//! Model calls for a plugin that cannot reach the network itself.
-//!
-//! A plugin whose manifest names a `model_slot` may, while that slot is bound
-//! for its installation, answer a call with a batch of model requests instead
-//! of a result. The host sends them to the slot's inference backend and calls
-//! the plugin again with the answers, until the plugin returns a result.
-//!
-//! The wire, driven by [`super::rounds`]:
-//!
-//! - input: the caller's input plus `"model_calls": true`, then on later
-//!   rounds `"model_results": {id: {"text": ...} | {"error": ...}}` and the
-//!   `"state"` the plugin last returned;
-//! - output: `{"model_calls": {"requests": [{"id", "prompt", "images":
-//!   [{"mime", "data_base64"}], "max_tokens"}], "state": ...}}`.
-//!
-//! The endpoint and the key live only in [`ModelEndpoint`], which this module
-//! never serialises, logs or puts in any error: a plugin sees answers, never
-//! where they came from. Bounds beyond the round loop's own:
-//! [`MAX_REQUESTS_PER_ROUND`] requests a round, [`MAX_REQUESTS_PER_CALL`]
-//! requests and [`MAX_ANSWER_BYTES_PER_CALL`] answer bytes for the whole call
-//! (a request past either gets an error result), [`MAX_RESULT_BYTES`] an
-//! answer, the backend's `max_concurrent` in flight across every call in the
-//! process, and after [`DEAD_ENDPOINT_ROUNDS`] rounds in a row that all failed
-//! every further request fails at once, so a dead endpoint costs seconds.
+//! Model calls for a plugin that cannot reach the network itself: a plugin
+//! with a bound `model_slot` answers a call with a batch of model requests;
+//! the host sends them to the slot's inference backend and calls the plugin
+//! again with the answers, until the plugin returns a result. The endpoint
+//! and key live only in [`ModelEndpoint`]: a plugin sees answers, never
+//! where they came from.
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, LazyLock};
@@ -43,21 +25,18 @@ use crate::Collection;
 pub const MAX_REQUESTS_PER_ROUND: usize = 64;
 /// Bytes of one model answer handed back to the plugin.
 pub const MAX_RESULT_BYTES: usize = 1024 * 1024;
-/// Requests one call may send over all its rounds: eight full rounds, far
-/// above a page-per-request run over a few hundred pages.
+/// Requests one call may send over all its rounds.
 pub const MAX_REQUESTS_PER_CALL: usize = 512;
-/// Answer bytes one call may take in over all its rounds: 32 answers at the
-/// per-answer cap; real page answers are tens of KiB, so this only stops abuse.
+/// Answer bytes one call may take in over all its rounds; this only stops
+/// abuse.
 pub const MAX_ANSWER_BYTES_PER_CALL: usize = 32 * 1024 * 1024;
-/// Output tokens asked for when neither the plugin nor the profile sets a cap;
-/// room for a dense page of text without letting a runaway answer fill the
-/// byte limits.
+/// Output tokens asked for when neither the plugin nor the profile sets a cap.
 pub const DEFAULT_MAX_TOKENS: u64 = 8192;
 /// Consecutive failed rounds after which the endpoint is treated as dead.
 pub const DEAD_ENDPOINT_ROUNDS: u32 = 2;
 const DEFAULT_CONNECT_TIMEOUT_SECS: i64 = 10;
-/// A page-sized vision answer from a local server takes seconds to a couple
-/// of minutes; past this one request is given up so the plugin can decide.
+/// Longest one request may take; a page-sized vision answer from a local
+/// server can take minutes.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The profile an installation bound a plugin's model slot to.
@@ -73,11 +52,9 @@ pub struct ModelEndpoint {
     pub api_key: Option<String>,
     pub model: String,
     pub max_concurrent: usize,
-    /// Names the backend for the process-wide concurrency limit, so every
-    /// call on one backend shares its `max_concurrent`.
+    /// Names the backend for the process-wide concurrency limit.
     pub backend_key: String,
     pub connect_timeout: Duration,
-    /// Longest one request may take, inside the call's own wall clock.
     pub request_timeout: Duration,
     pub max_output_tokens: Option<u64>,
 }
@@ -96,8 +73,6 @@ pub trait ModelResolver: Send + Sync {
     fn resolve<'a>(&'a self, binding: &'a ModelBinding) -> BoxFuture<'a, Result<ModelEndpoint>>;
 }
 
-/// Resolves a binding through the principal's configuration documents, the
-/// same profile and backend a behavior would use.
 pub struct AccessModels<A>(pub A);
 
 impl<A> ModelResolver for AccessModels<A>
@@ -148,8 +123,7 @@ where
     }
 }
 
-/// The chat completions endpoint a profile and its backend describe, or the
-/// reason model calls cannot use them.
+/// The chat completions endpoint a profile and its backend describe.
 pub fn endpoint_for(
     profile: &InferenceProfile,
     backend: &InferenceBackend,
@@ -220,8 +194,8 @@ pub(super) struct Batch {
 /// The requests a plugin's output asks for: `None` when the output is a
 /// final result, an error naming what is malformed otherwise.
 pub(super) fn parse_batch(output: &Value) -> Result<Option<Batch>, String> {
-    // Only an object under `model_calls` is a request: a result that merely
-    // echoes the `"model_calls": true` it was given is a result.
+    // A result that merely echoes the `"model_calls": true` it was given is
+    // a result, not a request.
     let Some(calls) = output
         .as_object()
         .and_then(|object| object.get("model_calls"))
@@ -298,9 +272,9 @@ pub(super) fn parse_batch(output: &Value) -> Result<Option<Batch>, String> {
     }))
 }
 
-/// In-flight limits by backend and cap, shared by every call in the process.
-/// The cap is part of the key, so an edited `max_concurrent` starts a fresh
-/// limit while calls already running finish under the old one.
+/// In-flight limits by backend, shared by every call in the process. The cap
+/// is part of the key, so an edited `max_concurrent` starts a fresh limit
+/// while calls already running finish under the old one.
 static LIMITERS: LazyLock<kovan_map::HopscotchMap<String, Arc<Semaphore>>> =
     LazyLock::new(kovan_map::HopscotchMap::new);
 

@@ -44,11 +44,8 @@ pub(crate) const MAX_RENDERED_BYTES: usize = 1024 * 1024;
 ///
 /// `tojson` rewrites `<`, `>`, `&` and `'` into `\uXXXX` escapes inside the
 /// filter body rather than through the formatter, so the auto-escape callback
-/// below does not make it escape-neutral: text piped through it reaches the
-/// provider carrying those escape sequences instead of the source characters.
-/// `{% autoescape %}` likewise decides from the value the tag names rather than
-/// from the callback, so a block under `{% autoescape "json" %}` reaches the
-/// provider JSON-serialized and one under `{% autoescape true %}` HTML-escaped.
+/// does not make it escape-neutral; `{% autoescape %}` likewise decides from
+/// the value the tag names rather than from the callback.
 fn environment() -> Environment<'static> {
     let mut env = Environment::new();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
@@ -136,32 +133,10 @@ impl NameUse {
     }
 }
 
-/// Filters, tests and functions resolve while rendering, so compiling a
-/// template admits names the engine can never provide and every fire of the
-/// task then fails. Configuration admission rejects those names here.
-///
-/// MiniJinja names each filter, test and called function in one flat
-/// instruction stream, so a branch no render would enter cannot hide one.
-/// Block bodies compile into a second stream this walk does not visit, and
-/// cannot occur: `{% block %}` needs MiniJinja's `multi_template` feature,
-/// which the workspace does not enable, so it fails to parse.
-///
-/// Compiling is part of the check, so this also reports a template that does
-/// not parse or exceeds the size cap, as a parse error rather than a name.
-///
-/// A rejection reports only that nothing can provide a name, never that a
-/// render failed: invocation values do not exist at authoring time, so
-/// value-dependent failures are not admission facts. For the same reason a
-/// method call (`{{ doc.name.upper() }}`) is out of reach here - it resolves
-/// against the value it is called on, which authoring does not have.
-///
-/// Three kinds of name survive to fire time, each so that a template a fire
-/// would run is not refused. A name a builtin resolves from a non-constant
-/// argument is unpredictable (`{{ items | map(doc.filter_name) }}`), as is one
-/// an argument splat hides (`{{ items | map(*args.spec) }}`). And a called name
-/// is admitted when the program binds it anywhere, without regard to scope or
-/// order, so `{% if doc.fmt %}{% set f = doc.fmt %}{% endif %}{{ f() }}` and
-/// `{{ f() }}{% set f = args.formatter %}` are admitted and fail on a fire.
+/// Configuration admission rejects names the engine can never provide, so
+/// every fire of the task cannot fail on them. Compiling is part of the
+/// check; a rejection reports only that nothing can provide a name, never
+/// that a render failed: value-dependent failures are not admission facts.
 pub fn check_template_vocabulary(template: &str) -> Result<(), TemplateError> {
     if template.len() > MAX_TEMPLATE_BYTES {
         return Err(TemplateError::Parse(format!(
@@ -195,9 +170,7 @@ pub fn check_template_vocabulary(template: &str) -> Result<(), TemplateError> {
                 used.push((NameUse::Function, (*name).to_string()));
             }
             // Assignment targets, `{% with %}` bindings and loop targets all
-            // compile to this. A call resolves through the frames before the
-            // environment, and admission judges the bindings program-wide,
-            // without regard to scope or order.
+            // compile to this; judged program-wide, without scope or order.
             Instruction::StoreLocal(name) => {
                 bound.insert((*name).to_string());
             }
@@ -205,17 +178,16 @@ pub fn check_template_vocabulary(template: &str) -> Result<(), TemplateError> {
             Instruction::PushLoop(_) => {
                 bound.insert("loop".to_string());
             }
-            // A bare variable resolves through the frames, then the render
-            // context roots, then the environment's globals; strict undefined
-            // fails every fire on anything else (#1970).
+            // Bare variables resolve through frames, context roots, then
+            // globals; strict undefined fails every fire otherwise (#1970).
             Instruction::Lookup(name) => {
                 used.push((NameUse::Variable, (*name).to_string()));
             }
             // Judged by the filter that resolves a name from it, not here.
             Instruction::LoadConst(_) => {}
-            // Named exhaustively: a MiniJinja instruction set that grows a new
-            // name-carrying instruction, or changes the arity of one above,
-            // must fail to compile rather than leave the walk silently partial.
+            // Exhaustive: a new name-carrying MiniJinja instruction, or a
+            // changed arity above, must fail to compile rather than leave the
+            // walk silently partial.
             Instruction::EmitRaw(_)
             | Instruction::GetAttr(_)
             | Instruction::SetAttr(_)
@@ -814,8 +786,8 @@ pub fn parse_template_for_validation(template: &str) -> Result<Vec<VariableRef>,
         )));
     }
 
-    // The reference scanner is not a syntax parser. Compile with the rendering
-    // owner before accepting configuration, without needing invocation values.
+    // The reference scanner is not a syntax parser; compile with the rendering
+    // owner before accepting configuration.
     environment().template_from_str(template).map_err(|error| {
         TemplateError::Parse(format!(
             "{error}; use MiniJinja syntax, e.g. {{{{ doc.message }}}} for a document field or {{{{ args.name }}}} for a task argument"

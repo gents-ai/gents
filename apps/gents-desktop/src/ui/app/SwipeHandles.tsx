@@ -1,7 +1,4 @@
-/* Chrome's history-swipe affordance: a chip slides in from the pane's edge
-   as a two-finger swipe progresses and fills solid once the gesture will
-   commit. Driven by direct style writes from the swipe hook, since progress
-   arrives at display rate. */
+// Driven by direct style writes from the swipe hook; progress arrives at display rate.
 import { ArrowLeft, ArrowRight } from "lucide-react";
 
 export const SWIPE_HANDLE_ATTR = "data-swipe-handle";
@@ -25,9 +22,8 @@ function Chip({ direction }: { direction: "back" | "forward" }) {
   );
 }
 
-/* The clip keeps the resting chips, which sit just past the pane's edges,
-   out of the pane's scrollable overflow; otherwise a focus call can scroll
-   the pane sideways to reveal them. */
+// The clip keeps the resting chips out of the pane's scrollable overflow;
+// otherwise a focus call can scroll the pane sideways to reveal them.
 export function SwipeHandles() {
   return (
     <div

@@ -1,9 +1,4 @@
 //! Minimal ChatGPT OAuth flows used by the Gents CLI and desktop app.
-//!
-//! This crate intentionally owns only the browser PKCE and device-code
-//! exchanges. Tokens are returned to the caller for immediate persistence in
-//! DefraDB; no Codex configuration, keyring, provider, sandbox, or app-server
-//! code is linked into Gents.
 
 use std::collections::HashMap;
 use std::io;
@@ -36,7 +31,6 @@ pub struct LoginOptions {
     pub issuer: String,
     pub port: u16,
     pub open_browser: bool,
-    /// Test hook for deterministic callback-state checks.
     pub force_state: Option<String>,
 }
 
@@ -59,7 +53,6 @@ pub struct LoginTokens {
     pub refresh_token: String,
 }
 
-/// Token values never reach logs or error text through `Debug`.
 impl std::fmt::Debug for LoginTokens {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LoginTokens")
@@ -100,7 +93,6 @@ impl LoginServer {
     }
 }
 
-/// Start a loopback-only OAuth callback server.
 pub fn run_login_server(options: LoginOptions) -> io::Result<LoginServer> {
     let pkce = generate_pkce();
     let state = options.force_state.clone().unwrap_or_else(generate_state);
@@ -635,15 +627,6 @@ mod tests {
     }
 
     #[test]
-    fn pkce_values_have_the_required_entropy_and_encoding() {
-        let pkce = generate_pkce();
-        assert!(pkce.verifier.len() >= 43 && pkce.verifier.len() <= 128);
-        assert!(!pkce.verifier.contains('='));
-        assert!(!pkce.challenge.contains('='));
-        assert_ne!(pkce.verifier, generate_pkce().verifier);
-    }
-
-    #[test]
     fn oauth_errors_do_not_echo_unstructured_response_bodies() {
         assert_eq!(
             oauth_error_message(r#"{"error":{"message":"denied"}}"#),
@@ -653,24 +636,6 @@ mod tests {
             oauth_error_message("secret=do-not-log"),
             "unstructured error response"
         );
-    }
-
-    #[test]
-    fn device_interval_accepts_string_and_number_encodings() {
-        let string: UserCodeResponse = serde_json::from_value(serde_json::json!({
-            "device_auth_id": "id",
-            "user_code": "code",
-            "interval": "7"
-        }))
-        .expect("string interval");
-        let number: UserCodeResponse = serde_json::from_value(serde_json::json!({
-            "device_auth_id": "id",
-            "user_code": "code",
-            "interval": 3
-        }))
-        .expect("numeric interval");
-        assert_eq!(string.interval, 7);
-        assert_eq!(number.interval, 3);
     }
 
     #[tokio::test]

@@ -1,11 +1,5 @@
 //! `gents pack outdated` and `gents pack update`: installed packs against the
 //! registry's latest versions.
-//!
-//! What is installed comes from the node's installation records plus the
-//! home's file-recorded assets/plugins installs
-//! ([`gents::pack::installed_packs`]); an update is an ordinary install of
-//! the latest version, so the drift rules and `--overwrite` / `--keep` apply
-//! exactly as they do to any install.
 
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -14,10 +8,9 @@ use super::registry::{resolve_registry_url, RegistryClient};
 use crate::cli::{PackInstallArgs, PackOutdatedArgs, PackUpdateArgs};
 use crate::output_format::OutputFormat;
 
-/// One installed pack and the latest version the registry has, if any. A
-/// registry or network failure is recorded per pack in `error`, never
-/// collapsed into "not on registry": a lookup that failed and a pack the
-/// registry has never heard of are different facts.
+/// A registry or network failure is recorded per pack in `error`, never
+/// collapsed into "not on registry": a failed lookup and an unknown pack are
+/// different facts.
 async fn outdated_packs(
     scope: &crate::cli::GraphScopeArgs,
     registry: Option<&str>,
@@ -70,19 +63,14 @@ async fn outdated_packs(
     Ok(report)
 }
 
-/// Whether `latest` is a strictly newer semver than `installed`; `None` when
-/// either does not parse. The registry's latest skips yanked versions, so it
-/// can be older than what is installed, and an update must never downgrade.
+/// The registry's latest can be older than what is installed (yanked), and an
+/// update must never downgrade; `None` when either side is not semver.
 fn is_newer(latest: &str, installed: &str) -> Option<bool> {
     let latest = semver::Version::parse(latest).ok()?;
     let installed = semver::Version::parse(installed).ok()?;
-    // Build metadata carries no precedence; plain `>` would order it lexically.
     Some(latest.cmp_precedence(&installed).is_gt())
 }
 
-/// The installed pack rows `update` acts on: the named pack, or every
-/// installed one. A named pack that matches nothing installed is an error
-/// naming it, never a silent empty selection.
 fn select_packs<'a>(packs: &'a [Value], package: Option<&str>) -> Result<Vec<&'a Value>> {
     let selected: Vec<&Value> = packs
         .iter()
@@ -110,13 +98,8 @@ pub(crate) async fn outdated(args: PackOutdatedArgs) -> Result<()> {
     Ok(())
 }
 
-/// Reinstalls every outdated pack among the selection, one at a time.
-///
 /// A failed install does not stop the batch: it is recorded under `failed`
-/// and the rest still run, so a partial failure keeps the list of updates
-/// already done instead of losing it. Each nested install runs through
-/// [`crate::request_helpers::capture_report`] so it never prints its own
-/// report; `update` prints exactly one JSON document, its own.
+/// and the rest still run, so a partial failure keeps the updates already done.
 pub(crate) async fn update(args: PackUpdateArgs) -> Result<()> {
     let packs = outdated_packs(&args.scope, args.registry.as_deref()).await?;
     let selected = select_packs(&packs, args.package.as_deref())?;
@@ -134,7 +117,7 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<()> {
             current.push(coordinate);
             continue;
         }
-        // Pinned: an unpinned install resolves installed-first and would
+        // Pinned: an unpinned install would resolve installed-first and
         // reinstall the version already there.
         let Some(latest) = pack["latest"].as_str() else {
             failed.push(json!({
@@ -154,8 +137,6 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<()> {
             registry: args.registry.clone(),
             drift: args.drift,
             grant_authority: false,
-            // An update never turns a dependency-only install into an
-            // explicit one; it only ever reinstalls what is already there.
             explicit: false,
         };
         match crate::request_helpers::capture_report(super::install(install_args)).await {
@@ -217,10 +198,8 @@ mod tests {
         assert_eq!(is_newer("1.2.0", "1.2.0-rc.1"), Some(true));
     }
 
-    /// A minimal document pack: an node placeholder and one empty
-    /// tools document, the same shape a real document pack ships (compare
-    /// a pack's `pack_config.json`). Returns its bytes
-    /// and the sha256 hex a registry advertises for them.
+    /// A minimal document pack the fake registry advertises; returns its
+    /// bytes and the sha256 hex.
     fn build_document_pack(version: &str) -> (Vec<u8>, String) {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("demo_pack");
@@ -263,6 +242,9 @@ mod tests {
     /// End to end: install `demo_pack@1.0.0` from a fake registry into a
     /// fresh home, point `--registry` at a second fake advertising
     /// `1.1.0`, and confirm `update` installs it and prints exactly the
+    /// End to end: install `demo_pack@1.0.0` from a fake registry into a
+    /// fresh home, point `--registry` at a second fake advertising
+    /// `1.1.0`, and confirm `update` installs it and prints exactly the
     /// `{"updated", "failed", "current"}` report.
     #[tokio::test]
     async fn update_installs_a_newer_version_the_fake_registry_advertises() {
@@ -272,7 +254,6 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let home_path = home.path().to_path_buf();
 
-        // A fresh home needs an enabled owner principal before a pack installs.
         let cli = crate::cli::Cli::try_parse_from([
             "gents",
             "init",
@@ -344,9 +325,8 @@ mod tests {
         );
     }
 
-    /// An assets pack installs a file record, never a `PackInstallation`; a
-    /// bare `gents pack outdated` against that same home must still list it,
-    /// without ever initializing or opening a node.
+    /// An assets pack installs a file record, never a `PackInstallation`;
+    /// `outdated` must still list it without opening a node.
     #[tokio::test]
     async fn outdated_lists_home_recorded_installs_without_opening_a_node() {
         let home = tempfile::tempdir().unwrap();

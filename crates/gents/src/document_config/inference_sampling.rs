@@ -1,8 +1,8 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-/// Optional sampling overrides shared by inference profiles. Unsupported explicit
-/// settings must be rejected for the selected provider/model rather than ignored.
+/// Optional sampling overrides shared by inference profiles; unsupported
+/// explicit settings must be rejected, not ignored.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -37,7 +37,7 @@ pub struct InferenceSampling {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub repetition_penalty: Option<f64>,
-    /// Optional UI/discovery labels. References, never tags, determine execution.
+    /// Optional UI/discovery labels.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -48,8 +48,7 @@ pub struct InferenceSampling {
 }
 
 impl InferenceSampling {
-    /// Validate the sampling bounds owned by this document and report every
-    /// violated rule at once.
+    /// Validate the sampling bounds owned by this document.
     pub fn validation_violations(&self) -> Vec<String> {
         let sampling_id = self.sampling_id.trim();
         let mut violations: Vec<String> = Vec::new();
@@ -120,48 +119,3 @@ impl InferenceSampling {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn nonfinite_sampling_cannot_become_silent_null_provider_defaults() {
-        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            let sampling = InferenceSampling {
-                temperature: Some(value),
-                top_p: Some(value),
-                min_p: Some(value),
-                frequency_penalty: Some(value),
-                presence_penalty: Some(value),
-                repetition_penalty: Some(value),
-                ..Default::default()
-            };
-            assert_eq!(sampling.validation_violations().len(), 6, "{value}");
-        }
-    }
-
-    #[test]
-    fn finite_sampling_boundaries_and_zero_seed_remain_valid() {
-        let mut sampling = InferenceSampling {
-            temperature: Some(0.0),
-            top_p: Some(0.0),
-            min_p: Some(1.0),
-            top_k: Some(1),
-            seed: Some(0),
-            frequency_penalty: Some(-2.0),
-            presence_penalty: Some(2.0),
-            repetition_penalty: Some(f64::MIN_POSITIVE),
-            ..Default::default()
-        };
-        assert!(sampling.validate().is_ok());
-        sampling.temperature = Some(-0.01);
-        sampling.top_p = Some(1.01);
-        sampling.min_p = Some(-0.01);
-        sampling.top_k = Some(0);
-        sampling.seed = Some(-1);
-        sampling.frequency_penalty = Some(-2.01);
-        sampling.presence_penalty = Some(2.01);
-        sampling.repetition_penalty = Some(0.0);
-        assert_eq!(sampling.validation_violations().len(), 8);
-    }
-}

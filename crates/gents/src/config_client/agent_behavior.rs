@@ -7,9 +7,6 @@ use crate::AgentDocument as Agent;
 use super::ConfigApplyTxn;
 use super::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 
-/// Replace one complete canonical behavior. Omitted optional fields clear their
-/// previous values; sparse edits belong to the explicit patch owner.
-/// Desired-state application validates references in the mutation transaction.
 pub async fn write_agent_document(access: &ConfigAccess, behavior: &Agent) -> Result<String> {
     access
         .transact_write("config.agent.write", |txn| {

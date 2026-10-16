@@ -214,9 +214,6 @@ fn generated_aggregate_token_budget_cases_drive_the_owned_loop_ledger() {
         );
     }
 
-    // Cross-request durable selection is exercised through the database owner
-    // in completion_factory::tests. This test drives only the ledger arithmetic
-    // owner, which receives rows already selected for one physical request.
     for case in cases.iter().filter(|case| {
         case.prior_request_doc_ids
             .iter()
@@ -228,9 +225,7 @@ fn generated_aggregate_token_budget_cases_drive_the_owned_loop_ledger() {
             "{}: each prior usage row needs both durable components",
             case.name
         );
-        // Exercise the same summation owner used by completion_factory on restart.
-        // These decoded rows cover accounted spend, not missing-usage validation
-        // or the database selection of completed calls.
+        // Decoded rows cover accounted spend, not missing-usage validation.
         let used = crate::provider_usage::sum_charged_from_persisted_parts(
             case.prior_prompt_tokens
                 .iter()
@@ -578,8 +573,7 @@ async fn exact_aggregate_exhaustion_rejects_tool_intent_before_dispatch() {
     ))
     .await;
 
-    // The modeled exhausted/nonterminal post-charge action fails before
-    // accepting the provider turn; streamed intent is not dispatch authority.
+    // Streamed intent is not dispatch authority.
     assert!(collected.tool_results.is_empty());
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert!(
@@ -735,9 +729,7 @@ async fn zero_remaining_capacity_is_not_captured_or_dispatched() {
         "zero-capacity request reached the provider model"
     );
 
-    // The terminal string comes from the typed contract error, so the loop-level
-    // and unit-level setups above must agree on its shape (model-facing). This
-    // half re-derives the typed error with the original unit test's fresh setup.
+    // Re-derives the typed contract error's shape the loop surfaces.
     let mut loop_config = config(0);
     loop_config.context_window = 100;
     let mut request = CompletionRequest {
@@ -835,9 +827,7 @@ async fn final_fit_failure_after_compaction_is_typed_and_never_dispatched() {
     let prompt = Message::user("current prompt survives compaction");
     let mut loop_config = config(0);
     loop_config.max_tokens = Some(1_000);
-    // Keep this below 100% so the post-compaction threshold diagnostic is
-    // also eligible. The stricter typed context-fit result must win when the
-    // rebuilt request has no positive output capacity.
+    // The typed context-fit result must win over the threshold diagnostic.
     loop_config.compaction_threshold = 0.5;
 
     let compacted_request = build_request(&model, prompt.clone(), &[], &[], &[], &loop_config)
@@ -1065,9 +1055,9 @@ async fn aggregate_budget_fails_closed_on_mid_stream_error_before_retry() {
         ))
         .await;
 
+        // A failed provider turn never reached acceptance, so no tool effect
+        // may escape.
         if with_tool {
-            // A streamed call is only intent. The failed provider turn never
-            // reached Complete acceptance, so no tool effect may escape.
             assert_eq!(calls.load(Ordering::SeqCst), 0);
             assert!(collected.tool_results.is_empty());
         }
@@ -1120,9 +1110,6 @@ async fn mid_stream_failure_after_tool_budget_exhausted_fails() {
 
     assert_eq!(collected.final_text, None);
     assert_eq!(collected.tool_results, Vec::<String>::new());
-    // No-effect-before-Complete: the provider turn never closed (mid-stream
-    // error), so the streamed tool intent must never dispatch, even as the
-    // exhausted retry budget terminalizes the loop.
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     let error = collected
         .error
@@ -1135,8 +1122,7 @@ async fn mid_stream_failure_after_tool_budget_exhausted_fails() {
 }
 
 /// Drives the production compaction trigger and per-turn output clamp from the
-/// Lean `PromptAssembly.Budget` boundary vector (moved here from the daemon's
-/// `request.rs` copy so the Lean→Rust refinement driver has one home).
+/// Lean `PromptAssembly.Budget` boundary vector.
 #[test]
 fn generated_budget_cases_drive_dynamic_output_compaction_trigger() {
     let cases = crate::lean_vocab_test::lean_prompt_assembly_budget_cases();
@@ -1146,11 +1132,7 @@ fn generated_budget_cases_drive_dynamic_output_compaction_trigger() {
     );
 
     for case in cases {
-        // Round-trip through the float the configuration surface actually
-        // carries, so the basis-point conversion is exercised rather than
-        // bypassed.
         let threshold = case.threshold_basis_points as f64 / 10_000.0;
-        // Drive the production helper, not a formula duplicated here.
         let configured =
             crate::provider_input::budget::threshold_budget(case.context_window, threshold);
         let effective =

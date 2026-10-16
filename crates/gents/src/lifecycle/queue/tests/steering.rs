@@ -69,7 +69,7 @@ async fn generated_pending_steering_terminals_retain_signed_admission_without_ou
         let terminal = match case.actions.as_slice() {
             [Action::Enqueue, Action::InterruptBeforeClaim] => Action::InterruptBeforeClaim,
             [Action::Enqueue, Action::AdmissionReject] => Action::AdmissionReject,
-            _ => continue, // Other generated actions need their own native owners.
+            _ => continue,
         };
         covered += 1;
         assert_eq!(case.entry.request_id, case.request_id, "{}", case.name);
@@ -294,8 +294,7 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
             case.name
         );
 
-        // The signed parent supplies the queued-after edge; the enqueue owner
-        // signs the child. Vacate the parent before child claim.
+        // Vacate the parent before child claim.
         let parent_row =
             crate::request_binding::load_agent_request_by_doc_id(&db.node, &parent.doc_id)
                 .await
@@ -334,9 +333,8 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
         let writer = DefraStreamWriter::new(db.node.clone(), db.node_did(), Duration::ZERO);
         lifecycle.begin_owned_execution(&writer).await.unwrap();
 
-        // This is the real owner handoff after claim/begin but before an
-        // AuthoredInputReady stream item has been accepted. The upstream
-        // preparation error/interrupt source is not simulated by this test.
+        // Real owner handoff after claim/begin, before an AuthoredInputReady
+        // stream item is accepted.
         if outcome == crate::lifecycle::RequestTerminalOutcome::Interrupted {
             assert!(case.interrupt_at.is_none(), "{}", case.name);
             crate::interrupt::interrupt_request_by_doc_id(

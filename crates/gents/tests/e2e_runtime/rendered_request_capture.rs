@@ -1,17 +1,3 @@
-//! End-to-end fence for durable rendered-request capture (#840).
-//!
-//! `Proofs/RenderedCapture.lean` proves the order — a provider send is legal
-//! only after the matching `(capture key, canonical request)` is durable — and
-//! `crates/gents/src/agent/loop_stream/tests.rs` fences that order against the
-//! owned loop with an in-process sink. What neither can reach is the claim this
-//! slice actually makes: that the bytes in `RenderedRequest.request_json` are
-//! the bytes the provider received, and that a sink failure stops the HTTP call
-//! rather than merely being logged next to it.
-//!
-//! Both need a real HTTP round trip, so these tests run a full daemon against
-//! the deterministic mock backend and compare the persisted payload with the
-//! body that backend was posted.
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -39,19 +25,8 @@ const CAPTURE_BACKEND_ID: &str = "capture-backend";
 const CAPTURE_AGENT_ID: &str = "capture-behavior";
 const CAPTURE_TOOL: &str = "capture_probe";
 
-/// The production parse-400 body that classifies as `ParseBadRequest` and so
-/// reaches `PreStreamDirective::Repair`. Copied verbatim from
-/// `completion_retry_tape.rs`, which is where it was captured from a real vLLM.
 const PROD_PARSE_400_BODY: &str = r#"{"object":"error","message":"BadRequestError: Error in processing prompt inputs: Expecting value: line 1 column 28 (char 27)","type":"BadRequestError","code":400}"#;
 
-/// The exact bytes the provider received must be the exact bytes on the row.
-///
-/// This is the claim the transport seam exists to make true. Capturing the
-/// rig-assembled request would pass a weaker test — "the row looks like the
-/// request we meant to send" — while the ChatGPT-Codex and Grok transports
-/// rewrite the body underneath it. Comparing against the backend's own
-/// observation is the only version of this assertion that cannot be satisfied
-/// by a second serializer agreeing with itself.
 #[tokio::test]
 async fn the_persisted_request_json_is_the_body_the_provider_received() {
     let backend = MockStreamingBackend::start(
@@ -106,7 +81,6 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
         row["capture_key"]
     );
 
-    // Provenance says, positively, where the bytes were read.
     let provenance = parse_json(&row["provenance_json"]);
     assert_eq!(provenance["capture_seam"], "transport_body");
     assert_eq!(provenance["status"], "captured_only");
@@ -158,13 +132,6 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
     agent.shutdown().await;
 }
 
-/// The fail-closed property, measured where it matters: at the provider.
-///
-/// `capture_failure_blocks_send` says a rejected capture leaves `sent`
-/// unreachable. A sink that logged its failure and let the request through
-/// would still pass every in-process test that only inspects the loop's error;
-/// only the backend's own request count can distinguish "refused" from
-/// "reported".
 #[tokio::test]
 async fn a_failing_capture_sink_issues_no_provider_request() {
     let backend = MockStreamingBackend::start(
@@ -190,10 +157,7 @@ async fn a_failing_capture_sink_issues_no_provider_request() {
         "please must-not-send",
     )
     .await;
-    // Wait for *any* terminal state, then assert both halves separately. If the
-    // zero-request assertion only ran after `lifecycle_state == "failed"`, a
-    // fail-open sink would fail this test on a timeout instead of on the claim
-    // under test, and the diagnostic would point at the wrong thing.
+
     let terminal =
         wait_for_request_terminal_state(db.node.as_ref(), &doc_id, Duration::from_secs(20)).await;
 
@@ -219,18 +183,6 @@ async fn a_failing_capture_sink_issues_no_provider_request() {
     agent.shutdown().await;
 }
 
-/// Redelivering the identical canonical request is a success without a write;
-/// reusing the key for a different one is an integrity error, never an update.
-/// This drives the sink directly because the loop can never produce the second
-/// case — that is the point of proving it here rather than assuming it.
-///
-/// Row counts alone cannot tell "the sink skipped the write" from "the sink
-/// rewrote the row with the same bytes", and the second is not idempotent: it
-/// appends a commit and moves the content anchor this design takes integrity
-/// from. So both outcomes are also measured against the row's `_commits`. The
-/// commit for `request_json` is asserted by name in Rust rather than filtered
-/// for in the query, because `_commits` evaluates its `fieldName` filter in
-/// memory and a malformed one degrades to no filter at all.
 #[tokio::test]
 async fn capture_is_idempotent_and_never_rebinds_a_key() {
     let db = test_db("rendered-request-capture-idempotency").await;
@@ -254,7 +206,6 @@ async fn capture_is_idempotent_and_never_rebinds_a_key() {
          anchor this design uses instead of a stored request_hash: {anchor:?}"
     );
 
-    // Same key, same canonical value, keys reordered: still one fact.
     let mut redelivered = first.clone();
     redelivered.request_json = serde_json::json!({"messages": [{"role": "user"}], "model": "m"});
     sink.capture(redelivered)
@@ -274,10 +225,6 @@ async fn capture_is_idempotent_and_never_rebinds_a_key() {
         the content anchor, must be untouched"
     );
 
-    // Same key and provider body, different provenance: still a different
-    // immutable fact. A future reconstructor trusts AssemblyTrace just as much
-    // as request_json, so accepting this as idempotent would make a false
-    // projection look verified.
     let mut provenance_conflict = first.clone();
     provenance_conflict.provenance_json["status_reason"] =
         Value::String("conflicting provenance".to_string());
@@ -311,7 +258,6 @@ async fn capture_is_idempotent_and_never_rebinds_a_key() {
         "a request-version conflict must not mutate the winning fact"
     );
 
-    // Same key, different canonical value: integrity error, no write.
     let mut conflicting = first.clone();
     conflicting.request_json = serde_json::json!({"model": "m", "messages": []});
     let error = sink
@@ -337,13 +283,6 @@ async fn capture_is_idempotent_and_never_rebinds_a_key() {
     );
 }
 
-/// The regression #2333 exists to fix, over a real store: a session whose
-/// captures grow by one message each turn writes only the new blocks plus a
-/// manifest row, so total capture bytes grow linearly with the conversation
-/// instead of repeating and re-signing it on every call.
-/// Deterministic per-message text: a fixed-seed xorshift64 stream mapped onto
-/// `a..z`. Content has to vary for content-defined boundaries to land; uniform
-/// runs almost never cut, which would make the reuse assertions meaningless.
 fn message_text(seed: u64, len: usize) -> String {
     let mut state = seed;
     let mut out = String::with_capacity(len);
@@ -364,9 +303,6 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
     let mut old_bytes = 0usize;
     let mut new_bytes = 0usize;
     let mut referenced_blocks = 0usize;
-    // The last turn's own write, measured so the per-call bound below binds the
-    // bytes that turn put in the database rather than an average over totals an
-    // earlier assertion already bounds.
     let mut previous_body_bytes = 0usize;
     let mut last_turn_new_content_bytes = 0usize;
     let mut last_turn_row_bytes = 0usize;
@@ -378,9 +314,6 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
             ).collect::<Vec<_>>()
         });
         let mut rendered = rendered_fixture(body.clone());
-        // Storage sharing is session/scoping based, not request based. Exercise
-        // the ordinary case where successive turns are distinct requests in the
-        // same session and must still share blocks.
         rendered.request_id = format!("req-manifest-{turn}");
         rendered.assembly_trace = gents::rendered_request::AssemblyTrace::from_effective_messages(
             gents::rendered_request::AssemblyBuildPath::Budgeted,
@@ -460,9 +393,6 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
             .len();
         let turn_row_bytes = stored.len() + row["provenance_json"].as_str().unwrap().len();
         if turn + 1 == turns {
-            // The last turn's new content is the message its body appends plus
-            // its own fresh single-message trace — a fixed budget that does not
-            // grow with the conversation already behind it.
             last_turn_new_content_bytes =
                 (turn_body_bytes - previous_body_bytes) + turn_trace_bytes;
             last_turn_row_bytes = turn_row_bytes;
@@ -471,9 +401,6 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
         old_bytes += turn_body_bytes + turn_trace_bytes;
         new_bytes += turn_row_bytes;
     }
-    // The linear claim, both directions: the store holds O(turns) blocks while
-    // the references the captures carry total O(turns^2), and a body whose
-    // per-turn growth is one message costs roughly that message's blocks.
     let block_rows = block_count(db.node.as_ref()).await;
     assert!(
         referenced_blocks > turns * (turns + 1) / 2,
@@ -494,12 +421,6 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
         old_bytes > new_bytes * 2,
         "storing each body and trace once must beat repeating them: old={old_bytes}, new={new_bytes}"
     );
-    // The per-call bound, on the write the last turn actually issued: the new
-    // block rows it created plus its own manifest row, against the new content
-    // that turn added. A capture that regressed to writing the whole
-    // conversation — re-storing the history as blocks or falling back to a
-    // full record — pays the body's bytes here, which this fixed content
-    // budget cannot absorb.
     let last_turn_block_bytes =
         block_payload_bytes(db.node.as_ref()).await - blocks_before_last_turn;
     let last_turn_write_bytes = last_turn_block_bytes + last_turn_row_bytes;
@@ -520,8 +441,6 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
     );
 }
 
-/// Total payload bytes currently stored across all capture blocks — the write
-/// amplification one capture is responsible for is the growth of this number.
 async fn block_payload_bytes(node: &EmbeddedNode) -> usize {
     let response = node
         .execute(r#"{ RenderedRequestBlock { payload } }"#)
@@ -546,7 +465,6 @@ async fn block_count(node: &EmbeddedNode) -> usize {
         .unwrap_or_default()
 }
 
-/// The content keys of every stored capture block row.
 async fn stored_block_keys(node: &EmbeddedNode) -> std::collections::BTreeSet<String> {
     let response = node
         .execute(r#"{ RenderedRequestBlock { content_key } }"#)
@@ -567,7 +485,6 @@ async fn stored_block_keys(node: &EmbeddedNode) -> std::collections::BTreeSet<St
         .unwrap_or_default()
 }
 
-/// The stored `request_json` container of one capture row.
 async fn stored_capture_request_json(node: &EmbeddedNode, capture_key: &str) -> String {
     let query = format!(
         r#"{{ RenderedRequest(filter:{{capture_key:{{_eq:"{}"}}}},limit:1){{request_json}} }}"#,
@@ -581,8 +498,6 @@ async fn stored_capture_request_json(node: &EmbeddedNode, capture_key: &str) -> 
         .to_owned()
 }
 
-/// One stored container payload as its capture record, unwrapping the zlib
-/// envelope the writer selects when its size and savings thresholds hold.
 fn stored_payload_record(container: &Value, payload: &str) -> Value {
     let record = container[payload].clone();
     if record["kind"] == "zlib" {
@@ -601,8 +516,6 @@ fn stored_payload_record(container: &Value, payload: &str) -> Value {
     record
 }
 
-/// The ordered content keys one manifest payload references; also asserts the
-/// payload is a manifest, so a full-record fallback fails at the call site.
 fn manifest_payload_keys(container: &Value, payload: &str) -> Vec<String> {
     let record = stored_payload_record(container, payload);
     assert_eq!(
@@ -622,14 +535,6 @@ fn manifest_payload_keys(container: &Value, payload: &str) -> Vec<String> {
         .collect()
 }
 
-/// The longest suffix of `previous`'s completed blocks that `current`
-/// re-references as a contiguous, ordered run.
-///
-/// `previous`'s final block is excluded: it is the body's trailing partial
-/// block, which any appended content legitimately rewrites, so anchoring on it
-/// would report zero reuse for a perfectly re-synchronized edit. The completed
-/// blocks before it cover the unchanged tail bytes and are exactly the ones a
-/// mid-history edit must re-reference.
 fn shared_manifest_suffix(previous: &[String], current: &[String]) -> usize {
     let completed = previous.len().saturating_sub(1);
     (1..=completed.min(current.len()))
@@ -642,8 +547,6 @@ fn shared_manifest_suffix(previous: &[String], current: &[String]) -> usize {
         .unwrap_or(0)
 }
 
-/// One turn of the manifest harness: a body over the given messages and a
-/// fresh single-message trace, under its own turn-indexed capture key.
 fn manifest_turn_fixture(body: Value, turn: usize) -> RenderedCompletionRequest {
     let mut rendered = rendered_fixture(body);
     rendered.request_id = format!("req-manifest-resync-{turn}");
@@ -676,20 +579,6 @@ fn manifest_turn_fixture(body: Value, turn: usize) -> RenderedCompletionRequest 
     rendered
 }
 
-/// The compaction shape over a real store: a mid-history edit re-uses the
-/// intact tail's blocks (#2333).
-///
-/// `encoding::mid_body_insertion_resynchronizes_chunk_boundaries` pins the
-/// property in memory; this fences it end to end, where it is the whole point
-/// of the format. A session captures a growing conversation, and then one
-/// capture replaces an early span of it with a summary while keeping the tail
-/// verbatim — exactly what compaction does to the next provider body. Because
-/// boundaries are content-defined, the boundaries after the edit re-synchronize
-/// onto the unchanged tail bytes, so the post-edit capture re-references the
-/// tail's existing block rows and stores only the replaced span's blocks, the
-/// seam and its own new tail. A chunker whose boundaries depended on position,
-/// or a writer that fell back to a full record, would re-store everything
-/// after the edit.
 #[tokio::test]
 async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
     const TURNS: usize = 20;
@@ -723,8 +612,6 @@ async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
     );
     let blocks_before = stored_block_keys(db.node.as_ref()).await;
 
-    // The edit: the first `KEPT_FROM` messages become one short summary, the
-    // tail stays byte-identical, and one new message follows it.
     let edited_messages = std::iter::once(serde_json::json!({
         "role":"user","content": message_text(7001, 2 * 1024)
     }))
@@ -742,18 +629,12 @@ async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
     let edited_stored = stored_capture_request_json(db.node.as_ref(), &edited_key).await;
     let edited_container: Value = serde_json::from_str(&edited_stored).unwrap();
     let post_edit_body = manifest_payload_keys(&edited_container, "request_body");
-    // The provenance payload must stay a manifest too: no full-record fallback
-    // on either half of the capture.
     manifest_payload_keys(&edited_container, "provenance_payload");
 
-    // The edit is real: a block of the replaced span is not referenced after it.
     assert!(
         !post_edit_body.contains(&pre_edit_body[0]),
         "the post-edit manifest must not reference a block of the replaced span"
     );
-    // The load-bearing property, measured on the store: the pre-edit tail's
-    // blocks are re-referenced verbatim, in order, because boundaries past the
-    // edit re-synchronized onto the unchanged bytes.
     let shared_tail = shared_manifest_suffix(&pre_edit_body, &post_edit_body);
     assert!(
         shared_tail >= 4,
@@ -761,8 +642,6 @@ async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
          content-defined boundaries did not re-synchronize after the mid-history edit",
         pre_edit_body.len()
     );
-    // The edit pays for itself: only the summary, the seam and the new tail
-    // become block rows, a budget that does not scale with the body.
     let blocks_after = stored_block_keys(db.node.as_ref()).await;
     let new_blocks: Vec<_> = blocks_after.difference(&blocks_before).collect();
     assert!(
@@ -778,7 +657,6 @@ async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
         "new block rows are exactly the rows the edit added"
     );
 
-    // And the edited capture still decodes to exactly what was captured.
     assert_eq!(
         gents::rendered_request::decode_capture_json_embedded(
             db.node.as_ref(),
@@ -805,7 +683,6 @@ async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
 
 /// Rows written as v2 delta chains are immutable history: the writer no longer
 /// produces them (#2333) but they must keep decoding through their own arm.
-/// The chain is stored by hand, exactly as a v2 writer would have left it.
 #[tokio::test]
 async fn stored_v2_delta_rows_still_decode_through_their_own_arm() {
     let db = test_db("rendered-request-stored-v2-delta").await;
@@ -877,8 +754,6 @@ async fn stored_v2_delta_rows_still_decode_through_their_own_arm() {
         .unwrap(),
         canonical(&next_body)
     );
-    // The same row read as a v3 manifest must not silently reinterpret the
-    // delta record: version dispatch stays fail-closed.
     assert!(gents::rendered_request::decode_capture_json_embedded(
         db.node.as_ref(),
         3,
@@ -1044,8 +919,6 @@ async fn legacy_capture_remains_readable_and_idempotent_after_format_upgrade() {
         commit_set(db.node.as_ref(), &rendered.capture_key).await,
         before
     );
-    // A missing format discriminator is not legacy v1. Such a row cannot be
-    // decoded by readers and must not authorize a new send on redelivery.
     let mut missing_version = rendered.clone();
     missing_version.capture_key.push_str("-missing-version");
     let malformed = mutation
@@ -1071,31 +944,6 @@ async fn legacy_capture_remains_readable_and_idempotent_after_format_upgrade() {
     );
 }
 
-/// Two attempts at one turn are two facts, and `attempt` is the only thing that
-/// makes them so.
-///
-/// `RenderedCapture.attempt_distinguishes_facts` is proven in Lean, and for a
-/// while nothing in Rust depended on it: a mutation probe that replaced the
-/// loop's `attempt` with a literal `0` compiled and failed no test. The in-crate
-/// seam test
-/// (`agent::loop_stream::tests::capture_seam_reports_distinct_attempts_and_the_repair_build_path`)
-/// now fences the loop's *arguments*; this fences the *durable rows*, which is
-/// the thing #840 actually promises, and it does so through the full daemon,
-/// transport, and DefraDB path where the counter has to survive a task-local
-/// hand-off from the loop to the capturing HTTP client.
-///
-/// The scenario is deliberately the weakest one: a 503 that is retried with a
-/// byte-identical request. Nothing about the payload distinguishes the two
-/// provider calls, so if `attempt` did not reach the key, the sink would find
-/// the key already bound to the identical canonical value, report an idempotent
-/// success, and leave exactly one row behind — a durable fact record that
-/// silently under-counts what the provider was actually sent.
-///
-/// The scope assertion is load-bearing for the same reason. `label_for` treats a
-/// `(turn 0, attempt 0)` arm as the start of a new completion loop, so an
-/// `attempt` pinned to `0` does not merely collapse the rows — it allocates a
-/// second scope, `inference.2`, and produces two rows that look plausible until
-/// you read their coordinates.
 #[tokio::test]
 async fn a_retried_attempt_is_its_own_durable_fact() {
     let marker = "capture-attempt-fence";
@@ -1138,9 +986,6 @@ async fn a_retried_attempt_is_its_own_durable_fact() {
         2,
         "one refused attempt and one recovery: {observed:?}"
     );
-    // The premise the fence rests on: a transport retry resamples the same
-    // request, so the two provider calls are byte-identical and `attempt` is
-    // the only component of the capture key that can separate them.
     assert_eq!(
         canonical(&observed[0]),
         canonical(&observed[1]),
@@ -1337,14 +1182,6 @@ async fn retry_continues_recorded_tool_progress_without_republishing_input() {
     agent.shutdown().await;
 }
 
-/// Every turn of a multi-turn, tool-using request is its own ordered fact, and
-/// each one is the body the provider received.
-///
-/// `turn_index` is the other half of what the single-turn test cannot reach: one
-/// request, one completion loop, several provider calls, each strictly extending
-/// the last. The assertion that turn 1 carries the tool call id and the tool's
-/// output is what makes the ordering meaningful — a capture that recorded turn
-/// 1's coordinates but turn 0's bytes would satisfy the coordinate check alone.
 #[tokio::test]
 async fn a_multi_turn_tool_using_request_captures_every_turn_in_order() {
     const TOOL_OUTPUT: &str = "MULTI_TURN_TOOL_OUTPUT_47bd";
@@ -1431,7 +1268,6 @@ async fn a_multi_turn_tool_using_request_captures_every_turn_in_order() {
         );
     }
 
-    // Turn 1 is turn 0 plus the tool exchange, not a re-render of turn 0.
     let turn_zero = message_count(&rows[0]);
     let turn_one = message_count(&rows[1]);
     assert!(
@@ -1452,8 +1288,6 @@ async fn a_multi_turn_tool_using_request_captures_every_turn_in_order() {
         "turn 0 was sent before the tool ran; its body cannot contain the result"
     );
 
-    // The trace records the same exchange in native form, keyed by call id: this
-    // is the leak set a reconstructor overlays onto rebuilt `AgentMessage` rows.
     let threaded = serde_json::to_string(
         &parse_json(&rows[1]["provenance_payload_json"])["threaded_tool_results"],
     )
@@ -1463,12 +1297,6 @@ async fn a_multi_turn_tool_using_request_captures_every_turn_in_order() {
         "the assembly trace must carry the threaded tool result verbatim: {threaded}"
     );
 
-    // #1066: the provenance manifest carries the exact admission join — the
-    // `call_id`/`call_seq` the admission registry minted for the call this
-    // capture preceded. This is the Rust fence for the task-local plumbing:
-    // `next_call` writes the slot, the transport-side capture reads it, and
-    // the values must be the ones persisted on the request's `InferenceCall`
-    // rows, not an ordinal guess.
     let calls = inference_calls(db.node.as_ref(), "req-capture-multi-turn").await;
     let inference_call_seqs: Vec<i64> = calls
         .iter()
@@ -1508,22 +1336,9 @@ async fn a_multi_turn_tool_using_request_captures_every_turn_in_order() {
     agent.shutdown().await;
 }
 
-/// A repaired attempt is a second fact whose bytes genuinely differ, and the row
-/// says which builder produced it.
-///
-/// `PreStreamDirective::Repair` rewrites the assembled provider input in place —
-/// it normalizes tool-call arguments — and rebuilds with `build_request` rather
-/// than `build_budgeted_request`, so it also skips the output clamp. Both make
-/// the repaired attempt a different provider request from attempt 0 with *no
-/// transcript write in between*: nothing in `AgentMessage` records that the
-/// arguments the provider saw the second time had their control characters
-/// stripped. Without `build_path` on the row a reconstructor would replay the
-/// budgeted path and report a false mismatch.
 #[tokio::test]
 async fn a_repaired_attempt_is_a_second_fact_with_a_different_canonical_request() {
     let marker = "capture-repair";
-    // A raw control character in the tool-call arguments. `repair_provider_input`
-    // strips it, which is what makes attempt 1's body differ from attempt 0's.
     let poisoned_arguments = format!("{{\"note\":\"bad{}value\"}}", '\u{0007}');
     let backend = MockStreamingBackend::start_with_plans(
         CAPTURE_MODEL,
@@ -1563,11 +1378,6 @@ async fn a_repaired_attempt_is_a_second_fact_with_a_different_canonical_request(
         &format!("please use the tool {marker}"),
     )
     .await;
-    // Wait for *any* terminal state and assert which one separately. A defect
-    // that made the two attempts collide on one capture key ends this request
-    // as `failed` — the sink rejecting the rebinding, correctly — and waiting
-    // for "completed" would report that as a lifecycle timeout instead of as
-    // the coordinate claim this test is about.
     let terminal =
         wait_for_request_terminal_state(db.node.as_ref(), &doc_id, Duration::from_secs(20)).await;
     assert_eq!(
@@ -1621,8 +1431,6 @@ async fn a_repaired_attempt_is_a_second_fact_with_a_different_canonical_request(
         original_arguments, repaired_arguments,
         "the difference must be the repaired tool-call arguments"
     );
-    // The wire form is a JSON string, so the control character travels as the
-    // six-character escape `\u0007` rather than as a raw byte.
     assert!(
         original_arguments.contains(r"bad\u0007value"),
         "attempt 0 must carry the arguments the model actually emitted, control \
@@ -1787,9 +1595,6 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
         );
     }
 
-    // The premise: turn 0 starts under budget, so the compaction observed at
-    // turn 1 is caused by the tool result and not by a preamble that has since
-    // outgrown the window.
     let turn_zero_tokens =
         gents_loop::provider_input::estimate_input_body(observed[0].clone()).unwrap();
     assert!(
@@ -1798,7 +1603,6 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
          input tokens against a budget of {input_budget}"
     );
 
-    // Turn 1: the compacted list is what the provider was shown.
     let turn_one = row_text(&rows[1]);
     assert!(
         !turn_one.contains(BIG_MARKER),
@@ -1811,7 +1615,6 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
         turn_one.len()
     );
 
-    // ...and the trace records that same narrowed list, in native form.
     let trace = parse_json(&rows[1]["provenance_payload_json"]);
     let effective = serde_json::to_string(&trace["effective_messages"]).expect("trace messages");
     assert!(
@@ -1819,9 +1622,6 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
         "the assembly trace must be the post-compaction message list"
     );
 
-    // Turn 2: assembled from the sticky compacted list. The first result is
-    // still a stub, and — the sharp half — the second result is verbatim, which
-    // is only possible if turn 2 was already under budget.
     let turn_two = row_text(&rows[2]);
     assert!(
         !turn_two.contains(BIG_MARKER),
@@ -2578,10 +2378,6 @@ async fn rolling_chunk_failure_does_not_advance_session_and_retry_commits_once()
     agent.shutdown().await;
 }
 
-// ===== helpers =====
-
-/// A tool with a fixed name and a fixed output.
-///
 /// `ToolDyn` is implemented directly rather than through `Tool` so the tool
 /// never parses its arguments. The repair fence deliberately streams a tool call
 /// whose arguments carry a raw control character, and a parsing tool would
@@ -2638,7 +2434,6 @@ fn coordinates(rows: &[Value]) -> Vec<(&str, i64, i64)> {
         .collect()
 }
 
-/// The builder that produced the captured request, as recorded in the manifest.
 fn build_path(row: &Value) -> String {
     parse_json(&row["provenance_json"])["assembly_trace"]["build_path"]
         .as_str()
@@ -2646,17 +2441,10 @@ fn build_path(row: &Value) -> String {
         .to_string()
 }
 
-/// The captured body re-serialized, for substring assertions. Control characters
-/// come back as `\uXXXX` escapes, exactly as they went out on the wire.
 fn row_text(row: &Value) -> String {
     serde_json::to_string(&parse_json(&row["request_json"])).expect("captured body re-serializes")
 }
 
-/// The `arguments` string the captured body carried for one tool call id.
-///
-/// The wire form is a JSON *string* holding the argument object, so this is the
-/// exact text the provider had to parse — which is what the parse-400 and its
-/// repair are about.
 fn tool_call_arguments(row: &Value, tool_call_id: &str) -> String {
     let body = parse_json(&row["request_json"]);
     let messages = body["messages"]
@@ -2679,7 +2467,6 @@ fn tool_call_arguments(row: &Value, tool_call_id: &str) -> String {
     panic!("captured body carries no tool call {tool_call_id}: {body}");
 }
 
-/// How many messages the captured body carried.
 fn message_count(row: &Value) -> usize {
     parse_json(&row["request_json"])["messages"]
         .as_array()

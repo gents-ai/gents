@@ -30,8 +30,6 @@ fn replace_node_rows_with_sources<T>(
     dest.extend(incoming);
 }
 
-// Both the incoming store and retained rows use this policy in place, avoiding
-// a full snapshot clone just to share the scope filter.
 macro_rules! retain_node_scope {
     ($store:expr, $node_did:expr, $keep_target:expr) => {{
         let rows = $store;
@@ -243,10 +241,6 @@ macro_rules! retain_node_scope {
 }
 
 impl ClientStore {
-    /// Replace this agent's operator-owned config and runtime readiness with
-    /// rows loaded from the runtime GraphQL endpoint. Local-only leftovers
-    /// (wizard writes that never reached the agent) are dropped so the desktop
-    /// matches the process that will actually run inference.
     pub fn overlay_node_operator_config(&self, node_did: &str, incoming: &ClientStore) -> Self {
         let mut rows = self.to_rows();
         if incoming
@@ -669,9 +663,6 @@ impl ClientStore {
         ClientStore::from_rows(rows)
     }
 
-    /// Replace one agent's authoritative projection instead of additively
-    /// merging it. This is used for scoped reloads and delete recovery so rows
-    /// absent from the database snapshot cannot survive indefinitely in memory.
     pub fn replace_node_scope(&self, node_did: &str, snapshot: ClientStore) -> Self {
         let mut snapshot = snapshot;
         retain_node_scope!(&mut snapshot, node_did, true);
@@ -693,10 +684,9 @@ impl ClientStore {
         let mut rows = self.to_rows();
         let patch_rows = patch.to_rows();
 
-        // Operator GraphQL supplies the canonical agent scope after a local
-        // submit may already have installed an unscoped optimistic row. Let
-        // the scoped document replace that placeholder; keeping both makes
-        // agent-aware turn lookup select the older processing row first.
+        // Operator-supplied scoped requests must replace the unscoped
+        // optimistic row installed at submit time; keeping both makes
+        // agent-aware turn lookup pick the stale processing row.
         let scoped_request_ids = patch_rows
             .requests
             .iter()

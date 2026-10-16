@@ -3,13 +3,6 @@ import Proofs.Conformance.Contracts.Json.ClientRuntime
 import Proofs.Conformance.ContractCases
 import Proofs.Background.ToolOutputCases
 
-/-!
-# Background Work JSON
-
-Serializers and fixed witness rows for background-tool and transcript
-contracts.
--/
-
 namespace Conformance.Contracts
 
 open Conformance.ContractCases
@@ -37,9 +30,6 @@ def r4cReadToolOutputCanonicalSourceReconstructionJson
     ++ "\"cases\":" ++ jsonArray (witness.cases.map toolOutputProjectionCaseJson)
     ++ "}"
 
--- Open and closed reads share the canonical immutable tool source. The
--- executable projection cases separately pin missing/conflict rejection and
--- committed-extent stability under a late suffix.
 def r4cReadToolOutputCanonicalSourceReconstruction :
     R4cWitnesses.ReadToolOutputCanonicalSourceReconstruction :=
   let mkCase (name : String) (world : CanonicalOutput.Execution.World)

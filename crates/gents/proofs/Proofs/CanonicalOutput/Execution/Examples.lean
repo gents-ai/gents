@@ -49,8 +49,6 @@ def conflictedFutureOutput : World :=
        { raw 100 0 0 99 with flush := some ⟨0,
           [⟨0, 1, some { block := 0, part := 0, kind := .text }⟩], [66]⟩ }] }
 
-/-- Canonical conflicts and future-dated records require their own integrity
-handling, but cannot prevent the current owner from winning a due renewal CAS. -/
 theorem explicit_renewal_ignores_conflicted_future_output :
     succeeds (renew conflictedFutureOutput 7 10) = true := by
   native_decide
@@ -433,8 +431,6 @@ theorem exact_duplicate_terminal_envelopes_are_idempotent :
     terminalSelectionValid duplicateHeaderOnlyWorld (.message 200) = true := by
   native_decide
 
-/-- Generation 7 publishes its authored input, then its lease expires and the
-same physical request is reclaimed as generation 8. -/
 def reclaimedAfterAuthored : Option World := do
   let published ← (publishAuthored (world 5) 7 authored authoredMessage).toOption
   let expired := { published with lease := { published.lease with now := 20 } }

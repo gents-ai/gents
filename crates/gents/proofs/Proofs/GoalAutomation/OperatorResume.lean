@@ -1,11 +1,9 @@
 import Proofs.GoalAutomation
 
-/-! #1354: transaction-boundary refinement, not a new Goal status machine.
-`children` projects existing AgentRequest rows; no new durable registry.
-A binding represents the immutable semantic fingerprint prepared by the one
+/-- `children` projects existing AgentRequest rows; no new durable registry. A
+binding represents the immutable semantic fingerprint prepared by the one
 existing goal-continuation RequestSpec builder, after authenticated ancestry
-validation. Readiness is deliberately absent: this slice is ready-backend only.
--/
+validation. Readiness is deliberately absent: this slice is ready-backend only. -/
 namespace GoalAutomation.OperatorResume
 
 structure Binding where

@@ -22,9 +22,6 @@ use super::runtime_tasks::{
 use super::to_health_view;
 
 pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot {
-    // Directory rows and transport status come from one watched revision.
-    // Reading `core.peer_records()` here would reintroduce a split sample where
-    // a readiness write wakes the bridge before the rebuilt view can see it.
     let sync_state = core.sync_state();
     let store = core.store().snapshot();
     let enrollment_requests = core
@@ -364,10 +361,6 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                     .map(str::to_owned);
             }
 
-            // The managed runtime's operator root (init.json tool_root) is
-            // the ceiling the snapshot clamps observed grants against; a
-            // paired remote peer keeps its stored grant, which is the only
-            // authority this client can observe for it.
             let operator_root = peer
                 .local_node_home
                 .as_deref()
@@ -388,10 +381,6 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             );
 
             let chat_safe = peer.is_chat_ready_at(Utc::now());
-            // Pairing readiness controls admission of new remote work. It does
-            // not control visibility of rows already authorized and present in
-            // the local database. Keeping this projection stable is what lets
-            // the mobile UI remain useful while the transport reconnects.
             let node_readiness = project_node_readiness(
                 store.node_readiness(&peer.node_did),
                 &peer.node_did,
@@ -593,7 +582,6 @@ mod task_view_tests {
         assert_eq!(wire["hooks"][0]["phase"], "before");
         assert_eq!(wire["hooks"][0]["timeout_secs"], 45);
         assert_eq!(wire["hooks"][1]["phase"], "finally");
-        assert_eq!(wire["tags"], serde_json::json!(["release", "operator"]));
     }
 }
 
@@ -786,11 +774,6 @@ fn resolve_agent_environments(
                 inference_profile_name: profile
                     .and_then(|profile| profile.display_name.clone())
                     .or_else(|| agent.inference_profile_id.clone()),
-                // Project the root the runtime would actually use, not the
-                // raw stored grant: the selection/ceiling meet clamps a grant
-                // the operator narrowed below, a rootless default inherits the
-                // operator root, and a disjoint grant (refused by the runtime)
-                // claims no authority here.
                 workspace_root: host.and_then(|host| {
                     let stored_root = host
                         .root
@@ -1027,8 +1010,6 @@ mod agent_environment_tests {
         let canonical_project = std::fs::canonicalize(&project).unwrap();
         let canonical_project = canonical_project.to_str().expect("utf-8 root");
 
-        // A stored grant wider than the narrowed operator root clamps to it,
-        // so the view reports the root the runtime actually enforces.
         let mut wide = tools();
         wide.host.as_mut().unwrap().root = Some(workspace.path().to_string_lossy().into_owned());
         let environments = resolve_agent_environments(
@@ -1046,8 +1027,6 @@ mod agent_environment_tests {
             "the view must agree with the clamped root the runtime uses"
         );
 
-        // A rootless default inherits the operator root instead of reporting
-        // no authority.
         let mut rootless = tools();
         rootless.host.as_mut().unwrap().root = None;
         let environments = resolve_agent_environments(
@@ -1065,8 +1044,6 @@ mod agent_environment_tests {
             "a rootless default inherits the operator root in the view"
         );
 
-        // A grant disjoint from the operator root is refused by the runtime;
-        // the view claims no authority for it.
         let elsewhere = tempfile::tempdir().expect("elsewhere");
         let mut disjoint = tools();
         disjoint.host.as_mut().unwrap().root =

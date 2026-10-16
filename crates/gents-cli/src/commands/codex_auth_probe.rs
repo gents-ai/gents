@@ -53,7 +53,6 @@ pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
     Ok(())
 }
 
-/// Probe one account and render its block (after the label).
 async fn probe_account(
     credential: gents::oauth_credential::OAuthCredential,
     node_did: &str,

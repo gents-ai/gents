@@ -1,8 +1,5 @@
-//! Why a request executed: interactive (a human waiting) or scheduled (a
-//! trigger, cron, or background wakeup). Moved out of `gents::lifecycle`
-//! (which stays native) because `CompletionRetryPolicy::default_for_origin`
-//! needs it and lives in the loop's closure; every other lifecycle concept
-//! (claims, generations, the request document itself) stays native.
+//! Interactive (a human waiting) or scheduled (a trigger, cron, or background
+//! wakeup) execution origin.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionOrigin {

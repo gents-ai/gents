@@ -1,7 +1,3 @@
-//! Fences for #729: grep bounds per-file work — oversized files and binary
-//! files are skipped (and counted), and case-insensitive matching keeps
-//! working for both ASCII and non-ASCII needles.
-
 use gents_fs_runner::execute_request_with_base;
 use gents_fs_runner::protocol::{GrepArgs, NativeFsRunnerRequest};
 use serde_json::Value;
@@ -65,9 +61,6 @@ fn grep_case_insensitive_non_ascii_needle_still_matches() {
 
 #[test]
 fn grep_explicit_single_file_over_size_cap_is_still_searched() {
-    // The 2 MiB per-file cap is a tree-walk guard. A file the caller names
-    // explicitly must be searched (the byte budget still bounds it honestly),
-    // not silently skipped with returned_count=0.
     let root = unique_root("explicit-large");
     let mut big = String::from("needle at the top\n");
     big.push_str(&"padding\n".repeat(400_000)); // ~3.2 MiB
@@ -125,8 +118,6 @@ fn grep_explicit_file_over_byte_budget_reports_exhaustion_not_silence() {
 
 #[test]
 fn grep_searches_non_utf8_text_files_lossily() {
-    // NUL-free non-UTF-8 text (e.g. Latin-1 logs) is deliberately decoded
-    // lossily and searched rather than silently skipped.
     let root = unique_root("latin1");
     std::fs::write(root.join("legacy.log"), b"caf\xe9 needle here\n").unwrap();
 

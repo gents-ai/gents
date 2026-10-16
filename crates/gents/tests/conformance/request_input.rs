@@ -12,8 +12,6 @@ fn lean_request_inputs_decode_without_losing_explicit_issuance_facts() {
         let input: RequestInput = serde_json::from_value(case["input"].clone())
             .unwrap_or_else(|error| panic!("{name}: typed input: {error}"));
         let encoded = serde_json::to_value(&input).unwrap();
-        // The model emits nulls/empty lists; compact authoring omits them.
-        // Every populated field must survive the production serializer exactly.
         for (field, value) in case["input"].as_object().unwrap() {
             if !value.is_null() && value.as_array().is_none_or(|xs| !xs.is_empty()) {
                 if field == "queue" {
@@ -116,15 +114,13 @@ fn signed_request_input_fields_match_lean_bytes() {
             expected.as_slice(),
             "{name}: real signing owner must use Lean's typed-input framing"
         );
-        // The next immutable semantic is execution_origin, encoded as a present
-        // optional field. This also rejects extra fields in the input segment.
+        // Next immutable semantic: execution_origin (present optional field);
+        // also rejects extra fields in the input segment.
         assert_eq!(fields[start + expected.len()], vec![1], "{name}");
         assert_eq!(fields[start + expected.len() + 1], b"interactive", "{name}");
     }
 }
 
-/// The source-authentication observation belongs to existing admission/ACP.
-/// This exercises its workspace tuple boundary, not a test-local resolver.
 #[test]
 fn lean_workspace_references_preserve_exact_owner_and_attenuate_authority() {
     fn lineage(value: &serde_json::Value) -> gents::lifecycle::WorkspaceLineage {

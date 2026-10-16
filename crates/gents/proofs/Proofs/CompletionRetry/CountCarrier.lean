@@ -25,11 +25,6 @@ def inputKinds : Field → List Kind
   | .list => [.array]
   | .relation | .unsupported => []
 
-/-- Native DateTime write arguments are text; DefraDB parses that text as
-RFC3339 and renders stored DateTime values as RFC3339. A canonical decimal
-string is not RFC3339. Other admitted count encodings have a storage witness
-(including whole-valued floating fields, returned as JSON integers). These
-external scalar constraints are bound by real storage conformance cases. -/
 def storageAdmits (field : Field) (_encoding : Encoding) : Bool :=
   field != .dateTime
 
@@ -40,9 +35,6 @@ def admitsEncoding (field : Field) (encoding : Encoding) : Bool :=
 def canCarry (field : Field) : Bool :=
   admitsEncoding field .integer || admitsEncoding field .decimal
 
-/-- Encodings classify JSON integers and canonical decimal strings separately.
-A noncanonical string, fractional number, null, bool, array or object has no
-count encoding. Bounds are checked before either provenance consumes it. -/
 def parseCount (encoding : Option Encoding) (value maximum : Nat) : Option Nat :=
   if encoding.isSome && 0 < value && value ≤ maximum then some value else none
 
@@ -52,9 +44,6 @@ inductive WireValue where
   | other (json : String)
   deriving Repr
 
-/-- The decimal spelling is ASCII, unsigned, and has no redundant leading
-zero. Numeric JSON fractions and exponent spellings stay outside the integer
-channel, matching serde_json's integer representation rather than coercing. -/
 def canonicalNat (text : String) : Option Nat :=
   if text.isEmpty || !(text.toList.all (fun c => '0' ≤ c && c ≤ '9')) ||
       (text.startsWith "0" && text != "0") then none
@@ -79,10 +68,6 @@ theorem noncanonical_decimal_rejected :
 def carries (field : Field) (encoding : Encoding) (value maximum : Nat) : Prop :=
   admitsEncoding field encoding = true ∧ parseCount (some encoding) value maximum = some value
 
-/-- Admission means some successful native input can carry a count, not that
-all values of the field type are counts or that every large integer survives
-floating-point storage. Ten is representable by every admitted scalar,
-including hex-encoded Blob text. -/
 theorem admission_iff_witness (field : Field) (maximum : Nat) (h : 10 ≤ maximum) :
     canCarry field = true ↔ ∃ encoding value, carries field encoding value maximum := by
   constructor

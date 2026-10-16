@@ -1,6 +1,5 @@
 //! One turn with the author: a user message on the author's session, and
-//! the text it answered with. The interview and the pilot take a [`Turn`];
-//! production sends it through the chat turn function, tests script it.
+//! the text it answered with.
 
 use anyhow::{Context, Result};
 
@@ -12,18 +11,11 @@ use crate::{create_agent_request, RequestSubmitOptions};
 
 #[async_trait::async_trait]
 pub(crate) trait Turn {
-    /// Send one user turn on the author's session; return the author's text.
     async fn send(&mut self, content: &str) -> Result<String>;
     fn session_id(&self) -> &str;
-    /// Whether the author's reply already reached the operator's terminal
-    /// while it arrived; the interview prints it otherwise.
     fn shows_replies(&self) -> bool;
 }
 
-/// A turn on the served home, as `gents chat` sends one: submitted on the
-/// session with `agent_id`, followed until the response lands. Its
-/// progress and the reply print as they arrive, unless `quiet`: then the
-/// turn is followed without writing to stdout, as `gents chat --json` does.
 pub(crate) struct LiveTurn {
     pub(crate) graphql: gents::config_client::GraphqlEndpoint,
     pub(crate) node_did: String,
@@ -91,12 +83,6 @@ impl Turn for LiveTurn {
 /// Replies stated up front, and every turn sent, for the loop's tests.
 #[cfg(test)]
 pub(crate) struct ScriptedTurn {
-    replies: std::collections::VecDeque<String>,
-    pub(crate) sent: Vec<String>,
-}
-
-#[cfg(test)]
-impl ScriptedTurn {
     pub(crate) fn new<S: Into<String>>(replies: impl IntoIterator<Item = S>) -> Self {
         Self {
             replies: replies.into_iter().map(Into::into).collect(),
@@ -124,25 +110,3 @@ impl Turn for ScriptedTurn {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{LiveTurn, Turn};
-
-    fn live(quiet: bool) -> LiveTurn {
-        LiveTurn {
-            graphql: gents::config_client::GraphqlEndpoint::anonymous("http://localhost:0/graphql"),
-            node_did: "did:key:owner".to_owned(),
-            agent_id: "prompt-proposer".to_owned(),
-            session_id: "session".to_owned(),
-            timeout_secs: 1,
-            poll_secs: 1,
-            quiet,
-        }
-    }
-
-    #[test]
-    fn a_quiet_live_turn_shows_no_replies() {
-        assert!(live(false).shows_replies());
-        assert!(!live(true).shows_replies());
-    }
-}

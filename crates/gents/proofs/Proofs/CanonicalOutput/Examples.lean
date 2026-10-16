@@ -1,7 +1,7 @@
 import Proofs.CanonicalOutput.Terminal
 import Proofs.RequestExecutionLease.Transition
 
-/-! Executable witnesses for the new model, not regenerated Rust fixtures. -/
+/-! Executable witnesses. -/
 namespace CanonicalOutput.Examples
 
 local instance {ε α : Type} [DecidableEq ε] [DecidableEq α] :
@@ -19,7 +19,6 @@ def argumentDeclaration : Declaration :=
   { block := 1, part := 0, kind := .arguments, tool := some ⟨"call", none, "child"⟩ }
 def laterTextDeclaration : Declaration := { block := 2, part := 0, kind := .text }
 
-/-- Text followed by deliberately incomplete argument JSON (`{`). -/
 def finalFlush : Segment :=
   { id := 100
     coordinate := coordinate
@@ -101,8 +100,6 @@ def delegatedFlush : Segment :=
                        ⟨1, 2, some argumentDeclaration⟩], [65, 123, 125]⟩
     close := some (.closed .complete 1 [1, 2]) }
 
-/-- Document ACP cannot give a delegate stream 1's bytes while hiding stream 0
-inside the same document. A PayloadRef is not a smaller authorization unit. -/
 theorem argument_document_also_contains_other_content :
     reconstructPayload [delegatedFlush] [] ⟨100, 1⟩ =
       .ok (argumentDeclaration, [123, 125]) ∧

@@ -22,8 +22,8 @@ pub(crate) async fn append_background_tool_completion(
     reason: Option<&str>,
     wake: crate::lifecycle::RequestHopCause,
 ) -> Result<()> {
-    // Load the parent request up front so the completion notification is stamped
-    // with the parent session's owning node_did.
+    // Load the parent request so the notification is stamped with the
+    // parent session's owning node_did.
     let parent_request = crate::request_binding::load_agent_request(node, parent_request_id)
         .await?
         .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} not found"))?;
@@ -44,7 +44,7 @@ pub(crate) async fn append_background_tool_completion(
     };
     // A published notice is replayed exactly (Lean ToolDelivery
     // notification replay), so a redrive renders with the budget that notice
-    // was rendered under, not whatever the configuration says now.
+    // was rendered under.
     let published_budget = existing_text
         .as_deref()
         .and_then(|stored| published_notification_budget(stored, &render));
@@ -117,10 +117,9 @@ async fn stored_notification_text(
     message.rag_text()
 }
 
-/// The summary budget an already published notice was rendered under: the
-/// unescaped length of its `<result>` body, with or without a truncation
-/// marker, whichever re-renders the stored text exactly. `None` when it
-/// matches neither.
+/// The summary budget an already published notice was rendered under:
+/// the unescaped length of its `<result>` body, with or without a truncation
+/// marker. `None` when it matches neither.
 fn published_notification_budget(
     stored: &str,
     render: &impl Fn(usize) -> (String, Vec<gents_protocol::output::PresentationPart>),

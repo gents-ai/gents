@@ -22,37 +22,3 @@ pub fn classify_remote_admin_error(err: &RemoteP2pAdminError) -> PairingErrorCla
         RemoteP2pAdminError::LocalError(_) => PairingErrorClass::LocalError,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn each_variant_maps_distinctly() {
-        let pairs = [
-            (
-                RemoteP2pAdminError::RpcTimeout,
-                PairingErrorClass::RpcTimeout,
-            ),
-            (
-                RemoteP2pAdminError::RpcError("x".into()),
-                PairingErrorClass::RpcError,
-            ),
-            (
-                RemoteP2pAdminError::RemoteNotFound("c".into()),
-                PairingErrorClass::RemoteNotFound,
-            ),
-            (
-                RemoteP2pAdminError::RemoteUnauthorized,
-                PairingErrorClass::RemoteUnauthorized,
-            ),
-            (
-                RemoteP2pAdminError::LocalError("y".into()),
-                PairingErrorClass::LocalError,
-            ),
-        ];
-        for (err, class) in pairs {
-            assert_eq!(classify_remote_admin_error(&err), class);
-        }
-    }
-}

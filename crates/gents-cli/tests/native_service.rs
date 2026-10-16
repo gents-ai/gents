@@ -88,12 +88,12 @@ fn mac_loaded_but_exited_job_is_not_running() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let config = config(temp.path(), "gents");
     let runner = ScriptedRunner::with_outputs([
-        output(true, "501", ""),                      // install: id
-        ok(),                                         // install: disable
-        output(true, "501", ""),                      // status: id
-        output(true, "state = exited\npid = 44", ""), // status: print
-        output(true, "501", ""),                      // status: id
-        output(true, "{}", ""),                       // status: print-disabled
+        output(true, "501", ""),
+        ok(),
+        output(true, "501", ""),
+        output(true, "state = exited\npid = 44", ""),
+        output(true, "501", ""),
+        output(true, "{}", ""),
     ]);
     let service = manager(config, NativeServicePlatform::Macos, runner);
     service.install()?;
@@ -133,11 +133,11 @@ fn failed_stop_prevents_restart_and_preserves_definition_and_home() -> Result<()
     let config = config(temp.path(), "gents");
     fs::write(config.home.join("durable.txt"), b"keep")?;
     let runner = ScriptedRunner::with_outputs([
-        ok(),                             // install: daemon-reload
-        ok(),                             // install: disable
-        output(true, "active", ""),       // restart: status is-active
-        output(true, "enabled", ""),      // restart: status is-enabled
-        output(false, "", "stop failed"), // restart: stop
+        ok(),
+        ok(),
+        output(true, "active", ""),
+        output(true, "enabled", ""),
+        output(false, "", "stop failed"),
     ]);
     let service = manager(config.clone(), NativeServicePlatform::Linux, runner.clone());
     service.install()?;
@@ -246,17 +246,17 @@ fn same_home_stopped_upgrade_unloads_old_launchd_job_without_changing_enablement
         fs::set_permissions(&upgraded.executable, fs::Permissions::from_mode(0o755))?;
     }
     let runner = ScriptedRunner::with_outputs([
-        output(true, "501", ""),                     // upgrade status: id
-        output(true, "state = exited", ""),          // upgrade status: print
-        output(true, "501", ""),                     // upgrade status: id
-        output(true, "{}", ""),                      // upgrade status: print-disabled => enabled
-        output(true, "501", ""),                     // loaded inspection: id
-        output(true, "state = exited", ""),          // loaded inspection: print
-        output(true, "501", ""),                     // stop: id
-        output(true, "state = exited", ""),          // stop: print
-        ok(),                                        // stop: bootout
-        output(true, "501", ""),                     // stop: wait id
-        output(false, "Could not find service", ""), // stop: wait print
+        output(true, "501", ""),
+        output(true, "state = exited", ""),
+        output(true, "501", ""),
+        output(true, "{}", ""),
+        output(true, "501", ""),
+        output(true, "state = exited", ""),
+        output(true, "501", ""),
+        output(true, "state = exited", ""),
+        ok(),
+        output(true, "501", ""),
+        output(false, "Could not find service", ""),
     ]);
     let service = manager(upgraded, NativeServicePlatform::Macos, runner.clone());
     service.install()?;

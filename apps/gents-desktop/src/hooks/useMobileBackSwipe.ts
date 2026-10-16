@@ -20,8 +20,6 @@ export function isMobileBackSwipe(start: SwipePoint, end: SwipePoint) {
 }
 
 export function useMobileBackSwipe(enabled: boolean, onBack: () => void) {
-  /* the newest handler, so a new one each render does not re-add the
-     listeners, which would drop a swipe begun before a navigation */
   const back = useRef(onBack);
   useEffect(() => {
     back.current = onBack;

@@ -1,10 +1,4 @@
 //! Bounded local request workers.
-//!
-//! This owns only process-local capacity. Request claims, execution leases,
-//! accepted tool identity and cancellation remain with their existing owners.
-//! A worker acquires an unbound active permit after dequeue, then binds it to
-//! the exact request document and claimed generation. A request never waits
-//! on another session's request, so no continuation is ever parked.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -45,7 +39,6 @@ pub(crate) enum CapacityError {
 
 #[derive(Clone, Debug)]
 struct RegisteredTicket {
-    /// Identity of the guard, distinct from the reusable physical ticket.
     marker: Arc<()>,
 }
 
@@ -64,14 +57,12 @@ tokio::task_local! {
 
 enum RequestGuard {
     Unbound(UnboundActiveGuard),
-    /// Held until the request scope ends; dropping it releases the slot.
     Active {
         _guard: ActiveGuard,
     },
 }
 
-/// Slot generation scope shared by its fixed worker tasks. Tool and request
-/// execution futures remain on these tasks; no spawned task inherits it.
+/// Slot generation scope shared by its fixed worker tasks.
 pub(crate) async fn scope_slot_capacity<F: Future>(
     capacity: Arc<WorkerCapacity>,
     future: F,
@@ -83,8 +74,7 @@ pub(crate) fn current_slot_capacity() -> Option<Arc<WorkerCapacity>> {
     SLOT_CAPACITY.try_with(Arc::clone).ok()
 }
 
-/// Owns one post-dequeue permit for the entire `process_request` future. The
-/// scoped value drops on every return, cancellation, or unwind.
+/// Owns one post-dequeue permit for the entire `process_request` future.
 pub(crate) async fn scope_request_capacity<F: Future>(
     guard: UnboundActiveGuard,
     future: F,
@@ -95,7 +85,6 @@ pub(crate) async fn scope_request_capacity<F: Future>(
 }
 
 /// Bind after the canonical request claim has supplied an execution generation.
-/// Direct unit calls without a worker scope preserve their existing behavior.
 pub(crate) fn bind_current_claim(ticket: WorkerTicket) -> Result<(), CapacityError> {
     REQUEST_GUARD
         .try_with(|slot| {
@@ -138,8 +127,7 @@ impl WorkerCapacity {
             .unwrap_or_else(|error| error.into_inner())
     }
 
-    /// Called after dequeue. A waiting or idle worker retains no active permit.
-    /// Cancellation drops the semaphore wait without leaving a registry entry.
+    /// Called after dequeue; a waiting or idle worker retains no active permit.
     pub(crate) async fn acquire_unbound(
         self: &Arc<Self>,
         cancellation: &CancellationToken,
@@ -191,9 +179,7 @@ pub(crate) struct UnboundActiveGuard {
 }
 
 impl UnboundActiveGuard {
-    /// Binds a successfully claimed request to its exact generation. A ticket
-    /// that already has an active worker cannot enter as fresh work. On
-    /// refusal, the caller retains the active permit.
+    /// Binds a successfully claimed request to its exact generation.
     pub(crate) fn bind(
         mut self,
         ticket: WorkerTicket,
@@ -244,7 +230,6 @@ impl Drop for ActiveGuard {
         {
             registered.remove(&self.ticket);
         }
-        // `permit` then drops, making a new active worker available.
     }
 }
 
@@ -275,9 +260,6 @@ mod tests {
         assert_eq!(capacity.snapshot().active, active);
     }
 
-    /// Worker capacity is acquire/release only: a request never parks its
-    /// worker on another agent's request, so the evaluated Lean states are the
-    /// whole resource contract.
     #[tokio::test]
     async fn emitted_worker_capacity_resource_transitions_match_model() {
         let mut exercised = 0;

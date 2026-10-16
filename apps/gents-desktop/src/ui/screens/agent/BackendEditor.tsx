@@ -1,5 +1,3 @@
-/* One backend's editor: its kind, endpoint and credential, the account a
-   subscription runs on, and its models and usage. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { dependentsWarning } from "./dependents";
 import { useEffect, useState } from "react";
@@ -87,12 +85,10 @@ export function BackendEditor({
   deployment: NodeView;
   backend: InferenceBackendView;
   accounts: readonly ProviderAccountView[];
-  /* this backend's usage and the read again; absent, no Usage group */
   usage?: {
     view?: BackendUsageView;
     refresh: (provider: string | null) => Promise<void>;
   };
-  /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
 }) {
   const {
@@ -122,7 +118,6 @@ export function BackendEditor({
     enabled: backend.enabled ?? true,
     tags: backend.tags,
   };
-  /* each field's value as the patch takes it; each throws its problem */
   const fieldsOf = (next: typeof saved) => ({
     name: () => {
       const name = next.name.trim();
@@ -211,10 +206,8 @@ export function BackendEditor({
     setDiscoveredModels(null);
     setProbe(null);
   }, [d.draft.providerKind, d.draft.endpoint]);
-  /* an added account's backend is deleted by removing the account */
   const removable = backend.accountRef ? backendAccount(accounts, backend) : undefined;
   const signIn = SUBSCRIPTION[backend.providerKind ?? ""];
-  /* a disabled or missing account draws no usage */
   const usable = !signIn || backendAccount(accounts, backend)?.enabled;
   const [refreshing, setRefreshing] = useState(false);
   const refreshUsage = async () => {

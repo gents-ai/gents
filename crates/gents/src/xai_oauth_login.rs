@@ -1,8 +1,3 @@
-//! Device-code OAuth login against xAI (`auth.x.ai`), public Grok CLI client.
-//!
-//! Browser authorization-code + PKCE is supported by discovery but not required
-//! for v1; device-code works on SSH/VPS without a loopback redirect.
-
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -18,7 +13,6 @@ use crate::xai_oauth_refresh::XAI_OAUTH_CLIENT_ID;
 const DEVICE_CODE_URL: &str = "https://auth.x.ai/oauth2/device/code";
 const TOKEN_URL: &str = "https://auth.x.ai/oauth2/token";
 
-/// Scopes required for Grok CLI proxy chat (see spike design note).
 pub const XAI_OAUTH_SCOPES: &str = "openid profile email offline_access grok-cli:access api:access conversations:read conversations:write";
 
 pub const XAI_OAUTH_DEVICE_URL_OVERRIDE_ENV: &str = "GENTS_XAI_OAUTH_DEVICE_URL";
@@ -216,10 +210,6 @@ pub async fn poll_device_token(
     }
 }
 
-/// Full device-code login: request code, print URL, poll until approved.
-///
-/// `open_browser` is reserved for future loopback/browser helpers; v1 always
-/// prints the verification URL so operators can open it on any device (SSH-safe).
 pub async fn run_device_code_login(
     http: &reqwest::Client,
     _open_browser: bool,
@@ -239,7 +229,6 @@ pub async fn run_device_code_login(
     poll_device_token(http, &challenge, None).await
 }
 
-/// Device-code login that returns the verification URL for UI surfaces, then polls.
 pub async fn run_device_code_login_with_url_callback<F>(
     http: &reqwest::Client,
     cancel: Option<Arc<AtomicBool>>,
@@ -257,14 +246,10 @@ where
     poll_device_token(http, &challenge, cancel).await
 }
 
-/// The provider account key of a Grok sign-in: `principal_type:principal_id`
-/// from the access token.
-///
-/// The claims are not signature-verified; they are trusted only as far as the
-/// TLS-protected token endpoint they came from. The key only recognizes and
-/// deduplicates an account: it is never an authorization, routing or request
-/// header input. A missing, malformed or non-JWT input gives `None`, never an
-/// error, so a bad claim cannot fail a sign-in or refresh.
+/// Account key `principal_type:principal_id` from the access-token claims.
+/// The claims are not signature-verified: the key only recognizes and
+/// deduplicates an account, it is never an authorization, routing or
+/// request-header input. Bad claims yield `None`, never an error.
 pub fn xai_account_key(access_token: &str) -> Option<String> {
     let claims = crate::chatgpt_oauth_refresh::jwt_payload(access_token)?;
     let claim = |name: &str| {

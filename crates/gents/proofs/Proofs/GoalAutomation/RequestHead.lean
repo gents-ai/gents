@@ -1,11 +1,6 @@
 import Proofs.GoalAutomation
 import Proofs.Request.State
 
-/-! Candidate-local refinement: the selector changes ordering only when a
-verified current-Goal child proves its exact physical parent superseded.
-Invalid/missing edges have no ordering authority. Selecting a row does NOT
-admit it or authorize publication; existing owner checks still apply.
--/
 namespace GoalAutomation.RequestHead
 
 structure Scope where
@@ -32,12 +27,13 @@ structure Row where
 def inScope (s : Scope) (r : Row) : Bool :=
   r.purpose == .normal && r.owner == s.owner && r.session == s.session
 
-/-- Cheap qualification/binding checks precede cryptographic validation.
-The shared Goal physical-edge helper checks original parent/child signatures,
-owner/session, exact physical parent pair, typed signed Goal continuation facts and original
-deterministic request/retry identity. Historical omission of inherited source
-fields does not erase a signed physical edge. Fresh typed-resume receipt checks
-remain stricter; this ordering projection does not authorize publication. -/
+/-- Cheap qualification/binding checks precede cryptographic validation. The
+shared Goal physical-edge helper checks original parent/child signatures,
+owner/session, exact physical parent pair, typed signed Goal continuation
+facts and original deterministic request/retry identity. Historical omission
+of inherited source fields does not erase a signed physical edge. Fresh
+typed-resume receipt checks remain stricter; this ordering projection does
+not authorize publication. -/
 def verifiedEdge (s : Scope) (parent child : Row) : Bool :=
   child.goal == some s.goal && child.parentDoc == some parent.doc &&
   child.parentRequest == some parent.request && child.doc != parent.doc &&
@@ -47,9 +43,6 @@ def verifiedEdge (s : Scope) (parent child : Row) : Bool :=
 def superseded (s : Scope) (rows : List Row) (parent : Row) : Bool :=
   rows.any (verifiedEdge s parent)
 
-/-- Input order is the existing canonical query order. Multiple unrelated or
-branched leaves retain that order. No-head (empty or all superseded) cannot
-authorize a new continuation. Busy/unknown-state guards remain outside here. -/
 def select (s : Scope) (orderedRows : List Row) : Option Row :=
   let rows := orderedRows.filter (inScope s)
   rows.find? fun row => !superseded s rows row

@@ -139,9 +139,6 @@ impl<H: SessionHook + 'static> crate::tool_effects::ToolEffectDispatcher for Eff
     }
 }
 
-// pub, not pub(super): gents' own tool-execution tests exercise this
-// formatting helper directly (a pub(super) item in this crate is invisible to
-// a dependent crate's own test build).
 pub fn value_to_json_string(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::String(string) => string.clone(),
@@ -149,9 +146,8 @@ pub fn value_to_json_string(value: &serde_json::Value) -> String {
     }
 }
 
-/// Tool-policy admission, evaluated before the dispatch election. `Some` is
-/// the pre-dispatch failure that settles the still-Pending call; the tool is
-/// never invoked. Unknown names are left to `dispatch_tool`.
+/// Tool-policy admission before the dispatch election; `Some` settles the
+/// still-Pending call and the tool is never invoked.
 pub(super) fn admit_tool(
     tools: &[Box<dyn ToolDyn>],
     name: &str,
@@ -450,8 +446,6 @@ mod tests {
                         result,
                         Err(crate::tool_effects::ToolEffectError::Fatal(_))
                     ));
-                    // Even a caller converting the fatal error into successful output
-                    // cannot authorize the owned loop's next provider call.
                     ToolOutcome::Completed("guest swallowed the error".into())
                 }),
             )
@@ -498,9 +492,6 @@ mod tests {
             Box::pin(async move {
                 self.called.store(true, Ordering::SeqCst);
                 let remaining = (self.deadline_at - Utc::now()).to_std().unwrap_or_default();
-                // This synchronous call returns Ready on its first poll after
-                // wall time advances. Tokio cannot repoll its sibling sleep
-                // while the current task is inside this tool future.
                 std::thread::sleep(remaining + std::time::Duration::from_millis(10));
                 Ok("late success".into())
             })

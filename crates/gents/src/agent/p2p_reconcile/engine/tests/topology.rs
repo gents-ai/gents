@@ -11,10 +11,9 @@ async fn install_updates_applied_after_success() {
         .await
         .expect("tick result");
 
-    // The subscription op and persisted Applied are in collection-*name*
-    // space (the observable contract); the replicator path stays in address
-    // space. The mock still stores a distinct id internally, but `read_actual`
-    // reverse-resolves it to the name.
+    // Subscription op and persisted Applied are in collection-*name* space
+    // (the observable contract); `read_actual` reverse-resolves the mock's
+    // internal id.
     assert_eq!(
         outcome.ops_applied,
         vec![
@@ -33,26 +32,20 @@ async fn install_updates_applied_after_success() {
     );
 }
 
-/// Regression for the Linux demo `pair` hang at "waiting for conversation
-/// data-plane replicators": the tick used to dial the desired replicator
-/// addresses unconditionally, so a redial of an ALREADY-connected peer that
-/// timed out aborted the tick before the diff ran — the applied
-/// control-plane pairing never got upgraded with the filtered conversation
-/// data-plane replicator (`PeerPairingApplied.replicator_filter` stayed
-/// null forever). An active peer must skip the redial and still reconcile.
+/// Linux demo `pair` hang regression: an unconditional redial of an
+/// already-connected peer that timed out aborted the tick before the diff ran,
+/// leaving the data-plane replicator upgrade unapplied. An active peer must
+/// skip the redial and still reconcile.
 #[tokio::test]
 async fn active_peer_skips_redial_and_upgrades_data_plane_replicator() {
     let conversation_filter = one_filter("AgentRequest", "requester_did", "did:key:requester");
-    // Desired now includes the conversation data plane: same address, new
-    // collection, and a scoped filter (identity change ⇒ reinstall).
+    // Same address, new collection, scoped filter (identity change ⇒ reinstall).
     let store = MockStore::with_desired(Some(PairingDesired {
         collections: set(&["Network", "AgentRequest"]),
         replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
         replicator_filter: conversation_filter.clone(),
         ..Default::default()
     }));
-    // Control-plane pairing already applied: unfiltered replicator on addr1.
-    *store.applied.lock().unwrap() = PairingApplied {
         collections: set(&["Network"]),
         replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
         replicator_filter: PairingFilters::new(),
@@ -89,8 +82,7 @@ async fn active_peer_skips_redial_and_upgrades_data_plane_replicator() {
             DiffOp::InstallReplicator(TEST_TRANSPORT_ADDRESS_A.into()),
         ]
     );
-    // Applied records the conversation filter — this is what surfaces as
-    // `PeerPairingApplied.replicator_filter` and what the demo waits on.
+    // Applied records the conversation filter (what the demo waits on).
     assert_eq!(
         store.applied.lock().unwrap().replicator_filter,
         conversation_filter
@@ -160,9 +152,8 @@ async fn changed_endpoint_replaces_same_peer_replicator_teardown_first() {
 }
 
 /// A restored transport route is not authoritative merely because durable
-/// `PeerPairingApplied` still matches desired. The live route may carry an old
-/// ticket and have lost its filter during restore; both are route-identity
-/// drift and must be repaired before readiness is earned.
+/// `PeerPairingApplied` matches desired; a stale ticket or lost filter is
+/// route-identity drift and must be repaired.
 #[tokio::test]
 async fn matching_applied_repairs_restored_unfiltered_stale_address() {
     let peer_id = "6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb";
@@ -246,10 +237,9 @@ async fn omitted_live_filters_force_current_protocol_repair() {
     assert!(!admin.recorded_filters.lock().unwrap().is_empty());
 }
 
-/// Current DefraDB HTTP responses omit `Filters` only for an empty effective
-/// map. The HTTP adapter projects that as `Some(empty)`, which is authoritative
-/// drift for a scoped route and must repair rather than remain permanently
-/// unready.
+/// DefraDB HTTP responses omit `Filters` for an empty effective map; the
+/// HTTP adapter projects that as `Some(empty)`, which is drift for a scoped
+/// route and must repair.
 #[tokio::test]
 async fn known_empty_live_filters_repair_a_scoped_route() {
     let filter = one_filter("AgentRequest", "node_did", "did:key:mandrake");

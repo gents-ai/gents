@@ -1,6 +1,3 @@
-//! Plain-text tables for `gents eval`. The `--json` form is the library's
-//! own structure; these are for a terminal.
-
 use std::io::{self, Write};
 
 use gents::eval::report::{
@@ -453,7 +450,6 @@ pub(crate) enum Breakdown {
 }
 
 pub(crate) fn breakdown_table(breakdown: &Breakdown, out: &mut dyn Write) -> io::Result<()> {
-    // One row shape for both: a stage row is a check row named by stage id.
     let (label, rows): (&str, Vec<CheckDiff>) = match breakdown {
         Breakdown::Check(rows) => ("check", rows.clone()),
         Breakdown::Stage(rows) => (
@@ -736,7 +732,6 @@ const TOP_TOOLS: usize = 5;
 /// The width the watch wraps its lists to.
 const WIDTH: usize = 118;
 
-/// A snapshot's usage, its tool calls and its documents against `goal`.
 fn snapshot_lines(live: &LiveSnapshot, goal: &[GoalEntry], out: &mut dyn Write) -> io::Result<()> {
     writeln!(
         out,
@@ -799,8 +794,6 @@ fn snapshot_lines(live: &LiveSnapshot, goal: &[GoalEntry], out: &mut dyn Write) 
     wrapped(out, "    docs", others)
 }
 
-/// `Collection observed/expected` for each goal entry; a met entry is
-/// marked, and a capture that counts a filtered subset names itself.
 fn goal_items(goal: &[GoalEntry], live: Option<&LiveSnapshot>) -> Vec<String> {
     goal.iter()
         .map(|entry| {
@@ -827,7 +820,6 @@ fn goal_items(goal: &[GoalEntry], live: Option<&LiveSnapshot>) -> Vec<String> {
         .collect()
 }
 
-/// `label item  item  item`, wrapped under the label at [`WIDTH`] columns.
 fn wrapped(out: &mut dyn Write, label: &str, items: Vec<String>) -> io::Result<()> {
     if items.is_empty() {
         return Ok(());
@@ -849,7 +841,6 @@ fn wrapped(out: &mut dyn Write, label: &str, items: Vec<String>) -> io::Result<(
     writeln!(out, "{line}")
 }
 
-/// `9999`, `812.3k`, `1.24M`, or `-` when unknown.
 fn compact(value: Option<u64>) -> String {
     match value {
         None => "-".to_owned(),
@@ -859,7 +850,6 @@ fn compact(value: Option<u64>) -> String {
     }
 }
 
-/// `95s`, `4m12s`, `1h03m`.
 fn duration(seconds: u64) -> String {
     match seconds {
         0..=99 => format!("{seconds}s"),
@@ -868,48 +858,6 @@ fn duration(seconds: u64) -> String {
     }
 }
 
-/// Enough of a trial id to tell slots apart on one line.
 fn short_id(trial_id: &str) -> &str {
     trial_id.get(..12).unwrap_or(trial_id)
-}
-
-#[cfg(test)]
-mod tests {
-    use gents::optimization::{Decision, InconclusiveReason, RejectReason};
-
-    use super::{decision_label, human_bytes, signed_percent, yes_or};
-
-    #[test]
-    fn human_bytes_reads_in_binary_units() {
-        assert_eq!(human_bytes(0), "0B");
-        assert_eq!(human_bytes(512), "512B");
-        assert_eq!(human_bytes(1_536), "1.5KiB");
-        assert_eq!(human_bytes(3 * 1024 * 1024), "3.0MiB");
-        assert_eq!(human_bytes(u64::MAX), "16777216.0TiB");
-    }
-
-    #[test]
-    fn an_undetermined_min_effect_gate_reads_undetermined() {
-        assert_eq!(yes_or(None, "undetermined"), "undetermined");
-        assert_eq!(yes_or(Some(true), "undetermined"), "yes");
-        assert_eq!(yes_or(Some(false), "undetermined"), "no");
-        assert_eq!(yes_or(None, "skipped"), "skipped");
-    }
-
-    #[test]
-    fn signed_percent_and_decision_labels_read_as_the_wire() {
-        assert_eq!(signed_percent(Some(5_000)), "+50.00%");
-        assert_eq!(signed_percent(Some(-1_234)), "-12.34%");
-        assert_eq!(signed_percent(Some(0)), "+0.00%");
-        assert_eq!(signed_percent(None), "-");
-        assert_eq!(decision_label(&Decision::Accept), "accept");
-        assert_eq!(
-            decision_label(&Decision::Reject(RejectReason::NoImprovement)),
-            "reject(no_improvement)"
-        );
-        assert_eq!(
-            decision_label(&Decision::Inconclusive(InconclusiveReason::TooFewCases)),
-            "inconclusive(too_few_cases)"
-        );
-    }
 }

@@ -40,12 +40,6 @@ function revealFocusedControl(viewport: VisualViewport) {
     rect.top < visibleTop ? rect.top - visibleTop : rect.bottom - visibleBottom;
 }
 
-/**
- * Keep the mobile shell pinned to WebKit's visible viewport while the software
- * keyboard or browser chrome changes it. CSS dynamic viewport units can lag a
- * keyboard dismissal in WKWebView, leaving the title above the visible area
- * and a phantom gap below the composer.
- */
 export function useMobileVisualViewport() {
   useEffect(() => {
     const viewport = window.visualViewport;

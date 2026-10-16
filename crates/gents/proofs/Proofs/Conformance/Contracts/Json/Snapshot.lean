@@ -85,7 +85,6 @@ namespace Conformance.Contracts
 
 open Conformance.ContractCases
 
-/-- The pairing route rules the native scope-template owner must resolve. -/
 def scopeRulesJson (rules : List ScopeTemplates.CollectionRule) : String :=
   jsonArray (rules.map fun rule =>
     "{\"collection\":" ++ jsonString rule.collection

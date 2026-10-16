@@ -42,9 +42,6 @@ struct ChatProgressMarker {
     tools: Vec<ChatToolProgressMarker>,
 }
 
-/// Streaming-relevant canonical output observation. Only presentation-carrying
-/// variants enter change detection and the reasoning indicator; retained
-/// partials are historical diagnostics and never enter either.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ChatOutputProgress {
     kind: &'static str,
@@ -145,8 +142,8 @@ pub(crate) async fn load_existing_tool_call_keys(
         .collect())
 }
 
-/// Whether ANSI styling should be applied to CLI output: only on a real
-/// terminal, and only when the caller has not opted out via `NO_COLOR`
+/// Whether ANSI styling should be applied: only on a real terminal, and only
+/// when the caller has not opted out via `NO_COLOR`
 /// (https://no-color.org — any non-empty *or* empty value disables color).
 fn colors_enabled() -> bool {
     io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none()
@@ -160,23 +157,11 @@ fn dim(text: &str, colors: bool) -> String {
     }
 }
 
-/// A best-effort "working…" indicator on stderr while a turn is in flight
-/// and nothing has streamed yet (#1622). Only appears when both stdout and
-/// stderr are terminals (see [`spinner_enabled`]), so piped/non-interactive
-/// output stays completely clean. It is cleared — and never shown again for
-/// the rest of this turn — the moment any tool activity or answer text is
-/// about to print.
 struct WorkingIndicator {
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<()>>,
 }
 
-/// Whether the working indicator should run at all. It writes to stderr, so
-/// stderr must be a terminal for the spinner itself to be interactive rather
-/// than junk in a redirected file; and it's always cleared immediately
-/// before the first stdout print, so stdout must be a terminal too — a
-/// piped/non-interactive stdout is exactly the case that must stay clean,
-/// regardless of what stderr is attached to.
 fn spinner_enabled(stdout_tty: bool, stderr_tty: bool) -> bool {
     stdout_tty && stderr_tty
 }
@@ -206,9 +191,6 @@ impl WorkingIndicator {
 
 impl Drop for WorkingIndicator {
     fn drop(&mut self) {
-        // Best-effort cleanup for a path that never reached `clear` (e.g. an
-        // early `bail!`): abort the spinner rather than await it here, since
-        // `Drop` cannot be async. The process is exiting either way.
         if let Some(task) = self.task.take() {
             task.abort();
         }
@@ -228,13 +210,10 @@ async fn spin(mut stop: tokio::sync::oneshot::Receiver<()>) {
             _ = &mut stop => break,
         }
     }
-    // Erase the indicator line so the next thing printed starts clean.
     eprint!("\r\x1b[2K");
     let _ = io::stderr().flush();
 }
 
-/// Clears `indicator` (if it hasn't already been cleared) right before the
-/// first tool event or answer text prints this turn. A no-op afterward.
 async fn clear_indicator(indicator: &mut Option<WorkingIndicator>) {
     if let Some(indicator) = indicator.take() {
         indicator.clear().await;
@@ -567,9 +546,6 @@ pub(crate) async fn stream_turn_progress(
                 | gents::session::CanonicalRequestOutput::Live(_)
                 | gents::session::CanonicalRequestOutput::Settling(_)
                 | gents::session::CanonicalRequestOutput::Published { .. } => {
-                    // Lifecycle and canonical publication replicate separately.
-                    // Published is useful preview state, but only the request's
-                    // exact terminal selection may settle this turn.
                     if last_progress_at.elapsed() >= idle_timeout {
                         anyhow::bail!(
                             "timed out waiting for terminal canonical selection for request {} after {}s of inactivity\n{}",
@@ -597,8 +573,6 @@ pub(crate) async fn stream_turn_progress(
     }
 }
 
-/// The one-line tool line for this poll: raw JSON args/result under
-/// `--verbose`, otherwise the short, dimmed summary (#1622).
 fn render_tool_line(tool: &ToolCallProgress, verbose: bool, colors: bool) -> String {
     if verbose {
         format_tool_progress_line(tool)
@@ -607,12 +581,6 @@ fn render_tool_line(tool: &ToolCallProgress, verbose: bool, colors: bool) -> Str
     }
 }
 
-/// The interim line printed while a terminal tool call's canonical result
-/// hasn't replicated yet and only a live/partial output snapshot is
-/// available. Never reports an outcome: the call's own `status` may already
-/// be "completed"/"error", but the snapshot in hand doesn't yet carry the
-/// tool's self-reported `ok`/`status`, so guessing here would risk a wrong
-/// "ok"/"failed" that a moment later flips when the real result lands.
 fn render_live_tool_line(tool: &ToolCallProgress, verbose: bool, colors: bool) -> String {
     if verbose {
         format_live_tool_progress_line(tool)
@@ -627,8 +595,6 @@ fn render_live_tool_line(tool: &ToolCallProgress, verbose: bool, colors: bool) -
     }
 }
 
-/// The catch-up "tool started" line printed when a tool call is first seen
-/// already in a terminal state (its running phase was missed between polls).
 fn render_tool_start_line(tool: &ToolCallProgress, verbose: bool, colors: bool) -> String {
     if verbose {
         format!(
@@ -657,8 +623,6 @@ fn chat_output_progress(
         gents::session::CanonicalRequestOutput::Published { presentation, .. } => {
             ("published", presentation)
         }
-        // Retained partials are historical diagnostics, never streaming answer
-        // progress; Loading/absence carry no new bytes either.
         _ => return None,
     };
     Some(ChatOutputProgress {
@@ -695,9 +659,6 @@ fn chat_tool_progress_marker(row: &Value) -> ChatToolProgressMarker {
     }
 }
 
-/// Reasoning has only begun once the request is actively processing and the
-/// canonical observation carries reasoning presentation without published body
-/// bytes yet.
 fn should_print_thinking(
     lifecycle_state: Option<RequestLifecycleState>,
     output: &gents::session::CanonicalRequestOutput,
@@ -824,20 +785,11 @@ fn bounded_chars(text: &str, limit: usize) -> String {
 /// command or path, short enough that even a giant one stays one line.
 pub(super) const SUMMARY_ARGUMENT_MAX_CHARS: usize = 100;
 
-/// Makes tool-provided text safe to print as a single line of a terminal
-/// summary. Tool arguments and output are not trusted terminal input: a
-/// multiline command or an embedded control character (ESC, CR, BEL, ...)
-/// would otherwise either break the one-line summary or become a live
-/// terminal control sequence when printed. This collapses every run of
-/// whitespace (including newlines) to a single space, drops every other
-/// control character outright, and bounds the result to `max_chars`
-/// *characters* — never splitting a UTF-8 code point. Returns `None` when
-/// nothing printable remains.
-///
-/// This is the sole normalization/bounding helper for terminal-facing text
-/// that ultimately comes from an untrusted source (tool name, tool
-/// arguments, tool output, or an agent's display name): every such call
-/// site routes through this function rather than adding a second one.
+/// Makes tool-provided text safe to print as a single terminal line: tool
+/// arguments and output are untrusted terminal input, and an embedded
+/// control character would become a live terminal control sequence when
+/// printed. The sole normalization/bounding helper for terminal-facing
+/// untrusted text — every such call site routes through this function.
 pub(super) fn sanitize_summary_text(text: &str, max_chars: usize) -> Option<String> {
     let mut normalized = String::with_capacity(text.len());
     let mut last_was_space = false;
@@ -865,10 +817,6 @@ pub(super) fn sanitize_summary_text(text: &str, max_chars: usize) -> Option<Stri
     Some(bounded_chars(trimmed, max_chars))
 }
 
-/// The single most useful argument for a one-line tool summary: the command
-/// (with its args) for a command-execution tool, the path for a file tool,
-/// and best-effort otherwise. `None` when `arguments` isn't recognized JSON,
-/// so callers fall back to a compact preview of the raw arguments.
 fn key_argument(arguments: &str) -> Option<String> {
     let value: Value = serde_json::from_str(arguments).ok()?;
     let object = value.as_object()?;
@@ -906,8 +854,7 @@ fn key_argument(arguments: &str) -> Option<String> {
 }
 
 /// The two prefixes gents's own tools use for their first, compact-text
-/// metadata line (`gents_exec: {...}` for command tools, `gents_fs: {...}`
-/// for file tools). Both carry at least `ok` (bool) and `status` (string).
+/// metadata line; both carry at least `ok` (bool) and `status` (string).
 const TOOL_OUTPUT_METADATA_PREFIXES: [&str; 2] = ["gents_exec: ", "gents_fs: "];
 
 fn parse_tool_output_metadata(result: &str) -> Option<(bool, String)> {
@@ -927,8 +874,6 @@ fn parse_tool_output_metadata(result: &str) -> Option<(bool, String)> {
     ))
 }
 
-/// One-line outcome for a terminal tool call. `None` while still running:
-/// there is nothing to report yet.
 enum ToolOutcome {
     Ok,
     Failed(Option<String>),
@@ -944,12 +889,6 @@ impl ToolOutcome {
     }
 }
 
-/// Derives the outcome from the tool call's own lifecycle `status` plus,
-/// when present, the tool's self-reported `ok`/`status` metadata. A "completed"
-/// AgentToolCall (the call ran and returned) can still report `ok: false`
-/// inside its own output — e.g. a shell command that exited non-zero — and
-/// that inner outcome, not the call's bookkeeping status, is what a user
-/// needs to see (#1622).
 fn tool_outcome(status: &str, result: Option<&str>) -> Option<ToolOutcome> {
     match status {
         "completed" => Some(match result.and_then(parse_tool_output_metadata) {
@@ -966,9 +905,6 @@ fn tool_outcome(status: &str, result: Option<&str>) -> Option<ToolOutcome> {
     }
 }
 
-/// Short, dimmed, one-line tool summary: tool name, its key argument, and
-/// — once terminal — the outcome. Raw JSON never appears here; that's only
-/// available with `--verbose` via [`format_tool_progress_line`].
 pub(super) fn format_tool_summary_line(tool: &ToolCallProgress, colors: bool) -> String {
     let mut line = sanitize_summary_text(&tool.tool_name, SUMMARY_ARGUMENT_MAX_CHARS)
         .unwrap_or_else(|| "tool".to_string());
@@ -992,9 +928,6 @@ fn text_fingerprint(value: &str) -> (usize, u64) {
     (value.len(), hasher.finish())
 }
 
-/// One line per profile of a refused turn whose account cannot serve it,
-/// naming the account, its state and the move; none unless `failure_reason`
-/// is an agent-unavailable rejection.
 fn account_problem_lines(
     failure_reason: &str,
     accounts: &[(String, gents::oauth_credential::ServingAccount)],
@@ -1019,8 +952,6 @@ fn account_problem_lines(
         .collect()
 }
 
-/// [`account_problem_lines`] for `submitted`'s agent, read now; a read
-/// failure gives none, since the turn's own error is already printed.
 async fn account_problems(
     graphql: &GraphqlEndpoint,
     submitted: &SubmittedRequest,
@@ -1069,11 +1000,8 @@ mod tests {
 
         let query = chat_progress_query(&submitted);
 
-        // Retired AgentToolCall storage fields must not be queried; the SDL
-        // no longer defines them (contracts/canonical-output.md deletions).
         assert!(!query.contains(" args"));
         assert!(!query.contains(" result"));
-        // Surviving tool lifecycle fields and canonical request fields remain.
         assert!(query.contains("tool_call_key"));
         assert!(query.contains("_docID"));
         assert!(query.contains("tool_name"));
@@ -1120,7 +1048,6 @@ mod tests {
             &reasoning_only
         ));
 
-        // Inference has not begun during claimed work; no reasoning yet.
         assert!(!should_print_thinking(
             Some(RequestLifecycleState::Claimed),
             &reasoning_only
@@ -1147,7 +1074,6 @@ mod tests {
             Some(RequestLifecycleState::Processing),
             &no_reasoning
         ));
-        // Loading/absence carry no presentation bytes at all.
         assert!(!should_print_thinking(
             Some(RequestLifecycleState::Processing),
             &gents::session::CanonicalRequestOutput::Loading
@@ -1170,8 +1096,6 @@ mod tests {
             &[],
         );
 
-        // Retained partials are historical diagnostics, not streaming answer
-        // progress, so they must not register new output bytes.
         assert_eq!(absent.canonical_output, retained.canonical_output);
         assert_eq!(retained.canonical_output, None);
     }
@@ -1238,9 +1162,6 @@ mod tests {
 
     #[test]
     fn tool_summary_line_reports_failed_with_short_status_for_a_nonzero_exit() {
-        // This is the exact scenario the raw-JSON transcript in #1622 showed:
-        // the AgentToolCall itself completed (the command ran and returned),
-        // but its own output says the command failed.
         let tool = bash_tool(
             "completed",
             Some(
@@ -1321,9 +1242,6 @@ mod tests {
 
     #[test]
     fn tool_summary_line_sanitizes_a_hostile_tool_name_and_status_and_keeps_dim_ansi() {
-        // Both the tool's own name and its self-reported failure status are
-        // attacker-influenced (an MCP tool's declared name; a tool's own
-        // output), not trusted terminal input, same as the key argument.
         let hostile_name = format!("bash\x1b[31mHACKED\x1b[0m\r\n{}", "n".repeat(200));
         let hostile_status = format!("exit\x1b[31mHACKED\x1b[0m\r\n{}", "s".repeat(200));
         let result = format!(
@@ -1383,7 +1301,6 @@ mod tests {
             "completed",
             Some("gents_exec: {\"ok\":false,\"status\":\"exit_nonzero\"}"),
         );
-        // `--verbose` still gets the original raw-JSON rendering, unchanged.
         assert_eq!(
             render_tool_line(&tool, true, false),
             format_tool_progress_line(&tool)
@@ -1401,9 +1318,6 @@ mod tests {
 
     #[test]
     fn sanitize_summary_text_strips_esc_and_neutralizes_cr() {
-        // A raw ESC would otherwise be interpreted as a live terminal
-        // control sequence when printed; a bare CR would overwrite the
-        // start of the line. Neither may survive into the summary.
         let input = "ls \u{1b}[31mHACKED\u{1b}[0m\rdone";
         let sanitized = sanitize_summary_text(input, 100).expect("nonempty");
         assert!(!sanitized.contains('\u{1b}'), "ESC leaked: {sanitized:?}");
@@ -1413,8 +1327,6 @@ mod tests {
 
     #[test]
     fn sanitize_summary_text_drops_other_control_characters() {
-        // BEL and backspace: neither is whitespace, both are control
-        // characters, and printed verbatim both are terminal noise, not text.
         assert_eq!(
             sanitize_summary_text("a\u{7}b\u{8}c", 100),
             Some("abc".to_string())
@@ -1432,8 +1344,6 @@ mod tests {
 
     #[test]
     fn sanitize_summary_text_cuts_on_a_char_boundary_near_non_ascii() {
-        // Multi-byte characters straddling the cut point must not panic and
-        // must not be split mid-codepoint.
         let mut input = "a".repeat(99);
         input.push_str("考考考考考");
         let sanitized = sanitize_summary_text(&input, 100).expect("nonempty");

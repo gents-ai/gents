@@ -1,12 +1,9 @@
 //! Session lineage: how one session is linked to others by agent messages.
 //!
 //! A session was started by another request only when its stored
-//! `AgentSession.provenance.parent_request_doc_id` names that request; the
-//! runtime copies it from the session's first request when it creates the
-//! session. A message into an existing session never rewrites it, so it never
-//! makes that session a started one. Every other link is a request whose
-//! `caused_by_parent_request_doc_id` names a request in another session. Every
-//! lineage reader goes through [`lineage`].
+//! `AgentSession.provenance.parent_request_doc_id` names that request; a
+//! message into an existing session never rewrites it. Every lineage reader
+//! goes through [`lineage`].
 
 use std::collections::BTreeSet;
 
@@ -29,7 +26,6 @@ pub struct SessionScope {
 }
 
 impl SessionScope {
-    /// The session a request runs in.
     pub fn of_request(request: &crate::AgentRequest) -> Self {
         Self {
             node_did: request.node_did.clone(),
@@ -54,21 +50,15 @@ impl SessionScope {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionLink {
     pub scope: SessionScope,
-    /// The causing request: in the other session for `started_by` and
-    /// `received`, in this session for `started` and `sent`.
     pub cause_request_doc_id: String,
 }
 
 /// Every agent-message link of one session.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionLineage {
-    /// The session whose request started this one.
     pub started_by: Option<SessionLink>,
-    /// Sessions this session's requests started.
     pub started: Vec<SessionLink>,
-    /// Other sessions this session sent a request into without starting them.
     pub sent: Vec<SessionLink>,
-    /// Other sessions, besides its starter, that sent this session a request.
     pub received: Vec<SessionLink>,
 }
 
@@ -129,8 +119,6 @@ pub async fn request_scopes<'a, R: ConfigRead + ?Sized>(
         .into_iter()
         .collect::<Vec<_>>();
     let mut scopes = Vec::new();
-    // Bounded predicates, without truncating lineage or ever interpolating
-    // an empty list literal into a database operation.
     for batch in doc_ids.chunks(128) {
         let query = format!(
             "{{AgentRequest(docIDs: {}) {{{SCOPE_FIELDS}}}}}",
@@ -151,8 +139,7 @@ pub async fn request_scopes<'a, R: ConfigRead + ?Sized>(
     Ok(scopes)
 }
 
-/// The session stored under `session_id` for `requester_did` (any requester
-/// when `None`), when exactly one is visible.
+/// The session stored under `session_id`, when exactly one is visible.
 pub async fn load_session(
     access: &ConfigAccess,
     session_id: &str,
@@ -173,7 +160,7 @@ pub async fn load_session(
     Ok(rows.pop())
 }
 
-/// The session that started `scope`, from its stored provenance.
+/// The session that started `scope`.
 pub async fn started_by(
     access: &ConfigAccess,
     scope: &SessionScope,
@@ -200,9 +187,7 @@ pub async fn started_by(
         }))
 }
 
-/// The request each physical tool call caused: the one public request whose
-/// `caused_by_parent_tool_call_doc_id` names that call. A call named by more
-/// than one request has no single caused request and is omitted.
+/// The request each physical tool call caused, when exactly one names it.
 pub async fn caused_requests<'a>(
     access: &ConfigAccess,
     tool_call_doc_ids: impl IntoIterator<Item = &'a str>,
@@ -247,7 +232,6 @@ pub async fn lineage(access: &ConfigAccess, scope: &SessionScope) -> Result<Sess
     );
     let started_by = started_by(access, scope).await?;
 
-    // Every public request of this session, with the edge it carries.
     let own_requests = collection(
         access,
         &format!(
@@ -291,8 +275,6 @@ pub async fn lineage(access: &ConfigAccess, scope: &SessionScope) -> Result<Sess
         });
     }
 
-    // A session this session started names one of its requests as provenance;
-    // its requester is this session's principal.
     let mut started = Vec::new();
     for session in sessions(
         access,
@@ -314,7 +296,6 @@ pub async fn lineage(access: &ConfigAccess, scope: &SessionScope) -> Result<Sess
         });
     }
 
-    // Requests in other sessions caused by this session's requests.
     let mut sent = Vec::new();
     let query = format!(
         "{{AgentRequest(filter: {{{}}}) {{{SCOPE_FIELDS} caused_by_parent_request_doc_id}}}}",
@@ -476,9 +457,6 @@ mod tests {
         node.shutdown().await;
     }
 
-    /// Only the stored provenance makes a session started: a message into an
-    /// existing session, even one ordered first in the same second, is a
-    /// `sent`/`received` link, never a start.
     #[tokio::test]
     async fn a_message_into_an_existing_session_does_not_make_it_started() {
         let dir = tempfile::tempdir().unwrap();
@@ -511,8 +489,6 @@ mod tests {
         )
         .await;
         seed_session(&node, "started", Some(&parent)).await;
-        // A later message from another session in the same second, ordered
-        // first by its request id, takes no authority over the session.
         let other = seed(&node, "o1", "other", "2026-09-26T00:00:01Z", None).await;
         seed_session(&node, "other", None).await;
         seed(&node, "a0", "started", "2026-09-26T00:00:02Z", Some(&other)).await;

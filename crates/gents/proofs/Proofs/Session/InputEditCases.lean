@@ -5,17 +5,14 @@ namespace SessionQueue.InputEditCases
 open InputEdit ManagementCases FoldCases
 
 def authority : Authority := ⟨true,true,true,true,true,true,true⟩
-/-- A local command: no peer route and the requester is the node. -/
 def command : Command := ⟨10,20,some 1,false,1,10,[2],0,1,[replacement 3 2]⟩
 def remote : Command := {command with hasPeer := true}
 def remoteAuthority : Authority := {authority with requesterIsNode := false}
 def state : State := ⟨initial [pending 2],[]⟩
 
-/-- Earlier events that produced a case's starting state. -/
 inductive Step where
   | apply (now : Nat) (authority : Authority) (command : Command)
   | loseReceipts
-  /-- Later commands target a fresh queue in another session of the same node. -/
   | otherSession (session : Nat)
 
 def Step.run (s : State) : Step → State

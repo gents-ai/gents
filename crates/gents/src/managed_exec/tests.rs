@@ -337,16 +337,10 @@ fn windows_process_is_running(pid: u32) -> std::io::Result<bool> {
 #[cfg(unix)]
 #[tokio::test]
 async fn managed_exec_delivers_stdin_and_closes_the_pipe() {
-    // `stdin` plumbing through the managed envelope: the writer task writes
-    // the payload and the child sees EOF after it, so a program that reads to
-    // completion observes exactly the supplied bytes.
     let outcome = run_managed_exec(ManagedExecRequest {
         argv: vec![
             "/bin/sh".to_string(),
             "-c".to_string(),
-            // `wc -c` counts every byte it reads before EOF; if the pipe were
-            // left open (writer task never finishing / not closed), this
-            // would hang until the deadline instead of exiting.
             "wc -c".to_string(),
         ],
         cwd: PathBuf::from("/"),
@@ -363,7 +357,6 @@ async fn managed_exec_delivers_stdin_and_closes_the_pipe() {
     match outcome {
         ManagedExecOutcome::Exited { code, stdout, .. } => {
             assert_eq!(code, Some(0));
-            // `19` is the payload length; the count is whitespace-padded.
             let text = String::from_utf8_lossy(&stdout);
             assert_eq!(
                 text.trim().parse::<u64>().expect("byte count"),
@@ -378,7 +371,6 @@ async fn managed_exec_delivers_stdin_and_closes_the_pipe() {
 #[cfg(unix)]
 #[tokio::test]
 async fn managed_exec_environment_replaces_the_inherited_environment() {
-    // Invoke env directly so shell-created variables cannot mask inheritance.
     let outcome = run_managed_exec(ManagedExecRequest {
         argv: vec!["/usr/bin/env".to_string()],
         cwd: PathBuf::from("/"),
@@ -397,7 +389,6 @@ async fn managed_exec_environment_replaces_the_inherited_environment() {
     match outcome {
         ManagedExecOutcome::Exited { code, stdout, .. } => {
             assert_eq!(code, Some(0));
-            // Do not include inherited environment values in failure output.
             assert!(
                 stdout == b"TEST_SCOPED_VAR=scoped-only\n",
                 "child environment must exactly match the supplied map"
@@ -410,8 +401,6 @@ async fn managed_exec_environment_replaces_the_inherited_environment() {
 #[cfg(unix)]
 #[tokio::test]
 async fn managed_exec_reports_spawn_failure_as_a_typed_outcome() {
-    // A nonexistent program must surface as SpawnFailed with the OS error —
-    // never as a silent exit or a hang — and must not leave a registry entry.
     let outcome = run_managed_exec(ManagedExecRequest {
         argv: vec!["/nonexistent/gents-missing-binary".to_string()],
         cwd: PathBuf::from("/"),
@@ -628,9 +617,6 @@ fn rust_cancel_process_reply_vocabulary_matches_lean_model() {
     });
 }
 
-/// Every generated observation pair is checked against the native verdict
-/// mapping; the reachable observations are then produced by a real
-/// test-owned process group and the owner's own stop.
 #[cfg(unix)]
 #[tokio::test]
 async fn generated_process_stop_cases_drive_host_owner() {
@@ -665,8 +651,6 @@ async fn generated_process_stop_cases_drive_host_owner() {
             .expect("generated observation pair")
     };
 
-    // A recorded running group is proven owned; the owner's stop observes it
-    // exit, which is the only verdict reported as cancelled.
     let process = OwnedTestProcess::spawn(None).await;
     assert_eq!(process.identity.observe(), ProcessObservation::Running);
     let (before, after) = process.identity.stop().await;
@@ -675,16 +659,12 @@ async fn generated_process_stop_cases_drive_host_owner() {
     assert_eq!(stopped.cancel_reply, "cancelled");
     assert_eq!(process.identity.observe(), ProcessObservation::Exited);
 
-    // The same record after the group ended: nothing is signalled and the
-    // result is lost, not cancelled.
     let (before, after) = process.identity.stop().await;
     let exited = case(before, after);
     assert_eq!(exited.outcome, "alreadyExited");
     assert!(!exited.may_terminate);
     process.finish().await;
 
-    // A live pid whose start identity differs (a reused pid) is not owned
-    // and must survive the owner's stop.
     let process = OwnedTestProcess::spawn(None).await;
     let reused = ProcessIdentity {
         start: format!("{}-reused", process.identity.start),
@@ -702,9 +682,6 @@ async fn generated_process_stop_cases_drive_host_owner() {
     process.finish().await;
 }
 
-/// The durable record written by the recorder names the exact spawned
-/// group, and a fresh store over the same directory reads it back, as a
-/// restarted runtime does.
 #[cfg(unix)]
 #[tokio::test]
 async fn durable_process_record_survives_a_fresh_store() {

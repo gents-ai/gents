@@ -11,12 +11,8 @@ use crate::graphql::escape_graphql_string;
 use crate::node_readiness_publisher::{NodeReadinessPublisherHandle, NodeReadinessPublisherOwner};
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 
-/// Target of the reconcile-phase transition event.
-///
-/// `NodeRuntime.reconcile_phase` holds only the phase the runtime is in now,
-/// and a reconcile leaves the intermediate phases for as long as its debounce
-/// and resolve take. The order and duration of those phases is therefore only
-/// observable through this event stream, not by reading the document.
+/// Reconcile-phase transitions are only observable through this event stream:
+/// `NodeRuntime.reconcile_phase` holds only the phase the runtime is in now.
 pub(crate) const RECONCILE_PHASE_EVENT_TARGET: &str = "gents.runtime.reconcile_phase";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,9 +99,8 @@ impl RuntimeStatusOwner {
 pub(crate) struct RuntimeStatusHandle {
     node: Arc<defra_node::EmbeddedNode>,
     state: Arc<Mutex<RuntimeStatusRow>>,
-    /// The row this process last wrote. DefraDB commits every field an update
-    /// names even when its value is unchanged, so later writes name only the
-    /// fields that differ from it; the first write names every field.
+    /// The row this process last wrote; later writes name only the fields that
+    /// differ from it, because DefraDB commits every field an update names.
     persisted: Arc<Mutex<Option<RuntimeStatusRow>>>,
     readiness: NodeReadinessPublisherHandle,
 }
@@ -347,8 +342,7 @@ impl RuntimeStatusHandle {
         }
         *guard = next.clone();
         let mut persisted = self.persisted.lock().await;
-        // A failed, timed-out or cancelled write may still commit, so the
-        // next write after one names every field.
+        // A failed, timed-out or cancelled write may still commit.
         let previous = persisted.take();
         match upsert_runtime_status(&self.node, previous.as_ref(), &next).await {
             Ok(()) => *persisted = Some(next),

@@ -23,9 +23,7 @@ pub struct NetworkApprovalContext {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AdditionalFileSystemPermissions {
-    /// This will be removed in favor of `entries`.
     pub read: Option<Vec<AbsolutePathBuf>>,
-    /// This will be removed in favor of `entries`.
     pub write: Option<Vec<AbsolutePathBuf>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub glob_scan_max_depth: Option<NonZeroUsize>,
@@ -90,20 +88,15 @@ pub struct FileSystemSandboxEntry {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionProfileListParams {
-    /// Opaque pagination cursor returned by a previous call.
     pub cursor: Option<String>,
-    /// Optional page size; defaults to the full result set.
     pub limit: Option<u32>,
-    /// Optional working directory to resolve project config layers.
     pub cwd: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionProfileSummary {
-    /// Available permission profile identifier.
     pub id: String,
-    /// Optional user-facing description for display in clients.
     pub description: Option<String>,
 }
 
@@ -111,19 +104,13 @@ pub struct PermissionProfileSummary {
 #[serde(rename_all = "camelCase")]
 pub struct PermissionProfileListResponse {
     pub data: Vec<PermissionProfileSummary>,
-    /// Opaque cursor to pass to the next call to continue after the last item.
-    /// If None, there are no more items to return.
     pub next_cursor: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ActivePermissionProfile {
-    /// Identifier from `default_permissions` or the implicit built-in default,
-    /// such as `:workspace` or a user-defined `[permissions.<id>]` profile.
     pub id: String,
-    /// Parent profile identifier from the selected permissions profile's
-    /// `extends` setting, when present.
     #[serde(default)]
     pub extends: Option<String>,
 }
@@ -144,7 +131,6 @@ impl ActivePermissionProfile {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AdditionalPermissionProfile {
-    /// Partial overlay used for per-command permission requests.
     pub network: Option<AdditionalNetworkPermissions>,
     pub file_system: Option<AdditionalFileSystemPermissions>,
 }
@@ -301,7 +287,6 @@ pub struct PermissionsRequestApprovalParams {
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
-    /// Unix timestamp (in milliseconds) when this approval request started.
     pub started_at_ms: i64,
     pub cwd: AbsolutePathBuf,
     pub reason: Option<String>,

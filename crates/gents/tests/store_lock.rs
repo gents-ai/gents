@@ -1,8 +1,4 @@
 //! Store lock lifetime: exclusion while held, release when dropped.
-//!
-//! A forked child shares its parent's open file descriptions until exec.
-//! The fork regression serializes with every other lock assertion under
-//! `FORK_EXCLUSION` so inherited descriptors belong to its controlled fixture.
 
 use std::fs;
 use std::sync::{Mutex, MutexGuard};
@@ -78,8 +74,6 @@ fn every_alias_of_a_store_takes_the_same_lock() {
     );
     drop(held);
 
-    // `--data-dir .` names the current directory, which has a name once
-    // resolved.
     let current = lock_store(temp.path(), &real.join(".")).unwrap();
     assert_eq!(
         current.path(),
@@ -114,9 +108,7 @@ fn a_home_lock_without_a_store_excludes_the_store_created_later() {
     lock_store(&home, &default_data_dir(&home)).unwrap();
 }
 
-/// A forked child blocked until its release pipe closes. Dropping it
-/// closes the pipe and reaps the child, so a failed assertion neither
-/// leaves the child blocked nor leaks it.
+/// A forked child blocked until its release pipe closes.
 #[cfg(unix)]
 struct BlockedChild {
     pid: libc::pid_t,
@@ -161,9 +153,8 @@ fn a_store_outside_the_home_does_not_exclude_the_home_default_store() {
     fs::create_dir_all(&outside).unwrap();
     fs::create_dir_all(default_data_dir(&home)).unwrap();
 
-    // A server on `--data-dir <outside>` claims that directory's lock, so
-    // nothing about the home's own store may be concluded from it. Reclaiming
-    // or clearing a lock keyed on the home would act on a live server's state.
+    // A server on `--data-dir <outside>` holds that directory's lock; a lock
+    // keyed on the home must not conclude anything about or disturb it.
     let held = lock_store(&home, &outside).unwrap();
     assert_eq!(
         held.path(),
@@ -176,7 +167,7 @@ fn a_store_outside_the_home_does_not_exclude_the_home_default_store() {
     assert_ne!(held.path(), home_store.path());
 }
 
-/// A fork inherits the open file description. The runtime owner must unlock
+/// A fork inherits the open file description; the lock owner must unlock
 /// explicitly on drop so a child blocked before exec cannot retain its lock.
 #[cfg(unix)]
 #[test]

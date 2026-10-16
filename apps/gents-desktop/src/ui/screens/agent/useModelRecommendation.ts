@@ -11,14 +11,10 @@ type AdvertisedModel = NonNullable<InferenceBackendView["advertisedModels"]>[num
 
 /**
  * The settings a backend recommends for a model, asked for 150ms after the
- * backend, the model or what the backend advertises about it last changed.
- * An answer is held with what it was asked about, so it shows only while
- * that is still the question: no stale recommendation (or error) outlives
- * a change, and none is shown while the next is out.
- *
- * `choose` marks a model the person just picked; when its recommendation
- * lands, `onChosen` applies it, where a recommendation for a model that was
- * already set leaves the draft's own values alone.
+ * backend, model or advertised facts last change; an answer shows only
+ * while what it was asked about is still current. `choose` marks a model
+ * the person just picked; when its recommendation lands, `onChosen`
+ * applies it.
  */
 export function useModelRecommendation({
   recommend,
@@ -39,7 +35,6 @@ export function useModelRecommendation({
 }) {
   const model = modelName.trim();
   const advertisedKey = JSON.stringify(advertised ?? null);
-  /* everything the request is about; the backend's concurrency is not */
   const asked = [
     backendId,
     model,
@@ -97,7 +92,6 @@ export function useModelRecommendation({
       canceled = true;
       window.clearTimeout(timeout);
     };
-    // `asked` names every input the request reads.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [asked, recommend]);
 
@@ -105,8 +99,6 @@ export function useModelRecommendation({
   return {
     recommendation: current?.recommendation ?? null,
     error: current?.error ?? null,
-    /** the person picked this model: its recommendation, when it lands, is
-        applied to the draft */
     choose(nextBackendId: string, nextModelName: string) {
       chosen.current = `${nextBackendId}\u0000${nextModelName.trim()}`;
     },

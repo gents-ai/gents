@@ -233,7 +233,6 @@ async fn read_tool_output_running_returns_live_stream_tail() {
         registry(tools, &["bash_unrestricted"]),
     )
     .await;
-    // Removing the gate releases the child, including when an assertion unwinds.
     let gate = tempfile::NamedTempFile::new_in(tempdir.path()).expect("process release gate");
     let gate_name = gate.path().file_name().unwrap().to_str().unwrap();
     let handle = background_tool_with_args(

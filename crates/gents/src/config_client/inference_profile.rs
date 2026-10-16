@@ -26,9 +26,7 @@ pub async fn list_inference_profiles_in_txn(
         .collect()
 }
 
-/// Replace a complete inference profile through the common configuration writer.
-/// Sampling and execution settings are references, never a second set of profile
-/// fields. Explicit sparse patches remain owned by the patch API.
+/// Replace a complete inference profile; sparse patches remain owned by the patch API.
 pub async fn write_inference_profile_document(
     access: &ConfigAccess,
     profile: &InferenceProfile,
@@ -58,9 +56,7 @@ pub async fn write_inference_profile_document(
         .await
 }
 
-/// The accounts a agent's turns need: its profile's, then its context's
-/// compaction profile's, the chain readiness walks. A profile or backend
-/// that is not stored is left out.
+/// Accounts for `agent_id`'s profile and compaction profile; missing profiles or backends are skipped.
 pub async fn agent_accounts(
     access: &ConfigAccess,
     node_did: &str,

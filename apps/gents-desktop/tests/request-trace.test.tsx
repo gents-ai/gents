@@ -65,8 +65,6 @@ describe("request trace panel", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("gents_exec — Completed")).toBeInTheDocument();
     expect(screen.getByText("materialized")).toBeInTheDocument();
-    // The response row must render its own summary vocabulary (status plus
-    // error_message), not fall through to the bare `kind` label.
     expect(
       screen.getByText("materialized — materialization dropped the tool tail"),
     ).toBeInTheDocument();
@@ -123,8 +121,6 @@ describe("request trace panel", () => {
         producer_call_id: "call-172",
       }),
     ).toBe("per-turn reduction #2 — 235605 → 16488 tokens — call-172");
-    // A reduction missing its token pair must not fabricate a count; the
-    // caller id alone remains.
     expect(
       eventSummary({
         kind: "provider_context_reduction",
@@ -147,7 +143,6 @@ describe("request trace panel", () => {
         created_at: "2026-08-07T12:00:02Z",
       }),
     ).toBe("2026-08-07T12:00:02Z");
-    // A response can use queued_at when no later timestamp exists.
     expect(
       eventTimestamp({
         kind: "response",
@@ -155,8 +150,6 @@ describe("request trace panel", () => {
       }),
     ).toBe("2026-08-07T12:00:01Z");
     expect(eventSummary({ kind: "unknown_future_kind" })).toBe("unknown_future_kind");
-    // Whitespace-only strings are not content: the summary must not render an
-    // empty role/preview pair for them.
     expect(eventSummary({ kind: "message", role: "user", content: "   " })).toBe(
       "user",
     );

@@ -2,18 +2,6 @@ import Proofs.CanonicalOutput.Hydration
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Finset.Card
 
-/-!
-# Session hydration state
-
-The model separates admission from reference closure. Pairing, membership, and
-session ownership admit a request; its unique `ClosureInput` is then executed by
-`CanonicalOutput.Hydration.buildManifest` against exact owner evidence. It is
-not a broad session inventory. In particular,
-a retained fork dependency may belong to an origin session without granting that
-session. Pairing observations are read-only admission inputs; hydration owns
-deliveries and terminal outcomes.
--/
-
 namespace SessionHydration
 
 structure Request where
@@ -22,14 +10,11 @@ structure Request where
   requester : String
   node : String
   session : String
-  /-- Native identity supplied by the session owner. Zero is reserved for
-  abstract enrollment fixtures which never install closure input. -/
+  /-- Zero `nativeSession` is reserved for abstract enrollment fixtures which
+  never install closure input. -/
   nativeSession : SessionId := 0
   deriving DecidableEq, Repr
 
-/-- Read-only ownership projection of canonical AgentSession. This is not a second
-durable session document. Hydration requires a present exact requester; absent or
-invalid requester metadata never becomes wildcard membership. -/
 structure SessionOwner where
   session : String
   nativeSession : SessionId
@@ -37,14 +22,12 @@ structure SessionOwner where
   node : String
   deriving DecidableEq, Repr
 
-/-- A locally desired pairing whose exact requester/node filter was applied for this peer. -/
 structure AppliedPairingRoute where
   peer : String
   requester : String
   node : String
   deriving DecidableEq, Repr
 
-/-- An active membership already verified against the selected network root. -/
 structure VerifiedActiveMembership where
   network : String
   member : String
@@ -58,8 +41,6 @@ structure Document where
 def Request.authorizationScope (r : Request) : CanonicalOutput.Hydration.AuthorizationScope :=
   ⟨r.peer, r.requester, r.node, r.session, r.nativeSession⟩
 
-/-- Inputs retained at the consumed boundary. Selection executes the canonical
-builder; the catalog never accepts a caller-supplied manifest. -/
 structure ClosureInput where
   request : Request
   bases : List CanonicalOutput.Hydration.AuthorizedBase
@@ -87,16 +68,15 @@ inductive Outcome where
   | rejected
   deriving DecidableEq, Repr
 
-/-- Result after the bounded delivery attempt budget is consumed. An
-`indeterminate` result may follow partial transport side effects; it only says
-that delivery of the complete selected set was not confirmed. -/
+/-- `indeterminate` may follow partial transport side effects; it only says that
+delivery of the complete selected set was not confirmed. -/
 inductive DeliveryResult where
   | confirmed
   | indeterminate
   deriving DecidableEq, Repr
 
-/-- Result of committing the signed terminal hydration receipt. Delivery and
-terminal persistence are separate effects in the Rust reconciler. -/
+/-- Delivery and terminal persistence are separate effects in the Rust
+reconciler. -/
 inductive TerminalWriteResult where
   | committed
   | failed
@@ -159,7 +139,7 @@ def buildDocuments (input : ClosureInput) :
     input.deniedHeaders input.deniedSegments input.dependencyDenials input.effects
   pure (manifest.map canonicalDocument).toFinset
 
-/-- `none` means absent/ambiguous input or failed canonical authorization. A
+/-- `none` means absent/ambiguous input or failed canonical authorization; a
 successful empty manifest is `some ∅` and remains distinguishable. -/
 def selectedDocuments (cat : Catalog) (r : Request) : Option (Finset Document) :=
   (closureInputFor cat.closureInputs r).bind fun input =>

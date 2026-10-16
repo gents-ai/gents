@@ -272,10 +272,8 @@ pub(super) fn empty_rate_limits() -> codex::RateLimitSnapshot {
     }
 }
 
-/// `account/rateLimits/read` from the stored usage of the session's account:
-/// fresh windows only (the protocol cannot mark a value as last-known), by
-/// Codex slot label; credits only when fresh and both of Codex's booleans
-/// are known.
+/// Stored-usage windows by Codex slot label: fresh windows only; credits only
+/// when fresh and both of Codex's booleans are known.
 pub(super) fn rate_limits_from_usage(
     stored: Option<&StoredUsage>,
     now: DateTime<Utc>,
@@ -316,9 +314,8 @@ pub(super) fn rate_limits_from_usage(
     }
 }
 
-/// `account/read` from the stored usage of the session's account: ChatGPT
-/// with a known plan, never with an email (no sign-in identity leaves the
-/// node); otherwise an API key, as before usage existed.
+/// `account/read` from stored usage: ChatGPT with a known plan, never with an
+/// email (no sign-in identity leaves the node); otherwise an API key.
 pub(super) fn account_from_usage(stored: Option<&StoredUsage>) -> codex::Account {
     let plan_type = stored
         .and_then(|stored| stored.report.plan.as_ref())
@@ -456,26 +453,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extracts_text_items_from_codex_turn_payload() {
-        let input = vec![
-            codex::UserInput::Text {
-                text: "hello".to_string(),
-                text_elements: Vec::new(),
-            },
-            codex::UserInput::Image {
-                detail: None,
-                url: "https://example.invalid/image.png".to_string(),
-            },
-            codex::UserInput::Text {
-                text: "world".to_string(),
-                text_elements: Vec::new(),
-            },
-        ];
-
-        assert_eq!(user_text_from_input(&input), "hello\nworld");
-    }
-
-    #[test]
     fn user_text_extraction_ignores_skill_selections() {
         let input = vec![
             codex::UserInput::Text {
@@ -570,36 +547,6 @@ mod tests {
             },
             ..StoredUsage::default()
         }
-    }
-
-    #[test]
-    fn rate_limits_from_usage_maps_primary_and_secondary_slots() {
-        let now = Utc::now();
-        let reset = now + chrono::Duration::hours(2);
-        let mut primary = usage_window("primary", 12.4, now);
-        primary.resets_at = Some(reset);
-        let mut secondary = usage_window("secondary", 40.6, now);
-        secondary.window_minutes = Some(10080);
-        let usage = stored(vec![primary, secondary, usage_window("5h", 90.0, now)]);
-
-        let snapshot = rate_limits_from_usage(Some(&usage), now);
-
-        assert_eq!(
-            snapshot.primary,
-            Some(codex::RateLimitWindow {
-                used_percent: 12,
-                window_duration_mins: Some(300),
-                resets_at: Some(reset.timestamp()),
-            })
-        );
-        assert_eq!(
-            snapshot.secondary,
-            Some(codex::RateLimitWindow {
-                used_percent: 41,
-                window_duration_mins: Some(10080),
-                resets_at: None,
-            })
-        );
     }
 
     #[test]

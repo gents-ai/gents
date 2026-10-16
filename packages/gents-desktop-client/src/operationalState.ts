@@ -20,7 +20,6 @@ export type OperationalStatusLayer =
 
 export type OperationalRecoveryAction = "configureInference" | null;
 
-/** Shared presentation-safe status. Surfaces choose density, not meaning. */
 export type OperationalStatus = {
   kind: OperationalStatusKind;
   layer: OperationalStatusLayer;
@@ -52,15 +51,11 @@ export type DeploymentOperationalState = {
   sync: OperationalStatus;
   agent: OperationalStatus;
   reconcile: OperationalStatus;
-  /** First status that prevents a chat request from being admitted. */
   admissionBlocker: OperationalStatus | null;
-  /** Highest-priority fleet/header summary, including non-blocking reconcile. */
   summary: OperationalStatus;
   nodeReadiness: NodeReadinessDecision;
 };
 
-/* Readiness reads a deployment's own settings, not the sessions and mailbox
-   items it lists, so a screen holding a node without those can ask. */
 type DeploymentSettings = Omit<DeploymentView, "sessions" | "mailboxItems">;
 
 function status(
@@ -105,7 +100,6 @@ function fallbackAgentId(deployment: DeploymentSettings): string | null {
   return deployment.agents.find((agent) => agent.enabled)?.agentId ?? null;
 }
 
-/** Keep an explicit selection only while its database agent row exists. */
 export function selectedAgentIdForDeployment(
   deployment: DeploymentSettings | null,
   selectedAgentId: string | null,
@@ -120,7 +114,6 @@ export function selectedAgentIdForDeployment(
   return fallbackAgentId(deployment);
 }
 
-/** Select one runtime-authored readiness verdict for admission and display. */
 export function selectedNodeReadinessDecision(
   deployment: DeploymentSettings | null,
   selectedAgentId: string | null,

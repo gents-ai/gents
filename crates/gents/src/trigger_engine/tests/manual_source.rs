@@ -14,9 +14,6 @@ fn resolved_task_for_test(task_id: &str, agent_id: &str, prompt_template: &str) 
     }
 }
 
-/// Build an `ActiveRuntimeSnapshot` with a single active task and no other
-/// live state. Mirrors `snapshot_with_schedules`. Used by the manual-fire
-/// tests that need `snapshot.active_tasks()` to resolve the intent's task.
 fn snapshot_with_active_task(task: ResolvedTask) -> Arc<ActiveRuntimeSnapshot> {
     let mut tasks = HashMap::new();
     tasks.insert(task.task_id.clone(), task);
@@ -93,8 +90,6 @@ async fn manual_source_run_task_now_rejects_unknown_task() {
 async fn manual_source_next_fire_returns_none_after_cancel() {
     let cancel = CancellationToken::new();
     let (mut source, _handle) = ManualSource::new(cancel.clone());
-
-    // Cancel immediately.
     cancel.cancel();
 
     let result = tokio::time::timeout(std::time::Duration::from_millis(200), source.next_fire())
@@ -214,10 +209,6 @@ async fn production_materializer_persists_event_source_document_lineage() {
     verifier.verify_fresh(&queued, "general").await.unwrap();
 }
 
-/// #2064 and Lean `Triggers.resolveSession`: an event fire rendered into an
-/// existing session that a paired desktop started is written under the
-/// desktop's requester (`Enrollment.runtimeRequesterScope`), passes final
-/// admission, claims into that same session and resumes it.
 #[tokio::test]
 async fn production_event_fire_into_a_paired_client_session_adopts_its_requester() {
     use crate::identity::NodeIdentity;
@@ -532,23 +523,11 @@ async fn production_materializer_rejects_manual_lineage_with_trigger_id() {
         .await
         .expect_err("Manual materialize with trigger_id must fail before persistence");
 
-    assert!(
-        err.to_string().contains("must not carry trigger_id"),
-        "unexpected manual lineage validation error: {err}"
-    );
+    assert!(err.to_string().contains("must not carry trigger_id"));
 }
 
-/// Task 6 pinning: `TriggerEngine::dispatch` must pass `TriggerKind::Manual`
-/// intents through without consulting `active_schedules()` /
-/// `active_event_triggers()` (no enabled-gate rejection for operator
-/// fires), render the prompt template against `args_vars`, and invoke the
-/// materializer exactly once with `(trigger_id = None, trigger_kind =
-/// Manual, rendered = "hello Amy")`.
 #[tokio::test]
 async fn dispatch_manual_intent_renders_with_args_and_materializes() {
-    // Snapshot carries the active task but NO active schedules / event
-    // triggers. A Schedule/Event intent would be gated off here; Manual
-    // must not be.
     let task = resolved_task_for_test("greet-user", "general", "hello {{ args.name }}");
     let snapshot = snapshot_with_active_task(task.clone());
     let (_tx, rx) = watch::channel(snapshot);
@@ -574,29 +553,16 @@ async fn dispatch_manual_intent_renders_with_args_and_materializes() {
     let result = engine.dispatch(intent).await;
 
     match result {
-        FireResult::Fired { request_id } => assert_eq!(
-            request_id, "req-0",
-            "spy materializer hands back sequentially-numbered ids starting at req-0"
-        ),
-        other => panic!("expected Fired for Manual intent (bypasses enabled-gate), got {other:?}"),
+        FireResult::Fired { request_id } => assert_eq!(request_id, "req-0"),
+        other => panic!("expected Fired for Manual intent, got {other:?}"),
     }
 
     let calls = materializer.calls();
-    assert_eq!(
-        calls.len(),
-        1,
-        "exactly one materialize call expected for Manual dispatch"
-    );
+    assert_eq!(calls.len(), 1);
     let (trigger_id, kind, rendered) = &calls[0];
-    assert!(
-        trigger_id.is_none(),
-        "Manual intents carry trigger_id = None; got {trigger_id:?}"
-    );
+    assert!(trigger_id.is_none());
     assert_eq!(*kind, TriggerKind::Manual);
-    assert_eq!(
-        rendered, "hello Amy",
-        "dispatch must render the `args.name` template against args_vars"
-    );
+    assert_eq!(rendered, "hello Amy");
 }
 
 #[tokio::test]
@@ -630,21 +596,16 @@ async fn dispatch_rejects_manual_intent_with_trigger_id() {
     let result = engine.dispatch(intent).await;
 
     match result {
-        FireResult::Rejected { error } => assert!(
-            error.contains("must not carry trigger_id"),
-            "unexpected manual well-formedness error: {error}"
-        ),
+        FireResult::Rejected { error } => {
+            assert!(error.contains("must not carry trigger_id"), "{error}")
+        }
         other => panic!("expected Rejected for malformed Manual intent, got {other:?}"),
     }
-    assert!(
-        materializer.calls().is_empty(),
-        "malformed Manual intent must not reach the materializer"
-    );
+    assert!(materializer.calls().is_empty());
     assert!(
         matches!(
             result_captured.lock().unwrap().as_ref(),
-            Some(FireResult::Rejected { error }) if error.contains("must not carry trigger_id")
+            Some(FireResult::Rejected { .. })
         ),
-        "on_result should receive the same malformed Manual error"
     );
 }

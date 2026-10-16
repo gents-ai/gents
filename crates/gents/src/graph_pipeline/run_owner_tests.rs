@@ -1,8 +1,3 @@
-//! Native-overlap helpers for GraphRun contract tests.
-//!
-//! These intentionally bypass the production replay owner so tests can hold
-//! overlapping storage snapshots and assert the underlying conflict behavior.
-
 use super::*;
 
 pub(super) async fn capture_failure_txn(

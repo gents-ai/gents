@@ -256,9 +256,6 @@ fn terminal_request_does_not_create_a_mutable_live_tail() {
         .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })));
 }
 
-// The response-row overlay tests below retain their UI guarantees under the
-// canonical contract: live bytes are no longer a mutable store collection, so
-// an active request asks the shared projector for a fresh snapshot instead.
 #[test]
 fn session_snapshot_consumes_generated_live_overlay_cases() {
     let request = AgentRequestRow {
@@ -572,11 +569,7 @@ fn message_request_id_is_never_the_request_doc_id() {
         .iter()
         .map(|message| message.request_id.as_deref())
         .collect::<Vec<_>>();
-    assert_eq!(
-        request_ids,
-        vec![Some("req-1"), None, None],
-        "a joined request yields the logical id; an absent request row or fork-placed history yields none, and the doc id never appears"
-    );
+    assert_eq!(request_ids, vec![Some("req-1"), None, None]);
 }
 
 #[test]
@@ -631,8 +624,7 @@ fn only_the_authored_prompt_row_owns_the_request_turn() {
                     ..
                 },
             ] if context_request == "req-1" && prompt_request == "req-1"
-        ),
-        "the workspace context row carries the request's id but does not own the turn; the prompt row does"
+        )
     );
 }
 

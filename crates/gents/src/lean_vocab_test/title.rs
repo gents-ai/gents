@@ -45,7 +45,6 @@ pub(crate) struct LeanTitleRequestAdmissionCase {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanTitleRequest {
-    /// Signed causal hop; the native adapter maps it to `request_hop`.
     pub(crate) hop: u32,
     pub(crate) request_id: String,
     pub(crate) purpose: LeanRequestPurpose,

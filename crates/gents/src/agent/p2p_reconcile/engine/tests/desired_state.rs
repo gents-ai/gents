@@ -17,8 +17,8 @@ pub(super) fn desired_row(template: Option<&str>, node_did: Option<&str>) -> Pai
     }
 }
 
-/// A `Push` template (conversation) resolves to NO subscription collections
-/// (no gossip leak) and a per-peer scope filter over the template set.
+/// Push templates resolve to no subscription collections (no gossip leak)
+/// and a per-peer scope filter over the template set.
 #[test]
 fn push_template_resolves_to_filter_without_subscription() {
     let desired = desired_from_pairing_row(
@@ -43,8 +43,8 @@ fn push_template_resolves_to_filter_without_subscription() {
     );
 }
 
-/// A `Replicate` template (agent-config) subscribes to its collection set
-/// and carries an EMPTY (unfiltered) replicator filter.
+/// Replicate templates subscribe to their collection set with an empty
+/// (unfiltered) replicator filter.
 #[test]
 fn replicate_template_resolves_to_subscription_without_filter() {
     let desired = desired_from_pairing_row(
@@ -129,9 +129,6 @@ fn agent_target_host_template_filters_return_projection_to_requester() {
 
 #[test]
 fn app_collections_on_control_plane_path_soft_skips() {
-    // A base/PeerPairingDesired row naming app-collections has no way to
-    // supply row collections; it must resolve to no wiring (soft-skip),
-    // never an empty-collection replicator.
     let out = desired_from_pairing_row(
         PairingStateRow {
             node_did: Some("did:key:peer".to_string()),
@@ -211,9 +208,9 @@ fn app_collections_empty_collections_soft_skips() {
     );
 }
 
-/// Residual (documented, not softened in #657): a foreign `node_did` on a
-/// data-plane row still hard-fails the whole peer load (`desired_read_failed`),
-/// including a co-existing control pairing. Security refusal, not soft-skip.
+/// #657: a foreign `node_did` on a data-plane row still hard-fails the whole
+/// peer load (`desired_read_failed`), including a co-existing control pairing.
+/// Security refusal, not soft-skip.
 #[test]
 fn foreign_node_did_still_hard_fails_whole_peer_load() {
     let signed_endpoint = EnrollmentEndpointEntry {

@@ -1,4 +1,3 @@
-/* What the sessions list is narrowed to, besides its nodes. */
 import { storedStrings } from "./storage";
 
 export type SessionState = "live" | "failed";
@@ -22,8 +21,6 @@ export const hasFilter = (f: SessionFilter) =>
 const STATES: readonly string[] = ["live", "failed"];
 const SOURCES: readonly string[] = ["person", "task", "session"];
 
-/** A stored filter, read back: a state or source this build does not offer
-    is dropped, not misread. */
 export function restoreSessionFilter(stored: unknown): SessionFilter {
   const saved = typeof stored === "object" && stored !== null ? stored : {};
   const field = (key: string) => storedStrings((saved as Record<string, unknown>)[key]);

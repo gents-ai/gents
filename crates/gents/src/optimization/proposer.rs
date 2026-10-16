@@ -1,27 +1,21 @@
 //! The proposer seam: what a proposer is told, and what it returns.
 //!
 //! A proposer receives data and returns a value. It holds no `ConfigAccess`,
-//! opens no transaction and names no path, so it cannot read a check's
-//! parameters beyond what a failing check's own message states, another
-//! case's body or the database it is being optimized against; `target.rs`
-//! and `subject.rs` build the patch from the text it returns. A proposer
-//! that asks a agent holds this only while the agent has no tools, so
-//! `gents optimization run` refuses one whose resolved tool surface is not
-//! empty.
+//! opens no transaction and names no path; `target.rs` and `subject.rs` build
+//! the patch from the text it returns. A proposer that asks an agent holds
+//! this only while the agent has no tools, so `gents optimization run` refuses
+//! one whose resolved tool surface is not empty.
 //!
-//! [`ProposalInput`] is therefore a boundary type, and its field list is the
-//! statement of what an optimizer may learn. Feedback reaches it only from the
-//! round's train run, and the eval runner has already refused to record
-//! feedback on any other split.
+//! [`ProposalInput`] is a boundary type, and its field list is the statement of
+//! what an optimizer may learn. Feedback reaches it only from the round's
+//! train run.
 
 use std::sync::Mutex;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-/// One acceptance check's advice from the train run. No case, no stage, and
-/// no check parameters beyond what the check's own message states: a check's
-/// name, what it scored, and what it had to say.
+/// One acceptance check's advice from the train run.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckFeedback {
     pub check: String,
@@ -40,7 +34,7 @@ pub struct Rejection {
 }
 
 /// Everything a proposer is told. Adding a field here is a decision about what
-/// reaches a model, and a test pins the list.
+/// reaches a model.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProposalInput {
     pub round: u32,
@@ -173,9 +167,6 @@ mod tests {
         assert_eq!(proposal.text, "baseline");
     }
 
-    /// Constraint 13: the proposer sees texts, scores and check names. It never
-    /// sees a case id, a stage prompt, a check's params, a tier, a split label
-    /// or a raw verdict payload.
     #[test]
     fn the_proposal_input_carries_nothing_protected() {
         let json = serde_json::to_value(input(1, "baseline")).unwrap();

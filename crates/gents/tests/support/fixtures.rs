@@ -7,12 +7,8 @@ use gents::{
     RuntimeNode,
 };
 
-/// Every pack fixture directory under `tests/fixtures/packs`, sorted by
-/// name. Shared by every test that must cover "every fixture pack" so a new
-/// fixture is picked up by all of them without each keeping its own copy of
-/// the list. Panics on any unreadable directory or manifest, and when a
-/// known fixture is missing, so a broken fixture cannot drop out of the
-/// coverage unnoticed.
+/// Every pack fixture directory under `tests/fixtures/packs`, sorted by name;
+/// panics when any manifest is unreadable or a known fixture is missing.
 pub fn fixture_pack_names() -> Vec<String> {
     const KNOWN: [&str; 7] = [
         "review_graph",
@@ -130,12 +126,9 @@ pub fn test_agent_for_node(
     }
 }
 
-/// Publish the canonical document chain that grants one behavior the
-/// session-message tools over `targets`.
-///
-/// Publish the complete behavior-owned tool graph used by integration tests.
-/// Targets are standalone documents, `Tools` selects them, `AgentContext`
-/// selects the tools, and the behavior selects the context.
+/// Publish the complete behavior-owned tool graph used by integration tests:
+/// standalone `AgentTarget` documents, `Tools` selecting them, `AgentContext`
+/// selecting the tools, and the behavior selecting the context.
 pub async fn configure_child_agent(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
@@ -390,7 +383,7 @@ pub async fn bind_default_agent_backend(
 }
 
 /// Publish the canonical principal → behavior → inference profile → backend
-/// chain used by daemon integration fixtures with an explicit behavior id.
+/// chain with an explicit behavior id.
 pub async fn bind_agent_backend(
     node: &Arc<EmbeddedNode>,
     node_did: &str,

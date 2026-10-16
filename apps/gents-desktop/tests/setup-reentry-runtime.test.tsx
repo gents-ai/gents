@@ -13,8 +13,6 @@ import { setupErrorMessage } from "../src/lib/setupErrors";
 import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 
-/* a connected account reads "Connected as <account>", or "Account connected"
-   when it has no name */
 const CONNECTED = /^(Account connected|Connected as )/;
 
 type MockApi = Record<string, ReturnType<typeof vi.fn>>;
@@ -83,7 +81,6 @@ const NOT_SAVED = new BridgeInvokeError({
   endpoint: null,
 });
 
-/* The bridge's held sign-in, observed through the provider account list. */
 function holdFailedSignIn(api: MockApi) {
   let held = false;
   api.listProviderAccounts.mockImplementation(async () =>
@@ -237,7 +234,6 @@ describe("setup re-entry at the provider step", () => {
     expect(screen.queryByRole("button", { name: "Sign in" })).not.toBeInTheDocument();
     expect(api.claudeLogin).not.toHaveBeenCalled();
 
-    // Try again reuses the same start + readiness owner.
     api.startManagedServer.mockResolvedValue(status({ state: "running" }));
     api.managedServerStatus
       .mockResolvedValueOnce(status({ state: "stopped" }))

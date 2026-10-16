@@ -37,8 +37,6 @@ impl TargetField {
         self.pack_slot().2
     }
 
-    /// Where the field sits in a raw `pack_config.json`: the array, the
-    /// document id key and the field.
     /// The request naming this field of the document `id`.
     pub fn job_target(&self, id: &str) -> JobTarget {
         match self {
@@ -47,6 +45,8 @@ impl TargetField {
         }
     }
 
+    /// Where the field sits in a raw `pack_config.json`: the array, the
+    /// document id key and the field.
     pub fn pack_slot(&self) -> (&'static str, &'static str, &'static str) {
         match self {
             Self::AgentContextSystemPrompt => ("contexts", "context_id", "system_prompt"),
@@ -69,8 +69,7 @@ impl Target {
     }
 }
 
-/// What an operator asks a job to change: the system prompt of the context the
-/// subject agent names, or the prompt template of one of its tasks.
+/// What an operator asks a job to change.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JobTarget {
     Context,
@@ -98,8 +97,8 @@ pub struct FrozenDocument {
 pub type Closure = Vec<(Collection, Value)>;
 
 /// Whether documents of `collection` belong to the frozen closure. An eval
-/// definition is the instrument, not the subject: it is frozen separately in
-/// `JobOrigin::definition`, and editing it is `definition_changed`.
+/// definition is frozen separately in `JobOrigin::definition` (F5), not in the
+/// closure.
 pub(crate) fn is_closure_collection(collection: Collection) -> bool {
     collection != Collection::EvalDefinition
 }
@@ -224,9 +223,9 @@ pub fn target_plan(
 }
 
 /// The first way a baseline pack's configuration differs from the live
-/// configuration a job would promote into. A job evaluates the frozen live
-/// revision (#1455), not a transfer to it, so a pack that installs any other
-/// configuration beside the target prompt cannot be a job's baseline.
+/// configuration a job would promote into: a job evaluates the frozen live
+/// revision (#1455), so a pack installing any other configuration cannot be a
+/// job's baseline.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BaselineMismatch {
     pub collection: Collection,
@@ -269,8 +268,7 @@ impl std::error::Error for BaselineMismatch {}
 ///   live binding.
 /// - `tags`: installing a pack stamps its provenance tag and merges retained
 ///   discovery tags, the trial's install as much as the live one, and tags
-///   never select what executes (the pack owner compares immutable resources
-///   without them for the same reason).
+///   never select what executes.
 ///
 /// Workspace and host paths are not configuration documents: a trial
 /// publishes its own `WorkspaceRoot`, which no closure holds.
@@ -536,9 +534,6 @@ mod tests {
         assert_eq!(current_text(&after, &target()).unwrap(), "a");
     }
 
-    /// A job request names a target as one value: a context target carries
-    /// no task id to ignore, and a frozen target reads back as the request
-    /// that froze it.
     #[test]
     fn a_job_target_is_the_request_side_of_a_frozen_target() {
         assert_eq!(
@@ -558,8 +553,6 @@ mod tests {
         assert_eq!(task.job_target(), JobTarget::Task("plan".into()));
     }
 
-    /// Finding F5: a definition is frozen in `JobOrigin::definition`, never in
-    /// the closure, so editing it is `definition_changed` and not drift.
     #[test]
     fn eval_definitions_never_enter_the_closure() {
         assert!(!is_closure_collection(Collection::EvalDefinition));

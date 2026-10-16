@@ -13,11 +13,6 @@ const SCOPE_LABEL = {
   client: "Desktop app data",
 } as const;
 
-/**
- * The single answer to a local home this version cannot open, whichever
- * operation found it: back it up (the default), delete it, or quit without
- * touching it.
- */
 export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenProps) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const report = home.report;

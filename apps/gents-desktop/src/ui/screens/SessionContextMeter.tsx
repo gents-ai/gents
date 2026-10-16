@@ -14,9 +14,7 @@ function formatTokens(value: number) {
   return `${amount >= 10 ? Math.round(amount) : amount.toFixed(1).replace(/\.0$/, "")}k`;
 }
 
-/* how full the context is, as a stroked ring: the track is the window, the
-   arc is what the conversation has used; past the compaction threshold the
-   arc takes the brand color, so the number beside it need not */
+// the arc takes the brand color past the compaction threshold
 function ContextRing({
   used,
   window,
@@ -68,14 +66,10 @@ export function SessionContext({
   compact = false,
 }: {
   context: DesktopSessionSnapshot["context"];
-  /* in the compact header: the ring alone, the numbers in its tooltip and popover */
   compact?: boolean;
 }) {
   const popover = useExclusivePopover();
   const used = Math.max(0, context.estimatedConversationTokens);
-  /* the configured window as the runtime resolves it, so an edit to the
-     profile shows at once; the last request's window is history. A window
-     the runtime rejects is reported, never shown as the one in use. */
   const windowError = context.contextWindowError ?? null;
   const window = Math.max(1, context.contextWindow);
   const threshold = Math.max(0, context.compactionThresholdTokens);
@@ -97,8 +91,7 @@ export function SessionContext({
       onOpenChange={popover.onOpenChange}
       onOpenChangeComplete={popover.onOpenChangeComplete}
     >
-      {/* the details open on hover as well as click where there is a pointer;
-          on touch a tap opens them. Leaving trigger and popup both closes. */}
+      {/* details open on hover where there is a pointer; on touch a tap opens them */}
       <PopoverTrigger
         render={
           compact ? (

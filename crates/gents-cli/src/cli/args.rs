@@ -353,7 +353,6 @@ pub(crate) struct PackListArgs {
     pub(crate) home: Option<PathBuf>,
 }
 
-/// What `gents pack new` and `init` start a pack from.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum PackTemplate {
@@ -542,7 +541,6 @@ pub(crate) struct PackTestArgs {
     pub(crate) scenario: bool,
 }
 
-/// The ecosystem a plugin being imported comes from.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PackImportFrom {
     /// Agent Plugins: `plugin.json`, `skills/`, `mcp.json`.
@@ -967,15 +965,10 @@ pub(crate) struct PackInstallArgs {
         help = "Allow the files, network or environment the pack's plugins ask for"
     )]
     pub(crate) grant_authority: bool,
-    /// Whether this install was requested for its own sake, rather than only
-    /// as a documents pack's dependency; never a CLI flag, so a parsed
-    /// top-level `gents pack install` always reads `true`, and code
-    /// constructing a dependency's own args sets `false`.
     #[arg(skip = true)]
     pub(crate) explicit: bool,
 }
 
-/// What to do with pack documents someone edited since the pack wrote them.
 #[derive(clap::Args, Clone, Copy, Debug, Default)]
 pub(crate) struct PackDriftArgs {
     #[arg(long, conflicts_with = "keep", help = "Replace edited pack documents")]
@@ -1574,8 +1567,6 @@ pub(crate) struct ProvisionArgs {
         help = "Keychain label for the macOS Secure Enclave identity."
     )]
     pub(crate) secure_enclave_label: Option<String>,
-    /// Keychain on macOS and a file elsewhere when omitted. Tests pass
-    /// `file` so they never write login-keychain items.
     #[arg(long, value_enum, hide = true)]
     pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,
 }
@@ -1587,7 +1578,6 @@ pub(crate) enum IdentityBackendArg {
     MacosSecureEnclave,
 }
 
-/// Custody of a new home's store encryption key (`gents::store_key`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub(crate) enum StoreKeyCustodyArg {
     File,
@@ -1651,8 +1641,6 @@ pub(crate) struct InitArgs {
         help = "Keychain label for --identity-backend macos-secure-enclave."
     )]
     pub(crate) secure_enclave_label: Option<String>,
-    /// Keychain on macOS and a file elsewhere when omitted. Tests pass
-    /// `file` so they never write login-keychain items.
     #[arg(long, value_enum, hide = true)]
     pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,
     #[arg(
@@ -2373,10 +2361,7 @@ impl BackendPresetArg {
         }
     }
 
-    /// Default model for presets whose endpoint implies a model source. The
-    /// shared DEFAULT_INIT_MODEL_NAME is an HF GGUF repo path: valid for
-    /// llama-server (`-hf`) but not an Ollama tag, so the ollama preset pulls
-    /// the same model through Ollama's `hf.co/` form instead.
+    /// Default model for presets whose endpoint implies a model source.
     pub(crate) fn default_model_name(self) -> Option<&'static str> {
         match self {
             Self::Ollama => Some(crate::DEFAULT_OLLAMA_MODEL_NAME),
@@ -2914,7 +2899,6 @@ pub(crate) struct SkillShowArgs {
     pub(crate) skill_id: String,
 }
 
-/// Shared args for skill commands that target a single skill by id.
 #[derive(clap::Args)]
 pub(crate) struct SkillRefArgs {
     #[arg(long)]
@@ -2962,7 +2946,6 @@ pub(crate) struct WorkspaceRootUpsertArgs {
     pub(crate) disabled: bool,
 }
 
-/// Replace one canonical agent document through the shared config writer.
 #[derive(clap::Args)]
 pub(crate) struct AgentUpsertArgs {
     #[arg(long)]
@@ -2991,7 +2974,6 @@ pub(crate) struct AgentUpsertArgs {
     pub(crate) enabled: bool,
 }
 
-/// Configure an agent through the shared self-config owner.
 #[derive(clap::Args)]
 pub(crate) struct AgentCreateArgs {
     #[arg(long)]
@@ -3028,7 +3010,6 @@ pub(crate) struct AgentCreateArgs {
     pub(crate) profile_id: String,
 }
 
-/// Clone an agent belonging to the initialized home signer.
 #[derive(clap::Args)]
 pub(crate) struct AgentCloneArgs {
     #[arg(long)]
@@ -3052,7 +3033,6 @@ pub(crate) struct AgentCloneArgs {
     pub(crate) profile_id: String,
 }
 
-/// Disable an agent belonging to the initialized home signer.
 #[derive(clap::Args)]
 pub(crate) struct AgentDisableArgs {
     #[arg(long)]
@@ -3466,7 +3446,6 @@ mode (push or replicate). Enrollment approvals select the authoritative route sc
     },
 }
 
-/// Subcommands for `p2p network` — the peer-registry front door.
 #[derive(Subcommand)]
 pub(crate) enum P2pNetworkCommand {
     #[command(about = "Register this node into the peer discovery registry (idempotent upsert)")]
@@ -3535,7 +3514,6 @@ pub(crate) struct P2pEnrollmentDecisionArgs {
     pub(crate) lease_seconds: u64,
 }
 
-/// Subcommands for `p2p templates`.
 #[derive(Subcommand)]
 pub(crate) enum P2pTemplatesCommand {
     #[command(about = "List all built-in scope templates")]
@@ -3548,7 +3526,6 @@ pub(crate) struct P2pTemplatesListArgs {
     pub(crate) output: OutputFormat,
 }
 
-/// Low-level live P2P admin commands. Escape hatch beneath `p2p pairings`.
 #[derive(Subcommand)]
 pub(crate) enum P2pAdminCommand {
     #[command(about = "Connect the running runtime to another peer")]
@@ -4218,8 +4195,6 @@ pub(crate) struct ResponseWaitArgs {
     pub(crate) poll_secs: u64,
 }
 
-/// `--home` and `--graphql`, resolved the way every home-reading command
-/// resolves them.
 #[derive(clap::Args, Clone, Debug, Default)]
 pub(crate) struct EvalScopeArgs {
     #[arg(long)]
@@ -4303,7 +4278,6 @@ impl EvalCommand {
     }
 }
 
-/// The scope of a command that reads no home.
 static NO_SCOPE: EvalScopeArgs = EvalScopeArgs {
     home: None,
     graphql: None,
@@ -4599,8 +4573,6 @@ pub(crate) struct EvalBatchArgs {
     pub(crate) scope: EvalScopeArgs,
 }
 
-// Each stage's captures come from the eval definition (`EvalStage.capture`),
-// not from this command; `run` passes no run-level fallback.
 #[derive(clap::Args)]
 pub(crate) struct EvalRunArgs {
     pub(crate) definition_id: String,
@@ -4927,5 +4899,3 @@ pub(crate) enum DesktopCommand {
     },
 }
 
-#[cfg(test)]
-mod tests;

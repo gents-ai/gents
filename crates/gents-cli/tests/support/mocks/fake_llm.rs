@@ -1,15 +1,8 @@
-//! One robust axum-based fake OpenAI-compatible endpoint shared by every CLI
-//! mock. Replaces the several hand-rolled nonblocking `TcpListener` accept
-//! loops (whose `Err(_) => break` arm killed the listener on any transient
-//! accept error under CI load). The server runs on its own current-thread
-//! tokio runtime in a background thread, so it works whether the consuming
-//! test is `#[tokio::test]` or a blocking CLI-subprocess test.
-//!
-//! Agent is supplied per construction via a chat `Responder` closure, so the
-//! thin `MockChatEndpoint` / `MockModelEndpoint` / `MockOpenAIEndpoint` /
-//! spawn-mock wrappers keep their exact public APIs while sharing this one
-//! robust server. Whole-response and gated incremental SSE variants let tests
-//! distinguish visible streaming from delivery that waits for completion.
+//! One shared axum-based fake OpenAI-compatible endpoint for every CLI mock.
+//! The server runs on its own current-thread tokio runtime in a background
+//! thread, so it works whether the consuming test is `#[tokio::test]` or a
+//! blocking CLI-subprocess test. The responder closure is supplied per
+//! construction so the thin mock wrappers keep their public APIs.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -277,8 +270,8 @@ async fn handle_chat(
                 tokio::time::timeout(Duration::from_millis(50), gate.acquire()).await
             {
                 if let Ok(permit) = permit {
-                    // This is a barrier (for example, the app has closed), not
-                    // a quota. Retries after it opens must not block again.
+                    // This is a barrier (for example, the app closed), not a
+                    // quota: retries after it opens must not block again.
                     drop(permit);
                     return sse_response(body);
                 }

@@ -1,29 +1,14 @@
-//! Native LLM message family (issue #425, Layer B of the rig shed).
-//!
-//! Mirrors `rig::completion::message` field-for-field and serde-shape-for-
-//! serde-shape, with one deliberate deviation: every `OneOrMany<T>` position
-//! is a plain `Vec<T>`. rig's `OneOrMany` serializes as a plain JSON array
-//! (custom `serialize_seq`), so `Vec` is byte-compatible while dropping the
-//! custom container; the compile-time non-empty invariant is documented at
-//! use sites instead.
+//! Native LLM message family mirroring `rig::completion::message`
+//! field-for-field and serde-shape-for-serde-shape, with one deliberate
+//! deviation: every `OneOrMany<T>` position is a plain `Vec<T>` (rig
+//! serializes it as a plain JSON array, so bytes are unchanged).
 //!
 //! BYTE COMPATIBILITY IS THE PROVIDER CONTRACT: these native types preserve
 //! Rig's message serialization. Canonical transcript headers and output
 //! segments reconstruct this message family; they do not store a serialized
-//! message in an `AgentMessage.content` column.
-//! The golden tests at the bottom serialize each persisted shape through BOTH
-//! families and assert byte equality, plus deserialize recorded rig-era
-//! literals. When Layer A lands and rig leaves the tree, the live-rig halves
-//! of those tests are deleted and the recorded literals remain the contract.
-//!
-//! Serde subtleties worth naming (all mirrored exactly):
-//! - `Message` is `tag = "role"`, lowercase; `Assistant.id` has NO
-//!   skip-if-none (serializes `"id":null`).
-//! - `AssistantContent` is UNTAGGED — variants are discriminated
-//!   structurally.
-//! - `ToolCall.call_id` serializes `null`; `ToolResult.call_id` is
-//!   skip-if-none. Asymmetric in rig; asymmetric here.
-//! - `ReasoningContent` is adjacently tagged (`type`/`content`, snake_case).
+//! message in an `AgentMessage.content` column. The tests at the bottom
+//! assert byte equality against live rig and against recorded rig-era
+//! literals (the literals remain the contract once rig leaves the tree).
 
 use serde::{Deserialize, Serialize};
 
@@ -31,11 +16,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "role", rename_all = "lowercase")]
 pub enum Message {
-    /// System message containing instruction text.
     System { content: String },
-    /// User message; `content` is non-empty by convention (was `OneOrMany`).
+    /// `content` is non-empty by convention (was `OneOrMany`).
     User { content: Vec<UserContent> },
-    /// Assistant message; `content` is non-empty by convention.
     Assistant {
         id: Option<String>,
         content: Vec<AssistantContent>,
@@ -69,9 +52,6 @@ impl Message {
         }
     }
 
-    /// First user text block, mirroring rig's `Message::rag_text` (which is
-    /// `pub(crate)` in rig — the public mirror here replaces the local copies
-    /// call sites kept).
     pub fn rag_text(&self) -> Option<String> {
         if let Message::User { content } = self {
             for item in content {
@@ -122,9 +102,8 @@ impl UserContent {
     }
 }
 
-/// Assistant-side content. Mirrors rig's `AssistantContent` — UNTAGGED, so
-/// variants are discriminated by structure; variant order matters for
-/// deserialization ambiguity and mirrors rig's.
+/// Assistant-side content. Mirrors rig's `AssistantContent`; UNTAGGED, so
+/// variant order matters for deserialization ambiguity and mirrors rig's.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(untagged)]
 pub enum AssistantContent {
@@ -144,26 +123,20 @@ impl AssistantContent {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "type", content = "content", rename_all = "snake_case")]
 pub enum ReasoningContent {
-    /// Plain reasoning text with an optional provider signature.
     Text {
         text: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         signature: Option<String>,
     },
-    /// Provider-encrypted reasoning payload.
     Encrypted(String),
-    /// Redacted reasoning payload preserved as opaque data.
     Redacted { data: String },
-    /// Provider-generated reasoning summary text.
     Summary(String),
 }
 
 /// Assistant reasoning payload. Mirrors rig's `Reasoning`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Reasoning {
-    /// Provider reasoning identifier, when supplied by the upstream API.
     pub id: Option<String>,
-    /// Ordered reasoning content blocks.
     pub content: Vec<ReasoningContent>,
 }
 
@@ -211,8 +184,7 @@ impl ToolResultContent {
     }
 
     /// Parse a tool output string into tool-result content(s), mirroring
-    /// rig's `ToolResultContent::from_tool_output` exactly (simple text,
-    /// single-image JSON, and hybrid `{"response", "parts"}` JSON).
+    /// rig's `ToolResultContent::from_tool_output`.
     pub fn from_tool_output(output: impl Into<String>) -> Vec<ToolResultContent> {
         let output_str = output.into();
 
@@ -277,9 +249,9 @@ impl ToolResultContent {
     }
 }
 
-/// A model-issued tool call. Mirrors rig's `ToolCall` — note `call_id`,
-/// `signature`, and `additional_params` have NO skip-if-none (they serialize
-/// `null`), unlike `ToolResult.call_id`.
+/// A model-issued tool call. Mirrors rig's `ToolCall`; `call_id`, `signature`,
+/// and `additional_params` serialize `null` (no skip-if-none), unlike
+/// `ToolResult.call_id`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct ToolCall {
     pub id: String,
@@ -391,15 +363,10 @@ pub struct Document {
 #[derive(Default, Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "type", content = "value", rename_all = "camelCase")]
 pub enum DocumentSourceKind {
-    /// A file URL/URI.
     Url(String),
-    /// A base-64 encoded string.
     Base64(String),
-    /// Raw bytes.
     Raw(Vec<u8>),
-    /// A string (or a string literal).
     String(String),
-    /// An unknown file source (there's nothing there).
     #[default]
     Unknown,
 }
@@ -511,7 +478,6 @@ mod tests {
         let native_json = serde_json::to_string(native).expect("native serializes");
         let rig_json = serde_json::to_string(rig).expect("rig serializes");
         assert_eq!(native_json, rig_json, "native and rig bytes must match");
-        // And the rig-produced bytes deserialize into the native family.
         let roundtrip: Message =
             serde_json::from_str(&rig_json).expect("rig bytes deserialize natively");
         assert_eq!(&roundtrip, native);
@@ -565,7 +531,6 @@ mod tests {
 
     #[test]
     fn golden_multi_content_assistant_turn() {
-        // The shape the owned loop persists: text + reasoning + two tool calls.
         let native = Message::Assistant {
             id: Some("msg_abc".to_string()),
             content: vec![
@@ -620,7 +585,6 @@ mod tests {
         };
         assert_bytes_match(&native, &rig);
 
-        // Without call_id (the skip-if-none asymmetry).
         let native = Message::User {
             content: vec![UserContent::tool_result(
                 "call-2",
@@ -688,8 +652,7 @@ mod tests {
     }
 
     /// Recorded rig-era literals: the persisted-format contract that outlives
-    /// rig. These strings were produced by rig 0.35 serialization of the
-    /// shapes the runtime persists today.
+    /// rig.
     #[test]
     fn recorded_persisted_literals_deserialize_natively() {
         let literals = [
@@ -702,7 +665,6 @@ mod tests {
         for literal in literals {
             let message: Message = serde_json::from_str(literal)
                 .unwrap_or_else(|error| panic!("literal failed natively: {error}\n{literal}"));
-            // Re-serialization is byte-identical (no field reordering/loss).
             assert_eq!(
                 serde_json::to_string(&message).unwrap(),
                 literal,

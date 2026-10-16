@@ -187,8 +187,6 @@ def agentRequestAdmissionCases : List AgentRequestAdmissionCase :=
       (requestAdmissionBase .enrollment) false
   ]
 
-/-- These are concrete signed request inputs. Expected decisions are evaluated
-by the Enrollment admission/claim owner, not by a second observation projector. -/
 structure TitleRequestAdmissionCase where
   name : String
   parentObservedState : RequestState
@@ -415,7 +413,6 @@ inductive EnrollmentAction where
   | clientRoute (request : Request) (decision : Decision)
   | serverReceipt (request : Request) (decision : Decision) (receipt : RouteReceipt)
   | revoke (request : Request) (revision : AuthorizationRevision)
-  /-- A restore/replication merge, with the approval whose projection is observed. -/
   | merge (request : Request) (decision : Decision) (revision : AuthorizationRevision)
   deriving Repr
 

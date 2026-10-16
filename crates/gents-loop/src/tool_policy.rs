@@ -1,12 +1,7 @@
 //! Pure command-policy vocabulary shared between the loop's tool-dispatch
 //! outcome (`ToolOutcome::Failed { denial, .. }`) and `gents`'s native
-//! command-execution enforcement (`toolset::shared::command`).
-//!
-//! Everything here is data and pure classification: no process spawn, no
-//! filesystem, no DefraDB. The enforcement itself (building a
-//! `CommandExecutionPolicy`, running `sandbox-exec`, spawning `managed_exec`)
-//! stays in `gents`, which re-exports these types so its own call sites are
-//! unchanged.
+//! command-execution enforcement. No process spawn, filesystem, or DefraDB
+//! access here.
 
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};

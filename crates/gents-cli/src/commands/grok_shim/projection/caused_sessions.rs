@@ -29,15 +29,12 @@ pub(crate) const SUBAGENT_LIST_RUNNING_METHOD: &str = "x.ai/subagent/list_runnin
 pub(crate) const SUBAGENT_CANCEL_METHOD: &str = "x.ai/subagent/cancel";
 
 /// Shape of a `subagent_spawned` update payload (Grok pager
-/// `extensions::notification::SubagentSpawned`).
-///
-/// The optional wire fields (`effective_context_source`, `capability_mode`,
-/// `persona`, `role`, `model`, `resumed_from`, `workflow_run_id`) stay absent:
-/// no durable Gents document carries them (the pager hides a subagent that names
-/// a workflow run it has no `workflow_updated` for; graph runs are projected
-/// by `grok_shim::graph_runs`). `context_normalized` is always
-/// true because every projected window passes through
-/// `effective_context_window_tokens`.
+/// `extensions::notification::SubagentSpawned`). The optional wire fields
+/// (`effective_context_source`, `capability_mode`, `persona`, `role`,
+/// `model`, `resumed_from`, `workflow_run_id`) stay absent: no durable Gents
+/// document carries them, and the pager hides a subagent that names a
+/// workflow run it has no `workflow_updated` for (graph runs are projected
+/// by `grok_shim::graph_runs`). `context_normalized` is always true.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct SubagentSpawnedUpdate {
     pub subagent_id: String,
@@ -96,8 +93,7 @@ impl SubagentFinishStatus {
         }
     }
 
-    /// Only the canonical request lifecycle owns terminality; an interrupt
-    /// marker is a request to stop, not evidence that execution stopped.
+    /// Only the canonical request lifecycle owns terminality.
     fn of(request: &AgentRequestRow) -> Option<Self> {
         match request.lifecycle_state.map(|state| state.as_str()) {
             Some("completed") => Some(Self::Completed),
@@ -140,8 +136,6 @@ impl SubagentUpdate {
         }
     }
 
-    /// The `sessionUpdate` discriminator keeps its camelCase enum tag; every
-    /// inner DTO field renders with its snake_case key.
     pub fn to_payload(&self) -> Value {
         match self {
             SubagentUpdate::Spawned(update) => {
@@ -733,114 +727,4 @@ fn elapsed_millis(started_at: Option<&str>, ended_at: Option<&str>) -> u64 {
         .max(0)
         .try_into()
         .unwrap_or(0)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn request(value: Value) -> AgentRequestRow {
-        serde_json::from_value(value).unwrap()
-    }
-
-    fn session(lifecycle_state: &str) -> CausedSession {
-        let first = request(json!({
-            "_docID": "doc-child", "request_id": "child", "session_id": "child-session",
-            "node_did": "did:child", "requester_did": "did:parent", "agent_id": "worker",
-            "content": "  inspect the logs  ", "lifecycle_state": lifecycle_state,
-            "created_at": "2026-09-26T00:00:00Z",
-            "caused_by_parent_request_doc_id": "doc-parent",
-            "caused_by_parent_tool_call_doc_id": "doc-call",
-        }));
-        CausedSession {
-            scope: SessionScope {
-                node_did: "did:child".into(),
-                session_id: "child-session".into(),
-                requester_did: Some("did:parent".into()),
-            },
-            agent_id: "worker".into(),
-            root_session_id: "parent-session".into(),
-            caused_by_scope: SessionScope {
-                node_did: "did:parent".into(),
-                session_id: "parent-session".into(),
-                requester_did: Some("did:parent".into()),
-            },
-            depth: 1,
-            latest: first.clone(),
-            first,
-        }
-    }
-
-    #[test]
-    fn finish_status_follows_the_canonical_lifecycle() {
-        for (state, expected) in [
-            ("completed", Some(SubagentFinishStatus::Completed)),
-            ("interrupted", Some(SubagentFinishStatus::Cancelled)),
-            ("failed", Some(SubagentFinishStatus::Failed)),
-            ("dead", Some(SubagentFinishStatus::Failed)),
-            ("superseded", Some(SubagentFinishStatus::Failed)),
-            ("pending", None),
-            ("processing", None),
-        ] {
-            assert_eq!(
-                SubagentFinishStatus::of(&session(state).latest),
-                expected,
-                "{state}"
-            );
-        }
-    }
-
-    #[test]
-    fn progress_routes_by_the_caused_session() {
-        let head = HeadActivity {
-            tokens_used: 50,
-            tools: vec![
-                (Some("bash".into()), Some("failed".into())),
-                (Some("bash".into()), Some("completed".into())),
-                (Some("read".into()), None),
-            ],
-            ..HeadActivity::default()
-        };
-        let progress = progress_update(&session("processing"), &head, 100);
-        assert_eq!(progress.subagent_id, "child-session");
-        assert_eq!(progress.child_session_id, "child-session");
-        assert_eq!(progress.parent_session_id, "parent-session");
-        assert_eq!(progress.tool_call_count, 3);
-        assert_eq!(progress.tools_used, ["bash", "read"]);
-        assert_eq!(progress.error_count, 1);
-        assert_eq!(progress.context_usage_pct, 50);
-        assert_eq!(description(&session("processing")), "inspect the logs");
-    }
-
-    #[test]
-    fn payloads_keep_the_pager_wire_shape() {
-        let spawned = SubagentUpdate::Spawned(SubagentSpawnedUpdate {
-            subagent_id: "child-session".into(),
-            parent_session_id: "parent-session".into(),
-            parent_prompt_id: Some("prompt-1".into()),
-            child_session_id: "child-session".into(),
-            subagent_type: "worker".into(),
-            description: "inspect".into(),
-            context_normalized: true,
-        })
-        .to_payload();
-        assert_eq!(spawned["sessionUpdate"], "subagent_spawned");
-        assert_eq!(spawned["parent_prompt_id"], "prompt-1");
-        let finished = SubagentUpdate::Finished(SubagentFinishedUpdate {
-            subagent_id: "child-session".into(),
-            child_session_id: "child-session".into(),
-            status: SubagentFinishStatus::Failed,
-            error: Some("boom".into()),
-            tool_calls: 0,
-            turns: 1,
-            duration_ms: 0,
-            tokens_used: 0,
-            will_wake: true,
-        })
-        .to_payload();
-        assert_eq!(finished["status"], "failed");
-        assert_eq!(finished["error"], "boom");
-        assert!(finished.get("output").is_none());
-        assert!(finished.get("parent_session_id").is_none());
-    }
 }

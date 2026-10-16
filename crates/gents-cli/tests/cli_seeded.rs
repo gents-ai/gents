@@ -1,5 +1,5 @@
-//! EmbeddedNode-seeded CLI suites: read/format surfaces that need a store
-//! but no server process.
+//! EmbeddedNode-seeded CLI suites: read/format surfaces needing a store but
+//! no server process.
 
 mod support;
 

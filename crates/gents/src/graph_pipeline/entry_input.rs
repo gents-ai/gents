@@ -3,7 +3,6 @@
 //!
 //! An entry without a declared `input_schema` takes an unvalidated JSON
 //! object, exactly as before this contract existed.
-
 use anyhow::{Context, Result};
 use serde_json::{Map, Value};
 
@@ -13,8 +12,6 @@ use super::types::PlannedEntry;
 /// admission check never compiles an unbounded document.
 const MAX_INPUT_SCHEMA_BYTES: usize = 64 * 1024;
 
-/// Validated at pack load: the schema must compile, fit the size ceiling,
-/// and describe an object (the only shape an entry input can take).
 pub fn validate_input_schema(schema: &Value) -> Result<()> {
     anyhow::ensure!(
         schema.get("type").and_then(Value::as_str) == Some("object"),
@@ -30,9 +27,6 @@ pub fn validate_input_schema(schema: &Value) -> Result<()> {
     Ok(())
 }
 
-/// Fills top-level property defaults absent from `input`, then validates the
-/// merged object against `entry.input_schema`. An entry without a schema
-/// requires only that `input` is a JSON object.
 pub fn admit_operator_input(entry: &PlannedEntry, input: Value) -> Result<Map<String, Value>> {
     let mut input = match input {
         Value::Object(input) => input,
@@ -117,7 +111,6 @@ mod tests {
         let admitted = admit_operator_input(&entry, json!({"question": "why?"})).unwrap();
         assert_eq!(admitted["scope"], "everything");
         assert_eq!(admitted["question"], "why?");
-        // An explicit value is never overridden by the schema default.
         let admitted =
             admit_operator_input(&entry, json!({"question": "why?", "scope": "narrow"})).unwrap();
         assert_eq!(admitted["scope"], "narrow");

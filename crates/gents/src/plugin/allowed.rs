@@ -1,20 +1,16 @@
 //! What a data-chosen plugin path may reach.
 //!
-//! A path that comes from data (a graph node's source document, a model's tool
-//! arguments) is untrusted. A call reads exactly what it names: one file is
-//! exposed alone, a folder as that folder. The path is reachable without a
-//! question when, symlinks resolved, it lies inside the session's working
-//! folder (read-only) or inside a folder or file in the operator's list. The
-//! working folder is only ever a specific folder: never `/`, the user's home
-//! or a folder holding either it or the gents home, because a server started
-//! from a launcher has one of those as its current directory and that must not
-//! make everything readable. The list is one operator-owned file in the gents
-//! home, written by `gents plugin dirs` and the desktop "Allowed folders"
-//! panel; the file tools refuse to write it (see [`protect`]), though a shell
-//! run as the same user can. Anything else needs the operator's approval for
-//! that call (see [`super::approval`]) or is refused. The gents home is never
-//! reachable.
-
+//! A path that comes from data is untrusted; reachable without a question
+//! when, symlinks resolved, it lies inside the session's working folder
+//! (read-only) or inside a folder or file in the operator's list. The working
+//! folder is never `/`, the user's home or a folder holding either it or the
+//! gents home: a server started from a launcher has one of those as its
+//! current directory and that must not make everything readable. The list is
+//! one operator-owned file in the gents home, written by `gents plugin dirs`
+//! and the desktop "Allowed folders" panel; the file tools refuse to write it
+//! (see [`protect`]), though a shell run as the same user can. Anything else
+//! needs the operator's approval for that call (see [`super::approval`]) or
+//! is refused. The gents home is never reachable.
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -40,8 +36,7 @@ fn file(home: &Path) -> PathBuf {
     home.join(crate::home::ALLOWED_DIRS_FILE_NAME)
 }
 
-/// The folders the operator configured, sorted by path; empty means the
-/// default applies.
+/// The operator's configured folders, sorted by path; empty means the default.
 pub fn list(home: &Path) -> Result<Vec<AllowedDir>> {
     let path = file(home);
     let bytes = match std::fs::read(&path) {
@@ -67,7 +62,7 @@ fn save(home: &Path, dirs: Vec<AllowedDir>) -> Result<()> {
 }
 
 /// Allows `path` (an existing folder or one file, stored in canonical form)
-/// with `access`, replacing any earlier entry for it.
+/// with `access`.
 pub fn add(home: &Path, path: &Path, access: BindAccess) -> Result<AllowedDir> {
     let path = path
         .canonicalize()
@@ -168,6 +163,7 @@ fn too_broad(dir: &Path, user_home: Option<&Path>, gents_home: &Path) -> bool {
             .is_ok_and(|home| home.starts_with(dir))
 }
 
+/// A working-folder root may not be the gents home or hold it.
 fn ensure_scope_path(path: &Path, user_home: Option<&Path>, gents_home: &Path) -> Result<()> {
     anyhow::ensure!(
         !too_broad(path, user_home, gents_home)

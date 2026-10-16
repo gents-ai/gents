@@ -1,6 +1,4 @@
 //! Background process-control conformance at the production hook seam.
-//! Native admissions come from canonical assistant publication.
-
 use crate::graphql::escape_graphql_string;
 use crate::identity::NodeIdentity;
 use crate::tool_call_lifecycle::ToolCallLifecycle;
@@ -110,8 +108,8 @@ async fn publish_hook_call(
 
 #[tokio::test]
 async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
-    // Contract loading may synchronously build Lean or wait for another loader.
-    // Complete it before acquiring a live lease on this current-thread runtime.
+    // Contract loading may synchronously build Lean or wait for another loader;
+    // complete it before acquiring a live lease on this current-thread runtime.
     let originating_name = "originating_request_without_matching_requester_is_denied";
     let originating_case = crate::lean_vocab_test::lean_r6_backgrounding_case(originating_name);
     let absent_name = "absent_requester_next_turn_authorized";
@@ -187,9 +185,7 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
         .get("requester_did")
         .is_some_and(serde_json::Value::is_null));
 
-    // Exercise the originating-request denial while its owner is live. The
-    // owned completion boundary must close it before a second request can
-    // claim the same principal's execution slot.
+    // Exercise the originating-request denial while its owner is live.
     assert!(!originating_case.legal);
     let background = ToolCallLifecycle::load(node.clone(), session_id, &handle)
         .await

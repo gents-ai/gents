@@ -21,12 +21,8 @@ pub(super) fn decode_gents_compaction_progress(row: &Value) -> Option<GentsCompa
     })
 }
 
-/// Project the persisted admission state without inventing a parallel
-/// compaction lifecycle. A terminal row can be the first replicated
-/// observation, in which case Codex still needs a well-formed start/completion
-/// pair. Failed and cancelled rows never claim that context was compacted. The
-/// pinned Codex protocol has no failed-item notification, so clients rendering
-/// a Started item must clear it when the enclosing turn terminates.
+/// Failed/cancelled rows never claim compaction; the pinned Codex protocol has
+/// no failed-item notification, so a Started item must be cleared by turn termination.
 pub(super) fn compaction_projection_events(
     previous: Option<&str>,
     current: &str,

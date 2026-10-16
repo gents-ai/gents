@@ -32,7 +32,6 @@ async fn temp_home(p2p: bool) -> EmbeddedHome {
     home
 }
 
-/// Seeds one editable pending message and signs a command replacing it.
 async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionInputEdit {
     let did = home.identity.did();
     let access = ConfigAccess::local(home.node.clone());
@@ -272,7 +271,6 @@ async fn overwrite_receipt(node: &Arc<EmbeddedNode>, id: &str, raw: &str) {
         escape_graphql_string(id), escape_graphql_string(raw))).await.unwrap();
 }
 
-/// Runs the reconciler until the command carries a receipt that verifies.
 async fn reconcile_until_verified(
     home: &EmbeddedHome,
     command: &SessionInputEdit,

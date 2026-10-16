@@ -48,8 +48,6 @@ fn modeled_scope(case: &LeanAuxiliaryOutputCase) -> (CaptureScope, usize, u32) {
     )
 }
 
-// The native one-shot reasoning event carries the same block/part fields as
-// the modeled raw flush. Unsupported modeled shapes fail this adapter loudly.
 fn modeled_message(case: &LeanAuxiliaryOutputCase) -> Message {
     let flush = case.raw.flush.as_ref().expect("modeled raw flush");
     assert_eq!(

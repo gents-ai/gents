@@ -70,8 +70,7 @@ async fn access_and_principal(
     args: &MailboxAccessArgs,
 ) -> Result<(gents::config_client::ConfigAccess, String)> {
     // The principal comes from the local identity, never a caller-supplied
-    // requester flag. Remote storage enforcement remains the paired-client
-    // trust boundary documented by the mailbox design.
+    // requester flag.
     let principal =
         resolve_node_did(args.home.as_deref(), None).context("resolving mailbox node DID")?;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;

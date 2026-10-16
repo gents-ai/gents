@@ -135,9 +135,6 @@ async fn boot_two_running_recovery_bashes(
     )
 }
 
-/// Resolve a provider call id through the accepted canonical header. The
-/// lifecycle row's `tool_call_id` is an internal invocation id and is not the
-/// provider id carried by the transcript block.
 async fn accepted_tool_call_doc_id(
     node: &gents::defra_node::EmbeddedNode,
     session_id: &str,
@@ -272,8 +269,6 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
     )
     .await;
 
-    // Background wake recovery deliberately checks the head across requesters.
-    // A newer interactive request blocks the old wake even in another scope.
     let foreign = serde_json::json!({
         "request_id":"foreign-interactive", "node_did":node_did,
         "purpose":"normal",
@@ -301,7 +296,6 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
     assert_eq!(blocked.ineligible, 1);
     assert_eq!(blocked.redriven, 0);
     assert_eq!(blocked.failed, 0);
-    // Remove only the competing fixture to exercise successful recovery below.
     let response = db.node.execute(&format!(
         r#"mutation {{ delete_AgentRequest(filter: {{ node_did: {{ _eq: "{node_did}" }}, request_id: {{ _eq: "foreign-interactive" }} }}) {{ _docID }} }}"#
     )).await;
@@ -359,9 +353,13 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
         .admission_signature
         .as_deref()
         .is_some_and(|signature| !signature.is_empty()));
-    // Claim owns inference selection and budget pinning for the new request.
     assert_eq!(successor.backend_id, None);
     assert_eq!(successor.max_total_tokens, None);
+    assert_eq!(successor.retry_count, Some(2));
+    assert_eq!(successor.max_retries, Some(3));
+    assert_eq!(successor.input.as_ref(), Some(&input));
+    assert_eq!(successor.deadline, None);
+    assert_eq!(successor.valid_until, None);
     assert_eq!(
         successor.retry_parent_request.as_deref(),
         Some("failed-wake")
@@ -371,11 +369,6 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
         successor.content.as_deref(),
         Some(gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT)
     );
-    assert_eq!(successor.retry_count, Some(2));
-    assert_eq!(successor.max_retries, Some(3));
-    assert_eq!(successor.input.as_ref(), Some(&input));
-    assert_eq!(successor.deadline, None);
-    assert_eq!(successor.valid_until, None);
 
     let second = RequestLifecycle::redrive_failed_background_wakeups(&db.node, &node_did)
         .await
@@ -477,9 +470,6 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
     let db = test_db("lifecycle-background-wake-backoff").await;
     let session_id = "wake-backoff-session";
     let input = background_wake_input(session_id);
-    // The queue wake is runtime-issued, not a local-self user request. Give
-    // its authenticated local-control receipt one exact, signed parent row.
-    // The source is expired so it cannot consume the scripted provider turn.
     let source_request_id = "foreground-parent";
     let source_doc_id = create_runtime_request_with_valid_until(
         db.node.as_ref(),
@@ -533,7 +523,6 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
                 );
                 request.caused_by_parent_request_id = Some(source_request_id.into());
                 request.caused_by_parent_request_doc_id = Some(source_doc_id);
-                // Exercise the owner's capped 60-second persisted backoff.
                 request.retry_count = 4;
                 request.max_retries = 6;
             })),
@@ -603,9 +592,6 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
     runtime
         .backend
         .enqueue_response("continue", StreamResponse::bad_request("provider failed"));
-    // Head selection orders whole-second creation times by logical ID on ties.
-    // This fixture needs its generated wake to be strictly newer than the
-    // scripted parent, whose name otherwise wins that tie.
     let release_second = chrono::Utc::now().timestamp();
     while chrono::Utc::now().timestamp() <= release_second {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -622,11 +608,6 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
                     .await
                     .iter()
                     .any(|message| message.message_key.starts_with("background-completion-notification:"))
-                // The notification materializes a successor wake. Shut down
-                // only once that wake is inside inference (the third scripted
-                // provider call), so shutdown deterministically fails it into
-                // its own persisted backoff; shutting down before its claim
-                // would leave it pending instead.
                 && runtime.backend.observed_requests("continue") >= 3
                 && background_wake_retry_rows(&db.node, session_id)
                     .await
@@ -932,11 +913,6 @@ async fn recover_interrupted_request_after_crash(
         Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
     )
     .await;
-    // Request recovery is node-wide. In caused-session fixtures the crashed
-    // runtime also stops renewing the one known child. Preserve only that
-    // exact linked child at the active boundary so tool recovery remains the
-    // owner of the subsequent cascade/detach decision. Never revive arbitrary
-    // same-principal requests.
     let mut protected_child = None;
     if let Some(child_doc_id) = expected_active_child_doc_id {
         let child_physical = gents::graphql::escape_graphql_string(child_doc_id);
@@ -1041,12 +1017,7 @@ async fn seed_accepted_request_projection(
 }
 
 /// Fixture fault injection only: force the exact stored lease fields the
-/// production recovery predicate compares. No live path may write these
-/// directly; the claim owner and the bounded renewal are the only writers.
-/// The `generation` argument is the exact `execution_generation` string
-/// recovery must match; `expires_at` in the past makes recovery eligible.
-/// `expires_at: None` clears the lease entirely — recovery then treats the
-/// active request as missing an execution lease.
+/// production recovery predicate compares; no live path writes them directly.
 async fn seed_expired_execution_lease(
     node: &gents::defra_node::EmbeddedNode,
     request_doc_id: &str,
@@ -1087,10 +1058,10 @@ async fn seed_expired_execution_lease(
     );
 }
 
-/// The exact provider-turn output coordinate the production writer allocates
-/// (`streaming.rs`): one inference capture at the first per-request allocation,
-/// first turn, first attempt. Recovery enumerates sources from committed
-/// segments, so the fixture and recovery must name the identical coordinate.
+/// The exact provider-turn output coordinate the production writer allocates:
+/// one inference capture at the first per-request allocation, first turn,
+/// first attempt. Recovery enumerates sources from committed segments, so the
+/// fixture and recovery must name the identical coordinate.
 fn fixture_provider_turn_source() -> gents_protocol::output::OutputSource {
     gents_protocol::output::OutputSource::ProviderTurn {
         scope: gents_protocol::rendered_request::CaptureScope {
@@ -1102,10 +1073,8 @@ fn fixture_provider_turn_source() -> gents_protocol::output::OutputSource {
     }
 }
 
-/// The production writer's provider-turn header identity (`streaming.rs`):
-/// `provider:{request_doc_id}:{serde_json(OutputSource)}`. Recovery keys its
-/// own partial publications `request-recovery:{request_doc_id}:{...}` — the
-/// fixture mirrors the writer, never the retired `provider-turn:` literal.
+/// Mirrors the production writer's provider-turn header identity, never the
+/// retired `provider-turn:` literal.
 fn fixture_provider_message_key(
     request_doc_id: &str,
     source: &gents_protocol::output::OutputSource,
@@ -1116,7 +1085,6 @@ fn fixture_provider_message_key(
     )
 }
 
-/// Reuse the shared pinned-driver create/add mutation normalization.
 fn canonical_created_doc_id(
     response: &gents::defra_node::QueryResponse,
     collection: &str,
@@ -1135,12 +1103,9 @@ fn canonical_created_doc_id(
 }
 
 /// Seed one canonical, complete provider turn for an expired generation,
-/// exactly as the production `DefraStreamWriter` publication path writes it:
-/// a fully-closed `OutputSegment` whose ordinal run carries the streamed text,
-/// followed by a `RequestExecution`-published assistant transcript header
-/// whose text block references that closing record. This is the canonical
-/// replacement of the retired `AgentResponse`/`progress_seq` fixture model —
-/// content lives in the canonical transcript, not in a status row.
+/// exactly as the production writer publishes it: a fully-closed
+/// `OutputSegment` followed by an assistant transcript header whose text block
+/// references that closing record.
 /// Returns `(closing_segment_doc_id, header_message_doc_id)`.
 #[allow(clippy::too_many_arguments)]
 async fn seed_completed_canonical_output(
@@ -1235,9 +1200,8 @@ async fn seed_completed_canonical_output(
 }
 
 /// Seed one canonical, open (unclosed) provider-turn flush under the expired
-/// generation — the interrupted-mid-stream state the production writer leaves
-/// behind. Recovery enumerates exactly this shape, closes it Partial, and
-/// publishes the retained text under a fresh `RequestRecovery` publication.
+/// generation — the interrupted-mid-stream state recovery enumerates, closes
+/// Partial, and republishes under a fresh generation.
 #[allow(clippy::too_many_arguments)]
 async fn seed_open_canonical_flush(
     node: &gents::defra_node::EmbeddedNode,
@@ -1548,9 +1512,6 @@ async fn recover_all_interrupts_an_expired_lease_with_a_durable_interrupt() {
     )
     .await;
     seed_accepted_request_projection(&db.node, "interrupted-session", "interrupted-request").await;
-    // The interrupted-mid-stream state: one open provider-turn flush under the
-    // expired generation. Recovery enumerates exactly this shape, closes it
-    // Partial, and publishes the retained text under a fresh generation.
     seed_open_canonical_flush(
         &db.node,
         &request_doc_id,
@@ -1820,13 +1781,12 @@ async fn recover_all_repairs_terminal_background_tool_notification_once() {
     .expect("background bash did not complete");
     let tool_doc_id = terminal_tool.doc_id.clone();
     let notification_key = format!("background-completion-notification:{tool_doc_id}:tool");
-    // Stop the live observer before establishing the lost-ack crash shape;
-    // otherwise it can legitimately reconcile the marker ahead of the
-    // explicit startup recovery call under test.
+    // Stop the live observer first or it may legitimately reconcile the
+    // marker ahead of the explicit startup recovery call under test.
     runtime.shutdown().await;
-    // Simulate the durable pre-ack cursor, not corrupt transcript storage. The
-    // immutable canonical notification remains present while the lifecycle
-    // row says its native side effects still need convergence.
+    // Simulate the durable pre-ack cursor: the immutable canonical notification
+    // remains present while the lifecycle row says its native side effects
+    // still need convergence.
     let response = db.node.execute(&format!(
         r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ status: "completionPending", completion_notification_delivered_at: null }}) {{ _docID }} }}"#,
         gents::graphql::escape_graphql_string(&tool_doc_id),

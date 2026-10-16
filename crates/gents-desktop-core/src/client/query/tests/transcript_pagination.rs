@@ -254,7 +254,6 @@ async fn operator_reads_a_local_child_session_under_its_own_scope() {
         .expect("schemas");
     let node_did = "did:test:node";
     let desktop = "did:test:desktop";
-    // A LocalChild is admitted with the node's own DID as requester.
     let headers = [
         canonical_header("child_a", "child:a", "child", node_did, Some(node_did), 1),
         canonical_header("child_b", "child:b", "child", node_did, Some(node_did), 2),
@@ -302,27 +301,23 @@ async fn operator_reads_a_local_child_session_under_its_own_scope() {
     .expect("child page");
     assert_eq!(page.store.transcript_messages.len(), 2);
 
-    // Without operator authority the desktop scope stands.
     assert_eq!(
         session_transcript_requester_scope(Some(&child), Some(node_did), Some(desktop), false)
             .as_deref(),
         Some(desktop)
     );
-    // Another requester's session is never widened into view.
     let other = session_row("other", node_did, Some("did:test:other"));
     assert_eq!(
         session_transcript_requester_scope(Some(&other), Some(node_did), Some(desktop), true)
             .as_deref(),
         Some(desktop)
     );
-    // A session of a different node does not borrow this node's scope.
     let foreign = session_row("child", "did:test:foreign", Some(node_did));
     assert_eq!(
         session_transcript_requester_scope(Some(&foreign), Some(node_did), Some(desktop), true)
             .as_deref(),
         Some(desktop)
     );
-    // The operator's own sessions keep the desktop scope.
     let own = session_row("own", node_did, Some(desktop));
     assert_eq!(
         session_transcript_requester_scope(Some(&own), Some(node_did), Some(desktop), true)
@@ -345,8 +340,7 @@ fn unreadable_reason_follows_the_exact_read_scope() {
     let node_owned = session_row("child", node_did, Some(node_did));
     assert_eq!(
         session_unreadable_reason(&node_owned, Some(desktop), true),
-        None,
-        "the operator reads the node's own session under its own scope"
+        None
     );
     assert!(session_unreadable_reason(&node_owned, Some(desktop), false)
         .is_some_and(|reason| reason.contains("owned by its node")));

@@ -1,9 +1,5 @@
-//! Canonical operator-controlled document collections.
-//!
-//! Names and owner-scoped logical keys follow `ConfigDocuments`, shared by Lean's
-//! apply and self-configuration models. Enumeration is deterministic, not a
-//! dependency ordering: references can form cycles. Atomic publication of a
-//! complete owner-closed manifest provides reference safety.
+//! Canonical operator-controlled document collections; names and
+//! owner-scoped logical keys follow `ConfigDocuments`.
 
 use std::fmt;
 
@@ -40,9 +36,9 @@ pub enum Collection {
     EvalDefinition,
 }
 
-/// Deterministic document traversal for desired-state writes. This enumeration
-/// provides no reference-safety guarantee; publication must validate the complete
-/// manifest and atomically commit it, including legal reference cycles.
+/// This enumeration provides no reference-safety guarantee; publication must
+/// validate the complete manifest and atomically commit it, including legal
+/// reference cycles.
 pub const DESIRED_STATE_APPLY_ORDER: [Collection; 27] = Collection::ALL;
 
 impl Collection {
@@ -194,8 +190,6 @@ mod tests {
 
     #[test]
     fn vocabulary_matches_canonical_lean_document_catalog() {
-        // Read the authoritative formal vocabulary, rather than maintaining
-        // another hand-written enum/rank fixture in this test.
         let lean = include_str!("../proofs/Proofs/ConfigDocuments.lean");
         let expected: Vec<_> = lean
             .lines()
@@ -225,8 +219,6 @@ mod tests {
             })
             .filter(|name| !matches!(*name, "graph_intents" | "graph_capabilities"))
             .collect();
-        // Graph intents and capabilities are composition inputs, not document
-        // collections; every other canonical pack root must be represented.
         let names: BTreeSet<_> = Collection::ALL.iter().map(|c| c.to_string()).collect();
         assert_eq!(names.len(), Collection::ALL.len());
         assert_eq!(

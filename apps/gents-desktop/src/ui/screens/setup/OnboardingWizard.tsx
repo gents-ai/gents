@@ -1,6 +1,3 @@
-/* First run, from the Startup designs: choose where the Node lives,
-   name it, watch it come online, then connect one inference provider
-   (InferenceSetup). */
 import { useEffect, useReducer, useState } from "react";
 import { Server, Wifi } from "lucide-react";
 import type {
@@ -35,15 +32,12 @@ type Step = "welcome" | "starting" | "inference";
 type FailedPhase = Exclude<DesktopStartupPhase, "ready">;
 type StartupDetail = "managedServer" | "configuration" | "client";
 
-/* where first run is, and how far its provisioning has got */
 type Run = {
   step: Step;
-  /** a provisioning run is out */
   busy: boolean;
   error: string | null;
   phase: FailedPhase;
   details: Partial<Record<StartupDetail, string>>;
-  /** when everything started; the provider step follows a moment later */
   provisionedAt: number | null;
 };
 
@@ -53,9 +47,7 @@ type RunEvent =
   | { type: "provisioned"; at: number; client: string }
   | { type: "failed"; phase: FailedPhase; error: string }
   | { type: "ended" }
-  /** Try again after a failure: back to the welcome step without it */
   | { type: "retried" }
-  /** back to the welcome step, keeping what was said */
   | { type: "wentBack" }
   | { type: "continued" };
 
@@ -156,8 +148,6 @@ export function OnboardingWizard({
   const [name, setName] = useState(
     bootstrap?.initNodeName?.trim() || DEFAULT_NODE_NAME,
   );
-  /* An initialized home keeps its identity: provisioning never renames it,
-     so its name is shown, not asked for. */
   const existingName = existingHome ? bootstrap?.initNodeName?.trim() || null : null;
   const nodeName = existingName ?? name;
   const [homeRoot, setHomeRoot] = useState<string | null>(
@@ -171,7 +161,6 @@ export function OnboardingWizard({
   );
   const [authorityError, setAuthorityError] = useState<string | null>(null);
   const managedWait = stores.localServer.use.wait();
-  /* the folder the service suggests as the tool root, or why it cannot */
   const readSuggestedRoot = () =>
     actions.refreshLocalServer().then((status) => {
       if (status?.suggestedToolRoot) setHomeRoot(status.suggestedToolRoot);
@@ -207,9 +196,6 @@ export function OnboardingWizard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [actions, homeRoot, step, allowLocal]);
 
-  /* the node just set up, as the next read lists it: the local node's own
-     node, which a paired remote node may be listed before; an enrolment's
-     node is not listed until its server approves, so it takes the first */
   const finishProvisioning = async (
     setUp: (snapshot: DesktopClientSnapshot) => NodeView | null | undefined,
   ) => {
@@ -251,7 +237,6 @@ export function OnboardingWizard({
       if (actions.localServerOffers.start) {
         const status = await actions.startLocalServer(requestedName, authority);
         if (status.nodeName && status.nodeName !== requestedName) {
-          /* Welcome then shows the existing Node's name. */
           void refreshSnapshot();
           throw new Error(
             `This computer already has a local node named ${status.nodeName}, so ${requestedName} was not created. Go back to continue with ${status.nodeName}.`,

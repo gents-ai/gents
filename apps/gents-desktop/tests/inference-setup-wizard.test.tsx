@@ -156,8 +156,6 @@ describe("InferenceSetupWizard", () => {
       });
     });
     expect(props.onCodexLogin).toHaveBeenCalledWith("did:key:z6MkAgent");
-    // Login must land before the backend flips to Codex, or the agent would
-    // point at a Codex backend with no credential.
     const loginOrder = vi.mocked(props.onCodexLogin).mock.invocationCallOrder[0]!;
     const saveOrder = vi.mocked(props.onPatchConfigComponents).mock
       .invocationCallOrder[0]!;

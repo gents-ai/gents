@@ -1,10 +1,6 @@
 //! What a case expects a trial's home to hold, for a watcher to measure a
-//! running or finished trial against.
-//!
-//! The goal is derived, never graded: each `captured_rows_count` check
-//! contributes the range its params require of its capture, and a case's
-//! own `goal` map replaces what the checks imply for the collections it
-//! names. The checks remain the only verdicts.
+//! running or finished trial against. The goal is derived from the checks, and
+//! the checks remain the only verdicts.
 
 use serde::{Deserialize, Serialize};
 
@@ -21,8 +17,6 @@ pub const SCHEMAS_GOAL: &str = "schemas";
 pub struct GoalEntry {
     /// A collection name, or [`SCHEMAS_GOAL`].
     pub collection: String,
-    /// The documents capture a `captured_rows_count` check counts; `None`
-    /// for an entry of the case's own goal, which counts the collection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capture: Option<String>,
     pub min: u64,
@@ -31,8 +25,6 @@ pub struct GoalEntry {
 }
 
 impl GoalEntry {
-    /// The snapshot's count for this entry; `None` when the snapshot has not
-    /// observed it, as for a collection not registered yet.
     pub fn observed(&self, snapshot: &LiveSnapshot) -> Option<u64> {
         if let Some(capture) = &self.capture {
             return snapshot.captures.get(capture).copied();
@@ -58,10 +50,6 @@ impl GoalEntry {
     }
 }
 
-/// The case's goal, in the order its stages last count each capture, then
-/// the case's own entries by name.
-/// `fallback` is the run's request-level capture list, which a stage that
-/// declares no captures reads.
 pub fn case_goal(case: &EvalCase, fallback: &[Capture]) -> Vec<GoalEntry> {
     let mut goal: Vec<GoalEntry> = Vec::new();
     for stage in &case.stages {
@@ -78,8 +66,7 @@ pub fn case_goal(case: &EvalCase, fallback: &[Capture]) -> Vec<GoalEntry> {
             if case.goal.contains_key(&collection) {
                 continue;
             }
-            // A capture counted by several stages is measured against the
-            // last: it is what the home holds when the case is done.
+            // A capture counted by several stages is measured against the last.
             goal.retain(|entry| entry.capture.as_deref() != Some(capture.as_str()));
             goal.push(GoalEntry {
                 collection,
@@ -98,7 +85,6 @@ pub fn case_goal(case: &EvalCase, fallback: &[Capture]) -> Vec<GoalEntry> {
     goal
 }
 
-/// The collection a stage's documents capture reads.
 fn capture_collection(
     declared: &[EvalCapture],
     fallback: &[Capture],
@@ -188,7 +174,6 @@ mod tests {
                 },
             ]
         );
-        // Without the run's fallback list the second stage captures nothing.
         assert_eq!(case_goal(&case(BTreeMap::new()), &[]).len(), 1);
 
         let overridden = case_goal(

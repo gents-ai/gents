@@ -2,15 +2,12 @@
 //! one `.pack` file, so first-party and third-party packs alike become the
 //! artifact the registry serves.
 //!
-//! Compiling is this module's job; packing is [`gents::pack_archive::write_pack`]'s.
-//! A plugin with no `source` must already carry its compiled artifact. A
-//! plugin with a `source` must be its own Afterburner package (a directory
+//! A plugin with a `source` must be its own Afterburner package (a directory
 //! with its own `afb.toml`), compiled through
 //! [`crate::commands::afterburner_build`] - the one place this workspace
 //! decides how an Afterburner package becomes a `.afb` and which languages
 //! it will actually run bounded, shared with `gents plugin build` so the
-//! two can never accept a language the other refuses. Everything else in
-//! the manifest travels unchanged.
+//! two can never accept a language the other refuses.
 
 use std::path::{Path, PathBuf};
 
@@ -26,11 +23,8 @@ use crate::commands::afterburner_build;
 #[derive(Debug, Serialize)]
 pub(crate) struct BuildReport {
     pub(crate) pack: String,
-    /// The coordinate's other half, so what `publish` will place it under
-    /// is visible at build time rather than discovered at publish time.
     pub(crate) namespace: String,
     pub(crate) version: String,
-    /// The pack digest: what installs, the store and the registry name it by.
     pub(crate) digest: String,
     pub(crate) size_bytes: u64,
     pub(crate) out: PathBuf,
@@ -53,9 +47,6 @@ pub(crate) fn dispatch(args: PackBuildArgs) -> Result<()> {
     crate::print_json(&serde_json::to_value(report)?)
 }
 
-/// Builds every pack directory under `root` (any directory that carries a
-/// `manifest.json`) into a `.pack` beside it, so this repository's own
-/// packs can be published to the registry in one step.
 pub(crate) fn build_all(root: &Path) -> Result<Vec<BuildReport>> {
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(root)
         .with_context(|| format!("reading {}", root.display()))?
@@ -74,9 +65,7 @@ pub(crate) fn build_all(root: &Path) -> Result<Vec<BuildReport>> {
         .collect()
 }
 
-/// Compiles `dir`'s declared plugins onto disk, then packs the whole
-/// directory into a `.pack` at `out`, or beside `dir` under the pack's file
-/// name. The file is written to a staging name and renamed into place, so an
+/// The file is written to a staging name and renamed into place, so an
 /// interrupted build never leaves a partial `.pack` behind.
 pub(crate) fn build_pack(dir: &Path, out: Option<&Path>) -> Result<BuildReport> {
     let manifest_path = dir.join("manifest.json");
@@ -146,9 +135,6 @@ pub(crate) fn build_pack(dir: &Path, out: Option<&Path>) -> Result<BuildReport> 
     })
 }
 
-/// Compiles every graph the pack declares and writes each plan to
-/// `graphs/<graph_id>.plan.json`, declaring it in `manifest.json` when it is
-/// not yet, so the pack digest covers the plan install will verify.
 pub(crate) fn build_graph_plans(dir: &Path, manifest: &PackManifest) -> Result<()> {
     let plans = gents::graph_package::compile_pack_graphs(
         manifest,
@@ -173,14 +159,11 @@ pub(crate) fn build_graph_plans(dir: &Path, manifest: &PackManifest) -> Result<(
     }
     let manifest_path = dir.join("manifest.json");
     let text = std::fs::read_to_string(&manifest_path).context("reading manifest.json")?;
-    // Appended: the author's order stays, and the digest sorts anyway.
     let mut assets = manifest.metadata.assets.clone();
     assets.extend(missing);
     std::fs::write(&manifest_path, replace_assets(&text, &assets)?).context("writing manifest.json")
 }
 
-/// `text` with its top-level `"assets"` list replaced by `assets`, one per
-/// line at the list's own indentation; nothing else in the file moves.
 fn replace_assets(text: &str, assets: &[String]) -> Result<String> {
     let key = text
         .find("\"assets\"")
@@ -207,15 +190,9 @@ fn replace_assets(text: &str, assets: &[String]) -> Result<String> {
     ))
 }
 
-/// Makes sure one plugin's artifact exists on disk before the pack is
-/// packed: compiles it from `source` when the manifest names one, otherwise
-/// requires it to already be there.
-///
-/// A plugin's source is plain source in its language (see [`plugin_entry`]).
-/// The build copies it to `<pack>/target/plugins/<name>/`, writes the package
-/// description the compiler reads there from the manifest entry, and compiles
-/// the copy, so the author's directory holds only their code and a rebuild
-/// reuses the language toolchain's own cache in the staged copy.
+/// The build copies the source to `<pack>/target/plugins/<name>/` so the
+/// author's directory holds only their code, and a rebuild reuses the
+/// language toolchain's own cache in the staged copy.
 pub(super) fn build_plugin(dir: &Path, manifest: &PackManifest, plugin: &PackPlugin) -> Result<()> {
     let artifact_path = dir.join(&plugin.artifact);
     let Some(source) = &plugin.source else {
@@ -267,9 +244,8 @@ pub(super) fn build_plugin(dir: &Path, manifest: &PackManifest, plugin: &PackPlu
         &serde_json::to_vec(&manifold)?,
     )?;
 
-    // Unchanged source, compiler and the artifact this build last produced
-    // from them: skip. The compiler is linked into this binary, so its
-    // version is part of the key; an upgrade may change `.afb` output.
+    // The compiler is linked into this binary, so its version is part of the
+    // cache key; an upgrade may change `.afb` output.
     let stamp = staged.join("target").join("gents-build.stamp");
     let source_digest = format!("{BUILDER_ID} {}", tree_digest(&staged)?);
     if let (Ok(recorded), Ok(artifact)) = (
@@ -291,8 +267,6 @@ pub(super) fn build_plugin(dir: &Path, manifest: &PackManifest, plugin: &PackPlu
 
 const BUILDER_ID: &str = concat!("gents-cli/", env!("CARGO_PKG_VERSION"));
 
-/// Digest of every file under `dir` except the toolchain's `target/`, by
-/// relative path and content, in path order.
 fn tree_digest(dir: &Path) -> Result<String> {
     fn walk(root: &Path, dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
         for entry in std::fs::read_dir(dir)? {
@@ -331,8 +305,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", sha2::Sha256::digest(bytes))
 }
 
-/// The entry file a plugin's source holds, by language: the one convention
-/// the scaffolder writes and the build compiles.
 pub(crate) fn plugin_entry(language: &str) -> Option<&'static str> {
     Some(match language.trim().to_ascii_lowercase().as_str() {
         "rust" => "source/main.rs",
@@ -351,10 +323,6 @@ fn toml_string(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_owned())
 }
 
-/// Makes `to` a copy of `from`, rewriting only files whose bytes changed so a
-/// toolchain's incremental cache in `to` stays valid, and removing what
-/// `from` no longer has. The staged `target/` and the generated package
-/// description are the build's own and are kept.
 fn mirror(from: &Path, to: &Path) -> Result<()> {
     mirror_level(from, to, true)
 }
@@ -407,9 +375,6 @@ mod tests {
     use super::*;
     use gents::pack_archive::PackArchive;
 
-    /// Writes a minimal plugin-less pack (mirrors any of the 11 first-party
-    /// packs' shape) so tests exercise the real manifest/asset contract
-    /// instead of a hand-rolled fixture that could drift from it.
     fn write_plain_pack(root: &Path, name: &str) {
         std::fs::create_dir_all(root).unwrap();
         std::fs::write(root.join("README.md"), b"# a plain pack").unwrap();
@@ -512,7 +477,6 @@ mod tests {
                 "input_schema": {"type": "object", "properties": {}},
             }),
         );
-        // The artifact is declared but never written to disk.
 
         let error = build_pack(&root, None).unwrap_err();
         let message = format!("{error:#}");
@@ -556,8 +520,6 @@ mod tests {
         );
     }
 
-    /// A second build of unchanged source reuses the artifact; a source edit
-    /// rebuilds it.
     #[test]
     fn an_unchanged_plugin_is_not_recompiled() {
         let root = tempfile::tempdir().unwrap();
@@ -632,12 +594,6 @@ mod tests {
         assert!(message.contains("has no source/main.rs"), "{message}");
     }
 
-    /// The pack manifest's own `PackPlugin::validate` (exercised end to
-    /// end here through `build_pack`, which packs the manifest once every
-    /// declared plugin's artifact is on disk) is what actually rejects an
-    /// unsupported language; `crate::pack`'s own unit tests check that
-    /// rule directly. This proves `gents pack build` surfaces the same
-    /// refusal, naming the plugin and the language it declared.
     #[test]
     fn a_plugin_with_an_unknown_language_is_refused_naming_it() {
         let dir = tempfile::tempdir().unwrap();
@@ -653,9 +609,6 @@ mod tests {
                 "input_schema": {"type": "object", "properties": {}},
             }),
         );
-        // No source: the artifact only needs to exist on disk for
-        // `build_plugin` to pass, so the refusal below is purely about the
-        // language.
         std::fs::create_dir_all(root.join("plugins")).unwrap();
         std::fs::write(root.join("plugins/format_check.afb"), b"stub").unwrap();
 
@@ -676,8 +629,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_plain_pack(&dir.path().join("alpha"), "alpha");
         write_plain_pack(&dir.path().join("beta"), "beta");
-        // A non-pack file beside the pack directories must not be treated
-        // as one (mirrors packs/catalog.json sitting next to real packs).
         std::fs::write(dir.path().join("catalog.json"), b"[]").unwrap();
 
         let reports = build_all(dir.path()).unwrap();
@@ -689,14 +640,6 @@ mod tests {
         }
     }
 
-    /// Compiles a real Rust Afterburner package to `wasm32-wasip1` through
-    /// [`crate::commands::afterburner_build`] and packs it, exercising the
-    /// actual `pkg::LocalPackage::load` + native-toolchain compile path end
-    /// to end rather than a stub. Every language `gents pack build` can
-    /// compile a plugin from is exercised directly, once, in
-    /// `afterburner_build`'s own tests; this proves the pack-manifest
-    /// integration around that shared compiler, not the compiler itself
-    /// again per language.
     #[test]
     fn a_plugin_with_a_rust_source_is_compiled_through_afterburner_and_packed() {
         let dir = tempfile::tempdir().unwrap();

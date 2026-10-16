@@ -49,22 +49,13 @@ export type ProjectionInputs = {
   clientAvailable: boolean;
   syncHealth: SyncHealthView | null;
   selection: Selection;
-  /** the selected node */
   node: NodeView | null;
-  /** the selected session as the node lists it */
   sessionSummary: SessionSummary | null;
-  /** the selected session's header, while the held read is the selected one */
   session: SessionHeader | null;
   localWorkflow: ChatWorkflowState;
   sending: boolean;
 };
 
-/**
- * What the shell decides with: the node's operational state, the selected
- * agent's readiness, the chat shell projection for a new message and for
- * a retry under the session's own agent, and the request being tracked.
- * Pure, so it is the same whether a screen renders it or an action asks.
- */
 export function projectShell(inputs: ProjectionInputs) {
   const { node, selection, session, syncHealth } = inputs;
   const operationalState = node
@@ -106,7 +97,6 @@ export function projectShell(inputs: ProjectionInputs) {
 
 export type ShellProjection = ReturnType<typeof projectShell>;
 
-/** The projection's inputs as the stores hold them now, for an action. */
 export function projectionInputsOf(stores: ShellStores): ProjectionInputs {
   const selection = stores.selection.getState();
   const fleet = stores.fleet.getState();

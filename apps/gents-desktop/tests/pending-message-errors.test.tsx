@@ -48,7 +48,6 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-/* rows by request, since a row being edited shows its editor, not its text */
 function rowFor(id: string) {
   const row = screen
     .getAllByTestId("queued-input")
@@ -78,7 +77,6 @@ describe("pending message failed mutations and async controls", () => {
       selectedRequestDocIds: ["doc-b"],
       messages: [],
     });
-    /* the runtime's queue stands until it changes; nothing else is sent meanwhile */
     expect(rows()).toEqual(["a", "b"]);
     expect(within(rowFor("a")).getByRole("button", { name: "Remove" })).toBeDisabled();
     await act(async () => gate.resolve());
@@ -125,7 +123,6 @@ describe("pending message failed mutations and async controls", () => {
       ],
     });
     await act(async () => gate.resolve());
-    /* the runtime's replacements, under their new ids, in the new order */
     view.rerender(
       <PendingTray
         queued={[turn(entry("b2")), turn(entry("a2"))]}
@@ -152,7 +149,6 @@ describe("pending message failed mutations and async controls", () => {
     expect(await moveDisabled(rowFor("a"), "down")).toBe(true);
     expect(await moveDisabled(rowFor("b"), "up")).toBe(true);
 
-    /* a failed removal still fences over the barrier's document */
     fireEvent.click(before.getByRole("button", { name: "Remove" }));
     await waitFor(() =>
       expect(before.getByRole("button", { name: "Remove" })).toBeEnabled(),
@@ -179,7 +175,6 @@ describe("pending message failed mutations and async controls", () => {
       foldedInputs: [],
       latestRequestId: "earlier",
     } as unknown as DesktopSessionSnapshot);
-    /* the refreshed session: the agent took both into its turn */
     const refreshSession = vi.fn().mockResolvedValue({
       sessionId: "s1",
       nodeDid: deployment.nodeDid,

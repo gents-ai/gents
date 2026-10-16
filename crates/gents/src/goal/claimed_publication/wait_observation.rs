@@ -10,8 +10,6 @@ use crate::tool_call_lifecycle::{query, ToolCallState};
 /// Goal wait evidence read inside the publication transaction.
 pub(super) enum WaitEvidence {
     Absent,
-    /// A waited target still owes its result: running, or ended with its
-    /// completion delivery pending.
     Running,
     /// Fail-closed: the evidence was read but cannot be interpreted.
     Invalid(anyhow::Error),
@@ -47,8 +45,7 @@ fn valid_argument_error(value: &Value) -> bool {
 }
 
 /// Only the canonical bounded-timeout envelope says that the agent deliberately
-/// waited for this exact handle while it was running. A normal process-control
-/// tool error or another valid wait outcome is not a Goal suspension receipt.
+/// waited for this exact handle while it was running.
 fn timed_out_running_handle(result: &str, accepted_handle: &str) -> Result<bool> {
     let value: Value =
         serde_json::from_str(result).context("decode canonical wait_process result")?;
@@ -96,8 +93,7 @@ fn timed_out_running_handle(result: &str, accepted_handle: &str) -> Result<bool>
 }
 
 /// Re-read exact accepted wait controls and targets inside the transaction
-/// that will CAS the Goal and publish its child. A missing target in a complete
-/// scan is a lost/finished process; an undecodable or ambiguous scan is invalid.
+/// that will CAS the Goal and publish its child.
 pub(super) async fn observe_intentional_wait(
     txn: &ConfigApplyTxn<'_>,
     parent_doc_id: &str,
@@ -176,9 +172,6 @@ async fn observe_waits(
             "terminal Goal parent has an unsettled wait_process control"
         );
         if accepted.lifecycle_state != ToolCallState::Completed {
-            // Deadline/cancel/failure settlement is a canonical diagnostic, not
-            // evidence that an intentional bounded wait observed a running tool.
-            // Terminalization cancels a never-started control without any reply.
             continue;
         }
         accepted
@@ -253,9 +246,6 @@ async fn observe_waits(
                 && spawn_parent.request_doc_id == required(target, "request_doc_id")?,
             "spawned background lacks accepted spawn_process parent"
         );
-        // Lean `BackgroundState.resultOwed`: an ended target whose completion
-        // notification and wake are still owed (`completionPending`) has not
-        // yet delivered its result to the session.
         let delivery_owed = target_state.is_terminal()
             && target["status"]
                 .as_str()

@@ -68,9 +68,8 @@ pub struct RuntimeSnapshot {
     pub last_reconcile_error: String,
 }
 
-/// Routed and settled at a generation past `generation`. Judged by
-/// generation, never by the last reconcile label, which a later no-op
-/// reconcile overwrites.
+/// Judged by generation, never by the last reconcile label, which a later
+/// no-op reconcile overwrites.
 pub fn is_routed_ready_after(snapshot: &RuntimeSnapshot, generation: i64) -> bool {
     snapshot.process_state == "ready"
         && snapshot.reconcile_phase == "idle"
@@ -203,10 +202,9 @@ pub async fn fetch_request_snapshot_raw(node: &EmbeddedNode, doc_id: &str) -> Re
     first_row::<AgentRequestRow>(&resp, "AgentRequest").into()
 }
 
-/// Read the canonical target shape; schema/storage migration remains downstream.
-/// No second writable session representation or retired conversation fallback.
-/// Fixture-only lookup: callers seed unique session labels. This is not a
-/// runtime scope/authorization selector; ambiguity fails instead of choosing a row.
+/// Fixture-only lookup: callers seed unique session labels; ambiguity fails
+/// instead of choosing a row. This is not a runtime scope/authorization
+/// selector.
 pub async fn fetch_session_snapshot(
     node: &EmbeddedNode,
     session_id: &str,
@@ -324,7 +322,6 @@ pub struct MessageSnapshot {
     pub role: String,
     pub content: String,
     pub timestamp: String,
-    /// Exact reconstructed native blocks; `content` is only their display view.
     pub native: gents_protocol::message::Message,
 }
 
@@ -398,7 +395,6 @@ pub struct ToolCallSnapshot {
     pub tool_name: String,
     pub tool_call_id: String,
     /// Retired compatibility status is nullable on canonically accepted rows.
-    /// Assertions must use `lifecycle_state` as the authoritative owner.
     #[serde(default)]
     pub status: Option<String>,
     #[serde(default)]
@@ -438,14 +434,12 @@ pub struct ToolCallSnapshot {
 }
 
 impl ToolCallSnapshot {
-    /// Read the exact canonical invocation reply, never a retired row payload.
     pub async fn load_result(&self, node: std::sync::Arc<EmbeddedNode>) -> String {
         self.try_load_result(node)
             .await
             .expect("snapshot tool must have an exact canonical invocation reply")
     }
 
-    /// The canonical invocation reply, or an error while it is undelivered.
     pub async fn try_load_result(
         &self,
         node: std::sync::Arc<EmbeddedNode>,
@@ -461,7 +455,6 @@ impl ToolCallSnapshot {
         gents::tool_call_lifecycle::render_tool_result(&message)
     }
 
-    /// The canonical JSON arguments accepted for this physical call.
     pub async fn try_load_arguments(
         &self,
         node: std::sync::Arc<EmbeddedNode>,
@@ -477,7 +470,6 @@ impl ToolCallSnapshot {
     }
 }
 
-/// One tool call with its payloads reconstructed through the tool-call owner.
 /// `arguments`/`result` are `None` until the owner can reconstruct them.
 #[derive(Debug, Clone)]
 pub struct ToolCallPayload {

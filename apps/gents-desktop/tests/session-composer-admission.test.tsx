@@ -43,8 +43,6 @@ vi.mock("../src/ui/screens/BehaviorPicker", () => ({
 
 const NODE = deployment.nodeDid;
 
-/* a session held for the screen: interrupted (so a message may follow)
-   unless a test says otherwise */
 function heldSession(over: Partial<DesktopSessionSnapshot> = {}) {
   return {
     sessionId: "session",
@@ -64,8 +62,6 @@ function heldSession(over: Partial<DesktopSessionSnapshot> = {}) {
   } as unknown as DesktopSessionSnapshot;
 }
 
-/* the screen's app: the fixture node, ready to chat unless a test gives
-   another, and the session it holds (none for the new-session screen) */
 function screenApp({
   session = null,
   nodeOverrides = {},
@@ -77,7 +73,6 @@ function screenApp({
   session?: DesktopSessionSnapshot | null;
   nodeOverrides?: Record<string, unknown>;
   sendChatMessage?: ReturnType<typeof vi.fn>;
-  /** more of the bridge, for what a test asks of it */
   api?: Record<string, unknown>;
 } = {}) {
   const app = testApp({
@@ -108,7 +103,6 @@ function renderScreen(app: DesktopApp) {
   );
 }
 
-/* another session selected and held, as the projection would */
 function hold(app: DesktopApp, session: DesktopSessionSnapshot) {
   act(() => {
     app.stores.selection.setState({ sessionId: session.sessionId });
@@ -286,7 +280,6 @@ describe("SessionScreen canonical composer admission", () => {
       target: { value: "keep this draft" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    /* the person moves to another node while the send is in flight */
     act(() => app.actions.selectNode("did:key:other-agent"));
     fireEvent.change(screen.getByLabelText("Message"), {
       target: { value: "unrelated draft" },
@@ -304,7 +297,6 @@ describe("SessionScreen canonical composer admission", () => {
   });
 
   it("preserves a canonical blocker for a non-empty local draft", () => {
-    /* a node whose route is not safe to chat over */
     const { app, sendChatMessage } = screenApp({ nodeOverrides: { chatSafe: false } });
     renderScreen(app);
     const status = app.view.getState().shellProjection.nonEmptyContentSendStatus;
@@ -329,7 +321,6 @@ describe("SessionScreen canonical composer admission", () => {
     fireEvent.change(screen.getByLabelText("Message"), {
       target: { value: "follow up" },
     });
-    /* typed text while the turn runs is queued behind it */
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
 
     hold(app, heldSession({ turnState: "interrupted" }));
@@ -404,7 +395,6 @@ describe("SessionScreen messages queued behind a running turn", () => {
     expect(screen.getAllByTestId("queued-input").map((row) => row.textContent)).toEqual(
       ["we should move faster", "and check the tests"],
     );
-    /* waiting input is the composer's, not the transcript's */
     const transcript = screen.getByTestId("transcript-panel");
     const tray = screen.getByTestId("queued-inputs");
     expect(transcript.contains(tray)).toBe(false);
@@ -660,7 +650,6 @@ describe("renaming a session", () => {
         title: "Renamed session",
       }),
     );
-    /* the title shown is the held session's, so it is read again */
     await vi.waitFor(() =>
       expect(fetchSessionSnapshot).toHaveBeenCalledWith(
         "session",

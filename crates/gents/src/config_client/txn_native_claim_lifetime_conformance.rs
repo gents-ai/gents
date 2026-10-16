@@ -268,8 +268,6 @@ async fn lean_claimed_access_retains_real_store_lock_after_cancelled_signed_writ
         &node,
     );
 
-    // The cancelled caller drops its access clone; the live access clone and
-    // the actual native writer both retain the attached OS store claim.
     drop(access);
     assert_observation(
         &case,
@@ -663,7 +661,6 @@ async fn lean_renewal_transaction_retains_claim_without_mutation_gate() {
         &node,
     );
     assert!(!model_observation(&case, "native_started", 0).mutation_gate_held);
-
     release.notify_one();
     let final_observation = model_observation(&case, "renewal_requested", 0);
     assert!(final_observation.claim_held);

@@ -20,10 +20,6 @@ pub struct ServiceAccount {
 }
 
 /// Resolved DID and signing handle for one runtime assembly.
-///
-/// Each resolved behavior holds this handle so DefraDB operations use the
-/// behavior owner's DID and signing identity. The assembly path validates the
-/// owner relationship before the behavior becomes runnable.
 #[derive(Clone)]
 pub struct RuntimeNode {
     pub node_did: String,
@@ -84,8 +80,8 @@ impl KeyIdentity {
         )
     }
 
-    /// Opens only an existing validated key; initialized homes must not mint a
-    /// replacement identity when their recorded key disappears.
+    /// Opens only an existing key; initialized homes must not mint a
+    /// replacement when their recorded key disappears.
     pub fn load_existing(
         key_path: impl Into<PathBuf>,
         service_account: Option<ServiceAccount>,
@@ -110,11 +106,8 @@ impl KeyIdentity {
     }
 }
 
-/// Register an existing Ed25519 identity for DefraDB commit signing.
-///
-/// Gents already owns the principal key; this makes the same identity
-/// available to `EmbeddedNode::with_node_identity_did` instead of creating a
-/// second database-specific identity.
+/// Registers the gents-owned principal key for DefraDB commit signing,
+/// instead of letting DefraDB create a second database-specific identity.
 pub fn register_ed25519_signing_identity(
     did: &str,
     private_key_bytes: &[u8],
@@ -147,13 +140,8 @@ pub fn register_ed25519_signing_identity(
     Ok(())
 }
 
-/// Return the identity string DefraDB stores in commit signature headers for
-/// a `did:key` principal.
-///
-/// DefraDB signatures carry the hexadecimal public key, while Gents exposes
-/// the corresponding DID at its API boundary. Keeping this conversion next to
-/// identity registration lets audit consumers compare the two without
-/// reimplementing `did:key` parsing.
+/// Identity string DefraDB stores in commit signature headers for a
+/// `did:key` principal: the hexadecimal public key, not the DID.
 pub fn commit_signer_identity_for_did(did: &str) -> Result<String> {
     let (_, public_key_bytes) = crypto::parse_did_key(did)
         .map_err(anyhow::Error::from)
@@ -161,20 +149,15 @@ pub fn commit_signer_identity_for_did(did: &str) -> Result<String> {
     Ok(lowercase_hex(&public_key_bytes))
 }
 
-/// Lifetime of one minted DefraDB HTTP bearer. Every request mints its own,
-/// and DefraDB tolerates a further 60s of clock skew, so a bearer replayed by
-/// the host it was sent to stays usable for at most two minutes. DefraDB
-/// bearers carry no nonce.
+/// DefraDB tolerates up to 60s of clock skew and its bearers carry no nonce,
+/// so a replayed bearer stays usable for at most two minutes.
 const DEFRADB_BEARER_LIFETIME: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// Mint an `Authorization` header value that authenticates one DefraDB HTTP
-/// request as `did`.
-///
-/// DefraDB verifies the JWT against the request's `Host` header, so
-/// `audience` must be the `host[:port]` the request is sent to. Only a DID
-/// whose private key bytes this process registered can mint one; a
-/// hardware-backed key without exportable bytes is refused rather than
-/// silently falling back to an anonymous request.
+/// Mint an `Authorization` header authenticating one DefraDB HTTP request as
+/// `did`. DefraDB verifies the JWT against the request's `Host` header, so
+/// `audience` must be the `host[:port]` the request is sent to. A DID whose
+/// private key bytes this process did not register is refused, not silently
+/// downgraded to an anonymous request.
 pub fn defradb_bearer_authorization(did: &str, audience: &str) -> Result<String> {
     let config = defra_core::signing::get_identity(did)
         .ok_or_else(|| anyhow!("no signing identity is loaded for {did}"))?;
@@ -197,16 +180,11 @@ pub fn can_mint_defradb_bearer(did: &str) -> bool {
     defra_core::signing::get_identity(did).is_some_and(|config| config.has_local_private_key())
 }
 
-/// Run `operation` with the node's own DID as the acting identity.
-///
-/// Mirrors DefraDB's private `EmbeddedNode::as_node_identity` until DefraDB
-/// installs the node identity on its P2P operations handle itself.
-///
-/// DefraDB node access control resolves the actor from the ambient request
-/// identity. `EmbeddedNode` installs it for queries, transactions and schema
-/// changes, but not for its P2P operations handle, so a node with access
-/// control enabled denies in-process P2P administration as anonymous unless
-/// it runs under this scope. Spawned tasks do not inherit the scope.
+/// Mirrors DefraDB's private `EmbeddedNode::as_node_identity`. DefraDB
+/// installs the ambient request identity for queries, transactions and schema
+/// changes but not its P2P operations handle, so access-controlled nodes deny
+/// in-process P2P administration as anonymous without this scope. Spawned
+/// tasks do not inherit the scope.
 pub async fn as_node_identity<F: std::future::Future>(
     node: &defra_node::EmbeddedNode,
     operation: F,
@@ -376,9 +354,8 @@ fn register_public_key(did: &str, key_type: crypto::KeyType, public_key: Vec<u8>
         );
 }
 
-/// `errSecItemNotFound`: the only Keychain status that proves an item is
-/// absent. Every other failure (locked keychain, denied access, cancelled
-/// prompt) leaves the item possibly intact.
+/// The only Keychain status that proves an item is absent; every other
+/// failure leaves the item possibly intact.
 pub(crate) const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
 #[cfg(target_os = "macos")]
 const ERR_SEC_MISSING_ENTITLEMENT: i32 = -34018;
@@ -499,9 +476,8 @@ pub(crate) fn macos_keychain_set(service: &str, label: &str, secret: &[u8]) -> R
         .map_err(anyhow::Error::from)
 }
 
-/// Removes a login-keychain generic password; an absent one is not an error.
-/// `security-framework` discards `SecKeychainItemDelete`'s status, so deletion
-/// is complete only after a fresh lookup returns `errSecItemNotFound`.
+/// `security-framework` discards `SecKeychainItemDelete`'s status, so
+/// deletion is complete only after a fresh lookup returns `errSecItemNotFound`.
 #[cfg(target_os = "macos")]
 pub(crate) fn macos_keychain_delete(service: &str, label: &str) -> Result<()> {
     let keychain = security_framework::os::macos::keychain::SecKeychain::default()

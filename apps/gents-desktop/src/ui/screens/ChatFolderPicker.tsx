@@ -1,6 +1,3 @@
-/* The folder the user works in for this chat, in the composer's leading
-   slot: plugin tools read inside it without a prompt. Shown only where the
-   OS folder picker exists. */
 import { Folder, X } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import { toastFailure } from "../lib/failure";

@@ -108,7 +108,7 @@ async fn selected_history_missing_later_payload_never_returns_a_shortened_prefix
             .len(),
         1
     );
-    // A replica may observe a later header before its selected close. Neither
+    // Replica may observe a later header before its selected close; neither
     // provider input nor compaction may accept just the earlier valid prefix.
     let header = TranscriptMessage {
         message_key: "later-input".into(),
@@ -467,7 +467,6 @@ async fn publish_tool_turn_for_rollback_test(
         background_calls: Vec::new(),
         consumes_folded: None,
     };
-    // Exercise the canonical publication owner, not a test-side write script.
     super::canonical::publish_provider_turn(node, lifecycle.execution_generation().unwrap(), plan)
         .await
 }
@@ -714,10 +713,9 @@ async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mu
         before.as_ref().unwrap()["AgentSession"],
         "successful recovery must update the session observation"
     );
-    // Discard the first acknowledgement and resend the exact recovery
-    // identity at the caller boundary. This does not inject an
-    // acknowledgement loss inside the transaction owner. The hook
-    // counts transactional mutations, not arbitrary auto-commit writes.
+    // Discard the first acknowledgement at the caller boundary (no injected
+    // loss inside the transaction owner); the hook counts transactional
+    // mutations, not arbitrary auto-commit writes.
     let (replay, writes) =
         ConfigApplyTxn::with_successful_mutation_failure_at(None, recover()).await;
     assert_eq!(replay.unwrap(), RecoveryResult::Won { published: 1 });
@@ -1169,12 +1167,11 @@ async fn publication_timestamp_follows_a_flush_that_already_owns_the_tail() {
     let encoded = native_encoding::encode_native_message(&message).unwrap();
 
     // The flusher owns the tail. Poll the publisher all the way to its lock
-    // wait before committing the flush, without relying on task scheduling.
+    // wait before committing the flush; the committed flush needs a later
+    // wall-clock stamp even on coarse-resolution clocks.
     let mut tails = writer.provider_tails.lock().await;
     let mut publication = Box::pin(writer.publish_native_turn(&lifecycle, 0, 0, &message));
     assert!(futures::poll!(publication.as_mut()).is_pending());
-    // Ensure the committed flush has a later wall-clock stamp even on clocks
-    // whose resolution is coarser than the synchronous poll above.
     tokio::time::sleep(Duration::from_millis(2)).await;
     let tail = tails.get_mut(&request.doc_id).unwrap();
     let delta = provider_flush_delta(&tail.streams, &encoded).unwrap();
@@ -1512,13 +1509,13 @@ async fn accepted_tool_publication_replay_returns_exact_physical_bindings() {
     let _ = std::fs::remove_dir_all(path);
 }
 
-// External storage premise under test: the embedded commit is durable but its
-// receipt never reaches the publication owner. #1630 relies on the existing
-// idempotent transaction retry to reconstruct committed publication; no
-// rollback is simulated and no model policy changes.
 /// Covers native dispatch-start election and one persisted completion after
 /// publication receipt loss. It does not execute an external `ToolDyn` effect
 /// or fault the dispatch transaction's own commit receipt.
+/// External storage premise under test: the embedded commit is durable but its
+/// receipt never reaches the publication owner. #1630 relies on the existing
+/// idempotent transaction retry to reconstruct committed publication; no
+/// rollback is simulated and no model policy changes.
 #[tokio::test]
 async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
@@ -1541,17 +1538,12 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
             additional_params: None,
         })],
     };
-    // The canonical publication owner may replay internally, so the first
-    // publish is not required to surface Err; the fault must fire exactly once
-    // at the post-commit boundary.
     let (first, fault_fired) = crate::config_client::ConfigApplyTxn::with_post_commit_receipt_loss(
         writer.publish_native_turn(&lifecycle, 0, 0, &message),
     )
     .await;
     let first = first.expect("idempotent owner must reconstruct the lost receipt");
     assert!(fault_fired, "post-commit receipt-loss fault must fire");
-    // Capture the committed state before an external replay so the comparison
-    // brackets that replay, rather than comparing two reads afterward.
     let request = crate::graphql::escape_graphql_string(&lifecycle.request().doc_id);
     let query = format!(
         r#"{{
@@ -1611,8 +1603,8 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
     assert_eq!(tool_rows[0]["lifecycle_state"], "pending");
     assert_eq!(a.accepted_header_doc_id, first.message_doc_id);
 
-    // Both the lost-receipt return and an external replay refer to the same
-    // accepted physical call. Only one can win the real dispatch admission CAS.
+    // Lost-receipt return and external replay refer to the same accepted call;
+    // only one can win the real dispatch admission CAS.
     let deadline = lifecycle.claimed_deadline_at().unwrap();
     let mut first_dispatch = crate::tool_call_lifecycle::ToolCallLifecycle::from_accepted(
         node.clone(),

@@ -15,7 +15,6 @@ use super::persistence::persist_terminal_call;
 #[path = "registry_contract_tests.rs"]
 mod contract_tests;
 
-/// The slot connection test callers attribute their calls to.
 #[cfg(test)]
 pub(super) const TEST_SLOT_CONNECTION: &str = "test-slot-connection";
 
@@ -30,9 +29,6 @@ struct AdmissionRegistryInner {
     backends: Mutex<HashMap<String, BackendAdmission>>,
 }
 
-/// A backend's capacity pool outlives its admitting incarnations and its
-/// outages while any permit it issued is held. Replaced incarnations are
-/// owned only by their outstanding permits and queued waiters.
 struct BackendAdmission {
     pool: Arc<CapacityPool>,
     admitting: Option<Arc<BackendAdmissionController>>,
@@ -56,11 +52,9 @@ impl AdmissionRegistry {
             .expect("AdmissionRegistry state lock poisoned")
     }
 
-    /// Installs the admitting controller for every available backend in this
-    /// complete snapshot, in the same step and on the backend's existing
-    /// pool, so new calls never observe a gap. Removed and unavailable
-    /// backends close admission; their held permits keep counting if the
-    /// backend returns.
+    /// Installs admitting controllers in one step so new calls never observe
+    /// a gap; removed and unavailable backends close admission while their
+    /// held permits keep counting if the backend returns.
     pub(crate) fn reconcile(
         &self,
         generation: u64,
@@ -117,7 +111,6 @@ impl AdmissionRegistry {
     }
 
     #[cfg(test)]
-    #[allow(dead_code)]
     pub(crate) async fn acquire_for_test(
         &self,
         request_id: impl Into<String>,
@@ -169,7 +162,6 @@ impl AdmissionRegistry {
         .await
     }
 
-    /// Acquires in the ambient request scope as a test slot.
     #[cfg(test)]
     pub(crate) async fn acquire_current_call_for_test(
         &self,
@@ -194,9 +186,6 @@ impl AdmissionRegistry {
             .map(|entry| entry.pool.clone())
     }
 
-    /// Admits one provider call issued through a client built for
-    /// `connection` (see `backend_connection_fingerprint`), which attributes
-    /// the call.
     pub(super) async fn acquire_current_call(
         &self,
         connection: &str,

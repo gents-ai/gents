@@ -65,8 +65,6 @@ async fn admitted_parent(case: &LeanR6BackgroundingCase, branch: &str) -> Publis
         real_identity: true,
         await_mode: AwaitMode::Background,
         start_running: true,
-        // The failed historical wake must be the actual latest request fact;
-        // the redrive owner deliberately ignores a hand-edited session cache.
         request_created_at: branch
             .ends_with("redrive")
             .then(|| "2026-07-14T00:00:00Z".to_owned()),
@@ -75,10 +73,8 @@ async fn admitted_parent(case: &LeanR6BackgroundingCase, branch: &str) -> Publis
     .await
     .expect("publish accepted background invocation on claimed request");
     let parent_doc = admission.tool.request_doc_id().unwrap();
-    // The generated completion-owner row begins with a terminal parent.
-    // Import that observation only AFTER the real claimed request has
-    // published its immutable accepted header; this test exercises the
-    // notification/redrive owners, not the request terminal transition.
+    // Import the terminal-parent observation only after the real claimed
+    // request has published its immutable accepted header.
     update(
         &admission.node,
         "AgentRequest",
@@ -439,7 +435,7 @@ async fn generated_r6_completion_owner_cases_use_accepted_native_output() {
     }
 }
 
-/// The watcher-selected request is deliberately still pending. The daemon
+/// The watcher-selected request is deliberately still pending; the daemon
 /// integration test hands it to `process_request`, which owns its claim.
 pub(crate) struct SelectedBackgroundWake {
     pub admission: PublishedAdmission,
@@ -451,8 +447,7 @@ pub(crate) struct SelectedBackgroundWake {
 }
 
 /// Compose the signed session-message owners through watcher selection,
-/// leaving the actual wake claim to the caller: an `agent_new` row settles
-/// from its caused request's terminal after a later assistant call.
+/// leaving the wake claim to the caller.
 pub(crate) async fn selected_background_wake() -> SelectedBackgroundWake {
     use super::admission_fixture::{
         complete_child, publish_accepted_on_claimed_request, published_session_message_with_owner,

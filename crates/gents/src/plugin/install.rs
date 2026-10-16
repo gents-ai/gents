@@ -1,9 +1,7 @@
-//! Installing a pack's plugins into the home's plugin store.
-//!
-//! Lives in the runtime crate, not `gents-cli`, so a graph install driven
-//! by `self_config` can install a pack's plugins itself without going
-//! through the CLI. `gents-cli`'s `commands::pack` module keeps a thin
-//! caller that forwards here.
+//! Installing a pack's plugins into the home's plugin store. Lives in the
+//! runtime crate, not `gents-cli`, so graph installs driven by `self_config`
+//! can install pack plugins without the CLI; `gents-cli`'s `commands::pack`
+//! forwards here.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -16,20 +14,11 @@ use super::store::{self, InstalledPlugin};
 use super::{Manifold, PluginRunner};
 use crate::pack::{PackManifest, PackPlugin};
 
-/// Installs one plugin a pack carries into the same content-addressed
-/// store `gents plugin install` uses, so a plugin that arrived inside a
-/// pack runs by name (`gents plugin run <name>`) just like one installed on
-/// its own.
-///
-/// A plugin declared inline in a pack manifest carries neither a namespace
-/// nor a version of its own, so it takes its pack's: two packs from
-/// different namespaces may each carry a `format_check`, and recording both
-/// under one default namespace would have the second silently replace the
-/// first.
-///
-/// `pack_coordinate` (`{namespace}/{name}` of the pack this plugin ships in)
-/// is refused when the record already belongs to a different pack: see
-/// [`store::check_plugin_ownership`].
+/// Installs one plugin a pack carries into the same content-addressed store
+/// `gents plugin install` uses, so it runs by name like a standalone install.
+/// A plugin declared inline in a pack manifest takes its pack's namespace and
+/// version. `pack_coordinate` is refused when the record already belongs to
+/// a different pack: see [`store::check_plugin_ownership`].
 #[allow(clippy::too_many_arguments)]
 pub fn install_from_pack(
     home: &Path,
@@ -44,8 +33,6 @@ pub fn install_from_pack(
 ) -> Result<InstalledPlugin> {
     store::check_plugin_ownership(home, pack_namespace, &plugin.name, pack_coordinate)?;
     let granted = store::grant_on_install(home, pack_namespace, plugin, consent)?;
-    // A reinstall or upgrade keeps the operator's binding while the plugin
-    // still names the same slot.
     let model_binding = match store::read_record(home, pack_namespace, &plugin.name) {
         Ok(previous) => Some(previous)
             .filter(|previous| previous.declaration.model_slot == plugin.model_slot)
@@ -96,9 +83,6 @@ pub fn install_from_pack(
 }
 
 /// Admits and stores every plugin a pack ships in `home`'s plugin store.
-/// `pack_digest` is the pack's own content digest, recorded on each
-/// plugin's record for operator visibility (see
-/// [`InstalledPlugin::owner_pack_digest`]).
 pub fn install_pack_plugins<'a>(
     home: &Path,
     manifest: &PackManifest,
@@ -165,7 +149,7 @@ pub fn bind_plugin_slots(
     Ok(bound)
 }
 
-/// Whether `error` is the plain absence of a file, a first install.
+/// Whether `error` is a plain file-not-found (first install).
 fn is_not_found(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
@@ -175,7 +159,7 @@ fn is_not_found(error: &anyhow::Error) -> bool {
 }
 
 /// Binds (`Some`) or unbinds (`None`) the model slot of the installed plugin
-/// `coordinate`. Refused when the plugin names no slot.
+/// `coordinate`; refused when the plugin names no slot.
 pub fn set_model_binding(
     home: &Path,
     coordinate: &str,
@@ -194,9 +178,8 @@ pub fn set_model_binding(
 }
 
 /// Every plugin `manifest` would install and its plugin-store record before
-/// any write, so a failure later in the same pack install can restore
-/// exactly what was there (or remove what was not) instead of leaving an
-/// orphaned plugin record behind. `None` means the name was not installed.
+/// any write, so a failed install can restore exactly what was there
+/// (`None` means the name was not installed).
 pub fn snapshot_pack_plugin_records(
     home: &Path,
     manifest: &PackManifest,
@@ -218,11 +201,10 @@ pub fn snapshot_pack_plugin_records(
 }
 
 /// Restores each `(namespace, name)` plugin record to what
-/// [`snapshot_pack_plugin_records`] observed before the install that must
-/// now be undone: the previous record is put back, or removed if there was
-/// none. Best-effort and never fails the caller: a restore that cannot
-/// complete is logged loudly rather than masking the original error that
-/// triggered the rollback.
+/// [`snapshot_pack_plugin_records`] observed: the previous record is put
+/// back, or removed if there was none. Best-effort, never fails the caller:
+/// a failed restore is logged loudly rather than masking the triggering
+/// error.
 pub fn rollback_pack_plugin_records(
     home: &Path,
     previous: &[(String, String, Option<InstalledPlugin>)],
@@ -232,8 +214,6 @@ pub fn rollback_pack_plugin_records(
             Some(record) => store::write_record(home, record),
             None => match store::read_record(home, namespace, name) {
                 Ok(_) => store::remove_record(home, namespace, name).map(|_| ()),
-                // Never written by this install (it failed before reaching
-                // this plugin, or this plugin failed itself): nothing to undo.
                 Err(_) => Ok(()),
             },
         };

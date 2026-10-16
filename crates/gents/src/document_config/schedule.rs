@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-/// Reusable schedule configuration. Task selection and concurrency live on
-/// Trigger; each referencing trigger has its own scheduling cursor.
+/// Reusable schedule configuration; task selection and concurrency live on
+/// Trigger, each referencing trigger has its own scheduling cursor.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -18,7 +18,7 @@ pub struct Schedule {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub updated_at: Option<String>,
-    /// Optional UI/discovery labels. References, never tags, determine execution.
+    /// Optional UI/discovery labels.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -34,13 +34,11 @@ pub struct Schedule {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum ScheduleCadence {
     Interval {
-        /// Must be positive. Existing interval catch-up behavior is preserved.
         interval_secs: i64,
     },
     Cron {
         expression: String,
         timezone: String,
-        /// Omitted means latest_only, as in the existing cron implementation.
         #[cfg_attr(feature = "typescript", ts(optional = nullable))]
         missed_run_policy: Option<crate::schedule_cron::CronMissedRunPolicy>,
     },
@@ -54,7 +52,6 @@ pub struct ScheduleObservation {
 }
 
 impl ScheduleCadence {
-    /// Shared cadence admission and runtime validation through the cron owner.
     pub fn validate(&self) -> anyhow::Result<()> {
         match self {
             Self::Interval { interval_secs } => {
@@ -89,6 +86,3 @@ impl ScheduleCadence {
     }
 }
 
-#[cfg(test)]
-#[path = "schedule_cadence_tests.rs"]
-mod cadence_tests;

@@ -86,8 +86,6 @@ theorem claim_unique_different_ids :
       [mkInv "inv-1" "dep-1" .running, mkInv "inv-2" "dep-1" .running] := by
   native_decide
 
-/-- Proof-carrying lifecycle cases expose nonempty captured input and group
-origin, so downstream conformance checks the real transition and journal. -/
 structure TransitionCase where
   name : String
   pre : CallbackInvocation
@@ -141,8 +139,6 @@ def transitionCases : List TransitionCase :=
       step := .retry 3 (by decide) rfl }
   ]
 
-/-- Every retry decision over a matrix of states, journals and budgets. The
-expected answer is the model's own `retryAllowed`. -/
 structure RetryCase where
   name : String
   state : InvocationState
@@ -173,9 +169,6 @@ def retryCases : List RetryCase :=
 
 theorem retryCases_count : retryCases.length = 224 := by native_decide
 
-/-- Recovery and denial of every running invocation over a matrix of journals
-and attempts. The expected outcomes and later retry decisions are the model's
-own `recover`, `deny` and `retryAllowed`. -/
 structure RecoveryCase where
   name : String
   journal : List ActionJournalState

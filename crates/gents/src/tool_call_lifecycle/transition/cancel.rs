@@ -5,16 +5,10 @@ use super::{CancelCause, ToolCallState};
 impl super::ToolCallLifecycle {
     pub const CANCEL_DURING_RUN_OUTPUT: &'static str = "tool call cancelled";
 
-    /// Running → Cancelled. Called by request interruption handling and
-    /// startup recovery for interrupted parent requests.
-    ///
     pub async fn cancel_during_run(&mut self, cause: CancelCause) -> Result<bool> {
         self.cancel_during_run_inner(cause, None).await
     }
 
-    /// Returns whether this caller won the durable running-state compare.
-    /// Background completion side effects must only be projected by that
-    /// winner; a loser adopts the already-terminal durable row.
     pub(crate) async fn cancel_during_run_owned(
         &mut self,
         cause: CancelCause,

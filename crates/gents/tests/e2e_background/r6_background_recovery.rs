@@ -80,10 +80,6 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
         request_setup: None,
     };
     let prepared = crate::support::accepted_turn::prepare_accepted_turn(&db, spec).await;
-    // Keep the accepted parent live after the spawn receipt. The recovery
-    // contract distinguishes a live parent from a cleanly completed one; an
-    // unpaused second provider response would race the crash and exercise the
-    // terminal-parent failure branch instead.
     prepared
         .backend
         .enable_dynamic_followups("start recovery background process");
@@ -259,8 +255,6 @@ async fn load_wakes(
         .unwrap_or_default()
 }
 
-/// Whether `pid` names a process that has not exited. The orphan is
-/// reparented to init after its runtime's crash, which reaps it promptly.
 #[cfg(unix)]
 fn process_alive(pid: i32) -> bool {
     // SAFETY: signal 0 only checks existence of this test's own child.
@@ -327,9 +321,6 @@ async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
             .expect("reopen crashed recovery store"),
     );
     gents::ensure_runtime_schemas(&node).await.unwrap();
-    // The crashed worker's `sleep` leads its own process group and survived
-    // the SIGKILL. Its durable record is the restarted runtime's only proof
-    // of ownership.
     let records = ready.data_path.join("background-processes");
     let record: serde_json::Value = serde_json::from_slice(
         &std::fs::read(

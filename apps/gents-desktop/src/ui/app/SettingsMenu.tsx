@@ -18,15 +18,12 @@ import { useApp } from "./AppContext";
 import { inNativeShell } from "../../lib/nativeShell";
 import { isMacTauriShell } from "../../lib/shellPlatform";
 
-/** Global settings at the foot of the nav: an icon on the rail, a row in the
-    panel. The theme, the side nav where there is one, and the runtime's DB
-    explorer where the bridge has it. */
+/** Settings menu: theme, side nav, runtime reset, DB explorer. */
 export function SettingsMenu({
   variant,
   showNav,
 }: {
   variant: "rail" | "row";
-  /** the side nav choices only make sense where there is a side nav */
   showNav: boolean;
 }) {
   const { actions, lifecycle } = useApp();

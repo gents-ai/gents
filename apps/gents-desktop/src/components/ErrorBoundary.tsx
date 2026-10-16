@@ -4,9 +4,6 @@ import { isWindowsTauriShell } from "../lib/shellPlatform";
 import { WindowControls } from "../ui/app/WindowControls";
 import { Disclosure } from "../ui/components/Disclosure";
 
-/// Last-resort boundary: without it a render exception anywhere below
-/// white-screens the whole desktop app. Class component by necessity —
-/// React only exposes error boundaries via lifecycle methods.
 type ErrorBoundaryProps = { children: ReactNode };
 type ErrorBoundaryState = { error: Error | null; componentStack: string | null };
 

@@ -1,5 +1,5 @@
-//! Native macOS tabs keep each webview alive when it moves between windows.
-//! Navigation, drafts and in-flight UI work therefore need no transfer protocol.
+//! AppKit's tab-bar + button sends newWindowForTab: through the responder
+//! chain. Keep this thin adapter next to the native menu's New Tab action.
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -42,8 +42,6 @@ pub fn desktop_window_setup_complete(window: WebviewWindow) -> Result<(), String
 }
 
 define_class!(
-    // AppKit's tab-bar + button sends newWindowForTab: through the responder
-    // chain. Keep this thin adapter next to the native menu's New Tab action.
     #[unsafe(super(NSResponder))]
     #[thread_kind = MainThreadOnly]
     #[ivars = AppHandle]
@@ -60,8 +58,8 @@ define_class!(
 );
 
 thread_local! {
-    // NSResponder.nextResponder does not retain its target. This lives until
-    // process exit and is only ever accessed on AppKit's main thread.
+    // NSResponder.nextResponder does not retain its target; this must live
+    // until process exit.
     static TAB_RESPONDER: RefCell<Option<Retained<TabResponder>>> = const { RefCell::new(None) };
 }
 
@@ -184,8 +182,7 @@ pub fn create_window(app: &AppHandle, tab: bool) -> tauri::Result<WebviewWindow>
     }
     window.show()?;
     window.set_focus()?;
-    // Explicit New Window bypasses the system's "always prefer tabs" setting;
-    // once shown it can participate in dragging and merging like every tab.
+    // Explicit New Window bypasses the system's "always prefer tabs" setting.
     with_native_window(&window, |native| {
         native.setTabbingMode(NSWindowTabbingMode::Automatic)
     })?;
@@ -200,8 +197,7 @@ fn with_native_window<T>(
     window: &WebviewWindow,
     action: impl FnOnce(&NSWindow) -> T,
 ) -> tauri::Result<T> {
-    // All callers are native setup/menu/window-event callbacks on the main
-    // thread. The Tauri window retains its NSWindow throughout this call.
+    // Native callbacks only; the Tauri window retains its NSWindow.
     assert!(objc2::MainThreadMarker::new().is_some());
     let pointer = window.ns_window()?;
     let native = unsafe { &*pointer.cast::<NSWindow>() };

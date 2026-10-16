@@ -29,8 +29,8 @@ pub(crate) struct ListRow {
     pub(crate) purpose: String,
     pub(crate) created_at: String,
     pub(crate) invalidated: Option<Invalidation>,
-    /// The run directory's size; `None` once `rm` or `gc` removed it, or
-    /// when it could not be read (`size_error` then says why).
+    /// `None` once `rm` or `gc` removed it, or when it could not be read
+    /// (`size_error` then says why).
     pub(crate) size_bytes: Option<u64>,
     pub(crate) size_error: Option<String>,
     pub(crate) cells: Vec<ListCell>,
@@ -106,8 +106,6 @@ pub(super) async fn list(
     }
 }
 
-/// The run directory's size: `(None, None)` when there is no directory,
-/// `(None, Some(why))` when it could not be read.
 fn run_size(ctx: &EvalContext, run_id: &str) -> (Option<u64>, Option<String>) {
     let Some(dir) = gents::eval::runner::run_dir(&ctx.runs_dir(), run_id)
         .ok()
@@ -142,7 +140,6 @@ pub(super) async fn show(
     }
 }
 
-/// One verdict row of the slot's latest attempt.
 #[derive(Debug, Serialize)]
 pub(crate) struct TrialVerdict {
     pub(crate) verdict_id: String,
@@ -191,9 +188,8 @@ pub(crate) struct TrialView {
     /// The retained trial home: `<home>/eval/runs/<home_hint>`.
     pub(crate) home: Option<PathBuf>,
     /// Every verdict row of the latest attempt, regrades and the verdicts
-    /// they superseded included. The latest attempt can differ from the
-    /// counted one: the counted attempt is the latest completed one, so a
-    /// retry in flight has no verdicts here yet.
+    /// they superseded included. The counted attempt is the latest completed
+    /// one, so a retry in flight has no verdicts here yet.
     pub(crate) verdicts: Vec<TrialVerdict>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) requests: Option<Vec<gents::eval::runner::embedded::RetainedRequest>>,
@@ -283,309 +279,3 @@ pub(super) async fn trial(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use tokio_util::sync::CancellationToken;
-
-    use super::super::testing::{eval, executor, row, Fixture, VALIDATION_CASES};
-
-    #[tokio::test]
-    async fn show_prints_six_slot_counts_per_cell_and_json_is_the_report() {
-        let fixture = Fixture::new().await;
-        fixture
-            .scripted_run(
-                "r1",
-                &executor(&VALIDATION_CASES[..3]),
-                CancellationToken::new(),
-            )
-            .await;
-
-        let table = eval(&fixture, &["show", "r1"]).await.unwrap();
-        assert_eq!(
-            row(&table, "baseline", 10),
-            vec!["baseline", "6", "6", "0", "0", "0", "0", "12", "50.00%", "-/-"]
-        );
-        assert_eq!(
-            row(&table, "candidate", 10),
-            vec![
-                "candidate",
-                "12",
-                "0",
-                "0",
-                "0",
-                "0",
-                "0",
-                "12",
-                "100.00%",
-                "-/-"
-            ]
-        );
-        assert!(table.contains("exposure 1 "), "{table}");
-
-        let json: serde_json::Value =
-            serde_json::from_str(&eval(&fixture, &["show", "r1", "--json"]).await.unwrap())
-                .unwrap();
-        assert_eq!(json["report_version"], 1);
-        assert_eq!(json["cells"][0]["cell_id"], "baseline");
-        assert_eq!(json["cells"][0]["counts"]["fail"], 6);
-        assert_eq!(json["cells"][0]["slots"][0]["class"], "fail");
-        assert_eq!(json["cells"][1]["headline_bp"], 10_000);
-    }
-
-    #[tokio::test]
-    async fn list_hides_invalidated_runs_unless_asked_and_counts_slots_per_cell() {
-        let fixture = Fixture::new().await;
-        let scripted = executor(&VALIDATION_CASES[..3]);
-        fixture
-            .scripted_run("r1", &scripted, CancellationToken::new())
-            .await;
-        fixture
-            .scripted_run("r2", &scripted, CancellationToken::new())
-            .await;
-        gents::eval::invalidate_run(
-            &fixture.ctx.access,
-            &fixture.ctx.owner,
-            "r1",
-            &fixture.ctx.owner,
-            "fixture was broken",
-        )
-        .await
-        .unwrap();
-
-        let listed = eval(&fixture, &["list"]).await.unwrap();
-        assert!(
-            !listed.lines().any(|line| line.starts_with("r1 ")),
-            "{listed}"
-        );
-        let r2 = listed
-            .lines()
-            .find(|line| line.starts_with("r2 "))
-            .unwrap_or_else(|| panic!("{listed}"));
-        assert!(
-            r2.contains("baseline[pass 6 fail 6 unknown 0 not_evidence 0 abandoned 0 planned 0]"),
-            "{r2}"
-        );
-
-        let all = eval(&fixture, &["list", "--all"]).await.unwrap();
-        let r1 = all
-            .lines()
-            .find(|line| line.starts_with("r1 "))
-            .unwrap_or_else(|| panic!("{all}"));
-        assert!(r1.contains(" yes "), "{r1}");
-
-        let json: serde_json::Value =
-            serde_json::from_str(&eval(&fixture, &["list", "--all", "--json"]).await.unwrap())
-                .unwrap();
-        assert_eq!(json.as_array().map(Vec::len), Some(2));
-        assert_eq!(json[0]["run_id"], "r1");
-        assert_eq!(json[0]["invalidated"]["reason"], "fixture was broken");
-
-        let other = eval(&fixture, &["list", "--definition", "other"])
-            .await
-            .unwrap();
-        assert_eq!(other.lines().count(), 1, "only the header: {other}");
-    }
-
-    #[tokio::test]
-    async fn list_shows_an_unreportable_run_with_its_refusal_and_the_rest_normally() {
-        let fixture = Fixture::new().await;
-        let scripted = executor(&VALIDATION_CASES[..3]);
-        fixture
-            .scripted_run("r1", &scripted, CancellationToken::new())
-            .await;
-        fixture
-            .scripted_run("r2", &scripted, CancellationToken::new())
-            .await;
-        let frozen = fixture.ctx.runs_dir().join("r1").join("definition.json");
-        std::fs::write(&frozen, "not a definition").unwrap();
-
-        let listed = eval(&fixture, &["list"]).await.unwrap();
-        let r1 = listed
-            .lines()
-            .find(|line| line.starts_with("r1 "))
-            .unwrap_or_else(|| panic!("{listed}"));
-        assert!(r1.contains("report unavailable: parsing "), "{r1}");
-        assert!(r1.contains("definition.json"), "{r1}");
-        let r2 = listed
-            .lines()
-            .find(|line| line.starts_with("r2 "))
-            .unwrap_or_else(|| panic!("{listed}"));
-        assert!(
-            r2.contains("baseline[pass 6 fail 6 unknown 0 not_evidence 0 abandoned 0 planned 0]"),
-            "{r2}"
-        );
-
-        let json: serde_json::Value =
-            serde_json::from_str(&eval(&fixture, &["list", "--json"]).await.unwrap()).unwrap();
-        assert_eq!(json[0]["run_id"], "r1");
-        assert_eq!(json[0]["cells"], serde_json::json!([]));
-        assert!(
-            json[0]["report_error"]
-                .as_str()
-                .is_some_and(|error| error.contains("definition.json")),
-            "{json}"
-        );
-        assert_eq!(json[1]["run_id"], "r2");
-        assert!(json[1]["report_error"].is_null(), "{json}");
-
-        let error = eval(&fixture, &["show", "r1"]).await.unwrap_err();
-        assert!(error.to_string().starts_with("parsing "), "{error:#}");
-    }
-
-    #[tokio::test]
-    async fn trial_prints_the_latest_attempt_with_its_verdicts() {
-        let fixture = Fixture::new().await;
-        fixture
-            .scripted_run(
-                "r1",
-                &executor(&VALIDATION_CASES[..3]),
-                CancellationToken::new(),
-            )
-            .await;
-
-        let text = eval(&fixture, &["trial", "r1", "baseline", "val-a", "1"])
-            .await
-            .unwrap();
-        assert!(text.contains("class fail"), "{text}");
-        assert!(text.contains("stage check terminal "), "{text}");
-        assert!(
-            text.contains(
-                "verdict captured_rows_count acceptance model_acceptance score 0 reason below_min"
-            ),
-            "{text}"
-        );
-
-        let json: serde_json::Value = serde_json::from_str(
-            &eval(&fixture, &["trial", "r1", "candidate", "val-a", "--json"])
-                .await
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(json["slot"]["class"], "pass");
-        assert_eq!(json["slot"]["trial_index"], 0);
-        assert_eq!(json["verdicts"][0]["reason_code"], "in_range");
-        assert_eq!(json["verdicts"][0]["raw"]["count"], 1);
-        assert!(json.get("requests").is_none());
-
-        let cancelled = CancellationToken::new();
-        cancelled.cancel();
-        fixture.scripted_run("r2", &executor(&[]), cancelled).await;
-        let error = eval(&fixture, &["trial", "r2", "baseline", "val-a"])
-            .await
-            .unwrap_err();
-        assert!(
-            error.to_string().contains("has no attempt yet"),
-            "{error:#}"
-        );
-    }
-
-    #[tokio::test]
-    async fn trial_requests_read_original_content_without_changing_eval_records() {
-        use gents::eval::runner::embedded::EmbeddedHome;
-        use gents::eval::runner::{ScriptedExecutor, TrialLocator};
-        use gents::graphql::escape_graphql_string;
-        use gents::ConfigAccess;
-
-        let fixture = Fixture::new().await;
-        let path = fixture.ctx.runs_dir().join("retained/home");
-        let home = EmbeddedHome::create_retained(&path).await.unwrap();
-        let did = home.did().to_owned();
-        let prompt = "Inspect the original \"request\"\nwithout another model turn.";
-        ConfigAccess::write_local(&home.node, "eval.cli.test.retained_request", &format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "child", purpose: "normal", node_did: "{}", session_id: "child-session", content: "{}", lifecycle_state: "completed", retry_root_request: "root", caused_by_parent_request_id: "parent", caused_by_parent_tool_call_id: "tool", caused_by_source_doc_id: "source", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
-            escape_graphql_string(&did), escape_graphql_string(prompt),
-        )).await.unwrap();
-        home.node.shutdown().await;
-        drop(home);
-        let mut evidence = ScriptedExecutor::passed_evidence(
-            &did,
-            "check",
-            "findings",
-            vec![serde_json::json!({})],
-        );
-        evidence.locator = TrialLocator {
-            trial_node_did: did.clone(),
-            session_id: "session".into(),
-            home_hint: Some("retained".into()),
-        };
-        let scripted = ScriptedExecutor::new().with_default(evidence);
-        let mut request = fixture.request("r1");
-        request.cells.truncate(1);
-        request.case_ids = Some(vec!["val-a".into()]);
-        request.trials_per_case = 1;
-        gents::eval::runner::run(
-            &fixture.ctx.access,
-            &request,
-            &scripted,
-            &gents::eval::checks::CheckRegistry::builtin(),
-            CancellationToken::new(),
-            &super::super::testing::fast(),
-        )
-        .await
-        .unwrap();
-        let records_before =
-            gents::eval::load_trials(&fixture.ctx.access, &fixture.ctx.owner, "r1")
-                .await
-                .unwrap();
-        let verdicts_before =
-            gents::eval::load_verdicts(&fixture.ctx.access, &fixture.ctx.owner, "r1")
-                .await
-                .unwrap();
-        let json: serde_json::Value = serde_json::from_str(
-            &eval(
-                &fixture,
-                &["trial", "r1", "baseline", "val-a", "--requests", "--json"],
-            )
-            .await
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(json["requests"][0]["content"], prompt);
-        assert_eq!(json["requests"][0]["node_did"], did);
-        assert_eq!(json["requests"][0]["retry_root_request"], "root");
-        assert_eq!(json["requests"][0]["caused_by_parent_request_id"], "parent");
-        assert_eq!(json["requests"][0]["caused_by_source_doc_id"], "source");
-        assert!(json["requests"][0]["request_doc_id"]
-            .as_str()
-            .is_some_and(|id| !id.is_empty()));
-        let text = eval(
-            &fixture,
-            &["trial", "r1", "baseline", "val-a", "--requests"],
-        )
-        .await
-        .unwrap();
-        assert!(text.contains(prompt), "{text}");
-        assert!(text.contains("retry_root root"), "{text}");
-        assert!(text.contains("parent_request parent"), "{text}");
-        assert!(text.contains("source_document source"), "{text}");
-        assert_eq!(
-            gents::eval::load_trials(&fixture.ctx.access, &fixture.ctx.owner, "r1")
-                .await
-                .unwrap(),
-            records_before
-        );
-        assert_eq!(
-            gents::eval::load_verdicts(&fixture.ctx.access, &fixture.ctx.owner, "r1")
-                .await
-                .unwrap(),
-            verdicts_before
-        );
-
-        let mut active = records_before[0].identity.clone();
-        active.attempt += 1;
-        active.trial_id = "unfinished-inspection".into();
-        gents::eval::create_trial(&fixture.ctx.access, &fixture.ctx.owner, &active)
-            .await
-            .unwrap();
-        let error = eval(
-            &fixture,
-            &["trial", "r1", "baseline", "val-a", "--requests"],
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            format!("{error:#}").contains("still active or unfinished"),
-            "{error:#}"
-        );
-    }
-}

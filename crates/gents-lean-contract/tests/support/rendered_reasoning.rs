@@ -66,7 +66,6 @@ pub(crate) fn generated_reasoning_cases() -> Vec<RenderedReasoningCase> {
             "{}: fixture must exercise both opaque native reasoning variants",
             case.name
         );
-
         let mut content = Vec::new();
         let mut expected_pieces = Vec::new();
         let mut next_kind = 0;

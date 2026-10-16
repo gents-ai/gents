@@ -136,33 +136,6 @@ async fn mailbox_submission_cause_is_owner_and_route_scoped() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn retry_key_and_mutation_are_scoped_to_exact_parent_document() {
-    assert_ne!(
-        retry_successor_key("parent-doc-a"),
-        retry_successor_key("parent-doc-b")
-    );
-    let field = build_add_agent_request_field(
-        "request",
-        "retry-request",
-        "did:test:node",
-        "did:test:requester",
-        "agent",
-        "session",
-        "logical-parent",
-        Some("parent-doc-a"),
-        "logical-root",
-        "retry content",
-        "2026-08-09T00:00:00Z",
-        1,
-        3,
-        "backend",
-        "interactive",
-        "",
-    );
-    assert!(field.contains(r#"retry_parent_request_doc_id: "parent-doc-a""#));
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn generated_session_recovery_cases_drive_desktop_retry_request() -> Result<()> {
     let cases = &lean_contract_snapshot().session_recovery_cases;

@@ -12,7 +12,6 @@ pub(crate) fn is_distributable_asset(path: &str) -> bool {
         })
 }
 
-/// Canonical spelling for a pack directory or a per-document directory handle.
 /// Keep this next to asset admission so build-time embedding and runtime
 /// resolution cannot disagree about what may be distributed.
 pub(crate) fn is_snake_case_name(name: &str) -> bool {

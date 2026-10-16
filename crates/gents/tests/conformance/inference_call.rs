@@ -1,12 +1,3 @@
-//! InferenceCall conformance home: drives the generated slot-accounting cases
-//! against REAL persisted `InferenceCall` rows. The scheduler's fleet slot
-//! state is a derived view over these rows (Boundaries.lean:
-//! `boundary.inference-slots.running-row-derived`), so the integration witness
-//! seeds each case's rows in DefraDB, reads them back, and reconstructs the
-//! running slot count exactly as admission does — pinning the S7 capacity
-//! bound (`reconstructed ≤ max_concurrent`) over the persisted projection.
-//! The pure transition/vocabulary checks remain in `admission::tests`.
-
 use super::*;
 
 #[derive(Debug, Deserialize)]

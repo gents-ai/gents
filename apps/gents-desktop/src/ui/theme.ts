@@ -1,11 +1,7 @@
-/* Theme is one attribute on <html>. The kit reads nothing else. The first
-   run takes the OS preference; after that the choice is the person's, kept
-   with their other preferences. */
 import { setWindowTheme } from "../lib/nativeShell";
 import { isMacTauriShell } from "../lib/shellPlatform";
 export type ThemePreference = "light" | "dark";
 
-/** The OS's preference, for a first run. */
 export const systemTheme = (): ThemePreference =>
   matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 

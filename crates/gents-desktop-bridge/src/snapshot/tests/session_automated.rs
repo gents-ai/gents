@@ -37,8 +37,6 @@ fn input(value: serde_json::Value) -> Option<gents_protocol::request_input::Requ
     Some(serde_json::from_value(value).expect("request input"))
 }
 
-/// One store with a person's turn followed by each kind of input that enters
-/// a session without the person typing it, published in stream order.
 fn automated_store() -> ClientStore {
     let person = request("person", "sess-1", 0);
     let sender = request("sender", "sess-other", 1);

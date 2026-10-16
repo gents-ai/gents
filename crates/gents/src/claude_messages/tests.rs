@@ -13,9 +13,6 @@ use crate::llm::message::{
     UserContent,
 };
 
-/// Lean `ClaudeMap.identity` and Rust `CLAUDE_CODE_IDENTITY` are the same
-/// bytes; the body-cases fence checks `system[0]` against the witness, so
-/// this pins the constant even for a witness set with no rows.
 #[test]
 fn identity_matches_lean_body_witness_head() {
     let cases = crate::lean_vocab_test::lean_prompt_assembly_claude_body_cases();
@@ -116,9 +113,8 @@ fn messages_body_includes_gents_tools_and_system() {
     assert_messages_body_has_no_sampling(&body);
 }
 
-/// Messages HTTP leads `system` with the Claude Code identity block and
-/// keeps the Gents preamble intact after it. Order matters: the identity
-/// is a wire-level prefix, not a rewrite of what the loop assembled.
+/// Messages HTTP leads `system` with the Claude Code identity block and keeps
+/// the Gents preamble intact after it — a wire-level prefix, not a rewrite.
 #[test]
 fn messages_body_system_leads_with_claude_code_identity_then_preamble() {
     let body = build_messages_body("claude-sonnet-5", &echo_request()).unwrap();
@@ -201,9 +197,8 @@ fn messages_body_omits_sampling_even_when_request_sets_it() {
     assert_eq!(body["tools"][0]["name"], "echo");
 }
 
-/// Keys the Messages body may carry. Sampling (`temperature`, `top_p`,
-/// `top_k`) and `additional_params` stay off the wire: live `claude-sonnet-5`
-/// returns 400 "`temperature` is deprecated for this model".
+/// Sampling keys stay off the wire: live `claude-sonnet-5` returns 400
+/// "`temperature` is deprecated for this model".
 const MESSAGES_BODY_ALLOWED_KEYS: &[&str] = &[
     "model",
     "max_tokens",
@@ -507,9 +502,6 @@ data: {"type":"message_stop"}
     assert!(err.to_string().contains("Bash"), "{err}");
 }
 
-/// A `tool_use` block with an explicit start input and any number of
-/// `input_json_delta` fragments; `sse_fixture_tool_use` covers the one-delta
-/// `input: {}` shape Anthropic actually sends.
 fn sse_tool_use_block(id: &str, name: &str, start_input: &str, deltas: &[&str]) -> String {
     let mut sse = format!(
         "event: content_block_start\ndata: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"tool_use\",\"id\":\"{id}\",\"name\":\"{name}\",\"input\":{start_input}}}}}\n\n"
@@ -533,9 +525,8 @@ fn tool_call_arguments(events: &[RawStreamingChoice<ClaudeStreamResponse>]) -> V
     }
 }
 
-/// C1: Anthropic sends `input: {}` on `content_block_start` and streams the
-/// real arguments as `input_json_delta` fragments. The deltas are the
-/// arguments; the start input is ignored once any delta arrives.
+/// Anthropic sends `input: {}` on `content_block_start` and streams the real
+/// arguments as `input_json_delta` fragments; deltas win once any arrive.
 #[test]
 fn sse_tool_use_deltas_yield_exact_arguments() {
     let sse = sse_tool_use_block("toolu_1", "echo", "{}", &["{\"text\":", " \"hi\"}"]);
@@ -671,9 +662,6 @@ fn sse_error_event_becomes_provider_error() {
     );
 }
 
-/// Stable projection of a stream event for equality: rig mints a fresh
-/// `internal_call_id` per `RawStreamingToolCall`, so `Debug` output of two
-/// parses of the same bytes never matches.
 fn event_key(event: &RawStreamingChoice<ClaudeStreamResponse>) -> String {
     match event {
         RawStreamingChoice::Message(text) => format!("text:{text}"),
@@ -1232,12 +1220,9 @@ fn unsupported_replay_preflight_is_a_permanent_request_error() {
     ));
 }
 
-/// A live Messages request records the unified usage headers for the
-/// reporter's account.
 #[test]
 fn usage_wiring_claude_live_messages_records_unified_headers() {
-    // The fixture lock spans the live request, so it is held outside the
-    // runtime: a std guard must not live across an await.
+    // The std fixture-lock guard must not live across an await.
     let _guard = lock_fixtures_for_test();
     tokio::runtime::Builder::new_current_thread()
         .enable_all()

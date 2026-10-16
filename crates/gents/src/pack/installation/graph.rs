@@ -28,21 +28,13 @@ use crate::graphql::{escape_graphql_string, graphql_string_list_literal};
 
 use super::{key, PackIdentity, Record, RecordedDocument, Retained};
 
-/// A run query is bounded, never scanning a whole graph's history: refusal
-/// names a handful of offending runs and says there may be more.
 const UNFINISHED_RUN_REPORT_LIMIT: usize = 8;
 
-/// A retained-run report is bounded the same way: it names a handful of runs
-/// pinned to a removed revision and reports the exact remaining total via a
-/// bounded `COUNT` rather than scanning the rest.
 const RETAINED_RUN_REPORT_LIMIT: usize = 20;
 
-/// Revisions are deleted in pages of this size, one mutation per page,
-/// instead of one mutation per row.
+/// One mutation per page rather than one per row.
 const REVISION_DELETE_PAGE_SIZE: usize = 256;
 
-/// Whether `document` is owned by the graph runtime rather than authored by
-/// a pack.
 pub(super) fn is_graph_owned(document: &RecordedDocument) -> bool {
     document.collection == "GraphRevision"
         || document.collection == "GraphDefinition"
@@ -55,12 +47,7 @@ pub(super) fn is_graph_owned(document: &RecordedDocument) -> bool {
 pub(crate) struct ObservedGraphInstall {
     prior: Record,
     preexisting: BTreeSet<String>,
-    /// Whether `graph_id`'s `GraphDefinition` already existed before this
-    /// install wrote anything: an untracked (legacy, or import-carried)
-    /// graph that must be adopted rather than claimed as created.
     graph_definition_preexisted: bool,
-    /// Digests of `graph_id`'s `GraphRevision`s that already existed before
-    /// this install wrote anything, for the same reason.
     preexisting_revision_digests: BTreeSet<String>,
 }
 
@@ -128,9 +115,7 @@ pub(crate) async fn observe_graph_install_in_txn(
 }
 
 /// Records a graph package install/activation after it succeeded, in the
-/// shared `PackInstallation` record, through the one shared writer
-/// [`super::write_record_in_txn`] so the graph and documents installers
-/// cannot diverge on how a record is written.
+/// shared `PackInstallation` record.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn record_graph_install_in_txn(
     txn: &ConfigApplyTxn<'_>,
@@ -151,8 +136,7 @@ pub(crate) async fn record_graph_install_in_txn(
     let mut documents = prior.documents.clone();
 
     // Every revision this package has ever produced for this graph,
-    // including a retired one: a reinstall after an untracked (legacy)
-    // install picks up all of them at once (see module docs).
+    // including retired ones.
     let response = txn
         .execute(&format!(
             r#"{{ GraphRevision(filter: {{ owner_did: {{ _eq: "{}" }}, graph_id: {{ _eq: "{}" }} }}) {{ digest plan_json }} }}"#,
@@ -181,8 +165,6 @@ pub(crate) async fn record_graph_install_in_txn(
             .context("graph revision is missing digest")?
             .to_owned();
         let revision_name = key("GraphRevision", &digest);
-        // A revision already recorded keeps its recorded `created`; one seen
-        // live before this install wrote anything is adopted, not claimed.
         let revision_created = documents
             .get(&revision_name)
             .map(|document| document.created)
@@ -198,8 +180,6 @@ pub(crate) async fn record_graph_install_in_txn(
         );
         for (collection, id) in revision_artifact_ids(&plan)? {
             let artifact_name = key(collection.graphql_type(), &id);
-            // A derived artifact is created exactly when its revision is,
-            // unless it was already recorded with a different verdict.
             let artifact_created = documents
                 .get(&artifact_name)
                 .map(|document| document.created)
@@ -279,8 +259,7 @@ pub(crate) async fn record_graph_install_in_txn(
     .await
 }
 
-/// Refuses removal while any of `graph_ids`' runs is not terminal, naming
-/// the graph and the run so the operator knows what to cancel.
+/// Refuses removal while any of `graph_ids`' runs is not terminal.
 pub(super) async fn ensure_no_unfinished_runs_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
@@ -381,12 +360,9 @@ pub(super) async fn delete_revisions_in_txn(
         })
         .collect();
 
-    // GraphRun history stays (it is never part of this record), but its
-    // pinned revision is gone: `graph result`/`graph watch` need the graph
-    // reinstalled before that run's view can be read again. The report is
-    // bounded to a handful of runs plus, past the limit, one item naming the
-    // exact remaining total from a `COUNT` aggregate over the same filter,
-    // never a full scan of a graph's run history.
+    // GraphRun history stays; its pinned revision is gone, so its result
+    // view needs the graph reinstalled. Bounded to a handful of runs plus a
+    // `COUNT` aggregate past the limit, never a full scan.
     let runs = txn
         .execute(&format!(
             r#"{{ GraphRun(filter: {{ owner_did: {{ _eq: "{}" }}, revision_digest: {{ _in: {list} }} }}, limit: {}) {{ run_id }} }}"#,

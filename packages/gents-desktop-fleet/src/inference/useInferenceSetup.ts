@@ -45,8 +45,6 @@ export function useInferenceSetup({
   const targets = resolveTargets(deployment);
   const [step, setStep] = useState<WizardStep>("choose");
   const [submitting, setSubmitting] = useState(false);
-  // Only browser sign-in can wait indefinitely, so cancellation also aborts
-  // the backend login server and frees its loopback port.
   const [signingIn, setSigningIn] = useState(false);
   const [error, setError] = useState<string | null>(targets.error);
   const [done, setDone] = useState<string | null>(null);
@@ -86,8 +84,7 @@ export function useInferenceSetup({
     return () => {
       cancelled = true;
     };
-    // The shell recreates its action closures each render; the Detect button
-    // handles explicit retries without restarting this mount-only probe.
+    // Mount-only probe; explicit retries go through the Detect button.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

@@ -1,5 +1,4 @@
-//! `gents plugin dirs`: the operator's allowed folders for plugin paths that
-//! an agent or a graph names (see `gents::plugin::allowed`).
+//! The operator's allowed folders for plugin paths (`gents::plugin::allowed`).
 
 use anyhow::Result;
 use gents::plugin::allowed;

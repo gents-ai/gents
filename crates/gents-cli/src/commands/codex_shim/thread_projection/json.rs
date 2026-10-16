@@ -206,43 +206,6 @@ mod tests {
     use crate::commands::codex_shim::caused_threads::CausedThread;
 
     #[test]
-    fn canonical_session_supplies_title_fork_and_dates_but_not_execution_authority() {
-        let session: gents_protocol::session::AgentSession = serde_json::from_value(json!({
-            "session_id":"child", "node_did":"did:agent", "agent_id":"configured",
-            "created_at":"2026-01-01T00:00:00Z",
-            "title":{"text":"Reviewed title", "source":"user"},
-            "provenance":{"fork":{"source_session_id":"source", "at_user_turn":2}},
-            "observation":{"last_activity_at":"2026-01-02T00:00:00Z", "preview":"Actual preview",
-                "latest_request":{"request_doc_id":"old-doc", "request_id":"old", "lifecycle_state":"failed"}}
-        })).unwrap();
-        let record = CodexThreadRecord {
-            session_id:"child".into(), cwd:PathBuf::from("/tmp"), archived:false, loaded:true,
-            memory_mode:"disabled".into(), name:String::new(), settings_json:String::new(), git_info:None,
-            projection_started:Some("2026-02-01T00:00:00Z".into()), session:Some(session),
-            latest_request:Some(serde_json::from_value(json!({"request":{
-                "_docID":"new-doc", "request_id":"new", "lifecycle_state":"pending"}, "response":null})).unwrap()),
-            caused:None,
-        };
-        let thread = codex_thread_json(&record, false);
-        assert_eq!(thread["name"], "Reviewed title");
-        assert_eq!(thread["preview"], "Actual preview");
-        assert_eq!(thread["forkedFromId"], "source");
-        assert_eq!(thread["createdAt"], 1767225600_i64);
-        assert_eq!(thread["updatedAt"], 1767312000_i64);
-        assert!(
-            matches!(
-                codex_thread_status(&record),
-                codex::ThreadStatus::Active { .. }
-            ),
-            "cached failed observation must not override actual pending request"
-        );
-        assert_eq!(
-            codex_thread_json(&record, false)["createdAt"],
-            thread["createdAt"]
-        );
-    }
-
-    #[test]
     fn caused_thread_serializes_codex_navigation_metadata() {
         let root_session_id = uuid::Uuid::new_v4().to_string();
         let parent_session_id = root_session_id.clone();

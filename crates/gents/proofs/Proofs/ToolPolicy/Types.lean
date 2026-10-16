@@ -4,12 +4,10 @@ import Mathlib.Data.Finset.Lattice.Basic
 
 namespace ToolPolicy
 
-/-- Goal-tool authority must be explicit. Missing state fails closed. -/
 def resolveGoalTools : Option Bool → Bool
   | none => false
   | some enabled => enabled
 
-/-- Goal-creation authority must be explicit. Missing state fails closed. -/
 def resolveGoalCreate : Option Bool → Bool
   | none => false
   | some enabled => enabled
@@ -34,7 +32,6 @@ inductive EndpointScope (K V : Type) where
   | only (keys : Finset K) (val : K → V)
   | all
 
-/-- Stable wire discriminator; not an authority ordering. -/
 def executionModeContractCode : CommandPolicy.ExecutionMode → Nat
   | .readOnly => 0
   | .workspaceWrite => 1
@@ -60,8 +57,7 @@ structure Surface where
   schemaManagement : Bool
   /-- Native P2P observations require explicit node-management authority. -/
   p2pRead : Bool
-  /-- Mutations also require read authority. Enrollment and DefraDB remain
-  the authority owners for peer access and document changes. -/
+  /-- Mutations also require read authority. -/
   p2pMutate : Bool
   sessionHistory : Bool
   contextBudget : Bool
@@ -74,7 +70,6 @@ structure Surface where
   cliTools : EndpointScope ToolId (Finset String)
   mcpServices : EndpointScope ToolId Unit
   defraCollections : EndpointScope ToolId Unit
-  /-- Replication and sync collection grants do not imply generic query access. -/
   p2pCollections : EndpointScope ToolId Unit
   selfConfigCategories : EndpointScope ToolId Unit
   agentTargets : EndpointScope (String × String) Unit

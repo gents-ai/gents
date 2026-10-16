@@ -29,13 +29,11 @@ enum RedriveOutcome {
 
 impl RequestLifecycle {
     /// Create bounded retry successors for failed canonical background wakes.
-    ///
-    /// This is deliberately narrower than interactive request retry: the
-    /// source must be a failed scheduled request carrying the versioned,
-    /// coalesced `background_completion` queue input. The source must also
-    /// remain the latest request across session requesters and have retry budget left.
-    /// A unique per-source `retry_key` plus a private transaction makes the
-    /// sweep idempotent across concurrent ticks and process restarts.
+    /// Narrower than interactive request retry: the source must be a failed
+    /// scheduled request carrying the versioned, coalesced `background_completion`
+    /// queue input, still the latest request across session requesters with retry
+    /// budget left; the unique per-source `retry_key` plus a private transaction
+    /// makes the sweep idempotent across concurrent ticks and process restarts.
     pub async fn redrive_failed_background_wakeups(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
@@ -320,7 +318,7 @@ async fn redrive_in_transaction(
         return Ok(RedriveOutcome::Ineligible);
     };
     // Lean `CausalHop.continuation_preserves_hop`: the retried wake copies
-    // the session's current hop, like every same-session continuation.
+    // the session's current hop.
     let hop = crate::session::load_session_current_hop_in_txn(txn, node_did, session_id).await?;
     let response = txn
         .execute_local_response(&redrive_mutation(candidate, request_id, &retry_key, hop).await?)
@@ -335,8 +333,8 @@ async fn redrive_in_transaction(
             && successor.observed.request_id == created.request_id,
         "background wake successor is not the canonical request head"
     );
-    // Only advance the observation here. Reopening remains the claim owner's
-    // responsibility, and the observation never supplies retry authority.
+    // The observation never supplies retry authority; reopening remains the
+    // claim owner's responsibility.
     anyhow::ensure!(
         crate::session::advance_session_request_observation_in_txn(
             txn,

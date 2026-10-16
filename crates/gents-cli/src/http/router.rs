@@ -28,54 +28,42 @@ use crate::shared::P2pAdmissionState;
 
 const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
 const P2P_METRICS_FETCH_BUDGET: Duration = Duration::from_millis(750);
-/// Identity fields on `/status` have to come back before a caller's own
-/// timeout. GraphQL and P2P probes can sit for much longer while the node
-/// is still opening, which made desktop readiness look like a dead server.
+/// Bounds core health so `/status` identity fields return before a caller's
+/// own timeout while the node is still opening.
 const STATUS_PROBE_BUDGET: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
 pub(crate) struct RuntimeHttpState {
-    /// Anonymous, like the unauthenticated HTTP handlers reading through it.
+    /// Anonymous; the unauthenticated HTTP handlers read through it.
     pub(crate) graphql: GraphqlEndpoint,
-    /// The served principal, for the P2P status the node's access control
-    /// admits only from it.
+    /// Served principal; the node's P2P access control admits only it.
     pub(crate) p2p_graphql: GraphqlEndpoint,
     pub(crate) node_name: String,
     pub(crate) node_did: String,
-    /// Live process ceiling advertised to desktop start/readiness checks.
-    /// Lowercase `meta-only` / `readonly` / `readwrite`, matching `gents status`.
     pub(crate) tool_ceiling: String,
-    /// Resolved against the server's cwd and filesystem, so a client on
-    /// another cwd or host reads the root the runtime admits paths under.
     pub(crate) tool_root: Option<String>,
-    /// Why the configured root does not resolve; `tool_root` is then unset.
     pub(crate) tool_root_error: Option<String>,
-    /// The `--cli-tool NAME=/path` registrations the ceiling admits, as given.
     pub(crate) cli_tools: Vec<String>,
-    /// The home this runtime serves, so a client that finds a different
-    /// runtime on its port can name it.
+    /// The home this runtime serves, so a client finding a different runtime
+    /// on its port can name it.
     pub(crate) home: Option<String>,
     pub(crate) started_at: String,
     pub(crate) started_instant: Instant,
     pub(crate) backend_health: Option<gents::BackendHealthMap>,
     pub(crate) p2p_admission: Option<P2pAdmissionState>,
     pub(crate) p2p_metrics_cache: Arc<Mutex<Option<P2pMetricsSnapshot>>>,
-    /// The Codex shim's live binding. Shared because the shim may bind after the
-    /// HTTP surface is already serving (#699). `None` when the host does not run
-    /// a shim at all (embedders, desktop).
+    /// Shared because the shim may bind after HTTP serving starts (#699).
     pub(crate) codex_shim_health: Option<crate::shared::CodexShimHealthHandle>,
     pub(crate) enrollment_offer_issuer: EnrollmentOfferIssuerHandle,
     pub(crate) enrollment_decisions: EnrollmentDecisionServiceHandle,
     pub(crate) activation_runtime: Arc<OnceCell<gents::Gents>>,
     pub(crate) activation_observation: watch::Receiver<RuntimeActivationObservation>,
-    /// This node's `client` route collection versions, set once by serve after
-    /// its migrations register every collection.
     pub(crate) replicated_schema: Arc<OnceCell<gents_protocol::peer_schema::ReplicatedSchema>>,
     pub(crate) serve_lifecycle: ServeLifecycleHandle,
 }
 
-/// Serve's `/status` lifecycle. It becomes ready only after serve writes
-/// `runtime.json` for this process, and never returns to starting.
+/// Ready only after serve writes `runtime.json` for this process; never
+/// returns to starting.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ServeLifecycleHandle(Arc<std::sync::OnceLock<()>>);
 
@@ -135,10 +123,6 @@ pub(crate) fn runtime_contract_router(
     tool_root: Result<Option<String>, String>,
     cli_tools: Vec<String>,
     home: Option<String>,
-    // `Some` mounts `/mcp`: the read-only `defra_query` tool always (an
-    // unauthenticated read surface, same exposure as the GraphQL endpoint),
-    // `write` for granted collections, and, with `graph_reads`, the read-only graph
-    // tools.
     mcp: Option<crate::http::mcp_server::McpServiceOptions>,
     backend_health: Option<gents::BackendHealthMap>,
     p2p_admission: Option<P2pAdmissionState>,
@@ -225,8 +209,6 @@ async fn wait_for_activation(state: RuntimeHttpState) -> Response {
     };
     let mut observed = state.activation_observation;
     loop {
-        // Mark before resolving: an acknowledgement that arrives while the
-        // canonical resolver awaits remains visible to this iteration.
         drop(observed.borrow_and_update());
         let expected = match runtime.document_runtime_configuration_fingerprint().await {
             Ok(value) => value,
@@ -291,8 +273,7 @@ async fn wait_for_activation(state: RuntimeHttpState) -> Response {
     }
 }
 
-/// Reads the runtime principal's account usage now. Upstream calls and
-/// sign-in renewals follow, so only the runtime's own operator may ask.
+/// Only the runtime's own operator may ask.
 async fn account_usage_read_handler(
     State(state): State<RuntimeHttpState>,
     axum::Json(command): axum::Json<crate::commands::accounts::UsageReadCommand>,
@@ -537,8 +518,6 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
             map.insert("p2p_admission".to_string(), admission.to_json());
         }
     }
-    // The probe budget bounds core health only; the optional progress
-    // observation gets whatever remains of it and never flips `ok`.
     let probe_deadline = tokio::time::Instant::now() + STATUS_PROBE_BUDGET;
     let metrics = tokio::time::timeout_at(
         probe_deadline,
@@ -674,7 +653,6 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
     (StatusCode::OK, axum::Json(body)).into_response()
 }
 
-/// `null` until serve publishes the schema after its migrations complete.
 fn replicated_schema_status(
     replicated_schema: &OnceCell<gents_protocol::peer_schema::ReplicatedSchema>,
 ) -> Value {
@@ -1062,8 +1040,6 @@ mod tests {
         assert_eq!(lifecycle(&state).await, json!("ready"));
     }
 
-    /// Mock GraphQL whose core health read answers after `core_delay` and
-    /// whose optional activity reads stall far past every probe budget.
     async fn stalled_activity_state(core_delay: Duration) -> RuntimeHttpState {
         use axum::{routing::post, Json, Router};
 
@@ -1128,9 +1104,6 @@ mod tests {
             .expect("liveness request row")
     }
 
-    /// A stalled optional activity read must not delay or fail core health:
-    /// `/healthz` and `/status` stay ok and on time, and progress falls back
-    /// to `claimed_at`.
     #[tokio::test]
     async fn stalled_liveness_activity_read_does_not_hold_health() {
         let state = stalled_activity_state(Duration::ZERO).await;
@@ -1157,9 +1130,6 @@ mod tests {
         assert!((120_000..180_000).contains(&progress_age_ms(&status_body)));
     }
 
-    /// The `/status` probe budget covers core health only: a core read that
-    /// lands late in the budget leaves activity only the remainder, so the
-    /// response stays ok with progress from `claimed_at`.
     #[tokio::test]
     async fn late_core_read_leaves_status_ok_when_activity_stalls() {
         let state = stalled_activity_state(Duration::from_millis(1_700)).await;

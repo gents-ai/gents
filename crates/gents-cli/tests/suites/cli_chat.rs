@@ -290,7 +290,6 @@ async fn chat_buffers_final_response_and_shows_tool_progress() -> Result<()> {
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    // Bound, not dropped: the server must outlive the chat child below.
     let (_serve, port, _readiness) =
         spawn_server_with_ready_json_recovering(&home_dir, port, &[], &[])?;
     let graphql = graphql_url(port);
@@ -605,7 +604,6 @@ async fn interactive_input_drains_while_provider_is_held(
         }
         Ok(())
     }.await;
-    // Release the provider even when an assertion prerequisite failed.
     gate.add_permits(1);
     result
 }

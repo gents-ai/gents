@@ -22,10 +22,7 @@ pub fn invocation_is_terminal(state: &str) -> bool {
     )
 }
 
-/// Claim is unique per (owner_node_did, invocation_id). Replicas see the
-/// row under another principal must not claim. Single-instance enforcement is deferred.
 pub async fn claim_invocation(
-    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     invocation: &CallbackInvocationDoc,
 ) -> Result<Option<CallbackInvocationDoc>> {

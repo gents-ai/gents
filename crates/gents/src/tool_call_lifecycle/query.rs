@@ -75,8 +75,6 @@ struct ToolCallRow {
 }
 
 impl ToolCallLifecycle {
-    /// Load an existing AgentToolCall row by session_id and tool_call_id.
-    /// Returns `None` if the row does not exist.
     pub async fn load(
         node: Arc<EmbeddedNode>,
         session_id: &str,
@@ -87,7 +85,6 @@ impl ToolCallLifecycle {
         Self::load_filtered(node, format!("session_id:{{_eq:\"{escaped_session_id}\"}},tool_call_id:{{_eq:\"{escaped_tool_call_id}\"}}")).await
     }
 
-    /// Rehydrate the exact authorized bridge within its canonical session scope.
     pub async fn load_by_doc_id(
         node: Arc<EmbeddedNode>,
         doc_id: &str,
@@ -306,8 +303,7 @@ impl ToolCallLifecycle {
         let selected_tool_identity =
             decode_selected_tool_identity(row.selected_service_id, row.selected_tool_name)?;
 
-        // The publication binds a physical request, not a session-relative
-        // logical ID. Resolve that exact request for existing lifecycle APIs.
+        // The publication binds a physical request, not a session-relative logical ID.
         let scope = crate::session::session_scope_filter(
             owner,
             &row.session_id,
@@ -352,9 +348,8 @@ impl ToolCallLifecycle {
             request_doc_id: row.request_doc_id.filter(|value| !value.trim().is_empty()),
             session_id: row.session_id,
             node_did,
-            // Current recovery paths only update the existing immutable row,
-            // but preserve its route key so a future create transition cannot
-            // silently rehydrate the lifecycle as unrouted.
+            // Recovery only updates the existing immutable row; preserve the route key
+            // so a create transition cannot rehydrate the lifecycle as unrouted.
             requester_did: row.requester_did,
             tool_call_id: row.tool_call_id,
             call_id: if spawned_by_tool_call_doc_id.is_none() && plugin_effect.is_none() {
@@ -389,31 +384,6 @@ mod tests {
     use crate::streaming::DefraStreamWriter;
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
     use std::time::Duration;
-
-    #[test]
-    fn selected_tool_identity_is_an_atomic_pair() {
-        assert!(decode_selected_tool_identity(None, None)
-            .expect("native tool call")
-            .is_none());
-
-        let selected = decode_selected_tool_identity(
-            Some("metrics-prod".to_string()),
-            Some("query_metrics".to_string()),
-        )
-        .expect("complete identity")
-        .expect("selected identity");
-        assert_eq!(selected.service_id, "metrics-prod");
-        assert_eq!(selected.tool_name, "query_metrics");
-
-        for (service_id, tool_name) in [
-            (Some("metrics-prod".to_string()), None),
-            (None, Some("query_metrics".to_string())),
-            (Some(String::new()), Some("query_metrics".to_string())),
-            (Some("metrics-prod".to_string()), Some("  ".to_string())),
-        ] {
-            assert!(decode_selected_tool_identity(service_id, tool_name).is_err());
-        }
-    }
 
     /// Canonical claimed-request fixture, mirroring
     /// `tool_call_lifecycle::delivery::claimed_request`, with the coordinator

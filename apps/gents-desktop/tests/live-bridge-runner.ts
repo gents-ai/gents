@@ -47,8 +47,8 @@ const REPO_ROOT = resolve(process.cwd(), "../..");
 export const LIVE_RUNNER_BINARY_ENV = "GENTS_TAURI_LIVE_RUNNER_BINARY";
 
 /**
- * Resolve the live runner process. A prebuilt override avoids Cargo's build lock,
- * but its caller owns ensuring that the explicitly selected binary is fresh.
+ * Resolve the live runner process. A prebuilt override avoids Cargo's build
+ * lock; its caller owns ensuring that the binary is fresh.
  */
 export function createLiveBridgeRunnerInvocation(
   options: LiveBridgeRunnerOptions = {},

@@ -201,10 +201,6 @@ theorem deadline_exceeded_request_cancels_pending_tools_from_initial
   deadline_exceeded_request_cancels_pending_tools
     h_in (wellFormed_from_initial h_reach) h_live_kind h_pending h_deadline
 
-/-- With every tool terminal, the composed foreground guard admits the owned
-loop's explicit processing continuation. The witness is intentionally a
-lifecycle stutter: it claims permission to continue, not scheduler liveness or
-evidence that work occurred. -/
 theorem all_tools_terminal_admits_processing_continuation
     {pre : ComposedState}
     (h_all_terminal : ∀ t ∈ pre.tools, isTerminal t.state)

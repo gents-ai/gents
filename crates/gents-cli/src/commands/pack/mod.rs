@@ -1,4 +1,3 @@
-//! One package-facing CLI; install writes stay with their existing owners.
 pub(crate) mod account;
 pub(crate) mod build;
 mod cache;
@@ -87,24 +86,15 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
     }
 }
 
-/// A pack, wherever it came from: an explicit local path or digest, an
-/// already-installed coordinate, the home's pack store, or the registry.
-/// Everything past resolution (materialize, cache, install) works the same
-/// regardless, so it is written once against this instead of once per source.
 pub(crate) struct PackSource {
     archive: PackArchive,
     from: Source,
 }
 
 enum Source {
-    /// Named by digest or path (`sha256:`, `./x.pack`, `./dir`).
     Local,
-    /// The coordinate's installed record named this digest, and the home's
-    /// store still holds it.
     Installed,
-    /// The home's pack store held it; no network call was made.
     Store,
-    /// Fetched from the registry, which stored and indexed it for next time.
     Registry {
         namespace: String,
         name: String,
@@ -118,8 +108,6 @@ impl PackSource {
         self.archive.manifest()
     }
 
-    /// The pack's content digest: identical whichever way it arrived, which
-    /// is what makes it safe to use as the asset-cache key either way.
     pub(crate) fn digest(&self) -> &str {
         self.archive.digest()
     }
@@ -128,8 +116,6 @@ impl PackSource {
         self.archive.asset(path)
     }
 
-    /// The underlying archive, for a caller (the graph installer) that needs
-    /// more than one asset's bytes at a time.
     pub(crate) fn archive(&self) -> &PackArchive {
         &self.archive
     }
@@ -143,8 +129,6 @@ impl PackSource {
         }
     }
 
-    /// A human-readable resolution note: which coordinate on the registry
-    /// this pack came from, when it did.
     pub(crate) fn describe(&self) -> String {
         match &self.from {
             Source::Registry {
@@ -161,23 +145,16 @@ impl PackSource {
     }
 }
 
-/// Shared by every gents-cli unit test that needs a resolved pack: the
-/// fixture packs live in the gents crate and open into a store
-/// the same way any local pack spec does, so a test never has to spin up a
-/// fake registry just to get a [`PackSource`].
 #[cfg(test)]
 pub(crate) mod test_support {
     use std::path::{Path, PathBuf};
 
-    /// A gents-crate fixture pack directory:
-    /// `crates/gents/tests/fixtures/packs/<name>`.
     pub(crate) fn fixture_dir(name: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../gents/tests/fixtures/packs")
             .join(name)
     }
 
-    /// Every fixture pack directory under `crates/gents/tests/fixtures/packs`.
     pub(crate) fn every_fixture_dir() -> Vec<PathBuf> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../gents/tests/fixtures/packs");
         let mut dirs: Vec<PathBuf> = std::fs::read_dir(&root)
@@ -190,9 +167,6 @@ pub(crate) mod test_support {
         dirs
     }
 
-    /// Recursively copies `from` into `to`, so a test can mutate a fixture
-    /// (build its plugin, edit a config) without touching the checked-in
-    /// copy other tests share.
     pub(crate) fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
         std::fs::create_dir_all(to)?;
         for entry in std::fs::read_dir(from)? {
@@ -207,8 +181,6 @@ pub(crate) mod test_support {
         Ok(())
     }
 
-    /// Builds every plugin `manifest` declares from source whose artifact is
-    /// not already on disk at `dir`, the way `gents pack build` does.
     pub(crate) fn build_unbuilt_plugins(dir: &Path, manifest: &super::PackManifest) {
         for plugin in &manifest.metadata.plugins {
             if plugin.source.is_some() && !dir.join(&plugin.artifact).is_file() {
@@ -218,7 +190,6 @@ pub(crate) mod test_support {
         }
     }
 
-    /// Opens `dir` into `home`'s store, the way a local path spec resolves.
     pub(crate) fn local_pack_source(dir: &Path, home: &Path) -> super::PackSource {
         let archive = super::local::open(&super::local::LocalName::Path(dir), home)
             .unwrap_or_else(|error| panic!("opening {}: {error:#}", dir.display()));
@@ -228,8 +199,6 @@ pub(crate) mod test_support {
         }
     }
 
-    /// Opens a fixture pack directory into `home`'s store, the way a local
-    /// path spec resolves.
     pub(crate) fn fixture_pack_source(name: &str, home: &Path) -> super::PackSource {
         local_pack_source(&fixture_dir(name), home)
     }
@@ -248,17 +217,10 @@ pub(crate) mod test_support {
     }
 }
 
-/// `{namespace}/{name}`, defaulting to the `gents` namespace when the given
-/// name carries none (a store or registry name may be bare, so this only
-/// matters for a registry lookup).
 pub(crate) fn split_namespace(name: &str) -> (&str, &str) {
     gents::pack_registry::split_pack_coordinate(name)
 }
 
-/// `gents pack list`: every pack the home's store holds, by name index, with
-/// the versions on hand, the preferred one's digest and manifest summary,
-/// and whether it is currently installed. No catalog ships in the binary, so
-/// an empty, unused home lists nothing.
 async fn list(args: PackListArgs) -> Result<()> {
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let store = gents::pack_store::PackStore::new(&home);
@@ -274,9 +236,6 @@ async fn list(args: PackListArgs) -> Result<()> {
             .split_once('/')
             .context("malformed pack store name index entry")?;
         let Some(preferred) = store.lookup(namespace, name, None)? else {
-            // Every entry has at least one version whose archive exists, or
-            // `lookup` would not have indexed it; this is unreachable in
-            // practice and simply skipped rather than failing the listing.
             continue;
         };
         let archive = store.open(&preferred.digest)?;
@@ -295,12 +254,6 @@ async fn list(args: PackListArgs) -> Result<()> {
     crate::print_json(&json!({ "packs": entries }))
 }
 
-/// Resolves a pack named by digest or path, an already-installed coordinate,
-/// the home's pack store, or the registry, in that order. Local forms
-/// (`sha256:`, `./x.pack`, `./dir`, an absolute path) never reach the
-/// registry; everything else goes through [`resolve_named`], which stores
-/// and indexes a registry fetch so the next resolution of that version is
-/// free of the network too.
 pub(crate) async fn resolve_pack_source(
     spec: &str,
     registry_override: Option<&str>,
@@ -357,9 +310,6 @@ fn materialize(pack: &PackSource, root: &std::path::Path) -> Result<()> {
         let destination = root.join(path);
         std::fs::create_dir_all(destination.parent().context("asset parent")?)?;
         let bytes = pack.asset(path)?;
-        // Stage beside the destination and publish without replacing it. Readers
-        // never see a partial body, and an interrupted staging write cannot
-        // poison the digest-addressed destination or overwrite operator edits.
         let mut staged = tempfile::NamedTempFile::new_in(destination.parent().unwrap())?;
         staged.write_all(bytes)?;
         set_distribution_permissions(staged.as_file())?;
@@ -405,27 +355,18 @@ fn materialize_cached_pack(
     Ok((root, lock))
 }
 
-/// A subject pack for `gents eval run` and `gents optimization run`: a
-/// directory on disk, or a name resolved the way `gents pack install`
-/// resolves one (installed, the home's store, else the registry) and
-/// materialized into a directory.
 pub(crate) struct SubjectPack {
     pub(crate) source: gents::eval::runner::CellSource,
     pub(crate) manifest: PackManifest,
-    /// The shared lock on a materialized cache entry, held while it is read.
     _lease: Option<gents::file_lock::FileLock>,
 }
 
 impl SubjectPack {
-    /// The pack's directory: the one the operator named, or the cache entry
-    /// a resolved name was materialized into.
     pub(crate) fn directory(&self) -> &std::path::Path {
         let gents::eval::runner::CellSource::Directory(dir) = &self.source;
         dir
     }
 
-    /// The pack's one inference-slot agent; refused when it declares
-    /// none or several.
     pub(crate) fn default_agent(&self) -> Result<String> {
         let mut agents: Vec<&String> = self
             .manifest
@@ -447,13 +388,6 @@ impl SubjectPack {
     }
 }
 
-/// Resolve `spec`. A spec that names a path is a directory used in place:
-/// one that starts with `.`, `/` or `~`, or one with a path separator that
-/// is a directory (`acme/widget` is otherwise a namespaced pack name). Any
-/// other spec is a pack name, even when a directory of that name is in the
-/// working directory: it resolves as `gents pack install` resolves one
-/// (local, installed, store, then registry) and materializes into
-/// `<home>/packs/.materialized/<namespace>/<name>/<digest>`.
 pub(crate) async fn resolve_subject_pack(
     home: &std::path::Path,
     spec: &str,
@@ -483,8 +417,6 @@ pub(crate) async fn resolve_subject_pack(
     })
 }
 
-/// The one inference slot a pack declares: refused when it declares none or
-/// several, with a sentence naming the pack.
 pub(crate) fn single_slot(manifest: &PackManifest) -> Result<&gents::pack::PackInferenceSlot> {
     match manifest.metadata.inference_slots.as_slice() {
         [only] => Ok(only),
@@ -496,8 +428,6 @@ pub(crate) fn single_slot(manifest: &PackManifest) -> Result<&gents::pack::PackI
     }
 }
 
-/// The `(slot, agent)` of a pack with one inference slot holding one
-/// agent, which is how an eval author pack names the agent it runs.
 pub(crate) fn single_slot_agent(manifest: &PackManifest) -> Result<(String, String)> {
     let slot = single_slot(manifest)?;
     match slot.agents.as_slice() {
@@ -511,8 +441,6 @@ pub(crate) fn single_slot_agent(manifest: &PackManifest) -> Result<(String, Stri
     }
 }
 
-/// Whether a subject spec names a directory rather than a pack: see
-/// [`resolve_subject_pack`].
 fn names_a_directory(spec: &str) -> bool {
     spec.starts_with(['.', '/', '~'])
         || (spec.contains(std::path::is_separator) && std::path::Path::new(spec).is_dir())
@@ -527,9 +455,6 @@ fn asset_cache_root(home: &std::path::Path, pack: &PackSource) -> Result<std::pa
     )
 }
 
-/// Thin caller over [`gents::plugin::install::install_pack_plugins`]; the
-/// implementation moved into the runtime crate so `self_config` can install
-/// a graph pack's plugins itself, without asking this CLI to do it.
 pub(crate) fn install_pack_plugins<'a>(
     home: &std::path::Path,
     manifest: &PackManifest,
@@ -540,7 +465,6 @@ pub(crate) fn install_pack_plugins<'a>(
     gents::plugin::install::install_pack_plugins(home, manifest, pack_digest, asset, consent)
 }
 
-/// Thin caller over [`gents::plugin::install::snapshot_pack_plugin_records`].
 pub(crate) fn snapshot_pack_plugin_records(
     home: &std::path::Path,
     manifest: &PackManifest,
@@ -552,7 +476,6 @@ pub(crate) fn snapshot_pack_plugin_records(
     gents::plugin::install::snapshot_pack_plugin_records(home, manifest)
 }
 
-/// Thin caller over [`gents::plugin::install::rollback_pack_plugin_records`].
 pub(crate) fn rollback_pack_plugin_records(
     home: &std::path::Path,
     previous: &[(
@@ -564,10 +487,6 @@ pub(crate) fn rollback_pack_plugin_records(
     gents::plugin::install::rollback_pack_plugin_records(home, previous)
 }
 
-/// Records a plugin-store change of `coordinate` in `home`'s node for the
-/// home's Node (`gents::pack::record_plugin_store_change`), after the
-/// store itself changed. An uninitialized home has no node, so no runtime to
-/// wake: the next start resolves the plugin store as it is.
 pub(crate) async fn record_plugin_store_change(
     home: &std::path::Path,
     coordinate: &str,
@@ -585,9 +504,6 @@ pub(crate) async fn record_plugin_store_change(
     gents::pack::record_plugin_store_change(&access, &owner, home, coordinate, installed).await
 }
 
-/// Reports a failed node notification after a plugin removal as a warning:
-/// the store change already happened and cannot be retried, and a call of a
-/// removed plugin fails closed on its own.
 pub(crate) fn warn_on_unrecorded_removal(coordinate: &str, recorded: Result<()>) {
     if let Err(error) = recorded {
         tracing::warn!(
@@ -599,9 +515,6 @@ pub(crate) fn warn_on_unrecorded_removal(coordinate: &str, recorded: Result<()>)
     }
 }
 
-/// The owner whose profiles `requested` names for a plugins pack's model
-/// slots, after checking each slot exists and its profile can serve a plugin;
-/// `None` when nothing is requested, which opens no store.
 async fn resolve_plugin_slot_owner(
     scope: &GraphScopeArgs,
     manifest: &PackManifest,
@@ -626,8 +539,6 @@ async fn resolve_plugin_slot_owner(
     Ok(Some(owner))
 }
 
-/// Binds each plugin's model slot to the profile `requested` names for it;
-/// a no-op when nothing is requested.
 fn bind_plugin_slots(
     home: &std::path::Path,
     manifest: &PackManifest,
@@ -642,7 +553,6 @@ fn bind_plugin_slots(
     }
 }
 
-/// The node and the owner a pack command acts for.
 pub(crate) async fn resolve_scope_owner(
     scope: &GraphScopeArgs,
 ) -> Result<(gents::config_client::ConfigAccess, String)> {
@@ -716,11 +626,6 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
             )
             .await?;
             let requested = parse_inference_slot_bindings(&args.inference_slots)?;
-            // Resolve and preview the complete dependency closure before any
-            // schema or configuration write. Reused slot names intentionally
-            // share one user selection across the root and dependency pack.
-            // Resolution never overlaps a write: up to 4 dependencies resolve
-            // concurrently (store first, then the registry) before this.
             let dependencies: Vec<PackSource> =
                 futures_util::stream::iter(pack.manifest().metadata.dependencies.iter())
                     .map(|coordinate| {
@@ -823,8 +728,6 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
             let (plugins, plugin_rollback) = if pack.manifest().metadata.plugins.is_empty() {
                 (Vec::new(), Vec::new())
             } else {
-                // A plugin runs on the host of the node that calls it; a
-                // remote node's host is not reachable from here.
                 anyhow::ensure!(
                     args.scope.graphql.is_none(),
                     "{} ships plugins, which install on the node's own host; run the install \
@@ -861,10 +764,6 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                     .collect(),
             );
             identity.dependencies = dependency_coordinates;
-            // From here, a document-transaction failure must not leave the
-            // plugins installed above orphaned: the operator sees this pack
-            // install as one atomic step, so its filesystem side effect is
-            // undone along with the write that never landed.
             let apply = match gents::pack::install_pack_documents(
                 &access,
                 &owner,
@@ -893,10 +792,6 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                 "apply": apply,
             }))
         }
-        // A plugins pack carries no documents either, just files to
-        // materialize (its compiled artifacts), so it installs the same
-        // way an assets pack does: into the home's content-addressed
-        // cache, where the artifacts become admissible by digest.
         PackKind::Assets | PackKind::Plugins => {
             let requested = parse_inference_slot_bindings(&args.inference_slots)?;
             anyhow::ensure!(
@@ -923,13 +818,6 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                 .home
                 .context("asset and plugins packs require --home")?;
             let (root, _cache_lease) = materialize_cached_pack(&home, &pack)?;
-            // A pack's plugins travel inside it (pack_archive's own doc),
-            // so installing the pack installs each one into the same
-            // content-addressed plugin store `gents plugin install` uses:
-            // a plugin that arrived bundled in a pack is just as runnable
-            // by name (`gents plugin run <name>`) as one installed on its
-            // own. A failure past this point (the record write) must not
-            // leave the plugins installed above orphaned.
             let prior_record = gents::pack::read_home_install(
                 &home,
                 &format!(
@@ -970,9 +858,6 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                     .collect(),
                 installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             };
-            // The node record goes last, in one transaction: a failure
-            // before it leaves the node untouched, and undoing the store and
-            // home record restores everything else.
             let recorded = async {
                 bind_plugin_slots(&home, pack.manifest(), slot_owner.as_deref(), &requested)?;
                 gents::pack::write_home_install(&home, &record)?;
@@ -1018,9 +903,6 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// A bare subject spec is a pack name even when a directory of that name
-    /// is in the working directory (a test runs in the crate root, which has
-    /// `src`); only a spec that looks like a path is read as a directory.
     #[tokio::test]
     async fn a_bare_subject_spec_is_a_pack_name_even_when_the_cwd_has_that_directory() {
         assert!(std::path::Path::new("src").is_dir());
@@ -1112,8 +994,6 @@ mod tests {
         let exclusive = cache::cache_lock(root.parent().unwrap()).unwrap();
         assert!(exclusive.try_lock().is_err());
         drop(lease);
-        // A process another test forks inherits every open descriptor until it
-        // execs, so the shared lock can outlive `drop` for that window.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut backoff = std::time::Duration::from_millis(1);
         while let Err(error) = exclusive.try_lock() {
@@ -1132,8 +1012,6 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let pack = test_support::fixture_pack_source("assets_fixture", home.path());
         let root = tempfile::tempdir().unwrap();
-        // Model process death before publication: a partial temporary file
-        // remains, but no destination has been exposed.
         let mut staged = tempfile::NamedTempFile::new_in(root.path()).unwrap();
         staged.write_all(b"partial").unwrap();
         let (_file, abandoned) = staged.keep().unwrap();
@@ -1151,9 +1029,7 @@ mod tests {
         );
     }
 
-    /// The CI gate for real (packs-repo) packs moves to packs CI
-    /// (`gents pack test`); this keeps only the gents-side machinery honest,
-    /// over the checked-in fixture.
+    /// The CI gate for real (packs-repo) packs moves to packs CI (`gents pack test`); this keeps only the gents-side machinery honest.
     #[test]
     fn a_document_pack_materializes_a_valid_configuration() {
         let home = tempfile::tempdir().unwrap();
@@ -1175,12 +1051,7 @@ mod tests {
     #[tokio::test]
     async fn resolution_prefers_the_home_store_without_the_registry() {
         let home = tempfile::tempdir().unwrap();
-        // Store it first, the way `gents pack fetch --store` or a prior
-        // install would have.
         let _ = test_support::fixture_pack_source("assets_fixture", home.path());
-        // An unroutable registry: if resolution incorrectly fell through to
-        // it, this fails fast instead of hanging on a real network call or
-        // silently succeeding some other way.
         let source = resolve_pack_source(
             "fixture/assets_fixture",
             Some("http://127.0.0.1:1"),
@@ -1261,8 +1132,6 @@ mod tests {
         }
     }
 
-    /// A `plugins`-kind manifest with one plugin, named after `pack_name`
-    /// and shipping under `plugin_name`.
     fn plugin_manifest(
         namespace: &str,
         pack_name: &str,
@@ -1281,10 +1150,7 @@ mod tests {
         .unwrap()
     }
 
-    /// #1721 item 1: a step after plugin install fails (here, standing in
-    /// for `install_pack_documents` failing) must leave the plugin store
-    /// exactly as it was before this install attempt, not orphan whatever
-    /// it just wrote.
+    /// A step after plugin install failing must leave the plugin store exactly as it was before this install attempt, not orphan whatever it just wrote.
     #[test]
     fn a_failure_after_plugin_install_rolls_back_to_exactly_the_previous_records() {
         let home = tempfile::tempdir().unwrap();
@@ -1298,14 +1164,10 @@ mod tests {
                 .context("unexpected asset")
         };
 
-        // A prior install this pack coordinate already owns.
         let v1 = plugin_manifest("acme", "widget", "echo", "1.0.0");
         install_pack_plugins(home.path(), &v1, "sha256:v1", asset_v1, false).unwrap();
         let before = super::super::plugin::store::read_record(home.path(), "acme", "echo").unwrap();
 
-        // An update whose install fails after the plugin step must roll all
-        // the way back to `before`, exactly as `install()` does when
-        // `install_pack_documents` errors.
         let echo_v2 = super::super::plugin::testing::build_plugin_afb(
             "echo",
             b"fn main() { println!(\"{{\\\"v\\\":2}}\"); }",
@@ -1329,8 +1191,6 @@ mod tests {
             before
         );
 
-        // A pack installing a name for the first time leaves nothing behind
-        // when the same kind of failure happens: rollback removes it.
         let new_plugin = super::super::plugin::testing::build_plugin_afb(
             "brandnew",
             b"fn main() { println!(\"{{}}\"); }",

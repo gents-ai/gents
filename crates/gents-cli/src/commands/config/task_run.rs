@@ -54,9 +54,6 @@ pub(crate) struct TaskRunOutput {
     pub(crate) duplicate: bool,
 }
 
-/// Manual invocations use the loaded Task document as their source identity.
-/// The invocation key distinguishes their synthetic trigger identities; request
-/// provenance remains manual because no persisted Trigger fired this request.
 pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRunOutput> {
     let task_id =
         resolve_task_id_for("run", args.task_id.as_deref(), args.task_id_flag.as_deref())?;
@@ -274,8 +271,6 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     })
 }
 
-/// Goal invocations use the explicit stable key. Ordinary calls retain their
-/// fresh-invocation agent even when --session-id supplies a session label.
 fn resolve_invocation_key(
     task_id: &str,
     goal_backed: bool,

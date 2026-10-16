@@ -8,11 +8,6 @@ use crate::identity::NodeIdentity;
 use crate::oauth_credential::{resolve_oauth_credential_in_txn, AccountPick};
 use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit};
 
-/// Resume `goal` through the operator resume transaction when its reported
-/// reset is due at `now`; `None` when it is not. The transaction runs as the
-/// node and `identity` signs the child, as claimed publication does. The
-/// Goal's recorded limit gates the transaction, so nothing is read before
-/// that reset passes.
 pub async fn resume_at_reset(
     node: &std::sync::Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
@@ -31,7 +26,6 @@ pub async fn resume_at_reset(
     .await
 }
 
-/// `ResetFacts.due`, read in the resume transaction, then `resume`.
 async fn stage_reset_resume(
     txn: &ConfigApplyTxn<'_>,
     identity: &dyn NodeIdentity,
@@ -104,7 +98,6 @@ async fn stage_reset_resume(
         .map(Some)
 }
 
-/// The reset a recorded usage limit names, if it names one.
 fn reported_reset(text: Option<&str>, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
     match classify_provider_limit(text?, now)? {
         ProviderLimit::UsageExhausted(limit) => limit.resets_at,

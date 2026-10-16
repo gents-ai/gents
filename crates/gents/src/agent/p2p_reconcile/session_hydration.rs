@@ -1,10 +1,3 @@
-//! Pure admission and selection core for `SessionHydrationRequest` (#1142).
-//!
-//! The background sweep and P2P delivery adapter are intentionally separate:
-//! this module decides whether a request is authorized and returns the exact
-//! tenant/session-scoped document set. The delivery adapter in the reconciler
-//! sends that set through DefraDB's bounded, peer-targeted doc-pusher.
-
 use std::collections::BTreeSet;
 
 pub use gents_protocol::session_hydration::{
@@ -19,8 +12,6 @@ pub const HYDRATION_COLLECTIONS: &[SessionHydrationCollection] = &[
     SessionHydrationCollection::CompactionEntry,
 ];
 
-/// Signed rejection detail for a request whose session another requester
-/// owns. Receivers present it as an unreadable session rather than a retry.
 pub const SESSION_OWNERSHIP_MISMATCH: &str = "session ownership does not match request";
 
 pub fn hydration_collection_name(collection: SessionHydrationCollection) -> &'static str {
@@ -43,8 +34,6 @@ pub struct HydrationRequest {
 }
 
 impl HydrationRequest {
-    /// Decode the schema's `{peer_id}:{session_id}` key and reject a key whose
-    /// session suffix does not match the immutable `session_id` column.
     pub fn from_row(
         request_key: String,
         requester_did: String,
@@ -75,7 +64,6 @@ pub struct SessionOwner {
     pub node_did: String,
 }
 
-/// A locally desired client route whose exact requester/agent filter is applied.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AppliedPairingRoute {
     pub peer_id: String,
@@ -83,7 +71,6 @@ pub struct AppliedPairingRoute {
     pub node_did: String,
 }
 
-/// An active membership whose network root and admin signature were verified.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VerifiedActiveMembership {
     pub network_id: String,
@@ -106,8 +93,6 @@ pub struct HydrationCatalog {
     pub verified_active_memberships: BTreeSet<VerifiedActiveMembership>,
     pub sessions: BTreeSet<SessionOwner>,
     pub documents: BTreeSet<HydrationDocument>,
-    /// Exact cross-session dependencies reached through authorized immutable
-    /// references. This is never inferred from an origin session scan.
     pub authorized_reference_closure: BTreeSet<SessionHydrationDocumentKey>,
 }
 
@@ -146,10 +131,6 @@ pub enum HydrationApplyOutcome {
     },
 }
 
-/// Project admission, bounded delivery, and terminal persistence as three
-/// separate effects. A failed terminal write leaves the durable request
-/// pending. Attempted documents and confirmed-complete delivery are distinct:
-/// a transport error or timeout can follow partial, replay-safe side effects.
 pub fn apply_hydration_delivery(
     verdict: HydrationVerdict,
     delivery: HydrationDeliveryResult,
@@ -279,8 +260,6 @@ pub struct ClientHydrationProgress {
     pub node_did: String,
     pub phase: ClientHydrationPhase,
     pub merged_count: usize,
-    /// Locally present identities that belong to the signed served manifest.
-    /// Before a manifest arrives this equals `merged_count`.
     pub covered_count: usize,
     pub served_count: Option<usize>,
     pub merged_documents: BTreeSet<SessionHydrationDocumentKey>,
@@ -302,11 +281,6 @@ impl Default for ClientHydrationProgress {
     }
 }
 
-/// Durable request state for one exact `(session_id, node_did)` target.
-///
-/// This is deliberately a query result rather than retained client state. A
-/// session snapshot derives progress from its own request row and locally
-/// merged documents, so observing one target cannot overwrite another.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientHydrationRequestState {
     Missing,
@@ -321,10 +295,6 @@ pub enum HydrationAdmissionAction {
     ExplicitRetry,
 }
 
-/// Admit a target-scoped passive start or explicit rejected-request retry.
-/// Passive observation only creates a missing durable row; it cannot reset a
-/// pending or terminal row. Retry requires both the exact failed observation
-/// and a currently rejected durable request.
 pub fn can_admit_hydration_request(
     action: HydrationAdmissionAction,
     request: &ClientHydrationRequestState,
@@ -357,8 +327,6 @@ pub fn can_admit_hydration_request(
     }
 }
 
-/// Begin a new receiver attempt, clearing any terminal state and denominator
-/// retained by the previous request for this target.
 pub fn begin_hydration_request(session_id: &str, node_did: &str) -> ClientHydrationProgress {
     ClientHydrationProgress {
         session_id: session_id.to_string(),
@@ -372,10 +340,6 @@ pub fn begin_hydration_request(session_id: &str, node_did: &str) -> ClientHydrat
     }
 }
 
-/// Whether a receiver may start its first request (`SessionHydration.canStart`).
-/// A header naming another requester never starts: the server's ownership
-/// check would refuse it. Otherwise an owned header permits a start during a
-/// live turn, and local rows permit one only once no request is in flight.
 pub fn can_start_hydration(
     foreign_header: bool,
     owned_session: bool,
@@ -385,7 +349,6 @@ pub fn can_start_hydration(
     !foreign_header && (owned_session || (has_documents && !nonterminal_request))
 }
 
-/// Retry admission is target-specific and terminal-state-specific.
 pub fn can_retry_hydration(
     prev: &ClientHydrationProgress,
     session_id: &str,
@@ -410,9 +373,6 @@ fn can_complete(
     served.is_some_and(|served| served.is_subset(merged))
 }
 
-/// Receiver-side progress. Completes only when unique locally merged
-/// documents cover the server's exact signed manifest. Sender status alone
-/// never completes a request.
 pub fn observe_hydration_progress(
     prev: &ClientHydrationProgress,
     session_id: &str,
@@ -496,11 +456,6 @@ pub fn observe_hydration_progress(
     }
 }
 
-/// Project receiver progress from durable state for one exact target.
-///
-/// A pending row is the durable evidence that an attempt was started. A
-/// rejected row is terminal until the explicit retry command rewrites it to
-/// pending. No process-local progress survives or crosses target queries.
 pub fn project_durable_hydration_progress(
     session_id: &str,
     node_did: &str,

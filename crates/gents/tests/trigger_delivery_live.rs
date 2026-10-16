@@ -1,5 +1,5 @@
 //! Opt-in qualification uses a fresh disposable embedded node and real HTTP
-//! inference endpoints. It never attaches to an operator's running node.
+//! inference endpoints; it never attaches to an operator's running node.
 #![cfg(feature = "live-e2e")]
 
 mod support;
@@ -40,8 +40,6 @@ fn artifact_directory(label: &str) -> Result<std::path::PathBuf> {
     Ok(directory)
 }
 
-/// Durable admitted-provider intervals use a half-open boundary: an ending
-/// call releases its slot before a call beginning at the same timestamp.
 fn provider_peaks(calls: &[Value]) -> Result<BTreeMap<String, usize>> {
     let mut events: BTreeMap<String, Vec<(chrono::DateTime<chrono::FixedOffset>, i32)>> =
         BTreeMap::new();
@@ -233,9 +231,9 @@ async fn configure(
     Ok(())
 }
 
-/// Both URLs must name real, separately hosted GLM servers. The test creates
-/// all documents locally; provider traffic alone crosses the workstation link.
-/// This qualifies a 64-document burst, not 64 simultaneously running providers.
+/// Both URLs must name real, separately hosted GLM servers; provider traffic
+/// alone crosses the workstation link. This qualifies a 64-document burst, not
+/// 64 simultaneously running providers.
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "real inference: GENTS_TRIGGER_DELIVERY_LIVE=1; GENTS_DELIVERY_ENDPOINT_1 and GENTS_DELIVERY_ENDPOINT_2"]
 async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> Result<()> {
@@ -305,8 +303,6 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
         "independent lead fires reused a session"
     );
     let mut expected = BTreeMap::new();
-    // Alternate destination independently of backend, so both workstations
-    // deliver outcomes to both same-behavior leads.
     for shard in 0..64 {
         let handoff = format!("assignment-{shard:02}");
         let session = &sessions[(shard / 2) % 2];

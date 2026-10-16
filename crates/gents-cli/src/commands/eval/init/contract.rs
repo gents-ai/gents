@@ -1,7 +1,3 @@
-//! What the CLI tells the author. The authoring contract itself is the
-//! `eval_author` context's system prompt; the first turn carries only what
-//! changes per init: the subject dossier, the check catalog and the floors.
-
 use std::fmt::Write as _;
 
 use gents::eval::checks::CheckDescription;
@@ -16,9 +12,6 @@ pub(crate) const VALIDATION_PREFIX: &str =
 /// Drafts that may fail validation before the interview gives up.
 pub(crate) const MAX_VALIDATION_ROUNDS: usize = 3;
 
-/// The author's first turn: `# Subject` (the dossier), `# Check catalog`
-/// (every check the registry ships, as JSON), and the floors the operator
-/// set.
 pub(crate) fn first_turn(
     dossier: &Dossier,
     catalog: &[CheckDescription],
@@ -68,7 +61,6 @@ mod tests {
         assert!(!turn.contains("## How to reply with a draft"), "{turn}");
     }
 
-    /// A case in the shape the author's contract shows: one stage, one check.
     const EXAMPLE: &str = r#"{
         "case_id": "disk-warning",
         "split": "validation",

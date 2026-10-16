@@ -4,9 +4,8 @@ use crate::backend_provider::BackendProviderKind;
 use crate::config::ReasoningEffort;
 use crate::openai_wire::OpenAiWireApi;
 
-/// Shared provider connection. Model and generation choices live in profiles.
-/// Authentication is explicit and must be compatible with the provider adapter.
-/// OAuth credentials remain resolved through the invoking principal's DID.
+/// Shared provider connection. Authentication must be compatible with the
+/// provider adapter; OAuth credentials resolve through the invoking principal's DID.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -19,24 +18,21 @@ pub struct InferenceBackend {
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub openai_wire_api: Option<OpenAiWireApi>,
     pub endpoint: String,
-    /// Required explicit choice; missing or invalid credentials never fall back
-    /// to unauthenticated access. The same selection governs discovery and calls.
+    /// Missing/invalid credentials never fall back to unauthenticated access.
     pub auth: BackendAuth,
-    /// Connection establishment only, not the total streaming response duration.
-    /// Default 10s, bounded by the active operation's deadline.
+    /// Connection establishment only; default 10s, bounded by the operation deadline.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub connect_timeout_secs: Option<i64>,
-    /// Total model-discovery request timeout. Default 10s for all discovery callers.
+    /// Total model-discovery request timeout; default 10s.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub discovery_timeout_secs: Option<i64>,
-    /// Shared backend capacity across all profiles and models using this connection.
-    /// Absent/null resolves to 1; an explicit value must be positive.
+    /// Shared backend capacity across profiles; absent resolves to 1.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_concurrent: Option<i64>,
-    /// Absent/null resolves to 100; zero disables queueing, negatives are invalid.
+    /// Absent resolves to 100; zero disables queueing.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_queue_depth: Option<i64>,
@@ -47,7 +43,7 @@ pub struct InferenceBackend {
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
     pub enabled: bool,
-    /// Optional UI/discovery labels. References, never tags, determine execution.
+    /// Optional UI/discovery labels.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -57,17 +53,13 @@ pub struct InferenceBackend {
     pub tags: Vec<String>,
 }
 
-/// Backend-owned observations exposed by the server, excluded from desired config.
-/// This is an observation projection, not a separately configured model registry.
+/// Backend-owned observation projection, excluded from desired config.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InferenceBackendObservation {
     pub backend_id: String,
-    /// Runtime-owned catalog observations exposed by the server. Entries are
-    /// embedded advertisements, not independently addressable model documents.
-    /// Discovery never creates profiles or changes their selected model/effort.
     #[serde(default, deserialize_with = "deserialize_backend_catalogs")]
     pub catalogs: Vec<BackendModelCatalog>,
-    /// Runtime-owned observation; configuration apply must not overwrite it.
+    /// Runtime-owned; configuration apply must not overwrite it.
     pub probe_status: Option<String>,
     pub last_probe: Option<String>,
 }
@@ -93,7 +85,6 @@ where
 }
 
 /// Authentication selection on a backend, not a second credential store.
-/// A tagged value prevents competing raw-key and environment-key settings.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -103,13 +94,11 @@ pub enum BackendAuth {
     Unauthenticated,
     /// Operator-managed API key stored in the backend document under DefraDB ACP.
     ApiKey { key: String },
-    /// Read the key from the runtime host's environment. Missing/blank is an error.
+    /// Key from the runtime host's environment; missing/blank is an error.
     Environment { variable: String },
-    /// Resolve the existing OAuthCredential using the node's DID
-    /// and the provider adapter's OAuth provider key. Existing login, refresh,
-    /// expiry, and credential ownership rules remain authoritative. No tokens
-    /// or fixed node DID are copied into the shared backend.
-    /// `account_ref` is an opaque, DID-free account reference; absent means the
+    /// Resolve the existing OAuthCredential using the node's DID; existing
+    /// login, refresh, expiry, and credential ownership rules remain
+    /// authoritative. `account_ref` is opaque and DID-free; absent means the
     /// provider's original account.
     #[serde(rename = "node_oauth")]
     NodeOAuth {
@@ -140,8 +129,7 @@ impl std::fmt::Debug for BackendAuth {
 }
 
 impl BackendAuth {
-    /// The account a node OAuth backend names (Lean `oauthRef`); `None`
-    /// for other auth and for the provider's original account.
+    /// The account a node OAuth backend names (Lean `oauthRef`).
     pub fn oauth_account_ref(&self) -> Option<&str> {
         match self {
             Self::NodeOAuth { account_ref } => account_ref.as_deref(),
@@ -150,15 +138,14 @@ impl BackendAuth {
     }
 }
 
-/// One backend catalog observed under a particular authentication scope.
-/// A node's catalog must not be treated as another node's entitlement.
+/// One backend catalog observed under a particular authentication scope; a
+/// node's catalog must not be treated as another node's entitlement.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BackendModelCatalog {
-    /// None denotes the backend's shared credential scope; Some identifies the
-    /// node whose existing OAuthCredential was used. Never contains secrets.
+    /// None: the backend's shared credential scope; Some: the node whose
+    /// OAuthCredential was used. Never contains secrets.
     pub node_did: Option<String>,
-    /// Successful observation time. A failed refresh must not erase a prior
-    /// catalog or claim it was freshly observed. Health remains separately owned.
+    /// A failed refresh must not erase a prior catalog or claim it fresh.
     pub observed_at: String,
     #[serde(
         default,
@@ -168,8 +155,6 @@ pub struct BackendModelCatalog {
 }
 
 /// Server-advertised model option, scoped by its containing backend catalog.
-/// Optional capabilities remain unknown unless discovery or an explicit adapter
-/// contract establishes them. No separate document identity or model profile.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct AdvertisedModel {
@@ -177,11 +162,10 @@ pub struct AdvertisedModel {
     pub display_name: Option<String>,
     /// Provider-advertised normal/default context size, when known.
     pub context_window: Option<i64>,
-    /// Provider-advertised ceiling for an explicit context override. This is
-    /// distinct from `context_window` and must never become a default itself.
+    /// Provider-advertised ceiling for an explicit context override; must
+    /// never become a default itself.
     pub max_context_window: Option<i64>,
     pub max_output_tokens: Option<i64>,
-    /// None means unknown; Some(empty) means no configurable reasoning effort.
-    /// The server advertises these choices without materializing effort profiles.
+    /// None unknown; Some(empty) means no configurable reasoning effort.
     pub reasoning_efforts: Option<Vec<ReasoningEffort>>,
 }

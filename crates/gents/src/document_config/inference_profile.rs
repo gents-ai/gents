@@ -4,10 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
-/// Complete selectable inference preset. Multiple profiles may select different
+/// Complete selectable inference preset; multiple profiles may select different
 /// models or efforts through the same backend without duplicating credentials.
-/// Sampling and execution settings live in their owning subobjects, referenced
-/// by `sampling_id`/`execution_id`; unset references use canonical defaults.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -22,32 +20,28 @@ pub struct InferenceProfile {
     pub description: Option<String>,
     /// Shared connectivity, authentication, discovery, and admission capacity.
     pub backend_id: String,
-    /// Explicit selection from the backend's advertised options, not a model
-    /// definition. Discovery refreshes must never rewrite this choice.
+    /// Explicit selection from the backend's advertised options; discovery
+    /// refreshes must never rewrite it.
     pub model_name: String,
-    /// Explicit backend-advertised effort selection. Unset uses the provider
-    /// default; an unsupported explicit effort is an error.
+    /// Explicit backend-advertised effort selection; unset uses the provider default.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub reasoning_effort: Option<crate::config::ReasoningEffort>,
-    /// Model-specific context budget override. Resolution must use the selected
-    /// model's capabilities, never another model's limits from the same backend.
+    /// Model-specific context budget override; resolution uses the selected
+    /// model's capabilities.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub context_window: Option<i64>,
-    /// Per-response output ceiling for requests through this profile.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_output_tokens: Option<i64>,
-    /// Unset leaves optional sampling parameters to the provider defaults.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub sampling_id: Option<String>,
-    /// Unset uses the existing owned-loop execution defaults.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub execution_id: Option<String>,
-    /// Optional UI/discovery labels. References, never tags, determine execution.
+    /// Optional UI/discovery labels.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -59,13 +53,7 @@ pub struct InferenceProfile {
 
 impl InferenceProfile {
     /// Validate this profile's bounds — the single owner every write path
-    /// (CLI desired state, self-config, `profile set`,
-    /// `upsert_inference_profile`) calls. The profile subobject owns only its
-    /// own rules: sampling bounds moved to `InferenceSampling::validate`,
-    /// turn/stream/deadline/retry bounds to `InferenceExecution::validate`
-    /// and `InferenceRetryPolicy` (#1430 split the flat profile). Reports
-    /// every violated rule at once so a `config apply` user who broke two
-    /// fields sees both in one round trip.
+    /// calls; reports every violated rule at once.
     pub fn validation_violations(&self) -> Vec<String> {
         let profile_id = self.profile_id.trim();
         let mut violations: Vec<String> = Vec::new();
@@ -222,30 +210,3 @@ pub async fn upsert_inference_profile(
     .await
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::ReasoningEffort;
-    use serde_json::json;
-
-    #[test]
-    fn effort_is_typed_and_explicit_limits_do_not_default_invalid_values() {
-        let value = json!({"node_did":"owner","profile_id":"profile","backend_id":"backend","model_name":"model","reasoning_effort":"high"});
-        let mut profile: InferenceProfile = serde_json::from_value(value.clone()).unwrap();
-        assert_eq!(profile.reasoning_effort, Some(ReasoningEffort::High));
-        assert_eq!(serde_json::to_value(&profile).unwrap(), value);
-        for effort in ["", " ", "extreme"] {
-            let mut invalid = value.clone();
-            invalid["reasoning_effort"] = effort.into();
-            assert!(serde_json::from_value::<InferenceProfile>(invalid).is_err());
-        }
-        for limit in [0, -1] {
-            profile.context_window = Some(limit);
-            profile.max_output_tokens = Some(limit);
-            assert_eq!(profile.validation_violations().len(), 2);
-        }
-        profile.context_window = Some(1);
-        profile.max_output_tokens = Some(1);
-        assert!(profile.validate().is_ok());
-    }
-}

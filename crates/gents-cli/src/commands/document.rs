@@ -13,9 +13,6 @@ pub(crate) async fn dispatch(command: DocumentCommand) -> Result<()> {
     }
 }
 
-/// Parse `--json` into a non-empty object of document fields. Field names are
-/// validated as GraphQL names by the shared literal renderer and values are
-/// escaped by it.
 fn parse_fields(collection: &str, fields: &str) -> Result<Value> {
     validate_collection_identifier(collection)?;
     CollectionScope::all().ensure_allowed(collection)?;
@@ -32,8 +29,6 @@ fn parse_fields(collection: &str, fields: &str) -> Result<Value> {
     if !fields.as_object().is_some_and(|object| !object.is_empty()) {
         bail!("--json must be a non-empty JSON object of document fields");
     }
-    // The shared literal renderer writes an empty array as null, which would
-    // silently differ from what the operator typed.
     if contains_empty_array(&fields) {
         bail!("--json must not contain an empty array; omit the field instead");
     }
@@ -44,7 +39,6 @@ fn ensure_exact_integers(raw: &serde_json::value::RawValue) -> Result<()> {
     let text = raw.get();
     match text.as_bytes().first() {
         Some(b'{') => {
-            // Preserve number tokens until their representability has been checked.
             let raw_fields: std::collections::BTreeMap<String, Box<serde_json::value::RawValue>> =
                 serde_json::from_str(text)?;
             for value in raw_fields.values() {
@@ -67,8 +61,6 @@ fn ensure_exact_integers(raw: &serde_json::value::RawValue) -> Result<()> {
     Ok(())
 }
 
-/// DefraDB ignores input fields the collection does not declare, so an
-/// unknown one is refused here against the introspected schema instead.
 fn ensure_known_fields(collection: &str, fields: &Value, input_fields: &[String]) -> Result<()> {
     let unknown = fields
         .as_object()

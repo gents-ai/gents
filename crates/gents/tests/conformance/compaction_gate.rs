@@ -81,8 +81,6 @@ pub(super) async fn compaction_runtime_reduces_valid_canonical_history() {
     assert!(checkpoint.request_doc_id.is_some());
     assert!(cursor < (SEEDED_TURNS as u32) * 2);
 
-    // This request reconstructs authorized provider input from the checkpoint
-    // and the remaining canonical tail.
     let second = run_request(&db, &agent, &session_id, "second").await;
     assert_eq!(second.lifecycle_state, RequestLifecycleState::Completed);
     assert!(backend.observed_requests(REQUEST_MARKER) >= 2);

@@ -7,9 +7,8 @@ use serde_json::Value;
 
 use super::graphql::escape_graphql_string;
 
-/// Recursively copies `from` into `to`, creating `to` if needed. Used to
-/// mutate a fixture pack for one test (an edited task prompt, an injected
-/// `input_schema`) without touching the checked-in copy other tests share.
+/// Copies `from` into `to` recursively. Copy per test so mutations never touch
+/// a checked-in fixture other tests share.
 pub fn copy_dir_all(from: &Path, to: &Path) -> Result<()> {
     fs::create_dir_all(to).with_context(|| format!("creating {}", to.display()))?;
     for entry in fs::read_dir(from).with_context(|| format!("reading {}", from.display()))? {

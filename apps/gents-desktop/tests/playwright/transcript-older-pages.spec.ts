@@ -1,8 +1,5 @@
 import { expect, gotoHarness, test } from "./desktopTest";
 
-/* Scrolling up a long session at a steady pace, older pages arrive before
-   the reader reaches the top: the view does not sit at the top waiting
-   for each page while there are older ones to load. */
 test("scrolling up a long session does not wait at the top for each page", async ({
   page,
 }, testInfo) => {
@@ -10,15 +7,12 @@ test("scrolling up a long session does not wait at the top for each page", async
     !["webkit-desktop", "chromium-desktop"].includes(testInfo.project.name),
     "one layout per engine",
   );
-  /* scrolls up for 12 s; WebKit on Linux animates each wheel's scroll, so
-     this outlasts the default limit there */
   test.slow();
   await page.setViewportSize({ width: 1500, height: 900 });
   await gotoHarness(page, "mobile-performance");
   await page.locator('[data-testid="session-session-large"]').click();
   const panel = page.getByTestId("transcript-panel");
   await panel.getByText("stream-start").last().waitFor();
-  /* a page read takes as long as a bridge read of the session does */
   await page.evaluate(() =>
     window.__GENTS_MOBILE_PERFORMANCE__!.setOlderPageDelay(400),
   );
@@ -41,7 +35,6 @@ test("scrolling up a long session does not wait at the top for each page", async
   });
 
   await panel.hover();
-  /* about 2,400 px a second for 12 s, a reader moving up through the session */
   for (let i = 0; i < 240; i += 1) {
     await page.mouse.wheel(0, -120);
     await page.waitForTimeout(50);
@@ -56,7 +49,6 @@ test("scrolling up a long session does not wait at the top for each page", async
       ).__olderFrames,
   );
   const allRows = Math.max(...frames.map((f) => f.rows));
-  /* time spent at the top while more rows were still to come */
   let waited = 0;
   for (let i = 1; i < frames.length; i += 1)
     if (frames[i].top <= 2 && frames[i].rows < allRows)
@@ -68,8 +60,6 @@ test("scrolling up a long session does not wait at the top for each page", async
   expect(waited).toBeLessThan(150);
 });
 
-/* A page now lands while the reader is still views below the top; the row
-   they are reading stays where it is. */
 test("a page landing views above the reader leaves their row in place", async ({
   page,
 }, testInfo) => {
@@ -88,8 +78,6 @@ test("a page landing views above the reader leaves their row in place", async ({
 
   const before = await panel.evaluate((node) => {
     const scroller = node.closest<HTMLElement>('[data-slot="scroll-area-viewport"]')!;
-    /* as a reader does: their own wheel, then the scroll it makes, ending
-       two views below the top */
     scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
     scroller.scrollTop = 2 * scroller.clientHeight;
     const view = scroller.getBoundingClientRect();
@@ -118,11 +106,6 @@ test("a page landing views above the reader leaves their row in place", async ({
   expect(Math.abs(after - before.top)).toBeLessThan(1);
 });
 
-/* WebKit drops a write to the position made while its own scrolling is under
-   way, and stops drawing the transcript until a later write takes. A page
-   that lands while the reader scrolls is kept out of sight above the
-   content instead; the position is written only once the view rests or
-   reaches the top. */
 test("a page landing while the reader scrolls is not put back with a write until the view rests", async ({
   page,
 }, testInfo) => {
@@ -140,17 +123,12 @@ test("a page landing while the reader scrolls is not put back with a write until
     window.__GENTS_MOBILE_PERFORMANCE__!.setOlderPageDelay(400),
   );
 
-  /* every write to the position once the reader starts scrolling (opening
-     the session pins it to the foot): how far it moved the view, how long
-     after the reader's last wheel or scroll, and where it was */
   await panel.evaluate((node) => {
     const scroller = node.closest<HTMLElement>('[data-slot="scroll-area-viewport"]')!;
     const native = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
     const writes: { by: number; sinceMoved: number; from: number }[] = [];
     let movedAt = -Infinity;
     let reading = false;
-    /* the wheel counts as a move too: WebKitGTK can start its scroll late,
-       so a write before any scroll event must not read as after a rest */
     scroller.addEventListener(
       "wheel",
       () => {
@@ -185,8 +163,6 @@ test("a page landing while the reader scrolls is not put back with a write until
     await page.mouse.wheel(0, -120);
     await page.waitForTimeout(40);
   }
-  /* the rest gate is a second long: wait the hidden rows out, not a fixed
-     delay that a loaded runner can outpace */
   await expect
     .poll(() =>
       panel.evaluate(
@@ -211,20 +187,13 @@ test("a page landing while the reader scrolls is not put back with a write until
       hidden: getComputedStyle(scroller.firstElementChild!).marginTop,
     };
   });
-  /* a write that puts a page back moves the view by the page's height */
   const pagesPutBack = writes.filter((w) => Math.abs(w.by) > 450);
   expect(rows).toBeGreaterThan(40);
   expect(pagesPutBack.length).toBeGreaterThan(0);
   expect(pagesPutBack.filter((w) => w.sinceMoved < 1000 && w.from > 0)).toEqual([]);
-  /* rested: nothing is left out of sight */
   expect(hidden).toBe("0px");
 });
 
-/* One wheel up the page, an older page landing during its animation, and
-   the wheel's whole travel still arriving: a write to the position while
-   WebKit is scrolling stops the animation. The wheel carries the view its
-   full 1200 px, which the landing and the write that puts it back never
-   touch. */
 test("a page landing mid-wheel keeps the wheel's whole travel", async ({
   page,
 }, testInfo) => {
@@ -238,14 +207,12 @@ test("a page landing mid-wheel keeps the wheel's whole travel", async ({
   await page.locator('[data-testid="session-session-large"]').click();
   const panel = page.getByTestId("transcript-panel");
   await panel.getByText("stream-start").last().waitFor();
-  /* a page read lands partway into the wheel's animation */
   await page.evaluate(() =>
     window.__GENTS_MOBILE_PERFORMANCE__!.setOlderPageDelay(200),
   );
 
-  /* the wheel, the view's own moves, and every write to the position, on
-     one clock; a write remembers how long after the reader's last wheel
-     or scroll it came */
+  /* the wheel, the view's own moves, and every position write on one clock; a
+     write remembers how long after the reader's last wheel or scroll it came */
   await panel.evaluate((node) => {
     const scroller = node.closest<HTMLElement>('[data-slot="scroll-area-viewport"]')!;
     const native = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
@@ -281,9 +248,8 @@ test("a page landing mid-wheel keeps the wheel's whole travel", async ({
     Object.assign(window, { __writes: writes });
   });
 
-  /* the row under the reading line, and that same row by its key once the
-     wheel has carried it down the screen: the landing and the write that
-     puts it back are visually neutral, so the row moves only as far as
+  /* the row under the reading line, and that same row by its key: the landing
+     and the put-back are visually neutral, so the row moves only as far as
      the wheel carries the view */
   const rowAtLine = () =>
     panel.evaluate((node) => {
@@ -329,16 +295,10 @@ test("a page landing mid-wheel keeps the wheel's whole travel", async ({
     return last;
   };
 
-  /* the scroller, not the panel: the panel is taller than the view, so
-     hovering it scrolls it into view, near the top, and that move asks for
-     an older page before the wheel; held out of sight, it blocks the page
-     the wheel asks for */
   await page.locator('[data-slot="scroll-area-viewport"][data-following]').hover();
   const rowsBefore = await rowCount();
   const reader = await rowAtLine();
   await page.mouse.wheel(0, -1200);
-  /* the page lands out of sight, and the write that puts it back is the
-     rest-gated one this waits for: nothing else moves the position */
   await expect
     .poll(() =>
       panel.evaluate(
@@ -360,8 +320,6 @@ test("a page landing mid-wheel keeps the wheel's whole travel", async ({
         }
       ).__writes,
   );
-  /* a page landed and was put back, and every put-back write came at
-     rest, a full second after the reader's last wheel or scroll */
   expect(await rowCount(), JSON.stringify(writes)).toBeGreaterThan(rowsBefore);
   const pagesPutBack = writes.filter((w) => w.from > 0 && Math.abs(w.by) > 450);
   expect(pagesPutBack.length, JSON.stringify(writes)).toBeGreaterThan(0);
@@ -369,8 +327,6 @@ test("a page landing mid-wheel keeps the wheel's whole travel", async ({
     pagesPutBack.filter((w) => w.sinceMoved < 1000),
     JSON.stringify(writes),
   ).toEqual([]);
-  /* rested: nothing is left out of sight, and the wheel carried the
-     reader's row the whole of its 1200 px */
   const travel = (await rowOffset(reader.key)) - reader.offset;
   console.log(`wheel travel ${travel} px, writes ${JSON.stringify(writes)}`);
   expect(travel).toBeGreaterThan(1140);

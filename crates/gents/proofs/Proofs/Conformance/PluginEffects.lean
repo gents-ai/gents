@@ -132,8 +132,6 @@ private def completeParent (world : World) : World :=
   | .ok post => post
   | .error _ => world
 
-/-- A running child whose own deadline (4) has passed while its parent's (20)
-has not. -/
 private def shortChild : World :=
   match admitPluginEffect baseline 7
       { admission with context := { admission.context with deadline := 4 } } with
@@ -149,8 +147,6 @@ private def closeChild (before : World) (action : ToolExecution.ToolCallContext.
 private def timedOutChild : World := closeChild shortChild .timeout
 private def completedChild : World := closeChild running .complete
 
-/-- A child's own deadline terminalizes that child only: the parent keeps
-running and still completes normally with the timed-out child as data. -/
 theorem child_timeout_is_child_terminal_and_parent_continues :
     ((ownedToolByDocument? timedOutChild 601).any fun child =>
       child.context.state == .timedOut && child.terminalOutput == some terminalPayload) = true ∧
@@ -160,8 +156,6 @@ theorem child_timeout_is_child_terminal_and_parent_continues :
       parent.context.state == .completed) = true ∧
     normalCompletionToolsReady (completeParent timedOutChild) 7 = true := by native_decide
 
-/-- Parent cancellation or deadline accounts the request exceptionally and
-retains every already terminal child, the completed prefix, unchanged. -/
 theorem parent_interruption_retains_completed_children :
     ((ownedToolByDocument? (accountOwnedTools completedChild 7 true) 601).any fun child =>
       child.context.state == .completed && child.terminalOutput == some terminalPayload) = true := by

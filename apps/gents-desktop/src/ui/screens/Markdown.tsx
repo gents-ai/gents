@@ -1,7 +1,3 @@
-/* Assistant prose, rendered the way the desktop app renders it: GitHub
-   markdown, a header on every code block with its language and a copy
-   button. Styling comes from the kit's prose-app utility; the block
-   header is the one thing added here. */
 import { isValidElement, memo, useRef, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -51,8 +47,7 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   );
 }
 
-/* a table that will not fit scrolls on its own rather than squeezing its
-   columns into the width it was given */
+// a wide table scrolls rather than squeezing its columns
 function Table({ children }: { children?: ReactNode }) {
   return (
     <div className="max-w-full overflow-x-auto">
@@ -63,9 +58,7 @@ function Table({ children }: { children?: ReactNode }) {
 
 type MdNode = { type: string; value?: string; children?: MdNode[] };
 
-/* a single newline in a paragraph ends the line, as it does in a note a
-   person or an agent types, rather than folding into a space; code keeps
-   its own newlines because its value is not a text node */
+// code keeps its own newlines: its value is not a text node
 function softBreaks(node: MdNode) {
   if (!node.children) return;
   node.children = node.children.flatMap((child) => {

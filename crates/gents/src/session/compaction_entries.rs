@@ -152,10 +152,6 @@ fn compaction_generation<T: CompactionProjection>(rows: &[T]) -> Result<String> 
     crate::rendered_request::sha256_canonical_json(&serde_json::json!(projection))
 }
 
-/// Load only the compaction projection consumed while assembling a prompt.
-///
-/// Every persisted entry must carry a canonical cursor. Rows without one are
-/// rejected rather than projected into provider history.
 pub(crate) async fn load_prompt_compaction_state(
     node: &EmbeddedNode,
     session_id: &str,
@@ -164,9 +160,6 @@ pub(crate) async fn load_prompt_compaction_state(
     through_sequence: Option<u32>,
 ) -> Result<PromptCompactionState> {
     let scope = super::query::session_scope_filter(node_did, session_id, requester_did);
-    // A background request is claimed against an immutable transcript high
-    // water mark. A compaction produced later may only shape that request when
-    // its cumulative canonical cursor is itself inside the claimed snapshot.
     let query = format!(
         r#"{{
             CompactionEntry(
@@ -302,9 +295,7 @@ pub(crate) struct NewExactSessionCompaction<'a> {
     pub(crate) expected_generation: &'a str,
 }
 
-/// Commit the shared exact reduction as one session-prefix fact. The summary
-/// and compacted count are derived from the artifact, so callers cannot pair a
-/// cursor with a different split or checkpoint.
+/// Commit the shared exact reduction as one session-prefix fact.
 pub(crate) async fn save_exact_compaction_entry(
     node: &std::sync::Arc<EmbeddedNode>,
     input: NewExactSessionCompaction<'_>,
@@ -325,42 +316,6 @@ pub(crate) async fn save_exact_compaction_entry(
         input.original_tokens,
         input.compacted_tokens,
         input.expected_generation,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-#[cfg(test)]
-pub(crate) async fn save_compaction_entry(
-    node: &std::sync::Arc<EmbeddedNode>,
-    session_id: &str,
-    node_did: &str,
-    request_id: &str,
-    request_doc_id: &str,
-    summary: &str,
-    files_read: &[String],
-    files_modified: &[String],
-    messages_compacted: u32,
-    compacted_through_sequence: u32,
-    original_tokens: usize,
-    compacted_tokens: usize,
-) -> Result<CompactionEntry> {
-    let state = load_prompt_compaction_state(node, session_id, node_did, None, None).await?;
-    save_compaction_entry_with_requester_did(
-        node,
-        session_id,
-        node_did,
-        None,
-        request_id,
-        request_doc_id,
-        summary,
-        files_read,
-        files_modified,
-        messages_compacted,
-        compacted_through_sequence,
-        original_tokens,
-        compacted_tokens,
-        &state.generation,
     )
     .await
 }
@@ -481,7 +436,7 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
                     u32::try_from(rows.len() + 1).context("compaction sequence overflow")?;
                 let compaction_key = compaction_key(node_did, session_id, requester_did, sequence);
                 // DefraDB canonicalizes fractional seconds with Go's RFC3339Nano
-                // formatter, which trims trailing zeros.  Emit whole seconds so the
+                // formatter, which trims trailing zeros; emit whole seconds so the
                 // value returned from this create is byte-identical to the value
                 // loaded during an exact redelivery.
                 let created_at =

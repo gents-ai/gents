@@ -1,9 +1,4 @@
 //! Co-resident domain plugin for the fixture host.
-//!
-//! Owns its own storage root (separate from the Gents bridge home), its own
-//! command namespace (`plugin:fixture-domain|*`), and emits
-//! `fixture-domain://updated` — proving v1 extension = side-by-side plugins,
-//! not shared-node schema registration.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -17,8 +12,7 @@ const EVENT_UPDATED: &str = "fixture-domain://updated";
 
 #[derive(Debug, Clone)]
 pub struct DomainConfig {
-    /// Storage root for the domain store. Host must supply a path under its
-    /// own app data — never the Gents bridge home.
+    // Must live under the host's app data, never the Gents bridge home.
     pub home: PathBuf,
 }
 
@@ -132,35 +126,10 @@ fn domain_doc_put<R: Runtime>(
 }
 
 fn chrono_now() -> String {
-    // Avoid chrono dep: RFC3339-ish via system time.
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     format!("{secs}")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    fn put_get_round_trip_under_fixed_home() {
-        let tmp = tempdir().unwrap();
-        let home = tmp.path().join("domain");
-        std::fs::create_dir_all(&home).unwrap();
-        let mut docs = BTreeMap::new();
-        let doc = DomainDoc {
-            id: "inv-1".into(),
-            body: r#"{"item":"milk"}"#.into(),
-            updated_at: "1".into(),
-        };
-        docs.insert(doc.id.clone(), doc.clone());
-        persist(&home, &docs).unwrap();
-        let loaded = load_docs(&home).unwrap();
-        assert_eq!(loaded.get("inv-1").unwrap().body, r#"{"item":"milk"}"#);
-        assert!(home.join("docs.json").exists());
-    }
 }

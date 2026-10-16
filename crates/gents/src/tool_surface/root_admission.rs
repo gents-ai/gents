@@ -10,31 +10,21 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-/// One operator-local `WorkspaceRoot` row. The schema intentionally has no
-/// node field: these rows are host policy shared by every local
-/// node and never replicate.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct WorkspaceRootDocument {
     pub root_path: Option<String>,
     pub enabled: Option<bool>,
 }
 
-/// Published filesystem policy after canonical resolution and the process
-/// ceiling meet. `configured` records the presence of any document, including
-/// disabled or invalid rows, and also records an explicitly supplied process
-/// ceiling that failed resolution, so explicit policy cannot fall back to the
-/// legacy self-admission path.
+    /// Published filesystem policy after canonical resolution and the process
+    /// ceiling meet; `configured` also records an explicit ceiling that failed
+    /// resolution so explicit policy cannot fall back to self-admission.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceRootPolicy {
     pub configured: bool,
     pub published: Vec<PathBuf>,
 }
 
-/// Execution-boundary observation retained beside the already-compiled host
-/// tool set. Tool construction and every fresh owned request reload current
-/// WorkspaceRoot rows and re-resolve this canonical persisted root. This
-/// narrows stale-policy races but holds no filesystem handle and makes no
-/// TOCTOU guarantee.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct RootExecutionGuard {
     pub(crate) agent_id: String,
@@ -86,8 +76,7 @@ impl WorkspaceRootPolicy {
         );
         // With no operator policy and no process ceiling, preserve the legacy
         // embedder contract: an authored absolute root narrows to its own
-        // canonical resolution. Configured/revoked policy never takes this
-        // branch and remains fail-closed.
+        // canonical resolution; configured/revoked policy stays fail-closed.
         if !self.configured && self.published.is_empty() {
             return resolve_configured_tool_root(candidate).map(RootAdmission::Admitted);
         }
@@ -95,10 +84,6 @@ impl WorkspaceRootPolicy {
     }
 }
 
-/// Project the single canonical published-root policy. With no documents, the
-/// process ceiling is the compatibility default. Once any document exists,
-/// only enabled, safely resolved rows contained by the ceiling are published;
-/// an all-disabled or all-invalid policy publishes nothing.
 pub fn project_workspace_root_policy(
     documents: Vec<WorkspaceRootDocument>,
     ceiling_root: Option<&Path>,
@@ -204,12 +189,10 @@ pub fn admit_authored_root(
         RootAdmission::Admitted(root) => Ok(Some(root)),
         denied @ RootAdmission::Denied { .. } => {
             // A stored grant containing a published root stays admitted
-            // unclamped: the operator narrowed authority below a grant the
-            // behavior already holds, and the selection/ceiling meet narrows
-            // the effective root before use. A grant authored by this write
-            // must be strictly admitted, so a behavior cannot pre-position a
-            // wide grant that silently activates when the operator later
-            // widens authority. Only a disjoint grant is refused.
+            // unclamped; a grant authored by this write must be strictly
+            // admitted so it cannot pre-position a wide grant that activates
+            // when the operator later widens authority. Only a disjoint grant
+            // is refused.
             if stored_grant {
                 let overlaps = policy.published.iter().any(|published| {
                     matches!(
@@ -233,11 +216,8 @@ pub fn admit_authored_root(
 /// Validate and canonicalize the existing `Tools.host.root` field against a
 /// published policy. `stored_root` is the `host.root` value the document held
 /// before this write; the containing-grant tolerance applies only when the
-/// authored root is that stored value (an edit that left `host.root` alone, or
-/// a read-side canonicalization of a persisted document). This mutates only
-/// the canonical Tools document shape; it does not introduce a parallel root
-/// field. Active host tools under explicit policy must name a root instead of
-/// inheriting the broader process ceiling.
+/// authored root is that stored value. This mutates only the canonical Tools
+/// document shape; it does not introduce a parallel root field.
 pub fn canonicalize_tools_root(
     tools: &mut crate::document_config::Tools,
     policy: &WorkspaceRootPolicy,
@@ -349,8 +329,7 @@ fn resolve_tool_root(path: &Path) -> Result<ResolvedToolRoot> {
 }
 
 /// Resolve `candidate` and admit it only when it is equal to or below one of
-/// the supplied roots. Comparisons are component-wise over resolved paths.
-/// An empty root iterator denies the candidate.
+/// the supplied roots; an empty root iterator denies the candidate.
 pub(crate) fn resolve_admitted_tool_root<'a>(
     candidate: &Path,
     allowed_roots: impl IntoIterator<Item = &'a Path>,
@@ -364,9 +343,8 @@ pub(crate) fn resolve_admitted_tool_root<'a>(
             .with_context(|| format!("resolving allowed tool root {}", allowed.display()))
         {
             Ok(allowed) => allowed,
-            // A malformed catalog row is not authoritative. Publication drops
-            // it; direct callers use the same policy so BTree ordering cannot
-            // turn a bad sibling row into a candidate-resolution error.
+            // A malformed catalog row is not authoritative: publication drops
+            // it so a bad sibling row cannot become a candidate error.
             Err(_) => continue,
         };
         if candidate.path.starts_with(&allowed.path) {
@@ -419,9 +397,6 @@ fn resolve_path_with_canonical_prefix(path: &Path) -> Result<ResolvedToolRoot> {
             std::path::Component::ParentDir => {
                 observed_parent = true;
                 resolved.pop();
-                // `..` may leave a missing suffix and return to an existing
-                // prefix. Re-check later components so a following symlink is
-                // canonicalized rather than treated as lexical text.
                 missing_tail = false;
             }
             std::path::Component::Normal(name) => {

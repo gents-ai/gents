@@ -1,10 +1,6 @@
-//! Product sync status projected from one coherent client observation.
-//!
-//! DefraDB owns replication work, retry clocks, exhaustion, and quarantine.
-//! The client owner snapshots those facts with transport connectivity; this
-//! module only chooses the small product label shown in the UI. Per-deployment
-//! pairing and route readiness remain separate authorities and are not rebuilt
-//! here as global sync state.
+//! The client owner snapshots DefraDB replication and transport facts; this
+//! module only chooses the product label shown in the UI. Per-deployment
+//! pairing and route readiness remain separate authorities.
 
 #[cfg(test)]
 use gents::P2pSyncStatusSnapshot;
@@ -17,8 +13,8 @@ pub enum SyncHealthState {
     Syncing,
     Offline,
     Failed,
-    /// A runtime advertises a different replicated schema; no retry or
-    /// reconnect can merge writes until both sides run the same version.
+    /// No retry or reconnect can merge writes until both sides run the same
+    /// schema version.
     Incompatible,
 }
 
@@ -38,8 +34,6 @@ impl SyncHealthState {
 pub struct SyncHealth {
     pub state: SyncHealthState,
     pub last_error: Option<String>,
-    /// Configured peers currently observed as connected, excluding unrelated
-    /// transport connections.
     pub connected_peer_count: usize,
     pub pending_dag_count: Option<usize>,
     pub persisted_pending_dag_count: Option<usize>,

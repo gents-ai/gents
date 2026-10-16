@@ -1,12 +1,3 @@
-/// Two Messages turns through the owned loop on SSE fixtures: two signed
-/// thinking blocks (one empty) and `tool_use echo` with streamed arguments →
-/// gents executes echo → signed-thinking/tool-result continuation → text
-/// `done`. The streamed native arguments are asserted through the
-/// canonical admission binding (`load_accepted_for_dispatch`) and exact
-/// reconstruction of its accepted `ToolArguments` payload — canonical
-/// admission resolves a terminal (completed) call too. The exact delivered
-/// output is asserted through `session::load_tool_call_result` (defect C1,
-/// live-confirmed by write request #8).
 #[tokio::test]
 async fn claude_messages_tool_round_trip_through_owned_loop() {
     for scope_kind in [
@@ -58,9 +49,6 @@ async fn signed_claude_tool_round_trip_with_scope(
     assert_eq!(collected.tool_results, vec!["ECHOED".to_string()]);
     assert_eq!(collected.final_text.as_deref(), Some("done"));
 
-    // The second provider send is captured by the real DefraDB sink. Its
-    // signed blocks can appear only after the accepted first turn's physical
-    // header, closure, and Claude capture pass the replay resolver.
     let request_doc_id = lifecycle.request().doc_id.clone();
     let sends = captured_claude_sends(&node, &request_doc_id, &request_commit_cid, scope_kind).await;
     let captured_body = &sends[1];
@@ -97,8 +85,6 @@ async fn signed_claude_tool_round_trip_with_scope(
         "second send must include the accepted tool result"
     );
 
-    // The physical AgentToolCall row is the only handle; address it by
-    // `_docID` within its session scope.
     let resp = node
         .execute("query { AgentToolCall { _docID tool_name lifecycle_state } }")
         .await;
@@ -122,8 +108,6 @@ async fn signed_claude_tool_round_trip_with_scope(
     let tool_doc_id = echo["_docID"].as_str().expect("_docID").to_string();
     let session_id = lifecycle.request().session_id.clone();
 
-    // Canonical admission works terminal too: the completed row still resolves
-    // its immutable accepted binding.
     let held = crate::config_client::ConfigApplyTxn::begin_local(&node, None)
         .await
         .unwrap();
@@ -147,8 +131,6 @@ async fn signed_claude_tool_round_trip_with_scope(
         "accepted binding must not cross physical request identity"
     );
 
-    // The accepted arguments stream is native JSON exactly as the fixture
-    // streamed it.
     let arguments = crate::session::load_canonical_payload_from_node(
         &node,
         &accepted.request_doc_id,
@@ -169,7 +151,6 @@ async fn signed_claude_tool_round_trip_with_scope(
         "streamed arguments must persist exactly as emitted"
     );
 
-    // The delivered result reconstructs exactly through the session owner.
     let native = crate::session::load_tool_call_result(
         &crate::config_client::ConfigAccess::local(node.clone()),
         &tool_doc_id,
@@ -297,8 +278,6 @@ async fn claude_messages_redacted_and_signed_tool_round_trip_through_owned_loop(
     );
 }
 
-/// Encodes native Messages content blocks as the SSE a provider streams for
-/// them, ending in a `tool_use` stop.
 fn claude_sse_for_blocks(blocks: &[serde_json::Value]) -> String {
     let mut events = Vec::new();
     for (index, block) in blocks.iter().enumerate() {
@@ -343,8 +322,6 @@ struct ClaudeFixtureRun {
     request_commit_cid: String,
 }
 
-/// Runs the owned loop against `first_turn` then a final `done` text turn,
-/// with the echo tool and the Claude Messages replay and capture owners.
 async fn run_claude_fixture_turns(
     first_turn: String,
     scope_kind: gents_protocol::rendered_request::CaptureScopeKind,
@@ -359,7 +336,6 @@ async fn run_claude_fixture_turns(
     install_messages_sse_fixtures(vec![first_turn, sse_fixture_final_text("done")]);
     let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
 
-    // Fixture-only: a refusing bearer keeps an extra turn off the network.
     let model =
         ClaudeSubscriptionClient::with_bearer(Arc::new(StaticBearer::failing("no credential")))
             .completion_model("claude-sonnet-5");
@@ -427,8 +403,6 @@ async fn run_claude_fixture_turns(
     }
 }
 
-/// A key client from `build_backend_client` runs a Messages turn on the SSE
-/// fixture; the fixture path never asks the bearer for the key.
 #[test]
 fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
     use crate::claude_messages::{
@@ -437,8 +411,6 @@ fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
     use crate::llm::backend_client::{build_backend_client, BackendClient};
     use rig::client::CompletionClient;
 
-    // The fixture lock spans the turn, so it is held outside the runtime:
-    // a std guard must not live across an await.
     let _guard = lock_fixtures_for_test();
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -528,8 +500,6 @@ fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
         });
 }
 
-/// Decodes both durable Claude sends for the request, in turn order, after
-/// checking each capture's physical coordinates.
 async fn captured_claude_sends(
     node: &Arc<defra_node::EmbeddedNode>,
     request_doc_id: &str,

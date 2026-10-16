@@ -1,9 +1,4 @@
-# One cumulative compaction record. The canonical cursor below is the
-# AgentMessage.sequence through which this entry's cumulative compacted
-# provider prefix is known to project; entries must retain it whenever the
-# runtime can prove the raw/provider split, and copied entries must pass the
-# same chain validation as newly produced ones (no cursor inference from
-# messages_compacted).
+# One cumulative compaction record.
 type CompactionEntry @branchable {
     compaction_key: String @index(unique: true)
     session_id: String @index
@@ -16,9 +11,8 @@ type CompactionEntry @branchable {
     files_read: String
     files_modified: String
     messages_compacted: Int
-    # Canonical AgentMessage.sequence cursor through which this entry's
-    # cumulative compacted provider prefix is known to project. Null on legacy
-    # entries and whenever the runtime cannot prove the raw/provider split.
+    # Canonical AgentMessage.sequence cursor of the cumulative compacted
+    # provider prefix; null on legacy entries.
     compacted_through_sequence: Int
     original_tokens: Int
     compacted_tokens: Int

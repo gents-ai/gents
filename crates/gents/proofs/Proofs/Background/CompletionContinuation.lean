@@ -9,43 +9,32 @@ import Proofs.Transcript.State
 # Background Completion Continuation
 
 The bridge and tool-call models terminalize work, the transcript model appends
-messages, and the session model coalesces and claims wake requests. This module
-composes those seams into the model-facing background-completion contract:
-
-1. an assistant wait header and pending call are durably published before dispatch;
-2. only a terminal parent-visible tool may produce a completion notification;
-3. the notification is appended after the reserved assistant row;
-4. a coalesced wake is enqueued only after that append exists, whether or not
-   the session has a Goal; and
-5. when that wake is claimed, the continuation still carries the transcript
-   containing both rows in the correct order.
-
-Native background processes and `agent_new`/`agent_message` rows converge
-on a terminal `ToolCallState`, so they share this continuation model.
+messages, and the session model coalesces and claims wake requests: (1) an
+assistant wait header and pending call are durably published before dispatch;
+(2) only a terminal parent-visible tool may produce a completion notification;
+(3) the notification is appended after the reserved assistant row; (4) a
+coalesced wake is enqueued only after that append exists, whether or not the
+session has a Goal; (5) a claimed wake still carries the transcript containing
+both rows in the correct order.
 -/
 
 namespace BackgroundCompletion
 
 open ToolExecution
 
-/-- One parent-visible terminal completion and the wake row it owes. -/
 structure TerminalCompletion where
   toolState : ToolCallState
   notificationMessageId : Transcript.MessageId
   wake : SessionQueue.QueueEntry
   deriving Repr
 
-/-- Evidence that the terminal completion has become a durable user-role
-message in the parent transcript. The exact append shape makes ordering
-explicit: later stages can only be constructed from this value. -/
 structure NotifiedCompletion where
   completion : TerminalCompletion
   preTranscript : Transcript.TranscriptState
   transcript : Transcript.TranscriptState
   terminal : isTerminal completion.toolState
-  /-- Fresh publication retains the executable append equation. Recovery may
-  instead observe the exact immutable row in a transcript that has since
-  advanced; in that case `freshAppend` is false and `durable` is authoritative. -/
+  /-- Recovery may observe the exact immutable row in a since-advanced
+  transcript; then `freshAppend` is false and `durable` is authoritative. -/
   freshAppend : Bool
   appended : freshAppend = true →
     transcript = preTranscript.appendUserMessage
@@ -57,7 +46,6 @@ structure NotifiedCompletion where
     row.role = Transcript.MessageRole.user ∧
     row.kind = Transcript.MessageKind.ordinary
 
-/-- Append the model-visible notification. Live work cannot enter this stage. -/
 def appendNotification?
     (completion : TerminalCompletion)
     (pre : Transcript.TranscriptState) :
@@ -84,9 +72,6 @@ def appendNotification?
   else
     none
 
-/-- Evidence that the canonical wake was enqueued after notification
-persistence. The queue transition is the executable session semantics, not a
-hand-written post-state. -/
 structure QueuedCompletion where
   notified : NotifiedCompletion
   preQueue : SessionQueue.SessionQueueState
@@ -103,15 +88,8 @@ structure QueuedCompletion where
   enqueued : SessionQueue.step? preQueue
     (.coalescePending notified.completion.wake) = some queue
 
-/-- Enqueue the first coalesced completion wake for this parent session.
-Subsequent terminal completions reuse the session queue's separately-proved
-coalescing path while each still gets its own transcript notification.
-
-Goal presence is deliberately not an input. Jack's decision (2026-09-24, wake
-ownership): Goals and background wakes are independent, so no Goal,
-whatever its status (including paused and complete), suppresses the
-background-completion wake. A terminal background completion always appends
-its notification and enqueues this coalesced wake. -/
+/-- Goals and background wakes are independent (wake ownership decision):
+no Goal suppresses the background-completion wake. -/
 def enqueueWake?
     (notified : NotifiedCompletion)
     (pre : SessionQueue.SessionQueueState) :
@@ -147,14 +125,11 @@ def enqueueWake?
   else
     none
 
-/-- Shared goal coalescing does not authorize the background producer to issue
-Goal-owned requests; those retain their authenticated continuation owner. -/
 theorem goal_queue_cannot_be_background_wake
     (notified : NotifiedCompletion) (pre : SessionQueue.SessionQueueState)
     (h : notified.completion.wake.source = .goal) : enqueueWake? notified pre = none := by
   simp [enqueueWake?, h]
 
-/-- A claimed continuation retains the notified transcript by construction. -/
 structure Continuation where
   queued : QueuedCompletion
   queue : SessionQueue.SessionQueueState
@@ -162,9 +137,6 @@ structure Continuation where
   activeWake :
     queue.active = some queued.notified.completion.wake.requestId
 
-/-- Claim the completion wake when it reaches the head of the same-session
-queue. Earlier foreground/user work may run first; this action becomes
-executable precisely when the completion wake is the claimable head. -/
 def claimContinuation? (queued : QueuedCompletion) : Option Continuation :=
   match h_step : SessionQueue.step? queued.queue .claimNext with
   | none => none
@@ -180,7 +152,6 @@ def claimContinuation? (queued : QueuedCompletion) : Option Continuation :=
       else
         none
 
-/-- The exact durable row shape the next provider turn must see. -/
 def HasNotification (notified : NotifiedCompletion) : Prop :=
   ∃ row,
     row ∈ notified.transcript.messages ∧
@@ -194,9 +165,6 @@ theorem notified_completion_has_durable_message
     HasNotification notified := by
   exact notified.durable
 
-/-- Acceptance theorem: once a background wake is claimed, its parent-visible
-terminal state and durable notification are still available to provider-input
-assembly for the continuation turn. -/
 theorem claimed_continuation_sees_terminal_notification
     (continuation : Continuation) :
     isTerminal continuation.queued.notified.completion.toolState ∧
@@ -207,9 +175,6 @@ theorem claimed_continuation_sees_terminal_notification
     notified_completion_has_durable_message continuation.queued.notified,
     continuation.activeWake⟩
 
-/-- End-to-end evidence retained by a claimed background continuation. This
-connects the actual notification publication (fresh when applicable), the
-same-session coalesced enqueue, and the subsequent queue claim. -/
 theorem claimed_continuation_retains_publication_enqueue_claim_chain
     (continuation : Continuation) :
     isTerminal continuation.queued.notified.completion.toolState ∧
@@ -255,9 +220,8 @@ def canonicalTranscript : Transcript.TranscriptState :=
   , inFlight := ∅
   }
 
-/-- The model-visible wait call is persisted before execution blocks. This is
-the durable form of the assistant sequence reservation: an independently
-appended completion notification must observe `nextSeq = 4`, not reuse the
+/-- The model-visible wait call is persisted before execution blocks: an
+independently appended completion notification observes `nextSeq = 4`, not the
 assistant row's sequence 3. -/
 def canonicalWaitTurn : Transcript.AssistantTurn :=
   { sessionId := canonicalTranscript.sessionId
@@ -292,9 +256,7 @@ def canonicalCompletion : TerminalCompletion :=
   , wake := canonicalWake
   }
 
-/-- Executable four-stage acceptance result used by generated conformance
-cases. Any guard drift in terminality, transcript append, wake metadata,
-coalescing, or claim agent flips this value. -/
+/-- Executable four-stage acceptance result used by generated conformance cases. -/
 def canonicalContinuationAccepted : Bool :=
   match appendNotification? canonicalCompletion canonicalWaitReservedTranscript with
   | none => false
@@ -317,37 +279,13 @@ theorem canonical_completion_appends_then_enqueues_then_continues :
     canonicalContinuationAccepted = true := by
   native_decide
 
-/-- Regression for the live wait/completion race: the assistant wait row and
-the background notification have distinct durable sequences, the assistant
-row remains assistant-role, and it precedes the user-role notification. -/
-def canonicalWaitOrderingAccepted : Bool :=
-  match appendNotification?
-      canonicalCompletion canonicalWaitReservedTranscript with
-  | none => false
-  | some notified =>
-      decide
-        (notified.transcript.messages.map
-          (fun row => (row.sequence, row.role)) =
-          [(3, .assistant), (4, .user)])
-
-theorem canonical_wait_call_precedes_completion_notification :
-    canonicalWaitOrderingAccepted = true := by
-  native_decide
-
 /-! ## Bounded failed-wake redrive
 
-Completion notifications remain durable when the scheduled continuation that
-was supposed to consume them fails.  The daemon may therefore create one
-fresh continuation attempt, but only for the canonical coalesced background
-queue shape and only while the persisted retry budget remains open.  This is a
-separate capability from the interactive client retry modeled by
-`SessionRecovery`: a generic scheduled request is not retryable merely because
-it was scheduled.
--/
+The daemon may create one fresh continuation attempt for a failed scheduled
+continuation, but only for the canonical coalesced background queue shape and
+only while the persisted retry budget remains open; this is separate from the
+interactive client retry modeled by `SessionRecovery`. -/
 
-/-- Publication fields observed or written by the existing RequestSpec owner.
-Physical document IDs, signatures and typed inputs remain adapter boundaries;
-execution clocks are assigned at claim, never invented by retry publication. -/
 structure WakeRequest where
   state : RequestState
   origin : ExecutionOrigin
@@ -365,8 +303,7 @@ structure FailedWake where
   policy : SessionQueue.QueuePolicy
   queueKey : Option SessionId
 
-/-- Local lifecycle/budget/queue eligibility only. Publication additionally
-requires the authoritative transaction gate in redriveWakeFromRows?. -/
+/-- Local lifecycle/budget/queue eligibility only. -/
 def CanRedriveWake (wake : FailedWake) : Prop :=
   wake.ctx.state = .failed ∧
     wake.ctx.admission = .released ∧
@@ -395,10 +332,8 @@ def redriveWake? (wake : FailedWake) : Option WakeRequest :=
   else
     none
 
-/-- One publication transaction's result, not another durable request/session.
-The parent WakeRequest projection is decoded from the exact physical row below.
-The DB adapter must read rows and publish all three outputs atomically; this
-executable composition does not prove native isolation or signature verification. -/
+/-- One publication transaction's result, not another durable request/session;
+the DB adapter must publish the outputs atomically. -/
 def redriveWakeFromRows?
     (session : AgentSession.Document)
     (rows : List AgentSession.RequestFact) (parentDoc : Nat) (wake : FailedWake)
@@ -419,9 +354,6 @@ def redriveWakeFromRows?
     some (next, AgentSession.advance session nextRows successor preview now, nextRows)
   else none
 
-/-- Every successful transaction publishes the same successor as both the
-canonical request head and the session's exact observed identity/state. This is
-an invariant of the executable publication result, not a proof of DB isolation. -/
 theorem redrive_publication_has_one_successor
     (session : AgentSession.Document)
     (rows : List AgentSession.RequestFact) (parentDoc : Nat) (wake : FailedWake)
@@ -442,8 +374,7 @@ theorem redrive_publication_has_one_successor
   simp only [hs] at hscoped
   simp [AgentSession.advance, hs, hb, hhead, hscoped, hstate]
 
-/-- Cached presentation is deliberately absent from every redrive gate. It is
-updated from the same successor rows as part of successful publication. -/
+/-- Cached presentation is deliberately absent from every redrive gate. -/
 theorem redrive_selection_ignores_cached_head
     (session : AgentSession.Document)
     (rows : List AgentSession.RequestFact) (parentDoc : Nat) (wake : FailedWake)
@@ -539,12 +470,9 @@ theorem canonical_wake_retry_backoff_is_bounded :
 
 /-! ## Aged wake admission
 
-The watcher preserves FIFO until a background-completion wake reaches the
-aging threshold.  Once aged, it precedes ordinary descendant work at the
-bounded agent-executor queue.  This is the runtime's weak-fairness
-assumption made executable: an ongoing descendant storm may fill the finite
-queue ahead of a wake, but new descendants cannot continue overtaking it.
--/
+Aged background-completion wakes precede ordinary descendant work at the
+bounded agent-executor queue: the runtime's weak-fairness assumption made
+executable. -/
 
 def completionWakeAgingThresholdSeconds : Nat := 30
 
@@ -612,14 +540,9 @@ theorem canonical_fresh_wake_does_not_bypass_fifo :
 
 /-! ## Attempt snapshots and acknowledgement
 
-Each notification message is durably bound to the wake request created or
-reused by the atomic enqueue transaction.  Claim snapshots the transcript's
-last sequence in the same transaction that changes the wake from pending to
-claimed.  A later notification is therefore owned by a successor epoch and
-cannot enter the active attempt's provider input.  Successful terminalization
-acknowledges exactly the attempted bindings; failure retains them for redrive.
--/
-
+Claim snapshots the transcript's last sequence in the same transaction that
+claims the wake; a later notification cannot enter the active attempt's
+provider input. -/
 structure NotificationBinding where
   messageId : Transcript.MessageId
   sequence : Nat
@@ -688,17 +611,9 @@ theorem canonical_failed_snapshot_retains_unacknowledged_notification :
 
 /-! ## Crash-boundary recovery
 
-Acknowledgement is not a second mutable protocol step.  It is a projection of
-the durable claim snapshot and the authoritative request terminal state.  This
-closes the three reachable crash boundaries in the delivery protocol: before
-claim there is no attempted snapshot to acknowledge; an unfinished claimed
-attempt remains owned until the existing lease/recovery owner terminalizes it; and a
-crash while a reader projects acknowledgement cannot create a partially
-acknowledged state.  Canonical request completion and terminal-output selection
-commit together; there is no response-only state that can repair an unfinished
-request to completed.
--/
-
+Acknowledgement is a projection of the durable claim snapshot and the
+authoritative request terminal state; a crash while a reader projects
+acknowledgement cannot create a partially acknowledged state. -/
 inductive DeliveryCrashPoint where
   | beforeClaim
   | duringInference
@@ -721,13 +636,6 @@ def attemptedFromSnapshot : Option WakeAttemptSnapshot → List NotificationBind
   | none => []
   | some snapshot => snapshot.attemptedBindings
 
-/-- Request lifecycle is authoritative. A claim snapshot neither completes nor
-fails unfinished work; the existing lease/recovery owner must first commit a
-terminal outcome. Canonical output never repairs request lifecycle here:
-successful completion already committed its exact terminal selection with the
-request owner. This projection does not itself authorize retries:
-`redriveWakeFromRows?` still applies authoritative head, physical parent,
-ownership and budget gates to an actually failed request. -/
 def recoverWakeDelivery (input : WakeRecoveryInput) : WakeRecoveryProjection :=
   let attempted := attemptedFromSnapshot input.claimSnapshot
   { requestState := input.requestState

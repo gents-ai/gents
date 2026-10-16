@@ -6,15 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use super::templates::{to_replication_filters, PairingFilters};
 
-/// Operator-set desired pairing for one peer.
-///
-/// `replicator_filter` is the per-pairing scope filter resolved from the
-/// pairing's scope template (empty == unfiltered). It is part of the
-/// *replicator identity*: every replicator in this pairing carries this
-/// per-collection filter map, so a changed map makes the `(address, filters)`
-/// identity distinct and forces a teardown+install — mirroring the Lean
-/// `PairingReconcile.ReplicatorId = (address, ReplicatorFilter)` and
-/// `filter_change_forces_reinstall`.
+/// Operator-set desired pairing for one peer. `replicator_filter` is part of
+/// the replicator identity: a changed filter map forces teardown+install,
+/// mirroring Lean `PairingReconcile.ReplicatorId = (address, ReplicatorFilter)`
+/// and `filter_change_forces_reinstall`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairingDesired {
     pub collections: BTreeSet<String>,
@@ -55,15 +50,14 @@ pub struct PairingActual {
     pub replicator_collections: BTreeMap<String, BTreeSet<String>>,
     #[serde(default)]
     pub replicator_filters: BTreeMap<String, defra_p2p_adapter::ReplicationFilters>,
-    /// Routes for which the remote admin response omitted filter visibility.
     /// Unknown filters do not trigger an unbounded reinstall loop, but a
     /// scoped route with unknown filters is never certified as live-matching.
     #[serde(default)]
     pub replicator_filters_unobserved: BTreeSet<String>,
-    /// Addresses reported by the live transport, keyed by the durable route
-    /// address that owns the transport peer. Keeping both identities lets the
-    /// reconciler adopt a restored route by peer id while still detecting a
-    /// stale ticket/address projection.
+    /// Transport-reported addresses keyed by the durable route address that
+    /// owns the transport peer; both identities are needed to adopt a restored
+    /// route by peer id while still detecting a stale ticket/address
+    /// projection.
     #[serde(default)]
     pub replicator_observed_addresses: BTreeMap<String, BTreeSet<String>>,
 }
@@ -129,17 +123,12 @@ pub fn compute_owned_pairing_diff(
     {
         ops.push(DiffOp::TeardownCollection(c.clone()));
     }
-    // Replicator identity is (address, filter, collections). Persisted applied
-    // metadata is only ownership; live filter drift must also force repair.
-    // A managed replicator whose desired filter differs from either applied or
-    // live state, or
-    // whose remotely-observed collection set differs from the desired set, is
-    // a *distinct* identity (Lean `filter_change_distinct_identity`,
-    // `collections_change_distinct_identity`): tear down the old identity and
-    // install the new one, even though the address is unchanged. The
-    // collections comparison fences the layer-order race where a replicator
-    // installed from the data-plane layer alone silently kept its narrow
-    // collection set after the control-plane layer merged in.
+    // Replicator identity is (address, filter, collections); filter or
+    // carried-collection drift is a distinct identity (Lean
+    // `filter_change_distinct_identity`, `collections_change_distinct_identity`)
+    // and forces teardown+install. The collections comparison fences the
+    // layer-order race where a data-plane-installed replicator silently kept
+    // its narrow collection set after the control-plane layer merged in.
     let filter_changed = desired.replicator_filter != applied.replicator_filter;
     let desired_live_filters = to_replication_filters(&desired.replicator_filter).ok();
     let desired_replicator_collections = desired.effective_replicator_collections();
@@ -159,8 +148,6 @@ pub fn compute_owned_pairing_diff(
             .get(r)
             .is_some_and(|carried| carried != desired_replicator_collections);
         let live_filter_changed = if actual.replicator_filters_unobserved.contains(r) {
-            // The current protocol requires filter observability. Missing
-            // evidence can never certify a scoped route.
             !desired.replicator_filter.is_empty()
         } else {
             actual
@@ -468,9 +455,7 @@ mod tests {
         );
     }
 
-    /// Mirrors Lean `filter_change_forces_reinstall`: a replicator on the same
-    /// address but a different filter is a distinct identity, so the diff tears
-    /// down the old filtered replicator and installs the new one.
+    /// Mirrors Lean `filter_change_forces_reinstall`.
     #[test]
     fn changing_scoped_did_reinstalls_replicator() {
         let desired = PairingDesired {
@@ -499,7 +484,6 @@ mod tests {
         );
     }
 
-    /// An unchanged filter on a converged pairing yields no replicator churn.
     #[test]
     fn unchanged_filter_does_not_reinstall_replicator() {
         let f = filter("node_did", "did:key:bob");
@@ -527,13 +511,6 @@ mod tests {
         assert!(compute_owned_pairing_diff(&desired, &actual, &applied).is_empty());
     }
 
-    /// Mirrors Lean `collections_change_forces_reinstall`: a replicator on
-    /// the same address with the same filter whose remotely-observed carried
-    /// collection set differs from the desired effective set is a distinct
-    /// identity, so the diff tears it down and reinstalls it. This is the
-    /// demo layer-order race: the replicator was installed from the
-    /// data-plane layer alone and kept its narrow set after the
-    /// control-plane layer merged in.
     #[test]
     fn changed_replicator_collections_reinstall_replicator() {
         let desired = PairingDesired {
@@ -562,7 +539,6 @@ mod tests {
         );
     }
 
-    /// A carried set that matches the desired effective set yields no churn.
     #[test]
     fn matching_replicator_collections_do_not_reinstall() {
         let desired = PairingDesired {
@@ -584,8 +560,6 @@ mod tests {
         assert!(compute_owned_pairing_diff(&desired, &actual, &applied).is_empty());
     }
 
-    /// An unobservable carried set (no map entry for the address) must not
-    /// churn: absence means "could not be observed", not "empty".
     #[test]
     fn unobservable_replicator_collections_do_not_reinstall() {
         let desired = PairingDesired {

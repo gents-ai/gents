@@ -6,9 +6,8 @@ import Proofs.Background.CompletionContinuation
 
 This adapter does not publish another transcript row. It accepts only the
 ordinary notification already committed by the shared canonical tool-delivery
-owner, reconstructs the existing `NotifiedCompletion` evidence from the
-pre-publication transcript, and requires exact equality with the committed
-shared transcript before invoking the existing queue owner.
+owner and requires exact equality with the committed shared transcript before
+invoking the existing queue owner.
 -/
 
 namespace CanonicalOutput.Execution.BackgroundContinuation
@@ -17,10 +16,6 @@ def publishNotification (binding : WakeDocumentBinding) (world : World)
     (document : DocId) (message : MessageEnvelope) : Except ToolDelivery.Error World :=
   ToolDelivery.publishWakeNotification world document binding message
 
-/-- Authenticated projection of the durable AgentRequest row retained after a
-background wake leaves the pending queue. Native code supplies this only after
-ACP-authorized exact-row lookup; `authenticated` makes that refinement premise
-explicit rather than treating a bare active/terminal request id as provenance. -/
 def wakeDocumentBindingValid (world : World) (message : MessageEnvelope)
     (queue : SessionQueue.SessionQueueState)
     (notified : BackgroundCompletion.NotifiedCompletion)
@@ -36,8 +31,6 @@ def wakeDocumentBindingValid (world : World) (message : MessageEnvelope)
         row.role == .user && row.kind == .ordinary) &&
     decide (binding.entry.coalesceWellFormed queue.sessionId)
 
-/-- Pending coalescing may accompany a fresh publication. Once the wake has
-left pending, only an exact publication replay may reuse its durable receipt. -/
 def wakeBindingAcceptsPublication (before : World) (message : MessageEnvelope)
     (queue : SessionQueue.SessionQueueState) (binding : WakeDocumentBinding) : Bool :=
   binding.entry ∈ queue.pending ||

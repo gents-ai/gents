@@ -59,7 +59,6 @@ pub(super) async fn insert_signed(db: &TestDb, mut request: AgentRequestCreate) 
     gents::graphql::created_doc_id(&response, "AgentRequest").unwrap()
 }
 
-/// Submits through the runtime command owner with only its reconciler running.
 async fn submit_edit(
     db: &TestDb,
     session_id: &str,

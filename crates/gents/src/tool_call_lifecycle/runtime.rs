@@ -1,15 +1,7 @@
-//! Native extension of the loop's tool-runtime scope (`gents-loop`, G-1).
-//!
-//! The loop's own `TOOL_RUNTIME_SCOPE` task-local (deadline, cancellation,
-//! session id, live output, background/correlation/identity) moved to
-//! `gents-loop`, since `agent/loop_stream/tool_dispatch.rs` sets it for every
-//! dispatched tool call and no longer lives in this crate. Native, filesystem
-//! and DefraDB-touching tools (bash, file, LSP) additionally need a workspace
-//! binding — a cwd, a root, an authority level, and sometimes an artifact
-//! write grant — which stays here as a second, nested task-local overlay
-//! (`WORKSPACE_OVERLAY`). [`current_tool_runtime_context`] reads both and
-//! merges them into one native-only context; the loop's own dispatch never
-//! sees the overlay half.
+//! Native extension of the loop's tool-runtime scope (`gents-loop`, G-1): a
+//! nested task-local workspace overlay (cwd, root, authority, artifact grant)
+//! merged into the loop's own scope by [`current_tool_runtime_context`]; the
+//! loop's own dispatch never sees the overlay half.
 
 use std::path::PathBuf;
 
@@ -42,8 +34,8 @@ tokio::task_local! {
     static WORKSPACE_OVERLAY: ToolWorkspaceScope;
 }
 
-/// The merged native context: everything the loop's own scope carries, plus
-/// the workspace binding only native tools observe.
+/// The merged native context: the loop's own scope plus the workspace
+/// binding only native tools observe.
 #[derive(Clone)]
 pub(crate) struct CurrentToolRuntimeContext {
     pub(crate) deadline_at: Option<DateTime<Utc>>,
@@ -63,8 +55,7 @@ pub(crate) struct CurrentToolRuntimeContext {
 }
 
 /// Establish the workspace overlay around `future`, nesting the loop's own
-/// scope inside it so a tool dispatched through `dispatch_tool` still sees
-/// deadline/cancellation/session/live-output alongside the workspace binding.
+/// scope inside it.
 pub(crate) async fn scope_request_tool_execution_with_workspace_overlay<F, T>(
     deadline_at: Option<DateTime<Utc>>,
     cancellation_token: CancellationToken,
@@ -132,11 +123,6 @@ pub(crate) use gents_loop::tool_call_lifecycle::runtime::{
     call_tool_managed, scope_request_tool_execution_with_trigger_context,
     scope_tool_request_identity, tool_execution_bounds,
 };
-// Test-only: gents' own tool-execution tests exercise the loop's deadline
-// arithmetic directly, and `scope_request_tool_execution_with_workspace`
-// below (a test-only helper) still threads through the session scope; no
-// non-test call site in this crate needs either any more (the dispatch loop
-// that used to call them here moved to gents-loop).
 #[cfg(test)]
 pub(crate) use gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session;
 
@@ -180,9 +166,7 @@ where
     .await
 }
 
-/// Scope for executions spawned through the R6 background bridge: identical
-/// to the foreground scope except tools can observe `background` and apply
-/// the background lifetime budget instead of their foreground ceiling.
+/// Scope for executions spawned through the R6 background bridge.
 #[cfg(test)]
 pub(crate) async fn scope_background_tool_execution<F, T>(
     deadline_at: Option<DateTime<Utc>>,

@@ -5,8 +5,6 @@ use std::sync::{Mutex, OnceLock};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 
-// Re-export the canonical escaper instead of duplicating it, so test-support
-// escaping can never drift from production (audit/code-review finding).
 pub use gents::graphql::escape_graphql_string;
 
 fn served_principals() -> &'static Mutex<HashMap<u16, String>> {
@@ -14,10 +12,10 @@ fn served_principals() -> &'static Mutex<HashMap<u16, String>> {
     PRINCIPALS.get_or_init(Default::default)
 }
 
-/// Record the principal of the home a test server serves on `port`, loading
-/// its key into this process so fixture requests can sign as it. A served
-/// home's node access control refuses anonymous writes; a home that is not
-/// initialized yet is left anonymous.
+/// Record the principal of the home served on `port`, loading its key into
+/// this process so fixture requests can sign as it; a served home's node
+/// access control refuses anonymous writes, and an uninitialized home is
+/// left anonymous.
 pub fn register_served_home(home: &Path, port: u16) -> Result<()> {
     let Some(config) = gents::home::read_init_config::<Value, Value>(home)? else {
         return Ok(());
@@ -34,7 +32,7 @@ pub fn register_served_home(home: &Path, port: u16) -> Result<()> {
     Ok(())
 }
 
-/// `graphql` acting as the principal of the test home served there, if any.
+/// Acting as the principal of the test home served there, if any.
 pub fn served_endpoint(graphql: &str) -> gents::config_client::GraphqlEndpoint {
     let principal = reqwest::Url::parse(graphql)
         .ok()
@@ -61,8 +59,6 @@ pub async fn graphql_query(graphql: &str, query: &str) -> Result<Value> {
     }
 }
 
-/// Write typed fixture payloads through the production transaction owner.
-/// Variable expansion, conflict handling, and commit remain owned by Gents.
 pub async fn graphql_mutation_with_variables(
     access: &gents::config_client::ConfigAccess,
     query: &str,

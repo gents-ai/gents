@@ -1,6 +1,4 @@
-/* Which agent a context page was opened from, so its Back returns there.
-   Routes carry no origin, so the agent that linked here is kept for the
-   session; opening the Contexts list itself forgets it. */
+/** Which agent a context page was opened from; Back returns there. */
 const origins = new Map<string, string>();
 
 export function rememberContextOrigin(contextId: string, agentId: string) {

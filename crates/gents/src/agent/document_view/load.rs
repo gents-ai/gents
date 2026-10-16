@@ -94,8 +94,8 @@ pub(crate) async fn load_document_runtime_view(
                     unknown_kind_backends,
                     oauth_credentials: HashMap::new(),
                 };
-                // Retain ordinary authored documents. Reserved package and graph
-                // resources execute only through their verified revision owner.
+                // Retain ordinary authored documents; reserved package and
+                // graph resources execute only through their verified revision owner.
                 let visible = |id: &str| {
                     (!id.starts_with("pkg-") || package_artifacts.contains(id))
                         && crate::graph_pipeline::graph_artifact_is_visible(id, &graph_digests)
@@ -170,8 +170,7 @@ pub(crate) async fn load_document_runtime_view(
 }
 
 /// A stored document that no longer decodes (for example, one carrying a
-/// field this runtime removed) names itself, so the operator can find and
-/// fix it; the principal's whole view still fails closed.
+/// field this runtime removed) fails the principal's whole view.
 pub(super) fn decode_record<T: DeserializeOwned>(
     name: &str,
     id: &str,
@@ -180,8 +179,7 @@ pub(super) fn decode_record<T: DeserializeOwned>(
     serde_json::from_value(canonical).with_context(|| format!("decoding {name} {id:?}"))
 }
 
-/// Select desired fields through the shared canonical serde codec. JSON groups
-/// stay bare selections; observations never enter a strict authored document.
+/// Select desired fields through the shared canonical serde codec.
 async fn load_records<T: DeserializeOwned>(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
@@ -191,7 +189,7 @@ async fn load_records<T: DeserializeOwned>(
 }
 
 /// `load_records`, except a backend of a provider kind this build does not
-/// know is skipped and recorded in `unknown_kinds` (ID to kind).
+/// know is skipped and recorded in `unknown_kinds`.
 async fn load_records_skipping<T: DeserializeOwned>(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,

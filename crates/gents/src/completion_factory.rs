@@ -58,15 +58,6 @@ pub(crate) fn build_admitted_model<C: crate::llm::rig_compat::ProviderClient>(
 }
 
 /// Build a loop config for one completion loop.
-///
-/// `capture_scope` is not decoration. Every loop this factory serves issues
-/// provider calls under the same `(node_did, session_id, request_id)`, and
-/// every one of them starts its turn and attempt counters at zero — the owned
-/// inference loop, the compaction summarizer and its JSON fallback, title
-/// generation, and the one-shot runner. The scope is what keeps their first
-/// calls from colliding into one durable fact, and passing it here is what
-/// makes capture the default for all of them instead of a privilege of the
-/// inference path (#840).
 pub(crate) fn loop_config(
     agent_config: &ResolvedAgent,
     preamble: String,
@@ -201,12 +192,10 @@ pub(crate) fn parse_aggregate_token_limit(
         .transpose()
 }
 
-/// Mint the single monotone provider-usage ledger for one durable request.
-///
-/// `used` is rehydrated from durable `InferenceCall` rows for this physical
+/// Mint the single monotone provider-usage ledger for one durable request,
+/// rehydrated from durable `InferenceCall` rows for this physical
 /// `request_doc_id` so crash redrive and process restart cannot mint a fresh
-/// allowance. Callers must construct it before any request-scoped provider
-/// work so session compaction and the owned inference loop share one handle.
+/// allowance.
 pub(crate) async fn aggregate_token_budget_for_request(
     node: &EmbeddedNode,
     request: &AgentRequest,
@@ -297,38 +286,28 @@ fn parse_request_deadline(value: Option<&str>) -> Option<DateTime<Utc>> {
         .map(|value| value.with_timezone(&Utc))
 }
 
-// Moved to gents-loop (G-1): compaction's per-turn summary request also
-// merges additional_params, with no dependency on Agent otherwise.
+// Moved to gents-loop (G-1).
 pub(crate) use gents_loop::compaction::merge_optional_params;
 
 /// Maps the inference profile's reasoning effort into each provider's wire
-/// contract. An absent profile setting injects no reasoning default, except for
-/// ChatGPT Codex: it has a known Responses contract and keeps the `medium`
-/// default it shipped before reasoning effort became profile configuration
-/// (#540).
+/// contract. An absent profile setting injects no reasoning default, except
+/// ChatGPT Codex (#540).
 ///
-/// vLLM's OpenAI-compatible server (with a `--reasoning-parser`, e.g.
-/// `deepseek_v4` on a DeepSeek V4 Flash server) only emits the chain-of-thought in
-/// the response `message.reasoning` field when the request carries
-/// `chat_template_kwargs={"enable_thinking": true}`. Without it the server
-/// defaults thinking OFF and the `reasoning` field is empty, so our harvest
-/// trajectories lose the model's reasoning. That local-only toggle must not be
-/// sent to Responses or OpenRouter endpoints, which use the standard
-/// `reasoning.effort` object instead.
-///
-/// The key is serialized flat into the OpenAI completion body (rig flattens
-/// `additional_params`), so it reaches vLLM as a top-level `chat_template_kwargs`
-/// object — exactly where the server reads it.
+/// vLLM's OpenAI-compatible server only emits chain-of-thought in
+/// `message.reasoning` when the request carries
+/// `chat_template_kwargs={"enable_thinking": true}`; that local-only toggle
+/// must not be sent to Responses or OpenRouter endpoints, which use the
+/// standard `reasoning.effort` object instead. The key is serialized flat into
+/// the OpenAI completion body, so it reaches vLLM as a top-level
+/// `chat_template_kwargs` object — exactly where the server reads it.
 fn reasoning_profile_params(
     kind: BackendProviderKind,
     wire_api: OpenAiWireApi,
     reasoning_effort: Option<ReasoningEffort>,
 ) -> Option<serde_json::Value> {
     let Some(reasoning_effort) = reasoning_effort else {
-        // Codex predates profile-configured reasoning: it has a known Responses
-        // contract and shipped an unconditional `medium`. Profile plumbing may
-        // override that default, never silently drop it (#540). Every other
-        // backend waits for explicit configuration.
+        // Profile plumbing may override Codex's shipped `medium` default,
+        // never silently drop it (#540).
         return matches!(kind, BackendProviderKind::ChatGptCodex).then(|| {
             serde_json::json!({
                 "reasoning": { "effort": ReasoningEffort::Medium.as_str() }
@@ -354,10 +333,8 @@ fn reasoning_profile_params(
         | (BackendProviderKind::ChatGptCodex, _) => Some(serde_json::json!({
             "reasoning": { "effort": reasoning_effort.as_str() }
         })),
-        // Grok: do not force reasoning.effort — several grok models 400 on it.
+        // Grok models 400 on a forced reasoning.effort.
         (BackendProviderKind::XaiGrokOAuth, _) => None,
-        // The Messages serializer admits only supported effort, never arbitrary
-        // extra fields or sampling controls.
         (BackendProviderKind::ClaudeCliSubscription | BackendProviderKind::AnthropicApiKey, _) => {
             Some(serde_json::json!({
             "output_config": { "effort": reasoning_effort.as_str() }
@@ -367,9 +344,8 @@ fn reasoning_profile_params(
 }
 
 /// Whether final rendered provider params explicitly switch reasoning off.
-/// Reads the keys [`reasoning_profile_params`] writes, after every later merge,
-/// so an override of those keys wins. Claude's `output_config.effort` does not
-/// switch thinking off, and Grok receives no effort, so neither counts.
+/// Claude's `output_config.effort` does not switch thinking off, and Grok
+/// receives no effort, so neither counts.
 pub(crate) fn params_disable_reasoning(params: Option<&serde_json::Value>) -> bool {
     let Some(params) = params else {
         return false;
@@ -387,9 +363,8 @@ pub(crate) fn params_disable_reasoning(params: Option<&serde_json::Value>) -> bo
 }
 
 /// xAI retains Responses requests by default, so an API-key backend at its
-/// endpoint asks for `store: false` and, to keep reasoning replayable without
-/// server state, encrypted reasoning, as `patch_store_false` does for the
-/// subscription transport (`PromptAssembly.ResponsesStorage.storage`).
+/// endpoint asks for `store: false` plus encrypted reasoning to keep reasoning
+/// replayable without server state (`PromptAssembly.ResponsesStorage.storage`).
 fn provider_additional_params(
     kind: BackendProviderKind,
     wire: crate::OpenAiWireApi,
@@ -491,7 +466,6 @@ pub(crate) async fn build_compaction_engine(
         "summary profile/backend reference mismatch"
     );
     inference.backend.validate()?;
-    // This is the existing resolved runtime view, not another authored config.
     let mut summary = agent_config.clone();
     let backend = inference.backend.backend_fields();
     summary.backend_id = backend.backend_id;

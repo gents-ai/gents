@@ -8,7 +8,6 @@ use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::path::Path;
 
-/// Displays execution defaults without changing the authored document or a running request.
 pub(super) fn execution_settings(document: Option<&Value>) -> Result<Value> {
     use crate::config::*;
     let mut document = document.cloned().unwrap_or_else(|| {
@@ -139,8 +138,6 @@ impl SelfConfigCore {
             )
             .await?;
             if let Some(tools) = canonical_tools.as_mut() {
-                // The persisted document's root is a stored grant being
-                // re-admitted, not a fresh write.
                 let stored_root = tools.host.as_ref().and_then(|host| host.root.clone());
                 crate::tool_surface::canonicalize_tools_root(
                     tools,

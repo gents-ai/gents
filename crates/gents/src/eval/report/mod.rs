@@ -1,15 +1,6 @@
-//! Pure projections from eval documents to comparable numbers.
-//!
-//! Unfrozen by design. `evidence` is the verdict-to-evidence
-//! projection the optimizer and the operator share; `build` is spec 4a's
-//! versioned report over it. `build`, `compare` and the breakdowns are pure;
-//! `store` is the module's one I/O boundary, loading rows for an owner,
-//! alongside `evidence::load_run_rows`. Reports are derived on
-//! demand and never stored as documents, so a regrade changes a report with
-//! no migration; the loop's `report.json` is an advisory copy for watchers
-//! (`crate::eval::runner::view`), never read back.
-//! `compare` reuses the optimizer's pure statistics so an operator's p-value
-//! is the optimizer's; nothing here reads or writes an optimization document.
+//! Pure projections from eval documents to comparable numbers; reports are
+//! derived on demand and never stored. `compare` reuses the optimizer's pure
+//! statistics so an operator's p-value is the optimizer's.
 
 pub mod breakdown;
 pub mod build;

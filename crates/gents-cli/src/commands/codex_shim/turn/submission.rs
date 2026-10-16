@@ -25,8 +25,6 @@ pub(super) async fn create_agent_request_with_retry(
     .await?;
     let result = submit_prepared_agent_request_committed(&state.graphql, &prepared).await;
     if result.is_err() {
-        // A lost reply can leave committed work. Only the original signed
-        // receipt establishes which physical request this submission owns.
         if let Ok(Some(row)) = matching_prepared_receipt(&state.graphql, &prepared.create).await {
             if let Some(physical) = row.doc_id.as_deref() {
                 if let Err(error) = gents::interrupt_request_by_doc_id(

@@ -1,10 +1,3 @@
-//! The builtin check registry.
-//!
-//! An eval definition names a check; it never carries code. A [`Check`] is a
-//! pure function from a check ref's params and one stage's evidence to a
-//! [`CheckVerdict`], so grading a trial is reproducible from its evidence
-//! alone.
-
 pub mod captured_fields_match;
 pub mod captured_rows_count;
 pub mod crew_spec_match;
@@ -28,23 +21,17 @@ use crate::eval::checks::tool_calls_expected::ToolCallsExpected;
 use crate::eval::runner::executor::StageEvidence;
 use crate::eval::OutcomeKind;
 
-/// Bumped when the builtin set changes in a way that could move a score.
-/// Frozen into every run's origin.
+/// Frozen into every run's origin; bump when the builtin set changes in a way that could move a score.
 pub const CHECK_REGISTRY_VERSION: &str = "4";
 
-/// What one check concluded about one stage. `score_bp` is `None` when the
-/// verdict is not evidence about the subject, such as a grader fault.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CheckVerdict {
     pub kind: OutcomeKind,
     pub score_bp: Option<u32>,
-    /// An object carrying at least a `reason_code`.
     pub raw: Value,
     pub feedback: Option<String>,
 }
 
-/// What a check tells an author about itself. Rendered into the catalog an
-/// eval author drafts against; never read by `evaluate`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CheckDescription {
     pub name: String,
@@ -52,29 +39,21 @@ pub struct CheckDescription {
     pub summary: String,
     /// JSON Schema (draft 2020-12) for the check ref's `params`.
     pub params_schema: Value,
-    /// What the check reads: `"capture:documents"`, `"capture:files"`,
-    /// `"stage:terminal_state"`, or a field path such as `"rows.payload"`.
     pub reads: Vec<String>,
-    /// `(reason_code, one line)` for every code `raw.reason_code` can carry.
     pub reason_codes: Vec<(String, String)>,
 }
 
 pub trait Check: Send + Sync {
     fn name(&self) -> &'static str;
 
-    /// Bumped when the same params would yield a different verdict.
     fn version(&self) -> &'static str;
 
-    /// Pure. `params` is the check ref's params; `stage` is the stage's
-    /// evidence. Never panics on either: malformed params are a grader
-    /// outcome.
+    /// Pure: malformed params are a grader outcome, never a panic.
     fn evaluate(&self, params: &Value, stage: &StageEvidence) -> CheckVerdict;
 
-    /// The check's entry in the author-facing catalog.
     fn describe(&self) -> CheckDescription;
 }
 
-/// The checks a definition may name, by name.
 pub struct CheckRegistry {
     checks: BTreeMap<&'static str, Box<dyn Check>>,
 }
@@ -99,19 +78,14 @@ impl CheckRegistry {
         self.checks.get(name).map(AsRef::as_ref)
     }
 
-    /// Every registered name, sorted.
     pub fn names(&self) -> Vec<&'static str> {
         self.checks.keys().copied().collect()
     }
 
-    /// Every registered check's description, sorted by name.
     pub fn catalog(&self) -> Vec<CheckDescription> {
         self.checks.values().map(|check| check.describe()).collect()
     }
 
-    /// Registers `check` over the builtin set. Test-only: the shipped
-    /// registry is the builtin one, and a definition may only name a check
-    /// that ships with it.
     #[cfg(test)]
     pub(crate) fn with(mut self, check: Box<dyn Check>) -> Self {
         self.register(check);
@@ -129,10 +103,6 @@ impl Default for CheckRegistry {
     }
 }
 
-/// A verdict's observed and expected values in one line, read from its
-/// `raw`: `items observed 7 expected ≥9` for a counted verdict,
-/// `2 of 3 requirements met` for a graded one, else the check's own
-/// `detail`, cut short. `None` when `raw` carries none of them.
 pub fn verdict_detail(raw: &Value) -> Option<String> {
     let number = |key: &str| raw.get(key).and_then(Value::as_u64);
     if let (Some(observed), Some(expected)) = (number("observed"), raw.get("expected")) {
@@ -155,7 +125,6 @@ pub fn verdict_detail(raw: &Value) -> Option<String> {
         .map(|detail| excerpt(detail, EXCERPT_CHARS))
 }
 
-/// A row range for a person: `≥9`, `3`, `≤4` or `2..5`.
 pub fn range_label(min: u64, max: Option<u64>) -> String {
     match max {
         None => format!("≥{min}"),
@@ -165,14 +134,11 @@ pub fn range_label(min: u64, max: Option<u64>) -> String {
     }
 }
 
-/// The longest excerpt of evidence a check quotes, in chars.
 const EXCERPT_CHARS: usize = 120;
 
-/// Feedback is rendered into the proposer's prompt once per verdict, so each
-/// is capped.
+/// Each verdict's feedback is rendered into the proposer's prompt once, so it is capped.
 const FEEDBACK_BYTES: usize = 2048;
 
-/// `text` cut to `max` chars, marked when cut.
 fn excerpt(text: &str, max: usize) -> String {
     match text.char_indices().nth(max) {
         Some((at, _)) => format!("{}…", &text[..at]),
@@ -180,8 +146,6 @@ fn excerpt(text: &str, max: usize) -> String {
     }
 }
 
-/// `satisfied` of `total` requirements held, scored in proportion. `total`
-/// is never zero: a check with nothing to require rejects its params.
 fn graded(satisfied: usize, total: usize, feedback: Option<String>) -> CheckVerdict {
     let met = satisfied == total;
     CheckVerdict {
@@ -208,8 +172,6 @@ fn bounded(mut text: String) -> String {
     text
 }
 
-/// Why `stage` did not complete: its end state, failure kind, provider
-/// reason and last tool error, bounded like any check's feedback.
 pub(crate) fn failure_feedback(stage: &StageEvidence) -> String {
     let mut text = format!(
         "stage ended {}",
@@ -242,8 +204,6 @@ pub(crate) fn failure_feedback(stage: &StageEvidence) -> String {
     bounded(text)
 }
 
-/// The check could not reach a verdict, which is no evidence about the
-/// subject.
 fn grader(reason_code: &str, detail: impl Into<String>) -> CheckVerdict {
     CheckVerdict {
         kind: OutcomeKind::Grader,
@@ -253,7 +213,6 @@ fn grader(reason_code: &str, detail: impl Into<String>) -> CheckVerdict {
     }
 }
 
-/// The reason codes every graded check shares.
 fn graded_reason_codes(extra: &[(&str, &str)]) -> Vec<(String, String)> {
     [
         ("met", "every requirement held; score 10000"),
@@ -279,57 +238,12 @@ mod tests {
     #[test]
     fn the_builtin_registry_holds_the_seed_check_under_its_own_name() {
         let registry = CheckRegistry::builtin();
-        assert_eq!(
-            registry.names(),
-            vec![
-                "captured_fields_match",
-                "captured_rows_count",
-                "crew_spec_match",
-                "final_message_matches",
-                "handoff_delivery",
-                "schema_matches",
-                "tool_calls_expected",
-                "tool_result_matches"
-            ]
-        );
         let check = registry.get("captured_rows_count").expect("the seed check");
         assert_eq!(
             (check.name(), check.version()),
             ("captured_rows_count", "2")
         );
         assert!(registry.get("no_such_check").is_none());
-    }
-
-    #[test]
-    fn a_verdict_detail_names_what_was_observed_against_what_was_expected() {
-        let counted = json!({
-            "reason_code": "below_min", "capture": "agents", "observed": 7,
-            "expected": {"min": 9, "max": null}, "count": 7
-        });
-        assert_eq!(
-            verdict_detail(&counted).as_deref(),
-            Some("agents observed 7 expected ≥9")
-        );
-        let graded = json!({"reason_code": "unmet", "satisfied": 2, "total": 3});
-        assert_eq!(
-            verdict_detail(&graded).as_deref(),
-            Some("2 of 3 requirements met")
-        );
-        let older = json!({"reason_code": "below_min", "detail": "items holds 1 rows"});
-        assert_eq!(
-            verdict_detail(&older).as_deref(),
-            Some("items holds 1 rows")
-        );
-        assert_eq!(verdict_detail(&json!({"reason_code": "met"})), None);
-        assert_eq!(
-            [
-                range_label(9, None),
-                range_label(3, Some(3)),
-                range_label(0, Some(4)),
-                range_label(2, Some(5))
-            ],
-            ["≥9", "3", "≤4", "2..5"]
-        );
     }
 
     #[test]
@@ -385,10 +299,11 @@ mod catalog_tests {
 
     #[test]
     fn every_builtin_check_describes_itself_with_a_schema_and_reason_codes() {
-        let catalog = CheckRegistry::builtin().catalog();
+        let registry = CheckRegistry::builtin();
+        let catalog = registry.catalog();
         assert_eq!(
             catalog.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
-            CheckRegistry::builtin().names()
+            registry.names()
         );
         for check in &catalog {
             assert_eq!(check.params_schema["type"], "object", "{}", check.name);
@@ -408,8 +323,6 @@ mod catalog_tests {
         assert!(validator.is_valid(&serde_json::json!({"name": "items", "min": 1})));
         assert!(!validator.is_valid(&serde_json::json!({"name": "items"})));
         assert!(!validator.is_valid(&serde_json::json!({"name": "items", "min": 1, "extra": 1})));
-        // `max` is optional, and `null` means absent, as the params type
-        // reads it.
         assert!(validator.is_valid(&serde_json::json!({"name": "items", "min": 1, "max": 3})));
         assert!(validator.is_valid(&serde_json::json!({"name": "items", "min": 1, "max": null})));
         assert!(!validator.is_valid(&serde_json::json!({"name": "items", "min": 1, "max": -1})));

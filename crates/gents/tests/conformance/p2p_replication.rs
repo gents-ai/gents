@@ -1,5 +1,3 @@
-//! Physical P2P replication of canonical output and durable peer identity (node identity).
-
 use anyhow::{Context, Result};
 use defra_p2p_adapter::P2pDocumentRequest;
 use gents::config_client::ConfigAccess;
@@ -31,10 +29,6 @@ async fn replicated_output_ordinal_twin_fails_closed_after_physical_p2p_import()
         .expect("replicated ordinal twin must invalidate the original canonical projection");
 }
 
-/// Two connected P2P nodes. Only `Network` has a replicator route: the
-/// exact-document push is sent through the replicator retry guard and returns
-/// Ok without sending when no route exists, while output collections must
-/// arrive only by the explicit push.
 async fn connected_pair() -> Result<(TestDb, TestDb)> {
     let a = test_p2p_db("p2p-replication-a").await;
     let b = test_p2p_db("p2p-replication-b").await;
@@ -113,8 +107,6 @@ async fn push_segment(from: &TestDb, to: &TestDb, doc_id: &str) -> Result<()> {
     }
 }
 
-/// Exercise imported-fact projection only; it does not establish that either
-/// peer could authorize the other's write under a production ACP grant.
 async fn assert_replicated_nonclosing_ordinal_twin_rejected() -> Result<()> {
     use gents::session::canonical_rows::{
         decode_output_segment_row, decode_transcript_message_row, output_segment_create_variables,

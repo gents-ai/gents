@@ -1,8 +1,3 @@
-/* Who ran a session and where: the node's avatar behind, the agent's in
-   front. Each carries its own hover card. The node is looked up from the
-   session's node id, and an agent is named by the node it belongs to. The
-   local node is where work is assumed to be, so only a remote node is shown;
-   a session whose node the client cannot see shows the agent alone too. */
 import { useShallow } from "zustand/react/shallow";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import type { NodeView } from "../../hooks/fleetStore";
@@ -36,17 +31,12 @@ export function NodeAgentStack({
 }) {
   const homeDid = useHomeDid();
   const found = useFleet((state) => nodeOf(state, nodeDid));
-  /* each worker's node, in the workers' order */
   const workersOn = useFleet(
     useShallow((state) => workers.map((w) => nodeOf(state, w.nodeDid))),
   );
   const node = found && !isWorkingNode(found, homeDid) ? found : null;
   const dim = size === "sm" ? "size-5 text-[9px]" : "size-7 text-[11px]";
   const overlap = size === "sm" ? "-ml-1.5" : "-ml-2";
-  /* two marks overlap to read as one; hovering the pair spreads them on a
-     pill so each can be read and hovered on its own */
-  /* one mark per distinct agent the workers use, beyond this one; one
-     per distinct remote node beyond this one; three of each at most */
   const workerAgents = [
     ...new Map(
       workers.flatMap((w, i) =>
@@ -69,27 +59,17 @@ export function NodeAgentStack({
     ),
   ];
   const spread = node !== null || workerAgents.length > 0 || workerNodes.length > 0;
-  /* the order says whose is whose: this session's node and agent lead,
-     then the workers' agents (folded into one count at rest), then any
-     remote node a worker runs on, which always shows since where work runs
-     matters at a glance. Hovering unfolds the agents, and the count stays
-     only for what the cap left out */
   const shownNodes = workerNodes.slice(0, 3);
   const shownAgents = workerAgents.slice(0, 3);
   const leftOut =
     workerNodes.length - shownNodes.length + (workerAgents.length - shownAgents.length);
-  /* folded marks keep a zero-width box rather than leaving the layout: a
-     hover card anchored to one is still closing when the pointer leaves,
-     and an anchor with no box sends it to the page's corner */
-  /* every mark moves with the same curve: width, margin, fade and ring
-     together, so the fold reads as one motion rather than parts popping */
+  // folded marks keep a zero-width box: an anchor with no box sends a closing card to the page's corner
   const motion = "transition-[width,margin,opacity,box-shadow] duration-200 ease-out";
   const foldedAgent = cn(
     "ml-0 w-0 overflow-hidden opacity-0 ring-0",
     size === "sm" ? "group-hover/stack:w-5" : "group-hover/stack:w-7",
     "group-hover/stack:opacity-100 group-hover/stack:ring-2",
   );
-  /* the count folds the other way: there at rest, gone once its marks are out */
   const foldedCount = cn(
     "overflow-hidden",
     leftOut === 0 &&
@@ -105,8 +85,6 @@ export function NodeAgentStack({
   return (
     <span
       className={cn(
-        /* the vertical padding is there at rest too, so the pill never
-           changes the row's height when it appears */
         "group/stack inline-flex shrink-0 items-center rounded-full py-0.5 transition-[padding,background-color] duration-200 ease-out",
         spread &&
           "hover:bg-raised hover:px-1 hover:shadow-xs hover:ring-1 hover:ring-border",

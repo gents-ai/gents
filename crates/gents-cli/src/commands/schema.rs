@@ -99,9 +99,6 @@ pub(crate) struct PackSchemaPhase {
 }
 
 impl PackSchemaPhase {
-    /// Whether the schema phase actually mutated the node. A pack re-applied
-    /// against a converged node reports every file as `already_exists`, which
-    /// must stay a `noop` so idempotency checks can settle.
     pub(crate) fn changed(&self) -> bool {
         self.schema_files
             .iter()
@@ -114,11 +111,9 @@ impl PackSchemaPhase {
 }
 
 /// If `<pack_root>/schemas` exists, apply every SDL/patch under it (same
-/// discovery rules as `gents schema apply`). Returns `None` when the directory
-/// is absent so ordinary agent-config roots stay unchanged.
-///
-/// Scoped to the pack: only `schemas/` under the desired-state root is
-/// considered — never global product schemas.
+/// discovery rules as `gents schema apply`); `None` when the directory is
+/// absent. Scoped to the pack: only `schemas/` under the desired-state root
+/// is considered — never global product schemas.
 pub(crate) async fn apply_pack_schemas_if_present(
     access: &ConfigAccess,
     pack_root: &Path,
@@ -573,7 +568,6 @@ mod pack_schema_tests {
     #[test]
     fn pack_schemas_dir_absent_means_skip() {
         let dir = tempdir().unwrap();
-        // Can't call async without runtime for full apply; discovery path only.
         assert!(!dir.path().join("schemas").is_dir());
     }
 

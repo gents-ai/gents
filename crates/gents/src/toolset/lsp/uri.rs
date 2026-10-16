@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-/// Convert a filesystem path to a `file://` URI with percent-encoding.
 pub fn path_to_file_uri(path: &Path) -> String {
     let abs = if path.is_absolute() {
         path.to_path_buf()
@@ -19,7 +18,6 @@ pub fn path_to_file_uri(path: &Path) -> String {
     uri
 }
 
-/// Parse a `file://` URI into a path. Tolerates unencoded `#`/`?` from lax servers.
 pub fn file_uri_to_path(uri: &str) -> Result<PathBuf, String> {
     if !uri.starts_with("file:") {
         return Err(format!("unsupported URI scheme: {uri}"));

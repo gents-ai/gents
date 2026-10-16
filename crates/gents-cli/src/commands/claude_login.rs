@@ -1,6 +1,5 @@
-//! First-party Claude subscription OAuth login. Tokens are stored as an
-//! `OAuthCredential` document for the node DID, exactly like `codex-login`
-//! and `grok-login`; the `claude` binary is not involved.
+//! First-party Claude subscription OAuth login. The `claude` binary is not
+//! involved.
 
 use std::io::{self, BufRead, Write};
 

@@ -45,8 +45,6 @@ async fn rendered_request_sink_runs_before_provider_stream() {
     );
 }
 
-/// The loop must honor a scripted capture outcome before sending to the provider.
-/// Durable capture semantics are exercised separately against DefraRenderedRequestSink.
 #[tokio::test(start_paused = true)]
 async fn generated_rendered_capture_cases_fence_persist_before_send() {
     let cases = crate::lean_vocab_test::lean_rendered_capture_cases();
@@ -124,22 +122,9 @@ async fn generated_rendered_capture_cases_fence_persist_before_send() {
     }
 }
 
-/// The capture seam must hand the sink the loop's own `attempt` counter and its
-/// own build path, one row per provider attempt.
-///
-/// Two things are fenced here that nothing else fences:
-///
-/// * `attempt` is part of the capture key, so retries must arrive as distinct
-///   attempts within one turn.
-/// * `AssemblyBuildPath` must flip to `Repair` exactly on the attempt that the
-///   `PreStreamDirective::Repair` branch rebuilt with `build_request`. The
-///   final dispatch boundary still recounts and clamps that repaired request.
-///
-/// Both repair injection branches run in this test. One reaches `Repair`
-/// through `model.stream` returning `Err` (`ScriptedCall::FailStream`); the
-/// other reaches it through the first poll of the returned stream failing
-/// (`TurnWithMidStreamError(vec![], …)`). The repair budget is request-wide,
-/// so the branches use independent loop invocations.
+/// `attempt` is part of the capture key and `AssemblyBuildPath` must flip to
+/// `Repair` exactly on the attempt the repair branch rebuilt; both repair
+/// injection branches (`FailStream` and first-poll failure) run here.
 #[tokio::test(start_paused = true)]
 async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
     let poison = format!("bad{}value", '\u{0007}');
@@ -222,10 +207,8 @@ async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
         );
     }
 
-    // Leak 2: the exact tool-result content threaded to the model. Persistence
-    // re-derives this text from `AgentToolCall.result` through a different
-    // truncation mode and limit set, so the trace is the only place the bytes
-    // the model actually saw survive.
+    // Leak 2: the exact tool-result content threaded to the model, which
+    // persistence cannot re-derive.
     let repaired_trace = &captures[3].3;
     let threaded = repaired_trace
         .threaded_tool_results
@@ -300,13 +283,9 @@ async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
     );
 }
 
-/// `repair_provider_input` rewrites `history` and `new_messages` in place, and
-/// both outlive the turn loop, so every turn *after* a repair is assembled from
-/// messages no `AgentMessage` row reproduces. `build_path` resets per turn and
-/// would report `Budgeted` for those turns, so the ephemeral marker is what
-/// stops a reconstructor trusting a list it cannot rebuild.
-///
-/// The repair occurs before another turn so carry-over is observable.
+/// After a repair, `repair_provider_input` rewrites the message vectors in
+/// place, so later turns are assembled from lists no `AgentMessage` row
+/// reproduces; `effective_messages` must carry them.
 #[tokio::test(start_paused = true)]
 async fn a_turn_after_a_repair_still_carries_the_effective_message_list() {
     let poison = format!("bad{}value", '\u{0007}');
@@ -429,11 +408,6 @@ async fn capture_trace_retains_ephemeral_request_context() {
     assert!(effective.iter().any(is_request_context_message));
 }
 
-/// `PreStreamDirective::Repair` is handled in two places: once where
-/// `model.stream` itself returns `Err`, and once where the first poll of the
-/// returned stream fails. Both rebuild with `build_request` and both must
-/// report `Repair`. `ScriptedCall::FailStream` only reaches the first;
-/// `TurnWithMidStreamError(vec![], …)` reaches the second.
 #[tokio::test(start_paused = true)]
 async fn capture_seam_reports_the_repair_build_path_from_the_first_poll_branch() {
     let model = ScriptedModel::new_calls(vec![
@@ -483,20 +457,10 @@ async fn capture_seam_reports_the_repair_build_path_from_the_first_poll_branch()
     );
 }
 
-/// The mis-wired-transport backstop, which nothing else exercises.
-///
-/// The transport is what claims an armed capture and writes the row. A provider
-/// stack assembled without `RenderedRequestCapturingHttpClient` — a new
-/// `BackendProviderKind`, a wrapper inserted below the capture seam, a builder
-/// that forgets it — still streams perfectly well; the only observable trace is
-/// that the arm is still pending when the first stream item arrives (or at EOF
-/// when the provider yields no item, so the item-level check is never reached
-/// and the loop cannot misclassify an uncaptured send as an ordinary empty
-/// completion). Deleting the check at that point would otherwise pass the
-/// entire suite while every turn on that backend went uncaptured.
-///
-/// `ScriptedModel` stands in for exactly that mis-wiring: it answers the loop
-/// without ever claiming the pending capture.
+/// The mis-wired-transport backstop, which nothing else exercises: a provider
+/// stack without `RenderedRequestCapturingHttpClient` still streams, so an
+/// armed capture left pending when the first stream item arrives (or at EOF)
+/// must fail the turn. `ScriptedModel` stands in for exactly that mis-wiring.
 #[tokio::test(start_paused = true)]
 async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
     use crate::rendered_request::scope::{scope_request, test_scope, CaptureScopeKind};
@@ -600,9 +564,8 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
         let sink = DefraRenderedRequestSink::new(node.clone());
 
         // The model's canonical request is opaque; equal values mean equal
-        // canonical JSON. One witness value per modeled request keeps that
-        // equality exact, including the case where a delivery must NOT be
-        // idempotent (witness 100 vs 101 in the generated rows).
+        // canonical JSON, so one witness value per modeled request keeps
+        // equality exact.
         let rendered_for_witness =
             |witness: u64| -> crate::rendered_request::RenderedCompletionRequest {
                 let node_did = format!("did:key:z6Mk-sink-{}", case.node_did);
@@ -654,8 +617,7 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
                 }
             };
 
-        // Seed the prior binding through the same sink: the model's store is
-        // built by captures, never by fixture writes.
+        // Seed the prior binding through the same sink, never by fixture writes.
         if let Some(prior) = case.prior_binding {
             sink.capture(rendered_for_witness(prior))
                 .await

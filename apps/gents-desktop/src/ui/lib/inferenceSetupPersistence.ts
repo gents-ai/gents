@@ -33,7 +33,6 @@ export function buildInferenceSetupPlan({
   provider: InferenceProviderId;
   apiKey: string;
   oauth: boolean;
-  /** which of the provider's accounts a sign-in backend runs on; null, the original */
   accountRef?: string | null;
   discovery: InferenceDiscoveryResult;
   model: string;

@@ -9,8 +9,6 @@ fn queue_input(queue: RequestQueue) -> RequestInput {
 
 #[test]
 fn rejects_noncanonical_queue_source_on_decode() {
-    // The canonical RequestQueue enum has no `subagent_completion` source;
-    // a row decoded with it must fail rather than pass through.
     let decoded: Result<gents_protocol::row::AgentRequestRow, _> =
         serde_json::from_value(serde_json::json!({
             "request_id": "req-1",

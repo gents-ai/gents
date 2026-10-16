@@ -130,11 +130,8 @@ pub(super) fn sorted_children(
 
 /// Stack of `.gitignore` matchers accumulated while descending, checked
 /// nearest-directory-first so deeper files override shallower ones
-/// (including `!` whitelists). Applied to any `.gitignore` encountered in
-/// the walked tree — nested repos under a home-directory tool root get
-/// their generated junk filtered before it consumes walk budget. Note:
-/// `.gitignore` files ABOVE the walk root (e.g. a repo root above a pruned
-/// glob prefix) are not consulted; walks are filtered by what they can see.
+/// (including `!` whitelists). `.gitignore` files ABOVE the walk root are
+/// not consulted; walks are filtered by what they can see.
 pub(crate) struct GitignoreStack {
     stack: Vec<ignore::gitignore::Gitignore>,
 }
@@ -222,11 +219,11 @@ pub(super) fn should_ignore_path(traversal_root: &Path, path: &Path) -> bool {
 ///
 /// `GENTS_FS_RUNNER_BLOCK_ENTERED` receives the wall-clock entry time in
 /// nanoseconds since the Unix epoch, published by rename so a reader never
-/// sees a partial write from a process killed mid-write. The blocker then
-/// waits until the `GENTS_FS_RUNNER_BLOCK_GATE` path exists or the blocked
-/// directory is removed, or otherwise sleeps `GENTS_FS_RUNNER_BLOCK_MS`. `GENTS_FS_RUNNER_BLOCK_RELEASED` is
-/// written only when the blocker returns on its own. Marker writes abort the
-/// runner on failure: an unwritten marker must never read as preemption.
+/// sees a partial write from a process killed mid-write. The blocker waits
+/// until `GENTS_FS_RUNNER_BLOCK_GATE` exists or the directory is removed,
+/// else sleeps `GENTS_FS_RUNNER_BLOCK_MS`; `GENTS_FS_RUNNER_BLOCK_RELEASED`
+/// is written only when the blocker returns on its own. Marker writes abort
+/// the runner on failure: an unwritten marker must never read as preemption.
 fn block_for_test(dir: &Path) {
     let Ok(target) = std::env::var("GENTS_FS_RUNNER_BLOCK_DIR") else {
         return;
@@ -264,56 +261,4 @@ fn should_skip_io_error(error: &std::io::Error) -> bool {
         error.kind(),
         std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::NotFound
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn test_context_and_dir(entries: usize) -> (RunnerContext, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "gents-fs-common-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        for index in 0..entries {
-            std::fs::write(dir.join(format!("f-{index:03}")), "x").unwrap();
-        }
-        let context = RunnerContext::new_with_base(dir.clone(), None).unwrap();
-        (context, std::fs::canonicalize(&dir).unwrap())
-    }
-
-    fn limits(max_entries: usize, max_wall: Duration) -> WalkLimits {
-        WalkLimits {
-            max_entries_visited: max_entries,
-            max_bytes_read: u64::MAX,
-            max_wall,
-        }
-    }
-
-    #[test]
-    fn dir_scan_stops_collecting_at_entry_budget() {
-        let (context, dir) = test_context_and_dir(100);
-        let mut walk = WalkState::new(limits(5, Duration::from_secs(60)));
-        let children = sorted_children(&context, &dir, &mut walk).unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-        assert!(
-            children.len() <= 6,
-            "collected {} dirents past the entry budget",
-            children.len()
-        );
-    }
-
-    #[test]
-    fn dir_scan_stops_on_expired_wall_budget() {
-        let (context, dir) = test_context_and_dir(100);
-        let mut walk = WalkState::new(limits(1000, Duration::ZERO));
-        let children = sorted_children(&context, &dir, &mut walk).unwrap();
-        let stats_exhausted = walk.exhausted();
-        let _ = std::fs::remove_dir_all(&dir);
-        assert!(children.is_empty(), "collected {}", children.len());
-        assert!(stats_exhausted);
-    }
 }

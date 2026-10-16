@@ -16,10 +16,6 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
             "{} should cite terminal coherence",
             case.witness
         );
-        // `is_superseded` is an independent observation input, not a derived
-        // alias for the lifecycle state. The model exercises both a superseded
-        // lifecycle with no override and a processing lifecycle with one.
-        // Compare their native projection below, without rewriting either input.
         if case.local_interrupt_acked {
             assert!(
                 case.interruptible_request_state,
@@ -39,11 +35,6 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
                 case.witness
             );
         } else {
-            // The exported phase must agree with the canonical client
-            // projection (`gents_protocol::client_protocol`), which owns
-            // `deriveAttempt`/`ClientTurnState` in Rust. The local-interrupt
-            // override is shim-specific and is checked by the dedicated
-            // witnesses below.
             let head = gents_protocol::client_protocol::project_persisted_attempt(
                 &case.request_state,
                 case.is_superseded,
@@ -292,8 +283,7 @@ pub(super) fn generated_codex_shim_binding_cases_pin_runnable_gated_binding() {
             case.witness
         );
 
-        // Re-observing the same generation must change nothing
-        // (CodexShim.Binding.Shim.observePublish_idempotent).
+        // CodexShim.Binding.Shim.observePublish_idempotent.
         let settled = shim.clone();
         shim.observe_publish(runnable.iter().copied(), || host_can_listen);
         assert_eq!(

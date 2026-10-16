@@ -1,14 +1,9 @@
 import Proofs.Triggers.Groups
 import Proofs.Callback.Properties
 
-/-! One durable event-group clock serves both consumer kinds. Callback input
-lives on the existing invocation, whose transitions preserve the captured value.
-Projected input is opaque here; projection/JSON encoding has its existing owner. -/
 namespace EventDelivery.Group
 open Triggers.Groups
 
-/-- Durable row projection. The identity carries owner, typed consumer,
-configuration and correlation; firstSeen is never rewritten. -/
 structure EventGroupState where
   key : EventGroupKey
   firstSeen : Nat
@@ -33,9 +28,8 @@ theorem quiesce_once (s : EventGroupState) (first later : Nat) :
     (s.quiesce first).quiesce later = s.quiesce first := by
   cases h : s.quiescedAt <;> simp [EventGroupState.quiesce, h]
 
-/-- Capture the caller's already ordered/projected input on the existing callback
-invocation. Quiescence marks an invalid group, not sealed input; it prevents
-delivery even if current membership would otherwise be eligible. -/
+/-- Quiescence marks an invalid group, not sealed input; it prevents delivery
+even if current membership would otherwise be eligible. -/
 def captureCallback (group : EventGroupState) (candidate : Candidate)
     (invocationId input : String) : Option CallbackInvocation :=
   if group.quiescedAt.isNone && candidate.eligible && decide (candidate.key = group.key) then
@@ -65,8 +59,6 @@ theorem capture_binds_eligible_group_and_input (group : EventGroupState)
       exact ⟨hg.1, hg.2.1, hg.2.2, rfl, rfl, rfl⟩
   · contradiction
 
-/-- All existing lifecycle continuations keep the sealed payload and origin;
-changing source documents is not an input to any transition. -/
 theorem captured_input_survives_execution {pre post : CallbackInvocation}
     (h : Relation.ReflTransGen CallbackInvocation.Transition pre post) :
     post.input = pre.input ∧ post.originGroupKey = pre.originGroupKey := by

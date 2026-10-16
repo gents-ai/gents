@@ -34,7 +34,6 @@ fn pending_user_turn_cases_match_lean_table() {
                 runtime_control: false,
             });
         }
-        /* a retired request is checked in both ways its author retires it */
         let rows = if case.retired_by_author {
             vec![
                 (

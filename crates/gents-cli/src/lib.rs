@@ -7,11 +7,9 @@ use clap::Parser;
 use gents::defra_node::NodeBuilder;
 use serde::de::DeserializeOwned;
 
-/// The account remove and usage read the desktop shares with `gents accounts`.
 pub mod accounts {
     pub use crate::commands::accounts::{remove_account, request_usage_reads, UsageReads};
 }
-/// Authenticated enrollment offer issuance shared by native server hosts.
 pub mod enrollment {
     pub use crate::http::enrollment::{
         ensure_enrollment_network, EnrollmentOfferIssuer, EnrollmentOfferStatus,
@@ -551,9 +549,7 @@ async fn http_send_bytes(request: reqwest::RequestBuilder) -> Result<(reqwest::U
     Ok((url, body.to_vec()))
 }
 
-/// Opens the control plane a command reads and writes: the running server's
-/// GraphQL endpoint, or the home's own store as an embedded node claimed for
-/// as long as the returned access lives.
+/// Opens the control plane: the running server's GraphQL endpoint, or the home's own store claimed for the access's lifetime.
 pub(crate) async fn resolve_config_access(
     home: Option<&Path>,
     explicit_graphql: Option<&str>,
@@ -595,8 +591,6 @@ pub(crate) async fn resolve_config_access(
     Ok((access, home_dir))
 }
 
-/// The builder for an initialized home's store at `data_dir`, encrypted with
-/// the key the home recorded.
 pub(crate) async fn persistent_node_builder(
     home_dir: &Path,
     data_dir: &Path,
@@ -640,16 +634,15 @@ pub(crate) fn normalize_optional_string(value: Option<&str>) -> Option<String> {
 
 /// Removes everything under the resolved home `home` except `keep` (the held
 /// store lock), so a runtime cannot take the store while it is wiped. `home`
-/// must come from [`overwritable_home`]; every removal stays under it.
+/// must come from [`overwritable_home`].
 pub(crate) fn dangerously_overwrite_home(home: &Path, keep: &Path) -> Result<()> {
     remove_tree_except(home, keep)
         .with_context(|| format!("dangerously overwriting {}", home.display()))
 }
 
 /// Resolves the directory an overwrite of `home_dir` would wipe, through
-/// every symlink and `.`/`..` alias, and refuses the filesystem root, the
-/// user home and any ancestor of it. An unknown user home is refused, not
-/// skipped. `None` when the home does not exist.
+/// every symlink and `.`/`..` alias, and refuses the filesystem root and any
+/// ancestor of the user home. `None` when the home does not exist.
 pub(crate) fn overwritable_home(
     home_dir: &Path,
     user_home: Option<&Path>,
@@ -792,8 +785,6 @@ mod tests {
         assert!(!data.join("MANIFEST").exists(), "the store is never opened");
     }
 
-    /// An initialized home: the signing key and `init.json` every
-    /// embedded-node entry point requires before it will open the store.
     fn initialized_home(temp: &Path) -> PathBuf {
         let home = temp.join("home");
         let key_path = default_key_path(&home, "default");
@@ -856,8 +847,6 @@ mod tests {
 
         drop(access);
         assert_eq!(node.strong_count(), 0, "the access held the only node");
-        // The backend refuses a store still open in this process, so reopening
-        // proves the node closed as well as the claim released.
         let (reopened, _) = resolve_config_access(Some(&home), None)
             .await
             .expect("a dropped access releases the store");
@@ -897,9 +886,6 @@ mod tests {
 
     #[test]
     fn default_codex_remote_matches_shim_port() {
-        // serve.rs decides whether to print a --remote hint by comparing the
-        // formatted shim URL against DEFAULT_CODEX_REMOTE; the two constants
-        // must agree byte-for-byte.
         assert_eq!(
             DEFAULT_CODEX_REMOTE,
             format!("ws://127.0.0.1:{DEFAULT_CODEX_SHIM_PORT}/")

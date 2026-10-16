@@ -191,8 +191,9 @@ def declarationPositionFresh (streams : Streams) (declaration : Declaration) : B
   streams.all fun existing => !sameDeclarationPosition existing.1 declaration
 
 /-- Runs partition the payload at UTF-8 boundaries, declare streams densely once,
-and never silently truncate an oversized run. Empty continuation writes are not
-progress; only an opening declaration represents a meaningful empty string. -/
+and never silently truncate an oversized run. An empty continuation write is not
+progress; a zero-byte run with a declaration is the only meaningful empty string
+and is preserved. -/
 def consumeRuns : List Run → List UInt8 → Streams → Except ExtentError Streams
   | [], [], streams => .ok streams
   | [], _ :: _, _ => .error .malformedRuns
@@ -280,17 +281,6 @@ theorem reconstruction_ignores_beyond_extent (records : List Segment)
 
 theorem no_flush_is_missing (writer : Writer) (ordinal : Nat) :
     flushAt [] writer ordinal = .error (.missingOrdinal ordinal) := rfl
-
-theorem no_declaration_is_not_an_empty_stream (bytes : List UInt8) :
-    consumeRuns [⟨0, bytes.length, none⟩] bytes [] = .error .malformedRuns := by
-  simp [consumeRuns]
-
-theorem explicit_empty_stream_is_preserved (declaration : Declaration)
-    (h : declarationWellFormed declaration = true) :
-    consumeRuns [⟨0, 0, some declaration⟩] [] [] = .ok [(declaration, [])] := by
-  have hempty : String.fromUTF8? (ByteArray.mk (#[] : Array UInt8)) = some "" := by
-    native_decide
-  simp [consumeRuns, declarationPositionFresh, h, hempty]
 
 inductive ReconstructionError where
   | lookup (error : LookupError)

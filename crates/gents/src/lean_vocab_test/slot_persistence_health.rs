@@ -159,7 +159,6 @@ pub(crate) struct LeanManagedExecLivenessCase {
     pub(crate) kill_signal_required: bool,
 }
 
-/// Host stop verdict witness (Lean `ManagedExec.Ownership`).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanProcessStopCase {
@@ -219,17 +218,9 @@ pub(crate) struct LeanMcpHealthCase {
     pub(crate) threshold_k: usize,
     pub(crate) next_state: Option<String>,
     pub(crate) next_count: Option<usize>,
-    /// Lean `healthProjection` of the surviving state. The Rust owner of this
-    /// mapping is `gents_protocol::tool_service_health::ToolServiceHealthState::project`.
     pub(crate) rust_projection: Option<String>,
 }
 
-/// Generated witness for `Proofs.BackendHealth.step` (#640): the scheduled
-/// inference-backend prober's per-runtime hysteresis machine. Unlike
-/// `LeanMcpHealthCase` the machine is total (no removal), so `next_state` /
-/// `next_count` are non-optional, and each row carries the `blocks_routing`
-/// projection of the next state (the routing veto the admission merge
-/// consumes).
 #[derive(Debug, Deserialize)]
 pub(crate) struct LeanBackendHealthCase {
     pub(crate) name: String,
@@ -239,9 +230,6 @@ pub(crate) struct LeanBackendHealthCase {
     pub(crate) threshold_k: usize,
     pub(crate) next_state: String,
     pub(crate) next_count: usize,
-    /// Lean `blocksRouting` of the next state. The Rust owner of the veto is
-    /// `gents::BackendHealthState::blocks_routing`; the admission merge
-    /// consumes the vetoed set at request admission time (#640).
     pub(crate) blocks_routing: bool,
 }
 

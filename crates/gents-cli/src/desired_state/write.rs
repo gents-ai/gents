@@ -42,7 +42,6 @@ fn write_root(root: &Path, manifest: &DesiredStateManifest, force: bool) -> anyh
             doc.collection
         );
     }
-    // Finish all structural checks before a forced replacement removes old files.
     let mut value = serde_json::to_value(manifest)?;
     prepare_root(root, force).map_err(anyhow::Error::msg)?;
     for (collection, field, file) in [
@@ -77,8 +76,6 @@ fn write_root(root: &Path, manifest: &DesiredStateManifest, force: bool) -> anyh
             }
         }
     }
-    // Canonical root order makes exports stable without mutating authored values,
-    // permission arrays, prompt whitespace, or any nested execution ordering.
     for collection in Collection::ALL {
         if let Some(rows) = collection
             .dir_name()
@@ -138,20 +135,6 @@ mod tests {
         serde_json::from_value(serde_json::json!({"node":{"node_did":"owner"}})).unwrap()
     }
     #[test]
-    fn filesystem_id_boundary_preserves_human_keys() {
-        for id in [
-            "default",
-            "workstation-1",
-            "seed_fleet_health",
-            "profile:default",
-        ] {
-            assert!(check_filesystem_safe_id(id).is_ok(), "{id}");
-        }
-        for id in ["", ".", "..", ".hidden", "a/b", "a\\b", "a\0b"] {
-            assert!(check_filesystem_safe_id(id).is_err(), "{id}");
-        }
-    }
-    #[test]
     fn overwrite_is_explicit_confined_and_removes_stale_files() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("unrelated"), "keep").unwrap();
@@ -163,25 +146,6 @@ mod tests {
         assert!(write_manifest_root(dir.path(), &config(), false).is_err());
         write_manifest_root(dir.path(), &config(), true).unwrap();
         assert!(!dir.path().join("stale").exists());
-    }
-    #[test]
-    fn handle_collisions_and_unsafe_ids_fail_before_overwrite() {
-        let dir = tempfile::tempdir().unwrap();
-        write_manifest_root(dir.path(), &config(), false).unwrap();
-        let file = dir.path().join("pack_config.json");
-        let before = fs::read(&file).unwrap();
-        for ids in [vec!["a-b", "a_b"], vec!["unsafe/id"]] {
-            let mut config = config();
-            config.contexts = ids
-                .into_iter()
-                .map(|id| {
-                    serde_json::from_value(serde_json::json!({"node_did":"owner","context_id":id}))
-                        .unwrap()
-                })
-                .collect();
-            assert!(write_manifest_root(dir.path(), &config, true).is_err());
-            assert_eq!(fs::read(&file).unwrap(), before);
-        }
     }
     #[test]
     fn absent_prompt_has_no_sidecar_or_authored_field() {

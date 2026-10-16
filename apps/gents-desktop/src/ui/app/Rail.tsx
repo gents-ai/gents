@@ -54,9 +54,6 @@ function RailItem({
   );
 }
 
-/* The selected node: its avatar opens its configuration, with a card on
-   hover. With no node selected the slot says so and goes to the Nodes list,
-   as the panel's does. */
 function RailNode({ route }: { route: Route }) {
   const node = useSelectedNode();
   const online = useOnline();
@@ -96,12 +93,8 @@ function RailNode({ route }: { route: Route }) {
   );
 }
 
-/* The rail's sync chip is one control in both of the rail's states: the
-   dot while the rail stands alone, and the same button widened into the
-   panel's row form, drawn over the hover flyout's foot, while the flyout
-   is open. One element, so nothing swaps under a pointer that opened the
-   flyout on its way to it. The standing panel and the phone sheet draw
-   their own row; no rail dot exists beside those. */
+// One element for both rail states, so nothing swaps under a pointer that
+// opened the flyout on its way to it.
 function RailSyncDot() {
   const flyoutOpen = useContext(FlyoutOpenContext);
   const syncHealth = useSyncHealth();
@@ -110,8 +103,6 @@ function RailSyncDot() {
       <div
         className={cn(
           "absolute top-0 left-0 z-40",
-          /* the flyout sits 8px in with 12px row margins: 20px from the
-             rail's edge, 6px right of the dot's own slot */
           flyoutOpen ? "left-[6px] w-[16.5rem]" : "w-7",
         )}
       >
@@ -154,8 +145,6 @@ export function Rail({ route, settings }: { route: Route; settings: ReactNode })
       >
         <ScrollText className="size-4" />
       </RailItem>
-      {/* 17px: the flyout's 8px inset, its 8px padding and its 1px border, so
-          the foot's items sit exactly where the panel draws them */}
       <div className="mt-auto flex flex-col items-center gap-1 pb-[17px]">
         <RailSyncDot />
         <div className="h-px w-8 bg-border" />

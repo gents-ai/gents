@@ -1,20 +1,12 @@
-//! Output budget of a host command tool, resolved from the owning behavior's
-//! current Tools document when a result is presented.
-//!
 //! Presentation owners (interrupted-call delivery, background completion
 //! notices) run after the dispatching behavior's in-memory tool surface may be
 //! gone — across a restart or a reconfiguration — so they resolve the budget
-//! from configuration instead of from the call. The mapping from a document to
-//! budgets is `ResolvedToolSelection::command_output_limits`, the same one
-//! foreground tools are built from.
+//! from configuration instead of from the call.
 
 use defra_node::EmbeddedNode;
 
 use super::selection::CommandOutputLimits;
 
-/// Budget for `tool_name` under a resolved selection: `host.bash` for the bash
-/// tools (including their `spawn_process` runs), `host.cli[name]` for CLI
-/// tools, and the default command budget for every other tool.
 pub(crate) fn budget_for_tool(limits: &CommandOutputLimits, tool_name: &str) -> usize {
     let configured = if crate::toolset::is_bash_tool_name(tool_name) {
         limits.bash
@@ -25,8 +17,8 @@ pub(crate) fn budget_for_tool(limits: &CommandOutputLimits, tool_name: &str) -> 
 }
 
 /// Budget for `tool_name` as configured now for `agent_id` under its owner
-/// `node_did`. A behavior, context or Tools document that no longer resolves
-/// falls back to the default: presentation must never fail on configuration.
+/// `node_did`; a document that no longer resolves falls back to the default so
+/// presentation never fails on configuration.
 pub(crate) async fn configured_output_budget(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,

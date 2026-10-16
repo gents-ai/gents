@@ -6,11 +6,8 @@ use anyhow::{bail, Context, Result};
 use crypto::Key;
 use identity::RawIdentity;
 
-/// An existing identity key that group or other users can access. It is
-/// refused, never repaired: a key that was readable by others may already
-/// be exposed, so loading it (or tightening its mode in place) would keep
-/// using a possibly compromised identity. Typed so hosts can route the
-/// refusal (for example to a fresh start) instead of matching its message.
+/// Refused, never repaired: a key others could read may already be exposed.
+/// Typed so hosts can route the refusal instead of matching its message.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("identity key {} has insecure permissions {mode:o}; remove group/other access before loading it", path.display())]
 pub struct InsecureKeyPermissions {
@@ -18,17 +15,16 @@ pub struct InsecureKeyPermissions {
     pub mode: u32,
 }
 
-/// Loads an existing file-backed Ed25519 identity without creating a key or
-/// directory. On Unix the opened inode must be a regular file inaccessible to
-/// group and other users; a symlink is never followed.
+/// Loads an existing file-backed Ed25519 identity without creating a key.
+/// The opened inode must be a regular file inaccessible to group and other
+/// users; a symlink is never followed.
 pub fn load_file_identity(path: &Path) -> Result<RawIdentity> {
     read_existing(path)?
         .ok_or_else(|| anyhow::anyhow!("identity key does not exist at {}", path.display()))
 }
 
-/// Creates a private file-backed Ed25519 identity only when no key exists.
-/// The key is published complete and without replacing a concurrent winner;
-/// concurrent creators all adopt the same validated winning identity.
+/// Creates the identity only when no key exists. Concurrent creators all
+/// adopt the same validated winning identity; a published key is never replaced.
 pub fn load_or_create_file_identity(path: &Path) -> Result<RawIdentity> {
     if let Some(identity) = read_existing(path)? {
         return Ok(identity);
@@ -45,9 +41,7 @@ pub fn load_or_create_file_identity(path: &Path) -> Result<RawIdentity> {
     }
 }
 
-/// Publishes `bytes` complete at `path` with owner-only access, creating a
-/// private parent directory. Never replaces an existing file: `Ok(false)`
-/// reports that another writer's file is already there.
+/// Never replaces an existing file: `Ok(false)` reports another writer won.
 pub(crate) fn publish_private_key_file(path: &Path, bytes: &[u8]) -> Result<bool> {
     let parent = path
         .parent()
@@ -96,9 +90,8 @@ fn read_existing(path: &Path) -> Result<Option<RawIdentity>> {
         .map(Some)
 }
 
-/// Reads an existing owner-only key file without following a symlink;
-/// `None` when it does not exist. A key group or other users can access is
-/// refused as [`InsecureKeyPermissions`].
+/// Reads an owner-only key file without following a symlink; `None` when
+/// absent. Group/other access is refused as [`InsecureKeyPermissions`].
 pub(crate) fn read_private_key_file(path: &Path) -> Result<Option<Vec<u8>>> {
     let mut options = OpenOptions::new();
     options.read(true);
@@ -302,7 +295,6 @@ mod tests {
 
         let fifo = root.path().join("fifo.key");
         let name = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
-        // The pathname is NUL-terminated and remains alive for this call.
         let created = unsafe { libc::mkfifo(name.as_ptr(), 0o600) };
         assert_eq!(created, 0, "{}", std::io::Error::last_os_error());
         assert!(load_file_identity(&fifo).is_err());

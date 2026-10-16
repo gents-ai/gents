@@ -14,7 +14,6 @@ const node = (nodeDid: string, sessionIds: string[]) =>
     mailboxItems: [],
   }) as unknown as DeploymentView;
 
-/* the route's owner over nodes a (session a-1) and b (session b-1) */
 function routeOwner(initial = { nodeDid: "a", sessionId: "a-1" as string | null }) {
   const stores = shellStores({
     deployments: [node("a", ["a-1"]), node("b", ["b-1"])],
@@ -29,7 +28,6 @@ describe("following the route", () => {
     const { store, route } = routeOwner();
     route.followRoute("b-1");
     expect(store.getState()).toMatchObject({ nodeDid: "b", sessionId: "b-1" });
-    /* a snapshot landing afterwards changes nothing */
     const intent = store.getState().intent;
     route.followRoute("b-1", true);
     expect(store.getState().intent).toBe(intent);

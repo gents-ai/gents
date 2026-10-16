@@ -2,9 +2,6 @@ import Proofs.Session.Management
 
 namespace SessionQueue.InputEdit
 
-/-- Facts come from existing signature, enrollment, applied-route and session
-owners. A command without a peer route is local and requires requester=node;
-remote commands require the exact fresh enrollment and applied peer route. -/
 structure Authority where
   signatureValid : Bool
   replacementsValid : Bool
@@ -14,8 +11,7 @@ structure Authority where
   routeApplied : Bool
   /-- All physical command documents have been observed without relying on a unique
   index winner. Distinct documents sharing the command ID fail closed even for identical
-  signed intents, and even when
-  one already carries a valid receipt; committed effects are never undone. -/
+  signed intents, and committed effects are never undone. -/
   commandIdentityUnique : Bool := true
   deriving DecidableEq, Repr
 
@@ -44,10 +40,6 @@ structure Receipt where
   requestIds : List RequestId
   deriving DecidableEq, Repr
 
-/-- The client keeps the authenticated command result separate from whether its
-local projection has caught up. `receiveValidatedReceipt` is downstream of the
-native signature and command checks; a later read failure cannot rewrite that
-already-observed result. -/
 structure ClientObservation where
   commandOutcome : Outcome
   projectionFresh : Bool
@@ -74,7 +66,6 @@ def authorized (a : Authority) (c : Command) (now : Nat) : Bool :=
   a.signatureValid && a.replacementsValid && a.sessionOwned && decide (now < c.expiresAt) &&
   if c.hasPeer then a.enrollmentFresh && a.routeApplied else a.requesterIsNode
 
-/-- The queue holds the request in any position: active, selected, pending or terminal. -/
 def recorded (q : SessionQueueState) (id : RequestId) : Prop :=
   q.active = some id ∨ id ∈ q.terminal ∨ id ∈ (q.folding ++ q.pending).map (·.requestId)
 
@@ -82,9 +73,6 @@ instance (q : SessionQueueState) (id : RequestId) : Decidable (recorded q id) :=
   unfold recorded
   infer_instance
 
-/-- Replacement request IDs are presigned by the command author and admitted only
-by this command, so their presence witnesses its committed effect even when its
-receipt is missing or unverifiable. A cancellation has no such witness. -/
 def effectsApplied (q : SessionQueueState) (c : Command) : Bool :=
   !c.replacements.isEmpty && c.replacements.all (fun e => decide (recorded q e.requestId))
 
@@ -93,11 +81,8 @@ def appliedReceipt (c : Command) : Receipt :=
 
 def rejectedReceipt (c : Command) : Receipt := ⟨c.id, c.digest, .rejected, []⟩
 
-/-- An invalid author signature is rejected before anything else: the effect witness
-is public replacement data, so copying it must not earn an applied receipt.
-Replica clocks skew, so a command issued after the runtime's clock is left
-undecided and reconsidered later; a future issuance must not become a permanent
-signed rejection. Only reaching `expiresAt` rejects it. -/
+/-- Replica clocks skew, so a command issued after the runtime's clock is left
+undecided; only reaching `expiresAt` rejects it. -/
 def decideFresh (target : AgentSession.Scope) (now : Nat) (a : Authority)
     (c : Command) (s : State) : State × Option Receipt :=
   if !a.signatureValid then
@@ -112,10 +97,6 @@ def decideFresh (target : AgentSession.Scope) (now : Nat) (a : Authority)
     | some queue => (⟨queue, s.receipts ++ [appliedReceipt c]⟩, some (appliedReceipt c))
     | none => ({ s with receipts := s.receipts ++ [rejectedReceipt c] }, some (rejectedReceipt c))
 
-/-- Queue mutation and runtime-signed terminal receipt commit in one transaction.
-The digest denotes the full signed intent. Exact replay returns the recorded
-outcome without reapplying or reevaluating expiry; ID reuse with different
-signed content is rejected without replacing the original receipt. -/
 def apply (target : AgentSession.Scope) (now : Nat) (a : Authority)
     (c : Command) (s : State) : State × Option Receipt :=
   if !a.commandIdentityUnique then (s, none) else
@@ -186,7 +167,6 @@ theorem future_issuance_is_deferred (target : AgentSession.Scope) (now : Nat)
   by_cases hu : a.commandIdentityUnique <;>
     simp [apply, hu, h_new, decideFresh, h_sig, h_effects, h_future]
 
-/-- A rejected or unauthorized command leaves the queue exactly as it was. -/
 theorem rejection_preserves_queue (target : AgentSession.Scope) (now : Nat)
     (a : Authority) (c : Command) (s : State)
     (h : (apply target now a c s).2.map (·.outcome) ≠ some .applied) :
@@ -242,7 +222,6 @@ theorem apply_preserves_receipts_unique (target : AgentSession.Scope) (now : Nat
     have := List.find?_eq_none.mp h_none w hw
     simp_all
 
-/-- A recorded outcome is final: no later processing replaces or adds a receipt for it. -/
 theorem recorded_receipt_is_final (target : AgentSession.Scope) (now : Nat)
     (a : Authority) (c : Command) (s : State) (id : Nat) (r : Receipt)
     (h : s.receipts.find? (fun r => r.commandId == id) = some r) :
@@ -292,7 +271,6 @@ private theorem drained_or_kept (source : QueueSource) (key : Option QueueKey)
           · exact Or.inl (List.mem_cons_of_mem _ h)
           · exact Or.inr h
 
-/-- An idle queue holds no selection: only an active claim selects input. -/
 def IdleUnselected (q : SessionQueueState) : Prop := q.active = none → q.folding = []
 
 theorem managed_step_preserves_idleUnselected {pre post : SessionQueueState}
@@ -331,7 +309,6 @@ theorem managed_step_preserves_idleUnselected {pre post : SessionQueueState}
         rfl
       · contradiction
 
-/-- A request the queue holds is never forgotten by any managed step. -/
 theorem managed_step_preserves_recorded {pre post : SessionQueueState} {id : RequestId}
     (h_step : ManagedStep pre post) (h_idle : IdleUnselected pre) (h : recorded pre id) :
     recorded post id := by
@@ -456,7 +433,6 @@ theorem managed_trace_preserves_recorded {pre post : SessionQueueState} {id : Re
       exact ⟨managed_step_preserves_idleUnselected h_step ih.1,
         managed_step_preserves_recorded h_step ih.1 ih.2⟩
 
-/-- Processing a command is either a no-op on the queue or one managed replacement step. -/
 theorem apply_queue_step (target : AgentSession.Scope) (now : Nat) (a : Authority)
     (c : Command) (s : State) :
     (apply target now a c s).1.queue = s.queue ∨ ManagedStep s.queue (apply target now a c s).1.queue := by
@@ -469,8 +445,6 @@ theorem apply_queue_step (target : AgentSession.Scope) (now : Nat) (a : Authorit
     · exact Or.inr (ManagedStep.replace hq)
     · exact Or.inl rfl
 
-/-- Once a command's replacements are admitted, reprocessing it after any later
-queue history, expiry or loss of its receipt yields the same applied receipt. -/
 theorem once_applied_stays_applied (target target' : AgentSession.Scope) (now now' : Nat)
     (a a' : Authority) (c : Command) (s : State) (q : SessionQueueState)
     (receipts : List Receipt)

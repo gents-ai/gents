@@ -1,13 +1,9 @@
 //! `gents plugin`: build, publish, install and run plugins.
 //!
 //! A plugin is a compiled `.afb` that always travels inside a pack, under
-//! `plugins/` (see `crates/gents/src/pack.rs`). Publishing one on its own
-//! wraps it in a single-plugin `plugins` pack ([`publish`]); installing one
-//! by name fetches its pack and installs the plugins it carries
-//! ([`install`]). The rest works on what is installed locally: compiling
-//! from source ([`build`]), listing and removing ([`list`], [`remove`]), and
-//! running one to prove it works ([`run`]). Registry access is the client
-//! `gents pack` uses ([`crate::commands::pack::registry::RegistryClient`]).
+//! `plugins/`. Publishing one on its own wraps it in a single-plugin
+//! `plugins` pack ([`publish`]); installing one by name fetches its pack
+//! and installs the plugins it carries ([`install`]).
 
 mod bind;
 mod build;
@@ -64,8 +60,6 @@ async fn publish(args: PluginPublishArgs) -> Result<()> {
     }))
 }
 
-/// Packs one compiled plugin on its own: a `plugins` pack named after it,
-/// carrying the artifact under `plugins/` and a README from its description.
 fn plugin_pack(
     dir: &std::path::Path,
     afb: &afterburner_cloud::Afb,
@@ -134,15 +128,6 @@ async fn remove(args: PluginRemoveArgs) -> Result<()> {
     crate::print_json(&json!({ "removed": removed }))
 }
 
-/// Test-only fixtures shared by this module's tests and its submodules'.
-///
-/// One builder rather than a copy per file: the three that preceded it
-/// differed only in a package name and a `main.rs` body, and all three
-/// carried the same defect (no `Cargo.toml`, which the Rust compile path
-/// shells out to `cargo build` and therefore requires), so all three were
-/// failing in the same way.
-/// Standalone artifacts have no enclosing pack declaration. Capture their own
-/// manifest and authority once at installation; pack installs retain theirs.
 pub(crate) fn declaration_from_artifact(
     afb: &afterburner_cloud::Afb,
 ) -> Result<gents::pack::PackPlugin> {
@@ -156,7 +141,6 @@ pub(crate) fn declaration_from_artifact(
         artifact: format!("plugins/{}.afb", package.name),
         source: None,
         language: package.language.clone(),
-        // The AFB manifest has no model-facing input schema.
         input_schema: serde_json::json!({"type": "object"}),
         manifold: Some(serde_json::to_value(&afb.manifold).context("encoding plugin manifold")?),
         instructions: None,
@@ -168,10 +152,6 @@ pub(crate) fn declaration_from_artifact(
 
 #[cfg(test)]
 pub(crate) mod testing {
-    /// Compiles a real Rust plugin through the same path `gents plugin
-    /// build` uses, and returns its `.afb` bytes. Not a stub: these tests
-    /// are about what a compiled plugin does, so a stand-in would prove
-    /// nothing.
     pub(crate) fn build_plugin_afb(name: &str, main_rs: &[u8]) -> Vec<u8> {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().join(name);
@@ -192,10 +172,6 @@ pub(crate) mod testing {
             br#"{"fs":"None","net":"None","env":"None","crypto":false,"child_process":false}"#,
         )
         .expect("writing manifold.json");
-        // Rust compiles by shelling out to `cargo build`, so the directory
-        // needs its own manifest as well as the afb.toml. `[workspace]`
-        // keeps it standalone: without it a parent manifest above the temp
-        // directory would claim it.
         std::fs::write(
             root.join("Cargo.toml"),
             format!(
@@ -212,7 +188,6 @@ pub(crate) mod testing {
         let local = crate::commands::afterburner_build::load_and_validate(&owner, &root)
             .unwrap_or_else(|error| panic!("loading the {name} package: {error:#}"));
         let out = dir.path().join(format!("{name}.afb"));
-        // The one lock every test that shells out to a toolchain takes.
         let _guard = crate::commands::afterburner_build::compile_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -221,8 +196,6 @@ pub(crate) mod testing {
         std::fs::read(&out).expect("reading the compiled .afb")
     }
 
-    /// The identity plugin: reads all of stdin, writes it back unchanged.
-    /// The vehicle for every "does the ABI carry arguments through" test.
     pub(crate) fn build_echo_plugin() -> Vec<u8> {
         build_plugin_afb(
             "echo",
@@ -236,19 +209,11 @@ pub(crate) mod testing {
         )
     }
 
-    /// Bare-hex SHA-256: the exact form the registry advertises
-    /// (`verify_digest` compares against `sha256_hex`'s own bare output,
-    /// never a `sha256:`-prefixed one).
     pub(crate) fn digest_of(bytes: &[u8]) -> String {
         use sha2::{Digest, Sha256};
         format!("{:x}", Sha256::digest(bytes))
     }
 
-    /// A fresh, built copy of the `bind_plugin_fixture` pack
-    /// (`crates/gents/tests/fixtures/packs`): a `list_files` plugin that
-    /// declares `bind_dir` over its `root` argument. Built rather than
-    /// checked in, since its `.afb` is gitignored like every other fixture
-    /// plugin's.
     pub(crate) fn build_bind_plugin_fixture() -> tempfile::TempDir {
         let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../gents/tests/fixtures/packs/bind_plugin_fixture");
@@ -262,7 +227,6 @@ pub(crate) mod testing {
         dir
     }
 
-    /// A loopback server answering `/hello` with `hello`; its port.
     pub(crate) async fn hello_server() -> u16 {
         let app = axum::Router::new().route("/hello", axum::routing::get(|| async { "hello" }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -271,10 +235,6 @@ pub(crate) mod testing {
         port
     }
 
-    /// A pack whose `fetch` plugin declares the `OutboundHttp` entry
-    /// `http://127.0.0.1:{port}`, asks the host for its input's `url` and
-    /// returns `{"hello": true}` when the answer's body is `hello`. Its one
-    /// case, under its source's `tests/`, fetches `/hello` on `port`.
     pub(crate) fn http_plugin_pack(port: u16) -> tempfile::TempDir {
         let afb = build_plugin_afb(
             "fetch",
@@ -350,20 +310,10 @@ mod tests {
     use super::*;
     use crate::cli::args::{PluginInstallArgs, PluginRunArgs};
 
-    /// A minimal real plugin `.afb`: the shared fixture, built once here
-    /// rather than described again.
     fn sample_plugin_afb() -> Vec<u8> {
-        // Writes one JSON value, because that is the plugin ABI: a plugin
-        // that prints nothing is `BadOutput` by design, so `fn main() {}`
-        // would make this fixture fail for a reason that has nothing to do
-        // with installing and running it.
         testing::build_plugin_afb("noop", b"fn main() { println!(\"{{}}\"); }")
     }
 
-    /// End-to-end round trip through this module's public surface, backed
-    /// by a local fake registry serving the plugin's pack: install, list
-    /// reflects it, run returns the plugin's own output, remove takes it
-    /// away again.
     #[tokio::test]
     async fn install_list_run_remove_round_trip() {
         let afb_bytes = sample_plugin_afb();

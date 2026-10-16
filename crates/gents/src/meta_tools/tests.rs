@@ -160,7 +160,7 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
     let count = calls.clone();
     let pool = crate::mcp_pool::McpPool::new_with_tool_handlers(
         |_, endpoint| async move {
-            assert_eq!(endpoint, "http://remote:8080"); // same logical service under foreign principal must never win
+            assert_eq!(endpoint, "http://remote:8080");
             Ok(catalog())
         },
         move |params| {

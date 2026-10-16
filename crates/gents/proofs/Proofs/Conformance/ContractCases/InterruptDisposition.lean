@@ -1,16 +1,6 @@
 import Proofs.Background.Interrupt
 import Proofs.Conformance.ContractCases.Types
 
-/-!
-# Interrupt Disposition Conformance Cases
-
-Every owned tool-call shape (lifecycle state × await mode) with the
-disposition and post-state computed by running
-`Background.Interrupt.interruptTool`. The Rust consumer compares its interrupt
-owner against every row and drives the running rows through the hook's
-in-flight interrupt path.
--/
-
 namespace Conformance.ContractCases
 
 open Background
@@ -51,7 +41,6 @@ theorem interruptDispositionCases_complete :
     interruptDispositionCases.length = 12 := by
   native_decide
 
-/-- No emitted row cancels running background work. -/
 theorem interruptDispositionCases_preserve_running_background :
     ∀ witness ∈ interruptDispositionCases,
       witness.state = "running" → witness.awaitMode = "background" →

@@ -24,7 +24,6 @@ const turn = (row: PendingQueueEntryView, createdAt: string): PendingTurnView =>
   createdAt,
 });
 
-/** `queued` arrives in creation order, as the snapshot sorts it. */
 function setup(
   queue: PendingQueueEntryView[],
   queued = queue.map((row, index) => turn(row, `2026-10-10T00:00:0${index}Z`)),
@@ -60,7 +59,6 @@ describe("pending message controls", () => {
     expect(screen.getAllByTestId("queued-input")[0]).toHaveTextContent("Editing…");
     for (const button of screen.getAllByRole("button", { name: "Remove" }))
       expect(button).toBeDisabled();
-    /* the grips stay, dimmed: nothing can move */
     for (const grip of screen.getAllByTestId("pending-grip"))
       expect(grip.dataset.draggable).toBeUndefined();
   });
@@ -95,7 +93,6 @@ describe("pending message controls", () => {
         ],
       }),
     );
-    /* the runtime's order stands until it shows the move */
     expect(screen.getAllByTestId("queued-input").map((row) => row.textContent)).toEqual(
       [expect.stringContaining("message a"), expect.stringContaining("message b")],
     );
@@ -132,7 +129,6 @@ describe("pending message controls", () => {
     const [a, b] = screen.getAllByTestId("queued-input");
     expect(await moveDisabled(a!, "down")).toBe(true);
     expect(await moveDisabled(b!, "up")).toBe(true);
-    /* the grips stay, dimmed: nothing can move */
     for (const grip of screen.getAllByTestId("pending-grip"))
       expect(grip.dataset.draggable).toBeUndefined();
     await moveItem(a!, "down");

@@ -15,13 +15,6 @@ export type DesktopStartupPhase =
   | "client-error"
   | "ready";
 
-/**
- * Sole decision whether startup starts the desktop client. The autostart
- * effect and the startup phase both read it, so startup waits on the client
- * only when something will start it. A local-standard peer is saved before
- * client state exists; while its runtime is not serving there is nothing to
- * connect to, and the shell must offer setup instead of waiting.
- */
 export function shouldAutoStartDesktopClient(
   snapshot: DesktopClientSnapshot,
   localServerAvailable: boolean | null,
@@ -152,11 +145,6 @@ type SessionLoadingInput = {
   operationalState: DeploymentOperationalState | null;
 };
 
-/**
- * Sole projection for user-visible session waits. It does not invent
- * progress: every state comes from an in-flight local read, signed hydration
- * progress, the application sync owner, or runtime-authored agent readiness.
- */
 export function projectSessionLoadingStatus({
   selectedSessionId,
   selectedNodeDid,

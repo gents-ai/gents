@@ -25,13 +25,9 @@ fn merge_desired(
     merge_layered_desired("did:key:local", "did:key:peer", base, data_plane)
 }
 
-/// Deterministic name → collection-id transform used by `MockAdmin`.
-///
-/// The real P2P adapter resolves a collection *name* to a distinct collection
-/// *id* when subscribing (`add_collections`) and returns ids from
-/// `get_collections`. The mock must mirror that distinctness — echoing the
-/// name back (id == name) would hide the very id-space mismatch this engine
-/// must reconcile (review Finding #1). The prefix guarantees id != name.
+/// The mock mirrors the real adapter's name→collection-id distinctness; a
+/// name-echo (id == name) would hide the id-space mismatch the engine must
+/// reconcile. The prefix guarantees id != name.
 fn mock_collection_id(name: &str) -> String {
     format!("col_{name}_id")
 }

@@ -45,7 +45,7 @@ pub struct ToolServiceRegistry {
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
     pub enabled: bool,
-    /// Optional UI/discovery labels. References, never tags, determine execution.
+    /// Optional UI/discovery labels.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -70,7 +70,7 @@ pub struct RepositoryPlacement {
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
     pub enabled: bool,
-    /// Optional UI/discovery labels. References, never tags, determine execution.
+    /// Optional UI/discovery labels.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -110,7 +110,7 @@ pub struct ProjectionAcpBinding {
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
     pub enabled: bool,
-    /// Optional UI/discovery labels. References, never tags, determine execution.
+    /// Optional UI/discovery labels.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",

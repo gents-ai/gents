@@ -4,24 +4,17 @@ import Proofs.PromptAssembly.Properties
 /-!
 # Content-bearing provider model with global resolution
 
-This module models assistant text retention, empty-message pruning, and content
-ordering. `sanitizeForProviderGlobal` still resolves calls against one transcript-wide
-set; production resolves within each turn. Soundness here requires unique call
-IDs, and does not establish safety for arbitrary persisted histories that reuse
-an ID. `PromptAssembly.sanitizeTurn` models per-turn row resolution, but does not
+`sanitizeForProviderGlobal` resolves calls against one transcript-wide set;
+production resolves within each turn. Soundness here requires unique call IDs
+and does not establish safety for arbitrary persisted histories that reuse an
+ID. `PromptAssembly.sanitizeTurn` models per-turn row resolution but does not
 carry assistant prose, so replacing this module with that projection would lose
 a real guarantee.
 
 The row-only refinement additionally requires calls-only assistant content and
-nondegenerate messages. Outside that fragment a row with prose plus an unresolved
-call must survive as ordinary content, while empty messages must disappear.
-
-Remaining owner migration: use per-turn resolution in this content-bearing model,
-prove soundness/fixpoint/idempotence directly, transfer compaction prefix/cursor
-lemmas to that owner, then delete the global filters and conditional bridges.
-Do not remove those hypotheses without replacing the proofs. Intra-turn duplicate
-call occurrences are also outside the Finset row abstraction; native sanitizer
-regressions currently fence multiplicity and cross-turn key reuse.
+nondegenerate messages; intra-turn duplicate call occurrences are outside the
+Finset row abstraction (native sanitizer regressions fence multiplicity and
+cross-turn key reuse).
 -/
 
 namespace PromptAssembly.Provider
@@ -29,15 +22,11 @@ namespace PromptAssembly.Provider
 open Transcript (MessageRow MessageKind MessageRole)
 open PromptAssembly.Content (Item)
 
-/-- A provider-bound row: the abstract transcript row plus the content list
-that sits inside the message. -/
 structure ProviderRow where
   row : MessageRow
   content : List Item
   deriving DecidableEq
 
-/-- Forget the content, recovering the row model the pairing theorems are
-stated over. -/
 def project (rows : List ProviderRow) : List MessageRow :=
   rows.map ProviderRow.row
 
@@ -46,7 +35,6 @@ def project (rows : List ProviderRow) : List MessageRow :=
 @[simp] theorem project_cons (pr : ProviderRow) (rest : List ProviderRow) :
     project (pr :: rest) = pr.row :: project rest := rfl
 
-/-- A row's kind announces exactly the tool calls its content carries. -/
 def Coherent (pr : ProviderRow) : Prop :=
   match pr.row.kind with
   | .assistantToolCalls callIds => Content.callsOf pr.content = callIds
@@ -57,10 +45,9 @@ instance (pr : ProviderRow) : Decidable (Coherent pr) := by
   unfold Coherent
   cases pr.row.kind <;> infer_instance
 
-/-- `UniqueCallIds` is the other premise of `sanitizeForProviderGlobal_sound`. Making
-it decidable lets the contract witnesses discharge it by `decide`, so a witness
-that reuses a call id fails the build rather than silently voiding the soundness
-claim the emitted rows rest on. -/
+/-- `UniqueCallIds` must be decidable so contract witnesses discharge it by
+`decide`: a witness that reuses a call id fails the build rather than silently
+voiding the soundness claim the emitted rows rest on. -/
 instance decidableDisjointCallIds (s t : Finset ToolExecution.ToolCallId) :
     Decidable (Disjoint s t) :=
   decidable_of_iff (s ∩ t = ∅) Finset.disjoint_iff_inter_eq_empty.symm
@@ -85,34 +72,19 @@ instance decidableUniqueCallIds :
 abbrev AllCoherent (rows : List ProviderRow) : Prop :=
   ∀ pr ∈ rows, Coherent pr
 
-/-- A row whose message would be *empty* at the orphan stage.
-
-Rust drops empty messages, and the two stages do it asymmetrically:
-`drop_orphaned_tool_results` pushes a user message only when content survives
-(so an empty user message goes there), while assistant messages are carried
-forward unconditionally and pruned in `drop_unpaired_tool_calls`. A
-`.toolResult` row denotes a user message carrying exactly one tool result, so it
-is never empty in this sense — the orphan branch already removes it when the
-result is unpaired. -/
+/-- A row whose message would be empty at the orphan stage. Rust drops empty
+messages, and the two stages do it asymmetrically: user rows are pushed only
+when content survives, assistant rows are pruned in the next stage. -/
 def emptyUserRow (pr : ProviderRow) : Bool :=
   match pr.row.role with
   | .user => pr.content.isEmpty
   | .assistant => false
 
-/-- An assistant row carrying nothing. A coherent `.ordinary` row announces no
-calls, so the content filter is the identity on it and emptiness is decided by
-the content alone. -/
 def emptyAssistantRow (pr : ProviderRow) : Bool :=
   match pr.row.role with
   | .assistant => pr.content.isEmpty
   | .user => false
 
-/-- A row that denotes a non-empty message. Rust drops empty messages, so this
-is what the fixpoint theorems need: an input that still carries empty rows is
-not a fixpoint of the sanitizer, because sanitizing it removes them.
-
-`.toolResult` rows are always non-degenerate — the row denotes a user message
-carrying exactly one tool result, which is its content. -/
 def NonDegenerate (pr : ProviderRow) : Prop :=
   match pr.row.kind with
   | .toolResult _ _ => True
@@ -207,7 +179,6 @@ theorem normalizeOrderFor_idempotent (mode : Content.OrderMode)
 @[simp] theorem normalizeOrder_cons (pr : ProviderRow) (rest : List ProviderRow) :
     normalizeOrder (pr :: rest) = normalizeRow pr :: normalizeOrder rest := rfl
 
-/-- Ordering is invisible to the row abstraction. -/
 @[simp] theorem project_normalizeOrder (rows : List ProviderRow) :
     project (normalizeOrder rows) = project rows := by
   induction rows with
@@ -240,9 +211,11 @@ theorem normalizeOrder_idempotent (rows : List ProviderRow) :
 
 /-! ## Stage 1 — orphaned tool results
 
-Structurally identical to `dropOrphanedFrom`; content rides along untouched,
-because a tool-result row carries no assistant content and an assistant row's
-content is not filtered by this stage. -/
+Structurally identical to `dropOrphanedFrom`; content rides along untouched.
+An empty user message does not end the active tool-call turn: Rust clears
+`pending_calls` only when the message carries plain content, so recursing with
+`∅` here would strand a valid call/result pair. A non-empty ordinary row does
+end the turn. -/
 
 def dropOrphanedFromP (pending : Finset ToolExecution.ToolCallId) :
     List ProviderRow → List ProviderRow
@@ -254,11 +227,6 @@ def dropOrphanedFromP (pending : Finset ToolExecution.ToolCallId) :
         else dropOrphanedFromP pending rest
     | .assistantToolCalls callIds => pr :: dropOrphanedFromP callIds rest
     | .ordinary =>
-        -- An empty user message does *not* end the active tool-call turn: Rust
-        -- clears `pending_calls` only when the message carries plain content,
-        -- and an empty message carries none. Recursing with `∅` here would
-        -- strand a valid call/result pair that merely had an empty message
-        -- between them. A *non-empty* ordinary row does end the turn.
         if emptyUserRow pr then dropOrphanedFromP pending rest
         else pr :: dropOrphanedFromP ∅ rest
 
@@ -293,14 +261,6 @@ theorem dropOrphanedFromP_cons_ordinary (h : pr.row.kind = .ordinary) :
 
 end DropOrphanedReduction
 
-/-- Stage 1 commutes with projection **on non-degenerate rows**.
-
-It does not commute in general: this stage drops empty user messages (Rust
-`drop_orphaned_tool_results` pushes a user message only when content survives)
-while the row-only `dropOrphanedFrom` has no notion of an empty message and
-keeps every `.ordinary` row. Soundness below therefore does not use this lemma;
-it uses the two set-level facts that follow, which hold unconditionally because
-an empty row carries neither calls nor results. -/
 theorem project_dropOrphanedFromP (rows : List ProviderRow)
     (hnd : AllNonDegenerate rows) :
     ∀ pending,
@@ -336,7 +296,6 @@ theorem project_dropOrphanedResultsP (rows : List ProviderRow)
     project (dropOrphanedResultsP rows) = dropOrphanedResults (project rows) :=
   project_dropOrphanedFromP rows hnd ∅
 
-/-- Dropping empty rows removes no announcements: they carry no calls. -/
 theorem callsIn_project_dropOrphanedFromP (rows : List ProviderRow) :
     ∀ pending,
       callsIn (project (dropOrphanedFromP pending rows)) = callsIn (project rows) := by
@@ -363,7 +322,6 @@ theorem callsIn_project_dropOrphanedFromP (rows : List ProviderRow) :
       · rw [if_pos hempty, ih pending]
       · rw [if_neg hempty, project_cons, callsIn_cons_ordinary pr.row _ hk, ih ∅]
 
-/-- Dropping empty rows resolves nothing new: they carry no results. -/
 theorem resolvedIn_project_dropOrphanedFromP_subset (rows : List ProviderRow) :
     ∀ pending,
       resolvedIn (project (dropOrphanedFromP pending rows))
@@ -397,9 +355,7 @@ theorem resolvedIn_project_dropOrphanedFromP_subset (rows : List ProviderRow) :
       rw [dropOrphanedFromP_cons_ordinary pr rest pending hk] at hc
       rw [project_cons, callsIn_cons_ordinary pr.row (project rest) hk]
       by_cases hempty : emptyUserRow pr
-      · -- The turn stays open across an empty message, so `pending` survives
-        -- and the bound is the induction hypothesis at the same `pending`.
-        rw [if_pos hempty] at hc
+      · rw [if_pos hempty] at hc
         exact (ih pending) hc
       · rw [if_neg hempty, project_cons,
           resolvedIn_cons_ordinary pr.row _ hk] at hc
@@ -443,8 +399,7 @@ theorem allCoherent_dropOrphanedFromP {rows : List ProviderRow}
 
 Content retention follows Rust; the supplied resolved set remains global. -/
 
-/-- Keep every non-call item; keep a call only when it resolved. Mirrors the
-closure in Rust `drop_unpaired_tool_calls`. -/
+/-- Keep every non-call item; keep a call only when it resolved. -/
 def keepItem (resolved : Finset ToolExecution.ToolCallId) : Item → Bool
   | .call callId => decide (callId ∈ resolved)
   | _ => true
@@ -476,8 +431,6 @@ theorem callsOf_restrictContent (resolved : Finset ToolExecution.ToolCallId)
         rw [hdrop, ih, Content.callsOf_cons_call,
           Finset.insert_inter_of_not_mem hmem]
 
-/-- The kind an assistant row takes once its unresolved calls are filtered out:
-`.ordinary` when nothing is left to announce. -/
 def restrictedKind (resolved callIds : Finset ToolExecution.ToolCallId) : MessageKind :=
   if callIds ∩ resolved = ∅ then .ordinary
   else .assistantToolCalls (callIds ∩ resolved)
@@ -487,9 +440,6 @@ def restrictRow (resolved : Finset ToolExecution.ToolCallId)
   { row := { pr.row with kind := restrictedKind resolved callIds }
   , content := restrictContent resolved pr.content }
 
-/-- Content-preserving filter over an explicitly supplied resolved set. A row survives exactly
-when content survives the filter, and its kind is demoted to `.ordinary` when
-no announced call resolved. -/
 def filterCallsByP (resolved : Finset ToolExecution.ToolCallId) :
     List ProviderRow → List ProviderRow
   | [] => []
@@ -499,9 +449,6 @@ def filterCallsByP (resolved : Finset ToolExecution.ToolCallId) :
         if restrictContent resolved pr.content = [] then filterCallsByP resolved rest
         else restrictRow resolved pr callIds :: filterCallsByP resolved rest
     | .ordinary =>
-        -- Rust prunes an assistant message here when nothing survives the
-        -- content filter, including one that never announced a call. User rows
-        -- were already pruned in stage 1.
         if emptyAssistantRow pr then filterCallsByP resolved rest
         else pr :: filterCallsByP resolved rest
     | .toolResult _ _ => pr :: filterCallsByP resolved rest
@@ -512,45 +459,28 @@ def resolvedInP (rows : List ProviderRow) : Finset ToolExecution.ToolCallId :=
 def dropUnpairedCallsP (rows : List ProviderRow) : List ProviderRow :=
   filterCallsByP (resolvedInP rows) rows
 
-/-- Three-stage content projection using global resolution. The two provider
-order modes share the *same* orphan and unpaired-call stages; only the final
-assistant-content ordering stage differs. This remains a conditional proof
-model, not the unrestricted production algorithm. -/
 def sanitizeForProviderGlobalFor (mode : Content.OrderMode)
     (rows : List ProviderRow) : List ProviderRow :=
   normalizeOrderFor mode (dropUnpairedCallsP (dropOrphanedResultsP rows))
 
-/-- The established grouped-provider instance of the composed owner. Its
-definition remains explicit so existing grouped theorems retain their form. -/
 def sanitizeForProviderGlobal (rows : List ProviderRow) : List ProviderRow :=
   normalizeOrder (dropUnpairedCallsP (dropOrphanedResultsP rows))
 
 @[simp] theorem sanitizeForProviderGlobalFor_grouped (rows : List ProviderRow) :
     sanitizeForProviderGlobalFor .grouped rows = sanitizeForProviderGlobal rows := rfl
 
-/-- The native-order view is the association view: replay tags and persisted
-block indices are carried on it, and the provider order stage runs once, at the
-send boundary. Grouping an associated row earlier would align its block sidecar
-with a permuted order that `ClaudeMap.replayRowIndicesValid` rejects, so every
-later projection pass over it would fail (`ClaudeMap.selectReplayBlocks_valid`). -/
 theorem sanitizeForProviderGlobalFor_orders_association_view
     (mode : Content.OrderMode) (rows : List ProviderRow) :
     sanitizeForProviderGlobalFor mode rows =
       normalizeOrderFor mode (sanitizeForProviderGlobalFor .nativePreserved rows) := by
   simp [sanitizeForProviderGlobalFor]
 
-/-- Row-level accounting (compaction counts, pairing, replay prefix bounds) is
-the same in the association view and in the provider-ordered view. -/
 theorem project_sanitizeForProviderGlobalFor_association
     (mode : Content.OrderMode) (rows : List ProviderRow) :
     project (sanitizeForProviderGlobalFor mode rows) =
       project (sanitizeForProviderGlobalFor .nativePreserved rows) := by
   rw [sanitizeForProviderGlobalFor_orders_association_view, project_normalizeOrderFor]
 
-/-- A fixpoint of the association view is row-stable under every provider
-order: the send-boundary reorder cannot add, drop or re-pair a row. The
-compaction stable-prefix gate (`Compaction.PromptView.safeToReduce`) is
-therefore checked on the native-order rows, not on their provider ordering. -/
 theorem project_sanitizeForProviderGlobalFor_of_association_fixpoint
     (mode : Content.OrderMode) {rows : List ProviderRow}
     (hfix : sanitizeForProviderGlobalFor .nativePreserved rows = rows) :
@@ -603,9 +533,6 @@ theorem coherent_restrictRow {pr : ProviderRow}
   · simp only [hempty, if_neg, not_false_iff]
     simpa using hrestrict
 
-/-- An assistant row whose filtered content is empty announced nothing that
-resolved. This is what makes the content-driven drop agree with the
-call-set-driven drop of the row model. -/
 theorem inter_eq_empty_of_restrictContent_nil {pr : ProviderRow}
     {callIds resolved : Finset ToolExecution.ToolCallId}
     (hcoh : Coherent pr) (hk : pr.row.kind = .assistantToolCalls callIds)
@@ -682,7 +609,6 @@ theorem restrictContent_union_of_disjoint
       rw [show List.filter (keepItem (extra ∪ resolved)) rest
             = List.filter (keepItem resolved) rest from ih hrest]
 
-/-- Call ids a row announces are call ids the projected list announces. -/
 theorem callsOf_subset_callsIn {rows : List ProviderRow} (hcoh : AllCoherent rows)
     {pr : ProviderRow} (hpr : pr ∈ rows) :
     Content.callsOf pr.content ⊆ callsIn (project rows) := by
@@ -767,13 +693,7 @@ theorem filterCallsByP_irrelevant (rows : List ProviderRow) :
         filterCallsByP_cons_ordinary row rest resolved hk,
         ih extra resolved hrest hdisjRest]
 
-/-! ## Soundness
-
-Mirrors `activeBlockValid_filterOrphanedFrom`. The one case that differs is the
-assistant row whose announced calls all went unresolved: the row model drops it,
-this model keeps it as `.ordinary` whenever non-call content survives. Both are
-sound, and for the same reason — at that position the pending set is already
-empty (`hstart`), which is exactly the `.ordinary` clause's obligation. -/
+/-! ## Soundness -/
 
 theorem activeBlockValidFrom_filterCallsByP (rows : List ProviderRow) :
     ∀ pending,
@@ -868,9 +788,7 @@ theorem activeBlockValidFrom_filterCallsByP (rows : List ProviderRow) :
       by_cases hnil :
           restrictContent (resolvedIn (project (dropOrphanedFromP callIds rest)))
             row.content = []
-      · -- No announced call resolved AND nothing else survives: the row goes,
-        -- exactly as the row model has it.
-        have hempty :
+      · have hempty :
             callIds ∩ resolvedIn (project (dropOrphanedFromP callIds rest)) = ∅ :=
           inter_eq_empty_of_restrictContent_nil hhead hk hnil
         rw [if_pos hnil, hstart]
@@ -878,10 +796,7 @@ theorem activeBlockValidFrom_filterCallsByP (rows : List ProviderRow) :
       · rw [if_neg hnil]
         by_cases hempty :
             callIds ∩ resolvedIn (project (dropOrphanedFromP callIds rest)) = ∅
-        · -- Nothing announced resolved, but assistant prose survives. Rust keeps
-          -- the message; the row is demoted to `.ordinary`. Sound because the
-          -- pending set is already empty here (`hstart`).
-          have hkindOrd :
+        · have hkindOrd :
               (restrictRow (resolvedIn (project (dropOrphanedFromP callIds rest)))
                 row callIds).row.kind = .ordinary := by
             simp [restrictRow, restrictedKind, hempty]
@@ -908,23 +823,18 @@ theorem activeBlockValidFrom_filterCallsByP (rows : List ProviderRow) :
         Finset.disjoint_iff_inter_eq_empty.mp (hdisj'.mono_right hRsub)
       have htail := ih ∅ huniq' (Finset.disjoint_empty_left _) hrestCoh
       by_cases hemptyUser : emptyUserRow row
-      · -- An empty user message does not end the turn, so the recursion carries
-        -- `pending` through unchanged and the goal *is* the induction
-        -- hypothesis at this `pending`.
-        rw [if_pos hemptyUser]
+      · rw [if_pos hemptyUser]
         exact ih pending huniq' hdisj' hrestCoh
       · rw [if_neg hemptyUser, project_cons,
           resolvedIn_cons_ordinary row.row (project (dropOrphanedFromP ∅ rest)) hk,
           filterCallsByP_cons_ordinary row (dropOrphanedFromP ∅ rest) _ hk]
         by_cases hemptyAssistant : emptyAssistantRow row
-        · -- An empty assistant message: carried through stage 1, pruned here.
-          rw [if_pos hemptyAssistant, hstart]
+        · rw [if_pos hemptyAssistant, hstart]
           simpa using htail
         · rw [if_neg hemptyAssistant, project_cons,
             activeBlockValidFrom_cons_ordinary row.row _ _ hk]
           exact ⟨hstart, htail⟩
 
-/-- Soundness of the content model on coherent, unique-call-ID inputs. -/
 theorem sanitizeForProviderGlobal_sound {rows : List ProviderRow}
     (huniq : UniqueCallIds (project rows)) (hcoh : AllCoherent rows) :
     ProviderValid (project (sanitizeForProviderGlobal rows)) := by
@@ -934,8 +844,6 @@ theorem sanitizeForProviderGlobal_sound {rows : List ProviderRow}
   simpa using
     activeBlockValidFrom_filterCallsByP rows ∅ huniq (Finset.disjoint_empty_left _) hcoh
 
-/-- Split-stability: a suffix of a unique-id transcript sanitizes to valid
-provider input on its own, with no view of what preceded it. -/
 theorem sanitizeForProviderGlobal_split_stable {old recent : List ProviderRow}
     (huniq : UniqueCallIds (project (old ++ recent)))
     (hcoh : AllCoherent recent) :
@@ -1058,8 +966,6 @@ theorem filterCallsByP_eq_self (rows : List ProviderRow)
         if_neg (by simp [not_emptyAssistantRow_of_nonDegenerate hheadNd hk]),
         ih hrestNd R ∅ h.2 hne' hrestCoh hres']
 
-/-- Every announcement the sanitizer emits is non-empty: a row that announced
-nothing that resolved is either dropped or demoted to `.ordinary`. -/
 theorem nonemptyAnnouncements_filterCallsByP
     (R : Finset ToolExecution.ToolCallId) (rows : List ProviderRow) :
     NonemptyAnnouncements (project (filterCallsByP R rows)) := by
@@ -1112,13 +1018,8 @@ theorem allCoherent_sanitizeForProvider {rows : List ProviderRow}
 /-! ### The sanitizer's output carries no empty messages
 
 This is what makes the fixpoint hypothesis discharge for `sanitizeForProviderGlobal`'s
-own output, and therefore what makes idempotence hold: an output that still
-carried an empty row would not be a fixpoint, because a second pass would drop
-it. -/
+own output, and therefore what makes idempotence hold. -/
 
-/-- What stage 1 guarantees about `.ordinary` rows: no empty *user* message
-survives it. Stage 2 removes the assistant counterpart, and the two together
-give `NonDegenerate`. -/
 def OrphanStagePruned (pr : ProviderRow) : Prop :=
   match pr.row.kind with
   | .ordinary => emptyUserRow pr = false
@@ -1247,7 +1148,6 @@ theorem allNonDegenerate_sanitizeForProvider (rows : List ProviderRow) :
   exact allNonDegenerate_normalizeOrder
     (allNonDegenerate_filterCallsByP _ (orphanStagePruned_dropOrphanedFromP rows ∅))
 
-/-- **Fixpoint.** Already-narrowed, already-ordered provider input is untouched. -/
 theorem sanitizeForProviderGlobal_fixpoint {rows : List ProviderRow}
     (hvalid : ProviderValid (project rows))
     (hne : NonemptyAnnouncements (project rows))
@@ -1261,7 +1161,6 @@ theorem sanitizeForProviderGlobal_fixpoint {rows : List ProviderRow}
     hvalid.activeBlockValid hne hcoh (Finset.Subset.refl _)]
   exact hordered
 
-/-- **Idempotence.** A second pass at the provider boundary is a no-op. -/
 theorem sanitizeForProviderGlobal_idempotent {rows : List ProviderRow}
     (huniq : UniqueCallIds (project rows)) (hcoh : AllCoherent rows) :
     sanitizeForProviderGlobal (sanitizeForProviderGlobal rows) = sanitizeForProviderGlobal rows := by
@@ -1335,8 +1234,6 @@ theorem sanitizeForProviderGlobalFor_fixpoint (mode : Content.OrderMode)
     hvalid.activeBlockValid hne hcoh (Finset.Subset.refl _)]
   exact hordered
 
-/-- Both composed provider views are fixpoints on coherent unique-call input;
-Claude's branch preserves the native assistant order at both passes. -/
 theorem sanitizeForProviderGlobalFor_idempotent (mode : Content.OrderMode)
     {rows : List ProviderRow}
     (huniq : UniqueCallIds (project rows)) (hcoh : AllCoherent rows) :
@@ -1352,18 +1249,11 @@ theorem sanitizeForProviderGlobalFor_idempotent (mode : Content.OrderMode)
 
 /-! ## Refinement: how this relates to the row-only `sanitizeGlobal`
 
-`Proofs.PromptAssembly.Executable.sanitizeGlobal` is the coarser model. The two agree
-exactly on the fragment the coarser model can faithfully describe — assistant
-rows whose content is nothing but tool calls.
+`Proofs.PromptAssembly.Executable.sanitizeGlobal` is the coarser model. The two
+agree exactly on the fragment the coarser model can faithfully describe — assistant
+rows whose content is nothing but tool calls; off that fragment they differ by
+design (see the conditional refinement below). -/
 
-Outside that fragment they genuinely differ, and the difference is the finding
-this file documents: on an assistant message carrying text alongside a tool call
-that never resolved, `sanitizeGlobal` drops the row and production keeps it. The
-refinement is therefore stated *conditionally*, on purpose. Stating it
-unconditionally would be false. -/
-
-/-- An assistant row whose content is nothing but tool calls — the fragment the
-row-only model describes faithfully. -/
 def CallsOnlyAssistant (pr : ProviderRow) : Prop :=
   match pr.row.kind with
   | .assistantToolCalls _ => ∀ item ∈ pr.content, item.isCall
@@ -1426,7 +1316,6 @@ theorem allCallsOnly_dropOrphanedFromP {rows : List ProviderRow}
         · exact hhead
         · exact ih hrest ∅ pr htail
 
-/-- Stage 1 only ever drops rows, so it preserves non-degeneracy. -/
 theorem allNonDegenerate_dropOrphanedFromP {rows : List ProviderRow}
     (h : AllNonDegenerate rows) :
     ∀ pending, AllNonDegenerate (dropOrphanedFromP pending rows) := by
@@ -1461,11 +1350,6 @@ theorem allNonDegenerate_dropOrphanedFromP {rows : List ProviderRow}
         · exact hhead
         · exact ih hrest ∅ pr htail
 
-/-- On the calls-only fragment, stage 2 projects onto the row model's `filterCallsBy`.
-
-Non-degeneracy is needed for the same reason stage 1 needed it: the row-only
-model keeps every `.ordinary` row, while this stage prunes empty assistant
-messages the way Rust does. -/
 theorem project_filterCallsByP_of_callsOnly (rows : List ProviderRow)
     (R : Finset ToolExecution.ToolCallId)
     (hcoh : AllCoherent rows) (honly : AllCallsOnly rows)
@@ -1509,12 +1393,7 @@ theorem project_filterCallsByP_of_callsOnly (rows : List ProviderRow)
         filterCallsBy_cons_ordinary row.row (project rest) R hk, ih hrestCoh hrestOnly hrestNd]
 
 /-- **Conditional refinement.** On the calls-only, non-degenerate fragment the
-enriched global model and the row-only `sanitizeGlobal` agree exactly.
-
-Off that fragment they differ by design, in two ways, both of them cases the
-row-only model cannot express: an assistant message carrying text alongside an
-unresolved call (see the module docstring), and an empty message, which
-production drops and `sanitizeGlobal` keeps. -/
+enriched global model and the row-only `sanitizeGlobal` agree exactly. -/
 theorem project_sanitizeForProviderGlobal_eq_sanitizeGlobal {rows : List ProviderRow}
     (hcoh : AllCoherent rows) (honly : AllCallsOnly rows)
     (hnd : AllNonDegenerate rows) :

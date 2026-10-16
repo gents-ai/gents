@@ -42,10 +42,6 @@ pub(super) async fn p2p_replicators_add(args: P2pReplicatorAddArgs) -> Result<()
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let client = p2p_http_client()?;
     let api_base = crate::graphql_access::graphql_api_base(graphql.url())?;
-    // Translate the parsed PairingFilters into defradb's wire shape and forward
-    // them in the request body. The node installs a filtered replicator (#1033)
-    // that pushes only matching documents; an empty map requests an unfiltered
-    // replicator (the field is omitted on the wire).
     let wire_filters = to_replication_filters(&filters).map_err(anyhow::Error::msg)?;
     let request = P2pReplicatorRequest {
         collections: collections.clone(),

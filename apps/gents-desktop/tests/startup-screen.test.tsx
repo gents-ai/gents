@@ -195,8 +195,6 @@ describe("desktop startup screen", () => {
       expect(screen.getByTestId("setup-screen")).toBeInTheDocument();
     });
     expect(screen.queryByTestId("startup-retry")).not.toBeInTheDocument();
-    // Restoration probes once; the expanded local card also resolves its
-    // default root without blocking entry to the first-run screen.
     await waitFor(() => {
       expect(managedServerStatus).toHaveBeenCalledTimes(2);
     });
@@ -394,8 +392,6 @@ describe("desktop startup screen", () => {
   });
 
   it("starts the client again when a retry follows a failed start", async () => {
-    /* the client stays stopped until a start succeeds; each read repeats
-       the same stopped client, so nothing about the read itself changes */
     let running = false;
     const fetchDesktopSnapshot = vi.fn(async () => snapshot(true, running));
     const startDesktopClient = vi

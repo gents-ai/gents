@@ -9,7 +9,6 @@ def parentBinding : Binding :=
 def initial : Snapshot :=
   ⟨⟨.paused, 2, false, false⟩, 0, none, 10, [], 37, some 1000⟩
 def request : Request := ⟨.paused, 0, true, true, true, true, parentBinding⟩
-/-- Explicit durable expectation, never computed from resume. -/
 def published : Snapshot :=
   ⟨⟨.active, 0, false, false⟩, 1, some 10, 20, [parentBinding], 37, some 1000⟩
 def later : Snapshot :=

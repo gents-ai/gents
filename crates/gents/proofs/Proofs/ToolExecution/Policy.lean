@@ -60,11 +60,10 @@ inductive ToolOperation where
   | mcpListTools
   | mcpCall
   | nativeCommand
-  /-- `agent_new` or `agent_message`: materializes or steers a request in
-  another session through `lifecycle::materialize`. The row has no host
-  process and no deadline; its only terminal is the caused request's terminal
-  output, always delivered to the calling session as a completion
-  notification. -/
+  /-- `sessionMessage` (`agent_new`/`agent_message`) materializes or steers a
+  request in another session through `lifecycle::materialize`; the row has no
+  host process or deadline and its terminal is the caused request's terminal
+  output, delivered as a completion notification. -/
   | sessionMessage
   deriving DecidableEq, Repr
 

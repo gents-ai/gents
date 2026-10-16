@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
-/// Document-layer view of a `ChainKeyBinding` row.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -26,7 +25,6 @@ pub struct ChainKeyBindingDocument {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub revoked_at: Option<String>,
-    /// Optional UI/discovery labels. References, never tags, determine execution.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -37,8 +35,8 @@ pub struct ChainKeyBindingDocument {
 }
 
 impl ChainKeyBindingDocument {
-    /// Intrinsic authoring checks. The signing owner verifies the DID
-    /// attestation, revocation and actual key material at execution time.
+    // Intrinsic authoring checks; the signing owner verifies the DID
+    // attestation, revocation and key material at execution time.
     pub fn validate(&self) -> Result<()> {
         anyhow::ensure!(
             !self.binding_id.trim().is_empty(),
@@ -137,9 +135,8 @@ pub async fn load_chain_key_binding_by_doc_id(
     Ok(rows.pop())
 }
 
-/// Shared update policy for the attested creation identity and revocation
-/// tombstone. An omitted, null, or blank proposal cannot reactivate a binding.
-/// Explicit nonblank revocations retain the existing update behavior.
+// An omitted, null, or blank proposal cannot reactivate a binding; explicit
+// nonblank revocations retain the existing update behavior.
 pub fn preserve_chain_key_binding_update_fields(update: &mut serde_json::Value) -> Result<()> {
     let fields = update
         .as_object_mut()
@@ -189,8 +186,6 @@ pub fn create_chain_key_binding_mutation(doc: &ChainKeyBindingDocument) -> Resul
     ))
 }
 
-/// Remove only the exact newly created, still-active row after keyring failure.
-/// A concurrent revocation is a tombstone, never incomplete-create cleanup.
 pub fn delete_chain_key_binding_mutation(doc_id: &str) -> String {
     let id = escape_graphql_string(doc_id);
     format!(

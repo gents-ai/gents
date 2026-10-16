@@ -225,9 +225,8 @@ fn read_stored_init_config(
 }
 
 /// The tool ceiling a managed node home records in `init.json`, with the
-/// provenance label of the resolution. Shared by the tools-explain command
-/// and the runtime snapshot so both meet observed grants against the same
-/// operator authority.
+/// provenance label of the resolution; both consumers must meet observed
+/// grants against the same operator authority.
 pub(crate) fn resolve_node_home_tool_ceiling(
     node_home: &std::path::Path,
 ) -> Result<(gents::ToolCeiling, &'static str), String> {

@@ -144,8 +144,8 @@ async fn atomic_background_completion_ignores_append_row_with_same_source_and_ke
         .request
         .expect("non-Goal wake");
 
-    // Include both policies: queue_is_automated_wakeup deliberately selects
-    // only coalesced wakes and would hide the append row under test.
+    // queue_is_automated_wakeup only selects coalesced wakes, so both policies
+    // must be matched manually here.
     let rows = queue_rows(&db.node, session_id)
         .await
         .into_iter()

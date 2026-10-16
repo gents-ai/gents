@@ -1,32 +1,3 @@
-//! Fleet slot-accounting conformance: pins the generated fleet admission
-//! projection rows to the real slot-count owner in
-//! `crates/gents/src/admission/slot_accounting.rs`.
-//!
-//! The Lean `FleetState` model is admission-only: it admits requests that
-//! already exist and were claimed through the common request entrance
-//! (`acceptExisting` requires `claimed` + `waiting`); it never constructs
-//! scheduled work or selects inference. Every emitted case therefore carries
-//! one of the four admission phases of an existing claimed request
-//! (`waiting` / `acquired` / `executing` / `released`), and the pin below
-//! rejects any other phase from entering the contract.
-//!
-//! Ownership of the stronger guarantees deliberately lives elsewhere and is
-//! not duplicated here:
-//! - `admission::tests::generated_slot_accounting_fleet_cases_match_admission_runtime_boundary`
-//!   replays every fleet case against real admission rows in DefraDB, and
-//!   `conformance/inference_call.rs` drives the InferenceCall slot cases over
-//!   persisted rows (the fleet aggregate is a derived view over those rows —
-//!   `boundary.fleet-slot-accounting.derived-view`).
-//! - The coverage ledger's shape/count and boundary classification are pinned
-//!   by `conformance/coverage.rs`.
-//!
-//! This file keeps the cheap, always-on cross-language pin: reconstructing the
-//! Lean-projected rows with the Rust count owner must equal both Lean
-//! reconstructions (`reconstructedRunningCount` over the projected
-//! InferenceCall rows and `slotCountFor` over the fleet state), and the
-//! emitted capacity-bound flag must agree with the bound recomputed by the
-//! Rust owner.
-
 use super::*;
 
 fn slot_rows_from_contract<'a>(

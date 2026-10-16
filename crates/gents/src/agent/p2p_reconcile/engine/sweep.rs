@@ -34,11 +34,9 @@ pub async fn run_pairing_reconciler(
     let admin = EmbeddedRemoteP2pAdmin::new(node.clone());
     let store =
         GraphqlPairingStateStore::with_enrollment_authority(node.clone(), identity, enrollment);
-    // Subscribe before resolving IDs so commits racing startup remain pending.
-    // Pairing intent and its applied witness are the only document state this
-    // reconciler reads directly. Enrollment authority changes materialize or
-    // remove PeerPairingDesired; lease expiry remains covered by the periodic
-    // sweep. Transcript/config writes must not trigger a global topology scan.
+    // Subscribe before resolving IDs so startup-racing commits stay pending.
+    // Enrollment authority changes materialize or remove PeerPairingDesired;
+    // transcript/config writes must not trigger a global topology scan.
     let subscription = node.subscribe_document_changes();
     let watched_collection_ids = pairing_state_collection_ids(&node)?;
 
@@ -88,12 +86,9 @@ pub(super) async fn run_pairing_reconciler_loop(
     let mut failing_peers = BTreeSet::<String>::new();
     let mut subscription_open = true;
 
-    // A transient top-level read failure during the first sweep is no more
-    // terminal than one during a recurring sweep. The interval's first tick is
-    // immediately ready, so logging here preserves the prompt startup retry
-    // without introducing a separate backoff path. Unlike the registry and
-    // endpoint heartbeat daemons, do not consume that first tick before this
-    // sweep: it is the retry fence if startup hits a transient store error.
+    // Log (not propagate) transient sweep failures; the next tick retries.
+    // The interval's first tick is immediately ready and stays as the startup
+    // retry fence, unlike the discovery/heartbeat daemons.
     if !sweep_pairings_logged_until_cancelled(
         admin,
         store,
@@ -164,10 +159,8 @@ pub(super) async fn sweep_pairings_logged_until_cancelled(
     }
 }
 
-/// Run a sweep, logging (not propagating) a transient failure. A failed sweep —
-/// e.g. a momentary `list_peer_ids` read error — must not tear down the whole
-/// reconciler; the next tick retries. Mirrors the discovery / heartbeat daemons,
-/// which also log-and-continue rather than aborting the runtime task.
+/// Run a sweep, logging (not propagating) a transient failure; the next tick
+/// retries. Mirrors the discovery/heartbeat daemons.
 async fn sweep_pairings_logged(
     admin: &dyn RemoteP2pAdmin,
     store: &dyn PairingStateStore,
@@ -185,9 +178,8 @@ pub(super) async fn sweep_pairings(
     replay_connections: &mut BTreeMap<String, bool>,
     failing_peers: &mut BTreeSet<String>,
 ) -> Result<()> {
-    // Amortize the membership-materializable computation across the whole sweep
-    // (avoids re-verifying every signature per peer). Non-fatal on failure: the
-    // per-peer gate falls back to a live read.
+    // Amortize membership materialization across the sweep; fall back to a live
+    // read per peer on failure.
     store.begin_sweep().await?;
     let preparation_inputs = store
         .list_peer_ids()

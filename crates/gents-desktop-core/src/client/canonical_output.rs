@@ -42,10 +42,6 @@ pub fn project_canonical_message(
     }
 }
 
-/// Project one live canonical source using the protocol owner. Desktop only
-/// adapts authenticated row envelopes into observations; eligibility,
-/// contiguous-prefix reconstruction, closure, terminal selection and header
-/// publication remain owned by `gents_protocol::output::live`.
 #[allow(clippy::too_many_arguments)]
 pub fn project_canonical_live(
     request_doc_id: &str,

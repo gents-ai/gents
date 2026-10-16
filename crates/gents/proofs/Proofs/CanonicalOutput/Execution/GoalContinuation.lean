@@ -1,22 +1,10 @@
 import Proofs.CanonicalOutput.Execution.Handover
 import Proofs.GoalAutomation.ClaimedPublication
 
-/-!
-# Goal-owned canonical continuation publication
-
-This adapter composes the existing Goal claimed-publication owner with the
-existing session queue and request handover owners.  It adds no Goal phase or
-request lifecycle.  The native binding is one authenticated observation across
-the differently typed physical, logical, owner, and session identity domains;
-the model never casts one domain into another.
--/
-
 namespace CanonicalOutput.Execution.GoalContinuation
 
 open GoalAutomation.OperatorResume
 
-/-- Authenticated native receipt joining the canonical Goal observation, the
-terminal physical predecessor, and the prepared physical child request. -/
 structure Binding where
   goalDocument : DocId
   goalOwner : String
@@ -29,9 +17,9 @@ structure Binding where
   childDocument : DocId
   childRequester : Option Nat
   childEntry : SessionQueue.QueueEntry
-  /-- Must be projected from the same authenticated ConfigApplyTxn as the Goal,
-  predecessor and child binding. Native must not supply an empty observation
-  when a relevant accepted wait or background row is unreadable. -/
+  /-- Projected from the same authenticated ConfigApplyTxn as the Goal,
+  predecessor and child binding; never an empty observation when a relevant
+  accepted wait or background row is unreadable. -/
   observation : PublicationObservation
   authenticated : Bool
   deriving DecidableEq, Repr
@@ -49,9 +37,6 @@ def bindingValid (world : World) (snapshot : Snapshot)
     binding.parentLogical == request.binding.predecessor &&
     binding.childDocument != binding.parentDocument
 
-/-- The predecessor is not inferred from a message. Its exact physical request
-row is terminal and carries the canonical terminal selection committed by the
-request owner. -/
 def canonicalParentTerminal (world : World) (binding : Binding) : Bool :=
   world.requestId == binding.parentDocument &&
     match world.lease.lease, world.terminalSelection with
@@ -126,9 +111,6 @@ def publishGoalChild? (goal : Snapshot) (state : World)
             , freshEnqueued := fun _ => hstep
             , replayInert := by simp, nextSeqPreserved := rfl }
     | (post, .recovered) =>
-        -- Lost acknowledgement after the atomic Goal/request publication.  The
-        -- exact child may already be pending, active, or terminal; do not create
-        -- another queue row or claim it here.
         if entry ∈ state.queue.pending ||
             state.queue.active == some entry.requestId ||
             decide (entry.requestId ∈ state.queue.terminal) then

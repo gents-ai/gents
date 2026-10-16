@@ -1,5 +1,3 @@
-//! Subscription factory for the three event-driven sources.
-
 use std::sync::Arc;
 
 use defra_node::EmbeddedNode;

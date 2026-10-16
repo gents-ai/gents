@@ -326,7 +326,6 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
-    // The shared config helper addresses the node by `--home`.
     let home_arg = home_dir.to_str().context("home is not UTF-8")?;
 
     let files_dir = home_dir.join("live-projection-files");
@@ -715,7 +714,6 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
-    // The shared config helper addresses the node by `--home`.
     let home_arg = home_dir.to_str().context("home is not UTF-8")?;
 
     struct LiveRequestSpec {
@@ -946,9 +944,6 @@ fn live_eval_target() -> Result<(String, String, Option<String>)> {
 
 /// Live counterpart of
 /// `cli_request::pending_message_commands_edit_reorder_and_remove_against_held_provider`.
-/// The real model is held inside a foreground `bash_unrestricted` call that
-/// blocks on a release file, so queue commands act on a genuinely running
-/// request while the provider keeps producing real output.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "live: requires GENTS_LIVE_OPENAI=1 and GENTS_EVAL_TARGET"]
 async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Result<()> {
@@ -1069,7 +1064,6 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
     )?;
 
     let (endpoint, model, api_key_env) = live_eval_target()?;
-    // The shared config helper addresses the node by `--home`.
     let home_arg = home.to_str().context("home is not UTF-8")?;
     let mut init_args = vec![
         "--home".to_owned(),
@@ -1080,8 +1074,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         model,
         "--inference-url".to_owned(),
         endpoint,
-        // Unrestricted bash needs the yolo package's ceiling; the hold
-        // command runs only inside this test's workspace.
+        // Unrestricted bash needs the yolo package's ceiling.
         "--yolo".to_owned(),
         "--tool-root".to_owned(),
         workspace

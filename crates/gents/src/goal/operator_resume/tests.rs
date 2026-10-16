@@ -19,9 +19,6 @@ struct GeneratedResumeOnContracts {
     goal_operator_resume_on_cases: Vec<GeneratedResumeOnCase>,
 }
 
-/// A `usage_limited` Goal whose latest request (`PARENT`) failed on a limited
-/// call on Claude account A; the agent's profile is on A, and B is
-/// another enabled Claude account. `call_failure` is the failed call's text.
 struct Limited {
     f: Fixture,
     access: ConfigAccess,
@@ -70,7 +67,6 @@ impl Limited {
         .await
     }
 
-    /// The agent's context compacts with `summ`, also on A.
     async fn compacts_on_a(&self) {
         self.f.compacts_on(&self.access, &self.a).await;
     }

@@ -1,11 +1,6 @@
-//! One run's rows, projected into paired evidence.
-//!
-//! Three judgements live here and nowhere else. A slot is
+//! One run's rows, projected into paired evidence. A slot is
 //! `(run_id, cell_id, case_id, trial_index)` and is read at its latest
-//! *completed* attempt, because a resumed run writes a new row per attempt.
-//! A verdict's `stage_id` becomes the `stage_index` its case declares, which
-//! is what `case_trial_score` reduces over. And several runs are paired one at
-//! a time and then concatenated, so a re-run adds pairs.
+//! *completed* attempt (a resumed run writes a row per attempt).
 
 use std::collections::BTreeMap;
 
@@ -22,7 +17,7 @@ use crate::eval::{
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunRows {
     pub run_id: String,
-    /// The run's frozen case list: the cases a decision over it expects.
+    /// The run's frozen case list.
     pub case_ids: Vec<String>,
     pub invalidated: bool,
     pub trials: Vec<TrialRecord>,
@@ -43,8 +38,8 @@ pub async fn load_run_rows(access: &ConfigAccess, owner: &str, run_id: &str) -> 
 }
 
 /// One trial per `(run_id, case_id, trial_index)` slot of `cell_id`: the
-/// completed attempt with the highest number. A slot whose every attempt is
-/// still open contributes nothing, and pairing counts it as a dropped key.
+/// completed attempt with the highest number; an all-open slot contributes
+/// nothing and pairing counts it as a dropped key.
 pub fn latest_attempts<'a>(trials: &'a [TrialRecord], cell_id: &str) -> Vec<&'a TrialRecord> {
     let mut latest: BTreeMap<(&str, &str, u32), &TrialRecord> = BTreeMap::new();
     for record in trials
@@ -69,8 +64,7 @@ pub fn latest_attempts<'a>(trials: &'a [TrialRecord], cell_id: &str) -> Vec<&'a 
 }
 
 /// Each completed slot of `cell_id` in one run, with its case and the
-/// verdicts that count for it: the latest attempt's verdicts, stage ids mapped
-/// to the case's stage indices, after `latest_verdicts` supersession.
+/// verdicts that count for it.
 pub(crate) fn counted_slots<'a>(
     definition: &'a EvalDefinition,
     rows: &'a RunRows,
@@ -135,9 +129,7 @@ pub fn cell_trial_scores(
 }
 
 /// The verdict rows that count for `cell_id` in one run: those of each slot's
-/// latest completed attempt that survive regrade supersession, in slot order
-/// and then `(stage_index, check)` order. Rows of superseded or unfinished
-/// attempts, regraded rows, and rows naming no declared stage are left out.
+/// latest completed attempt that survive regrade supersession.
 pub fn counted_verdicts<'a>(
     definition: &EvalDefinition,
     rows: &'a RunRows,
@@ -168,8 +160,8 @@ pub fn paired_evidence(
     )
 }
 
-/// Several runs' pairs as one body of evidence. Pairs are appended and the
-/// counters summed: a re-run adds pairs and never replaces them.
+/// Several runs' pairs as one body of evidence: a re-run adds pairs and never
+/// replaces them.
 pub fn concat_paired(parts: &[PairedEvidence]) -> PairedEvidence {
     let mut total = PairedEvidence::default();
     for part in parts {
@@ -241,7 +233,7 @@ pub(crate) mod tests {
     }
 
     /// One trial slot of case `disk-warning`. `score_bp: None` leaves the
-    /// attempt unfinished (null completion, no verdict).
+    /// attempt unfinished.
     pub(crate) struct Slot {
         pub cell: &'static str,
         pub trial_index: u32,
@@ -342,7 +334,7 @@ pub(crate) mod tests {
         later.attempt = 2;
         let rows = run_rows("run", &[slot("base", 0, 0), later]);
         let scores = cell_trial_scores(&one_case_definition(), &rows, "base");
-        assert_eq!(scores.len(), 1, "one slot, one score: {scores:?}");
+        assert_eq!(scores.len(), 1);
         assert_eq!(scores[0].score, CaseTrialScore::Scored(10_000));
     }
 
@@ -373,8 +365,6 @@ pub(crate) mod tests {
         assert!(cell_trial_scores(&one_case_definition(), &only_open, "base").is_empty());
     }
 
-    /// F1: slots are keyed by run as well, so the same `(case, trial_index)` in
-    /// two runs is two slots, never one ambiguous one.
     #[test]
     fn the_same_slot_in_two_runs_is_two_slots() {
         let mut first = run_rows("run-a", &[slot("base", 0, 10_000)]);
@@ -403,8 +393,6 @@ pub(crate) mod tests {
             .all(|pair| (pair.baseline_bp, pair.candidate_bp) == (0, 10_000)));
     }
 
-    /// F1: a re-run adds pairs; it never replaces them and never makes a
-    /// shared key ambiguous.
     #[test]
     fn concatenating_two_runs_adds_their_pairs() {
         let definition = one_case_definition();
@@ -423,8 +411,7 @@ pub(crate) mod tests {
         assert_eq!(both.keys, 4);
         assert_eq!((both.dropped_baseline, both.dropped_candidate), (0, 0));
         assert!(
-            both.pairs.iter().all(|pair| pair.candidate_bp == 10_000),
-            "no pair was imputed: {both:?}"
+            both.pairs.iter().all(|pair| pair.candidate_bp == 10_000)
         );
         assert_eq!(concat_paired(&[one.clone()]), one);
     }
@@ -475,8 +462,7 @@ pub(crate) mod tests {
                 tokens: 20,
                 trials: 2,
                 missing: 1,
-            },
-            "input and output are summed; a trial with neither is missing"
+            }
         );
     }
 }

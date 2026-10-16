@@ -82,8 +82,6 @@ private def grants : List Grant :=
   , .hosts [⟨.exact (.ip loopback6), true, some 8080⟩]
   , .hosts [⟨.exact (.ip (v4 169 254 169 254)), true, none⟩, ⟨.exact (.name "example.com"), false, none⟩] ]
 
-/-- Hostname targets pair with each resolution shape; an IP literal resolves
-to itself. -/
 private def targets : List (Target × List Addr) :=
   let names := ["api.example.com", "example.com", "deep.api.example.com", "other.test"]
   let shapes := [[publicIp], [], [publicIp, v4 10 0 0 5], [publicIp, loopback6]]

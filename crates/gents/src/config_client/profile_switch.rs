@@ -1,6 +1,5 @@
 //! Moving a profile, and the profiles that share its account, to another
-//! account of the same provider. An operator write: nothing in `self_config`
-//! reaches it.
+//! account of the same provider. An operator write; `self_config` never reaches it.
 
 use std::collections::BTreeSet;
 
@@ -31,7 +30,6 @@ pub const SWITCH_COST: &str = "After the move the provider's prompt cache starts
 pub struct SwitchCandidate {
     pub label: String,
     pub backend_id: String,
-    /// `offered`, or `not read yet` when the backend's catalog was never read.
     pub models: &'static str,
     pub usage: UsageView,
 }
@@ -40,7 +38,6 @@ pub struct SwitchCandidate {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SwitchPlan {
     pub profile: String,
-    /// The account the profile runs on.
     pub account: ServingAccount,
     pub agents: Vec<String>,
     /// Plugins whose model slot is bound to the profile.
@@ -56,7 +53,6 @@ pub struct SwitchPlan {
 pub struct SwitchReceipt {
     pub headline: String,
     pub profile: String,
-    /// The account the profile now runs on.
     pub account: ServingAccount,
     pub backend_id: String,
     pub agents: Vec<String>,
@@ -67,9 +63,8 @@ pub struct SwitchReceipt {
     pub companions_moved: Vec<String>,
 }
 
-/// The accounts `profile_id` can move to. `plugin_slots` are the plugins
-/// bound to the profile on the host, which only the caller can read. With no
-/// candidate, the error says how to add an account.
+/// The accounts `profile_id` can move to; `plugin_slots` are the plugins bound
+/// to the profile on the host, which only the caller can read.
 pub async fn switch_candidates(
     access: &ConfigAccess,
     node_did: &str,
@@ -131,10 +126,10 @@ pub async fn switch_candidates(
 }
 
 /// Move `profile_id` to `target_backend_id`, and with `move_companions` the
-/// companions the target offers, in one transaction. Refused, writing
-/// nothing, for another provider's account, the same account, an account
-/// that is not enabled and a model the target does not offer. Accounts are
-/// read just before the transaction.
+/// companions the target offers, in one transaction. Refused, writing nothing,
+/// for another provider's account, the same account, a disabled account, or a
+/// model the target does not offer. Accounts are read just before the
+/// transaction.
 pub async fn switch_profile_account(
     access: &ConfigAccess,
     node_did: &str,
@@ -313,8 +308,7 @@ impl Snapshot {
         })
     }
 
-    /// The other profiles (own or compaction) of the agents on the
-    /// profile that run on the same account.
+    /// The other profiles (own or compaction) of the profile's agents on the same account.
     fn companions(&self, accounts: &[AccountSummary]) -> Vec<InferenceProfile> {
         let own = account_key(&self.backend, accounts);
         let ids: BTreeSet<String> = self

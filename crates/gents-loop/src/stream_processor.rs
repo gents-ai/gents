@@ -29,8 +29,6 @@ where
     persistence_hook: &'a H,
     stream_writer: &'a W,
     lifecycle: &'a mut L,
-    // pub, not private: gents' own stream_processor tests drive the
-    // accumulator directly.
     pub assistant_turn: AssistantTurnAccumulator,
     pub streamed_text: String,
     committed_text_len: usize,
@@ -136,9 +134,7 @@ where
         self.lifecycle.validate_owned_execution().await
     }
 
-    /// When this turn's buffered tokens are next due to be written, if any
-    /// are buffered. A driver waits on this instead of polling, so a stream
-    /// that goes quiet mid-batch still lands its tokens on time.
+    /// When this turn's buffered tokens are next due to be written, if any.
     pub async fn next_flush_deadline(&self) -> Option<tokio::time::Instant> {
         self.stream_writer.next_flush_deadline(self.doc_id).await
     }
@@ -149,7 +145,7 @@ where
             self.stream_writer
                 .flush_native_partial(self.lifecycle, &message)
                 .await?;
-            // A successful durable flush consumes the due batching signal.
+            // A durable flush consumes the due batching signal.
             self.stream_writer.flush_pending(self.doc_id).await?;
         }
         Ok(())
@@ -200,9 +196,9 @@ where
                     .stream_writer
                     .publish_native_turn(self.lifecycle, turn, attempt, &message)
                     .await?;
-                // Acceptance also commits bytes still waiting for the batch
-                // timer. Consume that signal before clearing the accumulator,
-                // or a due timer can starve post-publication dispatch/finalization.
+                // Acceptance commits bytes waiting on the batch timer; consume
+                // that signal before clearing the accumulator or a due timer
+                // can starve post-publication dispatch/finalization.
                 self.stream_writer.flush_pending(self.doc_id).await?;
                 anyhow::ensure!(
                     published.accepted_tools.len() == self.pending_tool_internal_ids.len(),
@@ -240,7 +236,7 @@ where
                     .push_provider_reasoning(self.provider_profile, reasoning)?;
                 if self.provider_profile == ProviderInputProfile::ClaudeMessages {
                     // The final block must agree with the received prefix;
-                    // flushing also retains fields absent from Rig deltas.
+                    // flushing retains fields absent from Rig deltas.
                     self.flush_pending().await?;
                 } else if !rendered.is_empty() {
                     let flush_due = self
@@ -416,8 +412,7 @@ where
     }
 
     // Not `#[cfg(test)]`: gents' own stream_processor tests call this, and a
-    // cfg(test) item in this crate is invisible to a dependent crate's own
-    // test build.
+    // cfg(test) item in this crate is invisible to a dependent crate's test build.
     pub fn has_observable_activity(&self) -> bool {
         self.assistant_turn.has_content()
             || !self.streamed_text.trim().is_empty()

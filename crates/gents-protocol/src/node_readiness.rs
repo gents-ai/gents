@@ -1,10 +1,8 @@
-//! Canonical runtime-authored node-readiness wire contract.
-//!
-//! Runtime configuration is never treated as proof that an agent can accept
-//! work. The source projector admits only installed dispatchers not vetoed by
-//! explicit unavailability or a generation-owned startup demotion. The client
-//! projector then fails closed on missing, malformed, non-ready, or generation-
-//! skewed observations. This is last-known application state, not connectivity.
+//! Canonical runtime-authored node-readiness wire contract: last-known
+//! application state, not connectivity. The source projector admits only
+//! installed dispatchers not vetoed by explicit unavailability or a
+//! generation-owned startup demotion; the client projector then fails closed
+//! on missing, malformed, non-ready, or generation-skewed observations.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -65,7 +63,7 @@ pub enum AgentReadinessUnavailableReason {
 }
 
 impl AgentReadinessUnavailableReason {
-    /// Stable presentation-safe admission message. Resolver diagnostics are
+    /// Stable presentation-safe admission message; resolver diagnostics are
     /// deliberately excluded from durable request state and client views.
     pub const fn public_message(self) -> &'static str {
         match self {
@@ -96,12 +94,11 @@ impl AgentReadinessUnavailableReason {
     ];
 }
 
-/// Routing's admission message for an agent the active runtime does not assign.
 pub const BEHAVIOR_NOT_ASSIGNED_MESSAGE: &str = "behavior is not assigned to this runtime";
 
 /// Whether `failure_reason` is exactly one of routing's pre-dispatch
-/// behavior-unavailability rejections. Routing writes these stable messages,
-/// never resolver diagnostics, so exact comparison identifies the cause.
+/// behavior-unavailability rejections (routing writes stable messages, never
+/// resolver diagnostics, so exact comparison identifies the cause).
 pub fn is_behavior_unavailable_rejection(failure_reason: &str) -> bool {
     failure_reason == BEHAVIOR_NOT_ASSIGNED_MESSAGE
         || AgentReadinessUnavailableReason::ALL

@@ -469,7 +469,6 @@ mod tests {
         .await
         .expect("read memory");
         let parsed: Value = serde_json::from_str(&output).unwrap();
-        // upsert overwrites rather than duplicating: the re-written value wins.
         assert_eq!(parsed["found"], true);
         assert_eq!(parsed["value"], "second");
     }

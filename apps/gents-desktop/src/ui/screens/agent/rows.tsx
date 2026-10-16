@@ -1,4 +1,3 @@
-/* the settings-group pattern from the kit, with the pieces this screen repeats */
 import type { ReactNode } from "react";
 import {
   FieldContent,
@@ -16,7 +15,6 @@ export function Group({
   children,
   action,
 }: {
-  /* optional: a panel with one self-explanatory field needs no heading */
   title?: string;
   children: ReactNode;
   action?: ReactNode;
@@ -84,7 +82,6 @@ export function StackedRow({
   );
 }
 
-/* a read-only value, in mono when it is an identifier */
 export function Fact({
   children,
   mono = false,

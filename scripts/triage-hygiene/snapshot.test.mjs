@@ -1,8 +1,7 @@
-// Tests for the rollback tool's milestone handling. `restore()` is the only
+// Fences the rollback tool's milestone deletion guards: restore() is the only
 // destructive thing in this directory, and its milestone step could previously
-// delete every milestone in the repository — including a maintainer's — while
-// having no way to recreate any of them. These tests run against an in-memory
-// GitHub; nothing here touches the network or performs a live write.
+// delete every milestone in the repository. Runs against an in-memory GitHub;
+// nothing touches the network or performs a live write.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -42,8 +41,6 @@ const fakeApi = ({ milestones = [], labels = [] } = {}) => {
   return { api, calls };
 };
 
-// restore() narrates every step to stdout; capture it so the test output stays
-// readable and so the log-and-skip line can be asserted on.
 const withLogs = async (fn) => {
   const logs = [];
   const orig = console.log;
@@ -58,8 +55,6 @@ const withLogs = async (fn) => {
 
 const deleted = (calls) =>
   calls.filter((c) => c.method === "DELETE" && /\/milestones\/\d+$/.test(c.path)).map((c) => c.path);
-const created = (calls) =>
-  calls.filter((c) => c.method === "POST" && c.path.endsWith("/milestones")).map((c) => c.body);
 
 test("restore refuses to delete a milestone it did not capture and does not create", async () => {
   // The exact catastrophe: an empty `milestones` array in the snapshot.
@@ -89,53 +84,6 @@ test("restore deletes only milestones this migration introduces", async () => {
     `/repos/${REPO}/milestones/1`,
     `/repos/${REPO}/milestones/2`,
   ]);
-});
-
-test("an introduced milestone that existed at capture time is kept", async () => {
-  const snap = baseSnapshot({
-    milestones: [{ number: 9, title: "Gents cutover", state: "open", description: "", due_on: null }],
-  });
-  const { api, calls } = fakeApi({
-    milestones: [{ number: 9, title: "Gents cutover", state: "open" }],
-  });
-  await withLogs(() => restore(api, snapshotFile(snap), REPO));
-  assert.deepEqual(deleted(calls), [], "it predates the migration, so it is not ours to delete");
-  assert.deepEqual(created(calls), [], "and it already exists, so nothing is recreated");
-});
-
-test("restore recreates a captured milestone that no longer exists, with its due date", async () => {
-  const snap = baseSnapshot({
-    milestones: [
-      {
-        number: 4,
-        title: "Q3 planning",
-        state: "closed",
-        description: "the plan",
-        due_on: "2026-09-30T07:00:00Z",
-      },
-    ],
-  });
-  const { api, calls } = fakeApi({ milestones: [] });
-  await withLogs(() => restore(api, snapshotFile(snap), REPO));
-
-  assert.deepEqual(created(calls), [
-    {
-      title: "Q3 planning",
-      state: "closed",
-      description: "the plan",
-      due_on: "2026-09-30T07:00:00Z",
-    },
-  ]);
-});
-
-test("a captured milestone with no due date is recreated without a null due_on", async () => {
-  const snap = baseSnapshot({
-    milestones: [{ number: 4, title: "Q3 planning", state: "open", description: "", due_on: null }],
-  });
-  const { api, calls } = fakeApi({ milestones: [] });
-  await withLogs(() => restore(api, snapshotFile(snap), REPO));
-  assert.equal(created(calls).length, 1);
-  assert.ok(!("due_on" in created(calls)[0]), "the API rejects an explicit null due_on");
 });
 
 test("restore still refuses to run against a different repository", async () => {

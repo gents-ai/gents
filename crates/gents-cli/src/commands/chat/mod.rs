@@ -122,8 +122,7 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
 }
 
 /// Minimal, one-line context for the interactive prompt: which node is
-/// listening. Falls back through the sources that can name it, and finally
-/// to a generic label rather than a bare `>` with no context (#1622).
+/// listening.
 fn chat_prompt_label(
     args: &ChatArgs,
     runtime_state: Option<&crate::shared::StoredRuntimeState>,
@@ -135,10 +134,9 @@ fn chat_prompt_label(
     )
 }
 
-/// Routes a candidate node-name label through the same control/newline
-/// stripping and bounding used for tool summaries: `node_name` can come
-/// from `--node-name` or stored runtime state, neither of which is trusted
-/// terminal input, and this prompt is printed on every turn.
+/// Routes a candidate node-name label through the same stripping used for
+/// tool summaries: `node_name` comes from `--node-name` or stored runtime
+/// state, neither of which is trusted terminal input.
 fn sanitize_prompt_label(name: Option<String>) -> String {
     name.and_then(|name| sanitize_summary_text(&name, SUMMARY_ARGUMENT_MAX_CHARS))
         .unwrap_or_else(|| "gents".to_string())
@@ -302,8 +300,8 @@ fn write_text_output_file(path: &Path, content: &str) -> Result<()> {
     Ok(())
 }
 
-/// Terminal envelope selection only; `TerminalMessage` carries the exact
-/// terminal presentation, and `TerminalNoMessage` is explicit absence.
+/// Terminal envelope selection only; the presentation itself is owned by
+/// `TerminalMessage`.
 fn terminal_presentation(
     envelope: &RequestOutputEnvelope,
 ) -> Option<&crate::CliOutputPresentation> {

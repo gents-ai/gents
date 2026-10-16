@@ -1,13 +1,4 @@
 //! Gents desktop bridge: Tauri plugin + view models + command logic.
-//!
-//! Hosts compose with:
-//! ```ignore
-//! gents_desktop_bridge::install_runtime();
-//! tauri::Builder::default()
-//!     .plugin(gents_desktop_bridge::init(BridgeConfig::default()))
-//! ```
-//!
-//! Invoke paths: `plugin:gents-desktop-bridge|<command>`.
 
 pub mod approvals_watch;
 pub mod cause_derivation;

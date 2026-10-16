@@ -74,9 +74,8 @@ async fn load_agent_request_by_request_id(
     }
 
     // Goal-backed manual runs are committed atomically on the managed
-    // runtime so Goal, GoalCreationClaim and AgentRequest become visible
-    // together. Resolve their document ID at that authoritative operator
-    // node instead of racing the runtime-to-client P2P projection.
+    // runtime, so the document ID is resolved at that authoritative operator
+    // node rather than racing the runtime-to-client P2P projection.
     let response = core.operator_access(node_did)?.execute(&query).await?;
     let row = response
         .pointer("/data/AgentRequest/0")

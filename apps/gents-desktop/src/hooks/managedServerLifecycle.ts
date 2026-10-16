@@ -18,12 +18,6 @@ const managedServerRestoreInFlight = new WeakMap<
   Promise<boolean | null>
 >();
 
-/**
- * Observes the OS-owned service at launch. Concurrent callers share one
- * observation, so only the first caller's `onWait` and `signal` apply.
- * Rejects with `ManagedServerStartupError` when the service stays booting or
- * blocked past the bridge's bounds, or reports a failure.
- */
 export function restoreManagedServer(
   api: DesktopApiAdapter,
   options: RestoreOptions = {},
@@ -69,7 +63,6 @@ async function restoreManagedServerOnce(
   const nodeName = status.nodeName?.trim();
   const startManagedServer = api.startManagedServer;
   if (
-    awaitedApproval &&
     status.autoStart &&
     !signal?.aborted &&
     !status.approvalRequired &&
@@ -91,8 +84,5 @@ async function restoreManagedServerOnce(
       );
     }
   }
-  // Native launchd/systemd ownership is intentionally independent of the GUI.
-  // A stopped enabled service is an OS observation, not permission for this
-  // frontend to create a second process during application startup.
   return false;
 }

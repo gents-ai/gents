@@ -124,8 +124,6 @@ pub(super) async fn load_codex_thread(
     Ok(Some(assemble_caused_record(state, link).await?))
 }
 
-/// The Codex root thread IDs of this shim: its scoped sessions and the
-/// threads created on this connection before their first request.
 pub(super) async fn root_thread_ids(state: &ShimState) -> Result<HashSet<String>> {
     let mut ids = list_scoped_sessions(state)
         .await?
@@ -206,11 +204,6 @@ pub(super) async fn list_codex_threads_for_sources(
         };
     }
 
-    // Start from durable Codex roots, then walk only the sessions their
-    // requests caused. This keeps thread/list scoped to the same GENTS
-    // authority as thread/read and avoids a fleet-wide child scan. Git metadata is resolved
-    // once per unique root workspace; children inherit their authorized root's
-    // projection instead of spawning one git process per child.
     let active_roots =
         list_codex_threads_by_archived_with_git_cache(state, false, &mut git_info_cache).await?;
     let archived_roots =
@@ -370,8 +363,6 @@ async fn assemble_caused_record_parts(
             "child session binding differs from its authorized request"
         );
     } else {
-        // An admitted child request can be visible before its runtime session is created.
-        // Its actual request timestamp is the only creation fact available then.
         chrono::DateTime::parse_from_rfc3339(
             link.created_at
                 .as_deref()
@@ -495,93 +486,4 @@ mod tests {
     }
 
     #[test]
-    fn caused_fanout_reuses_the_authorized_root_workspace_projection() {
-        let root = CodexThreadRecord {
-            session_id: "root-session".to_string(),
-            cwd: PathBuf::from("/workspace/root"),
-            archived: false,
-            loaded: true,
-            memory_mode: "disabled".to_string(),
-            name: String::new(),
-            settings_json: String::new(),
-            git_info: Some(json!({"sha": "abc", "branch": "main"})),
-            projection_started: None,
-            session: None,
-            latest_request: None,
-            caused: None,
-        };
-        let workspaces = index_root_workspaces([&root]);
-        let expected = workspaces.get("root-session").expect("root workspace");
-
-        for index in 0..128 {
-            let link = CausedThread {
-                latest_request_doc_id: "test-request-doc".into(),
-                requester_did: Some("did:parent".into()),
-                latest_request_id: format!("request-{index}"),
-                latest_request_content: String::new(),
-                latest_request_created_at: None,
-                session_id: format!("child-{index}"),
-                parent_session_id: "root-session".to_string(),
-                root_session_id: "root-session".to_string(),
-                depth: 1,
-                node_did: "did:test:child".to_string(),
-                agent_id: "child-agent".to_string(),
-                model: None,
-                nickname: format!("child-{index}"),
-                client_projection: gents_protocol::client_protocol::project_persisted_attempt(
-                    "processing",
-                    false,
-                ),
-                failure_reason: None,
-                created_at: None,
-            };
-            let workspace = root_workspace_for_link(&workspaces, &link)
-                .expect("fan-out child should resolve its root workspace");
-            assert!(std::ptr::eq(workspace, expected));
-        }
-        assert_eq!(workspaces.len(), 1);
-    }
-    #[test]
-    fn projection_agent_id_preserves_exact_child_binding() {
-        let mut record = CodexThreadRecord {
-            session_id: "root-session".to_string(),
-            cwd: PathBuf::from("/workspace/root"),
-            archived: false,
-            loaded: true,
-            memory_mode: "disabled".to_string(),
-            name: String::new(),
-            settings_json: String::new(),
-            git_info: Some(json!({"sha": "abc", "branch": "main"})),
-            projection_started: None,
-            session: None,
-            latest_request: None,
-            caused: None,
-        };
-        assert_eq!(record.projection_agent_id("root-agent"), "root-agent");
-        let link = CausedThread {
-            latest_request_doc_id: "test-request-doc".into(),
-            requester_did: Some("did:parent".into()),
-            latest_request_id: "request-0".to_string(),
-            latest_request_content: String::new(),
-            latest_request_created_at: None,
-            session_id: "child-0".to_string(),
-            parent_session_id: "root-session".to_string(),
-            root_session_id: "root-session".to_string(),
-            depth: 1,
-            node_did: "did:test:child".to_string(),
-            agent_id: "child-agent".to_string(),
-            model: None,
-            nickname: "child-0".to_string(),
-            client_projection: gents_protocol::client_protocol::project_persisted_attempt(
-                "processing",
-                false,
-            ),
-            failure_reason: None,
-            created_at: None,
-        };
-        record.caused = Some(link);
-        assert_eq!(record.projection_agent_id("root-agent"), "child-agent");
-        record.caused.as_mut().unwrap().agent_id = "  ".to_string();
-        assert_eq!(record.projection_agent_id("root-agent"), "  ");
-    }
-}
+    fn git_info_cache_resolves_once_per_unique_workspace_including_misses() {

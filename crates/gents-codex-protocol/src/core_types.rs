@@ -1,5 +1,3 @@
-//! Small, wire-compatible leaf types formerly imported from `codex-protocol`.
-
 use std::fmt;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};

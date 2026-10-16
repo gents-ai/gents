@@ -25,7 +25,6 @@ const summary = (over: Partial<SessionSummary>) =>
     ...over,
   }) as SessionSummary;
 
-/* two nodes, the first selected; the second runs the reviewer */
 function twoNodes(remote: Record<string, unknown> = {}) {
   return testApp({
     deployments: [

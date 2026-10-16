@@ -32,8 +32,6 @@ def sampleOpen : Segment := { sampleComplete with id := 102, close := none }
 def sampleRetracted : Segment :=
   { sampleComplete with id := 103, flush := none, close := some .retracted }
 
-/-- A benign late raw flush is outside the already committed one-segment
-extent, carries no competing closure, and has a distinct immutable identity. -/
 def sampleLateBeyondExtent : Segment :=
   { sampleComplete with
     id := 104
@@ -54,8 +52,6 @@ def sampleOpenContinuation : Segment :=
     flush := some ⟨1, [⟨0, 1, none⟩, ⟨1, 1, none⟩], [67, 68]⟩
     createdAt := 6 }
 
-/-- The committed extent exists, but its declared run lengths consume more
-bytes than the immutable payload contains. -/
 def sampleMalformedSealed : Segment :=
   { sampleComplete with
     flush := some ⟨0,
@@ -84,9 +80,6 @@ def sampleArguments : Declaration :=
   { block := 1, part := 0, kind := .arguments
     tool := some ⟨"provider-call", some "call-alias", "lookup"⟩ }
 
-/-- A native assistant payload which exercises both nested reasoning parts and
-tool-call argument JSON. Expectations for this witness still come exclusively
-from `project`/`reconstructMessage`; this is not a second projection policy. -/
 def sampleNativePayload : Segment :=
   { id := 110, coordinate := sampleCoordinate, writer := .request 7
     flush := some ⟨0,
@@ -184,8 +177,6 @@ def viewName : View → String
   | .retainedPartial _ => "retained_partial"
   | .published _ _ => "published"
 
-/-- The presentation projection intentionally excludes encrypted/redacted opaque
-reasoning even though canonical reconstruction retains it losslessly. -/
 def renderedKinds : View → List String
   | .live streams | .retainedPartial streams =>
       streams.filterMap fun stream => match stream.1.kind with
@@ -430,9 +421,6 @@ theorem closed_preview_ignores_malformed_data_beyond_committed_extent :
       (messages := []) (messageId := none)) = .settling [(sampleText, [65])] := by
   native_decide
 
-/-- This deliberately does not claim arbitrary late records are harmless:
-same-ID or in-extent twins remain conflicts. The witness is distinct, closureless
-and outside the selected closure's committed extent. -/
 theorem benign_late_record_beyond_extent_preserves_publication :
     project (baseObservation
       (records := CanonicalOutput.deliver [sampleComplete] sampleLateBeyondExtent)) =
@@ -445,9 +433,6 @@ theorem late_in_extent_twin_is_not_benign :
       .conflicted := by
   native_decide
 
-/-- Executable non-rewind regression for a valid contiguous append. This pins
-the actual projected bytes, rather than inferring prefix safety merely from
-record retention. -/
 theorem valid_open_append_extends_live_preview :
     project (baseObservation (records := [sampleOpen])
       (messages := []) (messageId := none)) =

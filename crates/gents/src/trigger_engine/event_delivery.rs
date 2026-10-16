@@ -1,5 +1,5 @@
 //! Shared event selection and durable group observation for task triggers and
-//! callback bindings. Publication stays with each existing request/invocation owner.
+//! callback bindings.
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use gents_protocol::event_delivery::{EventConsumer, EventGroupState};
@@ -15,7 +15,6 @@ pub(crate) const GROUP_RECOVERY_PAGE_SIZE: usize = 256;
 
 pub(crate) mod source_scan;
 
-/// Borrow existing resolved/configuration owners; no second writable config.
 #[derive(Clone, Copy)]
 pub(crate) enum Delivery<'a> {
     Trigger {
@@ -160,8 +159,6 @@ impl Delivery<'_> {
         Ok(())
     }
     pub(crate) fn config_key(&self) -> String {
-        // Membership changes start another clock; prompt/count/deadline changes
-        // retain the observed first-seen time, as the existing event contract requires.
         digest(&json!([
             self.collection(),
             self.filter(),
@@ -504,9 +501,6 @@ pub(crate) fn group_candidate_eligible(
         }
 }
 
-/// Requests themselves are the publication marker. Ordinary grouped requests
-/// retain the fire key as their ID; goal requests retain it through the existing
-/// goal identity owner. Task or goal-mode edits cannot erase a prior delivery.
 pub(crate) fn request_matches_fire_key(owner: &str, request_id: &str, fire_key: &str) -> bool {
     request_id == fire_key || crate::goal::task_goal_fire_key(request_id, owner) == Some(fire_key)
 }

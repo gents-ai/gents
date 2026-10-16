@@ -4,21 +4,10 @@ import Proofs.CanonicalOutput.Hydration
 import Mathlib.Data.List.Basic
 import Mathlib.Data.List.Dedup
 
-/-!
-# Header-only session forks
-
-The source owner supplies one authorized coherent snapshot and an exclusive
-message-sequence cut. A fork creates child `MessageEnvelope` rows so the native
-blocks, native ID, references, outcome and creation provenance stay exact; only
-the child header identity/session/publication, child-scoped key and request
-membership change. It creates no payload, segment or tool-call row.
--/
 namespace SessionFork
 
 open CanonicalOutput
 
-/-- Compaction entries remain child-session metadata. Their inclusive cursor
-must name a retained child message sequence. -/
 structure Compaction where
   id : DocId
   session : SessionId
@@ -50,8 +39,6 @@ theorem copied_header_satisfies_reader_provenance (child : AgentSession.Scope)
     Hydration.forkMetadataMatches (copyMessage child id key origin) origin = true := by
   simp [Hydration.forkMetadataMatches, copyMessage, forkHeader]
 
-/-- The publisher and reader use the same sequence space. No per-message
-remapping can change tool-pair order or what an inherited compaction cursor names. -/
 theorem copied_prefix_preserves_order (source : History) (child : AgentSession.Scope)
     (ids : DocId → DocId) (keys : String → String) (cut : Nat) :
     ((copyPrefix source child ids keys cut).messages.map (·.sequence)) =
@@ -80,9 +67,9 @@ def structurallyValid (history : History) : Bool :=
     decide (history.messages.map (·.key)).Nodup &&
     decide (documentIds history).Nodup && cursorPrefixesExist history
 
-/-- Exact source snapshot grant returned by the existing document owner.  The
-complete parent scope is part of the grant and every copied header/compaction
-must be named; a session-only or boolean grant is not accepted. -/
+/-- Exact source snapshot grant from the existing document owner: the complete
+parent scope is part of the grant and every copied header/compaction must be
+named; a session-only or boolean grant is not accepted. -/
 structure SourceAuthorization where
   owner : AgentSession.Scope
   messageDocuments : List DocId
@@ -96,7 +83,7 @@ def authorizes (authorization : SourceAuthorization) (parent : AgentSession.Scop
     source.compactions.all (fun compaction => authorization.compactionDocuments.contains compaction.id)
 
 /-- Revision, authorization and source idleness remain inputs from existing
-owners. Allocators apply only to child messages/compactions and message keys;
+owners; allocators apply only to child messages/compactions and message keys —
 payload, segment and tool identities are never remapped. -/
 def publish (source : History) (parent child : AgentSession.Scope)
     (childDocumentId : DocId → DocId) (childKey : String → String) (cut : Nat)
@@ -168,9 +155,6 @@ theorem published_cursor_names_child_message
   simp only [cursorPrefixesExist, List.all_eq_true] at hvalid
   simpa only [List.any_eq_true, beq_iff_eq] using hvalid cursor hcursor
 
-/-- Successful publication restores the durable postconditions: every output
-row is in the child session, has a fresh identity, and retains its exact source
-origin. -/
 theorem publish_postconditions
     (source : History) (parent child : AgentSession.Scope)
     (childDocumentId : DocId → DocId) (childKey : String → String) (cut : Nat)
@@ -199,9 +183,6 @@ theorem publish_postconditions
     exact ⟨origin, horigin, hcopy⟩
   · contradiction
 
-/-- Origin messages and closing records are retention dependencies, not copied
-child payload. Exact extents and derived request/tool owners are added by
-canonical hydration closure. -/
 structure RetentionDependencies where
   originMessages : List DocId
   closingRecords : List DocId

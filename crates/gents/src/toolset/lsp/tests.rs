@@ -5,16 +5,6 @@ use crate::tool_surface::{
 use crate::toolset::shared::ToolContext;
 use crate::toolset::{CommandConstraints, CommandExecutionMode, CommandNetworkMode};
 
-fn first_line_containing(path: &std::path::Path, needle: &str) -> u32 {
-    let text = std::fs::read_to_string(path).unwrap_or_else(|err| {
-        panic!("read {}: {err}", path.display());
-    });
-    text.lines()
-        .position(|line| line.contains(needle))
-        .map(|idx| u32::try_from(idx + 1).expect("line"))
-        .unwrap_or_else(|| panic!("{}: missing `{needle}`", path.display()))
-}
-
 fn rustc_sysroot() -> Option<String> {
     let output = std::process::Command::new("rustc")
         .args(["--print", "sysroot"])
@@ -1700,8 +1690,8 @@ async fn rust_analyzer_starts_and_reports_ready() {
         .join("tests/fixtures/lsp_rust_workspace");
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(root.path().join("src")).unwrap();
-    // rust-analyzer prefers Cargo.toml over rust-project.json. An isolated
-    // temp crate has no lockfile/target, so cargo loading yields empty hover.
+    // rust-analyzer prefers Cargo.toml over rust-project.json; cargo loading on
+    // an isolated temp crate (no lockfile/target) yields empty hover.
     std::fs::copy(src.join("src/lib.rs"), root.path().join("src/lib.rs")).unwrap();
     write_isolated_rust_project(root.path());
     assert!(
@@ -1709,10 +1699,9 @@ async fn rust_analyzer_starts_and_reports_ready() {
         "rustc --print sysroot is required for the isolated rust-project.json fixture"
     );
     let mut server = rust_analyzer_server(8_000);
-    // The fixture lives outside the repository's toolchain override. Bind
-    // the host binary from the same toolchain checked above; resolving the
-    // rustup proxy relative to the temporary project can select a different
-    // default toolchain with no rust-analyzer component installed.
+    // The fixture lives outside the repository toolchain override; bind the
+    // host binary from the toolchain checked above, not the rustup proxy
+    // relative to the temporary project.
     server.command = super::admit::admit_command(
         "rust-analyzer",
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
@@ -1802,9 +1791,6 @@ async fn rust_analyzer_hover_on_gents_crate() {
         .expect("workspace root");
     let auth = workspace_root.join("crates/gents/src/toolset/lsp/auth.rs");
     let policy = workspace_root.join("crates/gents-loop/src/tool_policy.rs");
-    let advertised_line = first_line_containing(&auth, "pub fn lsp_advertised");
-    let meet_line =
-        first_line_containing(&policy, "More restrictive mode wins: Disabled < Inherit") + 1;
     let tool = LspTool::new(
         sample_config(
             workspace_root,
@@ -1844,7 +1830,7 @@ async fn rust_analyzer_hover_on_gents_crate() {
         .call(LspArgs {
             action: "hover".into(),
             file: Some("crates/gents/src/toolset/lsp/auth.rs".into()),
-            line: Some(advertised_line),
+            line: Some(first_line_containing(&auth, "pub fn lsp_advertised")),
             symbol: Some("lsp_advertised".into()),
             query: None,
             new_name: None,
@@ -1863,7 +1849,10 @@ async fn rust_analyzer_hover_on_gents_crate() {
         .call(LspArgs {
             action: "hover".into(),
             file: Some("crates/gents-loop/src/tool_policy.rs".into()),
-            line: Some(meet_line),
+            line: Some(
+                first_line_containing(&policy, "More restrictive mode wins: Disabled < Inherit")
+                    + 1,
+            ),
             symbol: Some("meet".into()),
             query: None,
             new_name: None,
@@ -1932,10 +1921,6 @@ fn code_action_query_selects_title_or_index() {
     assert_eq!(unresolved["title"], "Need resolve");
 }
 
-// Action caps (MAX_DIAGNOSTICS / MAX_WORKSPACE_SYMBOLS / …) are owned by
-// `actions.rs` constants; their application at truncation sites is pinned by
-// `document_symbol_cap_is_global_and_output_is_qualified` — restating the
-// numeric values here added no guarantee.
 #[test]
 fn redacts_single_location_workspace_symbol_and_nested_diagnostics() {
     let root = tempfile::tempdir().unwrap();

@@ -10,11 +10,8 @@ use crate::ensure_runtime_schemas;
 use crate::tool_surface::ToolCeiling;
 use crate::toolset::ToolSet;
 
-/// Install an explicit canonical agent/context/tools/profile/backend chain
-/// (shared `test_support::install_test_agent`) and bind it as the
-/// node's explicit default. `ensure_node` returns the
-/// `Node` only and invents no executable configuration, so a test
-/// that needs a runnable default chooses one deliberately.
+/// Installs the canonical agent/context/tools/profile/backend chain and binds
+/// it as the node's explicit default.
 async fn install_default_behavior_chain(node: &Arc<EmbeddedNode>, did: &str, agent_id: &str) {
     crate::test_support::install_test_agent(node, did, agent_id).await;
     crate::document_config::ensure_node(node, did)
@@ -49,7 +46,6 @@ async fn from_default_agent_documents_preserves_identity_only_principal() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("bootstrap-profile"));
     let did = identity.did().to_string();
-    // Identity bootstrap deliberately creates no executable default.
     crate::document_config::ensure_node(&node, &did)
         .await
         .unwrap();
@@ -78,9 +74,6 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
     let default_agent_id = default_agent_id_for_node(&did);
 
     install_default_behavior_chain(&node, &did, &default_agent_id).await;
-    // The #649 sampling pins: an explicit sampling document is the only way a
-    // profile can express sampling beyond temperature; the chain it must reach
-    // the provider request body through is behavior.sampling.
     let sampling_id = format!("{default_agent_id}:sampling");
     write_document(
         &node,
@@ -136,7 +129,6 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
     crate::document_config::upsert_inference_profile(&node, &profile)
         .await
         .unwrap();
-    // Context owns literal system instructions.
     let mut context = load_installed_context(&node, &did, &default_agent_id).await;
     context.system_prompt = Some("You are precise.".to_string());
     upsert_context(&node, &context).await;
@@ -186,10 +178,6 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
     assert_eq!(behavior.stream_liveness_timeout, Duration::from_secs(45));
     assert_eq!(behavior.deadline_duration, Duration::from_secs(120));
 
-    // #649: the profile's sampling knobs must land on the agent. This hop
-    // hardcoded `top_p: None, top_k: None`, so a profile could not express any
-    // sampling beyond temperature and every agent silently inherited whatever
-    // the served checkpoint's generation_config.json baked in.
     assert_eq!(behavior.sampling.temperature, Some(0.2));
     assert_eq!(behavior.sampling.top_p, Some(0.95));
     assert_eq!(behavior.sampling.top_k, Some(40));
@@ -202,7 +190,6 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
         Some(crate::config::ReasoningEffort::Max)
     );
 
-    // ...and from the agent they must reach the provider request body.
     let params = behavior
         .sampling
         .additional_params()
@@ -298,8 +285,6 @@ async fn from_default_agent_documents_resolves_tool_selection_with_ceiling() {
     let default_agent_id = default_agent_id_for_node(&did);
 
     install_default_behavior_chain(&node, &did, &default_agent_id).await;
-    // A second enabled agent the agent target can point at, plus the
-    // scoped AgentTargetDocument and the Tools.agents selection.
     crate::test_support::install_test_agent(&node, &did, "researcher").await;
     write_document(
         &node,
@@ -342,8 +327,6 @@ async fn from_default_agent_documents_resolves_tool_selection_with_ceiling() {
 
     let behavior = &agent.agents()[0];
     assert_eq!(behavior.agent_id, default_agent_id);
-    // The readonly ceiling still bounds the canonical chain: file/bash tools
-    // remain read-only regardless of what the document would grant.
     assert_eq!(behavior.tools.host_tools(), &ToolSet::readonly());
     assert!(!behavior.tools.meta_tools_requested());
     assert_eq!(
@@ -400,8 +383,6 @@ async fn from_default_agent_documents_filters_inactive_agent_targets() {
     let default_agent_id = default_agent_id_for_node(&did);
 
     install_default_behavior_chain(&node, &did, &default_agent_id).await;
-    // The destination agent exists but is disabled. The parent remains
-    // runnable while the inactive target is omitted from its presented surface.
     crate::test_support::install_test_agent(&node, &did, "disabled-researcher").await;
     let behavior: Agent =
         read_document(&node, &did, crate::Collection::Agent, "disabled-researcher").await;
@@ -466,8 +447,6 @@ async fn from_default_agent_documents_rejects_unresolved_agent_target() {
 
     install_default_behavior_chain(&node, &did, &default_agent_id).await;
     crate::test_support::install_test_agent(&node, &did, "target-before-corruption").await;
-    // The target names a agent_id that was never installed: scope resolution
-    // must fail closed with a diagnostic naming the agent_targets entry.
     write_document(
         &node,
         crate::Collection::AgentTarget,
@@ -541,8 +520,6 @@ async fn from_default_agent_documents_loads_runnable_agents_and_tracks_unavailab
         .unwrap();
     set_probe_status(&node, &did, "code:backend", "healthy").await;
     set_probe_status(&node, &did, "unhealthy:backend", "unhealthy").await;
-    // Guarded publication rejects dangling references. Corrupt one profile only
-    // after installing a valid bundle to exercise the runtime's failure path.
     let owner = crate::graphql::escape_graphql_string(&did);
     let response = node.execute(&format!(r#"mutation {{ update_InferenceProfile(filter: {{node_did: {{_eq: "{owner}"}}, profile_id: {{_eq: "broken:inference"}}}}, input: {{backend_id: "backend-missing"}}) {{_docID}} }}"#)).await;
     assert!(!response.has_errors(), "{:?}", response.errors);

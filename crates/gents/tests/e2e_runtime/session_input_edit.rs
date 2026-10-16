@@ -138,7 +138,6 @@ async fn generated_remote_edits_replicate_signed_effect_and_receipt() {
         fence.authorization_sequence,
         &fence.authorization_expires_at,
     );
-    // The applied route is produced by the enrollment and pairing owners, never a test-authored grant.
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let applied = rows(

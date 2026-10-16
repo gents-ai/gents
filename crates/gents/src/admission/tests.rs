@@ -84,7 +84,6 @@ pub(super) fn request(request_id: &str) -> AgentRequest {
 
 #[tokio::test]
 async fn current_session_id_reflects_request_scope() {
-    // Outside any admission scope there is no session id to attach.
     assert_eq!(super::current_session_id(), None);
 
     let context = AdmissionCallContext::for_request(&request("req-x"), "default", "backend-1");
@@ -100,22 +99,16 @@ async fn current_session_id_reflects_request_scope() {
     })
     .await;
 
-    // It is cleared again once the request scope ends.
     assert_eq!(super::current_session_id(), None);
 }
 
-/// `next_call` publishes the minted call identity to the shared slot, and
-/// `current_call_join()` reads it back on the same task — the seam the
-/// rendered-request capture uses for its exact `InferenceCall` join.
 #[tokio::test]
 async fn current_call_join_reflects_the_minted_call() {
     assert!(super::current_call_join().is_none());
 
     let context = AdmissionCallContext::for_request(&request("req-j"), "default", "backend-1");
-    // Keep a handle sharing the same slot Arc, exactly like scope_call clones do.
     let minting_handle = context.clone();
     scope_request(context, async move {
-        // Scoped but nothing admitted yet: no join to report.
         assert!(super::current_call_join().is_none());
 
         let first = minting_handle.next_call("runtime-test");
@@ -123,8 +116,6 @@ async fn current_call_join_reflects_the_minted_call() {
         assert_eq!(join.call_id, first.call_id);
         assert_eq!(join.call_seq, 1);
 
-        // A second admitted call replaces the slot; the join always names the
-        // call currently in flight.
         let second = minting_handle.next_call("runtime-test");
         let join = super::current_call_join().expect("join after second mint");
         assert_eq!(join.call_id, second.call_id);
@@ -133,7 +124,6 @@ async fn current_call_join_reflects_the_minted_call() {
     })
     .await;
 
-    // Cleared with the scope: no ambient join leaks across requests.
     assert!(super::current_call_join().is_none());
 }
 
@@ -698,10 +688,6 @@ async fn missing_backend_persists_backend_gone_cancelled_terminal() {
     assert_eq!(rows[0]["backend_id"], "missing");
     assert_eq!(rows[0]["call_state"], "cancelled");
     assert_eq!(rows[0]["failure_reason"], "BackendGone");
-    // The terminal row must carry the request's principal and the physical
-    // request edge: the restart recovery sweep selects stale rows by
-    // node_did, so a misattributed BackendGone row would be unrecoverable
-    // for its principal, and the logical request_id alone is not the edge.
     assert_eq!(rows[0]["node_did"], "did:test:test");
     assert_eq!(rows[0]["request_doc_id"], "doc-req-backend-gone");
     assert_reconstructed_slot_count(&rows, "missing", 0);
@@ -1127,12 +1113,6 @@ async fn scoped_oneoff_calls_are_persisted_with_oneoff_kind() {
 
 #[tokio::test]
 async fn dropped_permit_with_cancelled_token_persists_cancelled_terminal() {
-    // Validates the ComposedState::interrupted_request_cancels_live_linked_call
-    // runtime bridge for the mid-stream path: if the inference_token is cancelled
-    // at permit Drop time (e.g. daemon dropped the stream future because
-    // the request was interrupted), the persisted InferenceCall row lands
-    // as cancelled/Cancelled rather than the default
-    // failed/StreamDroppedBeforeTerminalResponse fallback.
     let node = test_node().await;
     let registry = AdmissionRegistry::new(node.clone());
     registry.reconcile(
@@ -1150,9 +1130,6 @@ async fn dropped_permit_with_cancelled_token_persists_cancelled_terminal() {
             let permit = registry.acquire_current_call_for_test().await.unwrap();
             let rows = call_rows(node.as_ref()).await;
             assert_reconstructed_slot_count(&rows, "backend-a", 1);
-            // Drop without calling finish_success/finish_failure — simulates
-            // the daemon dropping the stream future mid-stream after the
-            // request-level cancellation token fires.
             drop(permit);
         })
         .await;
@@ -1217,11 +1194,6 @@ async fn dropped_permit_with_terminal_failure_reason_persists_failed_reason() {
 
 #[tokio::test]
 async fn dropped_permit_without_cancelled_token_persists_failed_terminal() {
-    // Protects the existing default-terminal behavior for non-interrupt
-    // scenarios: when the inference_token is absent (or present but not
-    // cancelled), a permit dropped without an explicit terminal still
-    // lands as failed/StreamDroppedBeforeTerminalResponse — i.e. a real
-    // provider-side stream drop, not a user interrupt.
     let node = test_node().await;
     let registry = AdmissionRegistry::new(node.clone());
     registry.reconcile(
@@ -1272,17 +1244,8 @@ fn call_state_for_request(rows: &[Value], request_id: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// Issue #1001 defect 1. A failed durable queued write must release the
-/// queue-waiter unit; pre-fix, the waiter counter leaked one unit per persist
-/// failure and `max_queue_depth` failures wedged the backend at `QueueFull`
-/// while idle. Lean:
-/// `InferenceCall.ControllerBookkeeping.persist_error_releases_waiter`.
-#[tokio::test]
 async fn queued_persist_failure_releases_queue_capacity() {
     let node = test_node().await;
-    // A node without ensured schemas rejects InferenceCall writes, forcing
-    // the durable queued write inside the queue path to fail while the
-    // in-memory counters run their real paths.
     let schemaless = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     let controller = super::controller::BackendAdmissionController::new(
         1,
@@ -1328,8 +1291,7 @@ async fn queued_persist_failure_releases_queue_capacity() {
         "persist failure leaked a queue-waiter unit (#1001)"
     );
 
-    // Queue capacity must be intact: the next caller queues instead of being
-    // wedged into QueueFull, and completes once the held permit releases.
+    // Queue capacity must be intact for the next caller.
     let queued = tokio::spawn(controller.clone().acquire(
         node.clone(),
         pending_call("req-leak-c", "backend-queue-leak"),
@@ -1374,11 +1336,7 @@ fn rewritten_connection(
     rewritten
 }
 
-/// #1366: rewriting a backend while a call is in flight hands new calls to
-/// the replacement controller at once. The in-flight call keeps its old
-/// controller attribution and its permit still counts against the backend's
-/// capacity until it completes. Lean:
-/// `InferenceCall.Registry.available_desired_admits_without_gap`.
+/// Lean: `InferenceCall.Registry.available_desired_admits_without_gap`.
 #[tokio::test]
 async fn backend_rewrite_admits_new_calls_while_in_flight_call_drains() {
     let node = test_node().await;
@@ -1429,9 +1387,7 @@ async fn backend_rewrite_admits_new_calls_while_in_flight_call_drains() {
     );
 }
 
-/// A call queued before a capacity-only rewrite keeps waiting on the shared
-/// pool and is admitted when capacity frees, instead of failing. Lean:
-/// `InferenceCall.Registry.available_rewrite_rejects_nothing`.
+/// Lean: `InferenceCall.Registry.available_rewrite_rejects_nothing`.
 #[tokio::test]
 async fn queued_call_survives_capacity_only_rewrite() {
     let node = test_node().await;
@@ -1466,8 +1422,7 @@ async fn queued_call_survives_capacity_only_rewrite() {
     waiter.finish_success(None).await.unwrap();
 }
 
-/// A shrinking rewrite with a queued call: the excess held permit is paid
-/// before the queued call is admitted, so capacity is never exceeded.
+/// The excess held permit is paid before the queued call is admitted.
 #[tokio::test]
 async fn shrinking_rewrite_admits_queued_call_after_excess_releases() {
     let node = test_node().await;
@@ -1519,8 +1474,7 @@ async fn shrinking_rewrite_admits_queued_call_after_excess_releases() {
     assert_eq!(pool.available_permits_for_test(), 1);
 }
 
-/// Growing capacity while permits are owed repays the debt before adding
-/// admissible permits (Lean `InferenceCall.Registry.Ledger.resize`).
+/// Lean: `InferenceCall.Registry.Ledger.resize`.
 #[tokio::test]
 async fn growing_capacity_repays_owed_permits_first() {
     let node = test_node().await;
@@ -1576,10 +1530,6 @@ async fn growing_capacity_repays_owed_permits_first() {
     assert_eq!(pool.available_permits_for_test(), 5);
 }
 
-/// F1: Tokio returns a permit it already assigned to a waiter straight to the
-/// semaphore when the waiting call is dropped, bypassing the ledger. A shrink
-/// between the assignment and the drop leaves a permit available while debt
-/// is outstanding; registration must pay the debt instead of admitting.
 /// Lean: `InferenceCall.Registry.Ledger.abandon_can_expose_permit_under_debt`,
 /// `register_admits_within_capacity`.
 #[tokio::test]
@@ -1601,8 +1551,7 @@ async fn abandoned_assigned_waiter_cannot_admit_over_capacity() {
         .unwrap();
     let pool = registry.pool_for_test(backend).unwrap();
 
-    // Park a waiter and never let its task resume, so a released permit is
-    // assigned to it without being registered.
+    // Park a waiter and never let its task resume.
     let parked_registry = registry.clone();
     let mut parked =
         Box::pin(async move { acquire_on(&parked_registry, "req-abandon-parked", backend).await });
@@ -1630,8 +1579,7 @@ async fn abandoned_assigned_waiter_cannot_admit_over_capacity() {
         "the permit is assigned, not registered"
     );
 
-    // Shrink to one while that permit is in transit: one held, one in
-    // transit, capacity one, so one permit is owed.
+    // Shrink to one while that permit is in transit.
     registry.reconcile(
         2,
         &HashMap::from([(backend.to_string(), config(backend, 1, 2))]),
@@ -1644,8 +1592,7 @@ async fn abandoned_assigned_waiter_cannot_admit_over_capacity() {
         "Tokio returned the abandoned permit around the ledger"
     );
 
-    // The next caller takes that permit but must pay the debt with it, then
-    // wait for real capacity.
+    // The next caller must pay the debt with that permit.
     let over_registry = registry.clone();
     let over =
         tokio::spawn(async move { acquire_on(&over_registry, "req-abandon-over", backend).await });
@@ -1671,8 +1618,7 @@ async fn abandoned_assigned_waiter_cannot_admit_over_capacity() {
     next.finish_success(None).await.unwrap();
 }
 
-/// Deleting a backend closes admission: queued and new calls fail with
-/// `BackendGone`, while an already admitted call still completes.
+/// Deleting a backend fails queued and new calls with `BackendGone`.
 #[tokio::test]
 async fn backend_removal_fails_queued_and_new_calls_clearly() {
     let node = test_node().await;
@@ -1733,9 +1679,7 @@ async fn backend_removal_fails_queued_and_new_calls_clearly() {
     );
 }
 
-/// #897 and B1: a backend that recovers from an outage admits at once, up to
-/// the capacity its still-running pre-outage calls leave free; those calls
-/// are not forgotten. Lean: `InferenceCall.Registry.outage_carries_held`.
+/// Lean: `InferenceCall.Registry.outage_carries_held`.
 #[tokio::test]
 async fn recovered_backend_admits_within_capacity_left_by_pre_outage_calls() {
     let node = test_node().await;
@@ -1780,8 +1724,7 @@ async fn recovered_backend_admits_within_capacity_left_by_pre_outage_calls() {
     after.finish_success(None).await.unwrap();
 }
 
-/// F5: the reconcile rollback path re-adds a backend it just removed; calls
-/// admitted before the removal still count against the re-added pool.
+/// F5: calls admitted before a removal still count against the re-added pool.
 #[tokio::test]
 async fn rollback_re_adding_removed_backend_carries_held_permits() {
     let node = test_node().await;
@@ -1876,12 +1819,7 @@ async fn attribution_of(node: &EmbeddedNode, request_id: &str) -> Option<String>
         .map(ToOwned::to_owned)
 }
 
-/// Snapshot semantics (#1725 product decision): after a key rotation, a call
-/// queued through a slot built for the old connection is still admitted
-/// against the shared pool, dispatches through its own client and is
-/// attributed to that slot's connection; a slot built for the new
-/// connection uses the new client. Lean:
-/// `InferenceCall.Registry.available_rewrite_rejects_nothing`,
+/// Lean: `InferenceCall.Registry.available_rewrite_rejects_nothing`,
 /// `serve_attributes_fifo`; generated case `key_rotation_shares_the_pool`.
 #[tokio::test]
 async fn rotation_keeps_in_progress_calls_on_their_own_connection() {
@@ -1962,8 +1900,7 @@ type ParkedCall = std::pin::Pin<
     >,
 >;
 
-/// Parks a queued call whose task is never woken, then releases `holder` so
-/// Tokio assigns the permit to it without the call registering it.
+/// Parks a queued call whose task is never woken.
 async fn park_with_assigned_permit(
     node: &EmbeddedNode,
     registry: &AdmissionRegistry,
@@ -2001,8 +1938,7 @@ async fn park_with_assigned_permit(
     parked
 }
 
-/// (a) A permit assigned before admission closes and registered after it,
-/// with no reopen, admits nothing. Lean: `Ledger.register_closed_admits_nothing`,
+/// Lean: `Ledger.register_closed_admits_nothing`,
 /// `Registry.unavailable_closes_admission`.
 #[tokio::test]
 async fn permit_assigned_before_close_is_rejected_after_close() {
@@ -2034,9 +1970,7 @@ async fn permit_assigned_before_close_is_rejected_after_close() {
     assert_eq!(pool.held_for_test(), 0);
 }
 
-/// (b) A waiter whose permit was assigned before an outage fails with the
-/// outage: Tokio does not complete an acquisition on a closed semaphore, so
-/// the call is never admitted into the reopened pool.
+/// Lean: `Registry.unavailable_closes_admission`.
 #[tokio::test]
 async fn permit_assigned_before_outage_is_not_admitted_after_reopen() {
     let node = test_node().await;
@@ -2075,11 +2009,7 @@ async fn permit_assigned_before_outage_is_not_admitted_after_reopen() {
     current.finish_success(None).await.unwrap();
 }
 
-/// (a), (b) and (c) at the single admission point, for a waiter Tokio woke
-/// with a permit before the change that reaches the ledger lock after it:
-/// closed admission rejects it; a permit of a semaphore an outage retired
-/// grants no current slot; a pruned pool never admits. Lean:
-/// `Ledger.register_closed_admits_nothing`,
+/// Lean: `Ledger.register_closed_admits_nothing`,
 /// `Ledger.register_admits_within_capacity`.
 #[tokio::test]
 async fn registration_rechecks_open_pool_and_current_semaphore() {
@@ -2091,7 +2021,6 @@ async fn registration_rechecks_open_pool_and_current_semaphore() {
     down.measured_unhealthy = true;
     let unavailable = HashMap::from([(backend.to_string(), down)]);
 
-    // (a) Closed without reopening.
     registry.reconcile(1, &available);
     let pool = registry.pool_for_test(backend).unwrap();
     let taken = pool.take_unregistered_for_test();
@@ -2099,8 +2028,7 @@ async fn registration_rechecks_open_pool_and_current_semaphore() {
     assert!(pool.register_for_test(taken).is_err());
     assert_eq!(pool.held_for_test(), 0);
 
-    // (b) Taken before an outage while another call keeps the pool alive,
-    // reopened with one free slot that a new call takes before the old
+    // Reopened with one free slot that a new call takes before the old
     // registration resumes.
     let available_two = HashMap::from([(backend.to_string(), config(backend, 2, 1))]);
     registry.reconcile(3, &available_two);
@@ -2129,7 +2057,6 @@ async fn registration_rechecks_open_pool_and_current_semaphore() {
     current.finish_success(None).await.unwrap();
     drop(current);
 
-    // (c) Pruned with the permit in transit, then re-added.
     let taken = pool.take_unregistered_for_test();
     registry.reconcile(6, &HashMap::new());
     assert!(registry.pool_for_test(backend).is_none());
@@ -2139,8 +2066,7 @@ async fn registration_rechecks_open_pool_and_current_semaphore() {
     assert_eq!((pool.held_for_test(), fresh_pool.held_for_test()), (0, 0));
 }
 
-/// (c) A pool pruned while a permit is still in transit stays closed: the
-/// late registration fails and the re-added backend's pool is unaffected.
+/// Lean: `Registry.retired_pool_never_admits`.
 #[tokio::test]
 async fn transit_permit_of_pruned_pool_cannot_admit() {
     let node = test_node().await;

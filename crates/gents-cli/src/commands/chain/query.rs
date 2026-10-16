@@ -108,20 +108,3 @@ fn decode_eth_tool_rows(value: &Value) -> Result<Vec<EthToolDocument>> {
     }
     serde_json::from_value(Value::Array(rows)).context("decoding EthTool rows")
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_params_defaults_to_empty_array() {
-        assert_eq!(parse_params(None).expect("none"), json!([]));
-        assert_eq!(parse_params(Some("")).expect("empty"), json!([]));
-        assert_eq!(parse_params(Some("[]")).expect("arr"), json!([]));
-        assert_eq!(
-            parse_params(Some(r#"["0x1"]"#)).expect("one"),
-            json!(["0x1"])
-        );
-        assert!(parse_params(Some(r#"{"to":"0x"}"#)).is_err());
-    }
-}

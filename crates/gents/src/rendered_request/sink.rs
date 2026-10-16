@@ -1,37 +1,15 @@
-//! The durable writer behind the capture seam.
+//! The durable writer behind the capture seam, specified by
+//! `Proofs/RenderedCapture.lean`: an unbound `capture_key` writes, an
+//! identically-bound key writes nothing, a differently-bound key errors and
+//! blocks the send (`capture_failure_blocks_send`).
 //!
-//! `Proofs/RenderedCapture.lean` specifies this function exactly, and the three
-//! outcomes are not negotiable:
-//!
-//! | store state for `capture_key` | outcome | write |
-//! |---|---|---|
-//! | unbound | `fresh` | create |
-//! | bound to the identical canonical capture fact | `idempotent` | none |
-//! | bound to a *different* canonical capture fact | `rejected` | none, and an error |
-//!
-//! `capture_rejects_rebinding` is why the third row is an error rather than an
-//! update: one capture key names one provider request for the life of the
-//! store. `capture_failure_blocks_send` is why an error here has to reach the
-//! transport — the caller is
-//! [`crate::rendered_request::transport::RenderedRequestCapturingHttpClient`],
-//! which refuses the HTTP call on any error this returns.
-//!
-//! ## Storage shape
-//!
-//! A capture is stored as content-defined byte blocks plus a manifest row that
-//! references them (#2333). The blocks and the manifest row commit in one
+//! Storage shape: the capture's blocks and its manifest row commit in one
 //! transaction, so a capture is never durable with a manifest naming blocks
-//! that are not, and a failed capture leaves no orphan blocks. Both container
-//! payloads are blockified: the provider body and the assembly trace each grow
-//! with the conversation, so storing either inline would restore the quadratic
-//! cost the blocks exist to remove.
+//! that are not.
 //!
-//! ## Identity
-//!
-//! Reads and writes use the node identity installed on `EmbeddedNode`. DefraDB
-//! therefore signs the commit at the same boundary used by every other runtime
-//! write. The `node_did` column remains application data; it is not treated as
-//! proof of authorship.
+//! Identity: reads and writes use the node identity installed on
+//! `EmbeddedNode`; the `node_did` column is application data, not proof of
+//! authorship.
 
 use std::sync::Arc;
 
@@ -63,10 +41,7 @@ impl DefraRenderedRequestSink {
     }
 
     /// The immutable capture fact already stored under `capture_key`, if any.
-    ///
-    /// A GraphQL error is an error, never "no rows": treating a failed read as
-    /// an unbound key would turn a transient DB fault into a duplicate-key
-    /// create and, worse, into a silent rebinding attempt.
+    /// A GraphQL error is an error, never "no rows".
     async fn stored_fact(&self, capture_key: &str) -> Result<Option<Value>> {
         let query = format!(
             r#"query {{
@@ -109,8 +84,6 @@ impl DefraRenderedRequestSink {
         match rows.len() {
             0 => Ok(None),
             1 => Ok(Some(rows[0].clone())),
-            // The unique index makes this unreachable; if it ever happens the
-            // fact record is already ambiguous and must not be extended.
             count => Err(anyhow!(
                 "capture key {capture_key} matched {count} RenderedRequest rows; the unique index is not enforcing"
             )),
@@ -118,11 +91,8 @@ impl DefraRenderedRequestSink {
     }
 
     /// Create the capture manifest row inside `txn`, after the blocks it names.
-    ///
-    /// A duplicate-key error is an expected input to reconciliation, so the
-    /// create itself does not warn; a genuine failure is logged by the
-    /// transport after the re-read outside the transaction cannot establish
-    /// idempotency.
+    /// A duplicate-key error is expected input to reconciliation and does not
+    /// warn; a genuine failure is logged by the transport.
     async fn create_in_txn(
         txn: &crate::config_client::ConfigApplyTxn<'_>,
         rendered: &RenderedCompletionRequest,
@@ -182,14 +152,6 @@ impl DefraRenderedRequestSink {
         );
 
         let response = txn.execute(&mutation).await?;
-        // A mutation that returns no document wrote nothing, and "no errors" is
-        // not the same as "durable". The field lookup is explicit rather than
-        // handing the whole `data` object to `response_has_documents`, which
-        // would answer for the envelope instead of for the mutation's result.
-        // That result field is taken as the envelope's single entry rather than
-        // by name: DefraDB answers a `create_RenderedRequest` mutation under the
-        // key `add_RenderedRequest`, and hard-coding either spelling would turn
-        // a rename into a silently unverified write.
         if !response
             .get("data")
             .and_then(single_mutation_result)
@@ -215,8 +177,6 @@ impl DefraRenderedRequestSink {
             .and_then(|value| value.get("call_id"))
             .and_then(Value::as_str)
         else {
-            // One-shot calls have no InferenceCall join. Their accounting is
-            // still durable in RenderedRequest.provenance_json.
             return Ok(());
         };
         let accounting_json = canonical_json_string(
@@ -291,9 +251,6 @@ impl DefraRenderedRequestSink {
         Ok(())
     }
 
-    /// Persist one capture. See the outcome table at the top of this module.
-    /// Writes exactly the given stored bytes, bypassing chunking and block
-    /// writes, so tests can create captures the reader must reject.
     #[cfg(test)]
     pub(crate) async fn create_stored_for_test(
         &self,
@@ -335,10 +292,6 @@ impl DefraRenderedRequestSink {
         let provenance_chunks = super::encoding::chunk_capture_body(&provenance_payload_layout);
         let blocks = unique_blocks(&[&request_chunks, &provenance_chunks]);
 
-        // Blocks and the manifest row commit together. The existence read runs
-        // inside the same transaction as the creates it gates, and the
-        // transaction owner replays this whole closure on conflict, where a
-        // fresh snapshot re-decides what is missing.
         let capture_container = crate::config_client::ConfigAccess::transact_local_write(
             &self.node,
             None,
@@ -372,11 +325,6 @@ impl DefraRenderedRequestSink {
                 );
                 Ok(())
             }
-            // A concurrent writer may have won the unique index between the
-            // lookup and the create, taking the block writes down with the
-            // transaction. Re-read: an identical value is still an idempotent
-            // success, a different one is still an integrity violation, and
-            // anything else keeps the original error.
             Err(create_error) => match self.stored_fact(&rendered.capture_key).await {
                 Ok(Some(stored)) => {
                     self.reconcile_existing(&rendered, stored, "create_conflict")
@@ -494,10 +442,6 @@ impl DefraRenderedRequestSink {
     }
 }
 
-/// Canonical equality surface for idempotency. `created_at` is intentionally
-/// excluded because it records when the winning writer created the row. The
-/// request commit CID is included: a retry may not rebind the same provider
-/// attempt to a different source version.
 fn canonical_capture_fact(rendered: &RenderedCompletionRequest) -> Result<Value> {
     let source =
         serde_json::to_value(rendered.source).context("encoding rendered-request source")?;
@@ -525,10 +469,6 @@ const RENDERED_REQUEST_COLLECTION: &str = gents_protocol::schemas::RENDERED_REQU
 const RENDERED_REQUEST_BLOCK_COLLECTION: &str =
     gents_protocol::schemas::RENDERED_REQUEST_BLOCK_NAME;
 
-/// The unique content-defined blocks of both capture payloads, in first-seen
-/// order. A body may contain byte-identical chunks; the content key is the
-/// collection's unique identity, so each is stored once and referenced as many
-/// times as it occurs.
 fn unique_blocks<'a>(
     payloads: &[&'a [super::encoding::ChunkedBlock]],
 ) -> Vec<&'a super::encoding::ChunkedBlock> {
@@ -540,25 +480,14 @@ fn unique_blocks<'a>(
         .collect()
 }
 
-/// The document and payload field commit a manifest entry pins for one block.
 struct BlockPin {
     doc_id: String,
     field_commit_cid: String,
 }
 
-/// Create mutation for one capture block. The payload travels as a typed
-/// GraphQL variable, never as rendered GraphQL text: block bytes are canonical
-/// JSON text, and the variable encoder preserves them exactly where rendered
-/// text would have to escape its way back to the same bytes.
 const CREATE_RENDERED_REQUEST_BLOCK_MUTATION: &str = "mutation($input: \
 RenderedRequestBlockMutationInputArg!) { create_RenderedRequestBlock(input: $input) { _docID } }";
 
-/// The block pins of the latest earlier capture of this loop, by content key.
-///
-/// Block fields are immutable, so a pin an earlier manifest recorded is still
-/// the block's current field commit, and the reader re-verifies every pin.
-/// Reusing them keeps a capture's witness reads proportional to its new
-/// content. A loop without an earlier manifest row contributes no pins.
 async fn prior_block_pins_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     rendered: &RenderedCompletionRequest,
@@ -622,8 +551,6 @@ async fn prior_block_pins_in_txn(
     Ok(pins)
 }
 
-/// Read the document ids of the block rows already stored under `keys`, in
-/// one batched query.
 async fn stored_block_doc_ids_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     keys: &[&str],
@@ -663,10 +590,6 @@ async fn stored_block_doc_ids_in_txn(
     Ok(stored)
 }
 
-/// Create one capture block document and return its document id. A create that
-/// loses the unique content key to a concurrent writer surfaces as a
-/// transaction conflict; the transaction owner replays the capture on a fresh
-/// snapshot, whose existence read then finds the winner.
 async fn create_block_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     block: &super::encoding::ChunkedBlock,
@@ -674,9 +597,6 @@ async fn create_block_in_txn(
     let payload = std::str::from_utf8(&block.bytes).context(
         "capture block bytes must be valid UTF-8; chunk boundaries land on character boundaries",
     )?;
-    // Only content fields are written, so DefraDB's content-derived document
-    // id is the same for the same bytes on every writer and peer, and the
-    // document carries two field commits instead of four.
     let variables = serde_json::json!({ "input": {
         "content_key": block.content_key,
         "payload": payload,
@@ -684,10 +604,6 @@ async fn create_block_in_txn(
     let response = txn
         .execute_with_variables(CREATE_RENDERED_REQUEST_BLOCK_MUTATION, &variables)
         .await?;
-    // The result field is taken as the response's single mutation entry
-    // rather than by name: DefraDB answers a `create_X` mutation under an
-    // `add_X` key, and hard-coding either would turn a rename into a silently
-    // unverified write.
     response
         .get("data")
         .and_then(single_mutation_result)
@@ -704,11 +620,6 @@ async fn create_block_in_txn(
         .map(ToOwned::to_owned)
 }
 
-/// Pin every block a capture references: blocks the loop's previous manifest
-/// pinned keep that pin, every other block is reused by content key or
-/// created, and only those are witnessed — one batched read of their current
-/// payload field commits in this transaction, so the pins commit with the
-/// manifest naming them.
 async fn pin_capture_blocks(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     rendered: &RenderedCompletionRequest,
@@ -750,7 +661,6 @@ async fn pin_capture_blocks(
     Ok(pins)
 }
 
-/// The manifest record for one chunked payload over its blocks' pins.
 fn encode_payload_manifest(
     chunks: &[super::encoding::ChunkedBlock],
     pins: &std::collections::BTreeMap<String, BlockPin>,
@@ -773,11 +683,6 @@ fn encode_payload_manifest(
     super::encoding::encode_manifest(&entries)
 }
 
-/// The single result field of a single-operation mutation envelope.
-///
-/// `None` when the envelope is not a one-entry object, which is the honest
-/// answer for a response this sink does not recognise — treating it as "wrote
-/// something" is the failure mode the caller is checking for.
 fn single_mutation_result(data: &Value) -> Option<&Value> {
     let object = data.as_object()?;
     let mut entries = object.values();
@@ -785,8 +690,6 @@ fn single_mutation_result(data: &Value) -> Option<&Value> {
     entries.next().is_none().then_some(first)
 }
 
-/// The production capture factory: one sink per request context, all writing
-/// through the same identity-configured node.
 pub(crate) fn defra_rendered_request_capture_factory(
     node: Arc<EmbeddedNode>,
 ) -> RenderedRequestCaptureFactory {
@@ -805,10 +708,6 @@ mod tests {
     use super::*;
     use serde_json::{json, Value};
 
-    /// Deterministic pseudo-text for capture bodies under test: a fixed-seed
-    /// xorshift64 stream mapped onto `a..z`. Long enough bodies to span several
-    /// content-defined blocks is what makes the block-count assertions below
-    /// meaningful, so every body here is built from it.
     fn capture_text(seed: u64, len: usize) -> String {
         let mut state = seed;
         let mut out = String::with_capacity(len);
@@ -932,9 +831,6 @@ mod tests {
         node.shutdown().await;
     }
 
-    /// The regression #2333 exists to fix: two turns sharing a conversation
-    /// prefix write only the new blocks and a manifest row, so total capture
-    /// storage grows linearly with the conversation instead of quadratically.
     #[tokio::test]
     async fn a_shared_prefix_writes_only_new_blocks_and_a_small_manifest() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
@@ -949,7 +845,6 @@ mod tests {
         sink.capture(first.clone()).await.expect("first capture");
         let first_blocks = block_rows(node.as_ref()).await;
 
-        // Turn two repeats the whole conversation and appends one message.
         let mut second_messages = first.request_json["messages"].clone();
         second_messages
             .as_array_mut()
@@ -975,8 +870,6 @@ mod tests {
             )
             .cloned()
             .collect();
-        // Every block of the edited body but the ones covering the edit and the
-        // JSON tail is re-referenced, never rewritten.
         assert!(
             (added.len() as f64) < 0.4 * second_blocks.len() as f64,
             "{} new of {} total blocks; the shared prefix must be reused",
@@ -987,8 +880,6 @@ mod tests {
         let row = stored_capture(node.as_ref(), &second.capture_key).await;
         let stored = row["request_json"].as_str().unwrap();
         assert!(
-            // Two manifests (request body + provenance payload) of small
-            // references, against the full canonical body.
             stored.len() < 3 * prefix.len() / 4,
             "the capture row must not repeat the conversation: {} bytes for a {} byte body",
             stored.len(),
@@ -1008,9 +899,6 @@ mod tests {
         node.shutdown().await;
     }
 
-    /// A block another capture already stored keeps that row's document and
-    /// field commit: the manifest pins the existing witness, never a fresh one,
-    /// and never rewrites the block.
     #[tokio::test]
     async fn a_reused_block_pins_the_existing_row_field_commit() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
@@ -1029,7 +917,6 @@ mod tests {
             manifest_entries(&first_row["request_json"].as_str().unwrap(), "request_body");
         let first_blocks = block_rows(node.as_ref()).await;
 
-        // Turn two appends, so it shares the leading blocks.
         let mut messages = json!([{"role": "user", "content": body}]);
         messages
             .as_array_mut()
@@ -1068,8 +955,6 @@ mod tests {
                 );
             }
         }
-        // Nothing was rewritten: the block rows are exactly the ones the first
-        // capture created plus the new content.
         assert!(block_rows(node.as_ref()).await.len() > first_blocks.len());
         node.shutdown().await;
     }
@@ -1114,9 +999,6 @@ mod tests {
         node.shutdown().await;
     }
 
-    /// Re-delivering the identical capture is idempotent: the block writes roll
-    /// back with the conflicting manifest create, and the stored fact already
-    /// names the same canonical value.
     #[tokio::test]
     async fn re_delivering_a_capture_is_idempotent() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
@@ -1140,10 +1022,6 @@ mod tests {
         node.shutdown().await;
     }
 
-    /// Concurrent captures of identical content race on every block's unique
-    /// content key. The losers' transactions roll back and replay on a fresh
-    /// snapshot, so every capture succeeds and each block is stored exactly
-    /// once: no failed create leaves a document behind.
     #[tokio::test]
     async fn concurrent_identical_captures_store_each_block_once() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
@@ -1191,10 +1069,6 @@ mod tests {
         node.shutdown().await;
     }
 
-    /// The collection names are interpolated as bare GraphQL identifiers, where
-    /// escaping cannot defend. They are compile-time constants from the protocol
-    /// catalog, and this is the fence that keeps them valid identifiers if that
-    /// catalog ever changes.
     #[test]
     fn the_collection_names_are_valid_graphql_identifiers() {
         crate::graphql::validate_collection_identifier(RENDERED_REQUEST_COLLECTION)

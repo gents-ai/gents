@@ -22,17 +22,15 @@ use super::projection::tools::session_tool_results;
 use super::projection::{ProjectionEngine, UpdateTimestamps};
 use super::turn::{PromptSender, PromptSenderLine};
 
-/// Run views loaded per observation tick. Each load is several queries on
-/// the session observer's shared loop, so a session that resumes with many
-/// runs is covered round-robin instead of delaying its token stream.
+/// Run views loaded per observation tick, so a session that resumes with
+/// many runs is covered round-robin instead of delaying its token stream.
 const VIEW_LOADS_PER_TICK: usize = 4;
 
 /// The revision of the terminal frame sent when observation stops. The pager
-/// keeps the highest revision it holds across leader reconnects (see
-/// [`durable_revision`]), so this frame must outrank anything an earlier
-/// observer delivered. Stopping is final for this actor, so no frame follows
-/// it. 2^53 - 1 is the largest integer a JSON number keeps exactly as an
-/// IEEE double.
+/// keeps the highest revision it holds across leader reconnects, so this
+/// frame must outrank anything an earlier observer delivered. Stopping is
+/// final for this actor, so no frame follows it. The value stays within
+/// exact IEEE-double JSON number range.
 const ABANDONED_REVISION: u64 = (1 << 53) - 1;
 
 /// Upper bound on the delay before re-reading a run or `run_graph` reply
@@ -52,9 +50,9 @@ impl Backoff {
         self.retry_at.is_none_or(|at| now >= at)
     }
 
-    /// Defers the next read exponentially. Returns the error worth
-    /// reporting: only a streak's first, so a lasting failure is not logged
-    /// on every read.
+    /// Defers the next read exponentially. Only a streak's first error is
+    /// returned for reporting, so a lasting failure is not logged on every
+    /// read.
     fn fail(
         &mut self,
         now: DateTime<Utc>,
@@ -104,15 +102,12 @@ pub(super) struct GraphRunCursor {
 }
 
 enum ObservationError {
-    /// Repeating the same read by the same actor fails the same way.
     Permanent(anyhow::Error),
     Transient(anyhow::Error),
 }
 
 impl GraphRunCursor {
     /// The session observer has already authorized the attached root session.
-    /// Returns the failures worth reporting; none of them stops the other
-    /// runs from being observed.
     pub(super) async fn refresh(
         &mut self,
         node: &Arc<EmbeddedNode>,
@@ -159,8 +154,6 @@ impl GraphRunCursor {
         .await
         {
             Ok(calls) => calls,
-            // New runs stay discoverable, so discovery itself is never
-            // abandoned; only the first failure of a streak is reported.
             Err(error) => {
                 self.discovery_failures += 1;
                 return if self.discovery_failures == 1 {
@@ -287,9 +280,9 @@ impl GraphRunCursor {
 /// leader reconnects, and drops a lower one (probed against v1.0.46). A fresh
 /// observer after resume or re-attach therefore starts from this count of
 /// facts that only grow over a run's life: stage, request and plugin-call
-/// totals, their terminal outcomes, and the run's own terminal status. It
-/// increases with every change the projection can show, so it never falls
-/// below what an earlier observer delivered for the same durable state.
+/// totals, their terminal outcomes, and the run's own terminal status — so
+/// the revision never falls below what an earlier observer delivered for the
+/// same durable state.
 fn durable_revision(view: &GraphRunView) -> u64 {
     let stages: usize = view
         .stages
@@ -333,8 +326,8 @@ async fn send(
         .map(drop)
 }
 
-/// The pager ticks a running run's clock itself; elapsed time and the
-/// delivery counter alone never justify another update.
+/// The pager ticks a running run's clock itself; this strips the clock
+/// fields before the equality check.
 fn without_clock(update: &Value) -> Value {
     let mut shape = update.clone();
     if let Some(object) = shape.as_object_mut() {
@@ -366,11 +359,10 @@ fn objective(graph_id: &str) -> String {
     format!("Gents graph run: {graph_id}")
 }
 
-/// Stages are phases and model requests are agents. The pager's phase
-/// vocabulary is pending/active/done: a failed or cancelled run says so in
-/// `status` and `pause_message`, and a failed request in its agent state.
-/// An agent label names its own request, so a sibling that appears later
-/// never renames a row the pager already shows.
+/// Stages are phases and model requests are agents in the pager's
+/// pending/active/done phase vocabulary; failed or cancelled runs say so in
+/// `status` and `pause_message`. An agent label names its own request, so a
+/// sibling that appears later never renames a row the pager already shows.
 fn project(
     view: &GraphRunView,
     status: GraphRunStatus,
@@ -448,9 +440,7 @@ fn project(
     update
 }
 
-/// The one terminal update for a run this connection stops observing, so
-/// the pager does not keep ticking a run nothing reports on. It continues
-/// the last delivered update when there is one.
+/// The one terminal update for a run this connection stops observing.
 fn abandoned(
     run_id: &str,
     run: &RunObservation,
@@ -580,8 +570,7 @@ mod tests {
         );
     }
 
-    /// The view orders requests by id, which is not creation order, so a new
-    /// sibling can sort before the rows the pager already shows.
+    /// A new sibling can sort before the rows the pager already shows.
     #[test]
     fn a_new_sibling_never_renames_shown_agents() {
         let labels = |update: &Value| {
@@ -773,7 +762,6 @@ mod tests {
             };
         }
         step!(running_view(), now());
-        // Only the clock moved.
         step!(running_view(), now() + Duration::seconds(1));
         let first = updates(&buffer).await;
         assert_eq!(first.len(), 1);
@@ -818,8 +806,8 @@ mod tests {
     }
 
     /// The stock pager drops a revision lower than the one it holds, also
-    /// after the leader reconnects, so an observer created on resume or
-    /// re-attach must continue from durable state rather than from 1.
+    /// after the leader reconnects; a fresh observer must continue from
+    /// durable state rather than from 1.
     #[tokio::test]
     async fn a_fresh_observer_continues_the_revision_from_durable_state() {
         let (_directory, _node, projections, buffer, sender) = harness().await;
@@ -858,13 +846,10 @@ mod tests {
             .iter()
             .map(|update| update["revision"].as_u64().unwrap())
             .collect::<Vec<_>>();
-        // A fresh observer of unchanged state repeats the held revision; of a
-        // later state, it exceeds it.
         assert_eq!(revisions, [11, 15, 15, 18]);
     }
 
-    /// A run that cannot be read for a while is read again later, ever more
-    /// rarely, and is never given up while the session is attached.
+    /// A transient failure is retried with backoff and never abandoned.
     #[tokio::test]
     async fn a_transient_failure_backs_off_and_is_never_abandoned() {
         let (_directory, _node, projections, buffer, sender) = harness().await;
@@ -888,7 +873,6 @@ mod tests {
             );
             let retry_at = cursor.runs["run-1"].backoff.retry_at.unwrap();
             delays.push((retry_at - at).num_seconds());
-            // Not read again before its delay has passed.
             let reads = loads.load(Ordering::SeqCst);
             let early = retry_at - Duration::milliseconds(1);
             assert!(cursor
@@ -922,9 +906,8 @@ mod tests {
         assert_eq!(sent[0]["status"], "active");
     }
 
-    /// A missing or denied run, or a status outside the vocabulary, cannot
-    /// recover: observation ends at once with one terminal update, and other
-    /// runs are unaffected.
+    /// A permanent failure ends observation at once with one terminal
+    /// update; other runs are unaffected.
     #[tokio::test]
     async fn a_permanent_failure_ends_observation_with_one_terminal_update() {
         let (_directory, _node, projections, buffer, sender) = harness().await;
@@ -1064,7 +1047,6 @@ mod tests {
             .map(|tick| tick.map(|run| runs[run].clone()).to_vec())
             .to_vec();
         assert_eq!(ticks, expected);
-        // 10 runs at 4 loads per tick are all covered within 3 ticks.
         assert_eq!(
             ticks.concat().into_iter().collect::<HashSet<_>>().len(),
             runs.len()
@@ -1222,7 +1204,7 @@ mod tests {
     }
 
     /// Publishes and starts a one-stage graph through the public graph
-    /// owners, as the graph_pipeline runtime tests do.
+    /// owners.
     async fn start_real_run(
         node: &Arc<EmbeddedNode>,
         owner: &str,
@@ -1356,7 +1338,7 @@ mod tests {
     }
 
     /// A stage request the run's entry trigger caused, signed by the owner
-    /// as the trigger engine signs it, and pending.
+    /// as the trigger engine signs it.
     async fn seed_stage_request(
         node: &Arc<EmbeddedNode>,
         owner: &gents::KeyIdentity,
@@ -1422,8 +1404,7 @@ mod tests {
     }
 
     /// The real `run_graph` reply writer, discovery, the canonical run
-    /// loader and the projection, end to end; a poison reply beside it is
-    /// reported once and deferred without hiding the run.
+    /// loader and the projection, end to end.
     #[tokio::test]
     async fn a_real_run_graph_reply_is_observed_through_the_canonical_loader() {
         let (_directory, node, projections, buffer, sender) = harness().await;
@@ -1496,8 +1477,6 @@ mod tests {
             }),
         );
 
-        // Another principal is denied by the loader, and an unknown run id
-        // has no row: each is read once and ends with one terminal update.
         let mut intruder = GraphRunCursor::default();
         for run in [receipt.run_id.as_str(), "missing-run"] {
             intruder
@@ -1533,17 +1512,14 @@ mod tests {
         assert!(intruder.runs.values().all(|run| run.finished));
         let sent = updates(&buffer).await;
         assert_eq!(sent.len(), 3);
-        // A fresh cursor's stop frame must outrank what the first delivered.
         let delivered = sent[0]["revision"].as_u64().unwrap();
         assert!(sent[1..].iter().all(|update| update["status"] == "failed"
             && update["pause_message"].is_string()
             && update["revision"].as_u64().unwrap() > delivered));
     }
 
-    /// Stage requests driven by the lifecycle owners through pending,
-    /// claimed, processing and terminal (one failed, one interrupted), then
-    /// the run reconciled to its terminal status: the durable revision never
-    /// falls, and a fresh observer never starts below a running one.
+    /// Stage requests driven through the lifecycle owners to terminal, then
+    /// the run reconciled to its terminal status.
     #[tokio::test]
     async fn a_real_runs_revision_never_decreases_across_its_lifecycle() {
         use gents::lifecycle::{ClaimOutcome, RequestTerminalOutcome};

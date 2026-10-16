@@ -17,7 +17,6 @@ use super::registry::{
 };
 use crate::cli::{PackAccountArgs, PackInfoArgs, PackLoginArgs, PackOwnerArgs, PackYankArgs};
 
-/// The token a write to `registry` uses.
 pub(crate) fn resolve_publish_token(
     explicit: Option<&str>,
     registry: &str,
@@ -31,9 +30,6 @@ pub(crate) fn resolve_publish_token(
     })
 }
 
-/// Exchanges `username`/`password` for a token, refusing an empty password
-/// (after `--password-stdin` trims its trailing newline) rather than sending
-/// it to the registry.
 async fn login_with_password(
     client: &RegistryClient,
     username: &str,
@@ -295,8 +291,5 @@ mod tests {
             Some("explicit")
         );
         assert_eq!(resolve_token_flag(None, false).unwrap(), None);
-        // The `--token-stdin` branch reads real standard input (see
-        // `read_stdin_line`); it is exercised by the CLI, not a unit test,
-        // since process stdin cannot be redirected per-test here.
     }
 }

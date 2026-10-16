@@ -1,5 +1,3 @@
-/* Starting a new session: the node and agent it starts with, and the
-   composer whose first message creates it. */
 import { Fragment } from "react";
 import { ChevronDown } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
@@ -45,8 +43,6 @@ export function NewSession() {
   const selectedNodeDid = useSelectedNodeDid();
   const deployment = useSelectedNode();
   const choice = useAgentChoice();
-  /* the node's name, or the pairing label while a paired node has not
-     replicated its configuration yet */
   const nodeName = deployment?.node.displayName ?? deployment?.label ?? "the agent";
   const env = deployment?.agentEnvironments.find((e) => e.agentId === choice.agentId);
   const chosenName = agentName(choice.agentId, deployment);
@@ -156,15 +152,11 @@ function NewSessionComposer() {
           "Ask anything",
         )}
       />
-      {/* inside the composer's row, so the grid's gap is not paid twice
-          around a line that is usually empty */}
       <SessionSubmissionStatus activityStatus={activityStatus} reserve={false} />
     </div>
   );
 }
 
-/* the node a new chat starts on, where there is a choice: the name is the
-   button's own text, so the heading still reads as one sentence */
 function NodeChoice({
   name,
   selectedNodeDid,
@@ -194,7 +186,6 @@ function NodeChoice({
         <DropdownMenuRadioGroup value={selectedNodeDid ?? ""} onValueChange={onSelect}>
           {nodes.map((n, i, all) => (
             <Fragment key={n.nodeDid}>
-              {/* a faint line between the local node and the paired ones */}
               {i > 0 &&
                 isWorkingNode(all[i - 1]!, homeDid) &&
                 !isWorkingNode(n, homeDid) && (

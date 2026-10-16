@@ -82,8 +82,6 @@ describe("profile model recommendation ownership", () => {
       <ProfilesPanel deployment={fixture} item="profile-a" />,
     );
     expect(await screen.findByLabelText("Context window")).toBeVisible();
-    /* the lookup asks about the model, not how many requests the backend
-       runs at once */
     const changed = {
       ...fixture,
       inferenceBackends: fixture.inferenceBackends.map((backend) => ({
@@ -296,8 +294,6 @@ describe("profile model recommendation ownership", () => {
   });
 
   it("never presents the profile's saved window as the model's ceiling (#1618)", async () => {
-    // What the runtime recommends for a model whose limits the backend does
-    // not advertise: no model-aware bound for the window.
     const unadvertised: InferenceModelRecommendation = {
       ...recommendation(1),
       contextWindow: null,

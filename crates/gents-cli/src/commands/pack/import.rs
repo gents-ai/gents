@@ -355,7 +355,7 @@ fn import_skill(dir: &Path, pack: &mut PackEdit, report: &mut Report) -> Result<
 }
 
 /// Copies a skill's supporting files as declared assets, renaming them to
-/// the snake_case every pack file uses. `scripts/` is reported, never copied:
+/// the snake_case pack files use. `scripts/` is reported, never copied:
 /// gents does not run skill support files.
 fn copy_support_files(
     root: &Path,
@@ -421,8 +421,6 @@ fn import_markdown_dir(
     Ok(())
 }
 
-/// Replaces a prompt `pack add` wrote with the body of `source`, without its
-/// frontmatter.
 fn write_prompt(pack: &PackEdit, path: &str, source: &Path) -> Result<()> {
     let text =
         std::fs::read_to_string(source).with_context(|| format!("reading {}", source.display()))?;
@@ -440,7 +438,6 @@ fn has(pack: &mut PackEdit, key: &str, field: &str, id: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// `Extract Tables` or `extract_tables` -> `extract-tables`: a document id.
 fn kebab(name: &str) -> String {
     let mut out = String::new();
     for ch in name.chars() {
@@ -465,7 +462,6 @@ fn snake(name: &str) -> String {
     kebab(name).replace('-', "_")
 }
 
-/// A file name in the snake_case pack files use, keeping its extension.
 fn file_name(name: &str) -> String {
     if matches!(name, "README.md" | "SKILL.md" | "Cargo.toml" | "Cargo.lock") {
         return name.to_owned();

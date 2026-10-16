@@ -134,10 +134,6 @@ impl ClientStore {
             .map(|index| self.requests[*index].request_id.clone())
     }
 
-    /// The physical request whose tip a session read loads: the turn reached
-    /// from `request_id` (`turns::session_turn_request`) within that exact
-    /// node and requester scope. A queued or folded submission names the
-    /// running request, whose open output is the live tail.
     pub fn session_tip_request(
         &self,
         session_id: &str,
@@ -159,8 +155,6 @@ impl ClientStore {
         Some(turns::session_turn_request(&requests, submitted).clone())
     }
 
-    /// The request whose turn the session is on (`turns::session_turn_request`),
-    /// starting from its newest request.
     pub fn turn_request_id_for_session(&self, session_id: &str) -> Option<String> {
         let requests = self.requests_for_session(session_id);
         self.turn_request_id(&requests, self.latest_request_id_for_session(session_id)?)

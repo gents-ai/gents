@@ -1,8 +1,3 @@
-/* The agent choice for a new session: a chip, the name and a chevron
-   in the composer's leading slot, opening a small picker. Each row is the
-   agent's chip and name, its description, and one mono line of what
-   it runs on and may touch, resolved by the bridge; a search field
-   filters by name and description. Disabled agents are left out. */
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Plus, Search, X } from "lucide-react";
 import type { NodeView } from "../../hooks/fleetStore";
@@ -51,10 +46,9 @@ function MountedAgentPicker({
   onChange: (agentId: string) => void;
 }) {
   const [query, setQuery] = useState("");
-  /* search is hidden until asked for: the icon in the footer, or typing */
   const [searching, setSearching] = useState(false);
   const [creating, setCreating] = useState(false);
-  /* the create sheet waits for the popover's exit animation: one dialog at a time */
+  // the create sheet waits for the popover's exit animation: one dialog at a time
   const createAfterClose = useRef(false);
   const popover = useExclusivePopover(() => {
     setQuery("");
@@ -64,7 +58,6 @@ function MountedAgentPicker({
   useEffect(() => {
     if (searching) input.current?.focus();
   }, [searching]);
-  /* described by the node whose agents are listed */
   const describe = (id: string) =>
     deployment.agents.find((b) => b.agentId === id)?.description ?? "";
   const readiness = (id: string) => agentReadiness(deployment, id);
@@ -82,12 +75,10 @@ function MountedAgentPicker({
       <Popover
         open={popover.open}
         onOpenChange={(next) => {
-          /* reopening the picker withdraws a create still waiting on its exit */
           if (next) createAfterClose.current = false;
           popover.onOpenChange(next);
         }}
         onOpenChangeComplete={(next) => {
-          /* a popover opened after Create was clicked takes the turn instead */
           const create = !next && createAfterClose.current && !popover.peerPending();
           if (!next) createAfterClose.current = false;
           popover.onOpenChangeComplete(next);
@@ -110,7 +101,6 @@ function MountedAgentPicker({
           align="start"
           className="w-[min(40rem,calc(100vw-4rem))] p-0"
           onKeyDown={(e) => {
-            /* a printable key with the list focused starts a search with that key */
             if (
               !searching &&
               e.key.length === 1 &&
@@ -219,7 +209,6 @@ function MountedAgentPicker({
             <button
               type="button"
               onClick={() => {
-                /* a draft agent beside the session; saved enabled and chosen */
                 createAfterClose.current = true;
                 popover.onOpenChange(false);
               }}

@@ -1,8 +1,6 @@
-//! Developer option: open the managed runtime's DB Explorer window.
-//!
-//! `gents serve` mounts the vendored DefraDB Explorer at `/explorer/` on the
-//! same listener as its DefraDB HTTP API, so the window is same-origin with
-//! the database it browses and needs no CORS or IPC access.
+//! Developer option: open the managed runtime's DB Explorer window. The
+//! window is same-origin with the DefraDB HTTP API the Explorer is mounted
+//! on, so it needs no CORS or IPC access.
 
 use tauri::{AppHandle, Manager, Runtime, State, WebviewUrl, WebviewWindowBuilder};
 
@@ -33,7 +31,6 @@ pub async fn desktop_open_db_explorer<R: Runtime>(
     Ok(url)
 }
 
-/// `http://host:port/api/v0/graphql` → `http://host:port/explorer/`.
 fn explorer_url_from_graphql(graphql: &str) -> Result<String, BridgeError> {
     let parsed = reqwest::Url::parse(graphql).map_err(|error| {
         BridgeError::new(
@@ -69,7 +66,6 @@ fn open_db_explorer_window<R: Runtime>(app: &AppHandle<R>, url: &str) -> Result<
         .parse()
         .map_err(|error| BridgeError::new(BridgeErrorCode::InvalidArgument, format!("{error}")))?;
     if let Some(existing) = app.get_webview_window(DB_EXPLORER_WINDOW_LABEL) {
-        // The runtime address can change between runs; re-point the window.
         existing
             .navigate(parsed)
             .map_err(|error| BridgeError::new(BridgeErrorCode::Backend, format!("{error}")))?;

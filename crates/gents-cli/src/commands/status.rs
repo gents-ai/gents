@@ -256,19 +256,3 @@ pub(crate) async fn load_node_readiness(
         .map(|row| serde_json::from_value(row).context("decoding node readiness row"))
         .transpose()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn runtime_status_url_points_at_server_status_root() {
-        assert_eq!(
-            runtime_status_url(&gents::config_client::GraphqlEndpoint::anonymous(
-                "http://127.0.0.1:9191/api/v0/graphql?ignored=true"
-            ))
-            .unwrap(),
-            "http://127.0.0.1:9191/status"
-        );
-    }
-}

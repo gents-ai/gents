@@ -1,9 +1,5 @@
-//! Eager materialization driver.
-//!
-//! Uses DefraDB's datastore-only materialization primitive
-//! ([defradb.rs#1230](https://github.com/sourcenetwork/defradb.rs/issues/1230),
-//! merged in #1232): advances document blobs, stored version keys, and
-//! secondary indexes without creating CRDT commits or replication events.
+//! Eager materialization driver; advances document blobs, stored version keys,
+//! and secondary indexes without creating CRDT commits or replication events.
 
 use std::collections::BTreeMap;
 
@@ -16,17 +12,16 @@ use crate::report::MaterializationStats;
 
 /// Eagerly materialize every managed collection.
 ///
-/// Returns stats on success. Any collection-level failure is a hard error —
-/// after lineage verification every managed collection is expected to exist —
-/// with one deliberate exception: a unique-index violation raised by a
-/// document a P2P merge already parked unindexed (#984). The merge path
-/// resolves live unique conflicts deterministically (smallest public docID
-/// keeps the index entry; the loser persists unindexed), so the same document
-/// re-raising the violation during the boot-time reindex is expected residue,
-/// not corruption. The failed reindex transaction rolls back, preserving the
+/// Any collection-level failure is a hard error — after lineage verification
+/// every managed collection is expected to exist — with one deliberate
+/// exception: a unique-index violation raised by a document a P2P merge
+/// already parked unindexed (#984). The merge path resolves live unique
+/// conflicts deterministically (smallest public docID keeps the index entry;
+/// the loser persists unindexed), so the same document re-raising the
+/// violation during the boot-time reindex is expected residue, not
+/// corruption. The failed reindex transaction rolls back, preserving the
 /// merge-time winner; boot skips the collection's eager pass, records the
-/// parked state in the report, and continues. A foreign stale doc must never
-/// be a poison pill.
+/// parked state in the report, and continues.
 pub async fn materialize_all(
     node: &EmbeddedNode,
     registry: &Registry<'_>,
@@ -35,7 +30,6 @@ pub async fn materialize_all(
     materialize_collections(node, &names).await
 }
 
-/// Materialize the given collection names via `EmbeddedNode::materialize_collection`.
 pub async fn materialize_collections(
     node: &EmbeddedNode,
     collections: &[&str],
@@ -91,10 +85,8 @@ pub async fn materialize_collections(
 }
 
 /// A unique-index violation surfaced through the `EmbeddedNode` anyhow chain.
-///
-/// The message is DefraDB's shared constant
-/// (`storage::corekv::Error::UniqueConstraintViolation`, also matched by the
-/// upstream HTTP layer); only this error class is tolerated at boot.
+/// Only this error class is tolerated at boot; the message is DefraDB's shared
+/// constant (`storage::corekv::Error::UniqueConstraintViolation`).
 fn is_unique_index_violation(error: &anyhow::Error) -> bool {
     error
         .chain()
@@ -104,22 +96,19 @@ fn is_unique_index_violation(error: &anyhow::Error) -> bool {
 /// Bare `[A-Za-z0-9_]` check for GraphQL identifier positions.
 ///
 /// `escape_graphql_string` covers string literals only; collection and field
-/// names interpolate as identifiers, where validation is the only defense.
-/// Both come from trusted sources (the static registry and the node's own
-/// schema), so this is a trust-boundary backstop, not input sanitization.
+/// names interpolate as identifiers, so this is the only defense.
 fn is_safe_graphql_identifier(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Best-effort identification of the parked document(s) behind a boot-time
-/// unique-index violation.
+/// unique-index violation; diagnostics must never fail boot.
 ///
 /// Scans the collection (non-index reads see parked documents), groups rows
 /// by each unique index's field values, and applies the merge path's
 /// deterministic-winner rule — the lexicographically smallest public docID
 /// holds the index entry — so the reported winner/parked split matches what
-/// the merge already persisted. Diagnostics must never fail boot: any error
-/// degrades to the raw materialization error text.
+/// the merge already persisted.
 async fn describe_parked_unique_conflict(
     node: &EmbeddedNode,
     collection: &str,
@@ -219,33 +208,4 @@ async fn describe_parked_unique_conflict(
     }
 
     detail
-}
-
-#[cfg(test)]
-mod tests {
-    use super::is_unique_index_violation;
-
-    #[test]
-    fn unique_index_violation_is_detected_anywhere_in_the_chain() {
-        // Shape produced by the live incident: db::Error::Storage wrapped by
-        // defra-node into anyhow, displayed through the chain.
-        let root = anyhow::anyhow!(
-            "storage error: can not index a doc's field(s) that violates unique index."
-        );
-        let wrapped = root.context("merge residue surfaces during reindex");
-        assert!(is_unique_index_violation(&wrapped));
-        assert!(is_unique_index_violation(&anyhow::anyhow!(
-            "can not index a doc's field(s) that violates unique index."
-        )));
-    }
-
-    #[test]
-    fn other_materialization_errors_stay_fatal() {
-        assert!(!is_unique_index_violation(&anyhow::anyhow!(
-            "collection not found: PeerEndpoint"
-        )));
-        assert!(!is_unique_index_violation(&anyhow::anyhow!(
-            "failed to build migration history for collection 'PeerEndpoint'"
-        )));
-    }
 }

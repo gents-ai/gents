@@ -1,10 +1,6 @@
-/* One dialog for "make it run on its own": when, what, who. Nothing is
-   written until Create; then the schedule or event source, the task and
-   the trigger land together in one config component apply (one
-   transaction), with the same ids on a retry, so a failure leaves no half
-   of it behind. A new trigger starts off unless the person turns it on
-   here. Existing schedules, sources and tasks can be reused instead of
-   made. */
+/* Writes the schedule or event source, the task and the trigger together in
+ * one config apply, reusing the same ids on a retry so a failure leaves
+ * nothing half-written. A new trigger starts off unless turned on here. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { agentReadiness } from "@/lib/agent-readiness";
 import { useRef, useState } from "react";
@@ -55,7 +51,6 @@ import { useApp } from "@/app/AppContext";
 const NEW = "new:";
 export const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
-/* the cadences people ask for; Custom takes a cron expression */
 export const PRESETS = [
   { id: "daily", label: "Every day at 09:00", cron: "0 9 * * *" },
   { id: "weekdays", label: "Every weekday at 09:00", cron: "0 9 * * 1-5" },
@@ -117,12 +112,9 @@ export function NewAutomationDialog({
   deployment: NodeView;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /* from Tasks: always a new task, which may run manually; lands on the task */
   forTask?: boolean;
-  /* from a task's page: a trigger for that task, which stays where it is */
   task?: string;
   initialKind?: "schedule" | "event";
-  /* the new trigger's id, for a caller that stays on its page */
   onCreated?: (triggerId: string) => void;
 }) {
   const { changeConfig } = useApp().actions;
@@ -135,13 +127,11 @@ export function NewAutomationDialog({
   const [preset, setPreset] = useState<(typeof PRESETS)[number]["id"]>("daily");
   const [cron, setCron] = useState("");
   const [eventId, setEventId] = useState(NEW);
-  /* no default collection: watching a collection the task itself writes to
-     (AgentRequest) would let it trigger itself, so the watch is a choice */
+  /* no default collection: watching AgentRequest would let the task trigger itself */
   const [collection, setCollection] = useState("");
   const [eventKind, setEventKind] = useState("created");
   const [taskId, setTaskId] = useState(task ?? NEW);
   const [enable, setEnable] = useState(false);
-  /* the ids of what Create writes, kept across a failed attempt */
   const ids = useRef<Record<string, string>>({});
   const idFor = (key: string, prefix: string) => (ids.current[key] ??= newId(prefix));
   const [prompt, setPrompt] = useState("");
@@ -170,13 +160,11 @@ export function NewAutomationDialog({
     onOpenChange(next);
   };
 
-  /* the agent that will run it: the new task's pick, or the chosen task's */
   const runningAgentId =
     taskId === NEW
       ? agentId
       : deployment.tasks.find((t) => t.taskId === taskId)?.agentId;
   const agent = agentOf(deployment, runningAgentId) ?? null;
-  /* whether the agent can run is the bridge's readiness decision */
   const readiness = agent ? agentReadiness(deployment, agent.agentId) : null;
   const agentOff = readiness !== null && !readiness.ready;
 
@@ -204,10 +192,8 @@ export function NewAutomationDialog({
       const tasks: Task[] = [];
       const triggers: Trigger[] = [];
 
-      /* when */
       let source: TriggerSource | null = null;
       if (kind === "schedule") {
-        let schedule_id = scheduleId;
         if (scheduleId === NEW) {
           schedule_id = idFor("schedule", "sched");
           const expression =
@@ -243,7 +229,6 @@ export function NewAutomationDialog({
         source = { kind: "event", event_source_id };
       }
 
-      /* what */
       let task_id = taskId;
       if (taskId === NEW) {
         task_id = idFor("task", "task");
@@ -262,7 +247,6 @@ export function NewAutomationDialog({
         });
       }
 
-      /* the trigger: off unless turned on here, and never on for an agent that is off */
       if (source)
         triggers.push({
           node_did,

@@ -36,9 +36,6 @@ inductive ConcurrencyMode where
 
 namespace Triggers
 
-/-- An outcome consumer cannot opt into publishing another outcome, even when
-its Task is also referenced by another source. Both configuration admission
-and request admission enforce this rule. -/
 def outcomeSourceAllowed (sourceCollection : String) (emitOutcome : Bool) : Bool :=
   sourceCollection != "FireOutcome" || !emitOutcome
 
@@ -52,7 +49,6 @@ theorem ordinary_source_allows_outcome (source : String) (emit : Bool)
 
 end Triggers
 
-/-- Omission uses one source-independent default, including graph delivery. -/
 def resolveConcurrency (_source : TriggerKind) (configured : Option ConcurrencyMode) :
     ConcurrencyMode := configured.getD .parallel
 
@@ -66,7 +62,6 @@ theorem concurrency_source_independent (a b : TriggerKind) (c : Option Concurren
 
 theorem event_kind_default_created : resolveEventKind none = "created" := rfl
 
-/-- Resolved runtime projections, not authored schedule/event configuration. -/
 structure ActiveSchedule where
   triggerId : String
   taskId : String
@@ -131,15 +126,12 @@ theorem wellFormed_manual_triggerId_none
 
 end FireIntent
 
-/-- Selected task and lineage; execution resolves the task under the runtime node. -/
 structure RequestSeed where
   taskId : String
   causedByTriggerId : Option String
   causedByTriggerKind : TriggerKind
   deriving Repr
 
-/-- Logical trigger identity within one runtime node. Source kind selects a
-source, not a concurrency namespace; TriggerWideKey models explicit owner scoping. -/
 abbrev TriggerKey := String
 
 namespace FireIntent

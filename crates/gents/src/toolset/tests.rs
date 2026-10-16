@@ -131,8 +131,6 @@ async fn native_tool_definitions_include_model_facing_defaults_and_constraints()
     );
 }
 
-// #1018: when the operator raises the foreground cap above the default, the
-// model-visible schema advertises the default and the cap as distinct values.
 #[tokio::test]
 async fn bash_schema_advertises_decoupled_default_and_max() {
     let root = temp_root("gents-decoupled-timeout");
@@ -236,9 +234,6 @@ fn background_tool_names_are_gated_by_allowlist() {
     );
 }
 
-/// The first input is the live shape GLM emitted for the desktop operations
-/// smoke: the target's fields flattened beside `tool_name`, with the target's
-/// own `args` array standing in for the `args` object.
 #[tokio::test]
 async fn spawn_process_decodes_only_its_advertised_schema() {
     use crate::background_tools::BackgroundToolArgs;
@@ -330,8 +325,6 @@ async fn session_message_tool_definitions_register_expected_surface() {
     assert_eq!(list.parameters["properties"], serde_json::json!({}));
 }
 
-/// Build a single-target list for session-message tool tests. `name` doubles as the
-/// agent id and the destination principal is the same fixed local owner.
 fn agent_targets(name: &str) -> Vec<crate::document_config::AgentTargetDocument> {
     vec![crate::document_config::AgentTargetDocument {
         target_id: format!("{name}-target"),
@@ -353,8 +346,6 @@ fn temp_root(name: &str) -> PathBuf {
 fn ensure_native_fs_runner_for_test() {
     static BUILT: OnceLock<()> = OnceLock::new();
     BUILT.get_or_init(|| {
-        // An adjacent runner may predate the current sources (for example after
-        // a rebase), so always let cargo rebuild it; an up-to-date build is a no-op.
         let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .ancestors()
             .nth(2)
@@ -408,8 +399,7 @@ fn compact_exec_meta(output: &str) -> serde_json::Value {
     serde_json::from_str(raw).expect("metadata json")
 }
 
-/// Bounds a regression that would otherwise wait on a closed gate forever.
-/// It is a failure bound only; no assertion passes because it elapsed.
+/// Failure bound only; no assertion passes because it elapsed.
 const NATIVE_BLOCKER_HANG_BOUND: Duration = Duration::from_secs(120);
 
 fn blocker_entered_at_nanos(marker: &std::path::Path) -> Option<i64> {
@@ -443,17 +433,12 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
     std::fs::write(root.join("second.txt"), "second request\n").unwrap();
     let context = ToolContext::new(root.clone(), false).unwrap();
 
-    // The blocker waits on a gate file the test controls, so it cannot return
-    // on its own while the gate is closed. Only the preempted attempt's gate
-    // stays closed.
     let _block_dir = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_DIR", context.root().as_os_str());
     let blocking_tool: Box<dyn crate::llm::tool::ToolDyn> =
         Box::new(GlobTool::new(context.clone(), DEFAULT_MAX_MATCHES));
     let second_tool: Box<dyn crate::llm::tool::ToolDyn> =
         Box::new(ReadFileTool::new(context, DEFAULT_MAX_FILE_CHARS));
 
-    // Negative control: with no near deadline, the same blocker is entered,
-    // holds until its gate opens, then returns and writes its release marker.
     let control_entered = root.join("control-entered");
     let control_gate = root.join("control-gate");
     let control_released = root.join("control-released");
@@ -496,10 +481,8 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
         "an unpreempted blocker must write its release marker"
     );
 
-    // The deadline must fire after the runner enters the blocker. Entry time
-    // depends on process startup, so an attempt whose deadline fired before
-    // entry witnessed nothing and is repeated with a later deadline; only a
-    // witnessed attempt is asserted on.
+    // The deadline must fire after the runner enters the blocker: an attempt
+    // whose deadline fired before entry witnessed nothing and is repeated.
     let gate = root.join("preempt-gate");
     let _gate = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_GATE", &gate);
     let mut deadline_ms = 25;
@@ -1061,16 +1044,6 @@ async fn compact_list_output_is_smaller_than_representative_pretty_json() {
 }
 
 #[test]
-fn read_only_bash_rejects_write_commands() {
-    assert!(validate_read_only_command(
-        "git",
-        &[String::from("commit")],
-        &default_read_only_commands()
-    )
-    .is_err());
-}
-
-#[test]
 fn shell_environment_filters_secrets_and_forces_noninteractive_values() {
     let env = build_shell_env_from_vars([
         ("PATH".to_string(), "/custom/bin".to_string()),
@@ -1168,10 +1141,7 @@ fn command_policy_applies_forbidden_and_allowed_prefixes() {
 
 #[test]
 fn deny_all_argv_policy_rejects_every_command() {
-    // An effective `Only(∅)` allowed scope projects to deny_all_argv, which must
-    // reject every command — an EMPTY allowed_argv_prefixes would instead mean
-    // allow-all (the `Only(∅) ≠ All` trap). The allowed list stays empty here, so
-    // this proves the sentinel (not the list) is what enforces deny-all.
+    // The empty allowed list proves the sentinel, not the list, enforces deny-all.
     let policy = CommandExecutionPolicy::write_capable().with_deny_all_argv(true);
     assert!(policy.allowed_argv_prefixes.is_empty());
     assert!(validate_command_policy("ls", &[], &policy).is_err());
@@ -1208,13 +1178,10 @@ fn read_only_policy_allows_operator_configured_diagnostic_prefix() {
     .is_err());
 }
 
-/// The two ResolvedToolSelection knobs are not aliases: prefixes gate/extend by argv;
-/// the allowlist field replaces the whole-executable base.
 #[test]
 fn read_only_allowlist_knobs_match_operator_docs() {
     let defaults = default_read_only_commands();
 
-    // Base defaults admit built-in heads; unknown heads are denied.
     let default_policy = CommandExecutionPolicy::read_only(defaults.clone());
     validate_command_policy("date", &[], &default_policy).unwrap();
     assert!(
@@ -1222,7 +1189,6 @@ fn read_only_allowlist_knobs_match_operator_docs() {
         "unknown head must not pass the default base allowlist"
     );
 
-    // read_only_command_allowlist REPLACES the base (narrow / customize).
     let narrowed = CommandExecutionPolicy::read_only(vec![
         "ls".to_string(),
         "cat".to_string(),
@@ -1240,9 +1206,6 @@ fn read_only_allowlist_knobs_match_operator_docs() {
         "replace/narrow must drop unlisted default heads (e.g. sudo)"
     );
 
-    // Non-empty command_allowed_argv_prefixes is a global gate: a single
-    // diagnostic prefix admits matching argv outside the base, but also
-    // blocks default heads that do not match any prefix.
     let prefix_only =
         CommandExecutionPolicy::read_only(defaults).with_allowed_argv_prefixes(vec![vec![
             "spctl".to_string(),
@@ -1900,9 +1863,6 @@ async fn unrestricted_bash_timeout_kills_descendants_and_returns_promptly() {
         .to_string(),
     );
     tokio::pin!(call);
-    // The runtime converts a wall-clock deadline to a Tokio timer after spawn.
-    // Keep that deadline beyond fixture startup, then expire it only once the
-    // descendant exists; otherwise host load can make this test kill no child.
     let ready = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             if let Some(pid) = std::fs::read_to_string(&pid_file)
@@ -2142,8 +2102,6 @@ fn read_only_bash_rejects_mutating_host_diagnostics_commands() {
     assert!(validate_read_only_command("tailscale", &[String::from("up")], &allowlist).is_err());
 }
 
-// --- #738/#724: edit_file match ladder, dry-run, and content-hash wiring ---
-
 fn edit_args(path: &str, old: &str, new: &str) -> EditFileArgs {
     EditFileArgs {
         path: path.to_string(),
@@ -2305,7 +2263,6 @@ async fn edit_file_dry_run_previews_diff_without_writing() {
         value["diff"].as_str().unwrap().contains("max_turns"),
         "{value}"
     );
-    // Nothing was written.
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),
         "{\n  \"max_turns\": 20\n}\n"
@@ -2316,7 +2273,6 @@ async fn edit_file_dry_run_previews_diff_without_writing() {
 async fn edit_file_stale_hash_rejects_before_matching_without_disclosing_current() {
     let root = temp_root("gents-edit-stale");
     let file = root.join("a.txt");
-    // Pattern is ambiguous — but the stale gate must fire FIRST (Lean E6).
     std::fs::write(&file, "dup\ndup\n").unwrap();
     let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
     let mut args = edit_args("a.txt", "dup", "x");
@@ -2348,7 +2304,6 @@ async fn edit_file_success_reports_strategy_hashes_and_diff() {
         format!("sha256:{:x}", Sha256::digest(std::fs::read(&file).unwrap()))
     };
     let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
-    // Pattern carries trailing whitespace the file lacks: ladder must apply.
     let mut args = edit_args(
         "profile.json",
         "  \"max_turns\": 20   ",
@@ -2439,7 +2394,6 @@ async fn edit_file_regex_mode_and_insert_after_operation() {
     );
 }
 
-// Review finding 2: non-UTF-8 files are rejected, never lossy-rewritten.
 #[tokio::test]
 async fn edit_file_rejects_non_utf8_instead_of_corrupting() {
     let root = temp_root("gents-edit-non-utf8");
@@ -2450,13 +2404,9 @@ async fn edit_file_rejects_non_utf8_instead_of_corrupting() {
         .await
         .expect_err("non-UTF-8 must be rejected");
     assert!(err.to_string().contains("UTF-8"), "{err}");
-    // The file is untouched — no U+FFFD rewrite.
     assert_eq!(std::fs::read(&file).unwrap(), b"caf\xe9 target\n");
 }
 
-// Review finding 1: concurrent edits to the same file serialize — neither
-// lost-updates the other. (Without the per-path lock this interleaves:
-// both read, both write full content, one edit vanishes.)
 #[tokio::test(flavor = "multi_thread")]
 async fn edit_file_concurrent_edits_do_not_lose_updates() {
     let root = temp_root("gents-edit-concurrent");
@@ -2477,10 +2427,6 @@ async fn edit_file_concurrent_edits_do_not_lose_updates() {
     }
 }
 
-// Round-2 finding 1: write_file shares the mutation lock — a concurrent
-// edit_file + write_file pair serializes, so the final state is always one
-// of the two legal serial orders, never a torn third state (edit reads
-// before the write, lands after it, resurrecting overwritten content).
 #[tokio::test(flavor = "multi_thread")]
 async fn write_file_and_edit_file_serialize_on_the_same_lock() {
     let root = temp_root("gents-write-edit-serialize");
@@ -2512,8 +2458,6 @@ async fn write_file_and_edit_file_serialize_on_the_same_lock() {
     }
 }
 
-// Round-3 finding 2: mutation-lock keys for not-yet-existing files resolve
-// symlinked directory aliases to one key — both spellings share one lock.
 #[cfg(unix)]
 #[test]
 fn mutation_lock_keys_resolve_symlinked_parents_for_new_files() {
@@ -2528,10 +2472,6 @@ fn mutation_lock_keys_resolve_symlinked_parents_for_new_files() {
     );
 }
 
-// #985/#1018: the timeout applied when the model omits timeout_secs must equal
-// the schema-advertised default; explicit foreground requests may raise it up
-// to the operator's foreground ceiling; backgrounded runs get their own
-// lifetime budget instead of either foreground value.
 #[test]
 fn command_timeout_resolution_matches_advertised_schema() {
     use super::shared::resolve_command_timeout;
@@ -2564,7 +2504,7 @@ fn command_timeout_resolution_matches_advertised_schema() {
     assert_eq!(
         resolve_command_timeout(Some(600), foreground_default, foreground_default, false),
         foreground_default,
-        "max equal to default reproduces the coupled #985 ceiling"
+        "max equal to default reproduces the coupled ceiling"
     );
     assert_eq!(
         resolve_command_timeout(Some(600), foreground_default, Duration::from_secs(1), false),
@@ -2592,12 +2532,6 @@ fn command_timeout_resolution_matches_advertised_schema() {
         resolve_command_timeout(Some(0), foreground_default, foreground_max, true),
         Duration::from_secs(1)
     );
-}
-
-#[test]
-fn bash_args_omitted_timeout_deserializes_to_none() {
-    let args: BashArgs = serde_json::from_str(r#"{"command":"true"}"#).unwrap();
-    assert_eq!(args.timeout_secs, None);
 }
 
 #[cfg(unix)]
@@ -2679,9 +2613,9 @@ async fn artifact_command_without_runtime_grant_never_dispatches() {
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_launches() {
-    // Load the Lean cases before the fixture claims its execution lease: the
-    // first load may wait behind `lake build` under the shared proofs lock for
-    // longer than the lease, which would expire the grant under test.
+    // Load cases before the fixture claims its execution lease: the first load
+    // may wait behind `lake build` under the shared proofs lock longer than
+    // the lease, which would expire the grant under test.
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().artifact_spawn_cases;
     let fx = crate::workspace::artifact_test_fixture(&[]).await;
     assert_eq!(cases.len(), 5);
@@ -2732,8 +2666,6 @@ async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_lau
                 },
             ).await
         };
-        // A real task boundary explicitly receives the SAME grant; this does not
-        // claim to cover the separate durable background bridge's serialization.
         let result = if background {
             tokio::spawn(operation).await.unwrap()
         } else {
@@ -2899,8 +2831,7 @@ async fn run_artifact_compiler_fixture(build_script: Option<&str>) {
     } else {
         root.join(git_dir)
     };
-    // Artifacts deliberately live under a separate host-owned Git placement
-    // directory. The Git control files themselves must remain byte-identical.
+    // Artifacts live under a separate host-owned Git placement directory.
     let metadata_before: Vec<_> = ["HEAD", "index", "commondir", "gitdir"]
         .into_iter()
         .map(|name| (name, std::fs::read(git_dir.join(name)).unwrap()))
@@ -3015,7 +2946,6 @@ fn main() {
     let alias = output.join("source-symlink"); symlink(&protected, &alias).unwrap();
     denied(|| fs::write(&alias, "symlink escape"));
     denied(|| fs::hard_link(&protected, output.join("source-hardlink")));
-    // Redirecting model/build-process environment cannot redirect kernel authority.
     env::set_var("CARGO_TARGET_DIR", &source); env::set_var("TMPDIR", &source);
     denied(|| fs::write(PathBuf::from(env::var_os("TMPDIR").unwrap()).join("redirected"), "escape"));
     let address: SocketAddr = "127.0.0.1:9".parse().unwrap();

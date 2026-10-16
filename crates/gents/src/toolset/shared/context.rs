@@ -88,11 +88,6 @@ impl ToolContext {
     }
 
     pub(crate) fn new(root: PathBuf, create_missing: bool) -> Result<Self> {
-        // A configured tool root is also the unbound default cwd. The host
-        // process may have been launched from any descendant (for example,
-        // Tauri starts under `apps/.../src-tauri`); inheriting that directory
-        // would make identical Tools documents behave differently by launcher.
-        // Request workspace scope still replaces this base in `effective_base`.
         Self::new_with_base(root, None, create_missing)
     }
 
@@ -240,8 +235,7 @@ fn normalize_for_creation(path: &Path) -> Result<PathBuf> {
     }
     // Canonicalize the nearest filesystem entry, then append the missing
     // suffix. `symlink_metadata` deliberately does not follow the final link:
-    // a dangling symlink is an existing entry whose canonicalization must
-    // fail, rather than a creatable leaf that a later write could follow.
+    // a dangling symlink must fail rather than resolve to a creatable leaf.
     let mut ancestor = normalized.as_path();
     let mut suffix = Vec::new();
     while std::fs::symlink_metadata(ancestor).is_err() {

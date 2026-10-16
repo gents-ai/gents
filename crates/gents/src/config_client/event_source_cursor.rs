@@ -194,8 +194,7 @@ pub(crate) async fn seed_referencing_consumers(
 }
 
 /// Cached runtime snapshots cannot authorize new admissions after a committed
-/// disable or source replacement. Duplicate receipts bypass this check because
-/// their original request already committed before the control-plane change.
+/// disable or source replacement.
 pub(crate) async fn validate_event_admission(
     txn: &ConfigApplyTxn<'_>,
     fire: &gents_protocol::trigger_delivery::TriggerFire,
@@ -301,8 +300,6 @@ pub(crate) async fn load_or_seed_for_source(
                 .context("arrival journal omitted head")?
                 .to_owned()
         } else {
-            // Configuration may precede collection installation; an absent collection
-            // has no arrival history, so registration must retain its first arrival.
             "0".to_owned()
         };
     let cursor = EventSourceCursor {
@@ -343,13 +340,7 @@ async fn persist_checkpoint(
 }
 
 /// Completeness comes from the native receiving-node journal, within the same
-/// transaction as the persisted binding, filter, receipts and checkpoint. Hidden
-/// arrivals are exclusions only while enabled; disabled sources retain them.
-/// Created-source selection is evaluated at delivery: reliable handoff producers
-/// keep payload/filter fields immutable until admitted. A later mutation does
-/// not replay a row already excluded by the committed filter snapshot.
-/// A legacy-serial busy result may exclude only the next visible arrival, never
-/// authorize an arbitrary prefix of unadmitted work.
+/// transaction as the persisted binding, filter, receipts and checkpoint.
 pub(crate) async fn checkpoint_prefix(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
@@ -517,10 +508,6 @@ async fn admitted_arrival(
         == 1)
 }
 
-/// A callback binding's receipt is its event invocation for the arrival: the
-/// unique `(owner, idempotency_key)` index names it by binding and document,
-/// never by callback or source version, so neither a later callback
-/// replacement nor an edit of the admitted document hides it.
 async fn admitted_callback_arrival(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,

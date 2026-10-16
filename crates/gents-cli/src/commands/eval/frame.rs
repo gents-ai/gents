@@ -1,9 +1,3 @@
-//! The one-screen frame `gents eval watch` redraws in place on a terminal:
-//! a header with the run's progress, a table per cell, one row per trial in
-//! flight and the last trials to finish. Built only from what a watcher can
-//! read without the home's node: `progress.json` and the runner's
-//! `report.json` (or the report the node derives, once it is free).
-
 use std::collections::BTreeMap;
 use std::io::{self, Write};
 
@@ -14,7 +8,6 @@ use gents::eval::runner::{
 };
 use gents::eval::OutcomeKind;
 
-/// The terminal a frame is drawn on.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Screen {
     pub(crate) width: usize,
@@ -23,8 +16,6 @@ pub(crate) struct Screen {
 }
 
 impl Screen {
-    /// Stdout's size, or 120×40 when it cannot be read; color unless
-    /// `NO_COLOR` is set.
     pub(crate) fn of_stdout() -> Self {
         let (width, height) = terminal_size().unwrap_or((120, 40));
         Self {
@@ -50,13 +41,9 @@ fn terminal_size() -> Option<(usize, usize)> {
     None
 }
 
-/// Hide the cursor while the watch redraws.
 pub(crate) const HIDE_CURSOR: &str = "\x1b[?25l";
-/// Restore it; written on every way out, Ctrl-C included.
 pub(crate) const SHOW_CURSOR: &str = "\x1b[?25h";
 
-/// Draw `lines` over the previous frame: home, each line cleared to its end,
-/// then everything below cleared.
 pub(crate) fn draw(lines: &[String], out: &mut dyn Write) -> io::Result<()> {
     write!(out, "\x1b[H")?;
     for line in lines {
@@ -66,8 +53,6 @@ pub(crate) fn draw(lines: &[String], out: &mut dyn Write) -> io::Result<()> {
     out.flush()
 }
 
-/// What the frame knows about the run when no report can be read: the ids
-/// the run directory's frozen definition names.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Heading {
     pub(crate) run_id: String,
@@ -75,10 +60,7 @@ pub(crate) struct Heading {
     pub(crate) note: Option<String>,
 }
 
-/// How many finished trials a frame shows.
 const FINISHED: usize = 4;
-
-/// How many of a finished trial's failing checks a frame names.
 const FAILING_SHOWN: usize = 2;
 
 pub(crate) fn frame(
@@ -93,7 +75,6 @@ pub(crate) fn frame(
     let mut lines = Vec::new();
     let slots = in_flight(progress);
 
-    // Header.
     let (definition, created_at) = match view {
         Some(view) => (
             Some((
@@ -157,7 +138,6 @@ pub(crate) fn frame(
     }
     lines.push(String::new());
 
-    // Cells.
     lines.push(fit(
         &format!(
             "{:<16} {:>5} {:>5} {:>5} {:>6} {:>8} {:>15} {:>13}",
@@ -212,8 +192,6 @@ pub(crate) fn frame(
     }
     lines.push(String::new());
 
-    // Finished, drawn last but budgeted first so the in-flight rows fill
-    // what is left.
     let finished = finished(view, paint, width);
     let budget = screen
         .height
@@ -247,12 +225,10 @@ pub(crate) fn frame(
     }
     lines.push(String::new());
     lines.extend(finished);
-    // A frame taller than the screen would scroll its header away.
     lines.truncate(screen.height.saturating_sub(1));
     lines
 }
 
-/// The slots in flight, in a stable order: cell, case, trial, attempt.
 fn in_flight(progress: Option<&Progress>) -> Vec<(&String, &InFlight)> {
     let mut slots: Vec<(&String, &InFlight)> = progress
         .map(|progress| progress.slots.iter().collect())
@@ -276,7 +252,6 @@ fn in_flight(progress: Option<&Progress>) -> Vec<(&String, &InFlight)> {
     slots
 }
 
-/// A slot's row, and the line naming its last tool call when it has one.
 fn slot_rows(
     trial_id: &str,
     slot: &InFlight,
@@ -350,8 +325,6 @@ fn slot_rows(
     rows
 }
 
-/// `beh 7/9  task 12/22  trig 9/18`: each goal entry, then the snapshot's
-/// other counts, compactly named.
 fn docs_vs_goal(live: Option<&LiveSnapshot>, goal: &[GoalEntry]) -> String {
     let mut items: Vec<String> = goal
         .iter()
@@ -381,7 +354,6 @@ fn docs_vs_goal(live: Option<&LiveSnapshot>, goal: &[GoalEntry]) -> String {
     items.join(" ")
 }
 
-/// The short name a frame gives a configuration collection.
 fn abbreviation(collection: &str) -> &str {
     match collection {
         "Agent" => "beh",
@@ -400,8 +372,6 @@ fn abbreviation(collection: &str) -> &str {
     }
 }
 
-/// Tool calls ok and failed across a cell: its finished trials' final
-/// snapshots and its in-flight trials' latest.
 fn cell_tools(view: &RunView, cell_id: &str, slots: &[(&String, &InFlight)]) -> (u64, u64) {
     let finished = view
         .report
@@ -424,8 +394,6 @@ fn cell_tools(view: &RunView, cell_id: &str, slots: &[(&String, &InFlight)]) -> 
     })
 }
 
-/// The last trials to finish, latest first, one line each with what their
-/// failing checks observed against what they expected.
 fn finished(view: Option<&RunView>, paint: Paint, width: usize) -> Vec<String> {
     let Some(view) = view else {
         return Vec::new();
@@ -547,7 +515,6 @@ impl Paint {
     }
 }
 
-/// `[██████░░░░]` over `width` cells.
 fn bar(done: u32, total: u32, width: usize) -> String {
     let filled = if total == 0 {
         0
@@ -561,7 +528,6 @@ fn bar(done: u32, total: u32, width: usize) -> String {
     )
 }
 
-/// `line` cut to `width` chars, marked when cut.
 fn fit(line: &str, width: usize) -> String {
     match line.char_indices().nth(width.saturating_sub(1)) {
         Some((at, _)) if line.chars().count() > width => format!("{}…", &line[..at]),
@@ -591,7 +557,6 @@ pub(crate) fn duration(seconds: u64) -> String {
     }
 }
 
-/// `9999`, `812.3k`, `1.24M`, or `-` when unknown.
 pub(crate) fn compact(value: Option<u64>) -> String {
     match value {
         None => "-".to_owned(),
@@ -605,7 +570,6 @@ fn percent(bp: Option<u32>) -> String {
     super::render::percent(bp)
 }
 
-/// Enough of a trial id to tell slots apart on one line.
 pub(crate) fn short_id(trial_id: &str) -> &str {
     trial_id.get(..12).unwrap_or(trial_id)
 }

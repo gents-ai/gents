@@ -240,8 +240,6 @@ async fn stale_execution_owner_drop_does_not_expire_successor_generation() {
     let before = lease_tuple(&request_row(&node, &doc_id).await);
     let owners_before_drop = Arc::strong_count(&node);
     drop(lifecycle);
-    // Drop transfers its node reference into the cleanup task. Wait for that
-    // reference to be released, proving the stale CAS finished before asserting.
     tokio::time::timeout(Duration::from_secs(5), async {
         while Arc::strong_count(&node) >= owners_before_drop {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -302,8 +300,6 @@ async fn renewal_timer_advances_durable_deadline_while_provider_and_tool_reads_w
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     let doc_id = lifecycle.request().doc_id.clone();
 
-    // These stand in for an in-flight provider read and an independent tool
-    // read. Neither produces bytes or touches the request's lease.
     let (mut provider_reader, _provider_writer) = tokio::io::duplex(64);
     let (mut tool_reader, _tool_writer) = tokio::io::duplex(64);
     let provider_read = tokio::spawn(async move {
@@ -363,8 +359,6 @@ async fn renewal_after_a_simulated_scheduling_gap_cannot_revive_expired_owner() 
         .execution_generation
         .expect("claimed generation");
 
-    // Stop polling to simulate a scheduler gap. This is not an OS suspend or
-    // wall-clock mutation: the stored deadline remains the authority.
     drop(lifecycle.renewal_task.take());
     let before = request_row(&node, &doc_id).await;
     let deadline =
@@ -532,8 +526,6 @@ async fn recover_observed_execution(
     node: &Arc<EmbeddedNode>,
     row: &AgentRequestRow,
 ) -> Result<TerminalizeResult> {
-    // The canonical recovery coordinator re-observes its fence inside the
-    // transaction; verify that this exact observed generation was the winner.
     let agent = row
         .node_did
         .as_deref()
@@ -758,9 +750,8 @@ async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload
     .unwrap();
     running_lifecycle.start_running().await.unwrap();
 
-    // Persist a physically valid delivery header whose selected tool-output
-    // extent is immutably corrupt. Metadata-only revocation must never read or
-    // rewrite these bytes.
+    // Physically valid delivery header with an immutably corrupt selected
+    // tool-output extent; revocation must never read or rewrite these bytes.
     let now = Utc::now().to_rfc3339();
     let payload = "durable-but-corrupt";
     let segment = OutputSegment {
@@ -999,9 +990,6 @@ async fn expired_owner_racing_recovery_cannot_win_terminalization() {
     assert_eq!(terminal.terminal_output, Some(TerminalOutput::NoMessage));
 }
 
-/// Simulates a host that made no progress while its *stored* deadline passed.
-/// This is not an OS suspend or backward-clock test: the production gates read
-/// a deliberately expired persisted deadline, then recovery takes the fence.
 #[tokio::test]
 async fn expired_stored_deadline_blocks_old_publication_and_tool_admission_after_recovery() {
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
@@ -1065,8 +1053,7 @@ async fn expired_stored_deadline_blocks_old_publication_and_tool_admission_after
     assert_eq!(output_segment_count(&node, &doc_id).await, 0);
     assert_eq!(
         request_row(&node, &doc_id).await.execution_generation,
-        recovered.execution_generation,
-        "the stale owner must not replace recovery's terminal generation"
+        recovered.execution_generation
     );
 
     for collection in ["AgentMessage", "AgentToolCall"] {
@@ -1075,17 +1062,12 @@ async fn expired_stored_deadline_blocks_old_publication_and_tool_admission_after
             escape_graphql_string(&doc_id)
         );
         let response = node.execute(&query).await;
-        assert!(
-            !response.has_errors(),
-            "{collection}: {:?}",
-            response.errors
-        );
+        assert!(!response.has_errors(), "{collection}: {:?}", response.errors);
         assert!(
             response.data.as_ref().unwrap()[collection]
                 .as_array()
                 .unwrap()
-                .is_empty(),
-            "an expired owner published a header or admitted a tool: {collection}"
+                .is_empty()
         );
     }
 }
@@ -1093,7 +1075,6 @@ async fn expired_stored_deadline_blocks_old_publication_and_tool_admission_after
 #[tokio::test]
 async fn concurrent_recovery_of_one_observed_execution_commits_one_terminal_winner() {
     let (node, _dir) = test_node().await;
-    // Exercise both creating an absent response and updating a streaming one.
     for processing in [false, true] {
         let lifecycle = if processing {
             owner(&node).await
@@ -1145,8 +1126,6 @@ async fn concurrent_recovery_of_one_observed_execution_commits_one_terminal_winn
 #[tokio::test]
 async fn cancel_racing_provider_eof_commits_one_agreeing_terminal_pair() {
     let (node, _dir) = test_node().await;
-    // Cover both committed orders and actual overlapping latch/terminal transactions.
-    // EOF enters the owner as Failed; a latch observed by that transaction selects Interrupted.
     for ordering in 0..3 {
         let mut lifecycle = owner(&node).await;
         let doc_id = lifecycle.request().doc_id.clone();

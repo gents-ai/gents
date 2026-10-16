@@ -39,12 +39,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) root_admission_cases: Vec<LeanRootAdmissionCase>,
     pub(crate) vocabularies: Vec<LeanVocabularyContract>,
     pub(crate) state_machines: Vec<LeanStateMachineContract>,
-    /// Multi-resource pairing reconciliation samples
-    /// (`Conformance.PairingReconcileCases`).
     pub(crate) pairing_reconcile_cases: Vec<LeanPairingReconcileCase>,
-    // The generator emits every top-level key unconditionally, so no field may
-    // serde-default away its absence: a missing required fixture must fail
-    // decoding instead of silently decoding to empty coverage.
     pub(crate) graph_pipeline_validation_cases: Vec<LeanGraphPipelineValidationCase>,
     pub(crate) graph_pipeline_revision_gate_cases: Vec<LeanGraphPipelineRevisionGateCase>,
     pub(crate) graph_pipeline_run_terminal_cases: Vec<LeanGraphPipelineRunTerminalCase>,
@@ -68,7 +63,6 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) schema_argument_repair_cases: Vec<serde_json::Value>,
     pub(crate) invalid_tool_progress_cases: Vec<serde_json::Value>,
     pub(crate) repeated_tool_failure_cases: Vec<serde_json::Value>,
-    /// `Conformance.ToolTimeouts`: host-ceiling resolution of Tools timeouts.
     pub(crate) tool_timeout_cases: serde_json::Value,
     pub(crate) plugin_resource_cases: serde_json::Value,
     pub(crate) mailbox_notification_cases: Vec<serde_json::Value>,
@@ -122,10 +116,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) enrollment_encoding_cases: Vec<LeanEnrollmentEncodingCase>,
     pub(crate) enrollment_digest_cases: Vec<LeanEnrollmentDigestCase>,
     pub(crate) agent_request_admission_cases: Vec<LeanAgentRequestAdmissionCase>,
-    /// `Conformance.CausalHopContracts`: materialized hops and admission
-    /// verdicts evaluated by `CausalHop.nextHop`/`CausalHop.admitHop`.
     pub(crate) causal_hop_contract: LeanCausalHopContract,
-    /// `ScopeTemplates` per-collection route rules, by Lean definition name.
     pub(crate) scope_collection_rules:
         std::collections::BTreeMap<String, Vec<LeanScopeCollectionRule>>,
     pub(crate) title_request_admission_cases: Vec<LeanTitleRequestAdmissionCase>,
@@ -197,11 +188,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) queued_steering_guard_cases: Vec<LeanQueuedSteeringGuardCase>,
     pub(crate) queue_deadline_conformance_cases: Vec<LeanQueueDeadlineConformanceCase>,
     pub(crate) recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
-    /// `Recovery.killCases`: each kill observation with `killAction` of it.
     pub(crate) session_message_kill_cases: Vec<LeanKillCase>,
-    // `recovery_equivalence_cases` was deleted from the generated contract:
-    // the synthetic recovery-equivalence fixtures are gone and the actual
-    // recovery sweep (`recovery_sweep_cases`) is the remaining owner.
     pub(crate) restart_disposition_cases: Vec<LeanRestartDispositionCase>,
     pub(crate) r4c_background_work_cases: Vec<LeanR4cBackgroundWorkCase>,
     pub(crate) tool_output_paging_cases: Vec<LeanToolOutputPagingCase>,
@@ -353,8 +340,6 @@ pub(crate) struct LeanCanonicalPath {
     pub(crate) components: Vec<String>,
 }
 
-/// One observed collection state of the pairing transport owner
-/// (`Conformance.PairingReconcileCases`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanPairingReconcileSnapshot {
     pub(crate) connected: bool,
@@ -363,11 +348,6 @@ pub(crate) struct LeanPairingReconcileSnapshot {
     pub(crate) converged: bool,
 }
 
-/// One multi-resource pairing reconciliation sample
-/// (`Conformance.PairingReconcileCases`): a transport-owner operation
-/// (`dial`, `reconcileInstall`, `dialFailed`) and the observed resource state
-/// before and after. Convergence depends on all desired resources, not an
-/// independent phase machine.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanPairingReconcileCase {
     pub(crate) name: String,
@@ -376,8 +356,6 @@ pub(crate) struct LeanPairingReconcileCase {
     pub(crate) after: LeanPairingReconcileSnapshot,
 }
 
-/// Which compiler diagnostic realizes Lean `topologyValid = false`
-/// (`Conformance.GraphPipelineContracts.TopologyFault`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum LeanGraphTopologyFault {
@@ -386,8 +364,6 @@ pub(crate) enum LeanGraphTopologyFault {
     Cycle,
 }
 
-/// Which compiler diagnostic realizes Lean `withinBounds = false`
-/// (`Conformance.GraphPipelineContracts.BoundsFault`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum LeanGraphBoundsFault {
@@ -407,8 +383,6 @@ pub(crate) struct LeanGraphPipelineValidationCase {
     pub(crate) expected_valid: bool,
 }
 
-/// Where the active pointer stands relative to the candidate revision
-/// (`Conformance.GraphPipelineContracts.ActivePointer`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum LeanGraphActivePointer {
@@ -442,9 +416,6 @@ pub(crate) struct LeanGraphPipelineRunTerminalCase {
     pub(crate) expected_cancel: bool,
 }
 
-/// One graph edge (`Conformance.GraphPipelineContracts.edgeDeliveryCases`):
-/// its concurrency and delivery group in their wire shapes, and the verdicts
-/// of `GraphPipeline.graphEdgeConcurrencyValid` and `graphEdgeValid`.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct LeanGraphPipelineEdgeDeliveryCase {
     pub(crate) name: String,
@@ -470,8 +441,6 @@ pub(crate) struct LeanStateMachineContract {
     pub(crate) actions: Vec<String>,
     pub(crate) legal_transitions: Vec<LeanTransitionPair>,
     pub(crate) illegal_transitions: Vec<LeanTransitionPair>,
-    /// Named transition rows emitted by `Conformance.Contracts.NamedTransition`.
-    /// The generator emits this key for every machine (empty when unused).
     pub(crate) named_transitions: Vec<LeanNamedTransition>,
 }
 
@@ -1154,7 +1123,6 @@ pub(crate) struct LeanCausalHopContract {
     pub(crate) write_cases: Vec<LeanSessionMessageWriteCase>,
 }
 
-/// One delivered session message (`DurableLineage.sessionMessageWrite`).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanSessionMessageWriteCase {
@@ -1167,7 +1135,6 @@ pub(crate) struct LeanSessionMessageWriteCase {
     pub(crate) queued_after_active: bool,
 }
 
-/// One agent-interrupt permission question (`DurableLineage.interruptAllowed`).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanAgentInterruptCase {
@@ -1178,9 +1145,6 @@ pub(crate) struct LeanAgentInterruptCase {
     pub(crate) expected_allowed: bool,
 }
 
-/// One materialization step: `cause` is `root`, `cross_session` (with its
-/// `cause_hop`), `return` or `continuation`, from the hop of the request it
-/// continues in its own session.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCausalHopStepCase {
@@ -1193,8 +1157,6 @@ pub(crate) struct LeanCausalHopStepCase {
     pub(crate) expected_admitted: bool,
 }
 
-/// One link of a causal chain: `cross_session` from another session (with
-/// its own session's predecessor hop) or a same-session `continuation`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCausalHopChainStep {
@@ -1202,7 +1164,6 @@ pub(crate) struct LeanCausalHopChainStep {
     pub(crate) own_predecessor_hop: Option<u32>,
 }
 
-/// A chain materialized from hop zero; expectations are per request.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCausalHopChainCase {
@@ -1213,8 +1174,6 @@ pub(crate) struct LeanCausalHopChainCase {
     pub(crate) expected_admitted: Vec<bool>,
 }
 
-/// Calls and returns between a caller `a` and a callee `b` from hop zero
-/// (`CausalHop.run`); expectations are per materialized request.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCausalHopCallCase {
@@ -1754,9 +1713,6 @@ pub(crate) fn lean_composed_invariant_witness(
         })
 }
 
-/// Look up a composed-invariant witness by its (unique) `scenario`. Needed when
-/// several witnesses share a `theorem_name` — e.g. the C2 theorem's pending and
-/// running arms.
 pub(crate) fn lean_composed_invariant_witness_by_scenario(
     scenario: &str,
 ) -> &'static LeanComposedInvariantWitness {
@@ -1877,7 +1833,6 @@ pub(crate) fn lean_fold_queue_cases() -> &'static [LeanFoldQueueCase] {
     &lean_contract_snapshot().fold_queue_cases
 }
 
-/// `SessionQueue.FoldCases`: queue events and the model's observation.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanFoldQueueCase {
@@ -1926,8 +1881,6 @@ pub(crate) fn lean_fold_turn_input_cases() -> &'static [LeanFoldTurnInputCase] {
     &lean_contract_snapshot().fold_turn_input_cases
 }
 
-/// `SessionQueue.TurnInput` with its executable authored entries and
-/// provider order.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanFoldTurnInputCase {
@@ -1965,8 +1918,6 @@ pub(crate) fn lean_retry_selection_cases() -> &'static [LeanRetrySelectionCase] 
     &lean_contract_snapshot().retry_selection_cases
 }
 
-/// `SessionQueue.FoldCases.retrySelectionCases`: whether a user retry resumes
-/// and which of its claim's selected messages it answers.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanRetrySelectionCase {
@@ -1999,7 +1950,6 @@ pub(crate) struct LeanQueueManagementState {
     pub(crate) terminal: Vec<u64>,
 }
 
-/// A session queue in native request IDs, compared whole against the model.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct QueueImage {
     pub(crate) active: Option<String>,
@@ -2050,8 +2000,6 @@ pub(crate) fn lean_fold_publication_cases() -> &'static [LeanFoldPublicationCase
     &lean_contract_snapshot().fold_publication_cases
 }
 
-/// `CanonicalOutput.Execution.FoldPublication`: composed claim, publication,
-/// recovery and finish scripts with the model's observation after each step.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanFoldPublicationCase {
@@ -2119,8 +2067,6 @@ pub(crate) fn lean_handover_fold_cases() -> &'static [LeanHandoverFoldCase] {
     &lean_contract_snapshot().handover_fold_cases
 }
 
-/// `Handover.Cases.foldClaimCases`: a verified-folding claim through the
-/// handover owner.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanHandoverFoldCase {
@@ -2743,9 +2689,6 @@ pub(crate) fn assert_lifecycle_transition_cases_partition(
         if case.classification != "legal" && case.action.is_some() {
             invalid_cases.push(format!("{} non-legal case has action", case.name));
         }
-        // Recovery stands outside the machine's own transition relation and
-        // must name the boundary that licenses it. Legal and illegal cases are
-        // decided by the relation itself and must not carry a boundary.
         let requires_boundary = case.classification == "recoveryReachable";
         if requires_boundary && case.boundary.is_none() {
             invalid_cases.push(format!(

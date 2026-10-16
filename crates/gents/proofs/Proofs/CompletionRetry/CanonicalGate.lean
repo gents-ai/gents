@@ -1,16 +1,6 @@
 import Proofs.CompletionRetry.CanonicalExecution
 import Proofs.CanonicalOutput.Execution.Gate
 
-/-!
-# Retry policy at the canonical execution gate
-
-This is the application-facing adapter for provider-attempt closure decisions.
-It reuses the existing execution gate and retry policy rather than introducing a
-second scheduler.  Its deliberately narrow operation type prevents application
-code from choosing the raw execution `accept`/`retract` operations at this
-boundary.
--/
-
 namespace CompletionRetry.CanonicalGate
 
 open CanonicalOutput
@@ -89,10 +79,6 @@ theorem policyStep_preserves_now (purpose : RequestPurpose)
         all_goals try split at h <;> try contradiction
         all_goals cases h; rfl
 
-/-- Commit a provider closure decision against the latest gate-held execution
-world and the retry policy at the same authoritative time.  A replay retains the
-already-advanced retry state while still asking the execution owner to validate
-the exact immutable fact. -/
 def commit (state : CanonicalOutput.Execution.World) (actor : Actor) (now : Time)
     (operation : Operation) : Except Error CanonicalOutput.Execution.World :=
   if !requestCoherent state then .error .request
@@ -116,9 +102,6 @@ def policyClockAllowed (now : Time) (action : CompletionRetry.Action) : Bool :=
   | .wake wakeAt => wakeAt == now
   | _ => true
 
-/-- Policy-only progress never stands in for canonical acceptance or retraction.
-It advances at a clock no older than either composed owner; the next closure
-decision must still enter `commit` and its held execution gate. -/
 def stepPolicy (state : CanonicalOutput.Execution.World) (now : Time)
     (operation : PolicyOperation) : Option CanonicalOutput.Execution.World := do
   if !requestCoherent state || now < state.lease.now ||
@@ -134,8 +117,6 @@ def gateOperationAllowed : CanonicalOutput.Execution.Gate.Operation → Bool
 abbrev GateOperation := { operation : CanonicalOutput.Execution.Gate.Operation //
   gateOperationAllowed operation }
 
-/-- All non-closure execution work continues to use the existing gate. Provider
-acceptance and retry retraction are unrepresentable here and must use `commit`. -/
 def commitGate (state : CanonicalOutput.Execution.World) (actor : Actor) (now : Time)
     (operation : GateOperation) : Option CanonicalOutput.Execution.World := do
   if !requestCoherent state then none

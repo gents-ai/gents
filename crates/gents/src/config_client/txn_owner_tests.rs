@@ -1355,10 +1355,6 @@ async fn embedded_conflict_replays_complete_callback_with_fresh_snapshot() {
     node.shutdown().await;
 }
 
-/// Regression for the write/event feedback loop that wedged response
-/// publication under concurrent request progress. All application writes enter
-/// through the canonical owner, while a deliberately idle current-state
-/// observer coalesces every revision of the hot document into one invalidation.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn thirty_two_hot_document_writers_converge_without_event_loss() {
     const WORKERS: usize = 32;
@@ -1390,9 +1386,6 @@ async fn thirty_two_hot_document_writers_converge_without_event_loss() {
         .expect("hot mutation collection")
         .collection_id;
 
-    // Subscribe after the seed and intentionally do not drain until every
-    // writer completes. A raw bounded event stream can overflow here; the
-    // native document-change subscription must retain the invalidation.
     let mut changes = node.subscribe_document_changes();
     let start = Arc::new(Barrier::new(WORKERS + 1));
     let mut writers = Vec::with_capacity(WORKERS);
@@ -1928,9 +1921,6 @@ async fn observing_transaction_reports_conflict_without_replay() {
 
 #[tokio::test]
 async fn cancelling_callback_schedules_http_transaction_discard() {
-    // This exercises real loopback HTTP scheduling on shared CI hosts. Keep
-    // the deadline bounded without making ordinary compiler contention a
-    // transaction-semantics failure; the state assertions below remain exact.
     const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(10);
 
     let (endpoint, state, server) = fake_transaction_server(FirstCommit::Succeed).await;

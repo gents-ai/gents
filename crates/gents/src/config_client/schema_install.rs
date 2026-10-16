@@ -25,8 +25,7 @@ pub struct SchemaInstallPlan {
 }
 
 impl SchemaInstallPlan {
-    /// An SDL-plus-patch series may retain extra fields, but must supply every
-    /// declared field before reporting successful convergence.
+    /// An SDL-plus-patch series must supply every declared field before reporting convergence.
     pub fn require_satisfied(&self) -> Result<()> {
         ensure!(
             !self.requires_publication,
@@ -43,8 +42,7 @@ impl SchemaInstallPlan {
     }
 }
 
-/// Read-only compatibility check. Existing collections must match exactly;
-/// one SDL must not mix existing and missing collections.
+/// Read-only compatibility check; existing collections must match exactly.
 pub async fn preview_schema_install(access: &ConfigAccess, sdl: &str) -> Result<SchemaInstallPlan> {
     preview_schema(access, sdl, false).await
 }
@@ -109,9 +107,9 @@ async fn preview_schema(
     })
 }
 
-/// Recheck contracts and the exact previewed bytes before additive publication.
-/// DefraDB owns schema registration; this is not a document transaction and
-/// callers must not promise atomic publication with subsequent document writes.
+/// Recheck contracts and the exact previewed bytes before additive publication;
+/// this is not a document transaction and must not be promised atomic with
+/// subsequent document writes.
 pub async fn apply_schema_install(
     access: &ConfigAccess,
     sdl: &str,

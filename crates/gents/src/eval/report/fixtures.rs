@@ -1,6 +1,4 @@
-//! Hand-built eval documents for the report's unit tests: a definition of
-//! one-stage cases, a frozen run over it, and trials with one acceptance
-//! verdict each, built slot by slot.
+//! Hand-built eval documents for the report's unit tests.
 
 use serde_json::json;
 
@@ -14,8 +12,6 @@ use crate::eval::{
 
 pub(crate) const RUN: &str = "run";
 
-/// One validation case per id, each one stage `check` with one acceptance
-/// `captured_rows_count` check.
 pub(crate) fn definition(cases: &[&str]) -> EvalDefinition {
     let cases: Vec<serde_json::Value> = cases
         .iter()
@@ -46,7 +42,7 @@ pub(crate) fn definition(cases: &[&str]) -> EvalDefinition {
     .expect("the fixture definition parses")
 }
 
-/// A run frozen over every case of `definition`, one row per cell id.
+/// A run frozen over every case of `definition`.
 pub(crate) fn record(
     run_id: &str,
     definition: &EvalDefinition,
@@ -97,7 +93,6 @@ pub(crate) fn record(
     }
 }
 
-/// Where one attempt sits.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct At {
     pub cell: &'static str,
@@ -115,10 +110,8 @@ pub(crate) fn at(cell: &'static str, case: &'static str, index: u32, attempt: u3
     }
 }
 
-/// What one attempt came to.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Outcome {
-    /// Launched and never completed: a null completion and no verdict.
     Open,
     /// Completed with one acceptance verdict of this kind and score.
     Verdict(OutcomeKind, Option<u32>),
@@ -146,7 +139,6 @@ pub(crate) struct Rows {
 }
 
 impl Rows {
-    /// One attempt; a completed one reports ten input and ten output tokens.
     pub(crate) fn add(mut self, run_id: &str, at: At, outcome: Outcome) -> Self {
         let trial_id = trial_id(run_id, at);
         let completion = match outcome {
@@ -209,7 +201,6 @@ impl Rows {
         self
     }
 
-    /// The attempt added last reported no usage at all.
     pub(crate) fn unmetered(mut self) -> Self {
         if let Some(completion) = self
             .trials

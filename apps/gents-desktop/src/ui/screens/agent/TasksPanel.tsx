@@ -1,5 +1,3 @@
-/* Tasks: TaskSaveRequest fields, the run facts, and a manual run with
-   JSON args. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { setEnabled } from "./enabled";
 import { dependentsWarning } from "./dependents";
@@ -45,7 +43,6 @@ export function TaskEditor({
 }: {
   deployment: NodeView;
   task: TaskView;
-  /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
 }) {
   const {
@@ -114,17 +111,13 @@ export function TaskEditor({
       },
     },
   );
-  /* the New agent dialog's resolver while it is open */
   const [newAgent, setNewAgent] = useState<((id: string | null) => void) | null>(null);
-  /* this task's triggers, and the one open beside the page */
   const myTriggers = deployment.triggers.filter(
     (x) => x.config.task_id === task.taskId,
   );
   const [besideTrigger, setBesideTrigger] = useState<string | null>(null);
   const besideTriggerView =
     deployment.triggers.find((x) => x.config.trigger_id === besideTrigger) ?? null;
-  /* a schedule or an event for this task: a dialog that writes nothing
-     until Create, then the new trigger beside the page to adjust */
   const [adding, setAdding] = useState<"schedule" | "event" | null>(null);
   const [args, setArgs] = useState("{}");
   const [lastRun, setLastRun] = useState<string | null>(null);
@@ -435,7 +428,6 @@ export function TaskEditor({
   );
 }
 
-/* when a task runs, from its triggers, and the first reason it would not */
 function whenItRuns(deployment: NodeView, t: TaskView) {
   const triggers = deployment.triggers.filter((x) => x.config.task_id === t.taskId);
   if (t.enabled === false) return { when: "Disabled", problem: "Task is disabled" };
@@ -451,7 +443,6 @@ function whenItRuns(deployment: NodeView, t: TaskView) {
   };
 }
 
-/* the canonical document for a task view, for row edits and copies */
 function taskDocument(deployment: NodeView, t: TaskView) {
   return {
     node_did: deployment.nodeDid,

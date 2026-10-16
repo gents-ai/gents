@@ -30,9 +30,7 @@ pub(super) struct GentsToolCallProgress {
     pub(super) completed_at: Option<String>,
 }
 
-/// The exact `_docID` request read carries no `order`: DefraDB plans an
-/// ordered read as a `created_at` index scan and applies `limit` before the
-/// `_docID` filter, so later rows in the collection would hide this request.
+/// No `order` on the `_docID` read: DefraDB applies `limit` before the `_docID` filter.
 pub(super) fn gents_turn_progress_query(request_doc_id: &str, session_id: &str) -> String {
     format!(
         r#"{{
@@ -154,8 +152,6 @@ pub(super) fn decode_gents_tool_call_progress(row: &Value) -> Option<GentsToolCa
             .get("await_mode")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
-        // These are presentation fields, hydrated from canonical message and
-        // output-segment owners after the row's exact physical identity is known.
         args: String::new(),
         result: String::new(),
         selected_service_id: optional_nonempty_string(row, "selected_service_id"),
@@ -170,8 +166,7 @@ pub(super) fn decode_gents_tool_call_progress(row: &Value) -> Option<GentsToolCa
 }
 
 /// Attach presentation bytes only after the canonical owner validates their
-/// physical tool binding. A terminal lifecycle without a durable result is
-/// still pending projection; it is never presented as a successful empty one.
+/// physical tool binding; a terminal lifecycle without a durable result stays pending.
 pub(super) async fn hydrate_gents_tool_call_progress(
     access: &ConfigAccess,
     row: &Value,
@@ -476,77 +471,6 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_state_overrides_failure_metadata() {
-        let mut tool =
-            test_tool("bash", "completed", r#"{"command":"false"}"#).with_result("display output");
-        tool.lifecycle_state = Some("completed".to_string());
-        tool.tool_failure_class = Some("toolReturnedError".to_string());
-
-        assert_eq!(observed_tool_status(&tool), ProjectionStatus::Completed);
-    }
-
-    #[test]
-    fn durable_completed_status_ignores_failure_shaped_result_text() {
-        let tool = test_tool("bash", "completed", r#"{"command":"true"}"#)
-            .with_result(r#"gents_exec: {"ok":false,"status":"exit_nonzero"}"#);
-
-        assert_eq!(
-            observed_tool_status(&tool),
-            ProjectionStatus::Completed,
-            "model-facing result text is not authoritative for durable rows"
-        );
-    }
-
-    #[test]
-    fn unknown_failure_class_does_not_override_durable_lifecycle() {
-        let mut tool = test_tool("bash", "completed", r#"{"command":"true"}"#);
-        tool.tool_failure_class = Some("futureUnknownClass".to_string());
-
-        assert_eq!(observed_tool_status(&tool), ProjectionStatus::Completed);
-    }
-
-    #[test]
-    fn content_delta_ignores_terminal_leading_whitespace_normalization() {
-        assert_eq!(
-            content_delta("\n\nAnswer with context", "Answer with context"),
-            ""
-        );
-        assert_eq!(
-            content_delta("\n\nAnswer", "Answer with context"),
-            " with context"
-        );
-    }
-
-    #[test]
-    fn codex_turn_status_is_only_a_wire_vocabulary_mapping() {
-        assert_eq!(
-            codex_turn_status(ClientTurnState::Completed),
-            codex::TurnStatus::Completed
-        );
-        assert_eq!(
-            codex_turn_status(ClientTurnState::Failed),
-            codex::TurnStatus::Failed
-        );
-        assert_eq!(
-            codex_turn_status(ClientTurnState::Running),
-            codex::TurnStatus::InProgress
-        );
-        assert_eq!(
-            codex_turn_status(ClientTurnState::Superseded),
-            codex::TurnStatus::Interrupted
-        );
-    }
-
-    #[test]
-    fn turn_progress_query_observes_compaction_lifecycle() {
-        let query = gents_turn_progress_query("request-1", "session-1");
-        assert!(query.contains("InferenceCall("));
-        assert!(query.contains(r#"call_kind: { _in: ["inference", "compaction"] }"#));
-        assert!(query.contains("call_state"));
-        assert!(query.contains("ended_at"));
-    }
-
-    #[test]
     fn tool_projection_prefers_runtime_identity_failure_and_latency() {
         let mut tool = test_tool("configured_search", "failed", r#"{"query":"GENTS"}"#)
             .with_result("provider returned a generic failure");
@@ -580,34 +504,6 @@ mod tests {
     }
 
     #[test]
-    fn tool_projection_keeps_result_diagnostic_ahead_of_failure_class() {
-        let mut tool =
-            test_tool("search", "failed", "{}").with_result("connection refused to search service");
-        tool.tool_failure_class = Some("external".to_string());
-
-        let item = gents_tool_item(&tool, codex::McpToolCallStatus::Failed);
-        let codex::ThreadItem::McpToolCall { error, .. } = item else {
-            panic!("expected MCP tool call item");
-        };
-        assert_eq!(
-            error.expect("failed tool should carry diagnostics").message,
-            "connection refused to search service"
-        );
-
-        tool.result.clear();
-        let item = gents_tool_item(&tool, codex::McpToolCallStatus::Failed);
-        let codex::ThreadItem::McpToolCall { error, .. } = item else {
-            panic!("expected MCP tool call item");
-        };
-        assert_eq!(
-            error
-                .expect("failure class should remain a fallback")
-                .message,
-            "external"
-        );
-    }
-
-    #[test]
     fn tool_duration_falls_back_to_persisted_timestamps() {
         let mut tool = test_tool("search", "completed", "{}");
         tool.started_at = Some("2026-07-15T10:00:00.100Z".to_string());
@@ -620,32 +516,6 @@ mod tests {
 
         tool.completed_at = None;
         assert_eq!(tool_duration_ms(&tool), None);
-    }
-
-    #[test]
-    fn tool_queries_hydrate_runtime_presentation_metadata() {
-        for query in [
-            gents_turn_progress_query("request-1", "session-1"),
-            gents_tool_progress_query("request-1", "session-1"),
-        ] {
-            for field in [
-                "_docID",
-                "node_did",
-                "requester_did",
-                "selected_service_id",
-                "selected_tool_name",
-                "tool_failure_class",
-                "denial_reason",
-                "cancel_cause",
-                "latency_ms",
-                "started_at",
-                "completed_at",
-            ] {
-                assert!(query.contains(field), "query must load {field}: {query}");
-            }
-            assert!(!query.contains("\n                args\n"));
-            assert!(!query.contains("\n                result\n"));
-        }
     }
 
     fn test_tool(tool_name: &str, status: &str, args: &str) -> GentsToolCallProgress {

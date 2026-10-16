@@ -1,11 +1,8 @@
-//! Exact native invocation-reply pairing for terminal tool accounting.
-//!
-//! This is the Rust boundary for Lean's `canonicalToolResultBound`: the
-//! physical tool document anchors both the delivery publication and its native
-//! result block.
+//! Lean `canonicalToolResultBound`: the physical tool document anchors both
+//! the delivery publication and its native result block.
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, TranscriptMessage};
 
-/// Whether this is the sole canonical invocation reply for an accepted call.
+/// Sole canonical invocation reply for an accepted call.
 pub(crate) fn is_exact_invocation_reply(
     message: &TranscriptMessage,
     request_doc_id: &str,

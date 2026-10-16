@@ -117,8 +117,6 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
             output_obligation: None,
         },
     );
-    // Use the persisted resumed request at the daemon's actual tool scope seam.
-    // The tool receives no model-authored run_id and must stamp it itself.
     crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
         None,
         CancellationToken::new(),

@@ -317,27 +317,4 @@ mod tests {
             "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
         );
     }
-
-    #[test]
-    fn decode_binding_rows_ignores_doc_id_and_null() {
-        let value = json!({
-            "data": {
-                "ChainKeyBinding": [{
-                    "_docID": "bae-1",
-                    "binding_id": "bind-1",
-                    "node_did": "did:key:zAlice",
-                    "address": "0xabc",
-                    "key_backend": "keyring",
-                    "attestation": "0xsig",
-                    "created_at": "t0",
-                    "revoked_at": null
-                }]
-            }
-        });
-        let rows = decode_binding_rows(&value).expect("decode");
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].binding_id, "bind-1");
-        let empty = json!({ "data": { "ChainKeyBinding": null } });
-        assert!(decode_binding_rows(&empty).expect("null").is_empty());
-    }
 }

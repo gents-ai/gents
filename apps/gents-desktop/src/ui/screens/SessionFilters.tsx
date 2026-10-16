@@ -1,9 +1,3 @@
-/* The session filters as one quiet row at the right of the heading: an icon
-   per axis, each opening its own short menu. The state glyphs are the ones
-   the rows carry, so the strip reads as the list's legend as well as its
-   filter. Every option stays listed whether or not it has anything right
-   now, with the count it would leave behind faceted against the other two
-   axes, so narrowing never hides the way back. */
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { Activity, CircleX, CornerDownRight, Play, User, X } from "lucide-react";
 import type { ComponentType, ReactNode } from "react";
@@ -42,13 +36,6 @@ import { AgentInitials } from "./parts";
 const matchesState = (c: SessionSummary, state: SessionState) =>
   state === "live" ? isLive(c.turnState) : c.turnState === "failed";
 
-/* One option for automation, not two. Every run a trigger fires also names
-   the task it fired, so a task and a trigger were the same sessions under
-   two names, and the counts added up to more than the list held. Splitting
-   them properly — a trigger fired it, or someone invoked the task by hand —
-   asks a question about configuration rather than about the session, and
-   leaves an option that is almost always empty. How it fired is on the
-   session itself, where there is room to say it. */
 const matchesSource = (c: SessionSummary, source: SessionSource) =>
   source === "task"
     ? Boolean(c.taskId || c.triggerId)
@@ -56,8 +43,7 @@ const matchesSource = (c: SessionSummary, source: SessionSource) =>
       ? Boolean(c.startedBy)
       : !(c.taskId || c.triggerId || c.startedBy);
 
-/* an axis passes when nothing on it is picked, or when one picked value
-   matches: within an axis the options are a union, across axes they meet */
+// within an axis the options are a union, across axes they meet
 const passes = (c: SessionSummary, f: SessionFilter) =>
   (f.states.length === 0 || f.states.some((s) => matchesState(c, s))) &&
   (f.sources.length === 0 || f.sources.some((s) => matchesSource(c, s))) &&
@@ -92,8 +78,6 @@ const SOURCES: Option<SessionSource>[] = [
   { value: "session", label: "Another session", icon: CornerDownRight },
 ];
 
-/* One axis: the icon of what is picked, or the axis's own icon when it is
-   open to everything, and the menu of its options with their counts. */
 export function Axis<V extends string>({
   label,
   icon: AxisIcon,
@@ -105,8 +89,7 @@ export function Axis<V extends string>({
 }: {
   label: string;
   icon: ComponentType<{ className?: string }>;
-  /** the trigger shows no word until something is picked: the mark alone
-      names the axis, as it already does below sm */
+  /** the trigger shows no word until something is picked */
   wordless?: boolean;
   options: Option<V>[];
   counts: Record<string, number>;
@@ -128,12 +111,8 @@ export function Axis<V extends string>({
           />
         }
       >
-        {/* one steady mark for the axis: the picked options say what they
-            are in the label and the menu, so the trigger does not need to
-            restate them and shift width as they change */}
         <AxisIcon className="size-4" />
-        {/* on a phone the row has no width to name its axes: the marks
-            carry the meaning and the words come back at sm */}
+        {/* the words come back at sm on a narrow row */}
         {(!wordless || picked.length > 0) && (
           <span className="hidden text-xs sm:inline">
             {picked.length === 1
@@ -150,9 +129,6 @@ export function Axis<V extends string>({
             <DropdownMenuCheckboxItem
               key={v}
               checked={value.includes(v)}
-              /* an option with nothing behind it keeps its place and its
-                 zero: a filter that vanishes as you narrow loses the way
-                 back, and hides why it went */
               disabled={(counts[v] ?? 0) === 0 && !value.includes(v)}
               onCheckedChange={() => toggle(v)}
               closeOnClick={false}
@@ -170,9 +146,6 @@ export function Axis<V extends string>({
   );
 }
 
-/* Agent is the one axis with no ceiling, so it folds into a searchable
-   control rather than a menu: the trigger wears the marks of what is
-   picked, so the row stays one line however many agents there are. */
 function AgentAxis({
   agents,
   value,
@@ -184,10 +157,7 @@ function AgentAxis({
 }) {
   const byId = new Map(agents.map((b) => [b.id, b]));
   const picked = agents.filter((b) => value.includes(b.id));
-  /* its popup is a dialog (it holds a search field), so it takes its turn
-     with the shell's other popovers: opening Sync health closes it */
   const popover = useExclusivePopover();
-  /* the open state is an item too, so the menu can say it and clear to it */
   const ANY = "*";
   return (
     <Combobox
@@ -214,8 +184,6 @@ function AgentAxis({
             variant="quiet"
             size="sm"
             aria-label="Agent"
-            /* the node axis alone keeps its chevron; this trigger's is
-               drawn by the kit, so it is hidden from here */
             className={cn(
               "gap-1.5 px-2 [&>svg:last-of-type]:hidden",
               picked.length > 0 && "text-foreground",
@@ -312,10 +280,6 @@ export function SessionFilters({
       countFor("sources", (c) => matchesSource(c, s.value)),
     ]),
   );
-  /* every agent of the nodes the list spans, named by its node, offered
-     with its count even at zero; then any a listed session runs that its
-     node no longer lists, and any stored pick none of them is, so a pick
-     can always be seen and cleared */
   const fleetNodes = useFleet((state) => state.nodes);
   const names = new Map<string, string>();
   for (const did of nodeDids)
@@ -331,7 +295,6 @@ export function SessionFilters({
     count: countFor("agents", (c) => c.agentId === id),
   }));
 
-  /* a node pick that empties the list still needs its clear */
   if (sessions.length === 0 && !nodes?.picked) return null;
 
   return (

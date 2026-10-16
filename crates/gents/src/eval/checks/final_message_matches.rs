@@ -11,14 +11,12 @@ use crate::eval::checks::{
 };
 use crate::eval::runner::executor::StageEvidence;
 
-/// Params: `{ "any": [<pattern>], "all": [<pattern>] }`, where a pattern is
-/// a substring or `{ "matches": <regex> }`. Reads the last non-empty
-/// assistant message. Scores the fraction of `all` found, and 0 when `any`
-/// is given and none of it is found.
-///
-/// Feedback names the missing patterns. It is written only on the train
-/// split, and the held-out split is what catches a candidate that hard-codes
-/// them.
+/// Params: `{ "any": [<pattern>], "all": [<pattern>] }`, a pattern being a
+/// substring or `{ "matches": <regex> }`. Reads the last non-empty assistant
+/// message; scores the fraction of `all` found, and 0 when `any` is given and
+/// none of it is found. Feedback names the missing patterns and is written
+/// only on the train split; the held-out split catches a candidate that
+/// hard-codes them.
 pub struct FinalMessageMatches;
 
 /// Chars of the final message quoted in feedback.
@@ -180,7 +178,6 @@ mod tests {
     use crate::eval::runner::scripted::ScriptedExecutor;
     use crate::eval::OutcomeKind;
 
-    /// One completed stage whose assistant said `messages`, in order.
     fn stage(messages: &[&str]) -> StageEvidence {
         let mut evidence = ScriptedExecutor::passed_evidence("did:x", "s1", "items", vec![]);
         let mut stage = evidence.stages.remove(0);
@@ -297,7 +294,6 @@ mod tests {
         assert!(validator.is_valid(&json!({"any": ["a"], "all": [{"matches": "b+"}]})));
         assert!(!validator.is_valid(&json!({"all": [{"regex": "b"}]})));
         assert!(!validator.is_valid(&json!({"all": ["a"], "extra": 1})));
-        // What the parser rejects as requiring nothing, the schema rejects too.
         for nothing in [json!({}), json!({"any": []}), json!({"any": [], "all": []})] {
             assert!(!validator.is_valid(&nothing), "{nothing}");
         }

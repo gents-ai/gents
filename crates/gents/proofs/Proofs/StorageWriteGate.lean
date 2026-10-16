@@ -1,15 +1,9 @@
 /-!
 # Storage write-gate scheduling obligations
 
-This is an obligation model, not a proof of DefraDB or Tokio. A finalizer may
-hold the existing mutation gate while its stream is pending. A sibling branch
-which awaits that gate on the same task can suspend the only poller of the
-finalizer, including its timeout. Independent scheduling removes that particular
-circular wait, but still needs executor service and storage/cleanup return.
-
-`elapsed` is deliberately distinct from observing a deadline. Dropping a future
-is not assumed to preempt a non-yielding poll or to make cleanup return. Gate
-release proves neither commit nor rollback. There is no new durable lifecycle.
+This is an obligation model, not a proof of DefraDB or Tokio: dropping a future
+is not assumed to preempt a non-yielding poll, and gate release proves neither
+commit nor rollback.
 -/
 namespace StorageWriteGate
 
@@ -32,11 +26,10 @@ def pollable (s : State) : Bool := s.independent || !s.siblingWaiting
 
 def held (s : State) : Bool := s.phase != .released
 
-/-- Events ending in `Returned` are external observations, not guarantees.
-    `rollbackOwnerScheduled` records that Drop found an active runtime and
-    scheduled detached cleanup; it is not a cancellation request or intent.
-    An armed transaction may also be dropped during cleanup after an explicit
-    rollback failure, transferring the gate to the detached owner. -/
+/-- Events ending in `Returned` are external observations, not guarantees;
+    `rollbackOwnerScheduled` is not a cancellation request or intent. An armed
+    transaction may also be dropped during cleanup after an explicit rollback
+    failure, transferring the gate to the detached owner. -/
 def step (s : State) (event : Event) : State :=
   if event == .siblingWait then { s with siblingWaiting := held s }
   else if event == .rollbackOwnerScheduled then
@@ -83,7 +76,6 @@ theorem cleanup_timeout_still_needs_drop_return :
 theorem independent_owner_can_be_polled (s : State) (h : s.independent = true) :
     pollable s = true := by simp [pollable, h]
 
-/-- Conditional bounded path, NOT unconditional eventual storage completion. -/
 theorem observed_completion_releases (waiting : Bool) :
     held (run ⟨.storage, true, waiting⟩ [.storageReturned, .release]) = false := by
   cases waiting <;> rfl
@@ -98,11 +90,9 @@ theorem observed_drop_return_releases (waiting : Bool) :
       [.deadlineObserved, .cleanupDeadlineObserved, .dropReturned, .release]) = false := by
   cases waiting <;> rfl
 
-/-- Once `Drop` observes an active runtime and schedules its detached rollback
-    owner, that owner can be polled independently of the cancelled caller. If
-    its bounded cleanup times out, dropping that cleanup future releases the
-    Gents gate. This does not assert that native DefraDB work spawned by the
-    future has completed or been rolled back. -/
+/-- Once `Drop` schedules a detached rollback owner, that owner can be polled
+    independently of the cancelled caller; this does not assert that native
+    DefraDB work has completed or been rolled back. -/
 theorem scheduled_rollback_timeout_releases_gate :
     held (run ⟨.storage, false, true⟩
       [.rollbackOwnerScheduled, .cleanupDeadlineObserved, .dropReturned, .release]) = false := by
@@ -111,8 +101,6 @@ theorem scheduled_rollback_timeout_releases_gate :
 def ValidTrace (states : Nat → State) (events : Nat → Event) : Prop :=
   ∀ n, states (n + 1) = step (states n) (events n)
 
-/-- A real trace counterexample: passage of time cannot service an unpolled
-    finalizer. No claim of wall-clock liveness follows from this model alone. -/
 theorem suspended_forever_is_valid :
     ValidTrace (fun _ => suspended) (fun _ => .elapsed) ∧
     ∀ n : Nat, held ((fun _ : Nat => suspended) n) = true := by

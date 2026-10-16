@@ -39,7 +39,6 @@ describe("a message the agent takes", () => {
     const view = render(
       <PendingTray queued={queue.map(turn)} queue={queue} onEdit={onEdit} />,
     );
-    /* the runtime's read is newer than the rows: it has taken a */
     view.rerender(
       <PendingTray queued={queue.map(turn)} queue={[entry("b")]} onEdit={onEdit} />,
     );

@@ -1,10 +1,3 @@
-//! Fixture lens: additive field migration template.
-//!
-//! Forward: set `label` from `name` (uppercased) when missing/null.
-//! Inverse: drop `label`.
-//!
-//! Unit-test the pure transform; wasm entry is gated for host tests.
-
 use std::collections::HashMap;
 use std::error::Error;
 
@@ -14,7 +7,6 @@ use serde_json::Value;
 #[cfg(all(feature = "lens-entry", target_arch = "wasm32"))]
 lens_sdk::define!(try_transform, try_inverse);
 
-/// Pure forward transform used by the wasm entry and unit tests.
 pub fn apply_label(mut doc: HashMap<String, Value>) -> HashMap<String, Value> {
     let needs_label = match doc.get("label") {
         None => true,
@@ -33,7 +25,6 @@ pub fn apply_label(mut doc: HashMap<String, Value>) -> HashMap<String, Value> {
     doc
 }
 
-/// Pure inverse: remove the added field.
 pub fn drop_label(mut doc: HashMap<String, Value>) -> HashMap<String, Value> {
     doc.remove("label");
     doc

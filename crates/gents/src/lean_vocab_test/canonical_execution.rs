@@ -157,9 +157,8 @@ pub(crate) struct LeanCanonicalToolAdmission {
     pub(crate) await_mode: String,
 }
 
-/// A background tool spawned by an already running parent tool. It shares the
-/// lifecycle context fields of [`LeanCanonicalToolAdmission`] and additionally
-/// names the physical parent tool document that owns it.
+/// A background tool spawned by an already running parent tool; names the
+/// physical parent tool document that owns it.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCanonicalSpawnedToolAdmission {
@@ -268,14 +267,14 @@ pub(crate) enum LeanCanonicalExecutionOperation {
         generation: u64,
         record: LeanCanonicalSegment,
     },
-    /// Explicit due-only deadline CAS. Output and dispatch never extend the lease.
+    /// Explicit due-only deadline CAS.
     RenewLease {
         actor: u64,
         now: u64,
         generation: u64,
         expected_deadline: u64,
     },
-    /// Guarded raw output insert. It checks the live lease but never updates it.
+    /// Guarded raw output insert; never updates the lease.
     AppendOutput {
         actor: u64,
         now: u64,
@@ -334,8 +333,7 @@ pub(crate) enum LeanCanonicalExecutionOperation {
     },
     /// Advance the compaction watermark across a provider-stable published prefix.
     AdvanceCompactionCursor { actor: u64, now: u64, cursor: u64 },
-    /// Integrity revocation: terminate conflicted work without reconstructing it
-    /// and without discarding either conflicting fact.
+    /// Terminate conflicted work without discarding either conflicting fact.
     RevokeCorrupt {
         actor: u64,
         now: u64,
@@ -344,9 +342,8 @@ pub(crate) enum LeanCanonicalExecutionOperation {
         outcome: String,
         selection: LeanTerminalSelection,
     },
-    /// A distinct immutable fact arriving by replication. It bypasses the local
-    /// mutation gate, so the native fixture must insert it as a remote merge and
-    /// never route it through the execution owner.
+    /// A distinct immutable fact arriving by replication; the native fixture
+    /// must insert it as a remote merge, never through the execution owner.
     DeliverReplicatedSegment {
         actor: u64,
         now: u64,

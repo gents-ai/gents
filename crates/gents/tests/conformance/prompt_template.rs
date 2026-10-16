@@ -1,15 +1,10 @@
 //! Task templates use the production renderer; LayeredPromptBuilder preserves
-//! literal system preambles. Earlier system-prompt rendering in the agent
-//! builder remains a runtime migration; these hand-authored cases cover assembly
-//! and rendering, not generated task-render witnesses or dispatch persistence.
+//! literal system preambles. Hand-authored assembly/rendering cases.
 
 use gents::document_config::Task;
 use gents::prompt::LayeredPromptBuilder;
 use gents::template::{render_template, task_node_ctx, TemplateError, TemplateScope};
 
-/// A task document carrying a per-invocation template. Built from the
-/// canonical config type so the fence tracks the authoring contract, not a
-/// hand-rolled struct.
 fn task_with_template(template: &str) -> Task {
     serde_json::from_value(serde_json::json!({
         "node_did": "did:key:zNODE",
@@ -20,8 +15,6 @@ fn task_with_template(template: &str) -> Task {
     .expect("compact canonical task document")
 }
 
-/// A fixture scope using production node/context construction. Dispatch itself
-/// is exercised by the trigger engine tests.
 fn fire_scope(agent_id: &str, now: &str, args: serde_json::Value) -> TemplateScope {
     let (node, ctx) = task_node_ctx("did:key:zNODE", agent_id, now);
     TemplateScope {
@@ -36,8 +29,6 @@ fn fire_scope(agent_id: &str, now: &str, args: serde_json::Value) -> TemplateSco
     }
 }
 
-/// Template syntax in these preamble fixtures stays literal: the builder
-/// does not evaluate it (Template.assembled_preamble_literal).
 #[test]
 fn system_preamble_is_literal_template_syntax_is_inert() {
     let literal = "You are {{ node.agent_id }}. Now: {{ ctx.now }}.";
@@ -48,16 +39,13 @@ fn system_preamble_is_literal_template_syntax_is_inert() {
         preamble.starts_with(literal),
         "the preamble must carry the system instruction bytes unchanged, got: {preamble}"
     );
-    // The binding-looking syntax is inert: nothing substituted it.
     assert!(
         preamble.contains("{{ node.agent_id }}") && preamble.contains("{{ ctx.now }}"),
         "the preamble evaluated template syntax that must stay literal: {preamble}"
     );
 }
 
-/// Only the task slot substitutes bindings: the same literal text stays raw in
-/// the system preamble while the task template renders it
-/// (Template.task_binding_preserves_context).
+/// Only the task slot substitutes bindings (Template.task_binding_preserves_context).
 #[test]
 fn task_template_substitutes_only_in_the_task_slot() {
     let literal = "Deploy {{ args.target }} now.";
@@ -78,9 +66,6 @@ fn task_template_substitutes_only_in_the_task_slot() {
     assert_eq!(rendered, "Deploy TREE now.");
 }
 
-/// The task template is rendered per invocation against that invocation's
-/// binding: different bindings produce different prompts, the same binding is
-/// deterministic (Template.assembled_task_rendered, render_determined).
 #[test]
 fn task_template_renders_per_invocation() {
     let task =
@@ -109,9 +94,6 @@ fn task_template_renders_per_invocation() {
     assert_eq!(replay, first);
 }
 
-/// Rendering depends only on the variables the template reads: scopes that
-/// agree on every read variable render identically even where they disagree
-/// elsewhere (Template.render_determined).
 #[test]
 fn task_render_depends_only_on_read_variables() {
     let task = task_with_template("Work {{ args.task }}");
@@ -146,7 +128,6 @@ fn task_render_depends_only_on_read_variables() {
     );
 }
 
-/// Colliding names in separate scope slots must resolve through the named slot.
 #[test]
 fn task_render_keeps_event_and_argument_namespaces_separate() {
     let task = task_with_template("{{ event.trigger_kind }}:{{ args.trigger_kind }}");
@@ -163,8 +144,6 @@ fn task_render_keeps_event_and_argument_namespaces_separate() {
     );
 }
 
-/// Unbound variables fail closed at the task slot: the renderer errors instead
-/// of silently substituting empty text.
 #[test]
 fn task_render_fails_closed_on_unbound_variables() {
     let task = task_with_template("Ship {{ ctx.bogus_missing }}");
@@ -179,7 +158,7 @@ fn task_render_fails_closed_on_unbound_variables() {
         "expected a render-time failure, got: {err:?}"
     );
 
-    // An absent scope root must fail as well as an absent key.
+    // An absent scope root fails as well as an absent key.
     let task = task_with_template("Run {{ args.name }}");
     let mut scope = fire_scope("fence", "T1", serde_json::json!({}));
     scope.args = None;

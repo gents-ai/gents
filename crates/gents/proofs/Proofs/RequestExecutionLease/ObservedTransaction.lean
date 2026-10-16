@@ -2,10 +2,10 @@ import Proofs.RequestExecutionLease.Transition
 
 namespace RequestExecutionLease
 
-/-- A native transaction admits a decision against its snapshot before attempting
-its durable commit. `step?` remains the sole authorization policy. The stored
-world here represents the request facts validated by point reads; it does not
-assert that predicate scans are serializable or that native commit checks time. -/
+/-- A native transaction admits a decision against its snapshot before its
+durable commit; `step?` remains the sole authorization policy, and the stored
+world does not assert predicate scans are serializable or that native commit
+checks time. -/
 structure ObservedTransaction (Generation : Type) where
   before : World Generation
   admitted : World Generation
@@ -16,11 +16,7 @@ def observeTransaction? {Generation : Type} [DecidableEq Generation]
     Option (ObservedTransaction Generation) :=
   (step? pre action).map fun post => ⟨pre, post⟩
 
-/-- Native OCC rejects a changed authoritative request observation. Wall clock
-passage alone does not change the stored request and therefore does not cause a
-storage conflict. In particular, admission before expiry is not a promise that
-commit finishes before expiry. The pinned native adapter must demonstrate the
-request point read; a same-value write or an arbitrary scan is insufficient. -/
+/-- Native OCC: a changed authoritative request observation rejects the commit; wall-clock passage alone does not. Admission before expiry is not a promise the commit finishes before expiry; the pinned native adapter must demonstrate the request point read (a same-value write or arbitrary scan is insufficient). -/
 def commitObservedTransaction? {Generation : Type} [DecidableEq Generation]
     (current : World Generation) (observed : ObservedTransaction Generation) :
     Option (World Generation) :=

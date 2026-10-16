@@ -10,31 +10,16 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import type { SessionLoadState } from "../lib/loadingStatus";
 
-/**
- * What the screens ask of a session's transcript besides drawing it, kept
- * when the session is written rather than worked out on every render. The
- * paging merge keeps an unchanged item as the same object, so a change is
- * found by identity; a streamed chunk replaces only the live reply, which
- * none of these count.
- */
 export type SessionFacts = {
-  /** advances when a row other than the live reply is added, removed or changed */
   rowsRevision: number;
-  /** advances when a tool group is added, removed or changed */
   toolsRevision: number;
-  /** every tool call, in transcript order; the same array until a tool changes */
   tools: readonly RenderedToolCallView[];
-  /** the request ids on the transcript's input rows: a pending turn's
-      request id, and a saved or automated entry's input request id
-      (`inputRequestId`), falling back to its document id */
   userRequestIds: ReadonlySet<string>;
 };
 
 export type SessionState = {
-  /** the selected session as last read; never persisted */
   session: DesktopSessionSnapshot | null;
   facts: SessionFacts;
-  /** the last read asked for, and how it went */
   load: SessionLoadState;
 };
 
@@ -68,8 +53,6 @@ export function createSessionStore(session: DesktopSessionSnapshot | null = null
   return store;
 }
 
-/** The held read when it is the selected session's: a read for the previous
-    selection can still be held while the next one loads. */
 export function heldFor<S extends { sessionId: string; nodeDid?: string | null }>(
   held: S | null,
   sessionId: string | null,
@@ -85,7 +68,6 @@ export function readSession(store: SessionStore): DesktopSessionSnapshot | null 
   return store.getState().session;
 }
 
-/** Commits a read. The same snapshot again notifies no one. */
 export function writeSession(
   store: SessionStore,
   next: SetStateAction<DesktopSessionSnapshot | null>,
@@ -101,7 +83,6 @@ export function writeSessionLoad(store: SessionStore, load: SessionLoadState) {
   store.setState({ load });
 }
 
-/* the same items in the same order, the live reply left out */
 function sameItems(
   before: readonly RenderedTimelineItem[],
   after: readonly RenderedTimelineItem[],
@@ -155,15 +136,6 @@ function factsOf(
   };
 }
 
-/**
- * Whether the bridge holds a request the app sent, by the request's id (what
- * a send returns): once it does, the transcript has a row for it (its pending
- * turn, or its saved or folded entry by `inputRequestId`), the session lists
- * it as queued behind the running turn or as folded into a claimed turn, or
- * it is the session's latest request; and should no read happen to show any
- * of these, the latest has moved on from `latestWhenSent`, the one the
- * session showed when the request was sent.
- */
 export function holdsRequest(
   state: SessionState,
   sent: { sessionId: string; requestId: string; latestWhenSent: string | null },
@@ -180,9 +152,6 @@ export function holdsRequest(
   );
 }
 
-/** The session fields the projection decides with. A streamed chunk changes
-    the transcript and the revision but none of these, so the projection
-    keeps its previous header and what reads it does not re-render. */
 export type SessionHeader = Pick<
   DesktopSessionSnapshot,
   | "sessionId"
@@ -213,7 +182,6 @@ export function headerOf(session: DesktopSessionSnapshot | null): SessionHeader 
   };
 }
 
-/** A value derived from the session store; re-renders when it changes by identity. */
 export function useSessionValue<T>(
   store: SessionStore,
   select: (state: SessionState) => T,
@@ -221,7 +189,6 @@ export function useSessionValue<T>(
   return useStore(store, select);
 }
 
-/** An object of fields; re-renders when any of them changes. */
 export function useSessionFields<T extends object | null>(
   store: SessionStore,
   select: (state: SessionState) => T,

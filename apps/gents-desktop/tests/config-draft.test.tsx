@@ -38,7 +38,6 @@ describe("configuration drafts", () => {
 
     await user.click(screen.getByRole("button", { name: "Edit text" }));
     await user.click(screen.getByRole("button", { name: "Edit choice" }));
-    /* leaving a field, by Enter or by focus, saves nothing */
     await user.type(screen.getByLabelText("Name"), "{Enter}");
     await user.tab();
 

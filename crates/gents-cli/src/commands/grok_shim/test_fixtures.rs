@@ -128,9 +128,7 @@ pub(super) async fn configure_runtime_agent(
     .unwrap();
 }
 
-/// Publish one typed canonical assistant fixture. Each block owns a distinct
-/// authored source coordinate and closed payload stream; no retired inline
-/// message content or response row participates in the projection.
+/// Publish one typed canonical assistant fixture.
 pub(super) async fn seed_canonical_assistant_message(
     node: &EmbeddedNode,
     request: &gents_protocol::row::AgentRequestRow,
@@ -333,7 +331,7 @@ pub(super) async fn next_request_sequence(node: &EmbeddedNode, request_doc_id: &
 
 /// Seed one physical tool row through a matching canonical ToolCall admission
 /// and, for terminal lifecycle states, one exact ToolDelivery observation.
-/// This is the sole Grok-shim test encoding owner for tool arguments/results.
+/// The sole Grok-shim test encoding owner for tool arguments/results.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn seed_canonical_tool_call(
     node: &EmbeddedNode,
@@ -353,15 +351,12 @@ pub(super) async fn seed_canonical_tool_call(
     let requester_did = request.requester_did.clone();
     let session_id = request.session_id.as_deref().expect("fixture session");
     let request_doc_id = request.doc_id.as_deref().expect("fixture request doc");
-    // Keep the physical provider source unique even when a test deliberately
-    // gives two calls the same visible message sequence to exercise the
-    // projection's stable-identity tie break.
+    // Keep the provider source unique even when two calls share a visible
+    // message sequence (stable-identity tie break).
     let source_sequence = next_request_sequence(node, request_doc_id).await;
     let sequence = if let Some(sequence) = message_sequence {
         sequence
     } else if let Some(parent_doc_id) = spawned_by_tool_call_doc_id {
-        // A spawned process has no independent provider admission: its
-        // visible sequence is the exact spawn_process parent's coordinate.
         let parent = node
             .execute(&format!(
                 r#"{{ AgentToolCall(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{
@@ -504,12 +499,10 @@ pub(super) async fn seed_canonical_tool_call(
     )
     .await;
     if let Some(result) = result {
-        // Tool-row chronology and transcript publication chronology are
-        // separate coordinates. In particular, another accepted tool may
-        // deliberately use the adjacent (or same) visible tool sequence.
-        // Allocate the reply in the session's canonical sequence space
-        // instead of fabricating `admission + 1`, which would create an
-        // immutable header twin and make both publications conflicting.
+        // Tool-row and transcript publication chronology are separate
+        // coordinates; allocate the reply in the session's canonical sequence
+        // space instead of `admission + 1`, which would create an immutable
+        // header twin and make both publications conflicting.
         let delivery_sequence = next_request_sequence(node, request_doc_id).await;
         let delivered = OutputSegment {
             node_did: node_did.into(),
@@ -715,7 +708,7 @@ pub(super) async fn seed_canonical_live_tool_output(
 }
 
 /// A spawned process closes its raw output without inventing a native reply;
-/// the spawn_process invocation already owns its separate admission reply.
+/// the spawn_process invocation owns its separate admission reply.
 pub(super) async fn complete_canonical_spawned_process_output(
     node: &EmbeddedNode,
     request: &gents_protocol::row::AgentRequestRow,
@@ -753,8 +746,8 @@ pub(super) async fn complete_canonical_spawned_process_output(
             writer: OutputWriter::ToolExecution {
                 tool_call_doc_id: tool_doc_id.into(),
             },
-            // The open output already supplied the only data flush. Closing
-            // it adds a closure fact, not a synthetic zero-byte flush.
+            // The open output already supplied the only data flush; closing
+            // adds a closure fact, not a zero-byte flush.
             ordinal: None,
             runs: Vec::new(),
             payload: String::new(),
@@ -775,8 +768,8 @@ pub(super) async fn complete_canonical_spawned_process_output(
     );
 }
 
-/// Record that `session_id` was started by the request `parent_request_doc_id`,
-/// the stored provenance every lineage reader follows. Idempotent per scope.
+/// Record that `session_id` was started by `parent_request_doc_id`, the
+/// stored provenance every lineage reader follows. Idempotent per scope.
 pub(super) async fn seed_started_session(
     node: &EmbeddedNode,
     node_did: &str,

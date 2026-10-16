@@ -5,8 +5,6 @@ import { useAgentChoice } from "../src/ui/screens/session/useComposerSend";
 import { node, testApp, withApp } from "./app-fixture";
 import { deployment } from "./config-panel-wiring/fixtures";
 
-/* the choice on the new-session screen of the fixture node, whose default
-   agent is "default" and which also offers "ops" */
 function choice() {
   const app = testApp({
     deployments: [node()],

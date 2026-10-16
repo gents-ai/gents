@@ -1,11 +1,3 @@
-//! Production enrollment and client-visible conversation contract.
-//!
-//! Only inference is deterministic. The CLI server, signed enrollment,
-//! operator approval, Iroh replication, and the iOS app's ClientCore/store
-//! are real. This is not a test of UIKit rendering or iOS suspension; those
-//! require the device acceptance run. Each deadline includes all work in its
-//! phase, rather than allowing each polling helper a fresh latency budget.
-
 use super::*;
 use gents::{JsonP2pSyncStatusAdapter, P2pSyncStatusAdapter};
 use std::sync::Arc;
@@ -13,23 +5,12 @@ use support::mocks::fake_llm::{ChatAction, FakeLlm};
 use tokio::time::timeout;
 
 const ENROLL_BUDGET: Duration = Duration::from_secs(30);
-/// Readiness reaches a client only over the runtime's push replicator; it has
-/// no snapshot or bootstrap path. DefraDB acks a pushed block whose DAG is
-/// incomplete as soon as the root is registered pending and leaves recovery
-/// to the receiver's per-root backoff ladder, and
-/// `p2p::PENDING_RECOVERY_WORST_CASE_SECS` is the pinned dependency's bound
-/// from that root's first fetch dispatch to its fifth. A fresh peer walking
-/// aged readiness history therefore needs that pacing on top of the ordinary
-/// enrollment budget before a timeout means anything is wedged.
 const AGED_HISTORY_RECOVERY: Duration = Duration::from_secs(p2p::PENDING_RECOVERY_WORST_CASE_SECS);
 const TURN_BUDGET: Duration = Duration::from_secs(20);
 const RECONNECT_BUDGET: Duration = Duration::from_secs(20);
 const MODEL_DELAY: Duration = Duration::from_secs(2);
 const RETURN_TO_OBSERVER_BUDGET: Duration = Duration::from_secs(2);
 const READINESS_PROBE_INTERVAL: Duration = Duration::from_secs(3);
-/// The sampler runs beside enrollment, so a probe never delays it; a probe that
-/// cannot answer within this is reported as such, so one stalled query does
-/// not silence the samples after it.
 const READINESS_PROBE_BUDGET: Duration = Duration::from_millis(750);
 const REPLY: &str = "PAIRING_CONTRACT_ASSISTANT_REPLY";
 const OFFLINE_REPLY: &str = "PAIRING_CONTRACT_OFFLINE_REPLY";
@@ -233,8 +214,6 @@ async fn run_contract_with_streaming_cadence(
             Ok::<_, anyhow::Error>(())
         }).await;
         sampler.abort();
-        // A sample still in flight would query the client node while it shuts
-        // down.
         let _ = sampler.await;
         if !matches!(enrollment, Ok(Ok(()))) {
             let progress = probe.sample(Duration::from_secs(5)).await;
@@ -245,15 +224,11 @@ async fn run_contract_with_streaming_cadence(
                 phases.lock().expect("enrollment phase log"),
             );
         }
-        // The probe holds the client's node; the store stays locked against
-        // the reopen below until it is released.
         drop(probe);
         tracing::info!(elapsed_ms = enrollment_started.elapsed().as_millis(), "app enrollment ready");
         assert_observer_did_not_overflow(&core).await?;
 
         let session = Uuid::new_v4().to_string();
-        // Paced tiny frames exercise the one-second production cadence timer;
-        // the ordinary first-visible contract retains its stricter 500ms bound.
         let stream_visibility_budget = if paced {
             Duration::from_secs(2)
         } else {
@@ -272,9 +247,6 @@ async fn run_contract_with_streaming_cadence(
         )
         .await?;
 
-        // A request reaches the runtime, then the app closes before inference
-        // finishes. Reopen exactly the same home: no re-enrollment, identity
-        // reset, injected desired rows, or hand-installed return replicator.
         let records = core.peer_records().await;
         core.submit_request(&session, &node_did, OFFLINE_PROMPT, Some(&agent)).await?;
         let (request, _, _) = timeout(TURN_BUDGET, wait_for_runtime_agent_request(
@@ -471,7 +443,6 @@ async fn assert_observer_did_not_overflow(core: &ClientCore) -> Result<()> {
     Ok(())
 }
 
-/// Session selection is a data-plane action, independent of UI page reads.
 async fn select_session(core: &ClientCore, session: &str, agent: &str) -> Result<()> {
     use gents::agent::p2p_reconcile::session_hydration::ClientHydrationPhase;
     loop {
@@ -485,9 +456,6 @@ async fn select_session(core: &ClientCore, session: &str, agent: &str) -> Result
     }
 }
 
-/// No hydration, repair, UI refresh, or remote reads here: success is a
-/// completed conversation in the phone-side database AND the observed response
-/// projection consumed by the app. A healthy DB with a stuck observer must fail.
 async fn wait_for_replicated_reply(
     core: &ClientCore,
     session: &str,
@@ -534,16 +502,10 @@ async fn wait_for_replicated_reply(
             let request_completed = requests
                 .iter()
                 .any(|row| row["lifecycle_state"] == "completed");
-            // Terminal selection lives on the request. A completed request
-            // without it is an incomplete replica state, not a success.
             let terminal_selection = requests.iter().any(|row| !row["terminal_output"].is_null());
             if terminal_selection {
                 terminal_ready_at.get_or_insert_with(Instant::now);
             }
-            // The exact physical request row: observe the selected terminal
-            // content through the canonical request-output owner against the
-            // phone-side node. No inline content reads, no header
-            // concatenation, no response document.
             let mut terminal_request_row = None;
             for row in &requests {
                 let typed: gents_protocol::row::AgentRequestRow =
@@ -676,16 +638,8 @@ async fn wait_for_replicated_reply(
     Ok(())
 }
 
-/// DefraDB makes a replicated document queryable only once its whole commit
-/// ancestry has transferred and merged, and a fresh peer has no owner index to
-/// short-circuit that walk. The readiness row can therefore stay absent on the
-/// client while every block is already in flight. The probe samples the
-/// client's merged head height beside the runtime's and whether the row is
-/// present; a lagging height shows the ancestry walk is still behind, but it
-/// cannot by itself tell an undelivered head from unfinished history.
-///
-/// It owns the client handles it reads, so the sampler runs beside enrollment
-/// rather than inside it.
+/// A fresh peer can be missing the readiness row while every replicated block
+/// is in flight; the probe samples merged head height beside the runtime's.
 #[derive(Clone)]
 struct ReadinessProbe {
     node: Arc<gents::defra_node::EmbeddedNode>,
@@ -875,8 +829,8 @@ async fn local_transcript_keys(
         for message in &page.store.transcript_messages {
             keys.insert(message.message.message_key.clone());
         }
-        // The store orders a page ascending by sequence while the walk descends,
-        // so the next cursor is the page's lowest key, not its last.
+        // Page ordering is ascending while the walk descends; the next cursor
+        // is the page's lowest key.
         cursor = page
             .store
             .transcript_messages
@@ -906,13 +860,9 @@ async fn assert_local_pagination(
     })
     .await
     .context("session hydration did not settle before pagination")??;
-    // Hydration completes against the manifest its own request was served, not
-    // against whatever the session holds now: a message the runtime authors
-    // after that manifest reaches the client only over push replication, which
-    // carries each message document independently of the request completion a
-    // turn waits for. The authoring runtime is therefore the only authority for
-    // what local paging has to cover, and it is stable here because every
-    // request in this session is terminal.
+    // The runtime is the authority for what local paging must cover: hydration
+    // serves against the manifest its request was served, and later messages
+    // reach the client only over push replication.
     let expected =
         runtime_transcript_keys(graphql, session, agent, core.node_identity().did()).await?;
     timeout(TURN_BUDGET, async {
@@ -982,16 +932,6 @@ async fn assert_local_pagination(
     Ok(())
 }
 
-/// Production Amy had about 2,500 readiness revisions when a clean mobile
-/// client enrolled. Seed real signed runtime writes before creating the app.
-///
-/// A fresh peer cannot read the current revision before the whole ancestry
-/// transfers and merges: DefraDB resolves a replicated composite's document
-/// identity by walking parents to genesis, and it materializes nothing until
-/// that closure is complete. The enrollment budget therefore covers the whole
-/// history, and the revision count must stay below DefraDB's merge-depth
-/// limit, past which the walk fails terminally and the root is quarantined
-/// rather than retried.
 async fn seed_readiness_history(
     graphql: &str,
     agent: &str,
@@ -1013,6 +953,9 @@ async fn seed_readiness_history(
         .and_then(Value::as_str)
         .context("aged fixture requires runtime readiness")?;
     let snapshot = escape_graphql_string(snapshot);
+    // Replication ancestry must fully transfer before the doc is queryable;
+    // revision count must stay under DefraDB's merge-depth limit or the walk
+    // fails terminally (quarantined root).
     let started = Instant::now();
     for batch in (0..revisions).step_by(50) {
         let mut fields = String::new();
@@ -1020,8 +963,6 @@ async fn seed_readiness_history(
             let timestamp = (Utc::now() - chrono::Duration::seconds((revisions - revision) as i64))
                 .to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
             fields.push_str(&format!(
-                // Match the removed publisher: even an unchanged snapshot was
-                // rewritten alongside its timestamp, adding another field DAG.
                 r#"r{revision}: update_NodeReadiness(filter: {{node_did: {{_eq: "{agent}"}}}}, input: {{snapshot_json: "{snapshot}", updated_at: "{}"}}) {{_docID}} "#,
                 escape_graphql_string(&timestamp),
             ));

@@ -1,15 +1,6 @@
 import Proofs.CanonicalOutput.Execution.Transition
 import Proofs.CanonicalOutput.ToolDelivery
 
-/-!
-# Tool delivery in the shared execution world
-
-Tool lifecycle, canonical segments/messages, and transcript allocation are
-updated in one `Execution.World`. None of these transitions reads or rewrites
-the parent request lease. The gate supplies a monotonic owner time by updating
-`world.lease.now`; background delivery therefore remains possible after the
-parent request is terminal without reviving it.
--/
 namespace CanonicalOutput.Execution.ToolDelivery
 
 inductive Error where
@@ -22,9 +13,6 @@ inductive Error where
   | cursor
   deriving DecidableEq, Repr
 
-/-- The complete write authority of tool delivery. Identity, request control,
-the parent lease, compaction authority and terminal selection remain
-read-only inputs from `World`. -/
 private structure ToolWrite where
   segments : List Segment
   messages : List MessageEnvelope
@@ -68,8 +56,6 @@ private theorem ToolWrite.lift_preserves_lease {world after : World}
   obtain ⟨write, _, rfl⟩ := ToolWrite.lift_success h
   rfl
 
-/-- All lifted tool writes share this identity frame, independently of their
-branch logic. The private write payload is inferred from a public operation. -/
 theorem tool_write_preserves_request_identity {before after : World}
     {result : Except Error ToolWrite} (h : ToolWrite.lift before result = .ok after) :
     after.requestId = before.requestId ∧ after.sessionId = before.sessionId := by
@@ -90,13 +76,7 @@ theorem tool_write_preserves_composed_control {before after : World}
   exact ⟨rfl, rfl, rfl⟩
 
 inductive CloseAuthority where
-  /-- A confirmed native lifecycle result. A cancellation request by itself is
-  not this evidence; `.cancelDuringRun` means the host stop was confirmed. For
-  an `agent_new`/`agent_message` row the action is projected from the
-  caused request's durable terminal output by the completion observer. -/
   | native (action : ToolExecution.ToolCallContext.Action)
-  /-- A terminal lifecycle already committed by the cancellation/recovery
-  owner, including never-dispatched pending cancellation. -/
   | alreadyTerminal
 
 def resultKey (document : DocId) (message : MessageEnvelope) : Transcript.ToolResultKey :=
@@ -133,11 +113,6 @@ def clearReconcileIntent (tool : OwnedTool)
     context := context
     stuckSince := none }
 
-/-- Tool output uses the tool lifecycle only. It cannot revive or extend the
-request lease, including when the parent is already terminal. This hot path
-checks the exact indexed tool binding and its source prefix; it does not rescan
-every other accepted header in the session. Native storage refines this lookup
-through its immutable document index and transaction gate. -/
 private def appendToolOutputWrite (world : World) (document : DocId)
     (record : Segment) : Except Error ToolWrite :=
   match ownedToolByDocument? world document with
@@ -179,9 +154,6 @@ def closeReplayValid (world : World) (tool : OwnedTool) (record : Segment) : Boo
         (transcriptToolByDocument? world tool.document).isNone &&
           decide (tool.document ∉ world.transcript.inFlight)
 
-/-- Closure and confirmed native terminal state commit together. The transcript
-row receives that exact terminal state and leaves `inFlight`; result pairing is
-added only by `publishToolDelivery`. -/
 private def closeToolOutputWrite (world : World) (document : DocId)
     (authority : CloseAuthority) (record : Segment) : Except Error ToolWrite :=
   if !toolLifecycleProjectionCoherent world then .error .ownership
@@ -239,10 +211,6 @@ inductive DeliveryShape where
   | backgroundNotification
   deriving DecidableEq, Repr
 
-/-- Native result receipts and background completion notifications have
-different transcript projections. A result row represents exactly one native
-tool-result block. A notification is ordinary user content and may be
-payload-free (the pending-cancelled acknowledgement case). -/
 def deliveryShape? (message : MessageEnvelope) (document : DocId) : Option DeliveryShape :=
   match message.blocks with
   | [.toolResult call _ _ _] =>
@@ -258,9 +226,6 @@ def resultProviderMatches (world : World) (tool : OwnedTool)
       call == tool.document && acceptedProviderId? world tool == some providerId
   | _ => true
 
-/-- A background completion notification is insert-once per physical tool.
-The immediate singleton result receipt is a separate foreground-result shape
-and therefore does not consume this slot. -/
 def terminalNotificationExists (world : World) (tool : OwnedTool) : Bool :=
   world.messages.any fun message =>
     message.header.publication == .toolDelivery tool.document &&
@@ -270,8 +235,6 @@ def terminalNotificationExists (world : World) (tool : OwnedTool) : Bool :=
 def referenceOwnedByTool (world : World) (tool : OwnedTool)
     (reference : PayloadRef) : Bool := toolOutputReferenceOwned world tool reference
 
-/-- Derived effects have no transcript header. Their exact rendered terminal
-payload is stored on the child owner in the same write as its closure and state. -/
 private def closePluginEffectOutputWrite (world : World) (document : DocId)
     (authority : CloseAuthority) (record : Segment) (payload : PayloadSpec) : Except Error ToolWrite :=
   match ownedToolByDocument? world document with
@@ -531,10 +494,6 @@ def backgroundReceiptRecordValid (world : World) (tool : OwnedTool)
     freshCompleteExtentExact (world.segments ++ [closing]) closing &&
     match closing.close with | some (.closed .complete _ _) => true | _ => false
 
-/-- The immediate native receipt for a background child belongs to the direct
-accepted parent call. It is reconstructed from a separate authored source
-owned by that physical tool document; it neither closes nor terminalizes the
-long-running child source. -/
 def backgroundReceiptHeaderValid (world : World) (tool : OwnedTool) (closing : Segment)
     (message : MessageEnvelope) : Bool :=
   tool.provenance == .acceptedIntent &&
@@ -565,11 +524,6 @@ def backgroundReceiptReplayValid (world : World) (tool : OwnedTool)
           decide (tool.document ∉ world.transcript.inFlight)
       | none => false
 
-/-- Publish the immediate singleton native tool-result receipt for a direct
-background invocation (native or linked child). The call remains physically running; only
-its transcript result pairing and the shared message cursor advance. Final
-completion is a later ordinary notification through the typed Goal or wake
-publication boundary. -/
 private def publishBackgroundReceiptWrite (world : World) (document : DocId)
     (closing : Segment) (message : MessageEnvelope) : Except Error ToolWrite :=
   if !toolProjectionCoherent world then .error .ownership
@@ -615,9 +569,6 @@ def publishBackgroundReceipt (world : World) (document : DocId)
     (closing : Segment) (message : MessageEnvelope) : Except Error World :=
   ToolWrite.lift world (publishBackgroundReceiptWrite world document closing message)
 
-/-- Fresh publication allocates exactly `transcript.nextSeq` and derives its
-result key from session, physical tool document, and immutable header identity.
-Exact replay allocates nothing and is allowed even after compaction advanced. -/
 private def publishToolDeliveryWrite (world : World) (document : DocId)
     (message : MessageEnvelope) : Except Error ToolWrite :=
   if !toolProjectionCoherent world then .error .ownership
@@ -650,10 +601,6 @@ def publishToolDelivery (world : World) (document : DocId)
     (message : MessageEnvelope) : Except Error World :=
   ToolWrite.lift world (publishToolDeliveryWrite world document message)
 
-/-- Native completion closes the physical tool source, terminalizes its tool
-row, and publishes the paired ToolResult in one storage transaction. Neither
-the closed-but-undelivered intermediate world nor a result-only world is
-externally observable. -/
 def completeAndDeliver (world : World) (document : DocId)
     (authority : CloseAuthority) (record : Segment)
     (message : MessageEnvelope) : Except Error World :=
@@ -706,10 +653,6 @@ private def publishBackgroundNotificationWith
   ToolWrite.lift world
     (publishBackgroundNotificationWriteWith headerValid world document message)
 
-/-- A background notification is request-owned by the exact physical
-wake document from the authenticated queue transaction. Its payload refs stay
-bound to the parent tool source; the logical queue request id is never used as
-document authority. Queue enqueue/replay is composed in `BackgroundContinuation`. -/
 def publishWakeNotification (world : World) (document : DocId)
     (binding : WakeDocumentBinding) (message : MessageEnvelope) : Except Error World :=
   publishBackgroundNotificationWith
@@ -767,8 +710,6 @@ theorem append_preserves_parent_lease (before after : World) (document : DocId)
     after.lease = before.lease := by
   exact ToolWrite.lift_preserves_lease h
 
-/-- The lifecycle-relevant effect of a successful append. This exposes the
-single owned-tool replacement while keeping the write payload private. -/
 theorem append_success_lifecycle_effect (before after : World) (document : DocId)
     (record : Segment) (h : appendToolOutput before document record = .ok after) :
     after = before ∨ ∃ tool observed segments,
@@ -976,9 +917,6 @@ theorem publication_preserves_parent_lease (before after : World) (document : Do
     after.lease = before.lease := by
   exact ToolWrite.lift_preserves_lease h
 
-/-- Successful publication is either exact replay or a single header allocated
-at the old cursor. This one effect accounts for both the message collection and
-its allocator, rather than proving unrelated frame facts about each. -/
 def PublicationEffect (before after : World) (message : MessageEnvelope) : Prop :=
   after.sessionId = before.sessionId ∧
     ((after.messages = before.messages ∧
@@ -1100,8 +1038,6 @@ theorem wake_notification_preserves_parent_lease
     after.lease = before.lease := by
   exact ToolWrite.lift_preserves_lease h
 
-/-- Wake notification publication has only `ToolWrite` authority; composed
-request identity, queue/claim ownership, and retry policy remain framed. -/
 theorem wake_notification_preserves_composed_control
     (before after : World) (document : DocId) (binding : WakeDocumentBinding)
     (message : MessageEnvelope)
@@ -1237,9 +1173,6 @@ theorem background_receipt_segment_effect
   simp [ToolWrite.apply, ToolWrite.current]
 
 set_option maxHeartbeats 1000000 in
-/-- Every successful foreground delivery leaves the complete tool projection
-coherent.  This exposes the postcondition already enforced by the publication
-transaction, including its exact-replay branch. -/
 theorem publishToolDelivery_success_toolProjectionCoherent
     (before after : World) (document : DocId) (message : MessageEnvelope)
     (h : publishToolDelivery before document message = .ok after) :
@@ -1259,8 +1192,6 @@ theorem publishToolDelivery_success_toolProjectionCoherent
   repeat' first | contradiction | (solve | simp_all) | split at hwrite
 
 set_option maxHeartbeats 1000000 in
-/-- The atomic background receipt path checks the same complete projection
-after installing its closure, message, transcript result, and tool state. -/
 theorem publishBackgroundReceipt_success_toolProjectionCoherent
     (before after : World) (document : DocId) (closing : Segment)
     (message : MessageEnvelope)

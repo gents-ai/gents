@@ -9,8 +9,8 @@ pub struct BridgeConfig {
     pub app_meta: AppMeta,
     pub snapshot_grants: SnapshotGrants,
     pub managed_server: ManagedServerPolicy,
-    /// Custody of new store keys (the client store and a provisioned managed
-    /// home). Tests request file keys so no login-keychain item is written.
+    /// Custody of new store keys; tests request file keys so no login-keychain
+    /// item is written.
     pub store_key_custody: gents::store_key::StoreKeyCustodyChoice,
 }
 

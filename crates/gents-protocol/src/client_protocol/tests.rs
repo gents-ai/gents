@@ -73,8 +73,6 @@ fn unordered_turn_resolves_the_single_unreferenced_tip() {
         keyed_attempt("r2", Some("r1"), RequestLifecycleState::Failed, false),
         keyed_attempt("r3", Some("r2"), RequestLifecycleState::Processing, false),
     ];
-    // Order is irrelevant: the tip is the one candidate not referenced as a
-    // parent, not the last or first element.
     assert_eq!(derive_turn(&attempts), Some(ClientTurnState::Running));
 
     let reversed: Vec<_> = attempts.into_iter().rev().collect();
@@ -83,8 +81,6 @@ fn unordered_turn_resolves_the_single_unreferenced_tip() {
 
 #[test]
 fn unordered_turn_accepts_tip_whose_parent_is_in_scope() {
-    // The tip's own retry parent being present in the candidate set is the
-    // normal chain shape, not a cycle.
     let attempts = [
         keyed_attempt("r1", None, RequestLifecycleState::Completed, false),
         keyed_attempt("r2", Some("r1"), RequestLifecycleState::Completed, false),

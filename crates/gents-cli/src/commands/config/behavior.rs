@@ -23,8 +23,6 @@ pub(super) async fn agent_set(args: AgentUpsertArgs) -> Result<()> {
         .clone()
         .unwrap_or_else(|| default_agent_id_for_node(&args.node_did));
     let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
-    // Complete replacement clears omitted optionals. The shared writer
-    // validates same-node references in the publication transaction.
     let agent = Agent {
         agent_id: agent_id.clone(),
         node_did: args.node_did.clone(),
@@ -169,8 +167,6 @@ async fn load_document(
         unique_field = collection.unique_field(),
     );
     let rows = graphql_rows(access, collection.graphql_type(), &query).await?;
-    // Exact scoped lookup: a logical id resolving to more than one live row
-    // (unscoped lookup or duplicate scoped key) is ambiguous, not selectable.
     anyhow::ensure!(
         rows.len() <= 1,
         "ambiguous {} {id:?}: {} live rows resolve this logical id",
@@ -326,9 +322,6 @@ mod tests {
 
     use super::*;
 
-    /// Read one canonical document by its scoped logical key through the raw
-    /// GraphQL door. Tests only; production code reads through the shared
-    /// scoped readers.
     async fn read_canonical(
         node: &EmbeddedNode,
         collection: &str,
@@ -515,9 +508,6 @@ mod tests {
         Ok(())
     }
 
-    /// The raw `agent set` door is a complete canonical replacement through
-    /// the shared writer: omitted optionals clear and a dangling
-    /// context/profile reference fails the write transaction.
     #[tokio::test]
     async fn raw_set_rejects_dangling_profile_reference() -> Result<()> {
         let tempdir = tempfile::tempdir()?;

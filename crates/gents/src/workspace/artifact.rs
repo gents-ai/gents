@@ -1,5 +1,4 @@
 //! Request-owned compiler output, separate from the sealed source capability.
-//! The workspace executor owns the containing Git worktree directory and cleanup.
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -240,9 +239,8 @@ impl ArtifactGrant {
         Ok(grant)
     }
 
-    /// Revalidates this incarnation immediately before shared command preparation.
-    /// Existing request cancellation remains responsible for process termination
-    /// if cancellation races the subsequent spawn; this is not a second owner.
+    /// Revalidates this incarnation immediately before shared command preparation;
+    /// existing request cancellation remains responsible for process termination.
     pub async fn validate_for_launch(&self) -> Result<()> {
         let owner = &self.0;
         for (path, expected) in &owner.identities {

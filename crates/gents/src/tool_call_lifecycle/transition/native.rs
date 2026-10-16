@@ -15,8 +15,8 @@ impl ToolCallLifecycle {
     }
 
     /// Pending → Running for the exact row admitted with the accepted provider
-    /// header. Admission owns create-only identity and native intent; dispatch
-    /// only wins this lifecycle CAS after that publication has committed.
+    /// header; dispatch wins this lifecycle CAS only after that publication
+    /// has committed.
     pub async fn start_running(&mut self) -> Result<()> {
         self.start_running_with_time(None, None).await
     }
@@ -65,8 +65,6 @@ impl ToolCallLifecycle {
         self.start_running_canonical_with_time(fixture_now).await
     }
 
-    /// Running → Completed. Writes the tool result; sets completed_at,
-    /// latency_ms.
     pub async fn complete(&mut self, result: &str) -> Result<()> {
         let _ = self.complete_owned(result, None).await?;
         Ok(())
@@ -178,7 +176,6 @@ impl ToolCallLifecycle {
         Ok(true)
     }
 
-    /// Running → Failed. For tool errors during execution. Sets failure_class.
     pub async fn fail(&mut self, result: &str, failure: super::FailureClass) -> Result<()> {
         let _ = self.fail_owned(result, failure, None).await?;
         Ok(())
@@ -289,8 +286,7 @@ impl ToolCallLifecycle {
         Ok(true)
     }
 
-    /// Pending → Failed. Used when the dispatcher cannot start the call
-    /// (MCP service unreachable, argument parse failure pre-spawn).
+    /// Pending → Failed: the dispatcher cannot start the call.
     pub async fn spawn_failed(&mut self, failure: super::FailureClass, reason: &str) -> Result<()> {
         self.spawn_failed_with_details(failure, reason, None).await
     }
@@ -335,13 +331,9 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
-    /// Running → TimedOut. Called by the runtime deadline wrapper and startup
-    /// recovery when a running tool call exceeds its effective deadline.
-    ///
-    /// Returns whether this caller won the durable running-state compare.
-    /// A loser adopts the already-terminal durable row (another actor —
-    /// interrupt, recovery sweep, or the tool itself — terminalized first),
-    /// preserving that terminal's state and recorded cause.
+    /// Running → TimedOut when the call exceeds its effective deadline;
+    /// a loser adopts the already-terminal durable row, preserving its state
+    /// and recorded cause.
     pub async fn timeout(&mut self) -> Result<bool> {
         self.ensure_state(&[ToolCallState::Running], "timeout")?;
         let message = format!(
@@ -372,9 +364,6 @@ impl ToolCallLifecycle {
         Ok(true)
     }
 
-    /// Pending → Cancelled. Used when a tool call is cancelled before
-    /// dispatch creates a running row.
-    ///
     pub async fn cancel_before_dispatch(&mut self, cause: CancelCause) -> Result<()> {
         self.ensure_state(&[ToolCallState::Pending], "cancel_before_dispatch")?;
         let _ = self

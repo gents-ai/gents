@@ -1,8 +1,3 @@
-//! Locate-in-chain → attach → patch-inactive → verify → activate.
-//!
-//! Register the pinned baseline, reject unknown lineage, apply registered
-//! steps, and verify the active collection state.
-
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
@@ -19,18 +14,14 @@ use crate::registry::{
 };
 use crate::report::MigrationReport;
 
-/// Process-wide lock: desktop and runtime paths can race within one process.
 static ENSURE_LOCK: Mutex<()> = Mutex::const_new(());
 
-/// Single schema entry point: baseline + chain + verify + materialize.
-///
-/// Idempotent, resumable, and cheap when current. Every host calls this on
+/// Idempotent, resumable, and cheap when current; every host calls this on
 /// every start.
 pub async fn ensure_migrations(node: &EmbeddedNode) -> Result<MigrationReport> {
     ensure_migrations_with_registry(node, &DEFAULT_REGISTRY).await
 }
 
-/// Testable entry: inject a custom registry.
 pub async fn ensure_migrations_with_registry(
     node: &EmbeddedNode,
     registry: &Registry<'_>,
@@ -47,10 +38,6 @@ pub async fn ensure_migrations_with_registry(
     verify_managed_lineages(node, registry, &mut report).await?;
     let lineages_ready = Instant::now();
 
-    // A chain-free registry has no older document version to advance. DefraDB
-    // already maintains baseline indexes on writes and merges, so opening a
-    // current store must not start one read and one write transaction for
-    // every managed collection merely to prove that zero rows need migration.
     // Once the registry contains a migration step, retain the eager pass: old
     // versions can arrive over P2P after the step was originally applied.
     if !registry.steps.is_empty() {
@@ -90,7 +77,6 @@ pub async fn ensure_migrations_arc(node: Arc<EmbeddedNode>) -> Result<MigrationR
     ensure_migrations(node.as_ref()).await
 }
 
-/// Ensure against a heap-owned registry (pin authoring / conformance tests).
 pub async fn ensure_migrations_dynamic(
     node: &EmbeddedNode,
     registry: &DynamicRegistry,
@@ -215,8 +201,6 @@ async fn apply_add_collection(
     expected_state: &crate::expectation::CollectionExpectation,
     report: &mut MigrationReport,
 ) -> Result<()> {
-    // Infer collection name from the first `type Name` in the SDL for lookups
-    // after registration; callers still pin via expected_version/state.
     match node.add_schema(sdl).await {
         Ok(()) => report.steps_applied += 1,
         Err(error) if error.to_string().contains("already exists") => {
@@ -231,7 +215,6 @@ async fn apply_add_collection(
         }
     }
 
-    // If a pin is present, locate and verify the active version by scanning.
     if let Some(pin) = expected_version {
         let versions = node
             .get_all_collection_versions()
@@ -284,7 +267,6 @@ async fn apply_patch_versioned(
             collection: collection.to_string(),
         })?;
 
-    // Already at pin and active → verify + optional edge repair.
     if active.version_id == pin && active.is_active && !active.is_placeholder {
         verify_active_step(
             node,
@@ -308,11 +290,8 @@ async fn apply_patch_versioned(
         .map_err(Error::Node)?;
     let dest = all.iter().find(|v| v.version_id == pin);
 
-    // A later step in the same collection may already be active. In that
-    // state this destination is an inactive ancestor, not a crash-window
-    // version waiting to be reactivated. Re-activating it would roll the
-    // collection backward on every ensure before the later step rolls it
-    // forward again.
+    // A later step in the same collection may already be active; re-activating
+    // this destination would roll the collection backward on every ensure.
     if let Some(dest) = dest {
         if !dest.is_active && version_descends_from(&all, &active.version_id, pin) {
             expected_state
@@ -353,7 +332,6 @@ async fn apply_patch_versioned(
 
     match dest {
         None => {
-            // destination absent → attach (if lens), then patch inactive.
             if let Some(spec) = lens_spec {
                 let cfg = lens::lens_config(&spec, &active.version_id, pin);
                 node.set_migration(cfg)
@@ -396,7 +374,6 @@ async fn apply_patch_versioned(
             report.steps_applied += 1;
         }
         Some(v) if v.is_placeholder => {
-            // placeholder → patch inactive, verify, activate.
             let patched = node
                 .patch_collection(collection, patch)
                 .await
@@ -429,7 +406,6 @@ async fn apply_patch_versioned(
             report.steps_applied += 1;
         }
         Some(v) if !v.is_active => {
-            // complete inactive → verify, activate.
             expected_state
                 .verify(v)
                 .map_err(|detail| Error::StateVerification {
@@ -461,7 +437,6 @@ async fn apply_patch_versioned(
             report.steps_applied += 1;
         }
         Some(v) => {
-            // complete active (active version_id may differ if name pointer lag)
             verify_active_step(
                 node,
                 id,
@@ -550,8 +525,6 @@ async fn verify_active_step(
             detail,
         })?;
     if let Some(expected_tx) = expected_transform {
-        let prev = active.version_id.clone();
-        // Need source of this edge: previous_version.source
         if let Some(ref pv) = active.previous_version {
             let source = pv.source_collection_id.clone();
             repair_transform_if_needed(
@@ -566,7 +539,6 @@ async fn verify_active_step(
                 report,
             )
             .await?;
-            let _ = prev;
         }
     }
     Ok(())
@@ -591,7 +563,6 @@ async fn repair_transform_if_needed(
         return Ok(());
     }
     let Some(spec) = lens_spec else {
-        // Cannot repair without wasm bytes; surface as verification failure.
         return Err(Error::StateVerification {
             collection: collection.to_string(),
             step: id.to_string(),
@@ -656,10 +627,9 @@ async fn apply_patch_in_place(
 }
 
 // ---------------------------------------------------------------------------
-// Lineage verification (entire DAG of every managed collection)
+// Lineage verification
 // ---------------------------------------------------------------------------
 
-/// Group non-placeholder versions by collection name.
 fn versions_by_name(
     all_versions: &[CollectionVersion],
 ) -> HashMap<String, Vec<&CollectionVersion>> {
@@ -675,11 +645,6 @@ fn versions_by_name(
 
 /// Reject a store whose existing managed collections descend from a lineage
 /// this registry does not know, before anything is registered or patched.
-///
-/// Baseline registration adds collections a store lacks, so running it first
-/// would write this build's schema into a store it then refuses to open. The
-/// check reads the version DAG only; collections absent from the store are
-/// left to baseline registration.
 async fn reject_unknown_lineage(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
     let all_versions = node
         .get_all_collection_versions()
@@ -825,7 +790,7 @@ fn verify_one_collection(
             collection: entry.name.to_string(),
         })?;
 
-    // Active version must match the final target pin when one is known.
+    // Active version must match the final target pin.
     if let Some(target) = target_active.get(entry.name) {
         if active.version_id != *target {
             return Err(Error::VersionPinMismatch {
@@ -848,12 +813,6 @@ fn verify_one_collection(
     Ok(())
 }
 
-/// A collection's DAG belongs to this registry's lineage: the baseline root
-/// pin is present and, when it has several versions, every one is a known pin.
-///
-/// A missing root means the store predates this baseline (an older build);
-/// a present root with extra unknown versions means another build extended
-/// this lineage (for example a newer one). Hosts word the two differently.
 fn check_known_lineage(
     entry: &BaselineCollection<'_>,
     versions: &[&CollectionVersion],
@@ -864,8 +823,6 @@ fn check_known_lineage(
         .copied()
         .filter(|v| !v.is_placeholder)
         .collect();
-    // Root pin (if set) must appear in the DAG — it is not necessarily active
-    // after later PatchVersioned steps.
     if let Some(root) = entry.expected_version {
         if !non_ph.iter().any(|v| v.version_id == root) {
             return Err(Error::UnknownLineage {
@@ -878,8 +835,7 @@ fn check_known_lineage(
             });
         }
     }
-    // Multi-version DAGs are legal only when every non-placeholder version is a
-    // known pin (baseline root + step destinations).
+    // Every non-placeholder version must be a known pin.
     if non_ph.len() > 1 {
         if let Some(foreign) = non_ph
             .iter()

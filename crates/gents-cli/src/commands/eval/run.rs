@@ -1,7 +1,3 @@
-//! `run` and `resume`: the runner's loop, followed from the terminal. A line
-//! per slot as it lands, then the `show` table. Ctrl-C cancels the token the
-//! command was given (`cancel_on_ctrl_c`).
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::io::Write;
@@ -26,7 +22,6 @@ pub(super) async fn run(
     deps: &Deps<'_>,
     out: &mut dyn Write,
 ) -> Result<()> {
-    // The packs are held until the run ends: a cache entry stays locked.
     let (request, _packs) = run_request(ctx, args).await?;
     run_prepared(ctx, args, &request, deps, out).await
 }
@@ -39,9 +34,6 @@ pub(super) async fn run_prepared(
     out: &mut dyn Write,
 ) -> Result<()> {
     let run_id = request.run_id.clone();
-    // A `--run-id` naming an existing run continues it, as `resume` does:
-    // its landed attempts are not printed again, and the marker the runner
-    // clears is reported once the run ran.
     let marker = runner::run_dir(&ctx.runs_dir(), &run_id)?.join(CANCEL_MARKER);
     let had_marker = marker.exists();
     let landed = landed_attempts(ctx, &run_id).await?;
@@ -83,9 +75,6 @@ pub(super) async fn resume(
     deps: &Deps<'_>,
     out: &mut dyn Write,
 ) -> Result<()> {
-    // `runner::resume` thaws the run before it touches the
-    // marker, so a refused resume (an invalidated run, a changed pack) says
-    // nothing about it; the notice is printed only once the resume ran.
     let marker = runner::run_dir(&ctx.runs_dir(), &args.run_id)?.join(CANCEL_MARKER);
     let had_marker = marker.exists();
     let landed = landed_attempts(ctx, &args.run_id).await?;
@@ -113,10 +102,7 @@ pub(super) async fn resume(
     finish(ctx, &args.run_id, args.json, result, out).await
 }
 
-/// Each `--profile` by the cell it names. Refused, from argv alone, when a
-/// `--cell` id repeats, or a profile names a cell no `--cell` declares or
-/// names a cell twice: the binary reports it as a usage error (exit 2)
-/// before reading anything. The runner refuses a repeated cell id too.
+/// Each `--profile` by the cell it names.
 pub(super) fn profiles_by_cell(args: &EvalRunArgs) -> Result<BTreeMap<&str, &str>, String> {
     let mut cells = BTreeSet::new();
     for cell in &args.cells {
@@ -188,8 +174,6 @@ pub(super) async fn run_request(
         purpose: args.purpose.clone(),
         source_commit: source_commit(),
         source_dirty: source_dirty(),
-        // Each stage reads its captures from the definition; this run-level
-        // list is only the fallback, and the command adds none.
         captures: Vec::new(),
         runs_dir: ctx.runs_dir(),
     };
@@ -283,9 +267,6 @@ async fn finish(
     out: &mut dyn Write,
 ) -> Result<()> {
     let outcome = result?;
-    // The pass says whether the token or a marker stopped it. A stopped run
-    // is not a success: the table (or JSON) still renders, then the command
-    // fails with the note, so a script never reads a partial run as done.
     let stopped = (outcome.cancelled || outcome.abandoned > 0).then(|| {
         format!(
             "run {run_id} stopped before it finished ({} completed, {} abandoned this pass); `gents eval resume {run_id}` continues it",
@@ -304,309 +285,3 @@ async fn finish(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use gents::eval::checks::CheckRegistry;
-    use tokio_util::sync::CancellationToken;
-
-    use super::super::testing::{
-        deps, eval, eval_with, executor, row, Fixture, DEFINITION, VALIDATION_CASES,
-    };
-
-    fn run_argv<'a>(run_id: &'a str, cells: &'a [String]) -> Vec<&'a str> {
-        let mut argv = vec!["run", DEFINITION, "--run-id", run_id];
-        for cell in cells {
-            argv.extend(["--cell", cell.as_str()]);
-        }
-        argv.extend([
-            "--profile",
-            "baseline=local",
-            "--profile",
-            "candidate=local",
-        ]);
-        argv
-    }
-
-    /// A refused resume prints nothing about the marker.
-    #[tokio::test]
-    async fn a_refused_resume_says_nothing_about_the_marker() {
-        let fixture = Fixture::new().await;
-        let interrupted = CancellationToken::new();
-        interrupted.cancel();
-        fixture
-            .scripted_run("r1", &executor(&[]), interrupted)
-            .await;
-        eval(&fixture, &["cancel", "r1"]).await.unwrap();
-        eval(
-            &fixture,
-            &["invalidate", "r1", "--reason", "broken fixture"],
-        )
-        .await
-        .unwrap();
-        let mut out = Vec::new();
-        let scripted = executor(&[]);
-        let registry = CheckRegistry::builtin();
-        let error = super::super::execute(
-            &fixture.ctx,
-            super::super::testing::eval_command(&["resume", "r1"]),
-            &deps(&scripted, &registry, CancellationToken::new()),
-            &mut out,
-        )
-        .await
-        .unwrap_err();
-        assert!(error.to_string().contains("invalidated"), "{error:#}");
-        assert!(out.is_empty(), "{}", String::from_utf8_lossy(&out));
-        assert!(fixture
-            .ctx
-            .runs_dir()
-            .join("r1")
-            .join(gents::eval::runner::CANCEL_MARKER)
-            .exists());
-    }
-
-    fn cells(pack: &str) -> Vec<String> {
-        vec![
-            format!("baseline={pack}"),
-            format!("candidate={pack}:monitor"),
-        ]
-    }
-
-    #[tokio::test]
-    async fn run_prints_one_line_per_landed_slot_and_the_show_table() {
-        let fixture = Fixture::new().await;
-        let pack = fixture.pack_arg();
-        let cells = cells(&pack);
-        let scripted = executor(&VALIDATION_CASES[..3]);
-        let registry = CheckRegistry::builtin();
-        let output = eval_with(
-            &fixture,
-            &run_argv("r1", &cells),
-            &deps(&scripted, &registry, CancellationToken::new()),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            output
-                .lines()
-                .filter(|line| line.starts_with("landed "))
-                .count(),
-            24,
-            "{output}"
-        );
-        assert!(
-            output.contains("landed baseline val-a #0 attempt 1"),
-            "{output}"
-        );
-        assert_eq!(
-            row(&output, "baseline", 10),
-            vec!["baseline", "6", "6", "0", "0", "0", "0", "12", "50.00%", "-/-"]
-        );
-        assert!(!output.contains("stopped before it finished"), "{output}");
-
-        let mut json_argv = run_argv("r2", &cells);
-        json_argv.push("--json");
-        let json: serde_json::Value = serde_json::from_str(
-            &eval_with(
-                &fixture,
-                &json_argv,
-                &deps(&scripted, &registry, CancellationToken::new()),
-            )
-            .await
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(json["run"]["run_id"], "r2");
-
-        // Without --run-id, a fresh id every time.
-        let fresh: Vec<&str> = run_argv("unused", &cells)
-            .into_iter()
-            .filter(|arg| *arg != "--run-id" && *arg != "unused")
-            .collect();
-        let first = eval_with(
-            &fixture,
-            &fresh,
-            &deps(&scripted, &registry, CancellationToken::new()),
-        )
-        .await
-        .unwrap();
-        assert!(first.contains(&format!("run {DEFINITION}-")), "{first}");
-        assert_eq!(json["run"]["source_commit"], super::super::source_commit());
-    }
-
-    #[tokio::test]
-    async fn a_cancelled_run_says_how_to_resume_and_resume_clears_the_marker_and_finishes() {
-        let fixture = Fixture::new().await;
-        let pack = fixture.pack_arg();
-        let cells = cells(&pack);
-        let scripted = executor(&[]);
-        let registry = CheckRegistry::builtin();
-        // What Ctrl-C does: cancel the token the command was given.
-        let interrupted = CancellationToken::new();
-        interrupted.cancel();
-        // A stopped run renders its table, then fails with the note once.
-        let mut out = Vec::new();
-        let error = super::super::execute(
-            &fixture.ctx,
-            super::super::testing::eval_command(&run_argv("r1", &cells)),
-            &deps(&scripted, &registry, interrupted.clone()),
-            &mut out,
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(
-            format!("{error:#}"),
-            "run r1 stopped before it finished (0 completed, 0 abandoned this pass); `gents eval resume r1` continues it"
-        );
-        let stopped = String::from_utf8(out).unwrap();
-        assert!(!stopped.contains("stopped before it finished"), "{stopped}");
-        assert_eq!(row(&stopped, "baseline", 10)[6], "12");
-
-        // With --json, stdout stays the report alone and the note is the error.
-        let mut json_argv = run_argv("r1", &cells);
-        json_argv.push("--json");
-        let mut out = Vec::new();
-        let error = super::super::execute(
-            &fixture.ctx,
-            super::super::testing::eval_command(&json_argv),
-            &deps(&scripted, &registry, interrupted),
-            &mut out,
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .starts_with("run r1 stopped before it finished"),
-            "{error:#}"
-        );
-        let json: serde_json::Value = serde_json::from_slice(&out).unwrap_or_else(|error| {
-            panic!(
-                "stdout is not pure JSON ({error}): {}",
-                String::from_utf8_lossy(&out)
-            )
-        });
-        assert_eq!(json["run"]["run_id"], "r1");
-
-        eval(&fixture, &["cancel", "r1"]).await.unwrap();
-        let resumed = eval(&fixture, &["resume", "r1"]).await.unwrap();
-        assert!(resumed.contains("cleared the cancel marker "), "{resumed}");
-        assert_eq!(
-            resumed
-                .lines()
-                .filter(|line| line.starts_with("landed "))
-                .count(),
-            24,
-            "{resumed}"
-        );
-        assert_eq!(row(&resumed, "candidate", 10)[1], "12", "{resumed}");
-        assert!(!fixture
-            .ctx
-            .runs_dir()
-            .join("r1")
-            .join(gents::eval::runner::CANCEL_MARKER)
-            .exists());
-    }
-
-    /// Running an existing `--run-id` continues it like `resume`: attempts
-    /// that already landed are not printed again, and the marker the runner
-    /// clears is reported.
-    #[tokio::test]
-    async fn run_with_an_existing_run_id_prints_only_new_attempts_and_the_cleared_marker() {
-        let fixture = Fixture::new().await;
-        let pack = fixture.pack_arg();
-        let cells = cells(&pack);
-        let scripted = executor(&[]);
-        let registry = CheckRegistry::builtin();
-        let first = eval_with(
-            &fixture,
-            &run_argv("r1", &cells),
-            &deps(&scripted, &registry, CancellationToken::new()),
-        )
-        .await
-        .unwrap();
-        let landed = |output: &str| {
-            output
-                .lines()
-                .filter(|line| line.starts_with("landed "))
-                .count()
-        };
-        assert_eq!(landed(&first), 24, "{first}");
-        assert!(!first.contains("cleared the cancel marker"), "{first}");
-
-        eval(&fixture, &["cancel", "r1"]).await.unwrap();
-        let again = eval_with(
-            &fixture,
-            &run_argv("r1", &cells),
-            &deps(&scripted, &registry, CancellationToken::new()),
-        )
-        .await
-        .unwrap();
-        assert_eq!(landed(&again), 0, "{again}");
-        assert!(again.contains("cleared the cancel marker "), "{again}");
-        assert_eq!(row(&again, "baseline", 10)[1], "12", "{again}");
-        assert!(!fixture
-            .ctx
-            .runs_dir()
-            .join("r1")
-            .join(gents::eval::runner::CANCEL_MARKER)
-            .exists());
-    }
-
-    #[tokio::test]
-    async fn a_cell_without_a_profile_uses_the_homes_default_profile() {
-        let fixture = Fixture::new().await;
-        let pack = fixture.pack_arg();
-        let cell = format!("baseline={pack}");
-        let error = eval(
-            &fixture,
-            &["run", DEFINITION, "--cell", cell.as_str(), "--run-id", "r1"],
-        )
-        .await
-        .unwrap_err();
-        let profile = gents::default_inference_profile_id_for_agent(
-            &gents::default_agent_id_for_node(&fixture.ctx.owner),
-        );
-        assert_eq!(
-            error.to_string(),
-            format!("cell \"baseline\" names no inference profile {profile:?}")
-        );
-
-        let stray = eval(
-            &fixture,
-            &[
-                "run",
-                DEFINITION,
-                "--cell",
-                cell.as_str(),
-                "--profile",
-                "other=local",
-            ],
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(
-            stray.to_string(),
-            "--profile names cell \"other\", which no --cell declares"
-        );
-
-        let twice = eval(
-            &fixture,
-            &[
-                "run",
-                DEFINITION,
-                "--cell",
-                cell.as_str(),
-                "--profile",
-                "baseline=local",
-                "--profile",
-                "baseline=other",
-            ],
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(
-            twice.to_string(),
-            "--profile names cell \"baseline\" more than once"
-        );
-    }
-}

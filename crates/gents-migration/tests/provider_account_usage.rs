@@ -1,6 +1,3 @@
-//! `ProviderAccountUsage` is a baseline collection added after release: an
-//! existing store gains it on open, and a build without it still opens.
-
 use defra_node::EmbeddedNode;
 use gents_migration::{
     ensure_migrations, ensure_migrations_with_registry, BaselineCollection, Registry,

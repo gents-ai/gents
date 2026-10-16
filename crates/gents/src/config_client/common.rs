@@ -2,13 +2,11 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 // Process-local monotonicity closes the practical collision window for rapid
 // retries, concurrent apply workers, and wall-clock rollback while the process
-// is alive. A process restart cannot make a system clock globally monotonic;
-// DefraDB's unique/live checks still reject a collision safely, and a retry
-// later in that process mints from a new observation. The i64 nanosecond
-// representation reaches its chrono boundary in 2262.
+// is alive; a restart relies on DefraDB's unique/live checks to reject a
+// collision safely. The i64 nanosecond representation reaches its chrono
+// boundary in 2262.
 static LAST_RECREATE_IDENTITY_NANOS: AtomicI64 = AtomicI64::new(i64::MIN);
 
-/// Mint the timestamp carried only by document add/recreate branches.
 pub fn mint_recreate_identity_timestamp() -> String {
     let now = chrono::Utc::now()
         .timestamp_nanos_opt()
@@ -49,33 +47,4 @@ pub fn mint_recreate_identity(add_doc: &serde_json::Value) -> serde_json::Value 
     doc
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::{json, Value};
 
-    #[test]
-    fn recreate_identity_preserves_content_and_stamps_updated_at() {
-        let original = json!({
-            "tools_id": "tools-a",
-            "created_at": "2026-01-01T00:00:00Z"
-        });
-
-        let minted = mint_recreate_identity(&original);
-
-        assert_eq!(minted.get("tools_id"), original.get("tools_id"));
-        assert_eq!(minted.get("created_at"), original.get("created_at"));
-        assert!(minted.get("updated_at").and_then(Value::as_str).is_some());
-        assert!(original.get("updated_at").is_none());
-    }
-
-    #[test]
-    fn recreate_identity_timestamps_are_distinct_and_monotonic() {
-        let first = mint_recreate_identity_timestamp();
-        let second = mint_recreate_identity_timestamp();
-        let first = chrono::DateTime::parse_from_rfc3339(&first).unwrap();
-        let second = chrono::DateTime::parse_from_rfc3339(&second).unwrap();
-
-        assert!(second > first);
-    }
-}

@@ -1,5 +1,3 @@
-/* Sessions: a heading row with search and New, then plain rows on the
-   ground: title, the agent's chip, and when it last moved. */
 import {
   memo,
   useCallback,
@@ -82,29 +80,21 @@ export function SessionsScreen({
   const homeDid = useHomeDid();
   const selectedNodeDid = useSelectedNodeDid();
   const [query, setQuery] = useState<string | null>(null);
-  /* the three axes the summary carries: agent, state, and what started it */
   const filter = useListViews((v) => v.sessionFilter);
-  /* which parents are showing their workers; a person who opened one meant it */
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  /* the nodes the list shows: the working node to start, then whatever the
-     chips choose; none chosen means every node */
   const placement = { nodes, selectedNodeDid, homeDid };
   const defaultNodeIds = nodesInScope(defaultScope("sessions"), placement).map(
     nodeDidOf,
   );
   const storedNodeIds = useListViews((v) => v.sessionNodes);
-  /* a node named on the route narrows the list to it, once per route,
-     before the list is painted */
   useLayoutEffect(() => {
     if (nodeDid) listViews.setSessionNodes([nodeDid]);
   }, [nodeDid]);
-  /* a pick whose nodes are all gone starts over at the working node */
   const knownIds = storedNodeIds && knownNodeIds(storedNodeIds, placement);
   const nodeIds =
     !knownIds || (knownIds.length === 0 && storedNodeIds!.length > 0)
       ? defaultNodeIds
       : knownIds;
-  /* the working node is where the list starts, not a filter to clear */
   const nodesPicked =
     nodeIds.length !== defaultNodeIds.length ||
     nodeIds.some((id) => !defaultNodeIds.includes(id));
@@ -117,8 +107,6 @@ export function SessionsScreen({
       ),
     ),
   );
-  /* the lineage of the sessions in scope only, so work elsewhere in the
-     fleet does not re-render the list */
   const parents = useFleet(
     useShallow((s) =>
       Object.fromEntries(inScope.map((c) => [sessionKeyOf(c), parentOfIn(s, c)])),
@@ -133,25 +121,12 @@ export function SessionsScreen({
     () => filterSessions(inScope, filter, query),
     [inScope, filter, query],
   );
-  /* an empty list says "yet" only when no node has a session; otherwise
-     something narrowed it, the node chips included */
   const narrowed =
     Boolean(query) ||
     hasFilter(filter) ||
     Object.values(nodeCounts).some((count) => count > 0);
-  /* the session whose latest request spawned this one, by provenance */
   const parentOf = (c: SessionSummary) => parents[sessionKeyOf(c)] ?? null;
 
-  /* Work a session handed out sits under the session that handed it out,
-     shown only when the person opens it: a list someone is reading does not
-     rearrange itself as workers start and settle, and the parent's marks
-     say what its workers are doing. A child follows its parent only when
-     the parent is here to follow: a filter or a search that keeps the child
-     and drops the parent leaves the child where it fell. */
-
-  /* every worker on any node by the session that handed it out, whether
-     or not the list is showing it: the parent's marks say the whole piece
-     of work, and a worker on another node is still its work */
   const nested = useMemo(() => {
     const shown = new Set(conversations.map((c) => c.sessionId));
     const children = new Map<string, SessionSummary[]>();
@@ -166,16 +141,12 @@ export function SessionsScreen({
     }
     return roots.flatMap((root) => {
       const kin = children.get(root.sessionId) ?? [];
-      /* a filter is the person asking for exactly these, so it opens them */
       const open = expanded.has(root.sessionId) || hasFilter(filter);
       const rows: Row[] = [{ kind: "session", session: root, child: false }];
       if (open)
         for (const [n, c] of kin.entries())
           rows.push({ kind: "session", session: c, child: true, delay: n });
       const running = kin.filter((c) => isLive(c.turnState)).length;
-      /* the way in stays while there is something behind it worth opening,
-         or while it is open; a parent whose workers have all finished is
-         one row again */
       if (kin.length > 0 && (open || running > 0))
         rows.push({
           kind: "toggle",
@@ -207,7 +178,6 @@ export function SessionsScreen({
               value={nodeIds}
               onChange={(next) => {
                 listViews.setSessionNodes(next);
-                /* a pick is the person's, so the route stops naming a node */
                 if (nodeDid) navigate({ name: "sessions" });
               }}
             />
@@ -241,7 +211,6 @@ export function SessionsScreen({
               nativeButton={false}
               render={<a href={href({ name: "session", sessionId: null })} />}
             >
-              {/* a phone row has no width for the word beside six marks */}
               <Plus className="sm:hidden" />
               <span className="max-sm:sr-only">New</span>
             </Button>
@@ -382,9 +351,6 @@ function SessionList({
   );
 }
 
-/* One row of the list. A fleet read that changed one session re-renders that
-   session's row: the others skip, since every prop keeps its identity while
-   unchanged (the fleet store reconciles each read by key). */
 const SessionRow = memo(function SessionRow({
   session,
   child,
@@ -422,20 +388,11 @@ const SessionRow = memo(function SessionRow({
         data-testid={`session-${session.sessionId}`}
         className={cn(
           "-mx-3 grid grid-cols-[auto_1fr_auto_auto] items-center gap-4 rounded-lg px-3 hover:bg-accent",
-          /* under the work it came from, and smaller with it: a
-             worker is a detail of the row above, and a list where
-             everything is the same size has no shape to read */
           child ? "py-2 pl-9 text-sm" : "py-3.5",
         )}
       >
         <SessionStatus turnState={session.turnState} />
         <p className="flex min-w-0 items-center gap-1.5 text-sm">
-          {/* the mark says a session came from another; the indent
-              says which one. Kept in both places: a row that only
-              moves right reads as a wrapped title, and a child
-              whose parent is filtered away has nothing but this */}
-          {/* a run nobody started by typing wears the mark of what
-              did: the list filters on this and showed nothing */}
           {!parent && session.taskId && (
             <Play
               className="size-3.5 shrink-0 text-muted-foreground"
@@ -487,7 +444,6 @@ const SessionRow = memo(function SessionRow({
             child ? "text-xs" : "text-sm",
           )}
         >
-          {/* kept current by the clock, whether or not the row re-renders */}
           <Age iso={session.updatedAt} />
         </span>
       </a>

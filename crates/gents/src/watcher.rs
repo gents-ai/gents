@@ -326,11 +326,6 @@ impl Watcher for DefraWatcher {
                 );
             }
 
-            // An event is a rescan signal, not permission to bypass the
-            // durable queue. Fetching this doc directly allowed a stream of
-            // newly-created descendants to overtake an older completion wake
-            // in another session. The next loop iteration performs the global
-            // FIFO + aged-wake scan and still benefits from immediate gossip.
             continue;
         }
     }

@@ -1,7 +1,5 @@
-//! Claude subscription backend: one Messages HTTP wire (`claude_messages`),
-//! authenticated with the agent's `OAuthCredential` (`claude-subscription`)
-//! through the shared single-flight bearer. Login is `gents claude-login`;
-//! refresh is `claude_oauth_refresh`; the `claude` binary is not involved.
+//! Claude subscription backend over Anthropic Messages HTTP, authenticated
+//! with the agent's `OAuthCredential` through the shared single-flight bearer.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -23,11 +21,8 @@ use crate::claude_oauth::{CLAUDE_OAUTH_PRODUCT, CLAUDE_OAUTH_PROVIDER};
 use crate::oauth_credential::{BearerSource, DbCredentialBearer, OAuthRefreshKind};
 use crate::usage_observation::{UsageAccount, UsageReporter};
 
-/// Placeholder endpoint for ClaudeCliSubscription InferenceBackend rows.
 pub const DEFAULT_BACKEND_ENDPOINT: &str = "claude-cli://subscription";
-/// The fixed Anthropic API base for AnthropicApiKey backends.
 pub const ANTHROPIC_API_ENDPOINT: &str = "https://api.anthropic.com/v1";
-/// Default client-facing model slug for ClaudeCliSubscription.
 pub const DEFAULT_MODEL_ID: &str = "claude-opus-5-5";
 
 pub fn default_backend_endpoint() -> &'static str {
@@ -62,8 +57,6 @@ impl<S: BearerSource> fmt::Debug for ClaudeSubscriptionClient<S> {
 }
 
 impl ClaudeSubscriptionClient<DbCredentialBearer> {
-    /// Look the agent's Claude credential up once and bind the shared bearer.
-    /// Fails closed with the `claude-login` hint when no enabled credential exists.
     pub async fn build(
         node: Arc<EmbeddedNode>,
         node_did: &str,
@@ -90,7 +83,6 @@ impl ClaudeSubscriptionClient<DbCredentialBearer> {
 }
 
 impl ClaudeSubscriptionClient<ApiKeyBearer> {
-    /// A Messages client authenticated with an Anthropic API key. No I/O.
     pub fn with_api_key(key: String) -> Self {
         Self {
             bearer: Arc::new(ApiKeyBearer::new(key)),
@@ -171,12 +163,9 @@ impl<S: BearerSource + 'static> CompletionModel for ClaudeSubscriptionModel<S> {
     }
 
     /// Non-streaming turn: drains the same Messages stream `stream` returns
-    /// and folds the text. Calls `stream_messages` directly so the only
-    /// provider invocations in this crate stay inside the owned loop.
-    ///
-    /// Text-only by construction: the owned loop uses `stream()`, so this
-    /// path never maps `tool_use`; a tool-only turn here surfaces as the
-    /// empty-assistant-text error below.
+    /// and folds the text. Text-only by construction: the owned loop uses
+    /// `stream()`, so this path never maps `tool_use`; a tool-only turn here
+    /// surfaces as the empty-assistant-text error below.
     async fn completion(
         &self,
         request: CompletionRequest,

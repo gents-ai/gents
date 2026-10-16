@@ -1,5 +1,4 @@
 #!/bin/sh
-# Refresh vendor/gents-design tarballs from a local gents-design checkout.
 set -eu
 root="$(cd "$(dirname "$0")/.." && pwd)"
 design="${GENTS_DESIGN:-$root/../gents-design}"

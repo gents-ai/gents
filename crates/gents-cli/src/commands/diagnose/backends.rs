@@ -124,9 +124,6 @@ async fn backend_check(
     Ok(json!({"probe_status": observation.probe_status, "discovered_models": names, "error": null}))
 }
 
-/// The `account` a backend report names: the label of the account a principal
-/// OAuth backend runs on, `null` when that account is not on this node; absent
-/// for a backend that uses no account.
 fn account_field(
     backend: &InferenceBackend,
     accounts: &[gents::oauth_credential::AccountSummary],

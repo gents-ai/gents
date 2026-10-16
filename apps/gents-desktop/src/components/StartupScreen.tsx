@@ -21,7 +21,6 @@ const STARTUP_ASIDES = [
   "Aligning the durable timelines.",
 ];
 
-/* one aside after another while startup is under way */
 function useAside() {
   const [index, setIndex] = useState(0);
   useEffect(() => {
@@ -34,8 +33,6 @@ function useAside() {
   return { index, text: STARTUP_ASIDES[index] };
 }
 
-/** Where startup has got to, until the client is ready: each step, the
-    managed server's wait, and on failure the ways on. */
 export function StartupScreen({
   configurationPending = false,
   initConfigStatus,

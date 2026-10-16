@@ -22,7 +22,6 @@ function hydration(
   };
 }
 
-/* a hydration the screen shows: one of the phases it names */
 const visible = (overrides: Partial<VisibleSessionHydration> = {}) =>
   ({ ...hydration(), phase: "serving", ...overrides }) as VisibleSessionHydration;
 

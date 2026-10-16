@@ -48,27 +48,13 @@ def dropUnpairedCalls (msgs : List MessageRow) : List MessageRow :=
   filterCallsBy (resolvedIn msgs) msgs
 
 /-- Global-resolution proof model, valid as a runtime abstraction only under
-unique call IDs. Implement provider narrowing with `sanitizeTurn`; the content
-model has an additional calls-only projection boundary. -/
+unique call IDs. Implement provider narrowing with `sanitizeTurn`. -/
 def sanitizeGlobal (msgs : List MessageRow) : List MessageRow :=
   dropUnpairedCalls (dropOrphanedResults msgs)
 
-/-! ## Per-turn resolution
+/-! ## Per-turn resolution -/
 
-`filterCallsBy` credits an announcement from the *global* resolved set. That is
-what let a later turn reusing a call id resurrect an earlier unpaired
-announcement (`Compaction.reused_call_id_breaks_prefix_stability`), and
-production no longer does it: `drop_unpaired_tool_calls` scopes resolution to
-the active turn via `resolved_keys_per_turn`, mirroring the `pending_calls`
-reset in `drop_orphaned_tool_results`.
-
-The two agree exactly under `UniqueCallIds` (`filterCallsByTurn_eq_filterCallsBy`
-below), which is required when transferring global soundness to the per-turn algorithm.
-Outside that fragment these algorithms differ; the global proof model is not a
-second implementation choice. -/
-
-/-- Results closing the turn that just opened: the leading run of result rows.
-A non-result row ends the turn, matching the `pending_calls` reset. -/
+/-- Results closing the turn that just opened: the leading run of result rows. -/
 def resolvedInTurn : List MessageRow → Finset ToolExecution.ToolCallId
   | [] => ∅
   | row :: rest =>
@@ -76,7 +62,6 @@ def resolvedInTurn : List MessageRow → Finset ToolExecution.ToolCallId
     | .toolResult callId _ => insert callId (resolvedInTurn rest)
     | _ => ∅
 
-/-- Credit an announcement only from its own turn's results. -/
 def filterCallsByTurn : List MessageRow → List MessageRow
   | [] => []
   | row :: rest =>
@@ -90,7 +75,6 @@ def filterCallsByTurn : List MessageRow → List MessageRow
 def dropUnpairedCallsTurn (msgs : List MessageRow) : List MessageRow :=
   filterCallsByTurn msgs
 
-/-- The provider sanitizer production implements. -/
 def sanitizeTurn (msgs : List MessageRow) : List MessageRow :=
   dropUnpairedCallsTurn (dropOrphanedResults msgs)
 
@@ -133,7 +117,6 @@ theorem filterCallsByTurn_cons_ordinary (h : row.kind = .ordinary) :
 
 end TurnReduction
 
-/-- A turn's own results are among the list's results. -/
 theorem resolvedInTurn_subset_resolvedIn (l : List MessageRow) :
     resolvedInTurn l ⊆ resolvedIn l := by
   induction l with

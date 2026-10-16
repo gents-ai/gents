@@ -1,54 +1,5 @@
 //! Grok shim ACP service: initialize, session lifecycle, and stubbed edges.
 //!
-//! This module owns the JSON-RPC 2.0 surface the stock Grok pager drives once
-//! it has registered with the Gents leader socket ([`super::server`]) and its
-//! ACP payloads are forwarded here. It implements:
-//!
-//! - `initialize` — capabilities include persisted session loading.
-//! - `session/load` / `x.ai/session/list` — authorized read-only history,
-//!   replay through the existing projector, and live observation handoff.
-//! - `authenticate` — the single `gents.runtime` auth method always succeeds;
-//!   client credentials are the transport's concern, not a Gents document.
-//! - `session/new` — honors the preferred `_meta.sessionId`, creates exactly
-//!   one `AgentSession` document for the returned id (create-only on the
-//!   `@immutable` `node_did`/`requester_did` fields, matching the runtime's
-//!   `request_session_projection`), and returns the audited nested result
-//!   shape `{"sessionId", "models": {"availableModels", "currentModelId"},
-//!   "_meta"}`. Model, context window, and agent identity all come from
-//!   the bound configuration (`Agent` + `InferenceProfile`), never
-//!   from a per-session override the runtime does not model.
-//! - `session/set_model` — validates against the bound catalog and emits the
-//!   `x.ai/models/update` ext notification. Gents has no per-session model
-//!   override: only the currently bound model is accepted, and unsupported
-//!   model/effort selections fail rather than pretending to change inference.
-//! - `session/set_mode` — records the pager's mode and emits a
-//!   `current_mode_update` session notification. Mode is a client capability
-//!   concern, not an `AgentSession` field.
-//! - `session/prompt` / `session/cancel` — dispatched to the sibling
-//!   [`super::turn::TurnManager`], which owns the connection-scoped pending
-//!   prompt, deferred response, and interrupt lifecycle.
-//! - `x.ai/subagent/get` / `x.ai/subagent/list_running` /
-//!   `x.ai/subagent/cancel` — act only on the sessions caused by sessions
-//!   registered on this connection, using the stock shell's extension DTOs.
-//!   Cancel interrupts the caused session's current turn and is allowed only
-//!   for sessions a connection session started. Any other `x.ai/subagent/*`
-//!   method answers the typed method-not-found (`-32601`).
-//!
-//! Shaped stubs return JSON-RPC method-not-found (`-32601`) with an explicit
-//! owned-transition explanation, never a fabricated success:
-//! - `x.ai/interject` — the owned completion loop has no formally specified
-//!   injection transition; writing a detached `AgentMessage` would not affect
-//!   provider input.
-//! - `x.ai/compact_conversation` — `CompactionEntry` is runtime-owned and has
-//!   no `tokens_before`/`tokens_after` fields; `AgentSession` has no usage
-//!   counters.
-//!
-//! Anything not routed above — including the client-side `terminal/*`
-//! methods, whose shaped not-supported stubs are owned by
-//! [`super::projection::tools`] — falls back to the same explicit
-//! method-not-found error so an unported control edge stays visible on the
-//! wire instead of being silently swallowed.
-//!
 //! All GraphQL values pass through `gents::graphql::escape_graphql_string`
 //! and every query runs in-process on the embedded node through the
 //! `graphql_with_transaction_retry` and `ConfigAccess` owners; no HTTP
@@ -82,9 +33,8 @@ use super::turn::{
 /// JSON-RPC 2.0 error code for a malformed request envelope.
 pub(crate) const JSONRPC_INVALID_REQUEST: i64 = -32600;
 
-/// JSON-RPC 2.0 error code for an unknown/unhandled method. Every shaped stub
-/// in this module answers with exactly this code so the pager classifies the
-/// edge as unsupported rather than failed.
+/// JSON-RPC 2.0 error code for an unknown/unhandled method; every shaped stub
+/// answers with this so the pager classifies the edge as unsupported.
 pub(crate) const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
 
 /// JSON-RPC 2.0 error code for structurally invalid request params.
@@ -93,8 +43,7 @@ pub(crate) const JSONRPC_INVALID_PARAMS: i64 = -32602;
 /// JSON-RPC 2.0 error code for an internal shim failure.
 pub(crate) const JSONRPC_INTERNAL_ERROR: i64 = -32603;
 
-/// The single auth method the shim advertises: Gents runtime identity is the
-/// only supported credential surface.
+/// The single auth method the shim advertises.
 pub(crate) const GENTS_AUTH_METHOD_ID: &str = "gents.runtime";
 
 /// ACP protocol version the shim speaks.
@@ -136,26 +85,16 @@ pub(crate) const MODELS_UPDATE_METHOD: &str = "x.ai/models/update";
 /// Ext notification method that clears the pager's new-session MCP spinner.
 pub(crate) const MCP_INITIALIZED_METHOD: &str = "x.ai/mcp_initialized";
 
-// ---------------------------------------------------------------------------
-// Bound configuration
-// ---------------------------------------------------------------------------
-
-/// Bound model catalog entry derived from the serving configuration.
-///
-/// `model_id` is the wire-facing model identifier: exactly the bound
-/// agent's `model_name`, resolved once at bind time (see
-/// `resolve_bound_model_context`). The backend id remains internal routing
-/// configuration — it is validated during binding but never projected into
-/// the wire-facing `modelId`.
+/// Bound model catalog entry derived from the serving configuration:
+/// `model_id` is exactly the bound agent's `model_name`, resolved once at
+/// bind time; the backend id is never projected into the wire-facing id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BoundModel {
-    /// Wire-facing model identifier (`modelId` on the wire): the bound
-    /// agent's `model_name` exactly.
+    /// Wire-facing model identifier (`modelId` on the wire).
     pub(crate) model_id: String,
     /// Human-readable display name (`name` on the wire).
     pub(crate) name: String,
-    /// Context window from the bound `InferenceProfile`, advertised as
-    /// `meta.totalContextTokens`.
+    /// Context window from the bound `InferenceProfile`.
     pub(crate) total_context_tokens: u64,
 }
 
@@ -164,15 +103,9 @@ impl BoundModel {
         effective_context_window_tokens(self.total_context_tokens)
     }
 
-    /// Serialize this entry into the pager's `availableModels` item shape.
-    ///
-    /// The capability keys are the audited truth, not an aspiration: the
-    /// shim's prompt parser is text-only (images are not natively plumbed
-    /// into `SubmitRequestOptions`), and a selected reasoning effort never
-    /// leaves connection-local state to reach provider inference. Until the
-    /// runtime plumbs either natively, advertising image input or reasoning
-    /// effort would be a false capability, so the catalog stays text-only
-    /// with `supportsReasoningEffort: false` and no advertised effort list.
+    /// The shim's prompt parser is text-only and a selected reasoning effort
+    /// never reaches provider inference; advertising either would be a false
+    /// capability.
     fn catalog_entry(&self) -> Value {
         json!({
             "modelId": self.model_id,
@@ -188,14 +121,8 @@ impl BoundModel {
 }
 
 impl BoundModel {
-    /// Build the `models` object of a `session/new` result.
-    ///
-    /// The audited wire shape nests `availableModels` and `currentModelId`
-    /// under a `models` key — see `recon_input/audited_ledger.json`
-    /// (`session:new-load`) and the live probe's
-    /// `session["models"]["currentModelId"]` read. Splicing the catalog keys
-    /// into the top-level result object breaks the pager, so the nesting is
-    /// asserted by the tests in this file.
+    /// The pager reads `result["models"]["currentModelId"]`; splicing the
+    /// catalog keys into the top-level result breaks it.
     pub(crate) fn models_object(&self) -> Value {
         json!({
             "availableModels": [self.catalog_entry()],
@@ -204,48 +131,33 @@ impl BoundModel {
     }
 }
 
-/// Immutable bound configuration for the ACP service.
-///
-/// Every field is resolved once at bind time from the bound agent and
-/// inference profile (see `grok_shim.rs` assembly); nothing here is
+/// Immutable bound configuration for the ACP service, resolved once at bind
+/// time from the bound agent and inference profile; nothing here is
 /// per-session runtime state.
 #[derive(Clone)]
 pub(crate) struct AcpServiceConfig {
-    /// In-process embedded node used for every GraphQL query/mutation.
     pub(crate) node: Arc<EmbeddedNode>,
     /// Serving node DID (the `@immutable` `AgentSession.node_did` value).
     pub(crate) node_did: Arc<str>,
     /// Bound agent id (stamped on `AgentSession.agent_id`).
     pub(crate) agent_id: Arc<str>,
-    /// Bound model the runtime serves for this agent.
     pub(crate) current_model: BoundModel,
-    /// Grok home the pager reads its `/resume` records from (`$GROK_HOME`,
-    /// else `~/.grok`). `None` disables the record write.
+    /// Grok home the pager reads its `/resume` records from. `None` disables
+    /// the record write.
     pub(crate) grok_home: Option<std::path::PathBuf>,
 }
 
 impl AcpServiceConfig {
-    /// Build the `models` object of a `session/new` result for the currently
-    /// bound model. Delegates to [`BoundModel::models_object`], which owns the
-    /// audited nested shape and its tests.
     pub(crate) fn models_object(&self) -> Value {
         self.current_model.models_object()
     }
 }
 
-// ---------------------------------------------------------------------------
-// Connection-local session state
-// ---------------------------------------------------------------------------
-
-/// Per-session shim state.
-///
-/// Gents documents record session identity (`AgentSession`) and request
-/// history (`AgentRequest`, `AgentMessage`, and `AgentOutputSegment`); they have no cwd, model, or mode
-/// fields. Everything the pager needs that the runtime does not model is
-/// connection-local state here and is never persisted.
+/// Per-session shim state. Gents documents have no cwd, model, or mode
+/// fields; everything the pager needs that the runtime does not model is
+/// connection-local here and is never persisted.
 #[derive(Debug, Clone)]
 struct AcpSessionState {
-    /// Current pager mode id from `session/set_mode`.
     mode_id: String,
     /// Delivery handoff only: discovery begins from this pre-replay time
     /// after the load response has been successfully enqueued.
@@ -295,17 +207,11 @@ impl Drop for SessionLoadReservation<'_> {
     }
 }
 
-/// The `session/set_mode` state commit: record the new mode in the session
-/// registry exactly when the `current_mode_update` notification was
-/// successfully enqueued, inside the common send path's per-session critical
-/// section.
-///
-/// This is the atomicity hinge for `session/set_mode`: because the commit
-/// runs while the session's send lock is still held, a failed send leaves
-/// the mode state untouched (the hook never runs), and two concurrent
-/// `set_mode` calls serialize coherently with their updates — the mode
-/// state always reflects the last *delivered* update, in delivery order.
-/// The hook only ever records connection-local state, so it is infallible.
+/// The `session/set_mode` state commit: record the new mode exactly when the
+/// `current_mode_update` notification was successfully enqueued, inside the
+/// common send path's per-session critical section — so a failed send leaves
+/// the mode state untouched and concurrent `set_mode` calls serialize in
+/// delivery order.
 struct ModeStateCommit<'a> {
     sessions: &'a tokio::sync::Mutex<BTreeMap<String, AcpSessionState>>,
     session_id: String,
@@ -321,19 +227,11 @@ impl AsyncCommit for ModeStateCommit<'_> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Dispatch envelope
-// ---------------------------------------------------------------------------
-
 /// One parsed ACP JSON-RPC frame, dispatch-level only.
-///
-/// The wire envelope and frame codec are owned by [`super::protocol`]; this
-/// is the dispatch-side view of a single decoded ACP payload line.
 #[derive(Debug, Clone)]
 pub(crate) struct AcpRequest {
     /// JSON-RPC request id. `None` marks a notification.
     pub(crate) id: Option<Value>,
-    /// Requested method name.
     pub(crate) method: String,
     /// Request params (`{}` when absent).
     pub(crate) params: Value,
@@ -356,8 +254,6 @@ impl AcpRequest {
             .ok_or_else(|| anyhow::anyhow!("ACP payload has no method"))?
             .to_string();
         let method = internal_method(&method).to_owned();
-        // JSON-RPC 2.0: a request carries an id; a notification does not. A
-        // JSON `null` id is treated as absent, matching the pager's decoder.
         let id = match object.get("id") {
             Some(Value::Null) | None => None,
             Some(id) => Some(id.clone()),
@@ -371,13 +267,10 @@ impl AcpRequest {
     }
 }
 
-/// The wire output of one dispatched frame.
-///
-/// Most notifications are emitted before the response so a pager that drains
-/// until it sees its response id observes the same order the reference agent
-/// produces (for example `x.ai/models/update` before the `session/set_model`
-/// response). MCP initialization completion follows session creation's response,
-/// because the native pager needs that response to attach its session routing.
+/// The wire output of one dispatched frame. Most notifications are emitted
+/// before the response so the pager observes the same order the reference
+/// agent produces; MCP initialization completion follows session creation's
+/// response because the pager needs that response to attach its routing.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct AcpDispatch {
     /// Serialized JSON-RPC notification lines, ordered by the live delegate.
@@ -413,8 +306,8 @@ fn error_line(id: &Value, code: i64, message: &str) -> String {
 }
 
 /// Shape a JSON-RPC notification line.
-/// ACP extensions carry a leading underscore on the JSON-RPC wire. The SDK
-/// strips it before dispatching the extension to Grok's `x.ai/...` handlers.
+/// ACP extensions carry a leading underscore on the JSON-RPC wire; the SDK
+/// strips it before dispatching to Grok's `x.ai/...` handlers.
 pub(super) fn wire_method(method: &str) -> std::borrow::Cow<'_, str> {
     if method.starts_with("x.ai/") {
         std::borrow::Cow::Owned(format!("_{method}"))
@@ -440,16 +333,12 @@ fn notification_line(method: &str, params: &Value) -> String {
     .expect("JSON-RPC notification envelope is serializable")
 }
 
-// ---------------------------------------------------------------------------
 // ACP service
-// ---------------------------------------------------------------------------
 
 /// The ACP service implementing the leader server's delegate.
 pub(crate) struct AcpService {
     config: AcpServiceConfig,
-    /// Connection-scoped prompt/cancel lifecycle (sibling slice `turn.rs`).
     turns: Arc<TurnManager>,
-    /// Request-id-scoped durable projections (sibling slice `projection.rs`).
     projections: Arc<ProjectionEngine>,
     /// Connection-local session registry.
     sessions: tokio::sync::Mutex<BTreeMap<String, AcpSessionState>>,
@@ -457,20 +346,15 @@ pub(crate) struct AcpService {
     /// The connection's assigned leader client id, set when the factory binds
     /// the registering client's identity to this service.
     client_id: Option<u64>,
-    /// The registering client's registration mode (stdio pager or headless
-    /// client), stored when this per-connection service is constructed by the
-    /// delegate factory.
+    /// The registering client's registration mode, stored by the delegate
+    /// factory.
     registered_mode: Option<RegisterMode>,
-    /// The registering client's advertised capabilities, stored when this
-    /// per-connection service is constructed by the delegate factory.
+    /// The registering client's advertised capabilities, stored by the
+    /// delegate factory.
     registered_capabilities: Option<ClientCapabilities>,
 }
 
 impl AcpService {
-    /// Assemble the service from bound configuration and the sibling
-    /// engines. The assembly slice (`grok_shim.rs`) constructs the
-    /// [`TurnManager`] and [`ProjectionEngine`] from the same embedded node
-    /// and bound agent/model/context configuration.
     pub(super) fn new(
         config: AcpServiceConfig,
         turns: Arc<TurnManager>,
@@ -488,13 +372,9 @@ impl AcpService {
         }
     }
 
-    /// Store the registering client's identity and capabilities.
-    ///
-    /// The leader constructs this service per registered connection through
-    /// the delegate factory, then hands it the connection's assigned client id
-    /// plus the registration mode and advertised capabilities. The ACP service
-    /// derives the `yoloMode` / `autoMode` / `clientTerminal` injection for
-    /// `session/new` from the stored capabilities.
+    /// Store the registering client's identity and capabilities; `session/new`
+    /// derives `yoloMode`/`autoMode`/`clientTerminal` from the stored
+    /// capabilities.
     pub(super) fn register_client_identity(
         &mut self,
         client_id: u64,
@@ -506,16 +386,10 @@ impl AcpService {
     }
 
     /// Dispatch one decoded ACP payload line, sending every turn
-    /// notification live through `sender` as it is produced.
-    ///
-    /// This is the dispatch core shared by tests (which use a `Buffer`
-    /// sender) and the production delegate: the delegate builds a `Live`
-    /// sender over the connection's [`AcpOutbound`], so the user echo and
-    /// every novel durable projection update reach the pager immediately,
-    /// and only the deferred `session/prompt` response is written by the
-    /// delegate after the turn resolves. A buffered sender instead collects
-    /// the same lines for the dispatch result — there is no second code
-    /// path that skips the projection semantics.
+    /// notification live through `sender` as it is produced. This is the
+    /// dispatch core shared by the production delegate and the headless
+    /// buffered path; there is no second code path that skips the projection
+    /// semantics.
     pub(super) async fn dispatch_with_sender(
         &self,
         payload: &str,
@@ -544,8 +418,7 @@ impl AcpService {
         self.dispatch_request(request, prompt_sender).await
     }
 
-    /// Dispatch a notification. Notifications have no response body; an
-    /// unknown method is logged and dropped rather than answered.
+    /// Dispatch a notification; notifications have no response body.
     async fn dispatch_notification(&self, request: AcpRequest) -> AcpDispatch {
         match request.method.as_str() {
             SESSION_CANCEL_METHOD => {
@@ -576,16 +449,6 @@ impl AcpService {
     }
 
     /// Dispatch a request, mapping every handler failure to a shaped error.
-    ///
-    /// Session-update notifications were already enqueued live through the
-    /// common send path while the handler ran (the per-session send lock
-    /// makes allocation order equal enqueue order). A buffered sender
-    /// collects those same lines; they are drained here — in enqueue order,
-    /// before the response — so the headless dispatch result observes
-    /// exactly what a live client would have received. A `RequestOutcome`
-    /// notification value that never rode the session-update path (the
-    /// `x.ai/models/update` catalog refresh) is still emitted before the
-    /// response.
     async fn dispatch_request(
         &self,
         request: AcpRequest,
@@ -599,7 +462,6 @@ impl AcpService {
                     .notifications
                     .iter()
                     .map(|params| {
-                        // Each notification value carries its own method.
                         let notification_method = params
                             .get("__method")
                             .and_then(Value::as_str)
@@ -620,8 +482,6 @@ impl AcpService {
             Err(error) => {
                 let code = error_code_for(&error);
                 tracing::warn!(%error, %method, code, "grok shim ACP request failed");
-                // Lines already enqueued before the failure stay observable:
-                // a live client would have received them.
                 AcpDispatch {
                     notifications: prompt_sender.take_lines().await,
                     response: Some(error_line(&id, code, &error.to_string())),
@@ -656,9 +516,6 @@ impl AcpService {
                     result,
                 })
             }
-            // Gents has no x.ai subscription or cloud credit ledger. The
-            // native nullable config communicates absence without invented
-            // balances, subscription tiers, or an unsupported-method banner.
             "x.ai/billing" => Ok(RequestOutcome {
                 notifications: Vec::new(),
                 result: json!({"result":{"config":null,"on_demand_enabled":false}}),
@@ -726,8 +583,6 @@ impl AcpService {
             INTERJECT_METHOD | COMPACT_CONVERSATION_METHOD => {
                 Err(shaped_stub_error(&request.method, &request.params))
             }
-            // Any other `x.ai/subagent/*` method falls through to the typed
-            // `ShapedMethodNotFound` arm so it answers the exact `-32601`.
             SUBAGENT_GET_METHOD | SUBAGENT_LIST_RUNNING_METHOD | SUBAGENT_CANCEL_METHOD => {
                 self.handle_subagent_ext_request(request.method.as_str(), request)
                     .await
@@ -762,13 +617,8 @@ impl AcpService {
                 })
             }
             other if other.starts_with("terminal/") => {
-                // The client-side terminal/* methods are owned by
-                // `projection::tools`: its shaped errors must be preserved
-                // instead of collapsing into the generic method-not-found
-                // below. `terminal/wait_for_exit` carries the pager's exact
-                // `METHOD_NOT_FOUND` message
-                // (`wait_for_exit_not_supported("pager")`); the other known
-                // terminal methods carry the shim's own shaped wording.
+                // `projection::tools` owns the shaped terminal/* errors; they
+                // must not collapse into the generic method-not-found below.
                 let error = super::projection::tools::handle_terminal_client_method(other)
                     .expect_err("terminal client methods are never supported");
                 Err(anyhow::Error::new(ShapedMethodNotFound {
@@ -780,7 +630,6 @@ impl AcpService {
                 }))
             }
             other => {
-                // Unrouted methods stay explicit on the wire.
                 Err(anyhow::Error::new(ShapedMethodNotFound {
                     message: format!("method {other:?} is not supported by the Gents Grok shim"),
                 }))
@@ -788,10 +637,6 @@ impl AcpService {
         }
     }
 
-    /// Handle `initialize`.
-    ///
-    /// Session loading replays persisted observations through the same
-    /// projection owner used for live delivery.
     async fn handle_initialize(&self, request: &AcpRequest) -> Result<RequestOutcome> {
         tracing::debug!(
             request_id = ?request.id,
@@ -818,11 +663,6 @@ impl AcpService {
         })
     }
 
-    /// Handle `authenticate`.
-    ///
-    /// The only advertised method is `gents.runtime`; an unknown `methodId`
-    /// is an explicit error, not a silent success. No credential document is
-    /// written: the runtime's own identity is the credential.
     async fn handle_authenticate(&self, request: &AcpRequest) -> Result<RequestOutcome> {
         let method_id = request
             .params
@@ -843,30 +683,6 @@ impl AcpService {
         })
     }
 
-    /// Handle `session/new`.
-    ///
-    /// The preferred `_meta.sessionId` is honored verbatim when non-empty;
-    /// otherwise a fresh uuid is minted. Exactly one `AgentSession` document
-    /// exists for the returned id afterwards — create-only when absent,
-    /// matching the runtime's `request_session_projection` semantics, and
-    /// never rewriting the `@immutable` `node_did`/`requester_did` fields on
-    /// an existing row.
-    ///
-    /// `cwd` and `mcpServers` are accepted and deliberately not persisted:
-    /// `AgentSession` has no cwd field and the runtime serves from its own
-    /// working directory, so fabricating either would be a schema violation.
-    /// No `AgentRequest` row is created here; the runtime materializes requests
-    /// through normal execution, and fabricating one would desynchronize the
-    /// durable timeline.
-    ///
-    /// Mode capabilities are **connection-scoped, not request-scoped**: the
-    /// registering client advertised `yolo_mode`/`auto_mode`/`terminal` in
-    /// its register envelope, and the reference leader injects the
-    /// corresponding `_meta.yoloMode`/`autoMode`/`clientTerminal` keys from
-    /// those capabilities. The per-request `_meta` still wins when the pager
-    /// stamps an explicit override (`apply_permission_mode_override`), but an
-    /// absent key falls back to the registered capability — never to `false`
-    /// while the connection registered `true`.
     async fn handle_session_new(&self, request: &AcpRequest) -> Result<RequestOutcome> {
         let meta = request
             .params
@@ -881,9 +697,6 @@ impl AcpService {
             .map(ToOwned::to_owned);
         let requested_model = meta.get("modelId").and_then(Value::as_str);
 
-        // Registration-derived capabilities: the connection's stored
-        // registration, with the request `_meta` acting only as an explicit
-        // per-session override.
         let registered = self.registered_capabilities.as_ref();
         let yolo_mode = meta
             .get("yoloMode")
@@ -926,18 +739,9 @@ impl AcpService {
         }
         tracing::info!(%session_id, "grok shim session/new");
 
-        // Audited result shape: sessionId + nested models + _meta. The
-        // `models` object must stay nested — the pager reads
-        // `result["models"]["currentModelId"]`. `clientTerminal` tells the
-        // agent whether terminal/* commands route to the client; the
-        // reference pager registers `terminal: false`, so the shaped
-        // terminal/* not-supported stubs stay the answered agent.
+        // The pager reads result["models"]["currentModelId"]; clientTerminal
+        // tells the agent whether terminal/* commands route to the client.
         Ok(RequestOutcome {
-            // The stock pager seeds an MCP-initialization spinner before it
-            // sends session/new and clears it only when this extension
-            // notification arrives. Gents does not initialize the request's
-            // client-side MCP servers, so report the truthful zero count once
-            // the durable and connection-local session creation both succeed.
             notifications: vec![json!({
                 "__method": MCP_INITIALIZED_METHOD,
                 "sessionId": session_id,
@@ -957,12 +761,8 @@ impl AcpService {
         })
     }
 
-    /// Replay existing observations, then attach after the RPC response.
-    /// Loading does not reactivate or otherwise mutate AgentSession rows.
-    /// Stock grok lists every session the leader returns but only sends
-    /// `session/load` for one that also has a local record under its grok
-    /// home; the shim writes that record so `/resume` can reattach. A write
-    /// failure is logged, never surfaced: the durable session is the
+    /// Write the pager's `/resume` record so stock grok can reattach; a write
+    /// failure is logged, never surfaced — the durable session is the
     /// `AgentSession` document, not grok's file.
     fn write_pager_session_record(&self, request: &AcpRequest, session_id: &str) {
         let Some(grok_home) = self.config.grok_home.as_deref() else {
@@ -1029,8 +829,7 @@ impl AcpService {
         })
     }
 
-    /// Called for this load RPC only, after its response is enqueued. A
-    /// concurrent unrelated RPC must not release another load's handoff.
+    /// Called for this load RPC only, after its response is enqueued.
     async fn activate_loaded_session(&self, payload: &str, sender: &PromptSender) {
         let Ok(request) = AcpRequest::from_payload(payload) else {
             return;
@@ -1059,21 +858,6 @@ impl AcpService {
         }
     }
 
-    /// Handle `session/set_model`.
-    ///
-    /// The runtime has no per-session model field: the bound
-    /// `Agent` selects the model every request is served with. The
-    /// switch therefore validates against the bound catalog and emits
-    /// `x.ai/models/update` so the pager refreshes its catalog in place
-    /// (leaving current/effort alone, as the reference `update_catalog`
-    /// does).
-    ///
-    /// `_meta.reasoningEffort` is rejected explicitly as invalid params:
-    /// the shim advertises `supportsReasoningEffort: false`, and the
-    /// catalog's absence of an effort list is the pager's contract for
-    /// "unsupported" — so accepting (and silently storing) an effort the
-    /// catalog never advertised would fabricate a capability that never
-    /// reaches `SubmitRequestOptions` or provider inference anyway.
     async fn handle_session_set_model(&self, request: &AcpRequest) -> Result<RequestOutcome> {
         let session_id = required_session_id(&request.params)?;
         let requested = request
@@ -1103,8 +887,6 @@ impl AcpService {
             )));
         }
 
-        // Validate the session exists before answering: an unknown session
-        // never receives a fabricated catalog switch.
         {
             let sessions = self.sessions.lock().await;
             if !sessions.contains_key(&session_id) {
@@ -1113,8 +895,6 @@ impl AcpService {
         }
 
         tracing::info!(%session_id, %requested, "grok shim session/set_model");
-        // Empty result per the audited wire; the catalog refresh rides the
-        // x.ai/models/update ext notification emitted before the response.
         Ok(RequestOutcome {
             notifications: vec![{
                 let mut notification = self.config.models_object();
@@ -1125,29 +905,6 @@ impl AcpService {
         })
     }
 
-    /// Handle `session/set_mode`.
-    ///
-    /// Mode is a client capability concern with no `AgentSession` field; the
-    /// switch records it and emits a `current_mode_update` session
-    /// notification so the pager renders the new mode.
-    ///
-    /// The mode update rides the connection's common session-update send
-    /// path: the per-session send lock is held across reserve → stamp →
-    /// enqueue → commit, so the update's event id is allocated in the same
-    /// order it is enqueued. This is what keeps a `set_mode` racing a live
-    /// prompt on the same session from delivering `session-2` before
-    /// `session-1` (the pager deduplicates monotonically and would drop the
-    /// real mode update as stale). The event id is consumed only by the
-    /// successful enqueue; a failed send rolls the reservation back and the
-    /// request surfaces the failure.
-    ///
-    /// **State/send atomicity:** the mode state is committed inside the
-    /// channel's commit hook — the same critical section that enqueued the
-    /// notification — so a failed send leaves the mode state untouched and
-    /// concurrent mode changes serialize coherently with the update. A
-    /// `set_mode` whose notification cannot be enqueued fails the request
-    /// without leaving the session's recorded mode pointing at a mode the
-    /// pager never saw acknowledged.
     async fn handle_session_set_mode(
         &self,
         request: &AcpRequest,
@@ -1162,8 +919,8 @@ impl AcpService {
             .filter(|value| !value.is_empty())
             .ok_or_else(|| invalid_params("session/set_mode requires a non-empty modeId"))?;
 
-        // Validate the session exists before any send: an unknown session
-        // must fail without touching the sequencer or the wire.
+        // An unknown session must fail without touching the sequencer or
+        // the wire.
         {
             let sessions = self.sessions.lock().await;
             if !sessions.contains_key(&session_id) {
@@ -1172,14 +929,8 @@ impl AcpService {
         }
 
         // The mode update shares the projection sequencer's per-session
-        // event-id space with the user echo and the projected updates, so a
-        // `set_mode` and a prompt on the same session can never stamp the
-        // same eventId (the pager deduplicates non-replay counters by id).
-        // The mode state is committed inside the hook — after the line was
-        // enqueued through the actual sender (the live `AcpOutbound` in
-        // production, the headless buffer in tests), never before — so a
-        // failed send consumes no event id and leaves the mode state at its
-        // previous value.
+        // event-id space with the user echo, so a `set_mode` and a prompt on
+        // the same session can never stamp the same eventId.
         let commit = ModeStateCommit {
             sessions: &self.sessions,
             session_id: session_id.clone(),
@@ -1224,26 +975,11 @@ impl AcpService {
         })
     }
 
-    /// Handle `session/prompt` by delegating the whole turn to the sibling
-    /// [`TurnManager`].
-    ///
-    /// The turn manager owns the connection-scoped pending prompt, registers
-    /// the runtime request id before the first fallible outbound send, keeps
-    /// the JSON-RPC response deferred until terminalization, and streams the
-    /// turn's `session/update` notifications through `sender` — live through
-    /// the connection's [`AcpOutbound`] in production, buffered for the
-    /// headless dispatch path. The result is the audited `stopReason` value
-    /// the pager's drain loop waits for.
     async fn handle_session_prompt(
         &self,
         request: &AcpRequest,
         prompt_sender: &PromptSender,
     ) -> Result<RequestOutcome> {
-        // The prompt shape is caller-controlled: every parser failure from
-        // turn.rs (missing/empty prompt, block without text, invalid
-        // screenMode, missing sessionId) is a client invalid-params error,
-        // wrapped here at the handler boundary without modifying turn.rs.
-        // The source message is preserved verbatim for diagnostics.
         let parsed = parse_prompt_request(&request.params, request.id.clone())
             .map_err(|error| invalid_params(error.to_string()))?;
         {
@@ -1257,9 +993,6 @@ impl AcpService {
                 ));
             }
         }
-        // Turn-lifecycle failures after a well-formed prompt are operational
-        // (submission/runtime/send) and stay internal `-32603`; the
-        // caller-controlled shape validation happened in the parse above.
         if let [block] = parsed.prompt.as_slice() {
             if block.kind == "text"
                 && block
@@ -1271,8 +1004,6 @@ impl AcpService {
                     .map_err(|error| invalid_params(error.to_string()))?
                     .filter(|command| !matches!(command, super::goals::GoalCommand::Create { .. }))
                 {
-                    // A stock slash control is an operator action, not a
-                    // model prompt. Never ask inference to interpret pause.
                     super::sessions::load(
                         &self.config.node,
                         &self.config.node_did,
@@ -1312,21 +1043,12 @@ impl AcpService {
             .turns
             .handle_prompt(parsed, prompt_sender, &self.projections)
             .await?;
-        // Every turn notification was already enqueued through the common
-        // session-update send path while the turn ran — live through the
-        // connection's [`AcpOutbound`], buffered for the headless dispatch
-        // path, where `dispatch_request` drains the buffer into the result.
         Ok(RequestOutcome {
             notifications: Vec::new(),
             result: stop_reason,
         })
     }
 
-    /// Route a known `x.ai/subagent/*` inspection request to the caused
-    /// sessions leaf. The connection's session boundary is enforced before
-    /// any read: stock get requests carry only subagentId, whereas
-    /// list_running requires sessionId; an optional explicit session is
-    /// validated equally.
     async fn handle_subagent_ext_request(
         &self,
         method: &str,
@@ -1383,15 +1105,10 @@ impl AcpService {
         .await?;
         Ok(RequestOutcome {
             notifications: Vec::new(),
-            // The stock shell wraps extension DTOs in ExtMethodResult.
             result: json!({"result": result}),
         })
     }
 }
-
-// ---------------------------------------------------------------------------
-// Delegate binding
-// ---------------------------------------------------------------------------
 
 /// A JSON-RPC method-not-found failure, distinguished from an internal error
 /// so the dispatcher can shape the envelope with the exact audited code.
@@ -1408,9 +1125,6 @@ impl std::fmt::Display for ShapedMethodNotFound {
 
 impl std::error::Error for ShapedMethodNotFound {}
 
-/// Build the shaped method-not-found error for the remaining audited
-/// stubs, carrying the explicit owned-transition explanation the audit
-/// requires. None of these stubs touches a document.
 fn shaped_stub_error(method: &str, params: &Value) -> anyhow::Error {
     let session = optional_session_id(params).unwrap_or_default();
     let message = match method {
@@ -1433,20 +1147,6 @@ fn shaped_stub_error(method: &str, params: &Value) -> anyhow::Error {
     anyhow::Error::new(ShapedMethodNotFound { message })
 }
 
-/// Map a handler error to its JSON-RPC code.
-///
-/// Classification is type-driven, never by message string matching:
-/// - [`ShapedMethodNotFound`] (shaped stubs, unrouted methods, the
-///   `terminal/*` client methods) is the audited `-32601`.
-/// - [`InvalidParams`] (caller-controlled shape/value validation: the
-///   `session/prompt` parser errors, missing/empty `sessionId`/`modelId`/
-///   `modeId`, a model outside the bound catalog, an unsupported auth
-///   method, `_meta.reasoningEffort` on an unadvertised feature,
-///   malformed subagent params — including a missing/blank/non-string
-///   `sessionId` on the known subagent methods) is `-32602`.
-/// - Anything else is an operational failure (GraphQL/storage/outbound/
-///   runtime) and stays internal `-32603`, its message surfaced verbatim
-///   for diagnosis.
 fn error_code_for(error: &anyhow::Error) -> i64 {
     if error.downcast_ref::<ShapedMethodNotFound>().is_some() {
         JSONRPC_METHOD_NOT_FOUND
@@ -1457,11 +1157,8 @@ fn error_code_for(error: &anyhow::Error) -> i64 {
     }
 }
 
-/// A caller-controlled validation failure: the request's params were
-/// structurally or semantically invalid for the method. Distinguished from
-/// an internal failure so the dispatcher can answer the exact JSON-RPC
-/// invalid-params code (`-32602`) while preserving the source message for
-/// diagnostics.
+/// A caller-controlled validation failure, answered with the JSON-RPC
+/// invalid-params code while preserving the source message.
 #[derive(Debug)]
 struct InvalidParams {
     message: String,
@@ -1503,14 +1200,10 @@ fn optional_session_id(params: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// Create the `AgentSession` document for `session_id` if absent.
-///
-/// Mirrors the runtime's `request_session_projection`: create the canonical
-/// session when it does not exist and reopen it by clearing `closed_at`. The
-/// immutable identity fields are only ever supplied on create, and — matching
-/// the runtime's claim-admission agent — a row
-/// bound to a different agent id *or* a different immutable `node_did`
-/// is an explicit error rather than a silent rewrite of session identity.
+/// Create the `AgentSession` document for `session_id` if absent, mirroring
+/// the runtime's `request_session_projection` semantics: immutable identity
+/// fields are only ever supplied on create, and a row bound to a different
+/// agent id or `node_did` is an explicit error rather than a silent rewrite.
 async fn ensure_session_document(config: &AcpServiceConfig, session_id: &str) -> Result<()> {
     let escaped_session_id = escape_graphql_string(session_id);
     let lookup = format!(
@@ -1574,8 +1267,6 @@ async fn ensure_session_document(config: &AcpServiceConfig, session_id: &str) ->
     );
     let escaped_node_did = escape_graphql_string(&config.node_did);
     let escaped_agent_id = escape_graphql_string(&config.agent_id);
-    // DateTime fields round-trip through the "....Z" form the runtime's own
-    // fixtures use; to_rfc3339() emits "+00:00" instead.
     let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let escaped_created_at = escape_graphql_string(&created_at);
     if rows.is_empty() {
@@ -1594,7 +1285,6 @@ async fn ensure_session_document(config: &AcpServiceConfig, session_id: &str) ->
             .write("grok.session.create", &create)
             .await?;
     } else {
-        // Reactivate an existing row without touching the immutable fields.
         let update = format!(
             r#"mutation {{
                 update_AgentSession(
@@ -1613,14 +1303,6 @@ async fn ensure_session_document(config: &AcpServiceConfig, session_id: &str) ->
 }
 
 /// Bind the service to the leader server's delegate trait.
-///
-/// `spawn_leader` takes an `Arc<dyn AcpDelegate>`, so the trait must be
-/// object-safe, and the workspace forbids adding an `async-trait` dependency
-/// to this crate. The object-safe form is therefore a borrowed boxed future
-/// over the payload line that [`super::protocol`] decodes from the
-/// `{"type":"acp","payload":"..."}` envelope. The exact trait signature is
-/// owned by the `server` slice; convergence reconciles this one impl block
-/// if the sibling chose an equivalent spelling.
 impl AcpDelegate for AcpService {
     fn handle_acp<'a>(
         &'a self,
@@ -1644,20 +1326,12 @@ impl AcpDelegate for AcpService {
             } else {
                 None
             };
-            // The live production path: every notification the turn produces
-            // — the user echo plus each novel durable projection update — is
-            // sent through the connection's outbound as it happens, and the
-            // deferred `session/prompt` response is sent here once the turn
-            // resolves. Notifications that resolve before the turn (model
-            // catalog updates, mode updates) still precede their response.
             let sender = PromptSender::Live {
                 outbound: outbound.clone(),
             };
             let dispatch = self.dispatch_with_sender(payload, &sender).await;
-            // The native pager attaches routing from session/new's response.
-            // An earlier MCP completion can be received yet dropped, leaving
-            // its Starting session spinner alive indefinitely. Other extension
-            // notifications keep their established pre-response ordering.
+            // The MCP completion must follow session/new's response so the
+            // pager has attached the session's routing.
             let (after_response, before_response): (Vec<_>, Vec<_>) = dispatch
                 .notifications
                 .into_iter()
@@ -1699,9 +1373,6 @@ impl AcpDelegate for AcpService {
     }
 }
 
-/// Test-only buffered dispatch: run the full dispatch through a `Buffer`
-/// sender so the notifications surface as dispatch notifications after the
-/// frame resolves, without a live connection.
 #[cfg(test)]
 impl AcpService {
     pub(super) async fn handle_acp_payload(&self, payload: &str) -> AcpDispatch {
@@ -1714,10 +1385,6 @@ impl AcpService {
         dispatch
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -1740,15 +1407,8 @@ mod tests {
         }
     }
 
-    /// Build the service configuration over a throwaway node.
-    ///
-    /// The staging `TempDir` is returned *first* so an ordinary
-    /// `let (_staging, config) = config().await;` binding drops the node
-    /// (inside the config/service) before the `TempDir`: the node's storage
-    /// path lives inside the guard's directory and must not be deleted out
-    /// from under a still-alive node. The guard is never abandoned with
-    /// `keep()` or leaked with `mem::forget`; it cleans the directory up
-    /// when the test ends.
+    /// The staging `TempDir` is returned first so the node drops before the
+    /// guard deletes its storage directory.
     async fn config() -> (tempfile::TempDir, AcpServiceConfig) {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let node = Arc::new(
@@ -1771,18 +1431,6 @@ mod tests {
         )
     }
 
-    /// Build a service over a throwaway node with schemas ensured.
-    ///
-    /// The sibling constructors are the assembly slice's seam: `TurnManager`
-    /// and `ProjectionEngine` are built from the same embedded node. Their
-    /// exact constructor signatures are owned by those slices and reconciled
-    /// at convergence.
-    ///
-    /// The staging `TempDir` guard is returned *first*: the ordinary binding
-    /// `let (_staging, service) = test_service().await;` then guarantees the
-    /// service (and its node) drop before the `TempDir` deletes the node's
-    /// storage directory, because tuple/struct fields drop in declaration
-    /// order. The service/node must drop before the `TempDir` in every test.
     async fn test_service() -> (tempfile::TempDir, AcpService) {
         let (staging, config) = config().await;
         let identity = gents::KeyIdentity::load_or_create(staging.path().join("actor.key"), None)
@@ -2416,11 +2064,6 @@ mod tests {
             child.caused_by_parent_request_doc_id.as_deref().unwrap(),
         )
         .await;
-        // The real accepted parent/child turns above legitimately consumed
-        // model tokens. Pin that runtime-owned baseline before adding the
-        // synthetic accounting rows so this assertion proves attribution,
-        // including exclusion of the foreign physical owner, without
-        // pretending the live calls did not occur.
         RuntimeControlFixture::stop_runtime_parts(&fixture.shutdown, &mut fixture.runtime).await;
         let baseline = service
             .handle_acp_payload(&request_payload(
@@ -2599,8 +2242,6 @@ mod tests {
         )
         .await
         .unwrap();
-        // As in production, task kill reaches the runtime's own background
-        // execution owner; a separate registry cannot prove it owns the process.
         let projections = Arc::new(
             ProjectionEngine::new(
                 node.clone(),
@@ -2763,8 +2404,6 @@ mod tests {
         serde_json::from_value(rows[0].clone()).unwrap()
     }
 
-    /// Build a service whose `create_agent_request` seam points at a live
-    /// mock GraphQL endpoint forwarding to the embedded node.
     async fn test_service_with_graphql(node: Arc<EmbeddedNode>, graphql: String) -> AcpService {
         let identity_dir = tempfile::tempdir().expect("identity tempdir");
         let identity =
@@ -2812,8 +2451,6 @@ mod tests {
         AcpService::new(config, turns, projections)
     }
 
-    /// A mock GraphQL endpoint forwarding every query to the embedded node,
-    /// so `create_agent_request` writes real durable rows.
     async fn spawn_mock_graphql(node: Arc<EmbeddedNode>) -> String {
         async fn handler(
             axum::extract::State(node): axum::extract::State<Arc<EmbeddedNode>>,
@@ -2842,10 +2479,6 @@ mod tests {
         format!("http://{addr}/")
     }
 
-    /// The live delegate path (`AcpDelegate::handle_acp` over a real
-    /// `AcpOutbound`): the user echo and every novel durable projection
-    /// update stream through the outbound *before* the deferred
-    /// `session/prompt` response, in that wire order.
     #[tokio::test]
     async fn delegate_streams_updates_live_before_the_response() {
         let (_staging, config) = config().await;
@@ -2857,7 +2490,6 @@ mod tests {
         let service = test_service_with_graphql(node, graphql).await;
         let node_did = service.config.node_did.to_string();
 
-        // Create the session first so the prompt's session is known.
         service
             .handle_acp_payload(&request_payload(
                 "session/new",
@@ -2874,14 +2506,11 @@ mod tests {
             }),
         );
 
-        // The live outbound channel the delegate sends through.
         let (frames_tx, mut frames_rx) = tokio::sync::mpsc::unbounded_channel::<
             crate::commands::grok_shim::protocol::ServerEnvelope,
         >();
         let outbound = AcpOutbound::for_frames(frames_tx);
 
-        // Materialize the turn's durable output while the delegate runs:
-        // an assistant row, then terminalization.
         let node_for_seed = config.node.clone();
         let seed_handle = tokio::spawn(async move {
             loop {
@@ -2939,8 +2568,6 @@ mod tests {
             }
         });
 
-        // Drive the delegate to completion: it sends the echo and every
-        // novel projection update live, then the response.
         let service = Arc::new(service);
         let delegate_service = service.clone();
         let handle = tokio::spawn(async move {
@@ -2950,7 +2577,6 @@ mod tests {
                 .expect("delegate should succeed")
         });
 
-        // Collect the outbound frames until the response arrives.
         let mut frames: Vec<Value> = Vec::new();
         let response_seen = loop {
             let frame = tokio::time::timeout(std::time::Duration::from_secs(30), frames_rx.recv())
@@ -2994,11 +2620,9 @@ mod tests {
             echo_index < answer_index,
             "the echo must precede the answer, got {kinds:?}"
         );
-        // The response is the final frame.
         let last = frames.last().expect("response frame");
         assert_eq!(last["id"], 1, "the deferred response closes the stream");
         assert_eq!(last["result"]["stopReason"], "end_turn");
-        // Every streamed notification carries the turn's promptId.
         for frame in &frames[..frames.len() - 1] {
             assert_eq!(frame["params"]["_meta"]["promptId"], "prompt-live");
         }
@@ -3009,7 +2633,6 @@ mod tests {
     #[test]
     fn models_object_is_nested_and_complete() {
         let models = bound_model().models_object();
-        // THE audited shape: nested under "models", not spliced to top level.
         assert_eq!(
             models["currentModelId"], "GLM-5.3-NVFP4",
             "currentModelId must live inside the models object"
@@ -3020,28 +2643,10 @@ mod tests {
         assert_eq!(available.len(), 1);
         assert_eq!(available[0]["modelId"], "GLM-5.3-NVFP4");
         assert_eq!(available[0]["meta"]["totalContextTokens"], 262_144);
-        // Truthful capabilities: the shim's prompt parser is text-only and
-        // a selected reasoning effort never reaches SubmitRequestOptions,
-        // so the catalog must not advertise either.
-        assert_eq!(
-            available[0]["meta"]["acceptsImages"], false,
-            "images are not natively plumbed; advertising them would be false"
-        );
-        assert_eq!(
-            available[0]["meta"]["inputModalities"],
-            json!(["text"]),
-            "the catalog is text-only"
-        );
-        assert_eq!(
-            available[0]["meta"]["supportsReasoningEffort"], false,
-            "reasoning effort is not plumbed to provider inference"
-        );
-        // Absence of the effort list is the pager's contract for
-        // "unsupported" — the list must not be advertised at all.
-        assert!(
-            available[0]["meta"].get("reasoningEfforts").is_none(),
-            "no effort list is advertised while the feature is unsupported"
-        );
+        assert_eq!(available[0]["meta"]["acceptsImages"], false);
+        assert_eq!(available[0]["meta"]["inputModalities"], json!(["text"]));
+        assert_eq!(available[0]["meta"]["supportsReasoningEffort"], false);
+        assert!(available[0]["meta"].get("reasoningEfforts").is_none());
     }
 
     #[test]
@@ -3063,7 +2668,6 @@ mod tests {
         let entry = bound_model().catalog_entry();
         assert!(entry.get("meta").is_some());
         assert_eq!(entry["modelId"], "GLM-5.3-NVFP4");
-        // The display name falls back to the raw id when absent; ours is set.
         assert_eq!(entry["name"], "GLM 5.3 NVFP4");
     }
 
@@ -3091,7 +2695,6 @@ mod tests {
         assert!(AcpRequest::from_payload("[]").is_err());
         assert!(AcpRequest::from_payload("{}").is_err());
         assert!(AcpRequest::from_payload("{\"id\":1}").is_err());
-        // A null id is a notification, matching the pager's decoder.
         let null_id =
             AcpRequest::from_payload("{\"jsonrpc\":\"2.0\",\"id\":null,\"method\":\"x\"}")
                 .expect("parse");
@@ -3205,22 +2808,13 @@ mod tests {
         assert_eq!(error_code_for(&missing_session), -32602);
         let internal = anyhow::anyhow!("boom");
         assert_eq!(error_code_for(&internal), -32603);
-        // Classification is type-driven: an internal error whose message
-        // happens to mention sessionId must still be internal, never
-        // reclassified by string matching.
         let internal_looking =
             anyhow::anyhow!("storage failed while reading session requires a non-empty sessionId");
         assert_eq!(error_code_for(&internal_looking), -32603);
         let typed = invalid_params("any message");
         assert_eq!(error_code_for(&typed), -32602);
-        // The wrapped turn.rs parser error classifies as invalid params while
-        // preserving the source message.
         let parser_error =
             super::super::turn::parse_prompt_request(&json!({}), None).expect_err("missing params");
-        assert!(
-            parser_error.to_string().contains("session/prompt"),
-            "the source parser message is preserved: {parser_error}"
-        );
         let wrapped = invalid_params(parser_error.to_string());
         assert_eq!(error_code_for(&wrapped), -32602);
         assert_eq!(
@@ -3250,8 +2844,6 @@ mod tests {
             Some("s1".to_string())
         );
     }
-
-    // -- Service tests (node-backed) ----------------------------------------
 
     #[tokio::test]
     async fn initialize_advertises_persisted_session_loading_and_gents_auth() {
@@ -3356,7 +2948,6 @@ mod tests {
         let response = parse_response(dispatch.response.as_deref().expect("response line"));
         let result = &response["result"];
         assert_eq!(result["sessionId"], "grok-edge-preferred");
-        // THE audited read path: result["models"]["currentModelId"].
         assert_eq!(
             result["models"]["currentModelId"], "GLM-5.3-NVFP4",
             "session/new must return models.currentModelId, not a top-level key"
@@ -3377,19 +2968,9 @@ mod tests {
         assert_eq!(result["_meta"]["modelId"], "GLM-5.3-NVFP4");
     }
 
-    /// Production registration-to-session wiring: a service whose delegate
-    /// was constructed by the production factory (which stores the
-    /// registration capabilities through `register_client_identity`) derives
-    /// `yoloMode`/`autoMode`/`clientTerminal` for `session/new` from the
-    /// *registered* capabilities — with no session `_meta` carrying them.
-    /// This is the exact production path: `bind_grok_shim` →
-    /// `production_acp_delegate_factory` → `register_client_identity` →
-    /// `session/new`.
     #[tokio::test]
     async fn session_new_derives_mode_capabilities_from_registration() {
         let (_staging, mut service) = test_service().await;
-        // Exactly what the production factory does after constructing the
-        // service: store the registering client's identity and capabilities.
         service.register_client_identity(
             7,
             &crate::commands::grok_shim::server::Registration {
@@ -3404,8 +2985,7 @@ mod tests {
             },
         );
 
-        // The session/new request carries NO yoloMode/autoMode/clientTerminal
-        // keys in its `_meta` — the injection must come from registration.
+        // The session/new request carries no mode `_meta` keys.
         let dispatch = service
             .handle_acp_payload(&request_payload(
                 "session/new",
@@ -3430,10 +3010,6 @@ mod tests {
         );
     }
 
-    /// An explicit per-request `_meta` override wins over the registered
-    /// capability (the pager's `apply_permission_mode_override` stamps the
-    /// same keys), and `clientTerminal` rides the registered `terminal`
-    /// capability when the request does not carry it.
     #[tokio::test]
     async fn session_new_meta_overrides_registration_but_defaults_from_it() {
         let (_staging, mut service) = test_service().await;
@@ -3526,23 +3102,9 @@ mod tests {
         );
     }
 
-    /// Gate 7 (fixture lifetime): the staging `TempDir` guard returned by
-    /// the fixture owns the node's storage directory. While the guard is
-    /// held the node's data path exists; when it drops at the end of the
-    /// test the whole staging directory is removed — the guard is the
-    /// cleanup, not a `mem::forget`-leaked or `keep()`-abandoned directory
-    /// left for the temp cleaner.
-    ///
-    /// The binding matches the safe normal pattern — the `TempDir` is bound
-    /// *first*, so the ordinary end-of-scope drop order is service/node
-    /// first, staging second. The explicit drops below observe the same
-    /// order: the service (and its node) must drop before the `TempDir`
-    /// deletes the node's storage directory out from under it.
     #[tokio::test]
     async fn the_fixture_staging_tempdir_owns_and_cleans_up_the_node_storage() {
         let (staging, service) = test_service().await;
-        // The node's storage path lives inside the guard's directory and is
-        // observable while the guard is held.
         let staging_root = staging.path().to_path_buf();
         let node_data = staging_root.join("node");
         assert!(
@@ -3550,10 +3112,6 @@ mod tests {
             "the node's storage directory must exist while the staging guard is held"
         );
 
-        // Run one real dispatch through the fixture so the node is genuinely
-        // used, then observe the cleanup by dropping in the same order an
-        // ordinary test's end-of-scope drop would use: service first,
-        // staging second.
         service
             .handle_acp_payload(&request_payload(
                 "session/new",
@@ -3578,8 +3136,6 @@ mod tests {
 
     #[tokio::test]
     async fn session_new_writes_the_grok_record_the_resume_picker_needs() {
-        // Stock grok only sends session/load for a listed session that also has
-        // a local summary.json under <grok home>/sessions/<encoded cwd>/<id>/.
         let (_staging, mut service) = test_service().await;
         let home = tempfile::tempdir().expect("grok home");
         service.config.grok_home = Some(home.path().to_path_buf());
@@ -3648,9 +3204,6 @@ mod tests {
 
     #[tokio::test]
     async fn session_new_rejects_an_existing_session_bound_to_a_different_agent() {
-        // `node_did` is `@immutable` on `AgentSession`. A row stamped for a
-        // different node must be rejected before reactivation, not
-        // silently reactivated under this shim's identity.
         let (_staging, service) = test_service().await;
         let node = service.config.node.clone();
         let seed = r#"mutation {
@@ -3689,7 +3242,7 @@ mod tests {
             "the mismatch must name the immutable field: {message}"
         );
 
-        // The foreign row is untouched: never reactivated, never rewritten.
+        // The foreign row is untouched.
         let query = r#"{
             AgentSession(filter: { session_id: { _eq: "grok-edge-foreign-agent" } }) {
                 node_did closed_at
@@ -3712,8 +3265,6 @@ mod tests {
     #[tokio::test]
     async fn session_new_escapes_session_ids_in_queries() {
         let (_staging, service) = test_service().await;
-        // A quote/backslash-rich id proves every interpolated value is
-        // escaped rather than spliced raw into the GraphQL document.
         let hostile = r#"grok"\<script>-id"#;
         let dispatch = service
             .handle_acp_payload(&request_payload(
@@ -3821,13 +3372,6 @@ mod tests {
 
     #[tokio::test]
     async fn set_model_rejects_a_reasoning_effort_as_invalid_params() {
-        // The catalog advertises `supportsReasoningEffort: false` and no
-        // effort list, and a selected effort never reaches
-        // `SubmitRequestOptions` — so a caller-supplied
-        // `_meta.reasoningEffort` is rejected explicitly as invalid params
-        // instead of being silently stored as dead session state. Even a
-        // value Gents' own `ReasoningEffort` would parse ("high") is
-        // rejected, because the advertised catalog never offered it.
         let (_staging, service) = test_service().await;
         service
             .handle_acp_payload(&request_payload(
@@ -3902,8 +3446,6 @@ mod tests {
     #[tokio::test]
     async fn event_ids_are_monotonic_and_session_scoped_through_one_sequencer() {
         let (_staging, service) = test_service().await;
-        // set_mode and the prompt echo share the projection sequencer's
-        // per-session id space, so both routes go through the same counter.
         let buffer = Arc::new(Mutex::new(Vec::new()));
         let sender = PromptSender::Buffer {
             buffer: buffer.clone(),
@@ -3937,7 +3479,6 @@ mod tests {
             .collect();
         assert_eq!(event_ids, vec!["s-events-1", "s-events-2", "s-events-3"]);
 
-        // A different session has an independent counter starting at 1.
         let other_lines = {
             let other_buffer = Arc::new(Mutex::new(Vec::new()));
             let other_sender = PromptSender::Buffer {
@@ -3982,10 +3523,6 @@ mod tests {
         );
     }
 
-    /// A `session/set_mode` and a `session/prompt` on the same session draw
-    /// from the same monotonic id space and can never stamp a duplicate
-    /// eventId (the pager deduplicates non-replay counters by id, so a
-    /// repeated id would silently drop a live update).
     #[tokio::test]
     async fn set_mode_and_prompt_never_duplicate_an_event_id() {
         let (_staging, service) = test_service().await;
@@ -4007,8 +3544,6 @@ mod tests {
             .expect("mode eventId")
             .to_string();
 
-        // The turn's user echo through a buffered sender stamps the next id
-        // of the same session space.
         let buffer = Arc::new(Mutex::new(Vec::new()));
         let sender = PromptSender::Buffer {
             buffer: buffer.clone(),
@@ -4039,8 +3574,6 @@ mod tests {
         assert_eq!(echo_event_id, "s-dup-2");
     }
 
-    /// The production delegate sends MCP completion after session/new's
-    /// response, so the native pager has attached the new session's routing.
     #[tokio::test]
     async fn session_new_streams_exact_mcp_completion_after_the_live_response() {
         let (_staging, service) = test_service().await;
@@ -4092,13 +3625,6 @@ mod tests {
         );
     }
 
-    /// Gate 3: the live production path. A `session/set_mode` dispatched
-    /// through the real `AcpDelegate` over a live `AcpOutbound` streams its
-    /// `current_mode_update` notification *before* its JSON-RPC response —
-    /// the real common send path enqueues the notification live while the
-    /// deferred response is sent only after the dispatch resolves — and the
-    /// notification carries the session's first event id from the shared
-    /// per-session space.
     #[tokio::test]
     async fn set_mode_streams_its_notification_before_the_response_on_the_live_path() {
         let (_staging, service) = test_service().await;
@@ -4161,16 +3687,9 @@ mod tests {
         );
     }
 
-    /// Gate 4 (exact live mode failure): a `session/set_mode` dispatched
-    /// through the production ACP delegate over a *closed* live
-    /// `AcpOutbound` fails the dispatch and the send, leaves the session's
-    /// recorded mode at `"default"`, and consumes no event id — so a later
-    /// successful send on the same session receives `<session>-1`, never a
-    /// re-used already-delivered id.
     #[tokio::test]
     async fn set_mode_over_a_closed_live_outbound_fails_without_committing_mode_or_event_id() {
         let (_staging, service) = test_service().await;
-        // A known session in the default mode.
         service
             .handle_acp_payload(&request_payload(
                 "session/new",
@@ -4187,17 +3706,12 @@ mod tests {
             json!({ "sessionId": "s-mode-closed", "modeId": "yolo" }),
         );
 
-        // A real production `AcpOutbound` whose receiver is already gone:
-        // every send through it fails, exactly like a pager connection that
-        // closed before the mode update was enqueued.
         let (frames_tx, frames_rx) = tokio::sync::mpsc::unbounded_channel::<
             crate::commands::grok_shim::protocol::ServerEnvelope,
         >();
         let outbound = AcpOutbound::for_frames(frames_tx);
         drop(frames_rx);
 
-        // The production dispatch entry: the delegate wraps the outbound in
-        // the live prompt sender and runs the same handler the pager drives.
         let dispatch_result = service.handle_acp(&payload, outbound).await;
         let send_error =
             dispatch_result.expect_err("the closed outbound must fail the set_mode dispatch");
@@ -4206,8 +3720,6 @@ mod tests {
             "the dispatch must surface the closed-connection send error: {send_error}"
         );
 
-        // The actual `AcpSessionState`: the failed send never ran the mode
-        // commit hook, so the recorded mode is still the default.
         let sessions = service.sessions.lock().await;
         let state = sessions
             .get("s-mode-closed")
@@ -4218,7 +3730,6 @@ mod tests {
         );
         drop(sessions);
 
-        // The failed send consumed no event id: the reservation rolled back.
         assert_eq!(
             service
                 .projections
@@ -4228,9 +3739,6 @@ mod tests {
             "a failed live send must consume no event id"
         );
 
-        // Follow-up: a successful real/buffered send on the same session
-        // receives `<session>-1` — the rolled-back id is reused, and an
-        // already-delivered id is never handed out twice.
         let buffer = Arc::new(Mutex::new(Vec::new()));
         let sender = PromptSender::Buffer {
             buffer: buffer.clone(),
@@ -4256,24 +3764,6 @@ mod tests {
             "the next successful send must receive the session's first id"
         );
     }
-
-    /// Gate 3 (production entry, buffered sends): two sessions dispatched
-    /// through the production dispatch path (`dispatch_with_sender`, the
-    /// same entry the live delegate calls) each start their event-id space
-    /// at 1 and each stream exactly one mode update. Both dispatches run
-    /// against immediately-buffered sends, so this test proves the
-    /// production entry's per-session id accounting — it does **not**
-    /// prove the sessions' *send locks* are independent: a 30-second
-    /// timeout over two immediate buffered operations can only observe
-    /// completion, never non-blocking. The real independence proof is
-    /// [`ProjectionEngine`'s delayed session-A/session-B channel test]
-    /// (`a_delayed_first_send_is_not_overtaken_by_a_racing_second_send` and
-    /// `two_sessions_start_at_one_and_stay_independently_concurrent` in
-    /// `projection.rs`), which parks session A's first send inside its
-    /// enqueue and asserts session B completes while A is still parked.
-    /// A deterministic stalled live dispatch seam here would need a
-    /// injectable transport parked at the `dispatch_with_sender` boundary.
-    #[tokio::test]
     async fn two_sessions_dispatch_through_the_production_entry_with_independent_event_ids() {
         let (_staging, service) = test_service().await;
         let service = Arc::new(service);
@@ -4286,8 +3776,6 @@ mod tests {
                 .await;
         }
 
-        // Two set_mode dispatches on different sessions, run concurrently
-        // through the production dispatch entry: neither waits on the other.
         let service_a = service.clone();
         let service_b = service.clone();
         let dispatch_a = tokio::spawn(async move {
@@ -4316,8 +3804,7 @@ mod tests {
         assert_eq!(a.len(), 1, "session A streamed one mode update");
         assert_eq!(b.len(), 1, "session B streamed one mode update");
 
-        // Each session consumed exactly its own first event id — per-session
-        // counters, both starting at 1, never shared.
+        // Each session consumed exactly its own first event id.
         let event_id = |line: &str| {
             parse_response(line)["params"]["_meta"]["eventId"]
                 .as_str()
@@ -4457,12 +3944,6 @@ mod tests {
 
     #[tokio::test]
     async fn wait_for_exit_answers_the_pagers_exact_method_not_found_error() {
-        // The reference pager answers `terminal/wait_for_exit` with
-        // `wait_for_exit_not_supported("pager")` — a `METHOD_NOT_FOUND`
-        // error whose message is exactly "pager does not handle
-        // WaitForTerminalExit" — and its adapter falls back to polling on
-        // that answer. The shim must reproduce the code and the message
-        // verbatim through the full dispatch path.
         let (_staging, service) = test_service().await;
         let dispatch = service
             .handle_acp_payload(&request_payload("terminal/wait_for_exit", json!({})))
@@ -4477,11 +3958,6 @@ mod tests {
 
     #[tokio::test]
     async fn other_terminal_methods_answer_the_shaped_not_supported_error() {
-        // Every other terminal/* ACP request routes through
-        // `tools::handle_terminal_client_method` and answers with that
-        // leaf's shaped method-not-found error — the shim's own wording,
-        // never the generic method-not-found message and never a claim of
-        // pager-exactness (only `terminal/wait_for_exit` is pager-exact).
         let (_staging, service) = test_service().await;
         for method in [
             "terminal/create",
@@ -4519,15 +3995,9 @@ mod tests {
         assert_eq!(response["error"]["code"], -32600);
     }
 
-    /// Table-driven dispatch classification over real request payloads: every
-    /// caller-controlled validation failure answers exactly `-32602`, the
-    /// shaped unsupported methods answer exactly `-32601`, and no durable
-    /// rows are fabricated for any rejected input.
     #[tokio::test]
     async fn request_validation_failures_answer_invalid_params() {
         let (_staging, service) = test_service().await;
-        // A real session so session-scoped rejections aren't conflated with
-        // the unknown-session path (which stays internal).
         service
             .handle_acp_payload(&request_payload(
                 "session/new",
@@ -4537,52 +4007,41 @@ mod tests {
 
         let text_block = json!({"type": "text", "text": "hello"});
         let cases: Vec<(&str, Value)> = vec![
-            // missing/empty modelId on session/set_model
             (
                 "session/set_model",
                 json!({ "sessionId": "s-table", "modelId": "" }),
             ),
             ("session/set_model", json!({ "sessionId": "s-table" })),
-            // wrong bound model on session/set_model
             (
                 "session/set_model",
                 json!({ "sessionId": "s-table", "modelId": "gpt-9" }),
             ),
-            // wrong bound model on session/new `_meta.modelId`
             (
                 "session/new",
                 json!({ "cwd": "/tmp", "_meta": { "sessionId": "s-never", "modelId": "gpt-9" } }),
             ),
-            // missing/empty sessionId on session/set_model
             ("session/set_model", json!({ "modelId": "GLM-5.3-NVFP4" })),
             (
                 "session/set_model",
                 json!({ "sessionId": "  ", "modelId": "GLM-5.3-NVFP4" }),
             ),
-            // missing/empty modeId on session/set_mode
             (
                 "session/set_mode",
                 json!({ "sessionId": "s-table", "modeId": "" }),
             ),
             ("session/set_mode", json!({ "sessionId": "s-table" })),
-            // bad auth method
             ("authenticate", json!({ "methodId": "oauth" })),
             ("authenticate", json!({ "methodId": "" })),
-            // session/prompt: missing sessionId
             ("session/prompt", json!({ "prompt": [text_block.clone()] })),
-            // session/prompt: missing prompt array
             ("session/prompt", json!({ "sessionId": "s-table" })),
-            // session/prompt: empty prompt array
             (
                 "session/prompt",
                 json!({ "sessionId": "s-table", "prompt": [] }),
             ),
-            // session/prompt: block without text
             (
                 "session/prompt",
                 json!({ "sessionId": "s-table", "prompt": [{"type": "text"}] }),
             ),
-            // session/prompt: invalid screenMode
             (
                 "session/prompt",
                 json!({
@@ -4591,7 +4050,6 @@ mod tests {
                     "_meta": { "screenMode": "sideways" },
                 }),
             ),
-            // unsupported reasoningEffort (feature is unadvertised)
             (
                 "session/set_model",
                 json!({
@@ -4600,16 +4058,12 @@ mod tests {
                     "_meta": { "reasoningEffort": "high" },
                 }),
             ),
-            // malformed subagent params: each known session-scoped method
-            // without a sessionId
             ("x.ai/subagent/get", json!({})),
             ("x.ai/subagent/get", json!({ "sessionId": 7 })),
             ("x.ai/subagent/get", json!({ "sessionId": "  " })),
             ("x.ai/subagent/list_running", json!({})),
             ("x.ai/subagent/list_running", json!({ "sessionId": 7 })),
             ("x.ai/subagent/list_running", json!({ "sessionId": "  " })),
-            // malformed subagent params: get with a valid sessionId but a
-            // missing/non-string/blank subagentId
             ("x.ai/subagent/get", json!({ "sessionId": "s-table" })),
             (
                 "x.ai/subagent/get",
@@ -4697,7 +4151,7 @@ mod tests {
         );
 
         // Stock get DTOs omit sessionId; their reach is limited to sessions
-        // registered on this connection, never an arbitrary ID.
+        // registered on this connection.
         let dispatch = service
             .handle_acp_payload(&request_payload(
                 SUBAGENT_GET_METHOD,
@@ -4718,9 +4172,7 @@ mod tests {
             assert_eq!(response["error"]["code"], -32602, "{response}");
         }
 
-        // No durable rows were fabricated by any rejected input: no
-        // AgentRequest, no AgentMessage, no extra AgentSession beyond the
-        // one legitimate `s-table` session created above.
+        // No durable rows were fabricated by any rejected input.
         let node = service.config.node.clone();
         let query = r#"{
             AgentRequest { request_id }
@@ -4756,10 +4208,6 @@ mod tests {
         );
     }
 
-    /// A representative operational failure stays internal `-32603`: the
-    /// immutable `node_did` identity mismatch on `session/new` is a
-    /// storage/identity failure of the durable layer, not a caller-shape
-    /// error, and the rejected input fabricates nothing.
     #[tokio::test]
     async fn operational_failures_stay_internal_errors() {
         let (_staging, service) = test_service().await;

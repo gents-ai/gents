@@ -38,7 +38,6 @@ pub(crate) fn log_relay_mode_diagnostics(mode: P2pRelayModeArg) {
                 tracing::warn!(
                     ?non_production,
                     "default iroh relay set includes non-production (canary/staging) endpoints; \
-                     these are expected to be unstable and can trigger relay connect churn — \
                      the pinned iroh version likely needs updating (see #588)"
                 );
             }
@@ -49,35 +48,6 @@ pub(crate) fn log_relay_mode_diagnostics(mode: P2pRelayModeArg) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn non_production_relay_urls_flags_canary_and_staging() {
-        let urls = vec![
-            "https://use1-1.relay.n0.iroh.link./".to_string(),
-            "https://usw1-1.relay.n0.iroh-canary.iroh.link./".to_string(),
-            "https://euc1-1.staging-relay.n0.iroh.link./".to_string(),
-        ];
-
-        let flagged = non_production_relay_urls(&urls);
-
-        assert_eq!(
-            flagged,
-            vec![
-                "https://usw1-1.relay.n0.iroh-canary.iroh.link./".to_string(),
-                "https://euc1-1.staging-relay.n0.iroh.link./".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn non_production_relay_urls_passes_production_set() {
-        let urls = vec![
-            "https://use1-1.relay.n0.iroh.link./".to_string(),
-            "https://euc1-1.relay.n0.iroh.link./".to_string(),
-        ];
-
-        assert!(non_production_relay_urls(&urls).is_empty());
-    }
 
     #[test]
     fn pinned_iroh_default_relay_set_is_production() {

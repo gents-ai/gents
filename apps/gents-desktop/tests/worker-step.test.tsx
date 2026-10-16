@@ -27,7 +27,6 @@ import { WorkerActionsContext } from "../src/ui/screens/WorkerActions";
 import { node, renderIn, testApp } from "./app-fixture";
 import { deployment } from "./config-panel-wiring/fixtures";
 
-/* the rows read the selected node from the app */
 const render = (ui: ReactElement) => renderIn(testApp(), ui);
 
 const call = (
@@ -51,7 +50,6 @@ const call = (
     },
   }) as unknown as RenderedToolCallView;
 
-/* what the bridge sends in production: message_count is always None */
 const summary = (turnState: string | null): SessionSummary =>
   ({
     sessionId: "child-session",
@@ -84,7 +82,6 @@ const worker = (turnState: string | null): Worker => ({
   },
 });
 
-/* this row's call caused `request`; the session may be working on others */
 const reached = (
   request: CausedRequestView,
   s: Worker | null = worker("running"),
@@ -114,8 +111,7 @@ function renderStep(
 
 describe("an agent row", () => {
   it("shows the request this row's call caused, not the session's latest", () => {
-    /* the session is working on a later request; this call's has finished */
-    expect(
+  expect(
       workerNow(call(), reached(caused("child-req", "completed")), Date.now()),
     ).toEqual({
       tone: "done",
@@ -162,7 +158,6 @@ describe("an agent row", () => {
   });
 
   it("stops by interrupting only the request this row's call caused", () => {
-    /* the session has moved on to a later request; Stop names this call's */
     const request = caused("child-req", "processing");
     const actions = renderStep(call("running"), reached(request));
     screen.getByRole("button", { name: "Stop Reviewer" }).click();

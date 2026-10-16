@@ -180,9 +180,6 @@ async fn lean_auto_commit_completion_owns_the_real_signed_worker() {
                     .expect("completed native worker releases its gate")
                     .unwrap();
                     drop(acquired);
-                    // The native return and gate drop are consecutive in the
-                    // completing owner; observe their result at the release
-                    // boundary rather than inventing an intermediate pause.
                     continue;
                 }
                 "gate_release_requested" => {}
@@ -244,7 +241,7 @@ async fn lean_abandoned_registry_retains_gate_until_every_native_operation_drain
         .iter()
         .find(|case| case.name == "registry_abandonment_retains_gate_until_all_native_returns")
         .unwrap();
-    let expected = &concurrent.observations[6]; // partial drain after gate-release request
+    let expected = &concurrent.observations[6];
     let operation_count = concurrent
         .events
         .iter()
@@ -285,8 +282,6 @@ async fn lean_abandoned_registry_retains_gate_until_every_native_operation_drain
     tokio::time::resume();
     assert!(results.iter().all(Result::is_err));
 
-    // Registry ownership is gone immediately, even though both native permits
-    // still hold the gate/store claim. This is not rollback/drain completion.
     let abandoned = &concurrent.observations[4];
     assert!(abandoned.registry_abandoned);
     assert!(!abandoned.rollback_returned);

@@ -2,8 +2,7 @@ use super::*;
 use crate::config_client::ConfigAccess;
 use gents_protocol::request_input::QueueDelivery;
 
-/// Resolve the active physical session before signing a user's input. The
-/// claim owner remains authoritative if this observation races completion.
+/// The claim owner remains authoritative if this observation races completion.
 pub async fn prepare_user_message_input(
     access: &ConfigAccess,
     node_did: &str,

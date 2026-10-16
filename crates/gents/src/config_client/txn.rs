@@ -52,9 +52,7 @@ struct StoreClaim {
     _lock: crate::home::StoreLock,
 }
 
-/// An embedded access and node-scoped store claim retained through Gents-owned
-/// native operations. Forced host-runtime shutdown and DefraDB-owned inbound
-/// HTTP work remain outside this lifetime boundary.
+/// Embedded access plus a node-scoped store claim held across Gents-owned native operations.
 #[derive(Clone)]
 pub struct LocalConfigAccess {
     node: Arc<EmbeddedNode>,
@@ -304,8 +302,6 @@ impl MutationWriteGate {
         {
             Ok(guard) => guard,
             Err(_) => {
-                // The timed-out acquisition must not appear in its own
-                // timeout snapshot; the pending map reports only live waiters.
                 registration.take();
                 let owner = *self
                     .owner
@@ -566,7 +562,6 @@ async fn execute_owned_native(
     Ok(result)
 }
 
-/// Nested `with_*` scopes shadow the outer fault state rather than combining it.
 #[cfg(test)]
 struct SuccessfulMutationFault {
     fail_after: Option<usize>,
@@ -659,12 +654,6 @@ fn mark_cleanup_scheduled_for_test() {
     });
 }
 
-// External storage premise, test-only: an embedded commit may be durable while
-// its receipt never reaches the caller. This reuses the successful-mutation
-// fault task-local (one test-only fault owner) so a scoped future cannot carry
-// two competing fault states across awaits. The receipt-loss arm consumes
-// itself once; only the transaction owner's retry re-enters against the
-// already-committed state, and no rollback is simulated.
 #[cfg(test)]
 fn post_commit_receipt_loss_for_test(operation: Option<&str>) -> bool {
     SUCCESSFUL_MUTATION_FAULT
@@ -676,8 +665,6 @@ fn post_commit_receipt_loss_for_test(operation: Option<&str>) -> bool {
             {
                 return false;
             }
-            // swap leaves the fired flag sticky; only the first call observes
-            // the previous false and actually injects the lost receipt.
             !fault.receipt_fired.swap(true, Ordering::Relaxed)
         })
         .unwrap_or(false)
@@ -708,9 +695,8 @@ fn ensure_not_reentrant_embedded_write(operation: WriteOperation) -> Result<()> 
     Ok(())
 }
 
-// Embedded DefraDB operations are local and normally complete in milliseconds.
-// Bound every phase that can retain the process-wide mutation gate so one
-// wedged transaction cannot stop response progress, recovery, and hydration.
+// Bound every phase retaining the process-wide mutation gate so one wedged
+// transaction cannot stop response progress, recovery, and hydration.
 pub(crate) const EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT: Duration = Duration::from_secs(60);
 const EMBEDDED_TRANSACTION_CALLBACK_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT: Duration = Duration::from_secs(15);
@@ -766,8 +752,8 @@ fn existing_mutation_write_gate(node: &EmbeddedNode) -> Option<Arc<MutationWrite
         .and_then(Weak::upgrade)
 }
 
-// Callers may drop a transaction on a thread without a Tokio context, so each
-// cleanup owner retains the runtime that created it.
+// Cleanup owners may drop on threads without a Tokio context, so each retains
+// the runtime that created it.
 enum RollbackOnDrop {
     Http {
         runtime: tokio::runtime::Handle,
@@ -780,9 +766,6 @@ enum RollbackOnDrop {
         runtime: tokio::runtime::Handle,
         node: Arc<EmbeddedNode>,
         native_gate: Arc<MutationWriteGate>,
-        // A suspended native scope owns both its Arc node and its borrowed guard.
-        // Dropping the future synchronously abandons the native transaction;
-        // the mutex makes this unpolled owner Sync for shared transaction callbacks.
         native_owner: StdMutex<Option<BoxFuture<'static, Result<()>>>>,
         write_guard: Option<MutationWriteGuard>,
         #[cfg(test)]
@@ -840,9 +823,6 @@ impl Drop for RollbackOnDrop {
                 native_operations,
                 armed,
             } => {
-                // Abandon the registry entry before handing off or releasing the
-                // mutation gate. In-flight native contexts retain their storage
-                // references; the existing tracker still fences gate/claim release.
                 drop(
                     native_owner
                         .get_mut()
@@ -882,9 +862,6 @@ impl Drop for RollbackOnDrop {
                             pause.started.notify_one();
                             pause.release.notified().await;
                         }
-                        // Native abandonment already ran synchronously. This task
-                        // retains only the node/store claim and gate until native
-                        // work has returned; it does not finalize a transaction.
                         drop(node);
                         Ok::<(), anyhow::Error>(())
                     };
@@ -928,10 +905,6 @@ where
     F: FnOnce(TransactionHandle) -> Fut,
     Fut: Future<Output = ()>,
 {
-    // The native API borrows its node. Keep that borrow inside an owned future
-    // instead of a self-referential struct, a leaked Arc, or an unsafe lifetime.
-    // Once registration completes this future is never polled again: its only
-    // remaining job is to drop the native guard synchronously with this owner.
     let (registered, registration) = tokio::sync::oneshot::channel();
     let owner_node = Arc::clone(&node);
     let mut native_owner: BoxFuture<'static, Result<()>> = Box::pin(async move {
@@ -972,8 +945,6 @@ where
         native_operations,
         armed: true,
     };
-    // There is no await between receiving the handle and installing its owner.
-    // Native abandonment needs no scheduled rollback telemetry.
     let _ = cancellation_rollback_scheduled;
     after_begin(handle.clone()).await;
     Ok((rollback, handle))
@@ -984,9 +955,6 @@ async fn begin_http_owned(
     cancellation_rollback_scheduled: Arc<AtomicBool>,
     read_only: bool,
 ) -> Result<(reqwest::Client, String, RollbackOnDrop)> {
-    // Keep the response owner alive if the caller is cancelled while DefraDB
-    // is returning the newly registered ID. Once the ID arrives, dropping the
-    // detached task output schedules DELETE through `RollbackOnDrop`.
     let (client, id) = graphql::txn_begin(&endpoint, read_only)
         .await
         .map_err(retry::transaction_storage_failure)?;
@@ -1012,14 +980,10 @@ struct CommitFailure {
     cleanup: CommitCleanup,
 }
 
-/// Bounded replay policy for transactions whose callbacks are safe to repeat
-/// because every created document has a stable identity and every update is
-/// guarded by durable state.
+/// Replay policy for idempotent transactions (stable identities, durable-state-guarded updates).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IdempotentTransactionRetry {
-    /// One initial attempt plus three retries.
     Standard,
-    /// One initial attempt plus four retries.
     FiveAttempts,
 }
 
@@ -1032,8 +996,7 @@ impl IdempotentTransactionRetry {
     }
 }
 
-/// Result of a transaction whose caller treats a competing commit as a new
-/// observation to reload rather than an operation failure.
+/// A competing commit delivered a new observation to reload rather than a failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TransactionOutcome<T> {
     Committed(T),
@@ -1080,20 +1043,9 @@ impl TransactionMode {
     }
 }
 
-/// An open explicit transaction. Callers receive this only inside
-/// [`ConfigAccess::transact_write`] callbacks once migrations are complete.
-///
-/// The raw begin/commit/discard transport lives in the crate-private
-/// `graphql` submodule and is not nameable from outside `gents`; external
-/// callers must go through the owned [`ConfigAccess::write`] and
-/// [`ConfigAccess::transact_write`] entry points:
-///
-/// ```compile_fail
-/// use gents::config_client::graphql::txn_begin;
-/// // The `graphql` transport module is private to `gents`, so this import
-/// // fails with E0603 and raw transactions cannot be driven directly.
-/// let _ = txn_begin("http://127.0.0.1:1/api/v0/graphql");
-/// ```
+/// An open explicit transaction, handed to [`ConfigAccess::transact_write`] callbacks.
+/// Raw begin/commit/discard transport lives in the crate-private `graphql`
+/// submodule; external callers must use the owned entry points.
 pub struct ConfigApplyTxn<'a> {
     backend: TxnBackend<'a>,
     rollback_on_drop: Option<RollbackOnDrop>,
@@ -1181,11 +1133,6 @@ impl<'a> ConfigApplyTxn<'a> {
         (output, fault.count.load(Ordering::Relaxed))
     }
 
-    /// Runs `attempt` with a failure injected after each successful mutation in
-    /// turn until an attempt commits without reaching the fault. Every faulted
-    /// attempt must fail with exactly that injection and leave `observe`
-    /// unchanged; the committing attempt must change it. Returns the committed
-    /// value and its mutation count.
     #[cfg(test)]
     pub(crate) async fn assert_every_mutation_rolls_back<T, E, S, A, AF, O, OF>(
         mut attempt: A,
@@ -1243,8 +1190,6 @@ impl<'a> ConfigApplyTxn<'a> {
         Self::with_post_commit_receipt_loss_for_operation(None, future).await
     }
 
-    /// Target a commit boundary without consuming the fault on earlier writes
-    /// (for example, publication before dispatch) in the same task.
     #[cfg(test)]
     pub(crate) async fn with_post_commit_receipt_loss_for_operation<F: Future>(
         operation: Option<&'static str>,
@@ -1271,8 +1216,6 @@ impl<'a> ConfigApplyTxn<'a> {
         (output, fault.receipt_fired.load(Ordering::Relaxed))
     }
 
-    /// Pause once after the selected successful mutation, while its transaction
-    /// still owns the write gate; the test supplies both synchronization points.
     #[cfg(test)]
     pub(crate) async fn with_successful_mutation_pause_at<F: Future>(
         after: usize,
@@ -1315,8 +1258,6 @@ impl<'a> ConfigApplyTxn<'a> {
         )
     }
 
-    /// Observe the actual embedded write-gate lock poll without changing its
-    /// acquisition path. `queued` signals Pending once; `acquired` records Ready.
     #[cfg(test)]
     pub(crate) async fn with_write_gate_observation<F: Future>(
         queued: Arc<tokio::sync::Notify>,
@@ -1345,8 +1286,6 @@ impl<'a> ConfigApplyTxn<'a> {
         SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
     }
 
-    /// Fail every transaction read whose document contains `marker` as a
-    /// storage failure classified by this owner.
     #[cfg(test)]
     pub(crate) async fn with_read_storage_failure<F: Future>(
         marker: &'static str,
@@ -1370,8 +1309,6 @@ impl<'a> ConfigApplyTxn<'a> {
         SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
     }
 
-    /// Park every auto-commit read whose document contains
-    /// `marker`, after notifying `reached`; only dropping the reader ends it.
     #[cfg(test)]
     pub(crate) async fn with_read_pause<F: Future>(
         marker: &'static str,
@@ -1561,15 +1498,14 @@ impl<'a> ConfigApplyTxn<'a> {
         Ok(txn)
     }
 
-    /// Execute exactly once inside this snapshot. Conflict replay belongs to
-    /// the outer `transact` owner and always begins a fresh transaction.
+    /// Execute exactly once inside this snapshot; conflict replay is the outer `transact` owner's job.
     pub async fn execute(&self, document: &str) -> Result<Value> {
         self.execute_with_variables(document, &json!({})).await
     }
 
-    /// Execute in this same transaction with typed GraphQL variables. JSON
-    /// scalar payloads retain arbitrary keys and nested empty arrays; ordinary
-    /// nillable list fields remain the caller's responsibility.
+    /// Execute with typed GraphQL variables. JSON scalar payloads retain
+    /// arbitrary keys and nested empty arrays; ordinary nillable list fields
+    /// remain the caller's responsibility.
     pub async fn execute_with_variables(&self, document: &str, variables: &Value) -> Result<Value> {
         anyhow::ensure!(variables.is_object(), "GraphQL variables must be an object");
         let (expanded_document, expanded_variables) =
@@ -1779,12 +1715,6 @@ impl<'a> ConfigApplyTxn<'a> {
                         cleanup: CommitCleanup::Required,
                     }),
                     Ok(Ok(())) => {
-                        // External storage premise, test-only (#1630): the
-                        // embedded commit is durable but its receipt never
-                        // reaches the caller. NotNeeded cleanup leaves committed
-                        // state untouched so only the transaction owner's
-                        // existing retry replays the callback; no rollback is
-                        // simulated.
                         #[cfg(test)]
                         if post_commit_receipt_loss_for_test(self.operation) {
                             return Err(CommitFailure {
@@ -1861,8 +1791,6 @@ impl<'a> ConfigApplyTxn<'a> {
                         tracing::warn!(
                             "embedded rollback timed out; releasing mutation gate with transaction outcome ambiguous"
                         );
-                        // Do not let Drop schedule a second bounded rollback
-                        // while retaining the same process-wide write gate.
                         self.disarm_rollback();
                         return Err(error);
                     }
@@ -2226,8 +2154,6 @@ where
                     return Err(error);
                 }
             };
-            // Embedded cancellation abandons the native owner synchronously;
-            // only HTTP cleanup schedules a detached rollback request.
             telemetry.cancelled_rollback = match backend {
                 WriteBackend::Embedded => RollbackStatus::NotNeeded,
                 WriteBackend::Http => RollbackStatus::Scheduled,
@@ -2471,7 +2397,6 @@ impl ConfigAccess {
         }
     }
 
-    /// Commit one mutation through DefraDB's native auto-commit owner.
     pub async fn write(&self, operation: &'static str, mutation: &str) -> Result<Value> {
         graphql::ensure_mutation_document(mutation)?;
         let operation = WriteOperation::new(operation)?;
@@ -2491,13 +2416,11 @@ impl ConfigAccess {
         }
     }
 
-    /// Commit a stable-id HTTP mutation with bounded ambiguous-result recovery.
-    ///
-    /// Each mutation is posted exactly once. A retryable response or transport
+    /// Committed stable-id HTTP mutation with bounded ambiguous-result recovery:
+    /// each mutation is posted exactly once; a retryable response or transport
     /// failure is ambiguous, so the owner checks the caller's stable receipt
-    /// before it may repost. Receipt reads are retried separately; a mutation
-    /// is replayed only after a successful receipt read confirms absence.
-    /// Embedded access has no ambiguous HTTP response and uses [`Self::write`].
+    /// before it may repost, and replays only after a successful receipt read
+    /// confirms absence. Embedded access uses [`Self::write`].
     pub async fn write_with_receipt<F, Fut>(
         &self,
         operation: &'static str,
@@ -2613,7 +2536,6 @@ impl ConfigAccess {
         unreachable!("bounded receipt write loop returns on its final attempt")
     }
 
-    /// Borrowed embedded-node auto-commit seam for runtime and desktop code.
     pub async fn write_local(
         node: &Arc<EmbeddedNode>,
         operation: &'static str,
@@ -2626,8 +2548,6 @@ impl ConfigAccess {
         Ok(crate::graphql::into_data_envelope(response.data))
     }
 
-    /// Embedded auto-commit seam for callers that need DefraDB's typed
-    /// response metadata.
     pub(crate) async fn write_local_response(
         node: &Arc<EmbeddedNode>,
         operation: &'static str,
@@ -2756,8 +2676,8 @@ impl ConfigAccess {
         .map(expect_committed)
     }
 
-    /// Run a query-only transaction. DefraDB enforces read-only mode for both
-    /// transports; embedded access also avoids the mutation gate.
+    /// Query-only transaction; DefraDB enforces read-only mode on both transports
+    /// and embedded access avoids the mutation gate.
     pub async fn transact_readonly<'a, T, F>(
         &'a self,
         operation: &'static str,
@@ -2788,7 +2708,6 @@ impl ConfigAccess {
     }
 
     /// Replay a stable-key transaction after any callback or commit error.
-    ///
     /// Callers must make the callback idempotent across an ambiguous commit:
     /// creates need stable unique identities and retries must reconcile an
     /// already-durable winner before attempting another create.
@@ -2836,7 +2755,6 @@ impl ConfigAccess {
         .await
     }
 
-    /// Borrowed embedded-node transaction seam preserving the supplied ACP DID.
     pub async fn transact_local_write<'a, T, F>(
         node: &'a Arc<EmbeddedNode>,
         identity: Option<Did>,
@@ -2870,8 +2788,7 @@ impl ConfigAccess {
         .map(expect_committed)
     }
 
-    /// Native snapshot reads retain the supplied ACP DID without taking the
-    /// mutation gate. DefraDB's native read-only transaction rejects mutations.
+    /// Native snapshot reads retain the supplied ACP DID without taking the mutation gate.
     pub async fn transact_local_readonly<'a, T, F>(
         node: &'a Arc<EmbeddedNode>,
         identity: Option<Did>,
@@ -2905,10 +2822,10 @@ impl ConfigAccess {
         .map(expect_committed)
     }
 
-    /// Exact-request renewal retains generation/deadline CAS and native point-read
-    /// OCC while ordinary writes hold the mutation gate. Authorization is checked
-    /// again immediately before commit admission; native commit does not atomically
-    /// check wall clock, so this is not a durable-commit-before-expiry guarantee.
+    /// Renew an execution lease: generation/deadline CAS, native point-read OCC,
+    /// ordinary writes under the mutation gate. Authorization is re-checked
+    /// before commit admission; native commit does not atomically check wall
+    /// clock, so this is not a durable-commit-before-expiry guarantee.
     pub(crate) async fn renew_execution_lease(
         node: &Arc<EmbeddedNode>,
         request_doc_id: &str,
@@ -2950,7 +2867,6 @@ impl ConfigAccess {
         result.map(expect_committed)
     }
 
-    /// Borrowed embedded variant of [`Self::transact_idempotent`].
     pub async fn transact_local_idempotent<'a, T, F>(
         node: &'a Arc<EmbeddedNode>,
         identity: Option<Did>,

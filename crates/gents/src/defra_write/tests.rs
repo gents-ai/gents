@@ -228,8 +228,6 @@ async fn empty_field_declaration_reports_the_surface_contract_without_writing() 
     assert_eq!(rows["data"]["ActionRequest"], json!([]));
 }
 
-/// The advertised tool name comes from the declaration, not a shared const —
-/// this is what makes one declaration map to one uniquely-named runtime tool.
 #[tokio::test]
 async fn advertised_name_and_required_array_come_from_decl() {
     let node = node_with_actionrequest().await;
@@ -272,10 +270,6 @@ async fn runtime_backstop_rejects_invalid_graphql_identifiers() {
     }
 }
 
-/// Regression for audit finding `write-tool-graphql-identifier-injection`:
-/// collection and field names are interpolated as bare GraphQL identifiers,
-/// so a non-identifier field name must be rejected before the mutation is
-/// built (mirroring the query-tool path's `validate_identifier`).
 #[tokio::test]
 async fn rejects_decl_with_non_identifier_field_name() {
     let node = node_with_actionrequest().await;
@@ -341,8 +335,6 @@ async fn runtime_fills_are_hidden_rejected_from_model_input_and_stamped_at_call_
     )
     .await;
     assert!(supplied.unwrap_err().to_string().contains("runtime-filled"));
-    // The refusal names the declaring surface entry: the fix is the
-    // Engineer's, not the calling model's.
     let declared = tool.clone().declared_by(Some("results".into()));
     let refused = Tool::call(
         &declared,
@@ -447,14 +439,9 @@ async fn native_schema_and_receipts_preserve_lists_json_and_null() {
     assert!(super::input::literal("JSON", &json!({"nested": [1, []]})).is_err());
 }
 
-/// Which runtime failure a count field refused at publication produces is
-/// decided here, not by the refusing rule: a type [`super::input::parameters`]
-/// accepts still resolves a write-tool argument schema, so the tool registers
-/// and only the obligation fails after the write; a relation-typed or absent
-/// field resolves none, so the tool is not well formed and never registers.
-/// `FieldKind::graphql_type_name` spells a relation `Object` and a relation
-/// list `[Object]`, so a list carries a count field only when its items are
-/// scalar.
+// A type `parameters` accepts still resolves an argument schema (tool
+// registers; the obligation fails after the write); a relation-typed or
+// absent field resolves none, so the tool never registers.
 #[tokio::test]
 async fn count_field_type_decides_whether_a_refused_obligation_can_register() {
     use crate::document_config::{WriteToolOutputObligation, WriteToolOutputObligationScope};

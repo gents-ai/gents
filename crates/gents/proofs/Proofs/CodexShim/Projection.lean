@@ -205,9 +205,6 @@ inductive ThreadPresentationStatus where
   | systemError
   deriving DecidableEq, Repr
 
-/-- Presentation consumes the selected request observation (including the compact
-session observation on index-only peers). It never invents a second conversation
-status vocabulary; choosing the exact latest identity belongs to the caller. -/
 def projectThreadStatus (head : Option ClientHeadProjection) : ThreadPresentationStatus :=
   match head with
   | some ⟨.waitingForClaim, _⟩ | some ⟨.running, _⟩ => .active
@@ -222,8 +219,6 @@ def projectionAgentId (rootAgentId : String)
   | some agentId => agentId
   | none => rootAgentId
 
-/-- Display metadata must come from the exact selected node/agent pair.
-An unavailable binding stays unavailable; parent metadata is not a substitute. -/
 def projectedThreadModel (selectedOwner selectedAgent actualOwner actualAgent : String)
     (resolvedModel : Option String) : Option String :=
   if selectedOwner = actualOwner ∧ selectedAgent = actualAgent then
@@ -342,9 +337,6 @@ inductive RequestReplayStage where
 
 def completedCompactionReplayStages : List RequestReplayStage :=
   [.user, .compaction, .modelItems]
-
-theorem completed_compaction_replay_matches_runtime_order :
-    completedCompactionReplayStages = [.user, .compaction, .modelItems] := rfl
 
 structure ContextUsageObservation where
   cumulativeInput : Nat

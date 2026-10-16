@@ -124,9 +124,8 @@ async fn assert_access_control(
         .any(|collection| !collection.is_empty()));
 }
 
-/// Serve the home for one phase on its own runtime. Dropping the runtime
-/// stops the node's detached HTTP and P2P tasks, which is what releases the
-/// store for the next opener.
+/// Dropping the phase runtime stops the node's detached HTTP/P2P tasks,
+/// which releases the store for the next opener.
 fn serve_phase(
     data_dir: &Path,
     principal: &str,

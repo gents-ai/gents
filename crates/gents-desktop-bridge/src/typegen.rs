@@ -1,18 +1,4 @@
 //! TypeScript bridge-contract generation and bindings freshness gate.
-//!
-//! Decision: **ts-rs** (not typeshare).
-//! Evidence:
-//! - `serde-compat` honors `rename_all = "camelCase"` and tagged enums
-//!   (`RenderedTimelineItem` with `tag = "kind"`) without extra attributes.
-//! - Nested structs (`ToolServiceTestResult` → `ToolServiceToolView`) export
-//!   transitively.
-//! - `#[ts(type = "string")]` covers `&'static str` fields (`ClientUpdateEvent`).
-//! - typeshare would require a separate CLI + attribute surface and has weaker
-//!   serde-attribute coverage for our existing view models.
-//!
-//! Every production bridge-visible request, response, and event payload is
-//! exported. Generated files land in the committed
-//! `@source-inc/gents-desktop-client/src/generated/` directory.
 
 use std::path::{Path, PathBuf};
 

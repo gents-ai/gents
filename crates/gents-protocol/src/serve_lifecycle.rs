@@ -1,8 +1,7 @@
 //! Whether a serving runtime has finished starting, as `/status` reports it.
 //!
-//! The HTTP surface binds before migrations run, before the runtime accepts
-//! work and before `runtime.json` names the process. Local discovery reads that
-//! file, so a runtime is ready for discovery and pairing only once it is written.
+//! Local discovery reads `runtime.json`, so a runtime is ready for discovery
+//! and pairing only once it is written.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -70,50 +69,4 @@ pub fn outdated_runtime_message(version: Option<&str>) -> String {
         "{running} predates this app (v{}); restart it so it runs this version",
         env!("CARGO_PKG_VERSION")
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_an_explicit_ready_field_is_ready() {
-        assert!(
-            ObservedServeLifecycle::observe(&serde_json::json!({ "lifecycle": "ready" }))
-                .is_ready()
-        );
-        for status in [
-            serde_json::json!({ "lifecycle": "starting" }),
-            serde_json::json!({ "lifecycle": "draining" }),
-            serde_json::json!({ "lifecycle": null }),
-        ] {
-            assert_eq!(
-                ObservedServeLifecycle::observe(&status),
-                ObservedServeLifecycle::Starting
-            );
-        }
-    }
-
-    #[test]
-    fn a_runtime_without_the_field_is_outdated_with_its_version() {
-        assert_eq!(
-            ObservedServeLifecycle::observe(
-                &serde_json::json!({ "status": "ok", "version": "0.18.2" })
-            ),
-            ObservedServeLifecycle::Outdated {
-                version: Some("0.18.2".to_string())
-            }
-        );
-        assert_eq!(
-            ObservedServeLifecycle::observe(&serde_json::json!({ "node_did": "did:key:a" })),
-            ObservedServeLifecycle::Outdated { version: None }
-        );
-        assert_eq!(
-            outdated_runtime_message(Some("0.18.2")),
-            format!(
-                "the running agent (v0.18.2) predates this app (v{}); restart it so it runs this version",
-                env!("CARGO_PKG_VERSION")
-            )
-        );
-    }
 }

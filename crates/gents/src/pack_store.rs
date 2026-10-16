@@ -1,18 +1,7 @@
-//! The content-addressed pack store: `{home}/packs/store/sha256/{hex}.pack`.
-//!
-//! A file lands in the store only after [`read_pack`] verified it, streaming,
-//! while its bytes were copied into a staging file beside the destination.
-//! The staging file is renamed into place only when the computed digest
-//! equals both the file's own header and the digest the caller asked for, so
-//! a reader never sees a partial or unverified pack under a digest's name.
-//! Because a name is its content, an existing file is never replaced.
-//!
-//! Beside the digest-addressed store sits a name index,
-//! `{home}/packs/store/by-name/{namespace}/{name}/{version}`, a file
-//! holding that version's digest. [`Self::import_accepting`] writes it for
-//! every import (registry fetch, `.pack` file or directory alike), so
-//! [`Self::lookup`] can resolve a bare `namespace/name[@version]` to a
-//! stored archive without opening any of them.
+//! The content-addressed pack store: `{home}/packs/store/sha256/{hex}.pack`,
+//! verified while streaming into a staging file, renamed into place only
+//! when the digest checks out. A name is its content, so an existing file is
+//! never replaced.
 
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -52,11 +41,9 @@ pub struct StoredName {
 }
 
 /// A version string's sort key: a valid semantic version orders by
-/// [`semver::Version`]; anything else orders after every semantic version,
-/// lexicographically among themselves, so a real release always outranks
-/// an oddball tag like `latest`. Declaring `Other` first is load bearing:
-/// the derived `Ord` compares the variant before its payload, so every
-/// `Other` sorts below every `Semver` regardless of their text.
+/// [`semver::Version`]; anything else sorts after every semantic version.
+/// Declaring `Other` first is load bearing: the derived `Ord` compares the
+/// variant before its payload.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum VersionKey {
     Other(String),
@@ -72,10 +59,7 @@ impl VersionKey {
 }
 
 /// Whether `version` is safe as one path segment of the name index: ASCII
-/// alphanumeric plus `.`, `+`, `-`, non-empty, and never a bare `.` or `..`
-/// (otherwise a valid-looking version could name the parent directory).
-/// `pub(crate)` so [`crate::pack_resolve`] holds a pinned `@version` to the
-/// same rule the index files it against.
+/// alphanumeric plus `.`, `+`, `-`, and never a bare `.` or `..`.
 pub(crate) fn is_valid_index_version(version: &str) -> bool {
     version != "."
         && version != ".."
@@ -87,8 +71,8 @@ pub(crate) fn is_valid_index_version(version: &str) -> bool {
 
 /// The index file name for `version`: each uppercase letter becomes `_` and
 /// its lowercase, so `1.0.0-RC1` and `1.0.0-rc1` stay distinct files on a
-/// case-insensitive filesystem (macOS APFS by default). `_` is outside the
-/// version grammar, which makes the encoding reversible.
+/// case-insensitive filesystem. `_` is outside the version grammar, which
+/// makes the encoding reversible.
 fn encode_version(version: &str) -> String {
     let mut out = String::with_capacity(version.len());
     for ch in version.chars() {
@@ -168,7 +152,6 @@ impl PackStore {
             .tempfile_in(&self.root)
             .with_context(|| format!("staging a pack in {}", self.root.display()))?;
         let verified = {
-            // `read_pack` reads the input to its end, so the copy is the whole file.
             let mut tee = TeeReader {
                 inner: input,
                 copy: io::BufWriter::new(staged.as_file_mut()),
@@ -633,11 +616,9 @@ impl PackStore {
         .context("writing the unpacked header")?;
         match std::fs::rename(staging.path(), target) {
             Ok(()) => {
-                // The directory now lives at its final name.
                 let _ = staging.keep();
                 Ok(())
             }
-            // Another open unpacked the same digest first; its copy is identical.
             Err(_) if target.is_dir() => Ok(()),
             Err(error) => {
                 Err(error).with_context(|| format!("unpacking into {}", target.display()))
@@ -654,9 +635,8 @@ impl PackStore {
         let hex = digest_hex(digest)?;
         let archive = self.path(digest)?;
         let unpacked = self.unpacked_root().join(hex);
-        // Read before deleting: once the archive and its unpacked copy are
-        // both gone, there is no cheap way left to name the one index entry
-        // this digest was filed under.
+        // Read before deleting: once both copies are gone there is no cheap
+        // way left to name the one index entry this digest was filed under.
         let header = self.stored_header(&archive, &unpacked);
         let mut released = false;
         match std::fs::remove_file(&archive) {
@@ -680,7 +660,6 @@ impl PackStore {
             }
         }
         match header {
-            // A header index() never filed has no entry to remove.
             Some(header) => {
                 if let Some(path) = self.index_entry_path(&header) {
                     Self::remove_entry_if_records(&path, digest)?;

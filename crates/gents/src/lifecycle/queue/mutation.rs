@@ -54,8 +54,6 @@ pub(super) async fn session_request_create_mutation_at_hop(
             &parent.node_did,
             &parent.request_id,
         );
-    // A continuation stays in its parent's session under the requester that
-    // owns it (Lean `Enrollment.runtimeRequesterScope`).
     let identity = RequestIdentity {
         requester_did: parent.requester_did.clone(),
         request_id: request_id.to_string(),

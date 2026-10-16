@@ -1,26 +1,11 @@
 //! Live concurrent multi-wave P2P admission e2e against real inference.
 //!
-//! The sequential unit e2e (`p2p_admission_backpressure_e2e`) waits for each
-//! peer convergence before the next write, so `max_concurrent_push_tasks = 1`
-//! is never contended. This live test closes that gap:
-//!
-//!   * Owner hub: `max_concurrent_push_tasks = 1` (TLA `PushWorkers = 1` shape)
-//!   * Two healthy peers as PushLog fan-out targets
-//!   * Real completions from the target named by `GENTS_EVAL_TARGET`
-//!   * **Concurrent** request submission — N waves in flight at once so the
-//!     single push worker must serialize fan-out across peers without
-//!     stranding either peer
-//!
-//! Gated: `#[ignore]` + `GENTS_LIVE_P2P_ADMISSION=1`.
-//!
 //! ```bash
 //! GENTS_LIVE_P2P_ADMISSION=1 GENTS_EVAL_TARGET=workstation-1 \
 //!   cargo test -p gents --test e2e_live \
 //!     concurrent_multiwave_single_push_worker_converges_with_live_inference \
 //!     -- --ignored --nocapture --test-threads=1
 //! ```
-//!
-//! Assertions are structural (lifecycle + non-empty answer), never exact model text.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

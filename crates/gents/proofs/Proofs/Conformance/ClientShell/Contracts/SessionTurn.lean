@@ -9,7 +9,6 @@ def row (doc request : Nat) (state : RowState) (requester : Nat := 1)
     (foldedInto : Option Nat := none) (queuedAfter retryParent : Option Nat := none) : Row :=
   { doc, request, requester, state, foldedInto, queuedAfter, retryParent }
 
-/-- Each scenario lists rows in arrival order; the last row is the newest. -/
 def scenarios : List (String × List Row) :=
   [ ("queued_behind_running_turn",
       [ row 1 100 .active

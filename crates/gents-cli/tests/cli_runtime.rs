@@ -1,6 +1,5 @@
 //! Runtime-surface CLI suites (server-backed): chat, requests, status,
 //! sessions, goals, holds, init, reconciliation.
-
 mod support;
 
 #[path = "suites/cli_chat.rs"]

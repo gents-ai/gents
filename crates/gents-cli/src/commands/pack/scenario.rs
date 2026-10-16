@@ -1,16 +1,11 @@
 //! Non-interactive pack runs: `gents pack scenario run <pack>`, `gents pack scenario init`,
 //! and `gents pack scenario seed` against an already-serving node.
 //!
-//! A pack is a self-contained desired-state root (its own `schemas/` plus the
-//! config documents) with an `experiment.json` describing how to drive it.
-//!
-//! Two orderings are load-bearing and neither is visible from the outside: the
-//! pack applies *after* the runtime is ready, so its backend is unprobed for up
-//! to one probe interval while the server already reports `serving`; and a seed
-//! written before the event source observes its collection is dropped in
-//! silence, because triggers are created/first-seen only. `pack scenario seed` waits
-//! for `/healthz` and an enabled event-backed Trigger, then confirms a correlated
-//! AgentRequest actually fired.
+//! Two orderings are load-bearing: the pack applies only after the runtime is
+//! ready (its backend is unprobed for up to one probe interval while the server
+//! already reports `serving`), and a seed written before the event source
+//! observes its collection is dropped in silence (triggers are
+//! created/first-seen only).
 use gents::config_client::GraphqlEndpoint;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -51,34 +46,22 @@ struct ScenarioManifest {
     await_timeout_secs: u64,
     #[serde(default)]
     prepare: Vec<ScenarioPrepareStep>,
-    /// Folders the scenario's operator allows plugins to reach, written to the
-    /// run's home before its server starts exactly as `gents plugin dirs add`
-    /// would. A graph stage binds a data-chosen path with no working folder,
-    /// so this is how a scenario lets one read or write outside the defaults.
     #[serde(default)]
     allowed_folders: Vec<ScenarioAllowedFolder>,
     /// Environment required by canonical dependency configs, keyed by pack.
-    /// Values are expanded with the scenario's normal environment interpolation.
     #[serde(default)]
     graph_dependency_environment: BTreeMap<String, BTreeMap<String, String>>,
-    /// Resolved from the distribution manifest, never authored a second time.
     #[serde(skip)]
     graph_dependencies: Vec<String>,
-    /// The pack's own declared plugins, resolved from the distribution
-    /// manifest so `prepare` steps validate against what the pack actually
-    /// ships (name, `bind_dir`) without re-declaring plugins in
-    /// `experiment.json`.
     #[serde(skip)]
     plugins: Vec<gents::pack::PackPlugin>,
-    /// The canonical configuration is loaded once and owns all task, context,
-    /// tool, trigger, and event-source references used by scenario validation.
+
     #[serde(skip)]
     config: Option<gents::document_config::PackConfig>,
 }
 
-/// One `allowed_folders` entry: `path` is relative to `init.tool_root` unless
-/// absolute, must stay inside it (a scenario with allowed folders declares
-/// one), and is made when missing so an output folder needs no fixture.
+/// One `allowed_folders` entry; `path` is relative to `init.tool_root` unless
+/// absolute.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ScenarioAllowedFolder {
@@ -103,21 +86,13 @@ struct PackInit {
     backend_preset: Option<String>,
     #[serde(default)]
     openai_wire_api: Option<String>,
-    /// Initial backend concurrency. Pack-owned backends can still override
-    /// this, but bundled graphs must not accidentally inherit a tiny default.
+    /// Initial backend concurrency.
     #[serde(default)]
     max_concurrent: Option<i64>,
-    /// `gents init --tool-root`. Required for readonly/write/yolo when not
-    /// inferable. Relative paths resolve against the process cwd.
     #[serde(default)]
     tool_root: Option<String>,
-    /// Environment variable receiving the canonical tool root while the
-    /// child applies the pack. This keeps pack interpolation aligned with
-    /// the root passed to `gents init`.
     #[serde(default)]
     tool_root_env_var: Option<String>,
-    /// Files or directories that must exist under the resolved tool root.
-    /// Packs use this to fail fast when invoked from the wrong checkout.
     #[serde(default)]
     tool_root_markers: Vec<String>,
 }
@@ -342,10 +317,6 @@ fn read_distribution_manifest(root: &Path) -> Result<gents::pack::PackManifest> 
     .with_context(|| format!("parsing {}", path.display()))
 }
 
-/// Resolve an explicitly selected source directory, or a pack spec resolved
-/// the way `gents pack install` resolves one (local, installed, the home's
-/// store, then the registry). The returned file is a shared cache lease and
-/// must live for the operation.
 async fn resolve_scenario_dir(
     target: &str,
     registry: Option<&str>,
@@ -372,10 +343,6 @@ async fn resolve_scenario_dir(
     Ok((root, Some(lease), pack.manifest().clone()))
 }
 
-/// `gents pack check`'s scenario validation: `experiment.json` loads and
-/// validates at its declared defaults (environment not read), the same
-/// loader `gents pack scenario run` uses, so a pack that fails this fails
-/// the same way a scenario run against it would.
 pub(super) fn validate_scenario_defaults(dir: &Path) -> Result<()> {
     let distribution = read_distribution_manifest(dir)?;
     load_manifest_with(dir, &distribution, &|_| None)?;
@@ -448,11 +415,6 @@ fn load_pack_config_with(
     .with_context(|| format!("decoding canonical pack config {}", path.display()))
 }
 
-/// A sidecar reference names an asset inside the pack, so it is held to the
-/// same rule as any other distributable pack asset: the loader and this
-/// closure ask `gents::pack::is_distributable_asset_path` rather than each
-/// deciding separately what a pack may contain. Without it a `./../` prefix
-/// resolves outside the pack directory.
 fn read_pack_sidecar(pack: &Path, reference: &str) -> Result<String> {
     let relative = reference
         .strip_prefix("./")
@@ -472,10 +434,6 @@ fn scenario_config(manifest: &ScenarioManifest) -> Result<&gents::document_confi
         .context("scenario canonical configuration was not loaded")
 }
 
-/// A Task goal declaration is controller-provisioned, so its agent needs
-/// only the goal lifecycle tools. Model-facing goal creation must stay off:
-/// granting it would add unrelated authority and make provisioning ownership
-/// ambiguous.
 fn validate_task_goal_declarations(manifest: &ScenarioManifest) -> Result<()> {
     let config = scenario_config(manifest)?;
     for task in &config.tasks {
@@ -548,12 +506,6 @@ fn validate_task_goal_declarations(manifest: &ScenarioManifest) -> Result<()> {
     Ok(())
 }
 
-/// Keep model instructions coupled to the exact tools exposed by the pack.
-///
-/// A config can be structurally valid while asking the model to call a stale
-/// tool name. These contracts follow Task -> Agent -> Context -> Tools ->
-/// DatastoreToolSurface and require the exact advertised name to occur in the
-/// task or system prompt. Surface collections must also exist in `schemas/`.
 fn validate_prompt_tool_contracts(pack: &Path, manifest: &ScenarioManifest) -> Result<()> {
     if manifest.expect.prompt_tool_contracts.is_empty() {
         return Ok(());
@@ -738,9 +690,6 @@ fn trigger_source_collections(
     Ok(collections.into_iter().collect())
 }
 
-/// Resolves a scenario trigger to the event source that feeds it. Every
-/// load-time and run-time question about an expected trigger resolves through
-/// here, so the missing/non-event refusals cannot diverge between them.
 fn scenario_event_source<'a>(
     config: &'a gents::document_config::PackConfig,
     trigger_id: &str,
@@ -763,10 +712,6 @@ fn scenario_event_source<'a>(
         .with_context(|| format!("missing EventSource {event_source_id}"))
 }
 
-/// A scenario run awaits its stages by filtering requests on the seeded job
-/// id, and an event source only writes that correlation when it has a
-/// correlation_field, so an expected trigger without one can never match and
-/// the run can only time out. No valid no-correlation run exists; refuse it.
 fn validate_expected_trigger_correlations(manifest: &ScenarioManifest) -> Result<()> {
     let config = scenario_config(manifest)?;
     for trigger_id in &manifest.expect.trigger_ids {
@@ -970,10 +915,6 @@ fn validate_manifest(manifest: &ScenarioManifest) -> Result<()> {
     Ok(())
 }
 
-/// What [`install_graph_dependencies`] needs beyond the packages themselves,
-/// grouped so the function stays under the argument-count lint: the run's
-/// home it installs into (before that home's node starts, since plugins
-/// install only on the node's own host), and the identity it installs as.
 struct GraphDependencyInstall<'a> {
     bin: &'a Path,
     home: &'a Path,
@@ -983,9 +924,6 @@ struct GraphDependencyInstall<'a> {
     grant_authority: bool,
 }
 
-/// Installs every graph dependency the scenario's distribution manifest
-/// declares, resolving each the way `gents pack install` resolves one (a
-/// `--with-pack` pre-store lets this run entirely offline).
 async fn install_graph_dependencies(
     ctx: &GraphDependencyInstall<'_>,
     packages: &[String],
@@ -1028,9 +966,6 @@ async fn install_graph_dependencies(
     Ok(())
 }
 
-/// Admits every `--with-pack` directory or `.pack` file into `home`'s store
-/// before any dependency resolves, so `gents pack scenario run --with-pack`
-/// can install an offline graph dependency without a registry.
 fn pre_store_with_packs(home: &Path, with_pack: &[PathBuf]) -> Result<()> {
     let store = gents::pack_store::PackStore::new(home);
     for path in with_pack {
@@ -1098,16 +1033,6 @@ fn resolve_pack_tool_root(
     Ok(root)
 }
 
-/// Wait for the trigger engine to announce it is watching `collection` and
-/// has opened the global update subscription that can actually receive its
-/// documents.
-///
-/// Both signals are strictly later than "serving": the event source only
-/// starts observing once the agents behind the triggers are runnable,
-/// which needs the pack's backend probed. The per-collection messages are
-/// emitted just before the subscription is opened, so treating either one as
-/// the go-signal can race the first seed. Seeding earlier is silently dropped
-/// rather than rejected.
 async fn wait_for_event_source(log: &Path, collection: &str, deadline: Duration) -> Result<()> {
     let started = Instant::now();
     while started.elapsed() < deadline {
@@ -1128,11 +1053,6 @@ async fn wait_for_event_source(log: &Path, collection: &str, deadline: Duration)
     )
 }
 
-/// `server --apply-root` opens HTTP before its applied configuration has
-/// crossed the authoritative readiness fence. Demo-run dependencies must not
-/// mutate configuration in that interval: doing so changes the fingerprint
-/// the server is waiting to publish and can make it shut itself down while a
-/// prematurely seeded request is already streaming.
 async fn wait_for_server_ready_marker(
     log: &Path,
     server: &mut tokio::process::Child,
@@ -1178,8 +1098,6 @@ fn event_source_ready(log: &str, collection: &str) -> bool {
     observes_target && subscription_open
 }
 
-/// The runtime writes coloured tracing output even to a file, which splits
-/// `source_collection=Name` with escape sequences. Strip them before matching.
 fn strip_ansi(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let mut chars = line.chars().peekable();
@@ -1202,8 +1120,6 @@ fn strip_ansi(line: &str) -> String {
     out
 }
 
-/// Match the observe line for exactly `collection`, so `ExperimentJob` does
-/// not satisfy a wait on a collection whose name it prefixes.
 fn observes_collection(line: &str, collection: &str) -> bool {
     if !line.contains("event source now observing") {
         return false;
@@ -1219,9 +1135,6 @@ fn observes_collection(line: &str, collection: &str) -> bool {
 }
 
 fn seed_mutation(seed: &PackSeed, job_id: &str, prompt: &str) -> Result<String> {
-    // The collection and every field key below are interpolated in identifier
-    // position; validate them so a malformed pack manifest cannot inject
-    // GraphQL through the seed create.
     validate_collection_identifier(&seed.collection)?;
     gents::graphql::validate_graphql_name(&seed.job_id_field)?;
     gents::graphql::validate_graphql_name(&seed.prompt_field)?;
@@ -1383,8 +1296,6 @@ struct StageResult {
     caused_by_source_doc_id: Option<String>,
 }
 
-/// Pack assertions consume the same reconstructed payloads as trace and desktop;
-/// lifecycle documents no longer contain tool arguments or results.
 async fn canonical_stage_tool_rows(
     graphql: &GraphqlEndpoint,
     request_id: &str,
@@ -1402,8 +1313,6 @@ async fn canonical_stage_tool_rows(
         .filter(|tool| tool.request_doc_id.as_deref() == Some(request_doc_id))
         .map(|tool| {
             let mut row = serde_json::to_value(tool)?;
-            // These physical coordinates are intentionally omitted by the public
-            // timeline serializer, but provenance assertions need them.
             row["_docID"] = json!(tool.doc_id);
             row["request_doc_id"] = json!(tool.request_doc_id);
             Ok(row)
@@ -1507,11 +1416,9 @@ fn verify_stage_tool_sequence_rows(
             expected.max_calls_per_message_before_boundary
         );
     }
-    // A provider may repeat the exact same deterministic write while checking
-    // its own work.  The durable collection/fan-in gates below remain the
-    // authority for materialized output count, so count byte-identical write
-    // arguments once here.  A conflicting retry or an extra logical write has
-    // different arguments and still fails closed.
+    // The provider may repeat a byte-identical deterministic write while
+    // checking its own work; count identical write arguments once. A
+    // conflicting retry still fails closed.
     let boundary_attempts = sequence_name_and_args
         .iter()
         .filter(|(_, name, _)| *name == expected.boundary_tool_name)
@@ -1884,10 +1791,6 @@ async fn verify_stage_provenance(
     request_commit_cids.sort();
     request_commit_cids.dedup();
 
-    // Canonical terminal output (#1571): the terminalization owner selects
-    // `AgentRequest.terminal_output` in the terminal transaction. Read it back
-    // through the canonical `AgentRequestRow` owner, never a retired
-    // `AgentResponse` or a serialized `AgentMessage` copy.
     let terminal_query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{
             _docID
@@ -1925,8 +1828,6 @@ async fn verify_stage_provenance(
     })?;
     let terminal_output = match selection {
         TerminalOutput::Message { message_doc_id } => {
-            // Use the same exact terminal observation owner as other consumers;
-            // provenance checking must not introduce its own header eligibility.
             let access = ConfigAccess::Graphql(graphql.clone());
             let observation = gents::session::observe_request_output(&access, &request)
                 .await
@@ -1949,11 +1850,6 @@ async fn verify_stage_provenance(
             format!("message:{message_doc_id}")
         }
         TerminalOutput::NoMessage => {
-            // Preserved NoMessage semantics: an explicit absence of an answer,
-            // never a header this layer could second-guess. The AgentMessage
-            // branch below still requires a selected assistant header, so a
-            // completed stage expecting durable output stays red on conflict
-            // instead of silently passing.
             if stage.lifecycle_state == RequestLifecycleState::Completed {
                 bail!(
                     "completed request {} selected TerminalOutput::NoMessage but the \
@@ -1985,10 +1881,7 @@ async fn verify_stage_provenance(
         )
         .await?;
         match collection {
-            "AgentMessage" if terminal_output == "no_message" => {
-                // Preserved NoMessage semantics: no assistant header is
-                // required; request provenance stays signed above.
-            }
+            "AgentMessage" if terminal_output == "no_message" => {}
             "AgentMessage"
                 if !rows.iter().any(|row| {
                     row.get("role").and_then(Value::as_str) == Some("assistant")
@@ -2506,9 +2399,9 @@ async fn await_stages(
         if all_counts_resolved && done.len() == expected_total {
             return Ok(done);
         }
-        // A trigger that fired and failed to materialize will never retry:
-        // created/first-seen means the source document is already marked seen.
-        // Surface its own last_error instead of waiting out the deadline.
+        // A trigger that fired and failed to materialize will never retry
+        // (created/first-seen marks the source document seen); surface its own
+        // last_error instead of waiting out the deadline.
         for trigger_id in trigger_ids {
             let Some(expected_count) = resolved_counts.get(trigger_id).copied().flatten() else {
                 continue;
@@ -2549,7 +2442,6 @@ fn stage_requests_query(trigger_id: &str, correlation: &str) -> String {
     )
 }
 
-/// The trigger's own `last_error`, when it recorded a failed fire.
 async fn trigger_error(graphql: &GraphqlEndpoint, trigger_id: &str) -> Option<String> {
     let query = format!(
         r#"{{ Trigger(filter: {{ trigger_id: {{ _eq: "{}" }} }}) {{ last_status last_error }} }}"#,
@@ -3167,7 +3059,6 @@ async fn await_background_completion(
     }
 }
 
-/// Timestamped so `runs/` sorts chronologically and two runs never collide.
 fn default_job_id() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -3175,7 +3066,6 @@ fn default_job_id() -> String {
         .unwrap_or_default();
     format!("exp-{secs}")
 }
-
 fn resolve_manifest_tool_root(pack: &Path, manifest: &ScenarioManifest) -> Result<Option<PathBuf>> {
     if tool_package_needs_root(&manifest.init.tool_package) {
         Ok(Some(resolve_pack_tool_root(
@@ -3189,10 +3079,6 @@ fn resolve_manifest_tool_root(pack: &Path, manifest: &ScenarioManifest) -> Resul
 }
 
 /// The ceiling a `prepare` step's `bind_dir` must stay inside: `init.tool_root`
-/// when the manifest declares one, independent of whether `init.tool_package`
-/// itself needs a root (a minimal or none tool package can still bound a
-/// prepare plugin's own bind_dir). `None` only when the manifest declares no
-/// `tool_root` at all, in which case a prepare step binds with no ceiling.
 fn resolve_prepare_within(pack: &Path, manifest: &ScenarioManifest) -> Result<Option<PathBuf>> {
     let declared = manifest
         .init
@@ -3210,10 +3096,6 @@ fn resolve_prepare_within(pack: &Path, manifest: &ScenarioManifest) -> Result<Op
     }
 }
 
-/// Allows `manifest.allowed_folders` in `home` through the operator's own
-/// allowed-folders owner (`gents::plugin::allowed`), which keeps refusing a
-/// folder that is too broad or holds the gents home. The ceiling is the same
-/// one a `prepare` step's `bind_dir` stays inside: `init.tool_root`.
 fn allow_scenario_folders(
     pack: &Path,
     manifest: &ScenarioManifest,
@@ -3236,8 +3118,7 @@ fn allow_scenario_folders(
                 "allowed_folders path {:?} must not contain ..",
                 folder.path
             );
-            // Checked against the existing part before anything is made, then
-            // again once it exists, so a symlink cannot lead outside either.
+            // A symlink cannot lead outside: re-check after creation.
             let inside = |path: &Path| path.starts_with(&root);
             let existing = path
                 .ancestors()
@@ -3309,7 +3190,7 @@ pub(crate) async fn seed(args: PackSeedArgs) -> Result<()> {
 
     let port = args.http_port;
     // The pack node refuses anonymous writes; the seed signs as the default
-    // home's node identity (`GENTS_HOME` selects another home).
+    // home's node identity.
     let graphql = crate::resolve_graphql_endpoint(
         Some(&format!("http://127.0.0.1:{port}/api/v0/graphql")),
         None,
@@ -3398,14 +3279,12 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         bail!("no prompt: pass --prompt or give the pack a default_prompt");
     }
 
-    // Everything a run produces lands under <pack>/runs/<job_id>/ — home, log,
-    // and artifacts together, so a failed run is debuggable from one place.
     let run_dir = pack.join("runs").join(&job_id);
     std::fs::create_dir_all(&run_dir)
         .with_context(|| format!("creating run directory {}", run_dir.display()))?;
 
-    // A fresh home per run by default. Triggers are first-seen, so a reused
-    // home can silently skip a stage whose source rows already existed.
+    // Triggers are first-seen, so a reused home can silently skip a stage
+    // whose source rows already existed.
     let owned_home = args.home.is_none();
     let home = args.home.clone().unwrap_or_else(|| run_dir.join("home"));
     if owned_home && home.exists() {
@@ -3454,8 +3333,7 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         .filter(|id| !id.trim().is_empty())
         .context("init did not return default_agent_id")?;
     // Scenario homes are initialized with exactly one profile. Bind every
-    // declared role explicitly so the scenario remains deterministic without
-    // weakening the ordinary multi-slot install contract.
+    // declared role explicitly for deterministic role binding.
     let staged_pack = stage_scenario_pack(
         &pack,
         &distribution,
@@ -3931,11 +3809,9 @@ mod tests {
         load_manifest_with(pack, &distribution, &|_| None)
     }
 
-    /// Regression: a prepare step's `bind_dir` ceiling must honor a declared
-    /// `init.tool_root` even under a tool package (like the default
-    /// `minimal`) that needs no root of its own; `resolve_manifest_tool_root`
-    /// answers a different question (what the running agent's own tools get)
-    /// and must stay `None` here.
+    /// Regression: prepare `bind_dir` ceiling honors `init.tool_root` even
+    /// under a tool package that needs no root of its own; the distinct
+    /// `resolve_manifest_tool_root` question must stay `None` here.
     #[test]
     fn resolve_prepare_within_uses_tool_root_independent_of_the_tool_package() {
         let pack = tempfile::tempdir().unwrap();
@@ -3971,8 +3847,6 @@ mod tests {
         assert_eq!(resolve_prepare_within(pack.path(), &unset).unwrap(), None);
     }
 
-    /// `allowed_folders` reach the run's home through the operator's own
-    /// allowed-folders owner, inside `init.tool_root` only.
     #[test]
     fn scenario_allowed_folders_are_written_inside_the_tool_root() {
         let pack = tempfile::tempdir().unwrap();
@@ -4197,9 +4071,7 @@ mod tests {
     }
 
     /// Regression: tracing colours its file output, so the raw bytes are
-    /// `source_collection` ESC `=` ESC `ExperimentJob`. Matching the plain
-    /// substring silently never fired and the runner timed out with the
-    /// observe line sitting in the log.
+    /// `source_collection` ESC `=` ESC `ExperimentJob`.
     const COLOURED: &str = "\u{1b}[32m INFO\u{1b}[0m \u{1b}[2mgents::trigger_engine::event_source\u{1b}[0m\u{1b}[2m:\u{1b}[0m event source now observing source collection \u{1b}[3msource_collection\u{1b}[0m\u{1b}[2m=\u{1b}[0mExperimentJob \u{1b}[3mgeneration\u{1b}[0m\u{1b}[2m=\u{1b}[0m3";
 
     #[test]
@@ -4414,10 +4286,6 @@ mod tests {
         copy
     }
 
-    /// A run awaits its stages by filtering requests on the seeded job id,
-    /// and an event source writes that correlation only when it has a
-    /// correlation_field, so an expected trigger without one is refused at
-    /// load instead of running into the await timeout.
     #[test]
     fn expected_trigger_without_a_correlation_field_is_refused_at_load() {
         let dir = copy_fixture_pack("documents_fixture");
@@ -4443,9 +4311,6 @@ mod tests {
         );
     }
 
-    /// An expected trigger whose event source is missing was refused only
-    /// once the run joined trigger to source; the shared resolution now
-    /// refuses it at load with the same wording.
     #[test]
     fn expected_trigger_with_a_missing_event_source_is_refused_at_load() {
         let dir = copy_fixture_pack("documents_fixture");
@@ -4828,10 +4693,6 @@ mod tests {
         assert!(!tool_call_matches(&failed_lifecycle, &expected));
     }
 
-    /// Regression for audit finding `seed-mutation-unvalidated-identifiers`:
-    /// the seed collection and field keys are interpolated as bare GraphQL
-    /// identifiers, so a malformed pack manifest must be rejected instead of
-    /// producing an injectable mutation.
     #[test]
     fn seed_mutation_validates_identifiers() {
         let seed = |collection: &str, fields: BTreeMap<String, String>| PackSeed {

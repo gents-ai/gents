@@ -1,7 +1,3 @@
-/* The foot of an open session: what the person reads and does next, over
-   the composer (the goal, why sending waits, the messages queued behind the
-   turn) and the line under it. It holds the draft, so a keystroke renders
-   this and not the transcript above it. */
 import { useMemo, useRef, type KeyboardEvent, type RefCallback } from "react";
 import { ArrowDown, Check, Pencil, X } from "lucide-react";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
@@ -32,7 +28,6 @@ export function OpenSessionComposer({
   goal,
   agentId,
 }: {
-  /** where the foot publishes the room it takes (`useComposerRoom`) */
   roomRef: RefCallback<HTMLDivElement>;
   atBottom: boolean;
   toBottom: () => void;
@@ -69,12 +64,9 @@ export function OpenSessionComposer({
     deployment?.contexts.find((c) => c.context_id === agent?.contextId),
   );
 
-  /* Local text plus the canonical shell admission decision. */
   const status = presentedComposerSendStatus(draft, sendStatus);
   const queueing = status.kind === "queue";
   const blocked = sendStatus.kind === "disabled" && !inFlight;
-  /* a status that explains why the session cannot take a message covers
-     the composer it disables */
   const covered = blocked && loadingStatus !== null;
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -83,8 +75,6 @@ export function OpenSessionComposer({
         event.preventDefault();
         edit.cancel();
       }
-      /* the message is already with the agent: a key meant to save must
-         not send the text as a new message */
       if (
         editing.reached &&
         event.key === "Enter" &&
@@ -94,7 +84,6 @@ export function OpenSessionComposer({
         event.preventDefault();
       return;
     }
-    /* ↑ in an empty composer edits the last message still waiting */
     if (event.key === "ArrowUp" && draft === "") {
       const last = lastEditable(queue);
       if (last) {
@@ -106,19 +95,9 @@ export function OpenSessionComposer({
     slash.onKeyDown(event);
   };
 
-  /* Its height is published as --composer-h, so a block that sticks to the
-     foot of the scroller can sit clear of it rather than hard-coding what
-     the composer happens to be. The composer owns the foot of the
-     scroller: anything else that sticks there passes behind it rather than
-     over it, however short the block it belongs to turns out to be. */
   return (
     <div ref={roomRef} className="sticky bottom-0 z-20 mt-auto bg-background pt-6 pb-6">
-      {/* a goal outlives the turns under it, so it sits with the
-          next one rather than at the top where it scrolls away */}
       {goal && <Goal goal={goal} />}
-      {/* conversation still running on under the composer: a short
-          fade on its top edge says the transcript has not ended,
-          where a hard edge reads as the end of it */}
       <div
         aria-hidden
         className={cn(
@@ -126,7 +105,6 @@ export function OpenSessionComposer({
           atBottom ? "opacity-0" : "opacity-100",
         )}
       />
-      {/* the way back sits on the footer's top edge, whatever the footer holds */}
       {!atBottom && (
         <Button
           variant="raised"
@@ -142,14 +120,11 @@ export function OpenSessionComposer({
       <ComposerEditContext.Provider value={editContext}>
         <SelectedPendingTray />
       </ComposerEditContext.Provider>
-      {/* the card that covers the composer shares its cell, so a
-          card taller than the composer grows the cell, not clips */}
       <div data-testid="composer" className="grid">
         <div
           inert={covered || undefined}
           className={cn("[grid-area:1/1]", covered && "invisible")}
         >
-          {/* one composer either way, so the caret stays where it is */}
           <Composer
             value={editing ? editing.text : draft}
             onChange={editing ? edit.setText : setDraft}
@@ -178,8 +153,6 @@ export function OpenSessionComposer({
             onKeyDown={onKeyDown}
             textareaRef={textarea}
             leading={<ChatFolderPicker folder={chatFolder} onChange={setChatFolder} />}
-            /* while it holds an edit, the chip's X is the way out and the
-               button saves; an edit the agent already took sends as new */
             clearable={!editing}
             submitLabel={
               editing ? (editing.reached ? "Send as a new message" : "Save") : "Send"
@@ -198,8 +171,6 @@ export function OpenSessionComposer({
         </div>
         {covered && <LoadingStatus overlay />}
       </div>
-      {/* the placeholder already says why sending is off while the
-          box is empty; the hint is only for when typed text hides it */}
       <SessionSubmissionStatus
         activityStatus={activityStatus}
         hint={
@@ -212,8 +183,6 @@ export function OpenSessionComposer({
   );
 }
 
-/* says the composer holds a waiting message, not a new one; Esc or the X
-   puts it back unchanged */
 function EditingChip({
   reached,
   onCancel,

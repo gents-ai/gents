@@ -51,8 +51,6 @@ def activeCoreRequestState : RequestState → Prop
   | .processing => True
   | _ => False
 
-/-- These enum witnesses establish neither enabled transitions nor progress.
-    Operational storage/scheduler obligations live in `StorageWriteGate`. -/
 theorem active_request_has_distinct_state (s : RequestState) (h : activeCoreRequestState s) :
     ∃ s' : RequestState, s ≠ s' := by
   cases s with

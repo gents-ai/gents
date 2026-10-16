@@ -1,9 +1,5 @@
 import Proofs.Client.Types
 
-theorem deriveAttempt_total (view : AttemptView) :
-    ∃ s : ClientTurnState, deriveAttempt view = s :=
-  ⟨deriveAttempt view, rfl⟩
-
 theorem deriveTurn_total
     {attempts : List AttemptView}
     (h : attempts ≠ []) :
@@ -17,8 +13,8 @@ theorem deriveTurn_total
       simp [deriveTurn]
       exact ih (by simp)
 
-/-- The request-only projection implements the canonical lifecycle table exactly
-    once the retry supersession override has been ruled out. -/
+/-- The request-only projection implements the canonical lifecycle table once
+the retry supersession override is ruled out. -/
 theorem deriveAttempt_request_mapping
     {req : RequestSnapshot}
     (h_not_super : req.isSuperseded = false) :
@@ -33,7 +29,6 @@ theorem deriveAttempt_request_mapping
   | mk lifecycleState isSuperseded =>
     cases lifecycleState <;> simp_all [deriveAttempt]
 
-/-- Monotonicity is over the request owner's transitions, without a client-local lifecycle. -/
 theorem lifecycle_transition_monotonic
     {pre post : RequestContext}
     (h_trans : RequestContext.Transition pre post)
@@ -43,8 +38,6 @@ theorem lifecycle_transition_monotonic
   cases h_trans <;> subst_vars <;>
     cases isSuperseded <;> simp_all [deriveAttempt, ClientTurnState.rank]
 
-/-- Learning that an attempt was superseded can only move the client projection
-    to a terminal rank; it cannot regress execution. -/
 theorem supersession_override_monotonic (state : RequestState) :
     (deriveAttempt ⟨⟨state, true⟩⟩).rank ≥
     (deriveAttempt ⟨⟨state, false⟩⟩).rank := by

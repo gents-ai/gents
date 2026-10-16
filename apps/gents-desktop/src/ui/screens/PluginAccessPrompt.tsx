@@ -1,5 +1,3 @@
-/* A running plugin call asking whether it may read a path outside the
-   working folder and the allowed folders. The call waits for the answer. */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@gents/ui/components/button";
 import {
@@ -27,12 +25,9 @@ export function PluginAccessPrompt() {
   const answering = useRef(false);
   const active = useRef(false);
   const failed = useRef<string | null>(null);
-  /* one read out at a time; an answer outdates the one out, which may have
-     read the queue before the answer reached the host */
+  // one read at a time; an answer outdates the one out
   const reading = useRef(false);
-  /* the bridge's announce is edge-triggered with no replay: a change seen
-     while a read or an answer is out must run one more read, or it stays
-     unseen until the next queue change */
+  // announce is edge-triggered with no replay: a change seen while a read is out must re-read
   const dirty = useRef(false);
   const [asks] = useState(newestWins);
 

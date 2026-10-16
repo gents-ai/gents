@@ -1,10 +1,5 @@
-//! The one path a running agent takes to call an installed plugin.
-//!
-//! A model tool and a graph stage both call through here, so the lookup of
-//! the installed record, the digest pin, the recorded grant and the budget
-//! are decided in one place. An admitted runner is cached by artifact digest
-//! and grant, so repeated calls skip the store read, the parse and the
-//! admission check; a new install or a changed grant is admitted afresh.
+//! The one path a running agent takes to call an installed plugin. A model
+//! tool and a graph stage both call through here.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,9 +20,8 @@ use super::store::{self, InstalledPlugin};
 use super::{allowed, approval};
 use super::{BoundDir, Manifold, PluginBudget, PluginOutcome, PluginRunner};
 
-/// Bytes of admitted artifacts kept in memory before the cache starts over.
-// The whole cache is dropped past the budget; per-entry eviction is the
-// upgrade if agents ever call more distinct plugins than fit.
+/// Bytes of admitted artifacts kept in memory before the cache is dropped
+/// whole (per-entry eviction is the upgrade if needed).
 const ADMITTED_BYTES_BUDGET: u64 = 512 * 1024 * 1024;
 
 struct Admitted {
@@ -38,10 +32,6 @@ struct Admitted {
     bytes: u64,
 }
 
-/// What a data-chosen path is checked against: the session's working folder
-/// (`None` when the session has no explicit one; the folder is also ignored
-/// when it is too broad, see [`allowed`]), and whether the operator can be asked about a path outside the allowed
-/// folders (`interactive`, set by an interactive chat's calls).
 pub struct BindContext<'a> {
     pub workdir: Option<&'a Path>,
     pub session_id: Option<&'a str>,
@@ -49,7 +39,6 @@ pub struct BindContext<'a> {
 }
 
 impl BindContext<'_> {
-    /// A call with nobody to ask, such as a graph node.
     pub fn headless(workdir: Option<&Path>) -> BindContext<'_> {
         BindContext {
             workdir,
@@ -60,9 +49,7 @@ impl BindContext<'_> {
 }
 
 /// The refusal sentence for a path no folder covers for this call's `access`
-/// and nobody approved. It names the next call: the folder grant that admits
-/// it, and for a writing call under a read-only grant, the reading call that
-/// already would.
+/// and nobody approved; names the next call that admits it.
 fn not_allowed(
     resolved: &allowed::Resolved,
     access: crate::pack::BindAccess,
@@ -126,7 +113,6 @@ struct PluginAttemptError {
 }
 
 fn json_digest(value: &serde_json::Value) -> String {
-    // serde_json::Value contains no non-JSON values; canonicalization cannot fail.
     let canonical = crate::workspace::canonical_json_string(value)
         .expect("JSON value has a canonical encoding");
     format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))
@@ -265,7 +251,6 @@ impl PluginExecutor {
         }
     }
 
-    /// The gents home plugins are installed under, when there is one.
     pub fn home(&self) -> Option<&std::path::Path> {
         self.home.as_deref()
     }
@@ -278,11 +263,9 @@ impl PluginExecutor {
     }
 
     /// The model session for `record`, when its `model_slot` is bound for
-    /// this installation; `None` when it is not, and the plugin then runs
-    /// exactly as it does without model calls. A binding that no longer
-    /// resolves (profile or backend gone or disabled, key missing) also gives
-    /// `None`, with the sentence to show the operator, so a call that does
-    /// not need the model still works.
+    /// this installation; `None` (with the operator sentence) when the
+    /// binding no longer resolves, so a call that does not need the model
+    /// still works.
     async fn model_session(
         &self,
         record: &InstalledPlugin,
@@ -299,7 +282,7 @@ impl PluginExecutor {
         match resolved {
             Ok(endpoint) => Ok((Some(model_calls::Session::new(endpoint)?), None)),
             Err(_) => {
-                // The error is not logged: it may name an endpoint or a key variable.
+                // Not logged: the error may name an endpoint or a key variable.
                 tracing::warn!(
                     plugin = %coordinate,
                     profile_id = %binding.profile_id,
@@ -317,13 +300,9 @@ impl PluginExecutor {
     }
 
     /// Binds the path in `input` under `record`'s declared `bind_dir` field
-    /// for one call: exactly the file or folder it names, when `context`'s
-    /// working folder or the operator's allowed folders cover it with the
-    /// access this call asks for (Lean `ToolPolicy.pluginCallAdmitted`), or
-    /// when the operator approves it for this call. `None` when the plugin declares no binding or the input does
-    /// not carry the field (the plugin then runs sealed, e.g. on inline
-    /// data). The one function a graph node and a model tool both call; the
-    /// error is one sentence for the caller.
+    /// for one call; `None` when the plugin declares no binding or the input
+    /// does not carry the field (the plugin then runs sealed). The one
+    /// function a graph node and a model tool both call.
     pub async fn bind_input(
         &self,
         record: &InstalledPlugin,
@@ -390,8 +369,8 @@ impl PluginExecutor {
 
     /// [`Self::call`] for a model tool: binds the path the model named under
     /// the ambient session, then runs. The working folder is the session's
-    /// workspace folder, else `tool_root`, the root the operator gave the
-    /// agent's file tools; never the process's own current directory.
+    /// workspace folder, else `tool_root`; never the process's own current
+    /// directory.
     pub async fn call_data_bound(
         &self,
         record: &InstalledPlugin,
@@ -405,7 +384,6 @@ impl PluginExecutor {
             .and_then(|context| context.workspace_cwd.clone())
             .or_else(|| tool_root.map(Path::to_path_buf));
         let session_id = session.and_then(|context| context.session_id);
-        // Bind against the record the call will run (see `run`).
         let record = &self.resolve(
             &format!("{}/{}", record.namespace, record.name),
             Some(&record.digest),
@@ -469,9 +447,8 @@ impl PluginExecutor {
     }
 
     /// Runs `record`'s artifact once on `input`, within its recorded grant.
-    ///
-    /// The call runs on the blocking pool. Dropping the future does not stop
-    /// a call already running; the plugin's own wall-clock budget does.
+    /// Dropping the future does not stop a call already running; the plugin's
+    /// own wall-clock budget does.
     pub async fn call(
         &self,
         record: &InstalledPlugin,
@@ -480,9 +457,6 @@ impl PluginExecutor {
         self.run(record, input, None, None).await
     }
 
-    /// [`Self::call`] with `bound` granted for this one call, in the
-    /// record's declared `bind_dir` input field (see
-    /// [`PluginRunner::call_bound`]).
     pub async fn call_bound(
         &self,
         record: &InstalledPlugin,
@@ -651,9 +625,8 @@ impl PluginExecutor {
 }
 
 /// Runs a plugin that is not installed, such as a pack author's own under
-/// `gents pack test` or a scenario `prepare` step, once on `input`: the host
-/// serves the network `runner`'s granted manifold allows, exactly as for an
-/// installed call. It has no model binding to serve.
+/// `gents pack test`, once on `input`: the host serves the network `runner`'s
+/// granted manifold allows, exactly as for an installed call.
 pub async fn call_runner(
     coordinate: &str,
     runner: Arc<PluginRunner>,

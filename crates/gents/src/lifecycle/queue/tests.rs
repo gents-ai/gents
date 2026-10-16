@@ -246,10 +246,9 @@ async fn insert_raw_queue_request(
         .expect("raw queue create returns _docID")
 }
 
-/// A real accepted background tool and its closed `ToolExecution` source for
-/// queue-owner tests.  This deliberately goes through provider publication,
-/// accepted-tool adoption, running CAS, and terminal output closure: queue
-/// notification tests must not manufacture an `AgentToolCall` authority row.
+/// Queue notification tests must not manufacture an `AgentToolCall` authority
+/// row; this fixture goes through provider publication, accepted-tool
+/// adoption, running CAS, and terminal output closure.
 struct CanonicalBackgroundFixture {
     node: Arc<EmbeddedNode>,
     parent: AgentRequest,
@@ -470,10 +469,6 @@ mod pin_tests {
     }
 
     // --- Site 3: `lifecycle::queue::mutation::session_request_create_mutation` ---
-    // Pure (no node) and already returns the full mutation string built
-    // from `create.graphql_mutation()`; the input fields are extracted from
-    // that known wrapper.
-
     #[tokio::test]
     async fn pin_session_request_create_mutation() {
         let tempdir = tempfile::tempdir().unwrap();
@@ -514,7 +509,6 @@ mod pin_tests {
         );
     }
 
-    // Pin the production preparation seam; do not reconstruct its DTO here.
     #[tokio::test]
     async fn pin_goal_continuation_preparation() {
         let tempdir = tempfile::tempdir().unwrap();

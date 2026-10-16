@@ -1,5 +1,4 @@
-//! Executable mirror of `proofs/Proofs/GoalAutomation/ReadinessGate.lean` and
-//! its native adapters over the canonical node-readiness row.
+//! Executable mirror of `proofs/Proofs/GoalAutomation/ReadinessGate.lean`.
 use super::*;
 use crate::runtime_status::{ReconcilePhase, ReconcileResult};
 use gents_protocol::row::{
@@ -47,7 +46,7 @@ pub enum GoalGatedDecision {
     AgentUnavailable,
 }
 
-/// Inputs of the existing `decide_goal_continuation` owner.
+/// Inputs of `decide_goal_continuation`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GoalContinuationFacts {
     pub status: GoalStatus,
@@ -118,7 +117,6 @@ fn publishes(decision: GoalDecision) -> bool {
     )
 }
 
-/// Mirror of `ReadinessGate.gate`.
 pub fn gate_goal_continuation(
     observation: GoalAgentObservation,
     settled: bool,
@@ -150,7 +148,6 @@ pub enum GoalClaimedDecision {
     Inactive,
 }
 
-/// Mirror of `ReadinessGate.claimedGate`.
 pub fn gate_claimed_goal_continuation(
     observation: GoalAgentObservation,
     settled: bool,
@@ -171,8 +168,6 @@ pub fn gate_claimed_goal_continuation(
     }
 }
 
-/// Mirror of `ReadinessGate.nextRetries`: the persisted
-/// `infrastructure_retry_count` after GoalSource applies `gated`.
 pub fn next_goal_infrastructure_retries(
     cause: GoalFailureCause,
     facts: &GoalContinuationFacts,
@@ -191,9 +186,6 @@ pub fn next_goal_infrastructure_retries(
     }
 }
 
-/// Routing rejects an unclaimed request with the readiness public message
-/// when its agent cannot accept work. A claim always writes
-/// `execution_generation`, so its absence proves nothing executed.
 pub fn goal_failure_cause(request: &AgentRequestRow) -> GoalFailureCause {
     let unclaimed = request.execution_generation.is_none();
     let failed = request.lifecycle_state == Some(RequestLifecycleState::Failed);
@@ -208,8 +200,6 @@ pub fn goal_failure_cause(request: &AgentRequestRow) -> GoalFailureCause {
     }
 }
 
-/// `newer_than_terminal` compares the row's write time with the terminal
-/// request's; a missing or unparseable time is never newer.
 pub fn goal_agent_observation(
     projected: &ProjectedAgentReadiness,
     newer_than_terminal: bool,
@@ -255,7 +245,6 @@ pub const GOAL_READINESS_WAIT_PREFIX: &str = "waiting for agent readiness: ";
 pub struct ObservedGoalAgent {
     pub observation: GoalAgentObservation,
     pub settled: bool,
-    /// Presentation-safe reason recorded when the Goal waits or stops on it.
     pub reason: String,
 }
 

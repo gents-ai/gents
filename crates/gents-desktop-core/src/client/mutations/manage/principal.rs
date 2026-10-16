@@ -1,4 +1,3 @@
-//! Canonical authored configuration through the shared retained-candidate owner.
 use anyhow::Result;
 #[cfg(test)]
 use defra_node::EmbeddedNode;
@@ -38,9 +37,8 @@ pub async fn upsert_node(node: &Arc<EmbeddedNode>, document: &Node) -> Result<()
     .await
 }
 
-/// Make `agent_id` the node's default and enable it in one apply.
-/// Publication rejects a disabled default, so the two changes cannot land
-/// separately; the same apply replaces a stored default that is disabled.
+/// Publication rejects a disabled default, so enabling the new default and
+/// replacing a stored default that is disabled must land in one apply.
 pub async fn set_default_agent_on(
     access: &ConfigAccess,
     node_did: &str,
@@ -95,11 +93,9 @@ async fn set_default_agent_in_txn(
     Ok(())
 }
 
-/// Apply supplied canonical components under an existing node. The required
-/// PackConfig node is scope-only: every field except node_did must have its
-/// canonical default. Node settings use upsert_node instead.
-/// Omitted component documents remain unchanged. No deletes, interpolation,
-/// node creation, or graph compilation are implied by this operation.
+/// PackConfig node must be scope-only (canonical defaults); node settings go
+/// through upsert_node. No deletes, interpolation, node creation, or graph
+/// compilation.
 #[cfg(test)]
 pub async fn apply_config_components(
     node: &Arc<EmbeddedNode>,
@@ -184,10 +180,8 @@ fn config_components_plan(
     Ok((owner, plan))
 }
 
-/// Patch existing scoped components atomically through the canonical patch and
-/// candidate owners. Omitted fields (including hidden credentials) are retained.
-/// Explicit null is a value validated by the canonical document deserializer.
-/// This operation never creates or removes a document.
+/// Patch existing scoped components atomically; omitted fields (including
+/// hidden credentials) are retained. Never creates or removes documents.
 pub async fn patch_config_components_on(
     access: &ConfigAccess,
     node_did: &str,
@@ -367,8 +361,6 @@ mod tests {
             })
         })
         .await?;
-        // A default stored disabled before the rule: every validated apply
-        // over this node now fails until the default changes.
         ConfigAccess::write_local(
             &node,
             "test.default.stale",

@@ -1,12 +1,8 @@
 use super::*;
 
 impl ToolCallLifecycle {
-    /// Running mode-flip: await_mode Foreground → Background.
-    ///
-    /// Lean parity: ToolCallContext.Transition.background.
-    /// Requires Running state. Returns `ModeAlreadyBackground` if already in
-    /// Background mode. Persists the new await_mode to the row, then updates
-    /// the in-memory field on success.
+    /// Running mode-flip: await_mode Foreground → Background (Lean
+    /// `ToolCallContext.Transition.background`).
     pub async fn background(&mut self) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "background")?;
         anyhow::ensure!(
@@ -67,13 +63,9 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
-    /// Running mode-flip: await_mode Background → Foreground.
-    ///
-    /// Lean parity: ToolCallContext.Transition.foreground.
-    /// Requires Running state. Returns `ModeAlreadyForeground` if already in
-    /// Foreground mode. Persists the new await_mode to the row, then updates
-    /// the in-memory field on success. An `agent_new`/`agent_message` row
-    /// is background-only: its result arrives only as a message.
+    /// Running mode-flip: await_mode Background → Foreground (Lean
+    /// `ToolCallContext.Transition.foreground`). An `agent_new`/`agent_message`
+    /// row is background-only: its result arrives only as a message.
     pub async fn foreground(&mut self) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "foreground")?;
         if self.is_session_message() {

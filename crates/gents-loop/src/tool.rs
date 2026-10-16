@@ -22,24 +22,18 @@ pub enum ToolError {
     ToolCallError(#[from] Box<dyn std::error::Error + Send + Sync>),
     #[error("tool json error: {0}")]
     JsonError(#[from] serde_json::Error),
-    /// The model's tool-call `arguments` string could not be parsed even after a
-    /// tolerant (escape-only) repair pass: the payload was malformed (a
-    /// lone-backslash escape the model emitted raw that the repair could not make
-    /// deserialize) or truncated by the generation hitting its token cap
-    /// (`finish_reason == "length"`, surfaced here as a [`serde_json`]
-    /// `Category::Eof`). The dispatcher renders this into a `JsonError:`-prefixed
-    /// tool result so the call terminalizes `failed(ArgumentInvalid)` and the
-    /// model is told what went wrong (truncated vs malformed) and re-emits a
-    /// corrected tool call on its next turn — rather than the parse failure being
-    /// swallowed as a generic result the model blindly repeats.
+    /// `arguments` string unparseable even after the escape-only repair pass
+    /// (malformed, or truncated by the generation token cap — serde_json
+    /// `Category::Eof`). Terminalizes the call as `failed(ArgumentInvalid)` so
+    /// the model is told what went wrong instead of the parse failure being
+    /// swallowed.
     #[error("tool args unparseable ({kind}): {reason}")]
     UnparseableArgs {
         kind: UnparseableArgsKind,
         reason: String,
     },
     /// A trusted tool adapter observed an execution failure and rendered the
-    /// model-facing detail without asking persistence to infer semantics from
-    /// arbitrary output text.
+    /// model-facing detail itself.
     #[error("{text}")]
     ReportedFailure { class: FailureClass, text: String },
 }
@@ -86,18 +80,15 @@ pub trait Tool: Sized + Send + Sync {
         args: Self::Args,
     ) -> impl Future<Output = Result<Self::Output, Self::Error>> + Send;
 
-    /// Tool-policy admission for these arguments. The loop evaluates it before
-    /// the dispatch election, so a rejection leaves the call Pending and is
-    /// settled as a pre-dispatch failure. It must be side-effect free and must
-    /// reject only what `call` would reject before any external effect; launch
-    /// preparation that depends on the host remains in `call`.
+    /// Policy admission for these arguments: side-effect free, evaluated
+    /// before the dispatch election (a rejection leaves the call Pending as a
+    /// pre-dispatch failure), and must reject only what `call` would reject
+    /// before any external effect.
     fn admit(&self, _args: &Self::Args) -> Result<(), Self::Error> {
         Ok(())
     }
 
-    /// Convert the concrete tool error at the trusted adapter boundary. Tools
-    /// that deliberately return a recoverable, model-facing failure override
-    /// this to preserve its typed class and rendered detail.
+    /// Convert the concrete tool error at the trusted adapter boundary.
     fn into_dyn_error(error: Self::Error) -> ToolError {
         ToolError::ToolCallError(Box::new(error))
     }
@@ -124,16 +115,13 @@ pub trait ToolDyn: Send + Sync {
         })
     }
 
-    /// True only for the built-in command runner, whose results render
-    /// [`crate::live_output::COMMAND_OUTPUT_META_PREFIX`] metadata with
-    /// [`crate::live_output::COMMAND_OUTPUT_VOLATILE_FIELDS`]. Any other tool's
-    /// text is its own, even when it has the same shape.
+    /// True only for the built-in command runner (its results render command
+    /// output metadata; any other tool's text is its own).
     fn emits_command_envelope(&self) -> bool {
         false
     }
 
-    /// See [`Tool::admit`]. Arguments that do not parse are admitted so that
-    /// `call` reports them with its argument diagnostics.
+    /// See [`Tool::admit`].
     fn admit(&self, _args: &str) -> Result<(), ToolError> {
         Ok(())
     }
@@ -179,21 +167,12 @@ impl<T: Tool> ToolDyn for T {
     }
 }
 
-/// Deserialize a tool's `Args` from the model's raw `arguments` string, applying
-/// one tolerant [`repair_tool_arguments`] pass when the raw string fails to
-/// parse.
-///
-/// The model occasionally emits an `arguments` string that Rust's `serde_json`
-/// rejects: a lone backslash that is not a legal JSON escape (the "raw-escape"
-/// shape stewards hit on markdown bodies with `\d+` regexes / `C:\path`s), or a
-/// payload truncated mid-value because the generation hit its token cap
-/// (`finish_reason == "length"`). Rather than feed that error straight back to
-/// the model as the tool result — which only makes it re-emit the same broken
-/// payload — we try a conservative repair and re-parse. If the repair still does
-/// not yield a value that deserializes into `Args`, we raise the typed,
-/// retryable [`ToolError::UnparseableArgs`] so the run re-attempts the inference.
-// pub, not pub(crate): gents' native tool call sites (eth, meta_tools) parse
-// their typed arguments through this, and a pub(crate) item in this crate is
+/// Deserialize a tool's `Args` from the model's raw `arguments` string,
+/// applying one tolerant escape-only repair pass when the raw string fails
+/// to parse; on unrecoverable failure raise the typed retryable
+/// [`ToolError::UnparseableArgs`].
+// pub, not pub(crate): gents' native tool call sites parse their typed
+// arguments through this, and a pub(crate) item in this crate is
 // invisible outside it.
 pub fn parse_tool_args<A>(args: &str) -> Result<A, ToolError>
 where
@@ -202,9 +181,8 @@ where
     let value = match serde_json::from_str::<serde_json::Value>(args) {
         Ok(value) => value,
         Err(first_error) => {
-            // Repair only JSON syntax. Once an object is valid JSON, typed
-            // deserialization below reports its schema problem directly instead
-            // of suggesting irrelevant escaping retries.
+            // Repair only JSON syntax; once valid, typed deserialization
+            // reports its schema problem directly.
             if let Some(repaired) = repair_tool_arguments(args) {
                 serde_json::from_str::<serde_json::Value>(&repaired)
                     .map_err(|second_error| unparseable_args_error(&second_error))?
@@ -243,11 +221,10 @@ fn schema_args_error(error: serde_json::Error) -> ToolError {
     } else {
         UnparseableArgsKind::Schema
     };
-    // Unknown/missing-field diagnostics contain only schema vocabulary and
-    // are the most useful correction. Type/value diagnostics can echo the
-    // supplied value, so retain only the declared expectation. Never reflect
-    // arbitrary argument contents (which may include credentials) in retry
-    // guidance.
+    // Unknown/missing-field diagnostics contain only schema vocabulary.
+    // Type/value diagnostics can echo the supplied value, so retain only the
+    // declared expectation — never reflect arbitrary argument contents
+    // (which may include credentials) in retry guidance.
     let reason = match kind {
         UnparseableArgsKind::UnknownField | UnparseableArgsKind::MissingField => raw,
         UnparseableArgsKind::WrongType => raw
@@ -263,36 +240,25 @@ fn schema_args_error(error: serde_json::Error) -> ToolError {
     ToolError::UnparseableArgs { kind, reason }
 }
 
-/// Conservatively repair a tool-call `arguments` string the model emitted in a
-/// shape Rust's `serde_json` rejects, returning the repaired string only if a
+/// Conservatively repair a tool-call `arguments` string the model emitted in
+/// a shape `serde_json` rejects, returning the repaired string only if a
 /// repair was applied. Two corruptions are handled, both escapes:
 ///
-/// 1. **Lone backslashes**: the model writes a single backslash that is not a
-///    legal JSON escape (`\d`, `C:\temp`, a bare `\` before a normal char). We
-///    walk the string and double any backslash that does not introduce a valid
-///    JSON escape (`\" \\ \/ \b \f \n \r \t \uXXXX`), turning the raw output
-///    into the escaped form the model should have emitted.
-/// 2. **Literal control characters inside string literals** (#589): the
-///    model's reasoning channel bleeds raw newlines (and other `0x00-0x1f`
-///    bytes) into the middle of a JSON string, which `serde_json` rejects as
-///    "control character found while parsing a string". We escape them
-///    (`\n`, `\r`, `\t`, … `\uXXXX`), preserving the model's intent — a
-///    literal control character inside a string is never legal JSON, so the
-///    transform is identity on valid payloads. Control characters BETWEEN
-///    tokens are legal whitespace and are left untouched. This pass runs
-///    after backslash-doubling so every backslash begins a well-formed escape
-///    and in-string tracking is unambiguous.
+/// 1. **Lone backslashes**: double any backslash that does not introduce a
+///    valid JSON escape (`\" \\ \/ \b \f \n \r \t \uXXXX`).
+/// 2. **Literal control characters inside string literals** (#589): escape
+///    raw `0x00-0x1f` bytes (`\n`, `\r`, …, `\uXXXX`); identity on valid
+///    payloads. Control characters BETWEEN tokens are legal whitespace and
+///    are left untouched. Runs after backslash-doubling so in-string
+///    tracking is unambiguous.
 ///
-/// The repair is **escape-only by design**: it never closes a truncated value
-/// (dangling string / unbalanced brackets). Closing a truncation can produce JSON
-/// that deserializes even though the content was cut mid-field, which would let a
-/// half-written value (e.g. a truncated status report) run as if it were whole.
-/// By refusing to close, a `finish_reason == "length"` payload simply stays
-/// unparseable and is surfaced as [`ToolError::UnparseableArgs`] instead of run.
+/// Escape-only by design: it never closes a truncated value (dangling
+/// string / unbalanced brackets). Closing a truncation could let a
+/// half-written value run as if whole; by refusing to close, a
+/// `finish_reason == "length"` payload stays unparseable and surfaces as
+/// [`ToolError::UnparseableArgs`].
 ///
-/// Returns `None` when neither corruption was found (the caller has already
-/// tried a clean parse, so there is nothing to gain from re-parsing an
-/// identical string).
+/// Returns `None` when neither corruption was found (nothing to re-parse).
 pub fn repair_tool_arguments(raw: &str) -> Option<String> {
     let escaped = escape_lone_backslashes(raw);
     let escaped = escape_control_characters_in_strings(&escaped);
@@ -376,30 +342,14 @@ fn escape_control_characters_in_strings(raw: &str) -> String {
 }
 
 /// Normalize a tool-call `arguments` value to the provider-valid **object**
-/// shape (Lean `PromptAssembly.normalizeArgs`, issues #589/#590). Providers
-/// render history through templates that iterate `arguments.items()`, so a
-/// non-object value — a raw `Value::String` (the #589 poison), an array, a
-/// scalar, or `null` — deterministically jams every subsequent render of the
-/// session (#590). Applied at both rig-converter seams
-/// ([`crate::llm::rig_compat::from_rig_tool_call`], ingest — nothing
-/// non-object is ever accumulated into durable history — and
-/// [`crate::llm::rig_compat::to_rig_tool_call`], egress — already-poisoned
-/// durable history self-heals at request build).
-///
-/// The policy (each case fenced by conformance vectors mirroring the Lean
-/// theorems N1–N4):
-/// - an object passes through **unchanged** (N2);
-/// - `null` and an empty/whitespace string become `{}` silently (the
-///   absent-args shape providers accept);
-/// - a string that parses — after the tolerant escape-only
-///   [`repair_tool_arguments`] pass — to an object becomes **that object**
-///   (N4: the intended call survives, e.g. the #589 corrupt payload);
-/// - anything else (non-object JSON, unparseable string, array, scalar)
-///   becomes `{}` with a bounded warning so production occurrences are
-///   countable without dumping unbounded payloads.
-///
-/// `seam` labels the boundary ("ingest"/"egress") in the warning so healing
-/// of old poison is distinguishable from newly ingested poison.
+/// shape (Lean `PromptAssembly.normalizeArgs`, issues #589/#590): an object
+/// passes through unchanged (N2); `null` and empty/whitespace strings
+/// become `{}`; a string that parses after the tolerant
+/// [`repair_tool_arguments`] pass to an object becomes that object (N4);
+/// anything else becomes `{}` with a bounded warning (N1). Applied at both
+/// rig-converter seams (ingest — nothing non-object is accumulated into
+/// durable history — and egress — already-poisoned durable history
+/// self-heals at request build). `seam` labels the boundary in the warning.
 pub fn normalize_tool_call_arguments(
     seam: &'static str,
     tool_name: &str,
@@ -467,15 +417,11 @@ mod tests {
 
     #[test]
     fn repair_passes_through_valid_json_unchanged() {
-        // A well-formed string needs no repair; the helper returns None so the
-        // caller does not re-parse an identical string.
         assert!(repair_tool_arguments(&valid_sample_json()).is_none());
     }
 
     #[test]
     fn repair_escapes_lone_backslash_into_valid_json() {
-        // A lone backslash before `d` (the model's raw `\d+` regex) is not a legal
-        // JSON escape; repair doubles it so the literal backslash survives.
         let raw = r#"{"body":"regex \d+ here"}"#;
         let repaired = repair_tool_arguments(raw).expect("lone backslash should be repaired");
         let value: serde_json::Value =
@@ -485,8 +431,6 @@ mod tests {
 
     #[test]
     fn repair_preserves_valid_escapes_and_only_fixes_lone_backslashes() {
-        // A mix in a COMPLETE object: legal `\n` and `\"` stay; the raw `\d` gets
-        // doubled. The result must parse and keep the legal escapes' meaning.
         let raw = r#"{"body":"line\nwith \d and a quote \" here"}"#;
         let repaired = repair_tool_arguments(raw).expect("should repair the lone backslashes");
         let value: serde_json::Value =
@@ -508,7 +452,6 @@ mod tests {
 
     #[test]
     fn repair_keeps_unicode_escape_intact() {
-        // `é` is a legal escape and must not be doubled.
         let raw = r#"{"body":"café \d"}"#;
         let repaired = repair_tool_arguments(raw).expect("the lone \\d should trigger a repair");
         let value: serde_json::Value =
@@ -518,9 +461,6 @@ mod tests {
 
     #[test]
     fn repair_does_not_close_truncation() {
-        // Escape-only repair never completes a cut-off value. A payload truncated
-        // mid-string has no lone backslash to fix, so repair is a no-op (None) and
-        // the truncation survives to be reported — never closed-and-run.
         let raw = r#"{"report_type":"steward","body":"partial body that got cut"#;
         assert!(
             repair_tool_arguments(raw).is_none(),
@@ -530,9 +470,6 @@ mod tests {
 
     #[test]
     fn parse_tool_args_recovers_repairable_payload() {
-        // A payload with an unambiguously-invalid lone backslash (`\d`, the
-        // steward regex case) AND all required fields present should be repaired
-        // and deserialize into the typed args, preserving the literal backslash.
         let raw = r#"{"report_type":"steward","body":"regex \d+ here","findings":["x"]}"#;
         let parsed: Sample = parse_tool_args(raw).expect("repairable payload should parse");
         assert_eq!(parsed.report_type, "steward");
@@ -541,9 +478,6 @@ mod tests {
 
     #[test]
     fn parse_tool_args_truncated_reports_truncated_kind() {
-        // Truncated mid-string: escape-only repair cannot complete it, so we
-        // surface the typed signal kinded Truncated (finish_reason=length / serde
-        // Category::Eof).
         let raw = r#"{"report_type":"steward","body":"a long body that got cut o"#;
         let error = parse_tool_args::<Sample>(raw).expect_err("truncated payload must not parse");
         assert!(matches!(
@@ -557,8 +491,6 @@ mod tests {
 
     #[test]
     fn parse_tool_args_wrong_type_reports_schema_kind() {
-        // Valid JSON with the wrong schema is not malformed JSON and should tell
-        // the model exactly which correction class to make.
         let raw = r#"{"report_type":"steward","body":"ok","findings":"not-an-array"}"#;
         let error =
             parse_tool_args::<Sample>(raw).expect_err("type-mismatched payload must not parse");
@@ -624,11 +556,6 @@ mod tests {
 
     #[test]
     fn parse_tool_args_truncation_in_last_field_is_not_run() {
-        // A payload truncated INSIDE its last present field: if the repair closed
-        // the dangling string it would yield `{"note":"…"}`, which DOES deserialize
-        // into the tool's `Args` — and running it would silently commit a
-        // half-written value. Escape-only repair refuses to close, so this never
-        // runs; it is reported Truncated.
         let raw = r#"{"note":"a long note that got cut o"#;
         let error = parse_tool_args::<SingleField>(raw)
             .expect_err("a truncated-but-would-type-check payload must NOT run");
@@ -642,13 +569,8 @@ mod tests {
     }
 
     // ===== #589/#590: control-char salvage + object-shape normalization =====
-
     #[test]
     fn repair_escapes_control_characters_inside_strings() {
-        // The #589 production class: literal newlines (control characters)
-        // inside JSON strings, from reasoning-channel bleed. Escaping them is
-        // semantics-preserving (the model meant a newline) and lets the
-        // intended object parse; duplicate keys resolve last-wins.
         let raw = test_support::CORRUPT_TOOL_ARGS_589;
         let repaired =
             repair_tool_arguments(raw).expect("control characters in strings must be repaired");
@@ -663,18 +585,12 @@ mod tests {
 
     #[test]
     fn repair_leaves_inter_token_whitespace_untouched() {
-        // Newlines BETWEEN tokens are legal JSON whitespace; a payload that is
-        // already valid must not be "repaired" (None = nothing to re-parse).
         let raw = "{\n  \"a\": 1\n}";
         assert!(repair_tool_arguments(raw).is_none());
     }
 
     #[test]
     fn repair_control_chars_still_does_not_close_truncation() {
-        // A payload with an in-string control char AND a truncated tail: the
-        // control char is escaped, but the truncation is never closed — the
-        // reparse still fails Eof and is reported Truncated, never run (#512
-        // guarantee preserved).
         let raw = "{\"note\":\"line one\nline two that got cut";
         let error = parse_tool_args::<SingleField>(raw)
             .expect_err("truncated payload must not run even after control-char repair");
@@ -694,9 +610,6 @@ mod tests {
 
     #[test]
     fn parse_tool_args_salvages_589_contamination_to_typed_args() {
-        // Dispatch-level salvage: the corrupt payload deserializes into the
-        // tool's typed Args after repair, so the intended call runs instead of
-        // wasting a turn on "re-call the tool with valid JSON".
         let parsed: DescribeToolArgs = parse_tool_args(test_support::CORRUPT_TOOL_ARGS_589)
             .expect("the #589 payload must salvage into typed args");
         assert_eq!(parsed.tool_name, "list_hosts");
@@ -708,14 +621,12 @@ mod tests {
 
     #[test]
     fn normalize_passes_object_through_unchanged() {
-        // N2 (object fixpoint): the healthy flow has no regression.
         let object = serde_json::json!({"city": "NYC", "nested": {"a": [1, 2]}});
         assert_eq!(normalize(&object), object);
     }
 
     #[test]
     fn normalize_coerces_null_and_empty_string_to_empty_object() {
-        // Empty/absent arguments egress as {} (the 200-control shape).
         assert_eq!(normalize(&serde_json::Value::Null), serde_json::json!({}));
         assert_eq!(normalize(&serde_json::json!("")), serde_json::json!({}));
         assert_eq!(
@@ -726,7 +637,6 @@ mod tests {
 
     #[test]
     fn normalize_parses_stringified_object() {
-        // N4 (salvage): a JSON string holding an object becomes that object.
         assert_eq!(
             normalize(&serde_json::json!("{\"city\":\"NYC\"}")),
             serde_json::json!({"city": "NYC"})
@@ -735,9 +645,6 @@ mod tests {
 
     #[test]
     fn normalize_salvages_589_corrupt_string_payload() {
-        // N4 on the production poison: the persisted Value::String of corrupt
-        // bytes normalizes to the intended object, so a poisoned session
-        // self-heals on next egress.
         let poison = serde_json::Value::String(test_support::CORRUPT_TOOL_ARGS_589.into());
         let normalized = normalize(&poison);
         assert!(normalized.is_object());
@@ -746,9 +653,8 @@ mod tests {
 
     #[test]
     fn normalize_coerces_non_object_shapes_to_empty_object() {
-        // N1 (soundness): every non-object, non-salvageable shape becomes {}.
-        // Covers the full #590 reproduction matrix: "[]" (the repro), a JSON
-        // string literal (the production case), scalars, arrays.
+        // Full #590 reproduction matrix: "[]" (the repro), a JSON string
+        // literal (the production case), scalars, arrays.
         for poison in [
             serde_json::json!("[]"),
             serde_json::json!("[1,2]"),
@@ -773,7 +679,6 @@ mod tests {
 
     #[test]
     fn normalize_is_idempotent() {
-        // N3: ingest-then-egress normalization composes without drift.
         for value in [
             serde_json::json!({"city": "NYC"}),
             serde_json::json!("[]"),
@@ -789,14 +694,7 @@ mod tests {
 
     #[test]
     fn parse_tool_args_lone_backslash_then_truncation_is_not_run() {
-        // The corner the first ultracode review caught: a lone-backslash escape
-        // EARLY (so serde's first error is Syntax, not Eof) and truncation LATE.
-        // An escape-and-close repair would fix the backslash, close the cut, and
-        // run a half-written body. Escape-only repair fixes the backslash but
-        // leaves the truncation, so the reparse fails with Eof and we report
-        // Truncated — the truncated value is never run.
         let raw = r#"{"report_type":"steward C:\drive","body":"the cluster is healthy, node C is"#;
-        // The early lone backslash means serde's FIRST error is a syntax error.
         let first = serde_json::from_str::<Sample>(raw).expect_err("must not parse");
         assert_ne!(first.classify(), serde_json::error::Category::Eof);
         let error = parse_tool_args::<Sample>(raw)

@@ -1,5 +1,3 @@
-/* A new model drafted beside the page that needs it: the full profile
-   editor, nothing saved until Create, and the caller gets the id. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { useState } from "react";
 import { EditorSheet } from "./EditorSheet";
@@ -14,16 +12,13 @@ export function ProfileSheet({
 }: {
   deployment: NodeView;
   open: boolean;
-  /* the new profile's id, or null when discarded */
   onClose: (profileId: string | null) => void;
-  /* the backend it is added to (a backend's Add profile row) */
   backendId?: string;
 }) {
   const { accounts } = useAccounts(deployment.nodeDid);
   const [draft, setDraft] = useState(() =>
     newProfileDocument(deployment, backendId, accounts),
   );
-  /* drafted as it opens, from the accounts as they are by then */
   const [wasOpen, setWasOpen] = useState(false);
   if (open !== wasOpen) {
     setWasOpen(open);

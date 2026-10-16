@@ -3,10 +3,6 @@ import Proofs.CanonicalOutput.Execution.Properties
 
 namespace CanonicalOutput.Execution.DispatchObservation
 
-/-- A successful durable replay is not a newly won right to invoke a tool.
-Receipt loss may leave the row Running while conveying no execution authority.
-Native refinement must obtain the pre-state under the same transaction/gate as
-the dispatch election; a caller's cached Pending handle is not this witness. -/
 inductive Observation where
   | rejected
   | unacknowledged
@@ -18,9 +14,6 @@ def mayInvoke : Observation → Bool
   | .fresh => true
   | _ => false
 
-/-- Compose the existing durable dispatch with its caller-visible receipt.
-No new lifecycle or recovery transition is introduced. A rejected transaction
-keeps its input world; a lost receipt retains the committed world. -/
 def attempt (before : World) (actor : Gate.Actor) (now : Time)
     (generation : Generation) (permit : DispatchPermit) (acknowledged : Bool) :
     World × Observation :=
@@ -76,9 +69,6 @@ theorem committed_dispatch_is_running (before after : World) (actor : Gate.Actor
   exact (dispatch_requires_committed_intent_and_marks_running
     (Gate.atTime before now) execution generation permit hdispatch).1
 
-/-- A receipt lost after a successful commit cannot be repaired into a second
-execution permit by releasing/reacquiring the gate and receiving a replay ACK.
-Only gate scheduling fields vary here; no tool lifecycle evidence is assumed. -/
 theorem replay_after_commit_never_authorizes (before after : World)
     (actor nextActor : Gate.Actor) (now later : Time) (generation : Generation)
     (permit : DispatchPermit) (owner : Option Gate.Actor)

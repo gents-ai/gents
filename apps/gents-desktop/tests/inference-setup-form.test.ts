@@ -102,14 +102,12 @@ describe("the inference setup form", () => {
     expect(connected.accounts.signedIn).toEqual({
       openai: { credentialId: "c-1", accountRef: null },
     });
-    /* set aside: a later read of the same stored account does not connect it */
     const aside = run(
       connected,
       { type: "signedOut", provider: "openai" },
       read("c-1"),
     );
     expect(aside.accounts.signedIn).toEqual({});
-    /* a sign-in connects the new account, and reads seed again */
     const again = run(
       aside,
       {

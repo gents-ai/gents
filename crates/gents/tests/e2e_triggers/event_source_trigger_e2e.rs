@@ -1,32 +1,3 @@
-//! Task 24 — end-to-end integration test for the full Trigger pipeline.
-//!
-//! This test exercises the complete vertical from DefraDB event bus all the
-//! way to a materialized `AgentRequest` row. It:
-//!
-//!   1. Boots a real `Gents` against an embedded DefraDB node with a
-//!      `MockModelEndpoint` so the backend probes healthy without reaching
-//!      a live LLM.
-//!   2. Registers a custom `WebhookEvent` schema *before* seeding the
-//!      Task / Trigger docs — Trigger runtime resolution (and the
-//!      EventSource filter probe) both need the source collection already
-//!      present on the node.
-//!   3. Seeds one Task + one Trigger bound to the default behavior,
-//!      gated by `filter: { kind: { _eq: "signup" } }` with a `{{ doc.external_id }}`
-//!      prompt template.
-//!   4. Waits for routing and the trigger's durable arrival cursor.
-//!   5. Writes a matching `WebhookEvent` source doc and polls the
-//!      `AgentRequest` collection until exactly one request lands with the
-//!      expected trigger lineage.
-//!   6. Asserts the rendered prompt made it onto the request's `content` and
-//!      that the Trigger's runtime-owned bookkeeping fields
-//!      (`fire_count`, `last_status`, `last_fired_source_doc_id`) were
-//!      written through by the EventSource `on_result` callback (Task 22).
-//!
-//! A real control-plane document write drives a real source-doc event, which
-//! drives a real fire through the TriggerEngine and ProductionMaterializer
-//! onto a persisted AgentRequest row.
-
-use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;

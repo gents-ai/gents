@@ -3,40 +3,14 @@ import Proofs.Basic
 /-!
 # Causal hop: the only loop bound between agents
 
-Every agent is an ordinary agent, addressed directly; the runtime encodes no
-parent/child hierarchy. The one causal fact the runtime keeps is the hop: the
-signed, immutable `AgentRequest.request_hop`, written once by
-`lifecycle::materialize` and checked at admission against the target's
-`Node.max_request_hop`.
-
-Each session has a *current hop*: the hop of its latest request. The hop
-bounds call *depth*, not how many calls a session makes, so it separates the
-edges between sessions:
-
-* An *outward* edge — a tool-caused new request or steering continuation of
-  another session (`agent_new`, `agent_message`) — is strictly further than
-  its cause: `hop = max current (cause + 1)`.
-* A *return* edge — the completion wake that delivers a caused request's
-  result back to the session that made the call, along `caused_by_parent_*` —
-  keeps the caller's current hop. Counting it as `cause + 1` made every
-  question-and-answer round trip climb two hops, so a caller exhausted the
-  bound after a few sequential calls (#2065).
-* Same-session continuations (retries, goal continuations, user steering,
-  native process completion wakes) copy the session's current hop, never the
-  hop of an older request that scheduled them.
-* A user-authored or trigger root request is hop zero and so resets its
-  session.
-
-There is no separate refusal path: a request over the bound is written like
-any other, becomes its session's latest request, and is refused at admission,
-so every later return or same-session continuation copies a hop over the
-bound and is refused too; the session waits for its user. Return edges never
-change a hop, so a loop between agents — two sessions messaging each other —
-still climbs by at least one per send and is refused after a bounded number of
-sends, with no cascade, fence or tree walk. The hop deliberately does not
-bound how many times a caller acts on its own returned results. An
-`agent_message` to the caller's own current session is refused outright: it
-would be a same-session steering continuation with no hop increase.
+The runtime keeps one causal fact: the signed, immutable
+`AgentRequest.request_hop`, written once by `lifecycle::materialize` and checked
+at admission against the target's `Node.max_request_hop`. Outward edges are
+strictly further than their cause; return edges keep the caller's current hop
+(counting a return as `cause + 1` exhausted the bound after a few sequential
+calls, #2065). There is no separate refusal path: an over-bound request is
+written like any other, becomes its session's latest request, and is refused at
+admission, so later continuations of that session are refused too.
 -/
 
 namespace CausalHop
@@ -44,19 +18,16 @@ namespace CausalHop
 /-- Default `Node.max_request_hop` when the node leaves it unset. -/
 def defaultMaxRequestHop : Nat := 8
 
-/-- Why a request exists, relative to the request whose hop it inherits. -/
 inductive Cause where
-  /-- A user, trigger or schedule root. -/
   | root
-  /-- Outward: caused by another session's action at hop `causeHop`, a
-  `agent_new`/`agent_message` request or steering continuation whose cause is
-  the calling request. -/
+  /-- Outward: caused by another session's action at hop `causeHop`
+  (`agent_new`/`agent_message` request or steering continuation). -/
   | crossSession (causeHop : Nat)
   /-- Return: a session-message completion wake delivering a caused request's
   result back to the calling session. -/
   | returnEdge
-  /-- A same-session continuation: retry, goal continuation, user steering or
-  a native process completion wake. It cannot extend a chain. -/
+  /-- A same-session continuation (retry, goal continuation, user steering,
+  native process completion wake); cannot extend a chain. -/
   | continuation
   deriving DecidableEq, Repr
 
@@ -69,8 +40,8 @@ def nextHop : Cause → Nat → Nat
   | .continuation, own => own
 
 /-- Admission refuses a request whose hop exceeds the target node's
-`max_request_hop`. The check reads only the signed hop; no lineage walk,
-replication of the predecessor, or cooperation of the sender is needed. -/
+`max_request_hop`, reading only the signed hop: no lineage walk, replication of
+the predecessor, or cooperation of the sender is needed. -/
 def admitHop (maxHop hop : Nat) : Bool := decide (hop ≤ maxHop)
 
 /-- `agent_message` never addresses the caller's own current session. -/
@@ -82,23 +53,16 @@ theorem root_hop_is_zero (own : Nat) : nextHop .root own = 0 := rfl
 theorem continuation_preserves_hop (own : Nat) :
     nextHop .continuation own = own := rfl
 
-/-- A returned result keeps the caller's current hop, whatever the hop of the
-caused request that produced it. -/
 theorem return_keeps_caller_hop (own : Nat) : nextHop .returnEdge own = own := rfl
 
-/-- A return into a session whose current hop is over the bound is refused,
-like every other continuation of that session. -/
 theorem return_into_refused_session_is_refused (maxHop own : Nat) (h : maxHop < own) :
     admitHop maxHop (nextHop .returnEdge own) = false := by
   simp [nextHop, admitHop]; omega
 
-/-- A cross-session cause is strictly behind what it causes, whatever the
-target session's own history. -/
 theorem cross_session_exceeds_cause (causeHop own : Nat) :
     causeHop + 1 ≤ nextHop (.crossSession causeHop) own := by
   simp only [nextHop]; omega
 
-/-- A cross-session cause never lowers the target session's own hop. -/
 theorem cross_session_keeps_own (causeHop own : Nat) :
     own ≤ nextHop (.crossSession causeHop) own := by
   simp only [nextHop]; omega
@@ -146,9 +110,8 @@ theorem hopAlong_ge (start : Nat) (steps : List Step) :
       simpa [hopAlong, sends, Step.apply, nextHop] using ih start
 
 /-- Every admitted request has at most `maxHop` agent-to-agent sends in its
-causal chain, across any sessions and interleaved continuations: `maxHop` is
-the `max_request_hop` of the node that admits it. There is no global
-constant; `defaultMaxRequestHop` only fills an unset field. -/
+causal chain; there is no global constant, `defaultMaxRequestHop` only fills an
+unset field. -/
 theorem admitted_chain_sends_le_max (maxHop start : Nat) (steps : List Step)
     (h_admit : admitHop maxHop (hopAlong start steps) = true) :
     sends steps ≤ maxHop := by
@@ -156,8 +119,6 @@ theorem admitted_chain_sends_le_max (maxHop start : Nat) (steps : List Step)
   simp [admitHop] at h_admit
   omega
 
-/-- A message loop is cut: once a chain holds more sends than the admitting
-target's bound, its request is refused. -/
 theorem send_beyond_max_is_refused (maxHop start : Nat) (steps : List Step)
     (h_sends : maxHop < sends steps) :
     admitHop maxHop (hopAlong start steps) = false := by
@@ -165,15 +126,12 @@ theorem send_beyond_max_is_refused (maxHop start : Nat) (steps : List Step)
   simp [admitHop]
   omega
 
-/-- Continuations never change admissibility: retries, goal continuations,
-user steering and native completion wakes of an admitted request stay
-admitted. -/
 theorem continuation_preserves_admission (maxHop hop : Nat) :
     admitHop maxHop (nextHop .continuation hop) = admitHop maxHop hop := rfl
 
 /-- Two sessions messaging each other from a root at hop zero: each send
 continues the other session, whose current hop is that of the request two
-links back. Returns do not appear: they change no hop (`run_erases_returns`). -/
+links back. Returns do not appear (`run_erases_returns`). -/
 def pingPongHops (n : Nat) : List Nat :=
   (List.range n).foldl
     (fun hops _ =>
@@ -182,11 +140,7 @@ def pingPongHops (n : Nat) : List Nat :=
       hops ++ [nextHop (.crossSession cause) own])
     [0]
 
-/-! ## Calls and returns between two sessions
-
-A caller `a` and a callee `b`, each at its current hop. An outward send from
-one session is materialized in the other; a return is materialized in the
-session that made the call. -/
+/-! ## Calls and returns between two sessions -/
 
 structure Pair where
   a : Nat

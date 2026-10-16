@@ -32,9 +32,6 @@ async fn a_retained_generator_waiter_blocks_flush_until_the_generator_is_polled(
     assert!(poll_once(next.as_mut()).is_pending());
     drop(next);
 
-    // Unlock assigns the queued mutex waiter its turn. The async-stream keeps
-    // that acquisition future alive even though the temporary `next()` was
-    // dropped, so a later gate user cannot pass it until the stream is polled.
     drop(first_guard);
     let mut flush = Box::pin(gate.lock());
     assert!(poll_once(flush.as_mut()).is_pending());

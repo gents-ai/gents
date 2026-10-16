@@ -33,7 +33,6 @@ theorem occurrences_sound {s : Strategy} {doc pat : Doc} {i : Nat}
     matchesAt fold s doc pat i = true :=
   (List.mem_filter.mp h).2
 
-/-- A selected ladder rung contains exactly its actual, nonempty occurrences. -/
 theorem ladderMatch_resolves {doc pat : Doc} {s : Strategy} {occ : List Nat}
     (h : ladderMatch fold doc pat = some (s, occ)) :
     occ = occurrences fold s doc pat ∧ occ ≠ [] := by

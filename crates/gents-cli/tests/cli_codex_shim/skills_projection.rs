@@ -220,8 +220,6 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
     Ok(())
 }
 
-/// An explicit Codex skill selection resolves through the runtime's effective
-/// set and injects the body even when the turn contains no text.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -367,8 +365,6 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
     Ok(())
 }
 
-/// A selection outside the bound agent's effective set must not inject its
-/// skill body.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;

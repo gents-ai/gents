@@ -1,8 +1,4 @@
-//! Provider-view compaction: the pure reduction engine and history-shaping
-//! logic moved to `gents-loop` (G-1), since the loop's own dispatch needs it
-//! (`sanitize_history_for_provider` runs inside `run_loop_stream`) with no
-//! DefraDB dependency. Re-exported here so `crate::compaction` keeps every
-//! symbol this crate's callers already use.
+//! Provider-view compaction; re-exports `gents_loop::compaction`.
 #[cfg(test)]
 #[path = "compaction/tests.rs"]
 mod tests;
@@ -14,7 +10,6 @@ use futures::future::BoxFuture;
 pub use gents_loop::compaction::*;
 
 /// Build reduction options from canonical behavior compaction settings.
-/// Lives here (not on the gents-loop type) because `ResolvedAgent` is native.
 pub(crate) fn reduction_options_for_agent(
     behavior: &crate::config::ResolvedAgent,
 ) -> anyhow::Result<ReductionOptions> {
@@ -92,10 +87,7 @@ pub(crate) fn backend_scoped_reduction_engine(
     Arc::new(BackendScopedReductionEngine { inner, backend_id })
 }
 
-// Glue for the test suite above, which reaches these bare through
-// `use super::*` the way it did before the move (gents-loop's own
-// `compaction` module imports them privately for its own use, so they do not
-// ride the glob re-export above).
+// Test-only glue for the tests module above.
 #[cfg(test)]
 use crate::provider_input::budget::{
     rolling_summary_input_budget, summary_output_ceiling, threshold_decision, ThresholdDecision,

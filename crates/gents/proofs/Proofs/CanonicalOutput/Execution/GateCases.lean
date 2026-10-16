@@ -24,10 +24,6 @@ opaque outputAloneDoesNotRenew : Option Bool := do
   let recovered ← commit recoveryHeld 2 10 (.recover 7 8 5 20 items)
   pure (recovered.currentGeneration? == some 8)
 
-/-- Under the scheduling premise that the owner of a published, dispatched tool
-intent reaches its held write gate at the due time, it renews explicitly before
-yielding. This composes the transcript intent, not the external tool scheduler,
-and uses no tool output as heartbeat evidence. -/
 opaque toolWaitExplicitRenewal : Option Bool := do
   let acceptHeld ← acquire (initial (world 5)) 1 true
   let accepted ← commit acceptHeld 1 5
@@ -62,8 +58,6 @@ opaque sameTaskWaitDoesNotCommit : Option Bool := do
   pure ((commit suspended 1 5 (.append 7 (raw 100 0 0 5))).isNone &&
     suspended.segments.isEmpty)
 
-/-- The truncation counterexample is reached through admitted raw appends,
-not by assuming an arbitrary malformed initial collection. -/
 opaque completeTruncationRejected : Option Bool := do
   let first ← acquire (initial (world 5)) 1 true
   let firstCommitted ← commit first 1 5 (.append 7 providerFirstFlush)
@@ -126,9 +120,6 @@ def releaseAndAcquire (state : World) (actor : Actor := 1) : Option World := do
   let released ← scheduling state actor .release
   acquire released actor true
 
-/-- The foreground lifecycle is one chain of real gate commits. Delivery is
-not inferred from terminal state: close and publication are separate composed
-owner operations, and parent completion occurs only afterward. -/
 opaque foregroundEndToEnd : Option Bool := do
   let acceptHeld ← acquire (initial (world 5)) 1 true
   let accepted ← commit acceptHeld 1 5
@@ -170,8 +161,6 @@ opaque foregroundCompletionWhileRunningRejected : Option Bool := do
   pure (delivered.execution.lease == expectedLease && delivered.queued.isSome &&
     delivered.execution.transcript.nextSeq == 3)
 
-/-- Backgrounding is an explicit fenced transition. The parent then completes,
-and the still-running tool closes and publishes afterward without reviving it. -/
 opaque backgroundAccepted : Option World := do
   let acceptHeld ← acquire (initial (world 5)) 1 true
   commit acceptHeld 1 5 (.accept 7 providerTurn providerMessage [foregroundAdmission])
@@ -415,9 +404,6 @@ def allGateCaseChecks : Bool :=
   , spawnedAdmissionReplayCases
   , corruptRevocationCases ].all id
 
-/- One native compilation evaluates every executable seam regression. Keeping
-the checks in one witness avoids recompiling the broad Gate operation closure
-once per theorem while retaining each exact Boolean assertion above. -/
 theorem all_gate_case_regressions_hold : allGateCaseChecks = true := by native_decide
 
 end CanonicalOutput.Execution.Gate.Cases

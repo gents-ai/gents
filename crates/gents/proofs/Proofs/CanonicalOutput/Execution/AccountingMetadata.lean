@@ -17,9 +17,6 @@ theorem ownedToolByDocument_map (world : World) (edit : OwnedTool → OwnedTool)
   | nil => rfl
   | cons head tail => cases tail <;> rfl
 
-/-- Immutable accepted-header ownership survives a pointwise tool edit.  The
-edit may change execution accounting fields, but not physical/provenance
-identity or the spawned-background await mode read by the header projection. -/
 theorem acceptedHeaderBindsTool_map
     (world : World) (edit : OwnedTool → OwnedTool) (tool : OwnedTool)
     (hdocument : ∀ value, (edit value).document = value.document)

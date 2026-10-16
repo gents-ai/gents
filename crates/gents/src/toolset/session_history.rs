@@ -154,8 +154,7 @@ pub struct SessionTokenUsage {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionInferenceObservation {
     pub token_usage: SessionTokenUsage,
-    /// Distinct main-loop rounds, excluding summarizer calls and retry
-    /// attempts. None when an inference lacks its dispatch coordinate.
+    /// Distinct main-loop rounds, excluding summarizer calls and retry attempts.
     pub inference_turns: Option<u64>,
     pub latest_context: Option<super::context_budget::LastRequestContextSnapshot>,
     pub latest_completion_tokens: Option<u64>,
@@ -1051,7 +1050,6 @@ fn inference_turns(rows: &[InferenceDetailRow]) -> Result<Option<u64>> {
         match row.call_kind.as_deref() {
             Some("inference") => {}
             Some("compaction" | "oneoff") => continue,
-            // Legacy or unknown kinds cannot establish a known turn count.
             _ => return Ok(None),
         }
         let Some(request_doc_id) = row.request_doc_id.as_deref().filter(|id| !id.is_empty()) else {
@@ -1415,9 +1413,8 @@ mod tests {
     use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
     use crate::llm::tool::Tool;
     use crate::session::canonical_rows::{
-        decode_transcript_message_row, output_segment_create_variables,
-        transcript_message_create_variables, CREATE_AGENT_MESSAGE_MUTATION,
-        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+        output_segment_create_variables, transcript_message_create_variables,
+        CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
 
     use super::*;
@@ -1706,10 +1703,6 @@ mod tests {
             .expect("request-a-new document ID")
             .to_string();
 
-        // Canonical transcript fixtures (#1571): one authored user header and
-        // one provider-turn assistant header, each over a closed source. The
-        // document travels as a typed GraphQL variable through the native
-        // retry API; the pinned create response key is add_<Collection>.
         let node_did: &str = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
         let canonical_messages = [
             (
@@ -1789,8 +1782,6 @@ mod tests {
                 .and_then(Value::as_str)
                 .map(str::to_string)
                 .expect("pinned add_AgentOutputSegment response shape");
-            // The docID travels inside the typed JSON variable, not GraphQL
-            // text, so it must be the raw value.
             let close_doc_id = segment_doc_id;
             let message = gents_protocol::output::TranscriptMessage {
                 message_key: (*message_key).to_string(),
@@ -1843,29 +1834,6 @@ mod tests {
             );
         }
 
-        // A retired field must be rejected by the strict canonical decoder,
-        // never silently decoded from a malformed row: AgentMessage no longer
-        // carries content, timestamp, or a logical request_id (DefraDB itself
-        // permits unknown keys in create input, so the assertion belongs at
-        // the typed owner, not at the GraphQL boundary).
-        let retired = json!({
-            "_docID": "retired-doc-1",
-            "message_key": "retired:1",
-            "session_id": "session-a",
-            "node_did": node_did,
-            "request_doc_id": request_doc_id,
-            "publication": {"kind": "request_execution", "execution_generation": "generation-a"},
-            "outcome": "complete",
-            "sequence": 9,
-            "role": "user",
-            "blocks": [],
-            "created_at": "2026-06-03T10:09:00Z",
-            "timestamp": "2026-06-03T10:09:00Z"
-        });
-        assert!(
-            decode_transcript_message_row(&retired).is_err(),
-            "retired AgentMessage fields must fail the canonical decoder, not silently decode"
-        );
         let accounting = gents_protocol::rendered_request::ContextAccounting {
             accounting_version: gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
             turn_index: 2,

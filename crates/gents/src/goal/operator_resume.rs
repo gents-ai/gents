@@ -1,5 +1,5 @@
 //! Operator resume composes the existing Goal and request owners in one transaction.
-use super::*;
+
 use crate::config_client::ConfigApplyTxn;
 use crate::identity::NodeIdentity;
 use crate::lifecycle::materialize::{sign_request, RequestSigner};
@@ -13,13 +13,10 @@ pub struct GoalResumeReceipt {
     pub request_id: String,
     pub doc_id: String,
     pub created: bool,
-    /// Goal status observed in this transaction; a historical receipt need not be active.
+    /// Goal status observed in this transaction.
     pub goal_status: GoalStatus,
 }
 
-/// Resume the canonical goal and publish its continuation atomically.
-/// `from_request_id` identifies the operation across retries, including retries
-/// after the child has finished and the goal has advanced again.
 pub async fn resume_goal_request(
     access: &crate::ConfigAccess,
     identity: &dyn NodeIdentity,
@@ -184,19 +181,12 @@ async fn existing_resume_receipt_in_txn(
     }))
 }
 
-/// A Goal resumed on another account: the move, `None` when the profile was
-/// already there, and the resume.
 #[derive(Debug, Clone, Serialize)]
 pub struct GoalResumeOnReceipt {
     pub switch: Option<crate::config_client::SwitchReceipt>,
     pub resume: GoalResumeReceipt,
 }
 
-/// Move the profile whose usage limit stopped `from_request_id` to
-/// `target_backend_id` (with `move_companions`, its companions), then resume
-/// the Goal from that request. A retry with the same `from_request_id` finds
-/// the profile already on the target and returns the same continuation.
-/// `plugin_slots` gives the plugins bound to the moved profile on the host.
 #[allow(clippy::too_many_arguments)]
 pub async fn resume_goal_on_account(
     access: &crate::ConfigAccess,
@@ -255,8 +245,6 @@ pub async fn resume_goal_on_account(
             .map_err(|error| anyhow::anyhow!("switch failed; nothing changed: {error:#}"))?;
             Some(receipt)
         }
-        // The profile that served the call left the limited account: an
-        // earlier run moved it. Done when it runs on the target.
         None => {
             let on_target = call.map(|call| FailedCall {
                 backend_id: Some(target_backend_id.to_owned()),

@@ -1,15 +1,7 @@
 //! #738/#724 LIVE qualification: a real model, faced with drifted file
-//! content, lands the edit through `edit_file` instead of falling back to
-//! `write_file` — the production failure pattern that motivated #738 (amy
-//! gave up on `edit_file` for 80% of her mutation work).
-//!
-//! What real inference exercises that the deterministic fences cannot:
-//! whether the MODEL, given the new tool description, diagnostics, and
-//! content-hash flow, actually completes the read → edit_file loop on a
-//! file whose bytes drift from what the read rendering suggests (CRLF +
-//! trailing whitespace). The matcher itself is Lean-fenced
-//! (`Proofs/EditMatch/`) and conformance-fenced; this pins the
-//! model-facing contract end to end.
+//! content (CRLF + trailing whitespace), lands the edit through `edit_file`
+//! instead of falling back to `write_file`. The matcher itself is Lean-fenced
+//! (`Proofs/EditMatch/`); this pins the model-facing contract end to end.
 //!
 //! Runs against the inference target named by `GENTS_EVAL_TARGET`:
 //!

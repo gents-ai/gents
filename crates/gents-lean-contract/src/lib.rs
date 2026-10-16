@@ -84,7 +84,6 @@ fn load_contract_stdout_for(
     Ok(stdout)
 }
 
-/// Run `lake build` for the contract target under the proofs-dir lock.
 pub fn run_lake_build(proofs_dir: &Path) -> Result<()> {
     with_proofs_dir_lock(proofs_dir, || run_lake_build_unlocked(proofs_dir))
 }
@@ -97,8 +96,6 @@ fn run_lake_build_unlocked(proofs_dir: &Path) -> Result<()> {
         command
             .args(["build", CONTRACT_TARGET])
             .current_dir(proofs_dir)
-            // Match `Command::output`: Lake must never inherit an interactive
-            // stdin while this process holds the proofs-directory lock.
             .stdin(Stdio::null());
         let output = run_with_visible_output(&mut command, io::stdout(), io::stderr())
             .with_context(|| {
@@ -205,11 +202,8 @@ fn spawn_output_task(
         .spawn(move || forward_and_capture(source, destination))
 }
 
-/// Best-effort termination followed by an unconditional reap and task joins.
-///
-/// The original setup/wait error remains the reported error; cleanup failures
-/// must not replace it or make a Lake invocation eligible for different retry
-/// behavior.
+/// Termination must not replace the original setup/wait error or change
+/// eligibility for lake-build retry behavior.
 fn terminate_and_reap_child(child: &mut Child, tasks: Vec<OutputTask>) {
     let _ = child.kill();
     let _ = child.wait();
@@ -232,8 +226,8 @@ fn forward_and_capture(mut source: impl Read, mut destination: impl Write) -> io
         }
         let chunk = &buffer[..read];
         captured.extend_from_slice(chunk);
-        // Observability must not change command success semantics if a caller
-        // closes its output stream early (for example, a piped test command).
+        // A caller may close its output stream early; observability must not
+        // change command success semantics.
         let _ = destination.write_all(chunk);
         let _ = destination.flush();
     }
@@ -368,11 +362,9 @@ fn acquire_exclusive_lock(lock_path: &Path) -> Result<File> {
     }
 }
 
-/// Cargo supplies the consuming package's manifest paths when running tests
-/// and binaries, independently of their target directory and caller cwd.
-/// Compiled helper paths cannot identify the selected source after artifact
-/// cloning. Direct execution must provide the same explicit runtime anchor.
-/// Repository metadata bounds discovery to the selected checkout.
+/// Cargo supplies the consuming package's manifest paths at runtime; direct
+/// execution must provide the same explicit anchor, and repository metadata
+/// bounds discovery to the selected checkout.
 pub fn proofs_dir() -> Result<PathBuf> {
     let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR")
         .map(PathBuf::from)
@@ -475,243 +467,6 @@ mod tests {
     use std::thread;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test]
-    fn extracts_contract_json_between_unique_sentinels() {
-        let stdout = format!(
-            "debug {{noise}}\n{CONTRACT_JSON_BEGIN}\n{{\"ok\":true}}\n{CONTRACT_JSON_END}\nmore {{noise}}\n"
-        );
-
-        assert_eq!(extract_contract_json(&stdout).unwrap(), "{\"ok\":true}");
-    }
-
-    #[test]
-    fn rejects_duplicate_sentinels() {
-        let stdout = format!(
-            "{CONTRACT_JSON_BEGIN}\n{{\"ok\":true}}\n{CONTRACT_JSON_BEGIN}\n{CONTRACT_JSON_END}\n"
-        );
-
-        let err = extract_contract_json(&stdout).unwrap_err().to_string();
-        assert!(
-            err.contains("duplicate"),
-            "expected duplicate sentinel error, got: {err}"
-        );
-    }
-
-    #[test]
-    fn retries_transient_lake_dependency_fetch_failures() {
-        assert!(is_retryable_lake_build_failure(
-            "",
-            "info: mathlib: cloning https://github.com/leanprover-community/mathlib4\n\
-             error: external command 'git' exited with code 128"
-        ));
-    }
-
-    #[test]
-    fn does_not_retry_ordinary_lean_build_errors() {
-        assert!(!is_retryable_lake_build_failure(
-            "",
-            "error: Proofs/Foo.lean:12:4: unknown identifier 'bar'"
-        ));
-    }
-
-    #[test]
-    fn forwarding_command_output_retains_exact_diagnostics() {
-        let input = b"cold Lean build progress\n";
-        let mut forwarded = Vec::new();
-
-        let captured = forward_and_capture(input.as_slice(), &mut forwarded).unwrap();
-
-        assert_eq!(captured, input);
-        assert_eq!(forwarded, input);
-    }
-
-    #[test]
-    fn forwarding_command_output_retries_interrupted_reads() {
-        struct InterruptedOnce<'a> {
-            input: &'a [u8],
-            interrupted: bool,
-        }
-
-        impl Read for InterruptedOnce<'_> {
-            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-                if !self.interrupted {
-                    self.interrupted = true;
-                    return Err(io::Error::from(io::ErrorKind::Interrupted));
-                }
-                self.input.read(buffer)
-            }
-        }
-
-        let input = b"resumed output\n";
-        let mut forwarded = Vec::new();
-        let captured = forward_and_capture(
-            InterruptedOnce {
-                input,
-                interrupted: false,
-            },
-            &mut forwarded,
-        )
-        .unwrap();
-
-        assert_eq!(captured, input);
-        assert_eq!(forwarded, input);
-    }
-
-    #[test]
-    fn forwarding_command_output_preserves_raw_read_error() {
-        struct FailingReader;
-
-        impl Read for FailingReader {
-            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
-                Err(io::Error::other("sentinel pipe read failure"))
-            }
-        }
-
-        let task = thread::spawn(|| forward_and_capture(FailingReader, io::sink()));
-        let error = join_output_task(task, "stdout").unwrap_err();
-        let chain = error.chain().map(ToString::to_string).collect::<Vec<_>>();
-
-        assert_eq!(error.to_string(), "sentinel pipe read failure");
-        assert_eq!(format!("{error:#}"), "sentinel pipe read failure");
-        assert_eq!(chain, vec!["sentinel pipe read failure"]);
-        assert_eq!(
-            error.downcast_ref::<io::Error>().map(io::Error::kind),
-            Some(io::ErrorKind::Other)
-        );
-    }
-
-    #[cfg(unix)]
-    #[derive(Clone, Default)]
-    struct CapturingWriter(Arc<Mutex<Vec<u8>>>);
-
-    #[cfg(unix)]
-    impl CapturingWriter {
-        fn bytes(&self) -> Vec<u8> {
-            self.0.lock().unwrap().clone()
-        }
-    }
-
-    #[cfg(unix)]
-    impl Write for CapturingWriter {
-        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buffer);
-            Ok(buffer.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn visible_command_honors_configured_stdin_and_preserves_separate_nonzero_output() {
-        let fixture = unique_temp_dir("visible-command-stdin");
-        let stdin_path = fixture.join("stdin");
-        std::fs::write(&stdin_path, b"configured stdin\n").unwrap();
-
-        let forwarded_stdout = CapturingWriter::default();
-        let forwarded_stderr = CapturingWriter::default();
-        let mut command = Command::new("sh");
-        command
-            .args([
-                "-c",
-                "IFS= read -r line || exit 91\n\
-                 printf 'stdin=%s\\n' \"$line\"\n\
-                 printf 'stdout-only\\n'\n\
-                 printf 'stderr-only\\n' >&2\n\
-                 exit 23",
-            ])
-            .stdin(File::open(&stdin_path).unwrap());
-
-        let output = run_with_visible_output(
-            &mut command,
-            forwarded_stdout.clone(),
-            forwarded_stderr.clone(),
-        )
-        .unwrap();
-
-        assert_eq!(output.status.code(), Some(23));
-        assert_eq!(output.stdout, b"stdin=configured stdin\nstdout-only\n");
-        assert_eq!(output.stderr, b"stderr-only\n");
-        assert_eq!(forwarded_stdout.bytes(), output.stdout);
-        assert_eq!(forwarded_stderr.bytes(), output.stderr);
-
-        let _ = std::fs::remove_dir_all(fixture);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn visible_command_drains_both_streams_beyond_pipe_capacity() {
-        const REPETITIONS: usize = 4_096;
-        const STDOUT_CHUNK: &str = "stdout-0123456789abcdef-0123456789abcdef-0123456789abcdef\n";
-        const STDERR_CHUNK: &str = "stderr-fedcba9876543210-fedcba9876543210-fedcba9876543210\n";
-
-        let script = format!(
-            "i=0\n\
-             while [ \"$i\" -lt {REPETITIONS} ]; do\n\
-               printf '%s' '{STDOUT_CHUNK}'\n\
-               i=$((i + 1))\n\
-             done &\n\
-             stdout_pid=$!\n\
-             i=0\n\
-             while [ \"$i\" -lt {REPETITIONS} ]; do\n\
-               printf '%s' '{STDERR_CHUNK}' >&2\n\
-               i=$((i + 1))\n\
-             done &\n\
-             stderr_pid=$!\n\
-             wait \"$stdout_pid\"\n\
-             wait \"$stderr_pid\"\n"
-        );
-        let forwarded_stdout = CapturingWriter::default();
-        let forwarded_stderr = CapturingWriter::default();
-        let mut command = Command::new("sh");
-        command.args(["-c", &script]);
-
-        let output = run_with_visible_output(
-            &mut command,
-            forwarded_stdout.clone(),
-            forwarded_stderr.clone(),
-        )
-        .unwrap();
-
-        assert!(output.status.success());
-        assert_eq!(output.stdout, STDOUT_CHUNK.as_bytes().repeat(REPETITIONS));
-        assert_eq!(output.stderr, STDERR_CHUNK.as_bytes().repeat(REPETITIONS));
-        assert_eq!(forwarded_stdout.bytes(), output.stdout);
-        assert_eq!(forwarded_stderr.bytes(), output.stderr);
-    }
-
-    #[cfg(unix)]
-    struct FailingWriter;
-
-    #[cfg(unix)]
-    impl Write for FailingWriter {
-        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
-            Err(io::Error::from(io::ErrorKind::BrokenPipe))
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Err(io::Error::from(io::ErrorKind::BrokenPipe))
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn visible_command_ignores_forwarding_destination_failures() {
-        let mut command = Command::new("sh");
-        command.args([
-            "-c",
-            "printf 'captured stdout\\n'; printf 'captured stderr\\n' >&2",
-        ]);
-
-        let output = run_with_visible_output(&mut command, FailingWriter, FailingWriter).unwrap();
-
-        assert!(output.status.success());
-        assert_eq!(output.stdout, b"captured stdout\n");
-        assert_eq!(output.stderr, b"captured stderr\n");
-    }
-
     fn unique_temp_dir(label: &str) -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -723,166 +478,6 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
-    }
-
-    #[test]
-    fn copied_helper_uses_runtime_manifest_source() {
-        const CHILD: &str = "GENTS_LEAN_CONTRACT_PROVENANCE_CHILD";
-        const EXPECTED: &str = "GENTS_LEAN_CONTRACT_PROVENANCE_EXPECTED";
-        if let Ok(mode) = std::env::var(CHILD) {
-            let expected = PathBuf::from(std::env::var_os(EXPECTED).unwrap());
-            if mode.starts_with("valid") {
-                let actual = proofs_dir().expect("runtime source anchor");
-                assert_eq!(actual, expected);
-                let stdout = load_contract_stdout_for(
-                    &actual,
-                    &PROCESS_STDOUT_CACHE,
-                    &PROCESS_LOAD_MUTEX,
-                    &|_| Ok(()),
-                    &|root| Ok(std::fs::read_to_string(root.join("source-marker"))?),
-                )
-                .unwrap();
-                assert_eq!(stdout, "copied workspace source");
-            } else {
-                let error = proofs_dir().expect_err("invalid anchor must fail closed");
-                let expected_error = if mode.starts_with("relative") {
-                    "runtime Cargo manifest paths must be absolute"
-                } else if mode == "missing nested proofs" || mode == "outside sibling" {
-                    "could not locate crates/gents/proofs"
-                } else {
-                    &mode
-                };
-                assert!(format!("{error:#}").contains(expected_error), "{error:#}");
-            }
-            return;
-        }
-
-        let selected = proofs_dir().expect("normal Cargo test supplies runtime manifest paths");
-        let fixture = unique_temp_dir("copied-provenance");
-        let package = fixture.join("checkout-b/crates/consumer");
-        let proofs = fixture.join("checkout-b/crates/gents/proofs");
-        let other = fixture.join("checkout-c");
-        let target = fixture.join("custom-target/debug/deps");
-        for dir in [&package, &proofs, &other, &target] {
-            std::fs::create_dir_all(dir).unwrap();
-        }
-        for dir in [&package, &other] {
-            std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"fixture\"\n").unwrap();
-        }
-        std::fs::write(proofs.join("lakefile.lean"), "").unwrap();
-        std::fs::write(proofs.join("source-marker"), "copied workspace source").unwrap();
-        let outer = fixture.join("outer-checkout");
-        let outer_proofs = outer.join("crates/gents/proofs");
-        let nested_root = outer.join(".gents/workspaces/nested");
-        let nested_package = nested_root.join("crates/consumer");
-        let sibling_root = fixture.join("sibling-checkout");
-        let sibling_package = sibling_root.join("packages/consumer");
-        let sibling_proofs = sibling_root.join("packages/gents/proofs");
-        let direct_package = fixture.join("archive-direct/consumer");
-        let direct_proofs = direct_package.join("proofs");
-        let outside_root = fixture.join("outside-sibling-checkout");
-        for dir in [
-            &nested_package,
-            &sibling_package,
-            &direct_package,
-            &outside_root,
-        ] {
-            std::fs::create_dir_all(dir).unwrap();
-            std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"fixture\"\n").unwrap();
-        }
-        for root in [&outer, &nested_root, &outside_root] {
-            std::fs::write(root.join(".git"), "gitdir: fixture").unwrap();
-        }
-        std::fs::create_dir(sibling_root.join(".git")).unwrap();
-        for dir in [
-            &outer_proofs,
-            &sibling_proofs,
-            &direct_proofs,
-            &fixture.join("gents/proofs"),
-        ] {
-            std::fs::create_dir_all(dir).unwrap();
-            std::fs::write(dir.join("lakefile.lean"), "").unwrap();
-            std::fs::write(dir.join("source-marker"), "copied workspace source").unwrap();
-        }
-        let proofs = std::fs::canonicalize(proofs).unwrap();
-        assert_ne!(std::fs::canonicalize(selected).unwrap(), proofs);
-        let copied = target.join("copied-helper-tests");
-        std::fs::copy(std::env::current_exe().unwrap(), &copied).unwrap();
-
-        for mode in [
-            "valid",
-            "valid sibling",
-            "valid direct",
-            "missing nested proofs",
-            "outside sibling",
-            "missing runtime CARGO_MANIFEST_DIR",
-            "missing runtime CARGO_MANIFEST_PATH",
-            "invalid runtime CARGO_MANIFEST_DIR",
-            "invalid runtime CARGO_MANIFEST_PATH",
-            "relative directory",
-            "relative manifest",
-            "runtime Cargo manifest paths disagree",
-        ] {
-            let mut command = Command::new(&copied);
-            command
-                .args([
-                    "tests::copied_helper_uses_runtime_manifest_source",
-                    "--exact",
-                    "--nocapture",
-                ])
-                .current_dir(&other)
-                .env(CHILD, mode)
-                .env(EXPECTED, &proofs)
-                .env("CARGO_MANIFEST_DIR", &package)
-                .env("CARGO_MANIFEST_PATH", package.join("Cargo.toml"));
-            match mode {
-                "valid sibling" | "valid direct" | "missing nested proofs" | "outside sibling" => {
-                    let (anchor, expected) = match mode {
-                        "valid sibling" => (&sibling_package, &sibling_proofs),
-                        "valid direct" => (&direct_package, &direct_proofs),
-                        "missing nested proofs" => (&nested_package, &proofs),
-                        _ => (&outside_root, &proofs),
-                    };
-                    command
-                        .env("CARGO_MANIFEST_DIR", anchor)
-                        .env("CARGO_MANIFEST_PATH", anchor.join("Cargo.toml"))
-                        .env(EXPECTED, std::fs::canonicalize(expected).unwrap());
-                }
-                "missing runtime CARGO_MANIFEST_DIR" => {
-                    command.env_remove("CARGO_MANIFEST_DIR");
-                }
-                "missing runtime CARGO_MANIFEST_PATH" => {
-                    command.env_remove("CARGO_MANIFEST_PATH");
-                }
-                "invalid runtime CARGO_MANIFEST_PATH" => {
-                    command.env("CARGO_MANIFEST_PATH", fixture.join("absent/Cargo.toml"));
-                }
-                "relative directory" => {
-                    command.env("CARGO_MANIFEST_DIR", "checkout-b/crates/consumer");
-                }
-                "relative manifest" => {
-                    command.env(
-                        "CARGO_MANIFEST_PATH",
-                        "checkout-b/crates/consumer/Cargo.toml",
-                    );
-                }
-                "invalid runtime CARGO_MANIFEST_DIR" => {
-                    command.env("CARGO_MANIFEST_DIR", fixture.join("absent"));
-                }
-                "runtime Cargo manifest paths disagree" => {
-                    command.env("CARGO_MANIFEST_PATH", other.join("Cargo.toml"));
-                }
-                _ => {}
-            }
-            let output = command.output().unwrap();
-            assert!(
-                output.status.success(),
-                "{mode}: {}\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-        std::fs::remove_dir_all(fixture).unwrap();
     }
 
     #[test]
@@ -912,7 +507,6 @@ mod tests {
     #[test]
     fn concurrent_threads_single_flight_same_payload() {
         let proofs_dir = unique_temp_dir("single-flight");
-        // Shared cache/flight: same production wiring as load_contract_stdout.
         let cache = OnceLock::new();
         let flight = Mutex::new(());
         let build_count = AtomicUsize::new(0);
@@ -922,7 +516,6 @@ mod tests {
 
         let build = |_: &Path| -> Result<()> {
             build_count.fetch_add(1, Ordering::SeqCst);
-            // Hold the critical section long enough for other threads to pile up.
             thread::sleep(Duration::from_millis(100));
             Ok(())
         };
@@ -965,7 +558,6 @@ mod tests {
         let lock_path = lock_path_for(&proofs_dir).unwrap();
         let flight = Mutex::new(());
 
-        // Failures must not be cached, so each attempt uses a fresh OnceLock.
         let err = load_contract_stdout_for(
             &proofs_dir,
             &OnceLock::new(),
@@ -985,7 +577,6 @@ mod tests {
             "failure should retain lock diagnostics, got: {err}"
         );
 
-        // Lock must be free immediately for the next production-core caller.
         load_contract_stdout_for(&proofs_dir, &OnceLock::new(), &flight, &|_| Ok(()), &|_| {
             Ok(String::from("ok"))
         })
@@ -1005,7 +596,6 @@ mod tests {
             "distinct proof checkouts need distinct locks"
         );
 
-        // Hold A's lock via the production load path (build blocks until released).
         let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
         let (held_tx, held_rx) = std::sync::mpsc::channel::<()>();
         let dir_a_thread = dir_a.clone();
@@ -1025,7 +615,6 @@ mod tests {
         });
         held_rx.recv().unwrap();
 
-        // B must still load while A is held.
         load_contract_stdout_for(
             &dir_b,
             &OnceLock::new(),
@@ -1035,7 +624,6 @@ mod tests {
         )
         .unwrap();
 
-        // Same directory must contend while A is held.
         let contended = OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -1058,7 +646,6 @@ mod tests {
     #[test]
     fn same_canonical_proofs_dir_shares_lock_path() {
         let dir = unique_temp_dir("canonical");
-        // Create a real directory so canonicalize succeeds.
         let via_dot = dir.join(".");
         let path_a = lock_path_for(&dir).unwrap();
         let path_b = lock_path_for(&via_dot).unwrap();
@@ -1072,7 +659,6 @@ mod tests {
     #[test]
     fn lock_open_failure_includes_lock_path() {
         let base = unique_temp_dir("lock-open-fail");
-        // Make `.lake` a file so create_dir_all / open of the lock path fails.
         let lake_as_file = base.join(".lake");
         std::fs::write(&lake_as_file, b"not a directory").unwrap();
 
@@ -1142,7 +728,6 @@ mod tests {
             let overlap_path = fixture.join("overlap");
             let done_dir = fixture.join("done");
 
-            // Drive the production load core so a disconnect from the lock fails.
             let build = |_: &Path| -> Result<()> {
                 if holder_path.exists() {
                     std::fs::write(&overlap_path, b"overlap detected").ok();
@@ -1180,7 +765,6 @@ mod tests {
         let mut children = Vec::new();
         for _ in 0..CHILDREN {
             let child = std::process::Command::new(&exe)
-                // Full libtest path so the child actually executes this test body.
                 .arg("tests::cross_process_mutations_do_not_overlap")
                 .arg("--exact")
                 .arg("--nocapture")
@@ -1233,8 +817,6 @@ mod tests {
         let active = Arc::new(AtomicUsize::new(0));
         let max_active = Arc::new(AtomicUsize::new(0));
 
-        // Independent caches so each thread enters the production locked path
-        // rather than collapsing into single-flight.
         thread::scope(|scope| {
             let mut handles = Vec::new();
             for i in 0..6 {

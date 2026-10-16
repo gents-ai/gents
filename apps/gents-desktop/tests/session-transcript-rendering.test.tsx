@@ -20,7 +20,6 @@ import { assistantMessage } from "./timeline-fixture";
 import { NO_PARENT } from "../src/ui/screens/parentWork";
 import { NO_WORKERS } from "../src/ui/screens/workers";
 
-/* the props these cases are not about: no workers, no parent */
 const UNRELATED = {
   workers: NO_WORKERS,
   parentWork: NO_PARENT,
@@ -143,8 +142,6 @@ describe("SessionScreen transcript render boundary", () => {
         ...original,
         timelineItems: [older, ...original.timelineItems],
       };
-      /* as the session owner does: the older page is set as state, then the
-         load reports whether it added rows */
       let setSession: (next: DesktopSessionSnapshot) => void = () => {};
       function Owner() {
         const [current, setCurrent] = useState(original);

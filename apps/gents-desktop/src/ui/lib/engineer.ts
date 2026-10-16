@@ -1,5 +1,3 @@
-/* First-run Engineer: a stable configurator that sets up the user's
-   working agent. */
 import type { NodeView } from "../../hooks/fleetStore";
 import type { ConfigComponentPatch } from "@source-inc/gents-desktop-client";
 

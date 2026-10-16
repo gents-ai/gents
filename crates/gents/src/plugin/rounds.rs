@@ -1,20 +1,17 @@
-//! The round loop for a plugin the host serves: a plugin that cannot reach a
-//! model or the network itself answers a call with a batch of requests, the
-//! host serves them, and calls the plugin again with the answers until it
-//! returns a result.
-//!
-//! The services are [`super::model_calls`] (`model_calls` / `model_results`)
-//! and [`super::http_calls`] (`http_calls` / `http_results`). The input of a
-//! driven call is always a JSON object carrying `true` under each offered
-//! service's key; the caller's `"state"` and result keys are stripped (only
-//! the host sets them) and a null input becomes `{}`. One round asks one
-//! service. Bounds shared by every service: [`MAX_ROUNDS`] rounds, and the
-//! call's wall clock and fuel across all rounds; time serving `tool_calls`
-//! children is excluded from that wall clock. When the wall clock runs out
-//! while requests are served, the unanswered ones get error results and the
-//! plugin gets one final round (the last [`FINAL_ROUND_RESERVE_DIVISOR`]th of
-//! the clock) to finish with what it has; only a plugin that asks again is a
-//! timeout.
+//! The round loop for a host-served plugin: the plugin answers a call with a
+//! batch of requests, the host serves them, and the plugin runs again with the
+//! answers until it returns a result. Services are [`super::model_calls`]
+//! (`model_calls`/`model_results`), [`super::http_calls`]
+//! (`http_calls`/`http_results`) and tool calls. A driven call's input is
+//! always a JSON object carrying `true` under each offered service's key; the
+//! caller's `"state"` and result keys are stripped (only the host sets them)
+//! and a null input becomes `{}`. One round asks one service. Shared bounds:
+//! [`MAX_ROUNDS`] rounds, and the call's wall clock and fuel across all rounds
+//! (time serving `tool_calls` children is excluded). When the wall clock runs
+//! out while requests are served, the unanswered ones get error results and
+//! the plugin gets one final round (one
+//! [`FINAL_ROUND_RESERVE_DIVISOR`]th of the clock) to finish; only a plugin
+//! that asks again is a timeout.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -26,14 +23,12 @@ use super::{http_calls, model_calls, tool_calls, PluginBudget, PluginOutcome, Pl
 
 /// Rounds of requests one call may be answered.
 pub const MAX_ROUNDS: u32 = 64;
-/// The plugin's final round after request time runs out gets this fraction of
-/// the call's wall clock (one eighth).
+/// The final round after request time runs out gets this fraction of the
+/// call's wall clock.
 pub const FINAL_ROUND_RESERVE_DIVISOR: u32 = 8;
 
-/// One plugin run, as the executor supplies it.
 pub(super) type Round = Arc<dyn Fn(Value, PluginBudget) -> Result<PluginOutcome> + Send + Sync>;
 
-/// The services one call is offered. A call with none runs undriven.
 #[derive(Default)]
 pub(super) struct HostCalls {
     pub(super) model: Option<model_calls::Session>,
@@ -87,8 +82,6 @@ fn refused(started: Instant, fuel: u64, verdict: PluginVerdict, why: String) -> 
     }
 }
 
-/// What the plugin's output asks for: `None` for a final result. Only keys
-/// of an offered service are requests; any other output is a result.
 fn asked(calls: &HostCalls, output: &Value) -> Result<Option<Asked>, String> {
     let model = match calls.model {
         Some(_) => model_calls::parse_batch(output)?,
@@ -113,7 +106,6 @@ fn asked(calls: &HostCalls, output: &Value) -> Result<Option<Asked>, String> {
     }
 }
 
-/// Runs the plugin, serving its requests until it returns a result.
 pub(super) async fn drive(
     mut calls: HostCalls,
     input: Value,
@@ -122,7 +114,6 @@ pub(super) async fn drive(
 ) -> Result<PluginOutcome> {
     let started = Instant::now();
     let mut deadline = started + budget.wall_clock;
-    // Requests stop at the serve deadline; the plugin's final round runs on the rest.
     let reserve = budget.wall_clock / FINAL_ROUND_RESERVE_DIVISOR;
     let Value::Object(base) = calls.prepare_input(input)? else {
         anyhow::bail!("a driven plugin requires host services");

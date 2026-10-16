@@ -1,14 +1,8 @@
-//! Environment interpolation for desired-state document files.
-//!
-//! Applied by the common pack loader to parsed JSON string values only. `.md` sidecars carry runtime `{{ }}` prompt
-//! templates and are hydrated untouched, so the two substitution systems never
-//! meet.
-//!
-//! - `${VAR}` — required; an unset variable is an error, never an empty string.
-//! - `${VAR:-default}` — falls back to `default` when unset or empty.
-//! - `$$` — a literal `$`, so `$${VAR}` survives as the text `${VAR}`.
-/// Expand `${VAR}` references using `lookup`. Returns every unresolved
-/// variable name rather than the first, so one pass reports all of them.
+//! `${VAR}` is required; `${VAR:-default}` falls back when unset or empty;
+//! `$$` is a literal `$`, so `$${VAR}` survives as the text `${VAR}`. Applied
+//! by the common pack loader to parsed JSON string values only; `.md`
+//! sidecars carry runtime `{{ }}` prompt templates and are hydrated
+//! untouched, so the two substitution systems never meet.
 pub fn interpolate_with(
     input: &str,
     lookup: &dyn Fn(&str) -> Option<String>,
@@ -41,7 +35,6 @@ pub fn interpolate_with(
         }
 
         let Some(close) = input[i + 2..].find('}').map(|offset| i + 2 + offset) else {
-            // Unterminated: emit verbatim rather than silently eating the rest.
             out.push_str(&input[i..]);
             break;
         };
@@ -143,8 +136,6 @@ mod tests {
 
     #[test]
     fn an_unset_required_variable_never_becomes_an_empty_string() {
-        // Fail closed: silently emitting "" would apply a backend with no
-        // endpoint and fail much later, at reconcile.
         assert!(expand(r#"{"endpoint":"${EP}"}"#, &[]).is_err());
     }
 

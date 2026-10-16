@@ -32,7 +32,6 @@ type Evidence = {
 };
 const EVIDENCE_KEY = "gents-native-local-e2e";
 
-/** WebKit may pause animation frames while an unattended test window is covered. */
 export function emulateNativeReducedMotion(
   target: Pick<Window, "matchMedia"> = window,
 ): void {
@@ -45,7 +44,6 @@ export function emulateNativeReducedMotion(
   };
 }
 
-/** Compare canonical Markdown with the text produced by the actual transcript renderer. */
 export function renderedAssistantResponse(response: string): string {
   const container = document.createElement("div");
   const root = createRoot(container);
@@ -127,7 +125,6 @@ async function until<T>(
 const snapshot = () =>
   invoke<DesktopClientSnapshot>(bridgeCommand("desktop_client_snapshot"));
 
-/** Runs only inside the native test build; every mutation goes through visible UI. */
 export async function runNativeLocalE2e(
   config: Config,
   report: (status: { stage: string; detail?: string }) => Promise<void>,

@@ -91,8 +91,6 @@ describeLive("Tauri app live interrupt flow", () => {
         }
         const cancelCause = finalSession?.latestRequestOutcome?.cancelCause;
         if (cancelCause) {
-          // Interrupt accepted: the canonical contract requires an actually
-          // terminal interrupted turn, not just an acknowledged bridge call.
           expect(finalSession.turnState).toBe("interrupted");
           expect(cancelCause.cause).toBe("userCancelled");
           expect(cancelCause.source).toBe("requestInterrupt");
@@ -115,10 +113,6 @@ describeLive("Tauri app live interrupt flow", () => {
             { timeout: 30_000 },
           );
         } else {
-          // Completion race, documented rather than silently passing: the
-          // turn reached a terminal state before the interrupt could affect
-          // it, so the interrupt is a no-op: the turn must be terminal
-          // (never "interrupted") and no cancel cause may be latched.
           expect(isTerminalTurnState(finalSession.turnState)).toBe(true);
           expect(finalSession.turnState).not.toBe("interrupted");
           logTurn(

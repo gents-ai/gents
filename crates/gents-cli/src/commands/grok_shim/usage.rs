@@ -9,9 +9,8 @@ use serde_json::{json, Value};
 
 use crate::caused_sessions::{load_caused_sessions, SessionScope};
 
-/// The stock ContextInfo DTO explicitly accepts partial snapshots. Report
-/// the runtime's component groups as-is; do not invent a system/message
-/// split or provider message/tool counts that this observation lacks.
+/// The stock ContextInfo DTO accepts partial snapshots; report what the
+/// runtime's accounting owner observed without inventing fields.
 fn context_info(
     observation: &gents::toolset::SessionInferenceObservation,
     configured_window: u64,
@@ -141,10 +140,8 @@ pub(super) async fn session_info(
         }
     }
     context["compactionCount"] = json!(compactions.len());
-    // SessionInfo uses the extension's nested result envelope, unlike usage.
-    // cwd is unknown, not the current client's claimed historical cwd.
-    // `agentName` is the stock SessionInfo wire key; it carries the bound
-    // agent's logical id, not the node DID.
+    // SessionInfo uses the extension's nested result envelope; `agentName` is
+    // the stock wire key for the bound agent's logical id.
     Ok(json!({"result":{
         "sessionId":session, "cwd":"", "agentName":agent_id, "model":model,
         "modelDisplayName":model_name, "apiBackend":"gents", "turns":turns,
@@ -168,8 +165,6 @@ struct Totals {
 
 impl Totals {
     fn add(&mut self, usage: &SessionTokenUsage) {
-        // These are observed lower bounds, not fabricated complete totals.
-        // Stock PromptUsage has an explicit incomplete flag for this case.
         self.input = self.input.saturating_add(usage.input_tokens.unwrap_or(0));
         self.output = self.output.saturating_add(usage.output_tokens.unwrap_or(0));
         self.cached = self
@@ -208,8 +203,6 @@ pub(super) async fn session_usage(
     let mut totals = Totals::default();
     totals.add(&root.token_usage);
     totals.incomplete |= roots.iter().any(|row| !row.is_terminal());
-    // A foreign-requester session sharing a caused label is its own scope,
-    // counted once under its exact node/requester identity.
     let root_scope = SessionScope {
         node_did: node_did.to_owned(),
         session_id: session.to_owned(),

@@ -44,8 +44,6 @@ def followingEntry (requestId : RequestId) (createdAt : Time) : SessionQueue.Que
   { requestId, createdAt, source := .user, policy := .append
   , queueKey := none, queuedAfter := some 10 }
 
-/-- A verified-folding claim through the handover owner: the queue it installs
-selects exactly the verified run behind the claimed head. -/
 structure FoldClaimCase where
   name : String
   pending : List SessionQueue.QueueEntry

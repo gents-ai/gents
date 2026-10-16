@@ -1,4 +1,3 @@
-/* The node itself: editable node fields and identity/runtime facts. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { isLocalNode } from "@/lib/firstRun";
 import { DraftActions, RefRow, SwitchRow, TagsRow, TextRow } from "./editors";
@@ -28,8 +27,6 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
       tags: deployment.nodeConfig?.tags ?? [],
     },
     async (next) => {
-      /* a new default lands with its enablement first; the node's other
-         fields then save against an already valid default */
       if (next.defaultAgentId !== agent.defaultAgentId)
         await saveDefault(changeConfig, deployment, next.defaultAgentId);
       await changeConfig("saveNodeConfig", {

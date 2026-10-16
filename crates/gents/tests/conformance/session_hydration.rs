@@ -115,9 +115,6 @@ fn admitted_catalog() -> HydrationCatalog {
             requester_did: "did:key:requester-1".into(),
             node_did: "did:key:node-1".into(),
         }]),
-        // Cross-session dependencies are never inferred from an origin scan:
-        // the base catalog grants no reference closure, so only the request's
-        // own session documents are admitted.
         authorized_reference_closure: BTreeSet::new(),
         documents: BTreeSet::from([
             document(
@@ -157,9 +154,6 @@ fn generated_session_hydration_apply_cases_match_terminal_delivery_core() {
     let cases = lean_session_hydration_apply_cases();
     assert_eq!(cases.len(), 6);
     for case in cases {
-        // This group starts at the delivery owner's verdict boundary. Its
-        // exact input set comes from the modeled admission/closure owner;
-        // closure-to-admission itself is exercised by the native closure tests.
         let verdict = match (case.admitted, &case.input_documents) {
             (true, Some(documents)) => HydrationVerdict::Admit(
                 documents
@@ -256,7 +250,6 @@ fn generated_session_hydration_apply_cases_match_terminal_delivery_core() {
     }
 }
 
-/// Mirrors Lean `selected_tenancy_sound` and `selected_session_sound`.
 #[test]
 fn admitted_selection_is_exactly_requester_agent_session_scoped() {
     let req = request();
@@ -374,7 +367,6 @@ fn hydration_coverage_distinguishes_same_doc_id_in_different_collections() {
     use gents::agent::p2p_reconcile::session_hydration::{
         project_durable_hydration_progress, ClientHydrationRequestState,
     };
-    // Lean document references are interned (collection, _docID) pairs. Matching
     // an ID from another collection must not satisfy the served manifest.
     let message = SessionHydrationDocumentKey {
         collection: SessionHydrationCollection::AgentMessage,
@@ -404,8 +396,6 @@ fn hydration_coverage_distinguishes_same_doc_id_in_different_collections() {
     assert_eq!(complete.merged_count, 2);
 }
 
-/// The hydration manifest has a closed collection vocabulary. Neither a session
-/// control document nor the retired response collection is a transcript dependency.
 #[test]
 fn retired_collection_names_are_rejected_by_serde() {
     use gents_protocol::session_hydration::SessionHydrationDocumentKey as ProtocolKey;

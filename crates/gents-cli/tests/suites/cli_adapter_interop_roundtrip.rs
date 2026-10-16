@@ -76,8 +76,6 @@ async fn external_adapter_native_captures_project_to_export_formats() -> Result<
         };
         imported_count += 1;
 
-        // External framework state stays in the original capture. Persisted Gents
-        // requests deliberately do not carry a parallel framework metadata model.
         let context = ProjectionContext {
             actor_did: import.actor_did.clone(),
             redaction_mode: capture

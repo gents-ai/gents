@@ -157,10 +157,6 @@ fn canonical_text_message(
     (header, segment)
 }
 
-/// Add one fully closed canonical text message to a store fixture.  Desktop
-/// tests deliberately go through the same header/segment split as a real
-/// transcript: a header without its segment is an incomplete reconstruction,
-/// not a serialized-message fallback.
 pub(super) fn push_canonical_text_message(
     rows: &mut ClientStoreRows,
     doc_id: &str,

@@ -5,10 +5,7 @@ namespace SessionQueue.FoldCases
 
 inductive Event where
   | enqueue (entry : QueueEntry)
-  /-- Claim the queue head; `admitted` are the pending requests whose signed
-  admission the claim verified. -/
   | claim (admitted : List RequestId)
-  /-- The active turn publishes its next selected message. -/
   | consume
   | finish
   deriving Repr
@@ -16,8 +13,6 @@ inductive Event where
 def queue : SessionQueueState :=
   { scope := ⟨1, 900, some 1⟩, active := none, pending := [], terminal := ∅ }
 
-/-- A user message. `queuedAfter` is set when it was admitted behind a busy
-turn; `requester` 2 is a second signed principal in the same session. -/
 def user (id : RequestId) (queuedAfter : Option RequestId := none)
     (requester : Option Nat := some 1) (turnContext : Nat := 0) : QueueEntry :=
   { requestId := id, createdAt := id, source := .user, policy := .append
@@ -29,11 +24,8 @@ def steering (id : RequestId) (queuedAfter : RequestId) : QueueEntry :=
 structure Observation where
   active : Option RequestId
   pending : List RequestId
-  /-- Selected by the active claim and not yet published. -/
   folding : List RequestId
-  /-- Finished turns and published (superseded) messages. -/
   terminal : List RequestId
-  /-- Per claim, in order: the claimed request and the run it selected. -/
   claims : List (RequestId × List RequestId)
   deriving DecidableEq, Repr
 
@@ -112,8 +104,6 @@ example : cases.map (fun c => observation c.2) =
     , some ⟨some 101, [102, 103], [], [], [(101, [])]⟩
     , some ⟨some 101, [102], [], [], [(101, [])]⟩ ] := by native_decide
 
-/-- Executable folded-turn inputs; native tests take their authored entries and
-provider order from `TurnInput.authored` and `TurnInput.providerInput`. -/
 def turnInputCases : List (String × TurnInput String) :=
   [ ("head_then_folded_in_queue_order",
       ⟨none, "how are we looking", [(102, "we should move faster"), (103, "and ship")]⟩)
@@ -123,10 +113,6 @@ def turnInputCases : List (String × TurnInput String) :=
 example : turnInputCases.all (fun (_, input) =>
     input.providerInput == input.authored.map Prod.snd) = true := by native_decide
 
-/-- A user retry whose claim selected queued messages. Whether it resumes is
-`CurrentInput.admitResume` for a same-session, same-requester terminal
-parent with settled tools; which selected messages it answers is
-`CurrentInput.answersSelection`. -/
 structure RetrySelectionCase where
   name : String
   parentPublished : Bool

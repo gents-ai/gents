@@ -40,8 +40,6 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
                     .expect("desktop bridge lock poisoned")
                     .approvals_watch_task = Some(watch);
             }
-            // Off the setup path: reading the packaged runtime and asking the
-            // service manager for its state are both blocking.
             let handle = app.clone();
             std::thread::spawn(move || {
                 let state = handle.state::<DesktopAppState>();
@@ -78,7 +76,8 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
                 tauri::RunEvent::WindowEvent { label, event, .. } => {
                     app.state::<DesktopAppState>().window_event(label, event);
                 }
-                // Tauri ignores prevent_exit for its restart code, so that path cannot await shutdown.
+                // Tauri's restart path ignores prevent_exit, so it cannot await
+                // shutdown.
                 tauri::RunEvent::ExitRequested { code, api, .. }
                     if *code != Some(tauri::RESTART_EXIT_CODE) =>
                 {
@@ -260,8 +259,8 @@ fn register_window<R: Runtime>(webview: tauri::Webview<R>) {
         .register_window(window.label());
 }
 
-/// Takes the desktop process lock through the reset reservation, so a
-/// waiting reset is never overtaken, and holds it for the app's lifetime.
+/// Takes the desktop process lock through the reset reservation so a waiting
+/// reset is never overtaken, and holds it for the app's lifetime.
 fn hold_desktop_process<R: Runtime>(
     app: &tauri::AppHandle<R>,
     paths: &gents_desktop_core::client::DesktopPaths,

@@ -1,11 +1,10 @@
 //! `gents pack test`: check a pack, build it, and run every plugin's cases.
 //!
 //! A plugin case is a JSON file in the plugin source's `tests/` directory:
-//! `{"input": <arguments>, "expect": <result>}`. Each case runs through the
-//! same runner, bounds and host-served network a real call uses, against the
-//! artifact the build just produced. `expect` absent means the call only has
-//! to succeed. The pack's `experiment.json` scenario needs a model endpoint,
-//! so it runs only when asked for with `--scenario`.
+//! `{"input": <arguments>, "expect": <result>}` running through the same
+//! runner, bounds and host-served network a real call uses. The pack's
+//! `experiment.json` scenario needs a model endpoint, so it runs only with
+//! `--scenario`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -25,10 +24,8 @@ struct PluginCase {
     input: Value,
     #[serde(default)]
     expect: Option<Value>,
-    /// A directory to bind for this call, relative to the case file's own
-    /// directory; only a plugin declaring `bind_dir` may use it. `within`
-    /// for [`BoundDir::new`] is that same directory, so a case cannot bind
-    /// anything outside its own tree.
+    /// Relative to the case file's directory; `within` is that same
+    /// directory, so a case cannot bind outside its own tree.
     #[serde(default)]
     bind: Option<String>,
 }
@@ -83,8 +80,6 @@ struct ScenarioRun {
     args: crate::cli::PackRunArgs,
 }
 
-/// Runs every case of every plugin that has a source, against its built
-/// artifact.
 pub(crate) async fn run_plugin_cases(dir: &Path) -> Result<Vec<PluginCases>> {
     let manifest: PackManifest = serde_json::from_slice(
         &std::fs::read(dir.join("manifest.json")).context("reading manifest.json")?,
@@ -114,10 +109,6 @@ pub(crate) async fn run_plugin_cases(dir: &Path) -> Result<Vec<PluginCases>> {
             &gents::plugin::authority::declared_manifold(plugin)?,
         )?);
         let coordinate = format!("{}/{}", manifest.metadata.namespace, plugin.name);
-        // The budget a real call of this artifact gets, raised to what the
-        // plugin itself declares in `limits`: an interpreted plugin needs
-        // room to boot its runtime, and a plugin like `review_evidence`
-        // needs more than the bare default to process real input.
         let budget = PluginBudget::for_plugin(
             &afterburner_cloud::Afb::from_bytes(&artifact)
                 .with_context(|| format!("{} is not a readable plugin", plugin.artifact))?,
@@ -185,8 +176,8 @@ async fn run_case(
 mod tests {
     use super::*;
 
-    /// Driven from an async task, as `gents pack test` runs it: calling a
-    /// guest there directly panics inside the WASI runtime.
+    /// Driven from an async task; calling a guest directly panics inside
+    /// the WASI runtime.
     #[tokio::test]
     async fn a_scaffolded_plugin_passes_its_case_and_a_wrong_expectation_fails() {
         let root = tempfile::tempdir().unwrap();
@@ -228,8 +219,6 @@ mod tests {
         );
     }
 
-    /// A plugin granted a network allow-list reaches it through the host
-    /// while its case runs.
     #[tokio::test]
     async fn a_case_fetches_through_the_host_from_a_granted_host() {
         let port = crate::commands::plugin::testing::hello_server().await;
@@ -238,9 +227,6 @@ mod tests {
         assert_eq!(results[0].passed, 1, "{:?}", results[0].failures);
     }
 
-    /// A case's `bind` field binds the directory named relative to the case
-    /// file itself, so the fixture's `list_files` plugin sees exactly the
-    /// fixture tree checked in beside its own case file.
     #[tokio::test]
     async fn a_bind_case_binds_its_fixture_directory() {
         let dir = crate::commands::plugin::testing::build_bind_plugin_fixture();

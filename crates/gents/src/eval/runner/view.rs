@@ -1,18 +1,7 @@
-//! What a watcher reads of a run without opening the home's node.
-//!
-//! The process hosting a run holds the home's embedded node, whose store
-//! opens exclusively, so `gents eval watch` cannot build a report while the
-//! run is live. The loop therefore leaves two files a watcher can read:
-//!
-//! - `<run dir>/trials/<trial_id>/evidence.json`, the [`EvidenceRecord`]
-//!   written beside each finished trial's home;
-//! - `<run dir>/report.json`, the [`RunView`]: the run's report as
-//!   [`crate::eval::report::load_report`] derives it, joined with each
-//!   slot's evidence record, rewritten whenever a trial finishes.
-//!
-//! Both are advisory copies. Nothing the loop, a report or a resume decides
-//! reads them back: the documents stay the only record, and a watcher with
-//! the node open derives the same view from them through [`run_view`].
+//! What a watcher reads of a run without opening the home's node: the loop
+//! leaves `<run dir>/trials/<trial_id>/evidence.json` (the [`EvidenceRecord`])
+//! and `<run dir>/report.json` (the [`RunView`]), advisory copies nothing that
+//! decides reads back — the documents stay the only record.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -30,12 +19,9 @@ use super::files::write_json_atomically;
 pub const EVIDENCE_FILE: &str = "evidence.json";
 pub const REPORT_FILE: &str = "report.json";
 
-/// `<run dir>/trials/<trial_id>/evidence.json`.
-///
-/// `TrialCompletion` has no field for the digest, so the runner keeps it
-/// beside the retained home, with the trial's last [`LiveSnapshot`] and the
-/// goal it was measured against. Fields after the anchor are absent from a
-/// record an older runner wrote.
+/// `<run dir>/trials/<trial_id>/evidence.json`. The digest is kept beside the
+/// retained home because `TrialCompletion` has no field for it; fields after
+/// the anchor are absent from a record an older runner wrote.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvidenceRecord {
     pub evidence_digest: String,

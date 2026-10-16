@@ -1,14 +1,9 @@
 //! JSON-view codec between the Lean `ToolPolicy.ContractCases.SurfaceView`
-//! rows and the production `ToolPolicySurface`. This module performs **no
-//! permission decisions**: the effective surface is computed by the production
-//! owner `ToolPolicySurface::effective`; everything here only decodes emitted
-//! views into production types and re-encodes the result for comparison.
-//!
+//! rows and the production `ToolPolicySurface`.
 //! The rank mappings are wire-discriminator codecs matching Lean
-//! `FileCap.rank` / `executionModeContractCode` / `networkRank`; numeric
-//! values are never an authority ordering. The view encodes only the bash
-//! execution mode: the legacy bash-tool selector is outside this projection.
-//! The emitted view comparison covers the represented permission dimensions.
+//! `FileCap.rank` / `executionModeContractCode` / `networkRank`. The view
+//! encodes only the bash execution mode: the legacy bash-tool selector is
+//! outside this projection.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -56,7 +51,6 @@ fn exec_from_rank(rank: u8) -> CommandExecutionMode {
     }
 }
 
-// Numeric values are wire discriminators, never authority ordering.
 fn exec_rank(mode: CommandExecutionMode) -> u8 {
     match mode {
         CommandExecutionMode::ReadOnly => 0,
@@ -191,7 +185,6 @@ fn surface_from_view(view: &View) -> ToolPolicySurface {
             ),
             deny_git_metadata_writes: false,
         },
-        // Presentation is absent from the target permission contract.
         meta: false,
         goal_tools: view.goal_tools,
         goal_create: view.goal_create,

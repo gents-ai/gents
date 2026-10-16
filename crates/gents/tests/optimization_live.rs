@@ -1,46 +1,3 @@
-//! The two live scenarios M6 is judged by: one accept and one reject on a real
-//! provider. Never in CI; run in M5 (ruling R7).
-//!
-//! The subject and its definition come from M3's pack, named by environment
-//! variable, so this file compiles and stays ignored without that branch.
-//!
-//! # What the default policy demands (ruling T42-2)
-//!
-//! Both scenarios default to `PolicyV2::uncalibrated()` and two trials per
-//! case. M5 overrides them with `GENTS_OPTIMIZATION_LIVE_POLICY`, a serialized
-//! `PolicyV2`, and `GENTS_OPTIMIZATION_LIVE_TRIALS_PER_CASE`. It is expected to
-//! pass its calibrated policy that way, because the placeholder is strict on
-//! M3's 8 train / 6 validation / 6 held-out split (ruling N12):
-//!
-//! - `alpha_effective = 50_000 / 3 = 16_666` ppm. With 6 validation cases, the
-//!   exact one-sided sign-flip test reaches `p = 1/64 = 15_625` ppm only when
-//!   all 6 per-case mean differences are strictly positive. One tied or
-//!   worsened case gives at least `2/64 = 31_250` ppm, so the golden prompt
-//!   must strictly beat the thin one on every validation case.
-//! - `max_token_increase_bp: 2500` caps the candidate's mean tokens at 1.25x
-//!   the baseline's, on validation and again on held-out. In the accept
-//!   scenario the baseline is the one-line thin prompt, so a golden prompt that
-//!   drives tool use can fail on cost (`Reject(CostRegression)` in validation,
-//!   `Failed` at held-out) even when its scores are better.
-//!
-//! The proposer is given the same text for every round. Only round 1 is a real
-//! trial. Rounds 2 and later propose a digest the job has already evaluated, so
-//! the structural gate rejects them as duplicates without running anything. If
-//! round 1 is not accepted, the job ends `NothingToPromote`.
-//!
-//! A job's policy must have `max_rounds` equal to its budget, so the budget
-//! and the script length both follow the policy. The case-trial budget is
-//! what the policy, the trials per case and the definition's split can ever
-//! charge, so no override ends a scenario `Exhausted`.
-//!
-//! # Captures (ruling F-1)
-//!
-//! M3's stages declare their own `EvalStage.capture` (its `items` capture),
-//! and the runner reads a stage's capture before the request's. The job's
-//! `captures` are only the request-level fallback, so these scenarios pass
-//! none unless `GENTS_OPTIMIZATION_LIVE_CAPTURES` names a serialized
-//! `Vec<Capture>`, and they do not depend on it.
-
 mod support;
 
 use std::path::{Path, PathBuf};
@@ -62,30 +19,18 @@ use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
-/// The M3 pack directory: the monitor subject and its eval definition.
 const PACK_VAR: &str = "GENTS_OPTIMIZATION_LIVE_PACK";
-/// The id of the definition inside that pack (M3 names it `monitor-findings`).
 const DEFINITION_VAR: &str = "GENTS_OPTIMIZATION_LIVE_DEFINITION_ID";
-/// The behavior whose context is optimized; `monitor` unless overridden.
 const AGENT_VAR: &str = "GENTS_OPTIMIZATION_LIVE_AGENT";
-/// A serialized `PolicyV2`; `PolicyV2::uncalibrated()` unless set.
 const POLICY_VAR: &str = "GENTS_OPTIMIZATION_LIVE_POLICY";
-/// Trials per case for both arms; 2 unless set.
 const TRIALS_VAR: &str = "GENTS_OPTIMIZATION_LIVE_TRIALS_PER_CASE";
-/// A serialized `Vec<Capture>`, the job's request-level capture fallback;
-/// empty unless set.
 const CAPTURES_VAR: &str = "GENTS_OPTIMIZATION_LIVE_CAPTURES";
-/// A deliberately thin baseline, so a real provider has room to improve.
 const THIN_PROMPT: &str = "Look at the mailbox and say something.\n";
-/// A prompt that removes the output contract the checks grade.
 const DEGRADED_PROMPT: &str = "Answer in one word. Do not use any tools.\n";
 
-/// Which prompt the baseline subject carries.
 #[derive(PartialEq, Eq)]
 enum Baseline {
-    /// The M3 pack with its sidecar prompt replaced by [`THIN_PROMPT`].
     Thin,
-    /// The M3 pack as written, whose prompt M3 wrote to pass these cases.
     Golden,
 }
 
@@ -93,7 +38,6 @@ enum Baseline {
 #[ignore = "M5: needs GENTS_EVAL_TARGET, GENTS_OPTIMIZATION_LIVE_PACK, GENTS_OPTIMIZATION_LIVE_DEFINITION_ID and a real backend"]
 async fn live_accept_the_golden_prompt_beats_a_thin_one_and_reaches_ready_to_promote() {
     let fixture = Fixture::new("live-accept", Baseline::Thin).await;
-    // The candidate is the pack's own golden prompt; the baseline is the thin one.
     let proposer = fixture.proposer(
         &fixture.golden_prompt,
         "restore the full monitor instructions",
@@ -123,8 +67,6 @@ async fn live_accept_the_golden_prompt_beats_a_thin_one_and_reaches_ready_to_pro
 #[tokio::test]
 #[ignore = "M5: needs GENTS_EVAL_TARGET, GENTS_OPTIMIZATION_LIVE_PACK, GENTS_OPTIMIZATION_LIVE_DEFINITION_ID and a real backend"]
 async fn live_reject_a_prompt_that_ignores_the_task_never_reaches_ready_to_promote() {
-    // The baseline is M3's golden subject, which passes these cases, so the
-    // rejection is of a real regression and not a tie between two failing arms.
     let fixture = Fixture::new("live-reject", Baseline::Golden).await;
     let proposer = fixture.proposer(DEGRADED_PROMPT, "shorter is better");
     let outcome = fixture.drive(&proposer).await;
@@ -137,9 +79,6 @@ async fn live_reject_a_prompt_that_ignores_the_task_never_reaches_ready_to_promo
         view.decisions
     );
     assert!(outcome.checkpoint.is_none(), "{outcome:#?}");
-    // A dead backend, a structural reject or thin evidence also leaves nothing
-    // to promote; only a journaled policy rejection that its rows still support
-    // is a live reject.
     let round_one = view
         .decisions
         .iter()
@@ -152,8 +91,6 @@ async fn live_reject_a_prompt_that_ignores_the_task_never_reaches_ready_to_promo
     assert!(!round_one.mismatch, "{round_one:#?}");
 }
 
-/// A launching home with the M3 definition, a live inference binding, and a
-/// copy of the M3 pack, thinned or not, as the baseline subject.
 struct Fixture {
     _home: EmbeddedHome,
     _dirs: TempDir,
@@ -165,8 +102,6 @@ struct Fixture {
 
 impl Fixture {
     async fn new(job_id: &str, baseline: Baseline) -> Self {
-        // A test binary installs no subscriber, so an unreported finding is a
-        // dropped one, even under `--nocapture`.
         let _ = tracing_subscriber::fmt()
             .with_test_writer()
             .with_ansi(false)
@@ -314,8 +249,6 @@ impl Fixture {
         }
     }
 
-    /// The same proposal for every round the policy allows; see the module doc
-    /// for why only round 1 is a real trial.
     fn proposer(&self, text: &str, rationale: &str) -> ScriptedProposer {
         ScriptedProposer::new(vec![
             (text.to_owned(), rationale.to_owned());
@@ -348,10 +281,6 @@ impl Fixture {
     }
 }
 
-/// The most case-trials the job can ever be charged: every round's train run
-/// and every validation attempt the policy allows, plus the reserved held-out
-/// run. A budget of this size never ends a scenario `Exhausted`, whatever
-/// trials-per-case or policy override M5 passes.
 fn case_trial_ceiling(definition: &EvalDefinition, policy: &PolicyV2, trials: u32) -> u64 {
     let attempts = u64::from(policy.max_reruns) + 1;
     let round = run_cost(definition, EvalSplit::Train, trials, 1).saturating_add(
@@ -383,10 +312,6 @@ async fn install(access: &ConfigAccess, documents: Vec<(Collection, Value)>) {
         .unwrap();
 }
 
-/// The baseline pack installed as the live subject, as `gents pack install`
-/// would with every slot bound to the live profile: a job's baseline is the
-/// live configuration (ruling R5 and baseline equivalence). The definition is
-/// installed on its own.
 fn live_subject(pack: &Path, owner: &str, behavior: &str) -> Vec<(Collection, Value)> {
     let subject = materialize_pack(pack, owner, behavior, &JobTarget::Context).unwrap();
     let bindings = subject

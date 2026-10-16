@@ -17,7 +17,6 @@ pub enum TurnStatus {
     InProgress,
 }
 
-// Turn APIs
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnEnvironmentParams {
@@ -30,33 +29,19 @@ pub struct TurnEnvironmentParams {
 pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
-    /// Optional turn-scoped Responses API client metadata.
     pub responsesapi_client_metadata: Option<HashMap<String, String>>,
-    /// Optional turn-scoped environments.
-    ///
     /// Omitted uses the thread sticky environments. Empty disables
     /// environment access for this turn. Non-empty selects the first
-    /// environment as the current turn environment for this turn.
+    /// environment as the current turn environment.
     pub environments: Option<Vec<TurnEnvironmentParams>>,
-    /// Override the working directory for this turn and subsequent turns.
     pub cwd: Option<PathBuf>,
-    /// Replace the thread's runtime workspace roots for this turn and
-    /// subsequent turns. Relative paths are resolved against the effective
-    /// cwd for the turn.
     pub runtime_workspace_roots: Option<Vec<PathBuf>>,
-    /// Override the approval policy for this turn and subsequent turns.
     pub approval_policy: Option<AskForApproval>,
-    /// Override where approval requests are routed for review on this turn and
-    /// subsequent turns.
     pub approvals_reviewer: Option<ApprovalsReviewer>,
-    /// Override the sandbox policy for this turn and subsequent turns.
     pub sandbox_policy: Option<SandboxPolicy>,
-    /// Select a named permissions profile id for this turn and subsequent
-    /// turns. Cannot be combined with `sandboxPolicy`.
+    /// Cannot be combined with `sandboxPolicy`.
     pub permissions: Option<String>,
-    /// Override the model for this turn and subsequent turns.
     pub model: Option<String>,
-    /// Override the service tier for this turn and subsequent turns.
     #[serde(
         default,
         deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
@@ -64,20 +49,15 @@ pub struct TurnStartParams {
         skip_serializing_if = "Option::is_none"
     )]
     pub service_tier: Option<Option<String>>,
-    /// Override the reasoning effort for this turn and subsequent turns.
     pub effort: Option<ReasoningEffort>,
-    /// Override the reasoning summary for this turn and subsequent turns.
     pub summary: Option<ReasoningSummary>,
-    /// Override the personality for this turn and subsequent turns.
     pub personality: Option<Personality>,
-    /// Optional JSON Schema used to constrain the final assistant message for
-    /// this turn.
+    /// Optional JSON Schema used to constrain the final assistant message.
     pub output_schema: Option<JsonValue>,
 
-    /// EXPERIMENTAL - Set a pre-set collaboration mode.
-    /// Takes precedence over model, reasoning_effort, and developer instructions if set.
-    ///
-    /// For `collaboration_mode.settings.developer_instructions`, `null` means
+    /// EXPERIMENTAL - Set a pre-set collaboration mode. Takes precedence over
+    /// model, reasoning_effort, and developer instructions if set. For
+    /// `collaboration_mode.settings.developer_instructions`, `null` means
     /// "use the built-in instructions for the selected mode".
     pub collaboration_mode: Option<CollaborationMode>,
 }
@@ -93,10 +73,8 @@ pub struct TurnStartResponse {
 pub struct TurnSteerParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
-    /// Optional turn-scoped Responses API client metadata.
     pub responsesapi_client_metadata: Option<HashMap<String, String>>,
-    /// Required active turn id precondition. The request fails when it does not
-    /// match the currently active turn.
+    /// The request fails when this does not match the currently active turn.
     pub expected_turn_id: String,
 }
 
@@ -117,7 +95,6 @@ pub struct TurnInterruptParams {
 #[serde(rename_all = "camelCase")]
 pub struct TurnInterruptResponse {}
 
-// User input types
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ByteRange {
@@ -130,7 +107,6 @@ pub struct ByteRange {
 pub struct TextElement {
     /// Byte range in the parent `text` buffer that this element occupies.
     pub byte_range: ByteRange,
-    /// Optional human-readable placeholder for the element, displayed in the UI.
     placeholder: Option<String>,
 }
 
@@ -156,7 +132,6 @@ impl TextElement {
 pub enum UserInput {
     Text {
         text: String,
-        /// UI-defined spans within `text` used to render or persist special elements.
         #[serde(default)]
         text_elements: Vec<TextElement>,
     },
@@ -215,8 +190,6 @@ pub struct TurnCompletedNotification {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
-/// Notification that the turn-level unified diff has changed.
-/// Contains the latest aggregated diff across all file changes in the turn.
 pub struct TurnDiffUpdatedNotification {
     pub thread_id: String,
     pub turn_id: String,
@@ -246,6 +219,7 @@ pub enum TurnPlanStepStatus {
     InProgress,
     Completed,
 }
+
 use crate::core_types::{
     AbsolutePathBuf, CollaborationMode, ImageDetail, Personality, ReasoningEffort, ReasoningSummary,
 };

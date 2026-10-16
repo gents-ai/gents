@@ -70,8 +70,6 @@ def caseJson (entry : String × List Input) : String :=
 
 def casesJson : String := jsonArray (cases.map caseJson)
 
-/-- The `spawn_process` parent is accepted and wins its own dispatch; its
-target's command policy then denies the target. -/
 def spawnedTargetCasesJson : String :=
   jsonArray [
     "{\"name\":\"spawn_process_target_policy_denied\"" ++

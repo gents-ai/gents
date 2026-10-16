@@ -33,8 +33,8 @@ impl Drop for RequestLifecycle {
         let node = self.node.clone();
         let doc_id = escape_graphql_string(&self.request.doc_id);
         let generation = escape_graphql_string(lease.generation.as_str());
-        // Relinquishment only expires the matching generation. Recovery remains
-        // the terminal owner, including when a panic or task abort drops us.
+        // Relinquishment only expires the matching generation; recovery remains
+        // the terminal owner, including on panic or task abort.
         runtime.spawn(async move {
             let expired = (Utc::now() - chrono::Duration::milliseconds(1)).to_rfc3339();
             let active = RequestLifecycleState::graphql_list([RequestLifecycleState::Claimed, RequestLifecycleState::Processing]);
@@ -131,7 +131,7 @@ enum TerminalAuthority<'a> {
 
 impl RequestExecutionLease {
     /// `decide` over this execution's generation and the current request
-    /// row's lease, or `None` when the row is gone.
+    /// row's lease; `None` when the row is gone.
     async fn decide_lease(
         &self,
         node: &EmbeddedNode,
@@ -198,8 +198,6 @@ impl RequestLifecycle {
         Ok(())
     }
 
-    /// Cancelled when the lease owner observes this execution lost its
-    /// request; never cancelled for an execution without a renewal owner.
     pub(crate) fn ownership_lost(&self) -> tokio_util::sync::CancellationToken {
         self.renewal_task
             .as_ref()
@@ -207,9 +205,6 @@ impl RequestLifecycle {
             .unwrap_or_default()
     }
 
-    /// Whether this execution's generation still holds a live lease on its
-    /// active request. A failure observed after the lease is lost belongs to
-    /// the request's current owner, not to this execution.
     pub(crate) async fn owns_execution(&self) -> Result<bool> {
         self.execution_lease
             .as_ref()
@@ -219,8 +214,7 @@ impl RequestLifecycle {
     }
 
     /// Finishes an interactive request against its observed whole pending queue.
-    /// DefraDB 980190c mutates the AgentRequest arrival head for local and P2P
-    /// inserts in their document transaction. Reading that head inside the
+    /// Reading the DefraDB-mutated AgentRequest arrival head inside the
     /// finalizer supplies the point-read conflict fence that RepeatableRead
     /// predicate scans alone cannot provide.
     pub(crate) async fn finish_natural_turn(
@@ -284,9 +278,6 @@ impl RequestLifecycle {
     }
 }
 
-/// LatestOnly and child deadlines revoke the observed execution through the
-/// same atomic terminal owner. Unlike recovery, revocation may cancel a live lease.
-#[cfg(test)]
 pub(crate) async fn revoke_execution_generation(
     node: &std::sync::Arc<EmbeddedNode>,
     row: &AgentRequestRow,
@@ -315,8 +306,8 @@ pub(crate) async fn revoke_execution_generation(
 }
 
 /// Revoke without discarding already-published output. Selection is made under
-/// the same write gate as the generation CAS and uses immutable header metadata,
-/// exactly as `terminalSelectionMetadataValid`; corrupt bytes remain untouched.
+/// the same write gate as the generation CAS and uses immutable header metadata
+/// (`terminalSelectionMetadataValid`); corrupt bytes remain untouched.
 pub(crate) async fn revoke_execution_preserving_output(
     node: &std::sync::Arc<EmbeddedNode>,
     row: &AgentRequestRow,

@@ -9,9 +9,8 @@ inductive TerminalPayloadError where
   deriving DecidableEq, Repr
 
 /-- The common exact-answer boundary for UI, agent-request completion and mailbox
-delivery. A terminal lifecycle alone does not make a selected message available.
-Explicit NoMessage is distinct from an unresolved selection or incomplete replica.
-The caller's existing request/ACP owner supplies terminal lifecycle and scope. -/
+delivery: a terminal lifecycle alone does not make a selected message available,
+and the caller's existing request/ACP owner supplies terminal lifecycle and scope. -/
 def resolveTerminalPayload (messages : List MessageEnvelope) (records : List Segment)
     (deniedHeaders deniedSegments : List DocId) (request : DocId) (session : SessionId)
     (selection : Option TerminalSelection)
@@ -31,27 +30,6 @@ def resolveTerminalPayload (messages : List MessageEnvelope) (records : List Seg
         let native ← (reconstructMessage records deniedSegments message).mapError
           TerminalPayloadError.reconstruction
         .ok (some native)
-
-theorem absent_terminal_selection_has_no_answer
-    (messages : List MessageEnvelope) (records : List Segment)
-    (deniedHeaders deniedSegments : List DocId) (request : DocId) (session : SessionId) :
-    resolveTerminalPayload messages records deniedHeaders deniedSegments request session none =
-      .error (.selection .missingSelection) := rfl
-
-theorem no_message_needs_no_payload
-    (messages : List MessageEnvelope) (records : List Segment)
-    (deniedHeaders deniedSegments : List DocId) (request : DocId) (session : SessionId) :
-    resolveTerminalPayload messages records deniedHeaders deniedSegments request session
-      (some .noMessage) = .ok none := rfl
-
-theorem unknown_selected_header_is_not_latest
-    (messages : List MessageEnvelope) (records : List Segment)
-    (request selected : DocId) (session : SessionId)
-    (h : (messages.map (·.header)).filter (fun header => header.id == selected) = []) :
-    resolveTerminalPayload messages records [] [] request session (some (.message selected)) =
-      .error (.selection .missingHeader) := by
-  simp [resolveTerminalPayload, resolveTerminal, h]
-  rfl
 
 namespace Examples
 

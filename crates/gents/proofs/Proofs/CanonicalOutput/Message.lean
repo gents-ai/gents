@@ -61,15 +61,10 @@ theorem full_presentation_preserves_bytes (bytes : List UInt8)
     (h : (utf8? bytes).isSome = true) : present bytes .full = .ok bytes := by
   simp [present, h]
 
-/-- A candidate starts at a UTF-8 boundary, retains no more than the requested
-byte budget, and leaves a valid UTF-8 prefix in the immutable source. -/
 def terminalTailCandidate (raw : List UInt8) (budget start : Nat) : Bool :=
   decide (start ≤ raw.length) && decide (raw.length - start ≤ budget) &&
     (utf8? (raw.take start)).isSome && (utf8? (raw.drop start)).isSome
 
-/-- Candidate offsets are scanned in ascending byte order, so the first valid
-one retains the longest possible suffix. The full length is the safe fallback
-when the raw source itself is valid. -/
 def terminalTailStart (raw : List UInt8) (budget : Nat) : Nat :=
   ((List.range (raw.length + 1)).find? (terminalTailCandidate raw budget)).getD raw.length
 
@@ -94,10 +89,10 @@ theorem terminalTailStart_is_longest (raw : List UInt8) (budget start : Nat)
     (hbetter : start < terminalTailStart raw budget) :
     terminalTailCandidate raw budget start = false := by
   let p := terminalTailCandidate raw budget
-  have hempty : (utf8? ([] : List UInt8)).isSome = true := by native_decide
-  have hlast : p raw.length = true := by
-    simp [p, terminalTailCandidate, hraw, hempty]
   have hsome : ((List.range (raw.length + 1)).find? p).isSome = true := by
+    have hempty : (utf8? ([] : List UInt8)).isSome = true := by native_decide
+    have hlast : p raw.length = true := by
+      simp [p, terminalTailCandidate, hraw, hempty]
     apply List.find?_isSome.mpr
     exact ⟨raw.length, by simp, hlast⟩
   unfold terminalTailStart at hbetter
@@ -120,9 +115,6 @@ theorem terminalTailStart_bounds (raw : List UInt8) (budget : Nat)
   simp only [terminalTailCandidate, Bool.and_eq_true, decide_eq_true_eq] at h
   exact ⟨h.1.1.1, h.1.1.2⟩
 
-/-- Preserve the immutable committed bytes and expose only their longest
-UTF-8-safe bounded tail, followed by the terminal cause. Invalid source or
-cause bytes are rejected rather than repaired. -/
 def terminalDiagnosticPresentation (raw cause : List UInt8) (tailBudget : Nat) :
     Except MessageError Presentation := do
   if !(utf8? raw).isSome || !(utf8? cause).isSome then
@@ -294,10 +286,6 @@ def roleAllows {α : Type} (role : MessageRole) : MessageBlock α → Bool
       match part with | .text _ => true | .media value => value.kind == .image)
   | .media value => role == .user || (role == .assistant && value.kind == .image)
 
-/-- This is the structural shape of the persisted native message, not the
-provider-input boundary. Native user and assistant block vectors may be empty
-so a payload-free publication needs no invented bytes. The owned provider-input
-adapter may impose its conventional nonempty-message requirement later. -/
 def validNativeShape (message : MessageEnvelope) : Bool :=
   message.blocks.all (roleAllows message.header.role) &&
     (match message.header.role with
@@ -312,9 +300,6 @@ def recoveryTextOnly : List (MessageBlock PayloadSpec) → Bool
   | .text payload :: rest => payload.presentation == .full && recoveryTextOnly rest
   | _ => false
 
-/-- Publication provenance constrains the header even when it has no payload.
-Recovery is the deliberately narrow text-only fallback; forks detach request
-membership and carry one exact origin. -/
 def validPublicationShape (message : MessageEnvelope) : Bool :=
   match message.header.publication with
   | .requestExecution _ => message.header.request.isSome && message.header.origin.isNone
@@ -331,9 +316,6 @@ def validPublicationShape (message : MessageEnvelope) : Bool :=
   | .fork origin =>
       message.header.request.isNone && message.header.origin == some origin
 
-/-- Native JSON parsing is executable. Exact source bytes remain the result;
-parsing never serializes or repairs them. Media bytes below retain their encoded
-native representation; the platform media decoder is a separate bridge check. -/
 def resolveMessagePayload (records : List Segment) (denied : List DocId)
     (allowed : List PayloadKind) (json : Bool) (spec : PayloadSpec) :
     Except MessageError (List UInt8) := do
@@ -376,16 +358,11 @@ def publicationAllowsSource (header : Header) (closing : Segment) : Bool :=
   | .toolDelivery call =>
       match closing.coordinate.source, closing.writer with
       | .tool sourceCall, .tool writerCall => sourceCall == call && writerCall == call
-      /- Authored immediate receipts remain in the parent request. Ordinary
-      background notifications may belong to a separately authenticated wake
-      request while retaining exact refs to the parent tool source above. -/
       | .authored _, .tool writerCall =>
           header.request == some closing.coordinate.request && writerCall == call
       | _, _ => false
   | .fork _ => !closing.coordinate.source.isAuxiliary
 
-/-- Auxiliary audit bytes are not a public payload source under any
-publication, including a fork header with otherwise valid coordinates. -/
 theorem auxiliary_never_publication_source (header : Header) (closing : Segment)
     (kind : AuxiliaryKind) (scope turn attempt : Nat)
     (hsource : closing.coordinate.source = .auxiliary kind scope turn attempt) :
@@ -426,17 +403,11 @@ def validateToolResultSource (records : List Segment) (denied : List DocId)
       let publicationMatches := match header.publication with
         | .toolDelivery deliveryCall =>
             deliveryCall == call && header.request == some closing.coordinate.request
-        /- A fork retains exact origin refs. Its closure is validated by the
-        fork/hydration owner rather than rewritten into the child request. -/
         | .fork _ => true
         | _ => false
       if writerCall == call && publicationMatches then .ok () else .error .wrongSource
   | _, _ => .error .wrongSource
 
-/-- A published provider signature must agree with a retained signature stream
-at its reasoning-part position. Authored reasoning may carry inline signature
-metadata without a separate provider observation; unsigned provider reasoning
-without a signature stream remains valid for providers that do not sign it. -/
 def validateReasoningSignature (records : List Segment) (denied : List DocId)
     (payload : PayloadSpec) (signature : Option String) : Except MessageError Unit := do
   let closing ← (resolveClose records denied payload.reference).mapError
@@ -524,9 +495,6 @@ def providerPositions (records : List Segment) (denied : List DocId)
     | _ => pure none
   pure (positions.filterMap id)
 
-/-- Each provider source keeps its native order, including signed reasoning.
-Recovery may leave gaps; tool-owned output can be wrapped/reused at new header
-positions and is not mistakenly compared with its source's position. -/
 def nativePositionsOrdered : List (Coordinate × Declaration) → Bool
   | [] => true
   | head :: tail =>

@@ -1,12 +1,9 @@
-/* What a backend's provider reports it has used: a window's bar and the
-   rows under a backend. */
 import type {
   BackendUsageView,
   UsageWindowView,
 } from "@source-inc/gents-desktop-client";
 import { FactRow } from "./editors";
 
-/* "2h13m", "3m", "<1m": the CLI's short durations */
 function shortDuration(ms: number) {
   const total = Math.max(0, Math.floor(ms / 60_000));
   const [days, hours, minutes] = [
@@ -39,7 +36,6 @@ function windowText(w: UsageWindowView, now: number) {
   return parts.join(" · ");
 }
 
-/* a row's usage: its most-used window, labelled, the one that blocks first */
 export function UsageBar({ view }: { view?: BackendUsageView }) {
   const top = view?.windows.reduce<UsageWindowView | undefined>(
     (most, w) => (!most || w.usedPct > most.usedPct ? w : most),
@@ -61,8 +57,6 @@ export function UsageBar({ view }: { view?: BackendUsageView }) {
   );
 }
 
-/* the opened row's usage: each window, or why there is no number, and how
-   this read went */
 export function UsageRows({ view }: { view?: BackendUsageView }) {
   const now = Date.now();
   const read = view?.read?.startsWith("unavailable: ")

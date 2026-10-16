@@ -479,10 +479,8 @@ pub(super) fn handle_request(
             runtime.block_on(save_agent_config(fixture.desktop_core().as_ref(), request))?;
             Ok(snapshot_response(runtime, fixture)?)
         }
-        // Test-only escape hatch: write an agent document on the *remote* node so the
-        // subsequent desktop-snapshot read exercises the real P2P propagation path (write
-        // on remote core → visible on desktop core).  This is the D1/D2 cross-node
-        // witness.  Only available when GENTS_TAURI_LIVE=1 (set by run-live-test.mjs).
+        // Test-only: write on the remote core so the desktop-snapshot read
+        // exercises the real P2P propagation path (cross-node witness).
         ("POST", "/desktop/test-fixture/remote-save-agent") => {
             if std::env::var("GENTS_TAURI_LIVE").as_deref() != Ok("1") {
                 return Ok(HttpResponse::json_error(
@@ -513,10 +511,8 @@ pub(super) fn handle_request(
                 serde_json::json!({ "ok": true }).to_string(),
             ))
         }
-        // Test-only projection of the remote node's P2P admin API. The managed
-        // desktop route owner uses this through the same HTTP client and wire
-        // shapes as a deployed runtime. Keeping it inside the live runner lets
-        // the E2E provision two real nodes without a second server process.
+        // Test-only projection of the remote node's P2P admin API; must keep
+        // the same wire shapes as a deployed runtime's HTTP client.
         ("GET", "/p2p/info") => {
             require_live_fixture()?;
             let addresses = runtime.block_on(fixture.remote_core().p2p().listen_addresses())?;

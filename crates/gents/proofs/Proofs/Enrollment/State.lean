@@ -2,17 +2,6 @@ import Proofs.Basic
 import Proofs.SessionHydration.State
 import Mathlib.Data.Finset.Basic
 
-/-!
-# Authenticated status-first enrollment
-
-Status is observation only. A request is accepted only after its signed offer was
-observed and the candidate signature, authenticated transport peer, resolved DID,
-ticket, schema, scoped network trust, and canonical digest agree. Membership
-authority is an ordered admin-signed revision. The maximal revision is the sole
-owner of operational membership and routes; revocation is an authenticated
-tombstone, never deletion of authorization history.
--/
-
 namespace Enrollment
 
 abbrev Did := String
@@ -22,7 +11,6 @@ abbrev RequestId := String
 abbrev WireBytes := List UInt8
 abbrev CanonicalFields := List WireBytes
 
-/-- A digest contains only actual serialized bytes and their rendered ASCII hex bytes. -/
 structure Digest where
   serializedBytes : WireBytes
   renderedHexBytes : WireBytes
@@ -49,7 +37,6 @@ structure Offer where
   fresh : Bool
   deriving DecidableEq, Repr
 
-/-- Durable trust is owned by state and scoped to the exact network/admin pair. -/
 structure NetworkAdminPin where
   networkId : String
   adminDid : Did
@@ -88,7 +75,6 @@ def canonicalRequestTextFields (r : Request) : List String :=
 
 def textFieldsToBytes (fields : List String) : CanonicalFields := fields.map stringBytes
 
-/-- The exact canonical signed-field boundary is UTF-8 bytes, not host strings. -/
 def canonicalRequestFields (r : Request) : CanonicalFields :=
   textFieldsToBytes (canonicalRequestTextFields r)
 
@@ -97,7 +83,6 @@ def encodeWireLength : Nat → WireBytes
   | 0 => [255]
   | n + 1 => 0 :: encodeWireLength n
 
-/-- A field is its byte length followed by exactly those bytes. -/
 def frameWireField (field : WireBytes) : WireBytes :=
   encodeWireLength field.length ++ field
 
@@ -160,7 +145,6 @@ def hexAsciiNibble (n : Nat) : UInt8 :=
 def hexHighByte (byte : UInt8) : UInt8 := hexAsciiNibble (byte.toNat / 16)
 def hexLowByte (byte : UInt8) : UInt8 := hexAsciiNibble (byte.toNat % 16)
 
-/-- Lower-case hexadecimal rendered as its actual ASCII/UTF-8 bytes. -/
 def utf8HexBytes : WireBytes → WireBytes
   | [] => []
   | byte :: bytes => hexHighByte byte :: hexLowByte byte :: utf8HexBytes bytes
@@ -168,12 +152,10 @@ def utf8HexBytes : WireBytes → WireBytes
 def utf8HexString (bytes : WireBytes) : String :=
   String.join <| bytes.map hexByteString
 
-/-!
-The proof model uses a reversible byte-exact digest representation rather than
+/-- The proof model uses a reversible byte-exact digest representation rather than
 duplicating a cryptographic implementation. Production may hash these exact
 payload bytes, while conformance can compare the payload and this collision-free
-model digest without relying on a runtime-specific hash primitive.
--/
+model digest without relying on a runtime-specific hash primitive. -/
 def canonicalDigestFromFields (fields : CanonicalFields) : Digest :=
   let serialized := canonicalSerializedFields fields
   { serializedBytes := serialized, renderedHexBytes := utf8HexBytes serialized }
@@ -214,7 +196,7 @@ structure Decision where
   ownerNode : Did
   kind : DecisionKind
   authorizationSequence : Nat
-  /-- Signed lease boundary. `fresh` is the verifier's result at observation time. -/
+  /-- `fresh` is the verifier's result at observation time. -/
   authorizationExpiresAt : String
   signerDid : Did
   adminSigned : Bool
@@ -230,7 +212,6 @@ structure AuthorizationRevision where
   memberPeer : PeerId
   ownerNode : Did
   sequence : Nat
-  /-- Exact lease generation copied from the approval; revocations retain it as history. -/
   authorizationExpiresAt : String
   kind : RevisionKind
   signerDid : Did
@@ -264,11 +245,8 @@ structure AppliedRoute where
   live : Bool
   deriving DecidableEq, Repr
 
-/--
-Admin-signed evidence that the runtime reconciled the exact client-to-server
-route for one authorization generation.  The receipt is evidence, not
-authority: a later authorization revision makes it non-current.
--/
+/-- The receipt is evidence, not authority: a later authorization revision makes
+it non-current. -/
 structure RouteReceipt where
   requestId : RequestId
   requestDigest : Digest
@@ -323,7 +301,6 @@ def adminPinAdmissible (s : State) (o : Offer) : Prop :=
 instance (s : State) (o : Offer) : Decidable (adminPinAdmissible s o) := by
   unfold adminPinAdmissible; infer_instance
 
-/-- Trust is exact and unique; even a restored conflicting pin fails closed. -/
 def networkAdminPinned (s : State) (o : Offer) : Prop :=
   adminPinFor o ∈ s.adminPins ∧ ¬ adminPinConflict s o
 
@@ -425,11 +402,9 @@ def dominatingRevisionExists (s : State) (revision : AuthorizationRevision) : Pr
 instance (s : State) (r : AuthorizationRevision) : Decidable (dominatingRevisionExists s r) := by
   unfold dominatingRevisionExists; infer_instance
 
-/--
-An authorization is current only when it is the unique maximum for the scoped
+/-- An authorization is current only when it is the unique maximum for the scoped
 member. Equal-sequence conflicting restored or replicated revisions therefore
-make every contender non-current, even though serial insertion rejects ties.
--/
+make every contender non-current, even though serial insertion rejects ties. -/
 def uniqueMaximumRevision (s : State) (revision : AuthorizationRevision) : Prop :=
   revision ∈ s.authorizations ∧
   ∀ other ∈ s.authorizations, sameMember other revision →
@@ -443,7 +418,6 @@ instance (s : State) (revision : AuthorizationRevision) : Decidable
 def mergeAuthorization (s : State) (revision : AuthorizationRevision) : State :=
   { s with authorizations := insert revision s.authorizations }
 
-/-- Serial transitions preserve this; projection safety does not assume it after restore/merge. -/
 def AuthorizationWellFormed (s : State) : Prop :=
   ∀ a ∈ s.authorizations, ∀ b ∈ s.authorizations,
     sameMember a b → a.sequence = b.sequence → a = b
@@ -469,7 +443,6 @@ def currentApproval (s : State) (r : Request) (d : Decision) : Prop :=
 instance (s : State) (r : Request) (d : Decision) : Decidable (currentApproval s r d) := by
   unfold currentApproval; infer_instance
 
-/-- Operational peer admission comes only from an exact current enrollment. -/
 def peerOperationallyAuthorized (s : State) (memberDid : Did) : Prop :=
   ∃ r ∈ s.acceptedRequests, ∃ d ∈ s.decisions,
     currentApproval s r d ∧ r.candidateDid = memberDid

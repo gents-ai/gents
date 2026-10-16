@@ -1,8 +1,3 @@
-/* One glyph per kind of tool call, so the transcript and the trace mark a
-   call the same way. The contract's presentation kind decides it, with a
-   few tool names refining what a kind cannot say on its own: a grep and a
-   read_file are both fileRead, and they do not look like the same act.
-   Plain Lucide names, no kind aliases — the Figma library mirrors these. */
 import {
   Bot,
   Plug,
@@ -18,20 +13,12 @@ import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 
 type Glyph = ComponentType<{ className?: string }>;
 
-/* A tool name is more specific than its kind, where the name is known.
-   Kept short on purpose: every entry here is a claim that the contract's
-   own kind is not enough, and a name nothing calls is a claim about
-   nothing. */
 const BY_NAME: Record<string, Glyph> = {
   grep: Search,
   glob: Search,
   metrics: Search,
   read_doc: FileText,
 };
-/* The config's own vocabulary, so a thing looks the same wherever it is
-   named: Bot is an agent, Wrench is a tool, Plug is a tool service.
-   Play belongs to a task and is not borrowed here for a background
-   process — a long-running command keeps the terminal, squared off. */
 const BY_KIND: Record<string, Glyph> = {
   command: Terminal,
   fileRead: FileText,

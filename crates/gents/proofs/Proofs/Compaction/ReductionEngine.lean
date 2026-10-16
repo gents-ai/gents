@@ -1,15 +1,5 @@
 import Proofs.PromptAssembly.Budget
 
-/-!
-# Shared reduction decision and outcome
-
-The compactor owns one scope-independent decision/outcome engine. It either
-leaves the provider view unchanged, reports that no legal reduction can fit, or
-returns one checkpoint over an exact prefix together with the exact suffix.
-Session compaction and request-local provider-context reduction deliberately
-commit that shared outcome through separate persistence functions.
--/
-
 namespace Compaction.ReductionEngine
 
 inductive Decision where
@@ -20,9 +10,6 @@ inductive Decision where
 
 abbrev ThresholdDecision := PromptAssembly.Budget.ThresholdDecision
 
-/-- The one input-driven threshold gate. Equality is admitted; only one token
-over the effective input budget makes reduction eligible. `cannotFit` remains
-an execution outcome after an eligible reduction cannot produce a legal split. -/
 def decideThreshold (inputTokens effectiveInputBudget : Nat) : ThresholdDecision :=
   PromptAssembly.Budget.decideThreshold inputTokens effectiveInputBudget
 
@@ -36,21 +23,10 @@ theorem threshold_one_over_is_reduce_eligible (effectiveInputBudget : Nat) :
 
 inductive Outcome where
   | notNeeded (messages : List Nat)
-  /-- No legal reduction fits. Decision (#717): the request fails with a typed
-  error, both scopes commit nothing (`session_noop_does_not_commit`,
-  `request_local_noop_does_not_commit`), and there is no automatic fallback.
-  `CannotFit` directs the user to a new session or a larger context window; a
-  summary-provider failure fails as "per-turn provider-input compaction
-  failed"; an input leaving no output reserve fails at the final legality check
-  (`NoOutputCapacity`). A summary failure is transient and the next request
-  retries compaction; a budgeted fallback window would be a separate
-  availability feature, not part of this contract. -/
   | cannotFit
   | reduced (compactedPrefix retainedSuffix : List Nat) (checkpoint : Nat)
   deriving DecidableEq, Repr
 
-/-- Apply one reduction decision. A zero-length or overlong requested prefix is
-not silently discarded; it becomes the typed `cannotFit` outcome. -/
 def applyDecision (source : List Nat) : Decision → Outcome
   | .notNeeded => .notNeeded source
   | .cannotFit => .cannotFit
@@ -60,9 +36,6 @@ def applyDecision (source : List Nat) : Decision → Outcome
       else
         .cannotFit
 
-/-- Combine the threshold gate with the execution result under one shared
-decision owner. Scope-specific callers provide whether a legal bounded split
-and checkpoint were produced; they do not reinterpret threshold equality. -/
 def reductionDecision
     (inputTokens effectiveInputBudget : Nat) (canFit : Bool)
     (prefixLength checkpoint : Nat) : Decision :=
@@ -77,8 +50,6 @@ def reduce
   applyDecision source
     (reductionDecision inputTokens effectiveInputBudget canFit prefixLength checkpoint)
 
-/-- The shared engine's semantic postcondition. A no-op preserves the complete
-source, while a reduction returns an exact prefix/suffix partition. -/
 def ExactOutcome (source : List Nat) : Outcome → Prop
   | .notNeeded messages => messages = source
   | .cannotFit => True
@@ -139,25 +110,13 @@ theorem invalid_reduce_cannot_fit
   simp [applyDecision, invalid]
 
 /-! ## Projection-bounded reduction and rebuilt dispatch
-
-Projection and estimation are deliberately external functions.  In production
-the projection closure may capture the fixed request context and performs the
-native reconstruction/materialization step; this model neither substitutes a
-tokenizer nor assigns serialization costs.  The composition below does own two
-important bindings: the initial estimate is taken from the projection of the
-actual source, and a reduced request is rebuilt only from that same outcome's
-checkpoint and retained suffix.
 -/
 
-/-- Evidence retained at a projection boundary.  Consumers should obtain this
-through `projectRequest`; the composition never accepts one as an input. -/
 structure ProjectedRequest (Request : Type) where
   source : List Nat
   request : Request
   inputTokens : Nat
 
-/-- Fallibly reconstruct/materialize exactly `source`, then estimate that
-materialized request. -/
 def projectRequest {Request Error : Type}
     (project : List Nat → Except Error Request) (estimate : Request → Except Error Nat)
     (source : List Nat) : Except Error (ProjectedRequest Request) :=
@@ -186,9 +145,6 @@ theorem project_request_binds_source_and_estimate
           subst projected
           simp [hproject, hestimate]
 
-/-- Admission for any freshly materialized provider view, including a
-view repaired without creating a checkpoint.  It always projects and estimates
-the supplied source again before applying the same threshold and output guards. -/
 inductive FreshAdmission (Request : Type) where
   | overThreshold (projected : ProjectedRequest Request)
   | noOutputCapacity (projected : ProjectedRequest Request)
@@ -266,8 +222,6 @@ inductive RebuiltDispatch (Error Request : Type) where
   | noOutputCapacity (projected : RebuiltRequest Request)
   | dispatch (projected : RebuiltRequest Request) (outputTokens : Nat)
 
-/-- Rebuild a reduced outcome, project and estimate that rebuilt request, then
-re-run both the input threshold and positive-output-capacity guards. -/
 def rebuildAndAuthorize {Request Error : Type}
     (rebuild : Nat → List Nat → Except Error Request)
     (estimate : Request → Except Error Nat)
@@ -367,11 +321,6 @@ theorem rebuilt_dispatch_binds_exact_reduction
                   simp [hpartition, hrebuilt, hestimate]
       · simp [rebuildAndAuthorize, hproject, hcapacity] at h
 
-/-- The single reduction-to-dispatch entry.  Both threshold checks use the same
-Budget-owned effective threshold.  The initial callback consumes canonical
-source identities; the distinct rebuild callback consumes the generated
-checkpoint and exact retained identity suffix, so the checkpoint is never
-misinterpreted as a durable message identity. -/
 def reduceRebuildAndAuthorize {Request Error : Type}
     (project : List Nat → Except Error Request)
     (rebuild : Nat → List Nat → Except Error Request)
@@ -475,13 +424,6 @@ theorem composed_dispatch_binds_exact_source
             rebuilt_dispatch_binds_exact_reduction rebuild estimate source compactedPrefix
               retainedSuffix checkpoint budget contextWindow configuredMaxOutputTokens outputTokens
               projected hexact hrebuilt⟩
-
-/-! ## Scope-specific persistence
-
-These states are intentionally different types. The shared engine decides and
-constructs the exact reduction; each caller then commits it according to its
-own crash-cut and identity contract.
--/
 
 structure SessionState where
   cursor : Nat

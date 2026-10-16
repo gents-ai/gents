@@ -65,9 +65,8 @@ pub(super) fn message_is_runtime_control(
     gents::lifecycle::is_runtime_control_message(&request_input, &message.message.message_key)
 }
 
-/// Who put `request` into its session, when not the person. A session
-/// message names its sender's session only when this replica holds the exact
-/// causing request.
+/// A session message names its sender's session only when this replica holds
+/// the exact causing request.
 pub(super) fn request_origin_view(
     store: &ClientStore,
     request: &AgentRequestRow,
@@ -112,8 +111,8 @@ pub(super) fn request_origin_view(
     })
 }
 
-/// The origin of a user-role transcript entry: that of the request it was
-/// published under, or a background completion for a delivered notification.
+/// A user-role transcript entry's origin: that of its request, or a background
+/// completion for a delivered notification.
 pub(super) fn message_origin(
     store: &ClientStore,
     message: &TranscriptMessageRow,
@@ -142,10 +141,8 @@ pub(super) fn request_is_background_completion(request: &AgentRequestRow) -> boo
         .is_some_and(gents::lifecycle::is_background_completion_request)
 }
 
-/// `canonical_rows::authored_message_key` is `pub(crate)` in gents, so its
-/// prompt shape is repeated here; the two reconciliations that compare keys
-/// (the pending turn's owner and the message projection's owns-turn marker)
-/// must not drift apart.
+/// `canonical_rows::authored_message_key` is `pub(crate)` in gents; this shape
+/// is repeated here, and the reconciliations that compare keys must not drift.
 pub(super) fn authored_prompt_message_key(request_doc_id: &str) -> String {
     format!("authored:{request_doc_id}:prompt")
 }
@@ -189,10 +186,9 @@ pub fn build_session_snapshot_from_store_for_node(
     )
 }
 
-/// Build the shared session snapshot and attach the newest durable accounting
-/// row for any request in the session. This deliberately does not key the meter
+/// The newest durable accounting row for any request in the session (not keyed
 /// off `latest_request_id`: a newly submitted request has no accounting until
-/// its first provider dispatch, so the previous measured request remains visible.
+/// its first provider dispatch).
 #[cfg(test)]
 pub async fn build_session_snapshot_for_node(
     core: &ClientCore,

@@ -73,9 +73,6 @@ async fn restart_obligations(
     (messages, wakes)
 }
 
-/// Drives the native restart classifier rows through canonical provider
-/// publication. Session-message rows are exercised separately; the missing
-/// parent rows remain an integration fault-injection fixture by design.
 #[cfg(unix)]
 #[tokio::test]
 async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
@@ -97,10 +94,6 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
         );
         let admission = published_admission(PublishedAdmissionOptions {
             name: format!("restart-{name}"),
-            // Restart terminalization may owe a scheduled wake. That owner
-            // signs a new AgentRequest, so this fixture must use the same
-            // registered KeyIdentity boundary as production rather than the
-            // literal identity used by transition-only tests.
             real_identity: true,
             await_mode: if case.await_mode == "background" {
                 AwaitMode::Background
@@ -268,10 +261,6 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
     }
 }
 
-/// A started session is an ordinary agent's session, not a subordinate: no
-/// parent observation ends its `agent_new`/`agent_message` row on restart,
-/// only the row's own expired deadline does. The rows come from the Lean
-/// classifier; the fixture publishes an accepted session-message call.
 #[tokio::test]
 async fn generated_session_message_restart_dispositions_use_canonical_admission_owner() {
     let cases = crate::lean_vocab_test::lean_restart_disposition_cases()
@@ -399,10 +388,6 @@ async fn generated_native_recovery_cases_use_canonical_admission_owner() {
         .unwrap();
         let tool_doc = admission.tool.doc_id().unwrap().to_owned();
         let request_doc = admission.tool.request_doc_id().unwrap().to_owned();
-        // The current Recovery contract export pins the post-state but does
-        // not yet serialize these boundary premises. Retain the original
-        // native fixture inputs explicitly; do not misdescribe absent export
-        // fields as modeled inputs.
         let deadline_expired = name == "tool_running_deadline_exceeded_to_timed_out";
         let parent_interrupted = matches!(
             name,

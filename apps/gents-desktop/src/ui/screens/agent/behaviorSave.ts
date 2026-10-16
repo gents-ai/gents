@@ -1,5 +1,3 @@
-/* What saving an agent draft writes, and what it then says about the
-   contexts: kept apart from the editor that shows the draft. */
 import type { AgentContext, AgentView } from "@source-inc/gents-desktop-client";
 
 import type { NodeView } from "../../../hooks/fleetStore";
@@ -16,19 +14,17 @@ import {
 } from "./behaviorDraft";
 
 export type WrittenAgent = {
-  /** a new context was created for the agent */
   creating: boolean;
   contextId: string;
-  /** the new context's name, when one was created */
   newName: string;
 };
 
 /**
- * Writes an agent draft: a new context (a copy, an empty one, or a
- * duplicate) lands with the agent in one apply; an edit to an existing
- * agent and its existing context is one patch of the changed fields; a
- * new agent on an edited existing context patches the context and saves
- * the agent; anything else saves the agent alone.
+ * Writes an agent draft: a new context lands with the agent in one apply;
+ * an edit to an existing agent is one patch of changed fields only (so a
+ * concurrent edit to another field of a shared context is not
+ * overwritten); a new agent on an edited existing context patches the
+ * context with the agent applied; anything else saves the agent alone.
  */
 export async function writeAgentDraft({
   changeConfig,
@@ -43,10 +39,8 @@ export async function writeAgentDraft({
   deployment: NodeView;
   agent: AgentView;
   next: Draft;
-  /** save the context as a new copy rather than editing the one chosen */
   asCopy: boolean;
   draftMode: DraftMode | undefined;
-  /** the id a new context takes; the same one again on a retry */
   newContextId: () => string;
 }): Promise<WrittenAgent> {
   const creating = isNew(next.contextChoice) || asCopy;
@@ -83,8 +77,6 @@ export async function writeAgentDraft({
     tags: next.tags.length ? next.tags : null,
     created_at: agent.createdAt,
   };
-  /* only the context fields this edit changed, so a concurrent edit to
-     another field of a shared context is not overwritten */
   const before = target ? contextFields(target) : null;
   const changedFields: Partial<typeof fields> = {};
   if (before) {
@@ -96,8 +88,8 @@ export async function writeAgentDraft({
     if (JSON.stringify(before.skillIds) !== JSON.stringify(next.skillIds))
       changedFields.skill_ids = fields.skill_ids;
   }
-  /* a new context and the agent that points at it land together or
-     not at all: one component apply is one transaction */
+  /* one component apply is one transaction: a new context and the agent
+     pointing at it land together or not at all */
   if (creating)
     await changeConfig("applyConfigComponents", {
       document: {
@@ -116,8 +108,7 @@ export async function writeAgentDraft({
       },
     });
   else if (target && edited && !draftMode)
-    /* an existing agent and its existing context: one patch call, one
-       transaction, changed fields only */
+    /* one patch call, one transaction, changed fields only */
     await changeConfig("patchConfigComponents", {
       nodeDid: deployment.nodeDid,
       patches: [
@@ -140,8 +131,8 @@ export async function writeAgentDraft({
       ],
     });
   else if (target && edited) {
-    /* a new agent on an edited existing context: the agent has no
-       document to patch yet, so the context is patched with it applied */
+    /* the agent has no document to patch yet: patch the context, with the
+       agent applied */
     await changeConfig("patchConfigComponents", {
       nodeDid: deployment.nodeDid,
       patches: [
@@ -157,11 +148,7 @@ export async function writeAgentDraft({
   return { creating, contextId, newName };
 }
 
-/**
- * What a save did to the contexts, said after it: a context created, and
- * whether the one the agent left is still used by others; one left
- * unused is offered for deletion.
- */
+/** What a save did to the contexts, said after it. */
 export function contextOutcome(
   deployment: NodeView,
   agent: AgentView,

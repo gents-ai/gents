@@ -1,5 +1,3 @@
-/* Keyboard shortcuts: ⌘1 agents, ⌘2 sessions, ⌘3 configuration,
-   ⌘N new session, ⌘K focus the composer, ⌘/ this sheet. */
 import { useEffect, useState } from "react";
 import {
   Dialog,

@@ -62,7 +62,6 @@ impl FieldPage {
     }
 }
 
-/// One byte page of an immutable UTF-8 value: `ToolPolicy.FieldRead.page`.
 pub(crate) struct Utf8Page<'a> {
     pub text: &'a str,
     pub end: usize,
@@ -76,9 +75,6 @@ pub(crate) enum Utf8PageError {
     Offset,
 }
 
-/// Select the longest whole-scalar page of at most `budget` bytes at `offset`.
-/// A continuation must carry the SHA-256 of the value its earlier pages came
-/// from, so pages of different versions are never joined.
 pub(crate) fn utf8_page<'a>(
     text: &'a str,
     offset: usize,

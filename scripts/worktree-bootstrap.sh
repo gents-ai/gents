@@ -1,19 +1,8 @@
 #!/bin/sh
-# Create a git worktree with warm build caches.
-#
-# A bare `git worktree add` starts every cache cold: the new worktree has no
-# `target/` (a full workspace test build recompiles ~40 minutes even with
-# sccache, which cannot cache build scripts, proc-macro expansion, or linking)
-# and no `crates/gents/proofs/.lake` (Mathlib rebuilds for hours). Both are
-# cheaply transferable from the current checkout via APFS clonefile (`cp -c`),
-# which shares blocks copy-on-write instead of duplicating them.
-#
 # Usage: scripts/worktree-bootstrap.sh <branch> [dest-dir] [base-ref]
 #   branch    branch to check out; created from base-ref if it does not exist
 #   dest-dir  defaults to $WORKTREE_DIR, then a sibling gents-<slug> directory
 #   base-ref  defaults to $WORKTREE_BASE, then HEAD; used when creating the branch
-# The env-var forms exist so `make worktree` can pass optional values without
-# positional-argument collapse (an empty positional would shift later ones).
 set -eu
 
 branch="${1:?usage: worktree-bootstrap.sh <branch> [dest-dir] [base-ref]}"
@@ -31,16 +20,12 @@ fi
 if git show-ref --verify --quiet "refs/heads/$branch"; then
     git worktree add "$dest" "$branch"
 elif git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
-    # worktree add does not DWIM remote-only branches unless
-    # worktree.guessRemote is set; start the local branch from origin's.
+    # worktree add does not DWIM remote-only branches unless worktree.guessRemote is set
     git worktree add -b "$branch" "$dest" "origin/$branch"
 else
     git worktree add -b "$branch" "$dest" "$base"
 fi
 
-# Copying target/ out from under a live build is only mildly risky (cargo
-# rebuilds anything whose fingerprint doesn't verify), but warn so a slow or
-# odd first build in the new worktree isn't a mystery.
 for pid in $(pgrep -x cargo 2>/dev/null || true); do
     cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')"
     if [ "$cwd" = "$repo_root" ]; then
@@ -65,11 +50,10 @@ clone_dir() {
 }
 
 clone_dir "$repo_root/target" "$dest/target" "cargo target/"
-# Stale incremental state is worthless across worktrees (the workspace builds
-# with incremental=false) and just wastes space in the clone.
+# workspace builds with incremental=false; stale incremental state is worthless here
 rm -rf "$dest/target/debug/incremental" "$dest/target/release/incremental"
 
-# Lean caches are only valid against an identical dependency manifest.
+# Lean caches are only valid against an identical lake-manifest.json
 proofs="crates/gents/proofs"
 if cmp -s "$repo_root/$proofs/lake-manifest.json" "$dest/$proofs/lake-manifest.json" 2>/dev/null; then
     clone_dir "$repo_root/$proofs/.lake" "$dest/$proofs/.lake" "Lean proofs .lake/"

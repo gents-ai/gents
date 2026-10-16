@@ -250,10 +250,6 @@ fn peer_id_from_address_like_peer(value: &str) -> Option<String> {
     Some(peer_id.to_string())
 }
 
-/// Whether the pairing's template uses Push delivery (filtered replicator is the
-/// only channel; no DefraDB subscription). Unknown/absent templates fall back to
-/// the strict Replicate-style collection check, which is the conservative choice
-/// (a missing subscription reports unhealthy rather than falsely healthy).
 fn is_push_template(template: Option<&str>) -> bool {
     use gents::agent::p2p_reconcile::{resolve_template, Delivery};
     template

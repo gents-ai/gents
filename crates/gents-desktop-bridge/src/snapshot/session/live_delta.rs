@@ -121,9 +121,7 @@ pub(super) fn canonical_live_text(
 }
 
 fn live_text_hash(value: &str) -> String {
-    // FNV-1a is used only as a compact projection continuity checksum, never as
-    // a security primitive. Length plus checksum cheaply checks that an append
-    // patch is based on the same text version held by the webview.
+    // FNV-1a: projection-continuity checksum only, not a security primitive.
     let mut hash = 0x811c9dc5_u32;
     for byte in value.as_bytes() {
         hash ^= u32::from(*byte);
@@ -158,9 +156,7 @@ fn live_text_patch(
     }
 }
 
-/// The cursor binds the source selected by the canonical owner. Revisions
-/// describe observer activity only; full session reads own history freshness.
-/// This is the native adapter of `ClientLiveDelta.accepts`.
+/// The cursor binds the source selected by the canonical owner.
 fn accepts_live_cursor(base: Option<&str>, current: Option<&str>, terminal: bool) -> bool {
     !terminal && base.is_some() && base == current
 }
@@ -251,9 +247,8 @@ pub async fn build_session_live_delta(
     Ok(delta)
 }
 
-/// The cursor is bound to `request_store`'s request row, the same row the full
-/// snapshot reads, so a replica lagging the fresh `store` yields the same
-/// cursor on both paths; the fresh row only gates the live turn.
+/// The cursor is bound to `request_store`'s request row, so a lagging replica
+/// yields the same cursor on both paths.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_session_live_delta_from_store(
     request_store: &ClientStore,

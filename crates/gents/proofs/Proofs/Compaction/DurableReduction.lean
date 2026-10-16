@@ -1,21 +1,5 @@
 import Proofs.Basic
 
-/-!
-# Durable per-turn provider-context reduction (#1127)
-
-`CompactionEntry` is a session-prefix fact: its cumulative boundary changes the
-history loaded by later requests.  A per-turn reduction is a different entity.
-It replaces only one request's sticky provider projection, can happen several
-times in that request, and must never participate in session-prefix dropping.
-
-This model gives that entity its own immutable store.  The checkpoint is opaque
-but exact; production persists the native post-reduction message list.  The
-source boundary is opaque too; production binds it to the exact request version
-and a bounded canonical AgentMessage high-water identity while the stored split
-contains the exact source projection. Pair closure is a creation precondition
-rather than something recovery is allowed to repair.
--/
-
 namespace Compaction.DurableReduction
 
 abbrev NodeDid := Nat
@@ -23,8 +7,6 @@ abbrev ProducerCallId := Nat
 abbrev RequestDocId := Nat
 abbrev ClaimCommitId := Nat
 
-/-- One reduction result.  Retry/repair attempts of the summary provider call
-are provenance of `producerCall`, not new reduction identities. -/
 structure ReductionKey where
   nodeDid : NodeDid
   sessionId : SessionId
@@ -33,21 +15,16 @@ structure ReductionKey where
   ordinal : Nat
   deriving DecidableEq, Repr
 
-/-- Exact durable transcript/version boundary.  Opaque: the model needs
-identity, not an implementation of DefraDB commits. -/
 structure SourceBoundary where
   value : Nat
   deriving DecidableEq, Repr
 
-/-- Exact native provider projection. -/
 structure Projection where
   value : Nat
   deriving DecidableEq, Repr
 
 /-- The immutable fact value stored under a reduction key. -/
 structure Fact where
-  /-- Claim-local request version.  It is exact provenance for this fact, not a
-  chain-wide epoch and not part of `ReductionKey`. -/
   claimCommit : ClaimCommitId
   sourceBoundary : SourceBoundary
   sourceProjection : Projection
@@ -97,8 +74,6 @@ def durable : PersistOutcome → Bool
 
 end PersistOutcome
 
-/-- Create-and-compare.  A logical twin or mismatched redelivery is an
-integrity conflict; no branch updates a fact. -/
 def persist (store : Store) (key : ReductionKey) (fact : Fact) :
     PersistOutcome × Store :=
   if fact.pairClosed then
@@ -147,8 +122,6 @@ theorem fork_separates_reductions
   intro heq
   exact h (congrArg ReductionKey.sessionId heq)
 
-/-! ## Durable consumption evidence -/
-
 inductive CaptureKind where
   | inference
   | title
@@ -157,14 +130,10 @@ inductive CaptureKind where
 
 structure CaptureCitation where
   kind : CaptureKind
-  /-- Only a supported provenance format is consumption evidence. -/
   supported : Bool
   reductionKeys : List ReductionKey
   deriving Repr
 
-/-- A rendered capture consumes a checkpoint only by explicitly citing its key
-from the owned inference scope.  Timestamps and unrelated capture kinds are not
-evidence. -/
 def consumedBy (key : ReductionKey) (captures : List CaptureCitation) : Bool :=
   captures.any fun capture =>
     capture.supported &&
@@ -187,8 +156,6 @@ def consumedBy (key : ReductionKey) (captures : List CaptureCitation) : Bool :=
 
 /-! ## Active checkpoint versus immutable lineage -/
 
-/-- Every key remains in lineage to order the next fact, but only the newest
-checkpoint shapes the sticky provider projection after recovery. -/
 def activeKeys : List ReductionKey → List ReductionKey
   | [] => []
   | key :: rest =>
@@ -205,8 +172,6 @@ theorem activeKeys_append_nonempty (lineage : List ReductionKey) (key : Reductio
   cases lineage with
   | nil => rfl
   | cons head tail => simp [activeKeys]
-
-/-! ## Persistence fence and recovery -/
 
 inductive Stage where
   /-- Summary call returned, but its value is not accepted by the loop yet. -/
@@ -225,9 +190,6 @@ structure Machine where
   fact : Fact
   activeProjection : Option Projection
 
-/-- Summary transport completion is not itself a reduction transition.  The
-reduction succeeds exactly when create-and-compare has made its fact durable;
-production keeps the compaction `InferenceCall` non-complete until then. -/
 def successfulReduction (machine : Machine) : Bool :=
   machine.stage = .durable || machine.stage = .recovered || machine.stage = .sent
 
@@ -271,8 +233,6 @@ theorem crash_before_persist_never_activates {pre post : Machine}
   subst hcrash
   simp [successfulReduction]
 
-/-- The loop cannot consume a checkpoint in a provider call unless the exact
-fact that determines it is already durable. -/
 theorem sent_step_requires_durable_fact {pre post : Machine} (h : Step pre post)
     (hsent : post.stage = .sent) :
     pre.store pre.key = some pre.fact ∧
@@ -284,8 +244,6 @@ theorem sent_step_requires_durable_fact {pre post : Machine} (h : Step pre post)
   | restore _ _ hpost => subst hpost; contradiction
   | sendDurable _ hbound hactive _ => exact ⟨hbound, hactive⟩
 
-/-- Crash after persistence loses only process-local state.  Recovery restores
-the exact sticky projection, not a newly summarized approximation. -/
 theorem crash_then_restore_exact {durable crashed recovered : Machine}
     (hdurable : durable.store durable.key = some durable.fact)
     (hcrash : crashed = { durable with stage := .crashed, activeProjection := none })
@@ -298,8 +256,6 @@ theorem crash_then_restore_exact {durable crashed recovered : Machine}
   subst hrestore
   simp_all
 
-/-- Recovery trusts facts admitted by the creation owner. Arbitrary external
-stores do not acquire pair closure merely by containing a matching key. -/
 def Store.PairClosed (store : Store) : Prop :=
   ∀ key fact, store key = some fact → fact.pairClosed = true
 
@@ -329,8 +285,6 @@ theorem Step.preserves_pairClosed_store {pre post : Machine}
   | restore _ _ hpost => subst hpost; exact hstore
   | sendDurable _ _ _ hpost => subst hpost; exact hstore
 
-/-- Creation checks pair closure; recovery and send retain it from a valid
-store. No recovery repair or additional transition is introduced. -/
 theorem active_checkpoint_pair_closed {pre post : Machine}
     (hstore : pre.store.PairClosed) (hstep : Step pre post)
     (hactive : successfulReduction post = true) : post.fact.pairClosed = true := by
@@ -340,8 +294,6 @@ theorem active_checkpoint_pair_closed {pre post : Machine}
   | crash hpost => subst hpost; simp [successfulReduction] at hactive
   | restore _ hbound hpost => subst hpost; exact hstore _ _ hbound
   | sendDurable _ hbound _ hpost => subst hpost; exact hstore _ _ hbound
-
-/-! ## Executable create-and-compare cases -/
 
 structure Scenario where
   key : ReductionKey

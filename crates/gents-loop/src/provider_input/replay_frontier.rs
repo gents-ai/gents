@@ -1,6 +1,4 @@
-//! Lean `PromptAssembly.ReplayFrontier`: flat provider input, the two
-//! capture checks that decide reasoning replay, and the maximal admissible
-//! suffix of accepted turns.
+//! Lean `PromptAssembly.ReplayFrontier` over flat provider input.
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -51,9 +49,6 @@ pub fn drop_leading_reasoning(mut count: usize, items: &[FlatItem]) -> Vec<FlatI
         .collect()
 }
 
-/// One accepted turn located in the assembled body. `base` is the provenance
-/// and payload decision; `captured` is the flattened accepted request that
-/// produced the turn.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Turn {
     pub base: bool,
@@ -62,10 +57,6 @@ pub struct Turn {
     pub captured: Option<Vec<FlatItem>>,
 }
 
-/// Number of leading turns to drop so the rest is the maximal admissible
-/// suffix under `turnOk`. Admissibility is downward closed over suffixes
-/// (`admissible_of_suffix`), so scanning from the end is exact: each turn
-/// either extends the kept suffix or ends it.
 pub fn admissible_turn_drop(turns: &[Turn]) -> usize {
     let mut dropped = turns.len();
     let mut bound = 0;
@@ -154,10 +145,6 @@ fn without_cache_hint(value: &Value) -> Value {
     value
 }
 
-/// Flatten a provider body emitted by `ProviderInputCounter::project_body` or
-/// decoded from an exact transport capture. Cache hints are removed only where
-/// the wire places them (top-level system/tool/content blocks), never from
-/// nested tool arguments, schemas or user JSON.
 pub fn flatten(body: &Value, wire: ReplayWire) -> Result<Vec<FlatItem>> {
     let mut context = body
         .as_object()
@@ -332,12 +319,9 @@ mod tests {
         }
     }
 
-    /// The latest turn keeps its own reasoning whenever its own checks hold;
-    /// an earlier turn it was not produced with is what gets dropped.
     #[test]
     fn latest_valid_turn_is_never_dropped_for_an_earlier_one() {
         let first_capture = vec![ordinary("context"), ordinary("user")];
-        // The latest turn was produced after `r1` was stripped.
         let latest_capture = vec![
             ordinary("context"),
             ordinary("user"),

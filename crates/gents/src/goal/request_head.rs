@@ -7,9 +7,8 @@ use crate::request_admission::{
 use gents_protocol::request_admission::RequestPurpose;
 use gents_protocol::row::AgentRequestRow;
 
-/// Authenticate causal ancestry independently of the current producer defaults.
-/// Historical children can have different inherited optional fields; their
-/// original target signature still binds the exact physical predecessor.
+/// Historical children inherit different optional fields; their original
+/// target signature binds the exact physical predecessor.
 pub(crate) fn verify_goal_continuation_edge(
     node_did: &str,
     session_id: &str,
@@ -104,9 +103,6 @@ pub(super) fn verify_goal_continuation_receipt(
     Ok(())
 }
 
-/// Preserve canonical query order among heads, but never select an authenticated
-/// Goal continuation's physical ancestor ahead of that child. Only matching
-/// candidate edges pay for signature verification; ordinary latest leaves do not.
 pub(crate) fn latest_goal_request<'a>(
     goal: &GoalDocument,
     rows: &'a [AgentRequestRow],
@@ -130,8 +126,6 @@ pub(crate) fn latest_goal_request<'a>(
     )
 }
 
-/// Preserve original signed physical ancestry across canonical Goal replacement.
-/// Association with a current Goal is checked separately by the graph owner.
 pub(crate) fn latest_authenticated_session_request<'a>(
     node_did: &str,
     session_id: &str,
@@ -176,20 +170,14 @@ fn latest_scoped_request<'a>(
     })
 }
 
-/// Read-only membership of one admitted request and its authenticated Goal
-/// continuations. The entry supplies activation context; this grants no new
-/// execution or document permission and does not require a GraphRun.
 pub(crate) struct AuthenticatedGoalRequestMembers<'a> {
     pub(crate) entry: &'a AgentRequestRow,
     pub(crate) member_doc_ids: Vec<String>,
-    /// Verified physical Goal edges within this membership, child -> parent.
+    /// Verified physical Goal edges, child -> parent.
     pub(crate) parents: std::collections::BTreeMap<String, String>,
 }
 
 /// `rows` must include complete signed request projections for the session.
-/// Invalid ancestry of the current request is an error. Unrelated or malformed
-/// candidate rows cannot contribute writes to its logical invocation. Each
-/// historical edge retains its own signed Goal ID across Goal replacement.
 pub(crate) fn authenticated_goal_request_members<'a>(
     node_did: &str,
     session_id: &str,
@@ -278,7 +266,6 @@ fn authenticated_entry<'a>(
     }
 }
 
-/// A continuation cannot bypass an unfinished or unrecognized request row.
 pub(crate) fn goal_session_is_idle(rows: &[AgentRequestRow]) -> bool {
     rows.iter().all(|row| {
         row.purpose == Some(RequestPurpose::TitleAudit)

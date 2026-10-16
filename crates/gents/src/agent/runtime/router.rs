@@ -52,10 +52,8 @@ impl RuntimeAdmissionGate {
     }
 
     pub(in crate::agent) async fn close(&self) {
-        // Announce closure before waiting for in-progress routing admissions.
-        // A router may hold the read-side lease while an executor queue is
-        // full; that blocked send selects on this watch and releases the lease
-        // so the write-side drain cannot deadlock behind it.
+        // Announce closure before waiting for in-progress routing admissions;
+        // a blocked executor-queue send selects on this watch.
         self.changed.send_replace(false);
         *self.state.write().await = false;
     }
@@ -131,9 +129,8 @@ pub(super) async fn run_router(
     )
     .await;
     if result.is_err() {
-        // A router failure is an admission failure. Close locally before the
-        // task reports to the runtime coordinator so no concurrent watcher can
-        // dispatch against a readiness row whose router acknowledgement failed.
+        // Close locally before reporting: no concurrent watcher may dispatch
+        // against a readiness row whose acknowledgement failed.
         admission_gate.close().await;
     }
     result

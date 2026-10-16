@@ -1,5 +1,3 @@
-/* An existing session: its header, its transcript and, at the foot of the
-   same scroller, its composer. */
 import { useCallback, useMemo, useRef, useState, type ComponentProps } from "react";
 import { toast } from "sonner";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
@@ -53,8 +51,6 @@ export function OpenSession() {
   const homeDid = useHomeDid();
   const sessionWorkers = useFleet((s) => workersOfId(s, session?.sessionId));
   const [requestedStop, setRequestedStop] = useState<string | null>(null);
-  /* the transcript column follows new content while the reader is near
-     the bottom; a reader who has scrolled up is left where they are */
   const column = useRef<HTMLDivElement | null>(null);
   const [scroller, ownScroller] = useScroller();
   const [content, setContent] = useState<HTMLDivElement | null>(null);
@@ -65,17 +61,12 @@ export function OpenSession() {
     },
     [ownScroller],
   );
-  /* away from the bottom, a button offers the way back; scrolling is the cue */
   const { atBottom, toBottom, settle } = useFollowTail(scroller, selectedSessionId);
-  /* once the full header scrolls out, a condensed one sticks to the top */
   const [condensed, headerEnd] = useHeaderScrolledOut(scroller);
   const provenance = useSessionProvenance();
   const workers = useWorkers(provenance);
   const parentWork = useParentWork(provenance);
   const composer = useComposerRoom(column, settle);
-  /* a person stopping a worker from here: the canonical interrupt of the
-     one request that row's call caused; the row settles when that request
-     is terminal */
   const workerActions = useMemo<WorkerActions>(
     () => ({
       interrupt: (request) => {
@@ -87,15 +78,11 @@ export function OpenSession() {
     }),
     [interruptRequest],
   );
-  /* the snapshot says what happened in a session; the summary says where it
-     came from, which is the list's own view of it */
   const summary = useFleet((s) =>
     listedSession(s, deployment?.nodeDid, session?.sessionId),
   );
   const sessionNode = useFleet((s) => nodeOf(s, session?.nodeDid));
 
-  /* stop: the interrupt reaches this request only; sessions it started keep
-     their own work, each stoppable from its row or its own screen */
   const stoppableRequestId = activeRequestId ?? session?.latestRequestId ?? null;
   const stopping = isStopping({
     inFlight,
@@ -119,12 +106,6 @@ export function OpenSession() {
     }
   };
 
-  /* Until the session is here, nothing of its screen is. Drawn without it,
-     the screen assembled under the reader's eye — chrome, then a title
-     reading "loading", then the transcript — and changed shape as each
-     part landed. One mark, centred, says it is coming. A load that failed,
-     or a session the store does not have, keeps the screen: its
-     LoadingStatus says what happened and offers the way on. */
   if (!session && sessionLoad.phase !== "failed" && sessionLoad.found !== false)
     return <SessionLoading />;
 
@@ -134,8 +115,6 @@ export function OpenSession() {
       data-testid="session-screen"
     >
       <div className="relative flex min-h-0 min-w-0 flex-col">
-        {/* once the header has scrolled out, a fade at the top says the
-            transcript continues above, where the condensed title now is */}
         <div
           aria-hidden="true"
           data-testid="transcript-top-fade"
@@ -148,10 +127,6 @@ export function OpenSession() {
             the composer sticks to the foot so the bar runs the full height */}
         <div ref={columnRef} className="min-h-0 flex-1">
           <ScrollArea className="h-full">
-            {/* the right gutter is the sender marks' column, so it is only
-                  spent where marks can appear: a session another sent to, on a
-                  screen wide enough to give the width away. Elsewhere the
-                  column keeps its even padding. */}
             <div
               ref={setContent}
               className={cn(
@@ -160,9 +135,6 @@ export function OpenSession() {
               )}
             >
               <PaneBar>
-                {/* the header's facts, once the header has scrolled out: they
-                    ease in where the reader's eye already is, and the bar's
-                    height never changes, so nothing moves */}
                 <div
                   aria-hidden={!condensed}
                   data-testid="pane-bar-condensed"
@@ -191,15 +163,12 @@ export function OpenSession() {
                         }}
                       />
                     ) : (
-                      /* no session to name: the LoadingStatus below says what
-                       happened, so the title stays neutral */
                       <h1 className="font-heading text-sm font-medium text-heading">
                         Session
                       </h1>
                     )}
                   </div>
                 </div>
-                {/* the meter rides up with the header, next to the menu */}
                 {session?.context && (
                   <div
                     aria-hidden={!condensed}
@@ -227,8 +196,6 @@ export function OpenSession() {
                       }}
                     />
                   ) : (
-                    /* no session to name: the LoadingStatus below says what
-                       happened, so the title stays neutral */
                     <h1 className="font-heading text-lg font-medium text-heading">
                       Session
                     </h1>
@@ -261,8 +228,6 @@ export function OpenSession() {
                     />
                     <span className="text-sm text-muted-foreground">
                       {agentName(session?.agentId ?? null, deployment)}
-                      {/* the node only when it is not the local one, as the
-                          marks beside it do */}
                       {sessionNode && !isWorkingNode(sessionNode, homeDid)
                         ? ` on ${sessionNode.node.displayName ?? sessionNode.label}`
                         : null}
@@ -299,16 +264,12 @@ export function OpenSession() {
   );
 }
 
-/* The transcript is the one reader of every streamed chunk: it alone selects
-   the whole session, so a chunk re-renders it and not the screen around it. */
 function SelectedTranscript(
   props: Omit<ComponentProps<typeof TranscriptPanel>, "session">,
 ) {
   return <TranscriptPanel {...props} session={useSelectedSession()} />;
 }
 
-/* What the screen around the transcript reads from the session. A streamed
-   chunk keeps each of these, so it reaches the transcript and not the screen. */
 type ScreenFacts = Pick<
   DesktopSessionSnapshot,
   | "sessionId"

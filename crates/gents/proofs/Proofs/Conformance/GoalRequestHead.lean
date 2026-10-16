@@ -17,8 +17,6 @@ def child : Row := ⟨.normal, 20, 200, 1, 1, some 1, some 10, some 100, 1, true
 def grandchild : Row := ⟨.normal, 30, 300, 1, 1, some 1, some 20, some 200, 2, true, true⟩
 def unrelated : Row := ⟨.normal, 40, 400, 1, 1, none, none, none, 0, true, true⟩
 
-/-- Explicit query-order inputs and expected heads. The graph/task names label
-actual lexical order witnesses; numeric IDs are abstract physical identities. -/
 def cases : List Case :=
   [ ⟨"same_second_graph_parent", [root, child], some child⟩
   , ⟨"legacy_source_omission_keeps_physical_edge", [root, child], some child⟩
@@ -39,8 +37,7 @@ def cases : List Case :=
   , ⟨"title_cannot_supersede_parent", [root, {child with purpose := .titleAudit}], some root⟩
   ]
 
--- Abstract relation only: mutually deterministic hash identities are not a
--- realizable signed-row fixture. This is not emitted as consumer coverage.
+-- Not a realizable signed-row fixture; not emitted as consumer coverage.
 example : select scope [{child with parentDoc := some 30, parentRequest := some 300}, grandchild] = none := by decide
 
 theorem cases_replay_explicit_expectations : ∀ c ∈ cases, select scope c.rows = c.expected := by decide

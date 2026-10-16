@@ -1,16 +1,7 @@
-//! The baseline subject pack and the candidate packs derived from it.
-//!
-//! A candidate is the baseline pack with exactly one field changed: the system
-//! prompt of the context the subject agent names, or the prompt template of
-//! a task of that agent. When the pack keeps that text in a sidecar asset —
-//! the shape every pack in this repository uses — the change is one file's
-//! bytes and nothing else, which is what makes the structural gate's "only the
-//! target moved" check a file comparison.
-//!
-//! Both packs are ordinary directory packs, so the runner takes them through
-//! `CellSource::Directory` with no special case. They are loaded and digested
-//! by the runner's own pack loader, so the digest the optimizer records is the
-//! digest the runner freezes.
+//! The baseline subject pack and the candidate packs derived from it: the
+//! baseline pack with exactly one field changed. Both are ordinary directory
+//! packs loaded and digested by the runner's own pack loader, so the digest
+//! the optimizer records is the digest the runner freezes.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -37,14 +28,11 @@ pub struct MaterializedPack {
     pub digest: String,
     pub config: PackConfig,
     pub manifest: PackManifest,
-    /// Every declared asset, keyed by its path relative to `dir`.
     pub files: BTreeMap<String, Vec<u8>>,
     pub agent_id: String,
     pub target: TargetField,
-    /// The context the subject agent names, or the task being optimized.
     pub target_id: String,
-    /// The declared asset the target document reads its text from, when the
-    /// pack stores it as a sidecar rather than inline.
+    /// The declared asset the target field reads its text from, when inline.
     pub prompt_asset: Option<String>,
 }
 
@@ -171,7 +159,10 @@ fn raw_target<'a>(
 
 /// A target sidecar another config field also reads would change that
 /// document too in a trial, while promotion writes only the target.
-fn reject_shared_sidecar(files: &BTreeMap<String, Vec<u8>>, asset: &str) -> Result<()> {
+fn reject_shared_sidecar(
+    files: &BTreeMap<String, Vec<u8>>,
+    asset: &str,
+) -> Result<()> {
     fn uses(value: &Value, asset: &str) -> usize {
         match value {
             Value::String(text) => {
@@ -250,9 +241,7 @@ pub fn baseline_text(pack: &MaterializedPack) -> Result<String> {
 /// A sidecar asset holds `text` byte for byte, since sidecars are never
 /// interpolated. An inline prompt is written in its escaped form
 /// ([`interpolate::escape`]) so that the loader reads back exactly `text`.
-///
-/// `dir` is created; an existing one is refused rather than written over, so a
-/// round can never evaluate a directory another round left behind.
+/// `dir` is created; an existing one is refused rather than written over.
 pub fn materialize_candidate(
     baseline: &MaterializedPack,
     owner: &str,
@@ -283,8 +272,6 @@ pub fn materialize_candidate(
                         baseline.target_id
                     )
                 })?;
-            // The loader interpolates every string in pack_config.json, so
-            // the text is written escaped to be read back as exactly itself.
             *field = Value::String(interpolate::escape(text));
             files.insert(CONFIG_ASSET.to_owned(), serde_json::to_vec_pretty(&raw)?);
         }
@@ -311,7 +298,6 @@ pub(crate) mod tests {
     pub(crate) fn write_fixture_pack(root: &Path) {
         crate::eval::runner::freeze::tests::write_fixture_pack(root, "Off");
     }
-
     pub(crate) fn context_pack(dir: &Path) -> Result<MaterializedPack> {
         materialize_pack(dir, OWNER, "monitor", &JobTarget::Context)
     }
@@ -482,7 +468,6 @@ pub(crate) mod tests {
         assert_eq!(baseline_text(&candidate).unwrap(), text);
         assert_eq!(candidate.target_id, "plan");
 
-        // The same pack as a context subject leaves the task alone.
         let context = context_pack(&baseline_dir).unwrap();
         assert_eq!(context.target_id, "monitor-context");
         assert_eq!(baseline_text(&context).unwrap(), FIXTURE_PROMPT);
@@ -510,9 +495,6 @@ pub(crate) mod tests {
         );
     }
 
-    /// A sidecar two fields read would change both documents in a trial,
-    /// while promotion writes only the target; a shared sidecar the target
-    /// does not read never changes.
     #[test]
     fn only_a_target_sidecar_referenced_from_two_fields_is_an_error() {
         let dirs = tempfile::tempdir().unwrap();
@@ -573,8 +555,7 @@ pub(crate) mod tests {
 
         assert_eq!(
             baseline.files.keys().collect::<Vec<_>>(),
-            candidate.files.keys().collect::<Vec<_>>(),
-            "a candidate declares exactly the baseline's assets"
+            candidate.files.keys().collect::<Vec<_>>()
         );
         let differing: Vec<&String> = baseline
             .files
@@ -587,10 +568,7 @@ pub(crate) mod tests {
             baseline_text(&candidate).unwrap(),
             "Watch the mailbox, and say why.\n"
         );
-        assert_ne!(
-            candidate.digest, baseline.digest,
-            "one changed byte is a new pack"
-        );
+        assert_ne!(candidate.digest, baseline.digest);
         assert!(candidate_dir.join("manifest.json").exists());
     }
 
@@ -606,17 +584,13 @@ pub(crate) mod tests {
         let two = materialize_candidate(&baseline, OWNER, "New text.\n", &dirs.path().join("two"))
             .unwrap();
         assert_eq!(
-            one.digest, two.digest,
-            "the digest is over content, not location"
+            one.digest, two.digest
         );
 
         let same =
             materialize_candidate(&baseline, OWNER, FIXTURE_PROMPT, &dirs.path().join("same"))
                 .unwrap();
-        assert_eq!(
-            same.digest, baseline.digest,
-            "rewriting the prompt with its own text is the baseline pack"
-        );
+        assert_eq!(same.digest, baseline.digest);
     }
 
     #[test]
@@ -629,8 +603,6 @@ pub(crate) mod tests {
         assert!(format!("{error:#}").contains("no-such-agent"), "{error:#}");
     }
 
-    /// The same pack with the prompt inline in `pack_config.json` and no
-    /// sidecar asset, for the structural gate's inline branch.
     pub(crate) fn write_inline_fixture_pack(root: &Path) {
         write_fixture_pack(root);
         std::fs::remove_file(root.join("agents/monitor/system_prompt.md")).unwrap();
@@ -663,8 +635,6 @@ pub(crate) mod tests {
         assert_ne!(candidate.digest, baseline.digest);
     }
 
-    /// An inline prompt is written into `pack_config.json`, which the loader
-    /// interpolates; the candidate must still evaluate exactly the text.
     #[test]
     fn an_inline_prompt_with_dollar_signs_loads_back_as_itself() {
         let text = "Home is ${HOME}, pay $$5, and ${GENTS_T21_SURELY_UNSET}.\n";

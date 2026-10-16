@@ -1,17 +1,10 @@
 #!/usr/bin/env node
-// Capture and restore every piece of state the triage migration destroys.
-//
-// Deleting a label removes it from EVERY associated item, including closed
-// issues and pull requests, and discards the label's own definition. Renaming
-// is likewise not self-inverting. So the snapshot records label definitions,
-// the full label set and milestone of every open issue plus every item
-// carrying a doomed label in any state, existing milestones (with their due
-// dates, so restore can recreate them faithfully), and #839's title and body.
+// Capture and restore every piece of state the triage migration destroys:
+// deleting a label removes it from every associated item (any state) and
+// discards its definition, and renaming is not self-inverting.
 import { writeFileSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-// GITHUB_REPOSITORY wins when both are set: it is the name Actions and run.mjs
-// use, so an ambient GH_REPO left over in a shell cannot redirect a restore.
 const DEFAULT_REPO = process.env.GITHUB_REPOSITORY ?? process.env.GH_REPO ?? "gents-ai/gents";
 const TOKEN = process.env.GITHUB_TOKEN;
 // Labels this migration renames or deletes; the blast radius to capture.
@@ -25,18 +18,11 @@ const DOOMED = [
   "cluster: clients-platform",
   "cluster: gents-cutover",
 ];
-// Labels this migration introduces. On restore they are removed if they were
-// not present at capture time, so a rollback leaves no orphaned definitions.
-// Deliberately a fixed list: deleting every live label absent from the
-// snapshot would destroy unrelated labels created after capture.
+// Fixed lists: restore only ever deletes names from these, never every live
+// label/milestone absent from the snapshot — that would destroy labels or
+// milestones a maintainer created after capture, and deleting a milestone is
+// unrecoverable.
 const INTRODUCED = ["quality-ci", "needs-triage"];
-// Milestones this migration introduces, by title. Restore may delete ONLY
-// these, and only when they were absent at capture time. The baseline snapshot
-// captured zero milestones, so "delete everything not in the snapshot" would
-// delete every milestone in the repository — including any a maintainer created
-// after capture. Deleting a maintainer's milestone is unrecoverable (it
-// detaches from every issue that carried it); leaving one behind is a two-click
-// fix. Same fixed-list reasoning as INTRODUCED above.
 const INTRODUCED_MILESTONES = [
   "Authority and provenance hardening",
   "Fleet convergence and P2P durability",
@@ -49,8 +35,7 @@ const INTRODUCED_MILESTONES = [
 ];
 const ROADMAP_ISSUE = 839;
 
-// Injectable so the restore guards are unit-testable without a network and
-// without ever performing a live write.
+// Injectable so the restore guards are testable without a network.
 export const makeApi = (token) => async (path, init = {}) => {
   const res = await fetch(`https://api.github.com${path}`, {
     ...init,
@@ -88,9 +73,8 @@ export const capture = async (api, file, REPO = DEFAULT_REPO) => {
     description: l.description ?? "",
   }));
 
-  // `due_on` is captured because restore recreates milestones it finds
-  // missing, and a milestone recreated without its due date is not the same
-  // milestone: the date drives every "what is late" view in the UI.
+  // due_on is captured because a milestone recreated without it is not the
+  // same milestone.
   const milestones = (await paginate(api, `/repos/${REPO}/milestones?state=all`)).map((m) => ({
     number: m.number,
     title: m.title,
@@ -104,25 +88,22 @@ export const capture = async (api, file, REPO = DEFAULT_REPO) => {
     items.set(it.number, {
       number: it.number,
       isPullRequest: Boolean(it.pull_request),
-      // Informational only: restore deliberately never reopens or closes.
       state: it.state,
       labels: it.labels.map((l) => l.name).sort(),
       milestone: it.milestone ? it.milestone.title : null,
     });
   };
 
-  // Every open issue. The migration also backfills `roadmap:` horizon labels
-  // and assigns milestones across the open backlog, and none of that is
-  // reachable from the doomed-label sweep below — an item can be relabelled
-  // without ever having carried a doomed label.
+  // Every open issue: the migration also backfills horizon labels and assigns
+  // milestones across the open backlog, which the doomed-label sweep below
+  // cannot reach.
   for (const it of await paginate(api, `/repos/${REPO}/issues?state=open`)) {
     if (it.pull_request) continue;
     record(it);
   }
   const openIssues = items.size;
 
-  // Any state, so closed issues and pull requests are covered too. The Map
-  // deduplicates against the open-issue sweep above by issue number.
+  // Any state, so closed issues and pull requests are covered too.
   for (const label of DOOMED) {
     const hits = await paginate(
       api,
@@ -151,9 +132,7 @@ export const capture = async (api, file, REPO = DEFAULT_REPO) => {
 export const restore = async (api, file, REPO = DEFAULT_REPO) => {
   const snap = JSON.parse(readFileSync(file, "utf8"));
 
-  // 0. This is the only destructive tool here: it deletes milestones and PUTs
-  // whole label sets onto issues by number. Against the wrong repository — a
-  // fork, or a mis-set GITHUB_REPOSITORY/GH_REPO — that is silent damage.
+  // Destructive tool: refuse a wrong target repository.
   if (snap.capturedFrom !== REPO) {
     throw new Error(
       `refusing to restore: snapshot was captured from ${snap.capturedFrom}, ` +
@@ -185,8 +164,7 @@ export const restore = async (api, file, REPO = DEFAULT_REPO) => {
     }
   }
 
-  // 3. Restore each affected item's full label set. `state` is captured for
-  // diagnosis only: restore never reopens or closes an item.
+  // Restore each affected item's full label set.
   for (const it of snap.items) {
     await api(`/repos/${REPO}/issues/${it.number}/labels`, {
       method: "PUT",
@@ -195,14 +173,12 @@ export const restore = async (api, file, REPO = DEFAULT_REPO) => {
   }
   console.log(`restored labels on ${snap.items.length} items`);
 
-  // 4. Reconcile milestones in both directions, but asymmetrically: recreation
-  // is unconditional, deletion is allow-listed.
+  // Recreate captured milestones that no longer exist; deletion is
+  // allow-listed to INTRODUCED_MILESTONES only.
   const known = new Map(snap.milestones.map((m) => [m.title, m]));
   const liveMilestones = await paginate(api, `/repos/${REPO}/milestones?state=all`);
   const liveTitles = new Set(liveMilestones.map((m) => m.title));
 
-  // 4a. Recreate captured milestones that no longer exist. Without this the
-  // tool could only ever destroy state, never return it.
   for (const m of snap.milestones) {
     if (liveTitles.has(m.title)) continue;
     await api(`/repos/${REPO}/milestones`, {
@@ -211,15 +187,15 @@ export const restore = async (api, file, REPO = DEFAULT_REPO) => {
         title: m.title,
         state: m.state ?? "open",
         description: m.description ?? "",
-        // Omit rather than send null: the API rejects an explicit null here.
+        // The API rejects an explicit null due_on.
         ...(m.due_on ? { due_on: m.due_on } : {}),
       }),
     });
     console.log(`recreated milestone: ${m.title}`);
   }
 
-  // 4b. Delete only milestones this migration is known to create and that were
-  // absent at capture time. Anything else is a maintainer's — log and skip it.
+  // Delete only milestones this migration introduces and that were absent at
+  // capture time; anything else is a maintainer's.
   const introduced = new Set(INTRODUCED_MILESTONES);
   for (const m of liveMilestones) {
     if (known.has(m.title)) continue;
@@ -234,16 +210,14 @@ export const restore = async (api, file, REPO = DEFAULT_REPO) => {
     console.log(`deleted introduced milestone: ${m.title}`);
   }
 
-  // 5. Restore each item's milestone, clearing it when none was captured.
-  // Ordered after the deletion step so a captured title can never resolve to a
+  // Restore each item's milestone, clearing it when none was captured. Ordered
+  // after the deletion step so a captured title can never resolve to a
   // milestone that is about to be deleted.
   const byTitle = new Map(
     (await paginate(api, `/repos/${REPO}/milestones?state=all`)).map((m) => [m.title, m.number]),
   );
   let milestoned = 0;
   for (const it of snap.items) {
-    // `null` means the item held no milestone at capture time, and PATCHing
-    // null is what clears one the migration assigned.
     const title = it.milestone ?? null;
     let milestone = null;
     if (title !== null) {
@@ -261,7 +235,7 @@ export const restore = async (api, file, REPO = DEFAULT_REPO) => {
   }
   console.log(`restored milestones on ${milestoned} items`);
 
-  // 6. Restore the roadmap issue's title and body.
+  // Restore the roadmap issue's title and body.
   await api(`/repos/${REPO}/issues/${snap.roadmapIssue.number}`, {
     method: "PATCH",
     body: JSON.stringify({

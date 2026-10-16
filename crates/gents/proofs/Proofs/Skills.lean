@@ -1,14 +1,6 @@
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Finset.Union
 
-/-!
-# Skills: explicit context whitelist selection
-
-A context selects skills through an explicit `skill_ids` whitelist. `Skill.scope`, inheritance, and excludes are removed: empty
-whitelist selects none, and no selection can reference a skill outside the
-whitelist. Owner and enabled filtering and the tool ceiling are preserved.
--/
-
 namespace Skills
 
 abbrev ToolId := String
@@ -23,21 +15,17 @@ structure Skill where
   sourceDirectory : Option String := none
   deriving DecidableEq
 
-/-- Resolved context selection plus the existing effective tool ceiling. -/
 structure Context where
   node : Did
   ceiling  : Finset ToolId
   skillIds : Finset SkillId
 
-/-- Skills selectable by `b`: explicitly whitelisted by the context, owned by
-the agent's node, and enabled. -/
 def select (skills : Finset Skill) (b : Context) : Finset Skill :=
   skills.filter (fun s =>
     s.id ∈ b.skillIds ∧
     s.owner = b.node ∧
     s.enabled = true)
 
-/-- Selection never exceeds the context whitelist. -/
 theorem select_ids_subset_whitelist (skills : Finset Skill) (b : Context) :
     (select skills b).image Skill.id ⊆ b.skillIds := by
   intro id hid
@@ -46,15 +34,12 @@ theorem select_ids_subset_whitelist (skills : Finset Skill) (b : Context) :
   rw [Finset.mem_filter] at hs
   exact hs.2.1
 
-/-- Consequently any active set within the selection cannot exceed the
-whitelist. -/
 theorem selected_subset_whitelist (skills : Finset Skill) (b : Context)
     (active : Finset Skill) (h : active ⊆ select skills b) :
     active.image Skill.id ⊆ b.skillIds :=
   Finset.Subset.trans (Finset.image_subset_image h)
     (select_ids_subset_whitelist skills b)
 
-/-- Empty whitelist selects none. -/
 theorem empty_whitelist_selects_none (skills : Finset Skill) (b : Context)
     (hb : b.skillIds = ∅) : select skills b = ∅ := by
   unfold select
@@ -72,21 +57,19 @@ theorem select_respect_node (skills : Finset Skill) (b : Context)
   rw [Finset.mem_filter] at hs
   exact ⟨hs.2.2.1, hs.2.2.2⟩
 
-/-- A skill may recommend only tools already permitted by the resolved ceiling.
-Recommendations never grant authority. -/
+/-- Recommendations never grant tool authority beyond the resolved ceiling. -/
 def skillTools (b : Context) (s : Skill) : Finset ToolId :=
   s.toolRefs ∩ b.ceiling
 
 theorem recommended_tools_permitted (b : Context) (s : Skill) :
     skillTools b s ⊆ b.ceiling := Finset.inter_subset_right
 
-/-- A local source location informs relative references, never tool authority. -/
 theorem source_directory_preserves_tool_authority (b : Context) (s : Skill)
     (directory : Option String) :
     skillTools b { s with sourceDirectory := directory } = skillTools b s := rfl
 
-/-- Activation selects skill content and carries existing tool authority unchanged.
-There is no second tool-surface composition through skill references. -/
+/-- Activation carries existing tool authority unchanged; there is no second
+tool-surface composition through skill references. -/
 def activate (skills : Finset Skill) (b : Context) : Finset Skill × Finset ToolId :=
   (select skills b, b.ceiling)
 

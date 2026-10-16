@@ -3,8 +3,6 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::trigger_delivery::TriggerFire;
 
-/// Startup and crash-boundary tests use the same transaction owner. Terminal
-/// facts and assignment bindings are observed in the publication snapshot.
 pub(crate) async fn recover_outcomes(
     node: &std::sync::Arc<EmbeddedNode>,
     owner: &str,
