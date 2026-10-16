@@ -1,8 +1,7 @@
+pub use crate::plugin_access::{AllowedFoldersView, PluginApprovalView, PluginApprovalsView};
 use gents::pack::BindAccess;
 use gents::plugin::{allowed, approval};
-use serde::Serialize;
 use tauri::{Runtime, State, WebviewWindow};
-use ts_rs::TS;
 
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
@@ -18,27 +17,6 @@ fn home(state: &DesktopAppState) -> Result<std::path::PathBuf, BridgeError> {
 
 fn failed(error: anyhow::Error) -> BridgeError {
     BridgeError::untyped(format!("{error:#}"))
-}
-
-#[derive(Debug, Serialize, TS)]
-pub struct AllowedFoldersView {
-    pub dirs: Vec<allowed::AllowedDir>,
-}
-
-#[derive(Debug, Serialize, TS)]
-pub struct PluginApprovalsView {
-    pub requests: Vec<PluginApprovalView>,
-}
-
-#[derive(Debug, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct PluginApprovalView {
-    pub id: String,
-    pub prompt: String,
-    pub folder: std::path::PathBuf,
-    pub path: String,
-    pub is_dir: bool,
-    pub session_id: Option<String>,
 }
 
 fn view(home: &std::path::Path) -> Result<AllowedFoldersView, BridgeError> {
@@ -93,17 +71,7 @@ pub fn desktop_plugin_approvals_pending<R: Runtime>(
         Vec::new()
     };
     Ok(PluginApprovalsView {
-        requests: pending
-            .iter()
-            .map(|request| PluginApprovalView {
-                id: request.id.clone(),
-                prompt: request.prompt(),
-                folder: request.folder.clone(),
-                path: request.path.clone(),
-                is_dir: request.is_dir,
-                session_id: request.session_id.clone(),
-            })
-            .collect(),
+        requests: pending.iter().map(PluginApprovalView::from).collect(),
     })
 }
 
@@ -113,17 +81,7 @@ pub fn desktop_plugin_approval_decide(
     decision: String,
     state: State<'_, DesktopAppState>,
 ) -> Result<(), BridgeError> {
-    let answer = match decision.as_str() {
-        "once" => approval::Answer::Once,
-        "file" => approval::Answer::AlwaysPath,
-        "always" => approval::Answer::AlwaysFolder,
-        "deny" => approval::Answer::Deny,
-        other => {
-            return Err(BridgeError::untyped(format!(
-                "{other:?} is not an answer; use once, file, always or deny"
-            )))
-        }
-    };
+    let answer = crate::plugin_access::answer(&decision)?;
     approval::decide(&home(&state)?, &id, answer).map_err(failed)
 }
 

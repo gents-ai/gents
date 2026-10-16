@@ -290,6 +290,8 @@ impl PeerDirectory {
         Ok(())
     }
 
+    /// Local discovery adds operator metadata to an existing enrollment; its
+    /// signed route, authorization generation and user-owned label survive.
     pub(in crate::client) async fn upsert_local_standard_peer(
         &mut self,
         label: &str,
@@ -305,24 +307,36 @@ impl PeerDirectory {
         let agent_home = normalize_non_empty("agent_home", agent_home)?;
 
         let mut candidate = self.clone();
-        let mut record = candidate
+        let mut enrolled = candidate
             .peers
             .iter()
-            .find(|existing| {
-                existing.source.as_deref() == Some("local-standard")
-                    || (existing.is_enrollment()
-                        && existing.node_did == node_did
-                        && existing.local_node_home.as_deref() == Some(agent_home))
+            .filter(|existing| existing.is_enrollment() && existing.node_did == node_did);
+        let enrollment = enrolled.next().cloned();
+        anyhow::ensure!(
+            enrolled.next().is_none(),
+            "local runtime has ambiguous enrollment records"
+        );
+        let mut record = enrollment
+            .or_else(|| {
+                candidate
+                    .peers
+                    .iter()
+                    .find(|existing| existing.source.as_deref() == Some("local-standard"))
+                    .cloned()
             })
-            .cloned()
             .unwrap_or_else(|| PeerRecord::local_standard(label, addr, node_did, graphql));
-        record.label = label.to_string();
         record.node_did = node_did.to_string();
         record.graphql = Some(graphql.to_string());
         record.local_node_home = Some(agent_home.to_string());
         if !record.is_enrollment() {
+            record.label = label.to_string();
             record.addr = addr.to_string();
             record.source = Some("local-standard".to_string());
+        } else {
+            candidate.peers.retain(|existing| {
+                existing.node_did != node_did
+                    || existing.source.as_deref() != Some("local-standard")
+            });
         }
 
         let record = candidate.apply_upsert(record);
@@ -1007,6 +1021,50 @@ mod tests {
 
         let reloaded = load_peer_records(&path).await.unwrap();
         assert_eq!(reloaded, vec![enrolled]);
+    }
+
+    #[tokio::test]
+    async fn local_discovery_keeps_an_existing_enrollment_generation_and_label() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let mut directory = PeerDirectory::load(&path).await.unwrap();
+        let enrolled = directory
+            .upsert_enrollment_peer(
+                "signed-peer",
+                "Named runtime",
+                "iroh://signed-ticket",
+                "did:key:runtime",
+                "network",
+                "request",
+                "digest",
+                "did:key:admin",
+                7,
+                "2099-10-29T00:00:00Z",
+            )
+            .await
+            .unwrap();
+        let enrolled = directory
+            .set_pairing_ready(&enrolled.peer_id, true)
+            .await
+            .unwrap()
+            .unwrap();
+        let connected = directory
+            .upsert_local_standard_peer(
+                "Discovery label",
+                "iroh://discovery-ticket",
+                "did:key:runtime",
+                "http://127.0.0.1:9291/api/v0/graphql",
+                "/tmp/runtime-home",
+            )
+            .await
+            .unwrap();
+        let mut expected = enrolled;
+        expected.graphql = Some("http://127.0.0.1:9291/api/v0/graphql".into());
+        expected.local_node_home = Some("/tmp/runtime-home".into());
+        expected.updated_at.clone_from(&connected.updated_at);
+        assert_eq!(connected, expected);
+        assert_eq!(directory.records(), &[expected.clone()]);
+        assert_eq!(load_peer_records(&path).await.unwrap(), [expected]);
     }
 
     #[tokio::test]

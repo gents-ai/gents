@@ -59,9 +59,7 @@ fn prompt_commands_are_scoped_to_live_native_windows_and_mount_tokens() {
         .unwrap()
         .approvals_prompt_subscriptions
         .changes();
-    let mark = home
-        .join(gents::home::PLUGIN_APPROVALS_DIR_NAME)
-        .join(".listening");
+    let mark = approval::queue_dir(&home).join(".listening");
 
     assert_eq!(
         invoke(&main, "desktop_plugin_approvals_pending", json!({})).unwrap(),

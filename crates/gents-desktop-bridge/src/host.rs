@@ -1,3 +1,4 @@
+mod approvals;
 mod connection;
 #[cfg(unix)]
 pub mod local;
@@ -59,8 +60,52 @@ impl ClientHost {
         connection::serve(self, stream, stop).await
     }
 
-    async fn execute(&self, command: ClientCommand) -> Result<Value, BridgeError> {
+    async fn execute(
+        &self,
+        command: ClientCommand,
+        approvals: &approvals::AttachmentApprovals,
+    ) -> Result<Value, BridgeError> {
         match command {
+            ClientCommand::ConnectLocal { node_home } => {
+                let home = match node_home {
+                    Some(path) if !path.trim().is_empty() => std::path::PathBuf::from(path.trim()),
+                    _ => gents_desktop_core::local_runtime::default_node_home()
+                        .map_err(backend_error)?,
+                };
+                if !home.is_absolute() {
+                    return Err(BridgeError::new(
+                        BridgeErrorCode::InvalidArgument,
+                        "use an absolute local runtime home path",
+                    ));
+                }
+                self.core
+                    .refresh_local_standard_peer(&home, "Local runtime")
+                    .await
+                    .map_err(backend_error)?;
+                encode(())
+            }
+            ClientCommand::ApprovalSubscribe { node_did, token } => {
+                approvals.subscribe(&self.core, &node_did, &token).await?;
+                encode(())
+            }
+            ClientCommand::ApprovalUnsubscribe { token } => {
+                approvals.unsubscribe(&token);
+                encode(())
+            }
+            ClientCommand::ApprovalPending { node_did, token } => {
+                encode(approvals.pending(&self.core, &node_did, &token).await?)
+            }
+            ClientCommand::ApprovalDecide {
+                node_did,
+                token,
+                id,
+                decision,
+            } => {
+                approvals
+                    .decide(&self.core, &node_did, &token, &id, &decision)
+                    .await?;
+                encode(())
+            }
             ClientCommand::Snapshot {} => encode(
                 crate::snapshot::build_client_snapshot_with_grants(
                     Some(&self.core),

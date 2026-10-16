@@ -805,6 +805,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_goal_observations_drive_signature_and_scope_validation",
         },
         ConformanceConsumer::RustTest {
+            id: "plugin::approval::contract_tests::generated_approval_traces_drive_native_queue_and_grants",
+            package: "gents",
+            source_path: "crates/gents/src/plugin/approval_contract_tests.rs",
+            module_path: "plugin::approval::contract_tests",
+            function: "generated_approval_traces_drive_native_queue_and_grants",
+        },
+        ConformanceConsumer::RustTest {
             id: "goal::edit::contract_tests::generated_goal_edit_cases_drive_real_transactions",
             package: "gents",
             source_path: "crates/gents/src/goal/edit/contract_tests.rs",

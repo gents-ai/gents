@@ -77,6 +77,7 @@ import Proofs.Conformance.GoalClientControl
 import Proofs.Conformance.GoalClientMutation
 import Proofs.Conformance.GoalClientStart
 import Proofs.Conformance.GoalObservation
+import Proofs.Conformance.PluginApproval
 import Proofs.Conformance.GraphFailureAttribution
 import Proofs.Conformance.GraphLogicalInvocation
 import Proofs.Conformance.RequestExecutionLease
@@ -123,6 +124,7 @@ def snapshotJson : String :=
     ++ "\"goal_client_start_cases\":" ++ Conformance.GoalClientStartContracts.casesJson ++ ","
     ++ "\"goal_client_receipt_cases\":" ++ Conformance.GoalClientMutationContracts.receiptCasesJson ++ ","
     ++ "\"goal_observation_cases\":" ++ Conformance.GoalObservationContracts.casesJson ++ ","
+    ++ "\"plugin_approval_cases\":" ++ Conformance.PluginApproval.casesJson.compress ++ ","
     ++ "\"goal_objective_whitespace_codepoints\":"
       ++ Conformance.GoalEditContracts.whitespaceCodepointsJson ++ ","
     ++ "\"graph_logical_invocation_cases\":"

@@ -1416,7 +1416,7 @@ mod approval_progress_tests {
             BindAccess::Read,
             Some("held-session".into()),
         );
-        let dir = home.path().join(gents::home::PLUGIN_APPROVALS_DIR_NAME);
+        let dir = approval::queue_dir(home.path());
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join(format!("{}.json", request.id)),
