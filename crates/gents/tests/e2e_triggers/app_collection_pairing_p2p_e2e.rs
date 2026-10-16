@@ -1011,7 +1011,7 @@ async fn seed_preexisting_hydration_history(
         response.errors
     );
 
-    use gents::defra_node::{ExecuteRetryPolicy, QueryRequest};
+    use gents::defra_node::QueryRequest;
     use gents::graphql::single_mutation_document;
     use gents::session::canonical_rows::{
         output_segment_create_variables, transcript_message_create_variables,
@@ -1099,10 +1099,9 @@ async fn seed_preexisting_hydration_history(
         created_at: now.clone(),
     };
     let segment_response = node
-        .execute_request_with_retry(
+        .execute_request(
             QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                 .with_variables(output_segment_create_variables(&segment).expect("segment vars")),
-            ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(
@@ -1142,11 +1141,10 @@ async fn seed_preexisting_hydration_history(
         created_at: now,
     };
     let message_response = node
-        .execute_request_with_retry(
+        .execute_request(
             QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION).with_variables(
                 transcript_message_create_variables(&message).expect("message vars"),
             ),
-            ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(

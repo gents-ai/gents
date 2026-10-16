@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use storage::corekv::{IterOptions, Store};
-use storage::encrypted_store::EncryptedStore;
 use storage::RegolithStore;
 
 use super::{StoreEncryption, StoreKey};
@@ -317,10 +316,10 @@ async fn copy_and_verify(
         }
         fs::create_dir(stage)?;
         fs::set_permissions(stage, fs::metadata(data)?.permissions())?;
-        let destination = EncryptedStore::new(
-            RegolithStore::open_with_options(stage, crate::storage_backend::regolith_options())?,
-            *key.0,
-        );
+        let destination = RegolithStore::open_with_options(
+            stage,
+            crate::storage_backend::regolith_options().with_encryption_key(*key.0),
+        )?;
         let copied = copy_values(&source, &destination, progress).await;
         let verified = match copied {
             Ok(()) => verify_values(&source, &destination, progress).await,
@@ -384,10 +383,10 @@ async fn recheck_source(
     let source =
         RegolithStore::open_with_options(data, crate::storage_backend::regolith_options())?;
     let result = async {
-        let destination = EncryptedStore::new(
-            RegolithStore::open_with_options(stage, crate::storage_backend::regolith_options())?,
-            *key.0,
-        );
+        let destination = RegolithStore::open_with_options(
+            stage,
+            crate::storage_backend::regolith_options().with_encryption_key(*key.0),
+        )?;
         let equal = values_equal(&source, &destination, progress).await;
         let closed = destination.close().await;
         drop(destination);

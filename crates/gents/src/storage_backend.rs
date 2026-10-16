@@ -9,9 +9,11 @@ use anyhow::Result;
 /// not a process RSS limit.
 pub fn regolith_options() -> storage::RegolithStoreOptions {
     let mut options = storage::RegolithStoreOptions::default();
-    options.engine.write_buffer_size = 32 * 1024 * 1024;
-    options.engine.max_write_buffer_number = 2;
-    options.engine.block_cache_size = 64 * 1024 * 1024;
+    options.engine = options
+        .engine
+        .write_buffer_size(32 * 1024 * 1024)
+        .max_write_buffer_number(2)
+        .block_cache_size(64 * 1024 * 1024);
     options
 }
 
@@ -194,17 +196,26 @@ mod tests {
     fn in_process_budget_preserves_server_acceptance_and_commit_settings() {
         let server = storage::RegolithStoreOptions::default();
         let local = regolith_options();
-        assert_eq!(local.engine.write_buffer_size, 32 * 1024 * 1024);
-        assert_eq!(local.engine.max_write_buffer_number, 2);
-        assert_eq!(local.engine.block_cache_size, 64 * 1024 * 1024);
-        assert_eq!(local.engine.max_key_size, server.engine.max_key_size);
-        assert_eq!(local.engine.max_value_size, server.engine.max_value_size);
-        assert_eq!(local.engine.durability, server.engine.durability);
+        assert_eq!(local.engine.get_write_buffer_size(), 32 * 1024 * 1024);
+        assert_eq!(local.engine.get_max_write_buffer_number(), 2);
+        assert_eq!(local.engine.get_block_cache_size(), 64 * 1024 * 1024);
+        assert_eq!(
+            local.engine.get_max_key_size(),
+            server.engine.get_max_key_size()
+        );
+        assert_eq!(
+            local.engine.get_max_value_size(),
+            server.engine.get_max_value_size()
+        );
+        assert_eq!(
+            local.engine.get_durability(),
+            server.engine.get_durability()
+        );
         assert_eq!(local.isolation, server.isolation);
         assert_eq!(local.close_timeout, server.close_timeout);
         assert_eq!(
-            local.engine.max_background_compactions,
-            server.engine.max_background_compactions
+            local.engine.get_max_background_compactions(),
+            server.engine.get_max_background_compactions()
         );
     }
     use anyhow::Context as _;

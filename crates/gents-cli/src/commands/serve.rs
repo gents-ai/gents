@@ -848,12 +848,10 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
                 }
             }
 
-            let p2p_status = gents::identity::as_node_identity(
-                node.as_ref(),
-                load_local_server_p2p_status(node.as_ref(), args.p2p_transport, p2p_admission),
-            )
-            .await?;
-            if let Some(p2p) = node.p2p_arc() {
+            let p2p_status =
+                load_local_server_p2p_status(node.as_ref(), args.p2p_transport, p2p_admission)
+                    .await?;
+            if let Some(p2p) = gents::identity::node_p2p(&node) {
                 *enrollment_offer_issuer.write().await =
                     Some(crate::http::enrollment::EnrollmentOfferIssuer::new(
                         identity.clone(),
@@ -1637,7 +1635,7 @@ async fn load_local_server_p2p_status(
             "p2p_admission": admission,
         })),
         P2pTransportArg::Iroh => {
-            let p2p = node.p2p().ok_or_else(|| {
+            let p2p = gents::identity::node_p2p(node).ok_or_else(|| {
                 anyhow::anyhow!(
                     "P2P transport was requested but is not available on the embedded node"
                 )
@@ -1646,7 +1644,7 @@ async fn load_local_server_p2p_status(
                 .local_peer_id()
                 .await
                 .context("loading local P2P peer id from the embedded node")?;
-            let listen_addresses = wait_for_p2p_listen_addresses(p2p).await?;
+            let listen_addresses = wait_for_p2p_listen_addresses(p2p.as_ref()).await?;
             let connected_peers = p2p
                 .connected_peers()
                 .await

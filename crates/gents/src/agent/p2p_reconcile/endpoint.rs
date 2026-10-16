@@ -26,8 +26,7 @@ pub async fn run_endpoint_heartbeat(
     identity: Arc<dyn NodeIdentity>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let scope = Arc::clone(&node);
-    crate::identity::as_node_identity(&scope, endpoint_heartbeat(node, identity, cancel)).await
+    endpoint_heartbeat(node, identity, cancel).await
 }
 
 async fn endpoint_heartbeat(
@@ -35,7 +34,7 @@ async fn endpoint_heartbeat(
     identity: Arc<dyn NodeIdentity>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let Some(p2p) = node.p2p_arc() else {
+    let Some(p2p) = crate::identity::node_p2p(&node) else {
         tracing::debug!("PeerEndpoint heartbeat idle because embedded node has no P2P transport");
         cancel.cancelled().await;
         return Ok(());

@@ -2789,10 +2789,9 @@ mod tests {
             created_at: created_at.clone(),
         };
         let response = node
-            .execute_request_with_retry(
+            .execute_request(
                 gents::defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                     .with_variables(output_segment_create_variables(&segment).unwrap()),
-                gents::defra_node::ExecuteRetryPolicy::default(),
             )
             .await;
         ensure_no_errors(&response, "seed canonical output segment").expect("seed segment");
@@ -2828,10 +2827,9 @@ mod tests {
             created_at,
         };
         let response = node
-            .execute_request_with_retry(
+            .execute_request(
                 gents::defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                     .with_variables(transcript_message_create_variables(&message).unwrap()),
-                gents::defra_node::ExecuteRetryPolicy::default(),
             )
             .await;
         ensure_no_errors(&response, "seed canonical transcript header")

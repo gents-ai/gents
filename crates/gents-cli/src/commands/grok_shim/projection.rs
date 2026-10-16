@@ -1573,7 +1573,7 @@ mod tests {
         sequence: u32,
         calls: &[(&str, &str, &str)],
     ) {
-        use gents::defra_node::{ExecuteRetryPolicy, QueryRequest};
+        use gents::defra_node::QueryRequest;
         use gents::graphql::single_mutation_document;
         use gents::session::canonical_rows::{
             output_segment_create_variables, transcript_message_create_variables,
@@ -1631,10 +1631,9 @@ mod tests {
                 created_at: created_at.into(),
             };
             let response = node
-                .execute_request_with_retry(
+                .execute_request(
                     QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                         .with_variables(output_segment_create_variables(&segment).unwrap()),
-                    ExecuteRetryPolicy::default(),
                 )
                 .await;
             assert!(
@@ -1683,10 +1682,9 @@ mod tests {
             created_at: created_at.into(),
         };
         let response = node
-            .execute_request_with_retry(
+            .execute_request(
                 QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                     .with_variables(transcript_message_create_variables(&message).unwrap()),
-                ExecuteRetryPolicy::default(),
             )
             .await;
         assert!(

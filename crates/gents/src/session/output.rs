@@ -2563,10 +2563,7 @@ mod tests {
         field: &str,
     ) -> String {
         let response = node
-            .execute_request_with_retry(
-                defra_node::QueryRequest::new(mutation).with_variables(variables),
-                defra_node::ExecuteRetryPolicy::default(),
-            )
+            .execute_request(defra_node::QueryRequest::new(mutation).with_variables(variables))
             .await;
         assert!(!response.has_errors(), "{:?}", response.errors);
         crate::graphql::single_mutation_document(&response, field)

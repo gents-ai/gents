@@ -24,7 +24,7 @@ const SESSION: &str = "goal-session";
 const RESCAN: Duration = Duration::from_millis(20);
 
 async fn publish_canonical_terminal_activity(db: &TestDb, request_doc_id: &str, content: &str) {
-    use gents::defra_node::{ExecuteRetryPolicy, QueryRequest};
+    use gents::defra_node::QueryRequest;
     use gents::session::canonical_rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
@@ -112,10 +112,9 @@ async fn publish_canonical_terminal_activity(db: &TestDb, request_doc_id: &str, 
     };
     let created = db
         .node
-        .execute_request_with_retry(
+        .execute_request(
             QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                 .with_variables(output_segment_create_variables(&segment).unwrap()),
-            ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(
@@ -161,10 +160,9 @@ async fn publish_canonical_terminal_activity(db: &TestDb, request_doc_id: &str, 
     };
     let created = db
         .node
-        .execute_request_with_retry(
+        .execute_request(
             QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                 .with_variables(transcript_message_create_variables(&message).unwrap()),
-            ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(

@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use defra_node::{EmbeddedNode, ExecuteRetryPolicy, QueryRequest};
+use defra_node::{EmbeddedNode, QueryRequest};
 use futures::future::BoxFuture;
 use identity::Did;
 use query::TransactionHandle;
@@ -2350,10 +2350,8 @@ impl ConfigAccess {
         document: &str,
         operation: &str,
     ) -> Result<defra_node::QueryResponse> {
-        const READ_RETRY_POLICY: ExecuteRetryPolicy =
-            ExecuteRetryPolicy::new(3, Duration::from_millis(100), Duration::from_millis(800));
         let started = Instant::now();
-        let response = node.execute_with_retry(document, READ_RETRY_POLICY).await;
+        let response = node.execute(document).await;
         let elapsed = started.elapsed();
         if elapsed > Duration::from_secs(1) {
             tracing::warn!(
@@ -2581,11 +2579,6 @@ impl ConfigAccess {
         let (send, receive) = tokio::sync::oneshot::channel();
         let node = Arc::clone(node);
         let mutation = mutation.to_owned();
-        let retry_policy = ExecuteRetryPolicy::new(
-            retry::TRANSACT_CONFLICT_MAX_RETRIES,
-            std::time::Duration::from_millis(100),
-            std::time::Duration::from_millis(800),
-        );
         let dispatcher = tracing::dispatcher::get_default(Clone::clone);
         let span = tracing::Span::current();
         #[cfg(test)]
@@ -2607,7 +2600,7 @@ impl ConfigAccess {
                 }
                 let started = Instant::now();
                 native_completion.started = true;
-                let result = node.execute_with_retry(&mutation, retry_policy).await;
+                let result = node.execute(&mutation).await;
                 let elapsed = started.elapsed();
                 record_slow_native_phase(Some(operation.as_str()), "auto-commit", elapsed);
                 let successful = !result.has_errors();

@@ -35,7 +35,7 @@ impl EmbeddedRemoteP2pAdmin {
     }
 
     fn p2p(&self) -> RemoteP2pAdminResult<Arc<dyn defra_p2p_adapter::P2POperations>> {
-        self.node.p2p_arc().ok_or_else(|| {
+        crate::identity::node_p2p(&self.node).ok_or_else(|| {
             RemoteP2pAdminError::LocalError("embedded node has no P2P transport".into())
         })
     }
@@ -56,12 +56,7 @@ impl EmbeddedRemoteP2pAdmin {
     where
         F: Future<Output = P2PResult<T>>,
     {
-        match timeout(
-            within,
-            crate::identity::as_node_identity(&self.node, future),
-        )
-        .await
-        {
+        match timeout(within, future).await {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => Err(map_p2p_error(operation, error)),
             Err(_) => Err(RemoteP2pAdminError::RpcTimeout),
@@ -255,8 +250,7 @@ pub(super) async fn push_documents_to_peer(
 ) -> anyhow::Result<()> {
     use anyhow::Context as _;
 
-    let p2p = node
-        .p2p_arc()
+    let p2p = crate::identity::node_p2p(node)
         .context("embedded node has no P2P transport for hydration delivery")?;
     let docs = documents
         .iter()
@@ -268,7 +262,7 @@ pub(super) async fn push_documents_to_peer(
         .collect::<Vec<_>>();
     timeout(
         DEFAULT_EMBEDDED_ADMIN_TIMEOUT,
-        crate::identity::as_node_identity(node, p2p.push_documents_to_peer(peer_id, docs)),
+        p2p.push_documents_to_peer(peer_id, docs),
     )
     .await
     .with_context(|| format!("push hydration documents to peer {peer_id} timed out"))?

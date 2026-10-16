@@ -1,10 +1,9 @@
 //! The per-store at-rest encryption key: creation, custody and loading.
 //!
 //! Every persistent Gents store (a gents home's data directory and the
-//! desktop client's store) is opened through DefraDB's `EncryptedStore`
-//! (AES-256-GCM over values; keys stay plaintext) with the 32-byte key this
-//! module owns. New stores start encrypted. An existing plaintext store is
-//! copied and verified before replacement; a recorded encrypted store is
+//! desktop client's store) uses DefraDB's engine file encryption with the
+//! 32-byte key this module owns. New stores start encrypted. An existing
+//! plaintext store is copied and verified before replacement; a recorded encrypted store is
 //! never reopened without its key.
 //!
 //! At-rest encryption protects the disk and its backups. The process that
@@ -227,7 +226,7 @@ fn require_unoccupied_key_file(key_file: &Path) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {
             return Err(error)
-                .with_context(|| format!("inspecting store key {}", key_file.display()))
+                .with_context(|| format!("inspecting store key {}", key_file.display()));
         }
     }
     Ok(())

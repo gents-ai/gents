@@ -665,10 +665,9 @@ async fn expired_conflicting_source_is_revoked_without_rewriting_its_records() {
         .segment;
     twin.payload = "conflict bytes".into();
     let inserted = node
-        .execute_request_with_retry(
+        .execute_request(
             defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                 .with_variables(output_segment_create_variables(&twin).unwrap()),
-            defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(!inserted.has_errors(), "{:?}", inserted.errors);
@@ -784,10 +783,9 @@ async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload
         created_at: now.clone(),
     };
     let response = node
-        .execute_request_with_retry(
+        .execute_request(
             defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                 .with_variables(output_segment_create_variables(&segment).unwrap()),
-            defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -828,10 +826,9 @@ async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload
         created_at: now,
     };
     let response = node
-        .execute_request_with_retry(
+        .execute_request(
             defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                 .with_variables(transcript_message_create_variables(&delivery).unwrap()),
-            defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
