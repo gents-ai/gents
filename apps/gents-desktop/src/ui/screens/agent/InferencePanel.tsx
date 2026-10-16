@@ -1,8 +1,3 @@
-/* Inference: backends and the provider accounts that some of them need,
-   in one list. A row is a backend; its kind decides the credential
-   section. OpenAI-compatible and OpenRouter take a key or an env var;
-   ChatGPT/Codex and Grok exist only through a subscription sign-in, so
-   the account card sits in the row with connect, cancel and disconnect. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { setEnabled } from "./enabled";
 import { dependentsWarning } from "./dependents";
@@ -37,6 +32,7 @@ function providerOf(b: InferenceBackendView): ProviderId {
     case "ChatGptCodex":
       return "openai";
     case "ClaudeCliSubscription":
+    case "AnthropicApiKey":
       return "anthropic";
     case "XaiGrokOAuth":
       return "grok";
@@ -44,6 +40,7 @@ function providerOf(b: InferenceBackendView): ProviderId {
       return "openrouter";
   }
   const host = b.endpoint ?? "";
+  if (host.replace(/\/+$/, "").toLowerCase() === "https://api.x.ai/v1") return "grok";
   if (/openai\.com/.test(host)) return "openai";
   if (/anthropic\.com/.test(host)) return "anthropic";
   if (/openrouter/.test(host)) return "openrouter";

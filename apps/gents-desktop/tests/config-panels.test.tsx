@@ -114,6 +114,47 @@ function expectFields(labels: string[]) {
 beforeEach(() => vi.clearAllMocks());
 
 describe("configuration panels", () => {
+  it.each([
+    ["AnthropicApiKey", "https://api.anthropic.com/v1", "Anthropic"],
+    ["AnthropicApiKey", "https://proxy.example/v1", "Anthropic"],
+    ["OpenAiCompatible", "https://api.x.ai/v1", "Grok"],
+    ["OpenAiCompatible", "HTTPS://API.X.AI/V1/", "Grok"],
+    ["OpenAiCompatible", "https://api.x.ai.example/v1", "Local"],
+    ["OpenAiCompatible", "https://proxy.example/api.x.ai/v1", "Local"],
+  ])("groups %s at %s under %s", async (providerKind, endpoint, provider) => {
+    const { api, app } = harness();
+    api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({
+      providers: [
+        { id: "anthropic", displayName: "Anthropic" },
+        { id: "grok", displayName: "Grok" },
+        { id: "local", displayName: "Local" },
+      ],
+    });
+    renderIn(
+      app,
+      <InferencePanel
+        deployment={{
+          ...deployment,
+          inferenceBackends: [
+            {
+              ...deployment.inferenceBackends[0]!,
+              name: "My backend",
+              providerKind,
+              endpoint,
+            },
+          ],
+        }}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(
+      await screen.findByRole("button", { name: "More for My backend" }),
+    );
+    expect(
+      await screen.findByRole("menuitem", { name: `Add another ${provider}` }),
+    ).toBeVisible();
+  });
+
   it("continues an existing local Gents home instead of creating a new identity", async () => {
     const { app } = harness();
     renderIn(app, <SetupScreen onDone={vi.fn()} />);
