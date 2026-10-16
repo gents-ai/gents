@@ -128,17 +128,18 @@ test.describe("what a transcript scroll costs", () => {
     });
     expect(long.scroll.rows).toBeGreaterThan(short.scroll.rows * 4);
 
-    /* a reader's scroll finds the row under them by point, not by a walk
-       over the rows; a streamed chunk measures the held row and the view */
+    /* a reader's scroll finds the row under them by point, or when the
+       point finds nothing by halving over the rows (about ten measures at
+       600); a streamed chunk measures the held row and the view */
     for (const at of [short, long]) {
       expect(at.chunk.grew).toBe(true);
-      expect(at.scroll.rects).toBeLessThanOrEqual(8);
+      expect(at.scroll.rects).toBeLessThanOrEqual(16);
       expect(at.chunk.rects).toBeLessThanOrEqual(16);
       /* held, nothing is written during the reader's motion */
       expect(at.scroll.writes).toBe(0);
     }
-    /* and none of it grows with the session */
-    expect(long.scroll.rects).toBeLessThanOrEqual(short.scroll.rects + 2);
+    /* and none of it grows with the session beyond the halving's few */
+    expect(long.scroll.rects).toBeLessThanOrEqual(short.scroll.rects + 10);
     expect(long.chunk.rects).toBeLessThanOrEqual(short.chunk.rects + 4);
   });
 

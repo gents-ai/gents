@@ -409,11 +409,23 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       let el = holdable(
         document.elementFromPoint?.(box.left + box.width / 2, line) ?? null,
       );
-      if (!el)
-        el =
-          Array.from(scroller.querySelectorAll(HOLDABLE)).find(
-            (row) => holdable(row) === row && row.getBoundingClientRect().bottom > line,
-          ) ?? null;
+      /* the line falls in a gap, or on nothing of the transcript's: the
+         first row whose foot is below it, found by halving over the rows,
+         which stack in document order, so the measuring stays a handful
+         however long the session */
+      if (!el) {
+        const rows = Array.from(scroller.querySelectorAll(HOLDABLE)).filter(
+          (row) => holdable(row) === row,
+        );
+        let lo = 0;
+        let hi = rows.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (rows[mid]!.getBoundingClientRect().bottom > line) hi = mid;
+          else lo = mid + 1;
+        }
+        el = rows[lo] ?? null;
+      }
       anchor = el
         ? { el, key: keyOf(el), offset: el.getBoundingClientRect().top - box.top }
         : null;
