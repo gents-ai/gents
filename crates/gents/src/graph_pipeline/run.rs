@@ -1012,15 +1012,13 @@ pub async fn reconcile_owned_graph_runs(
     node: &std::sync::Arc<EmbeddedNode>,
     owner_did: &str,
 ) -> Result<usize> {
-    let response = node
-        .execute(&format!(
-            r#"{{ GraphRun(filter: {{ owner_did: {{ _eq: "{}" }}, status: {{ _eq: "running" }} }}, limit: 1001) {{ run_id }} }}"#,
-            escape_graphql_string(owner_did),
-        ))
-        .await;
-    if response.has_errors() {
-        anyhow::bail!("query running graph runs failed: {:?}", response.errors);
-    }
+    let query = format!(
+        r#"{{ GraphRun(filter: {{ owner_did: {{ _eq: "{}" }}, status: {{ _eq: "running" }} }}, limit: 1001) {{ run_id }} }}"#,
+        escape_graphql_string(owner_did),
+    );
+    let response =
+        crate::graphql::graphql_with_transaction_retry(node, &query, "reconcile_owned_graph_runs")
+            .await?;
     let data = json!({ "data": response.data.unwrap_or(Value::Null) });
     let running = rows(&data, "GraphRun");
     if running.len() > 1_000 {

@@ -124,8 +124,9 @@ async fn load_candidates(
     Vec<AgentRequestRow>,
 )> {
     let node_did = escape_graphql_string(node_did);
-    let response = node
-        .execute(&format!(
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &format!(
             r#"{{
                 failed: AgentRequest(filter: {{
                     node_did: {{ _eq: "{node_did}" }},
@@ -146,11 +147,10 @@ async fn load_candidates(
                     lifecycle_state: {{ _eq: "pending" }}
                 }}) {{ request_id session_id requester_did input }}
             }}"#
-        ))
-        .await;
-    if response.has_errors() {
-        anyhow::bail!("querying failed background wakes: {:?}", response.errors);
-    }
+        ),
+        "load_candidates",
+    )
+    .await?;
     let data = response.data.context("background wake query has no data")?;
     let failed: Vec<AgentRequestRow> =
         serde_json::from_value(data["failed"].clone()).context("decoding failed wakes")?;

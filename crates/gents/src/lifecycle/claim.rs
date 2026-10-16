@@ -201,10 +201,9 @@ async fn fetch_interrupt_and_ttl(
             }}
         }}"#
     );
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!("fetch_interrupt_and_ttl for {doc_id}: {:?}", resp.errors);
-    }
+    let resp =
+        crate::graphql::graphql_with_transaction_retry(node, &query, "fetch_interrupt_and_ttl")
+            .await?;
     let row: gents_protocol::row::AgentRequestRow =
         crate::graphql::first_row(&resp, "AgentRequest")?
             .ok_or_else(|| anyhow::anyhow!("AgentRequest {doc_id} not found"))?;

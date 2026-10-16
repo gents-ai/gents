@@ -583,7 +583,9 @@ impl CallbackEngine {
             "{{{collection}(filter:{{_docID:{{_eq:\"{}\"}}}},limit:1){{{field}}}}}",
             escape_graphql_string(doc_id)
         );
-        let response = self.node.execute(&query).await;
+        let response =
+            crate::graphql::graphql_with_transaction_retry(&self.node, &query, "source_field")
+                .await?;
         Ok(crate::graphql::rows::<Value>(&response, collection)?
             .first()
             .and_then(|row| row.get(field))
@@ -812,10 +814,8 @@ pub(super) async fn fetch_source_doc(
         }}"#,
         id = escape_graphql_string(source_doc_id),
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!("fetch callback source doc errors: {:?}", response.errors);
-    }
+    let response =
+        crate::graphql::graphql_with_transaction_retry(node, &query, "fetch_source_doc").await?;
     let Some(row) = response
         .data
         .as_ref()
