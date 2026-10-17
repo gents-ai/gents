@@ -12,7 +12,7 @@ use gents_desktop_core::client::DesktopPaths;
 use tokio::net::windows::named_pipe::{
     ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
 };
-use windows_sys::Win32::Foundation::ERROR_PIPE_BUSY;
+use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_PIPE_BUSY};
 use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
@@ -112,12 +112,26 @@ pub(super) fn lock_file(paths: &DesktopPaths, name: &str) -> Result<File> {
 }
 
 impl Listener {
+    /// The caller holds the installation listener lock. Mio retains pipe handles
+    /// until cancelled I/O completions are consumed, so a previous listener can
+    /// still reserve the name after its Rust handles have been dropped.
     pub(super) async fn bind(paths: &DesktopPaths) -> Result<Self> {
         let name = endpoint(paths)?;
-        Ok(Self {
-            next: create_pipe(&name, true)?,
-            name,
-        })
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let next = loop {
+            match create_pipe(&name, true) {
+                Ok(next) => break next,
+                Err(error)
+                    if error.downcast_ref::<io::Error>().is_some_and(|error| {
+                        error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32)
+                    }) && tokio::time::Instant::now() < deadline =>
+                {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => return Err(error).context("reserving the private client pipe"),
+            }
+        };
+        Ok(Self { next, name })
     }
 
     pub(super) async fn accept(&mut self) -> Result<NamedPipeServer> {
@@ -186,7 +200,8 @@ mod tests {
             let paths = DesktopPaths::from_root(dir.path().join("client"));
             prepare_home(&paths).await.unwrap();
             let mut listener = Listener::bind(&paths).await.unwrap();
-            assert!(Listener::bind(&paths).await.is_err());
+            let name = endpoint(&paths).unwrap();
+            assert!(create_pipe(&name, true).is_err());
             let mut first = connect(&paths).await.unwrap();
             let second = connect(&paths);
             tokio::pin!(second);
@@ -194,7 +209,7 @@ mod tests {
             let mut first_server = listener.accept().await.unwrap();
             let mut second = second.await.unwrap();
             let mut second_server = listener.accept().await.unwrap();
-            assert!(Listener::bind(&paths).await.is_err());
+            assert!(create_pipe(&name, true).is_err());
             first.write_all(b"first").await.unwrap();
             second.write_all(b"other").await.unwrap();
             let mut bytes = [0; 5];
@@ -210,6 +225,23 @@ mod tests {
         })
         .await
         .expect("named-pipe attachment lifecycle deadline");
+    }
+
+    #[tokio::test]
+    async fn listener_lock_rejects_an_active_owner_before_rebinding() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = DesktopPaths::from_root(dir.path().join("client"));
+        let listener = super::super::LocalListener::bind(&paths).await.unwrap();
+        let competing = tokio::time::timeout(
+            Duration::from_secs(5),
+            super::super::LocalListener::bind(&paths),
+        )
+        .await
+        .expect("an active owner must be rejected before waiting for pipe release");
+        assert!(competing.is_err());
+        drop(listener);
+        let rebound = super::super::LocalListener::bind(&paths).await.unwrap();
+        drop(rebound);
     }
 
     #[tokio::test]
