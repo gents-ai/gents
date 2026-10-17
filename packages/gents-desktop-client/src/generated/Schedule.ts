@@ -2,7 +2,7 @@
 import type { ScheduleCadence } from "./ScheduleCadence.js";
 
 /**
- * Reusable schedule configuration; task selection and concurrency live on
- * Trigger, each referencing trigger has its own scheduling cursor.
+ * Each referencing trigger keeps its own scheduling cursor against this
+ * shared cadence.
  */
 export type Schedule = { node_did: string, schedule_id: string, display_name?: string | null, cadence: ScheduleCadence, created_at?: string | null, updated_at?: string | null, tags?: Array<string> | null, };
