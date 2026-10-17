@@ -553,4 +553,5 @@ pub struct AgentModelSelectionRequest {
     pub backend_id: String,
     pub model_name: String,
     pub reasoning_effort: Option<gents::config::ReasoningEffort>,
+    pub service_tier: Option<gents::config::ServiceTier>,
 }

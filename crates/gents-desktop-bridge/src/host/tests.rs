@@ -138,7 +138,7 @@ fn inference_setup_state_uses_scoped_wire_arguments() {
 fn agent_model_selection_is_scoped_and_not_cancellable() {
     let mut request = json!({
         "nodeDid":"did:fixture", "agentId":"agent", "backendId":"backend",
-        "modelName":"model", "reasoningEffort":"high"
+        "modelName":"model", "reasoningEffort":"high", "serviceTier":"fast"
     });
     let command: protocol::ClientCommand = serde_json::from_value(json!({
         "name":"client_agent_model_select", "args":{"request":request}
