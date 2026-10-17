@@ -143,7 +143,12 @@ pub async fn run_session_command_reconciler(
             .context("goal observation schema missing")?;
         goal_sources.insert(collection.collection_id, source);
     }
-    let mut changes = node.subscribe_document_changes();
+    let watched = collections
+        .keys()
+        .chain(goal_sources.keys())
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut changes = node.subscribe_collection_changes(watched);
     let mut interval = tokio::time::interval(super::intervals::sweep_interval());
     let mut subscription_open = true;
     let mut deferred: HashMap<(CommandKind, String), DateTime<Utc>> = HashMap::new();

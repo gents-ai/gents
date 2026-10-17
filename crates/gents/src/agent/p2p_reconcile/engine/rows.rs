@@ -32,6 +32,8 @@ pub(super) struct PairingStateRow {
 pub(super) struct AppliedStateRow {
     #[serde(rename = "_docID")]
     pub(super) doc_id: String,
+    #[serde(default)]
+    pub(super) peer_id: String,
     collections: Option<Vec<String>>,
     pub(super) replicator_addresses: Option<Vec<String>>,
     #[serde(default)]

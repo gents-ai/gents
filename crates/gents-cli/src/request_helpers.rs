@@ -1290,7 +1290,8 @@ mod tests {
             }
             // The mutation committed, but its response was lost/replaced by a
             // transient error at the transport boundary.
-            return Json(json!({"errors": [{"message": "database is locked"}]})).into_response();
+            return Json(json!({"errors": [{"message": "transaction conflict. please retry"}]}))
+                .into_response();
         }
         let rows: Vec<Value> = state
             .durable_ids

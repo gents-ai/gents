@@ -3,7 +3,7 @@ mod automation;
 mod load;
 mod snapshot;
 
-pub(crate) use apply::apply_control_update;
+pub(crate) use apply::{apply_control_update, control_collection_names};
 pub(crate) use load::load_document_runtime_view;
 pub(crate) use snapshot::resolve_document_runtime_snapshot_from_view;
 

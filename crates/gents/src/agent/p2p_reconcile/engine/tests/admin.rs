@@ -17,6 +17,10 @@ struct MockAdmin {
     blocked_connect_release: Option<Arc<tokio::sync::Notify>>,
     replicator_installed: Option<Arc<tokio::sync::Notify>>,
     fail_add_replicator_attempts: Mutex<usize>,
+    /// Peer ids whose replicator acknowledged every routed document; the
+    /// queried `(peer_id, collection)` pairs are recorded.
+    acknowledged_peers: BTreeSet<String>,
+    acknowledgement_queries: Mutex<Vec<(String, String)>>,
 }
 
 #[async_trait]
@@ -210,5 +214,18 @@ impl RemoteP2pAdmin for MockAdmin {
         _timeout: Option<Duration>,
     ) -> RemoteP2pAdminResult<()> {
         Ok(())
+    }
+
+    async fn replication_acknowledged(
+        &self,
+        peer_id: &str,
+        collection: &str,
+        _filter: Option<&crate::agent::p2p_reconcile::FilterPredicate>,
+    ) -> RemoteP2pAdminResult<Option<bool>> {
+        self.acknowledgement_queries
+            .lock()
+            .unwrap()
+            .push((peer_id.to_string(), collection.to_string()));
+        Ok(Some(self.acknowledged_peers.contains(peer_id)))
     }
 }

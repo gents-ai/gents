@@ -1,11 +1,10 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::UpdateSubscriptionSource;
 use gents_codex_protocol as codex;
 use tokio::sync::watch;
 
-use super::caused_threads::{CausedThread, CausedThreadUpdateFilter};
+use super::caused_threads::{CausedThread, CAUSED_THREAD_COLLECTIONS};
 use super::progress::timestamp_millis;
 use super::protocol::{
     send_committed_user_message, send_notification, send_thread_status_changed, timestamp_seconds,
@@ -67,9 +66,8 @@ async fn watch_loaded_caused_thread(
         project_child_request(connection, state, &link, options, announce_turn).await?;
     }
 
-    let mut updates = state.node.subscribe_updates();
+    let mut updates = gents::subscribe_collections(&state.node, CAUSED_THREAD_COLLECTIONS)?;
     let mut updates_closed = false;
-    let caused_update_filter = CausedThreadUpdateFilter::from_state(state);
     let fallback_poll = Duration::from_millis(state.poll_interval.as_millis().max(250) as u64);
     loop {
         if !state.is_thread_loaded(&child_thread_id).await {
@@ -80,25 +78,13 @@ async fn watch_loaded_caused_thread(
         } else {
             tokio::select! {
                 _ = tokio::time::sleep(fallback_poll) => {}
-                message = updates.recv() => {
-                    let Some(message) = message else {
+                batch = updates.recv() => {
+                    if batch.is_none() {
                         updates_closed = true;
                         tracing::warn!(
                             child_thread_id,
                             "Codex shim loaded-child update subscription closed; polling"
                         );
-                        continue;
-                    };
-                    let dropped = updates.check_and_reset_dropped();
-                    if dropped > 0 {
-                        tracing::warn!(
-                            child_thread_id,
-                            dropped,
-                            "Codex shim loaded-child update subscription dropped messages"
-                        );
-                    } else if !message.as_update().is_some_and(|update| {
-                        caused_update_filter.affects_collection_id(&update.collection_id)
-                    }) {
                         continue;
                     }
                 }

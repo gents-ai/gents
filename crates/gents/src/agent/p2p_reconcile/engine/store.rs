@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -127,23 +127,23 @@ impl GraphqlPairingStateStore {
         )
     }
 
-    async fn load_applied_rows(&self, peer_id: &str) -> Result<Vec<AppliedStateRow>> {
-        let peer_id = escape_graphql_string(peer_id);
-        let query = format!(
-            r#"{{
-                PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
-                    _docID
-                    collections
-                    replicator_addresses
-                    replicator_filter
-                }}
-            }}"#
-        );
+    /// A merge that brings in a second row for an existing `peer_id` keeps only
+    /// the smallest docID in the unique index; the other row is reachable by
+    /// scan but not by a `peer_id` filter, so twins are found by scanning the
+    /// collection once for the whole sweep.
+    async fn load_applied_rows(&self) -> Result<Vec<AppliedStateRow>> {
+        let query = r#"{
+            PeerPairingApplied {
+                _docID
+                peer_id
+                collections
+                replicator_addresses
+                replicator_filter
+            }
+        }"#;
         let response =
-            graphql_with_transaction_retry(&self.node, &query, "query PeerPairingApplied").await?;
-        let mut rows = rows::<AppliedStateRow>(&response, "PeerPairingApplied")?;
-        rows.sort_by(|left, right| left.doc_id.cmp(&right.doc_id));
-        Ok(rows)
+            graphql_with_transaction_retry(&self.node, query, "query PeerPairingApplied").await?;
+        rows::<AppliedStateRow>(&response, "PeerPairingApplied")
     }
 }
 
@@ -238,24 +238,63 @@ impl PairingStateStore for GraphqlPairingStateStore {
     }
 
     async fn load_applied(&self, peer_id: &str) -> Result<LoadedPairingApplied> {
-        let mut rows = self.load_applied_rows(peer_id).await?.into_iter();
-        let Some(canonical) = rows.next() else {
-            return Ok(LoadedPairingApplied::default());
-        };
-        Ok(LoadedPairingApplied {
-            state: canonical.into_applied(),
-            duplicate_doc_ids: rows.map(|row| row.doc_id).collect(),
-        })
+        Ok(self
+            .load_applied_many(&BTreeSet::from([peer_id.to_owned()]))
+            .await?
+            .remove(peer_id)
+            .unwrap_or_default())
+    }
+
+    async fn load_applied_many(
+        &self,
+        peer_ids: &BTreeSet<String>,
+    ) -> Result<BTreeMap<String, LoadedPairingApplied>> {
+        if peer_ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let mut grouped = BTreeMap::<String, Vec<AppliedStateRow>>::new();
+        for row in self.load_applied_rows().await? {
+            if peer_ids.contains(&row.peer_id) {
+                grouped.entry(row.peer_id.clone()).or_default().push(row);
+            }
+        }
+        Ok(grouped
+            .into_iter()
+            .map(|(peer_id, mut rows)| {
+                rows.sort_by(|left, right| left.doc_id.cmp(&right.doc_id));
+                let mut rows = rows.into_iter();
+                let canonical = rows.next().expect("only populated groups are retained");
+                (
+                    peer_id,
+                    LoadedPairingApplied {
+                        doc_id: Some(canonical.doc_id.clone()),
+                        state: canonical.into_applied(),
+                        duplicate_doc_ids: rows.map(|row| row.doc_id).collect(),
+                    },
+                )
+            })
+            .collect())
     }
 
     async fn persist_applied(&self, peer_id: &str, applied: &LoadedPairingApplied) -> Result<()> {
         if applied.state.is_empty() {
+            let delete_observed =
+                if applied.doc_id.is_none() && applied.duplicate_doc_ids.is_empty() {
+                    String::new()
+                } else {
+                    let ids = graphql_string_list_literal(
+                        applied
+                            .doc_id
+                            .iter()
+                            .chain(&applied.duplicate_doc_ids)
+                            .map(String::as_str),
+                    );
+                    format!("observed: delete_PeerPairingApplied(docIDs: {ids}) {{ _docID }}")
+                };
             let peer_id = escape_graphql_string(peer_id);
             let mutation = format!(
-                r#"mutation {{
-                    delete_PeerPairingApplied(
-                        filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}
-                    ) {{ _docID }}
+                r#"mutation {{ {delete_observed}
+                    current: delete_PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{ _docID }}
                 }}"#
             );
             return crate::config_client::ConfigAccess::write_local_response(

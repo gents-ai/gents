@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
-use defra_node::{EmbeddedNode, EventName};
+use defra_node::EmbeddedNode;
 use serde::Deserialize;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
@@ -293,6 +293,17 @@ impl EnrollmentAuthorityOwner {
     }
 }
 
+/// Authority rows plus the applied pairing witness that a route receipt
+/// records.
+const ENROLLMENT_SWEEP_COLLECTIONS: [&str; 6] = [
+    "Network",
+    "NetworkEnrollmentRequest",
+    "NetworkEnrollmentDecision",
+    "NetworkAuthorizationRevision",
+    "NetworkEnrollmentRouteReceipt",
+    "PeerPairingApplied",
+];
+
 /// Run the sole durable enrollment projection/effect loop. This loop publishes
 /// its immutable projection and owns `source="enrollment"` data-plane rows.
 pub async fn run_enrollment_reconciler(
@@ -304,7 +315,8 @@ pub async fn run_enrollment_reconciler(
     let store = GraphqlEnrollmentStore::new(node.clone(), identity.clone());
     let pairing_admin = EmbeddedRemoteP2pAdmin::new(node.clone());
     let mut delivered = BTreeSet::new();
-    let mut subscription = node.subscribe(&[EventName::Update]);
+    let mut subscription = crate::subscribe_collections(&node, ENROLLMENT_SWEEP_COLLECTIONS)?;
+    let mut subscription_open = true;
     let mut interval = tokio::time::interval(super::intervals::sweep_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -330,14 +342,11 @@ pub async fn run_enrollment_reconciler(
                 };
                 handle_authority_command(&store, &owner, command).await;
             }
-            message = subscription.recv() => {
-                if message.is_none() {
-                    tracing::warn!("enrollment update subscription closed; continuing periodic sweeps");
+            batch = subscription.recv(), if subscription_open => {
+                if batch.is_none() {
+                    tracing::warn!("enrollment change subscription closed; continuing periodic sweeps");
+                    subscription_open = false;
                     continue;
-                }
-                let dropped = subscription.check_and_reset_dropped();
-                if dropped > 0 {
-                    tracing::warn!(dropped, "enrollment update subscription dropped messages");
                 }
                 sweep_enrollment(&node, &identity, &store, &pairing_admin, &owner, &mut delivered).await;
             }

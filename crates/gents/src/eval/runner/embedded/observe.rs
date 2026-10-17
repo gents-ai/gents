@@ -79,18 +79,17 @@ pub struct RequestEvidence {
     pub failure_reason: Option<String>,
 }
 
-/// Poll `AgentRequest { lifecycle_state session_id }` until the request is
-/// terminal or the deadline-and-grace window ends. Terminal evidence requires
-/// a durable terminal state; interrupt intent and an expired grace leave
-/// `terminal_state` absent.
+/// Read `AgentRequest { lifecycle_state session_id }` on each request change
+/// until the request is terminal or the deadline-and-grace window ends.
+/// Terminal evidence requires a durable terminal state; interrupt intent and
+/// an expired grace leave `terminal_state` absent.
 pub async fn await_terminal(
     node: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
     deadline: Duration,
     grace: Duration,
-    poll: Duration,
 ) -> Result<TerminalObservation> {
-    await_terminal_with(node, request_id, deadline, grace, poll, &NoHook).await
+    await_terminal_with(node, request_id, deadline, grace, &NoHook).await
 }
 
 pub async fn await_terminal_with(
@@ -98,9 +97,9 @@ pub async fn await_terminal_with(
     request_id: &str,
     deadline: Duration,
     grace: Duration,
-    poll: Duration,
     hook: &dyn ObservationHook,
 ) -> Result<TerminalObservation> {
+    let mut changes = crate::subscribe_collections(node, ["AgentRequest"])?;
     let started = std::time::Instant::now();
     let mut interrupted_on_deadline = false;
     let mut session_id = None;
@@ -148,7 +147,15 @@ pub async fn await_terminal_with(
                 elapsed: started.elapsed(),
             });
         }
-        tokio::time::sleep(poll).await;
+        let boundary = if interrupted_on_deadline {
+            deadline.saturating_add(grace)
+        } else {
+            deadline
+        };
+        let remaining = boundary.saturating_sub(started.elapsed());
+        if let Ok(None) = tokio::time::timeout(remaining, changes.recv()).await {
+            tokio::time::sleep(remaining).await;
+        }
     }
 }
 
@@ -696,7 +703,6 @@ mod tests {
             request_id,
             Duration::from_secs(5),
             Duration::from_secs(1),
-            Duration::from_millis(50),
         )
         .await
         .unwrap();
@@ -772,15 +778,9 @@ mod tests {
                 .unwrap();
             let request_id = format!("req-unsettled-{state}");
             insert_request(&home, &request_id, state).await;
-            let observed = await_terminal(
-                &home.node,
-                &request_id,
-                Duration::ZERO,
-                Duration::ZERO,
-                Duration::from_millis(1),
-            )
-            .await
-            .unwrap();
+            let observed = await_terminal(&home.node, &request_id, Duration::ZERO, Duration::ZERO)
+                .await
+                .unwrap();
             let stored = poll_request(&home.node, &request_id)
                 .await
                 .unwrap()
@@ -804,6 +804,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn await_terminal_wakes_on_the_request_change_before_its_deadline() {
+        let home = EmbeddedHome::create_temp("observe-change").await.unwrap();
+        let writer = async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            insert_request(&home, "req-later", "completed").await;
+        };
+        let (observed, ()) = tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::join!(
+                await_terminal(
+                    &home.node,
+                    "req-later",
+                    Duration::from_secs(60),
+                    Duration::ZERO,
+                ),
+                writer,
+            )
+        })
+        .await
+        .expect("the committed terminal state wakes the observer");
+        let observed = observed.unwrap();
+        assert_eq!(
+            observed.terminal_state,
+            Some(RequestLifecycleState::Completed)
+        );
+        assert!(!observed.interrupted_on_deadline);
+    }
+
+    #[tokio::test]
     async fn await_terminal_interrupts_on_the_deadline_and_reports_it() {
         let home = EmbeddedHome::create_temp("observe-deadline").await.unwrap();
         insert_request(&home, "req-stuck", "pending").await;
@@ -812,7 +840,6 @@ mod tests {
             "req-stuck",
             Duration::from_millis(200),
             Duration::from_millis(300),
-            Duration::from_millis(50),
         )
         .await
         .unwrap();
@@ -859,7 +886,6 @@ mod tests {
             "req-stuck",
             Duration::from_millis(200),
             Duration::from_millis(300),
-            Duration::from_millis(50),
             &hook,
         )
         .await

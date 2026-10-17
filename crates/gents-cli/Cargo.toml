@@ -51,6 +51,7 @@ gents-protocol.workspace = true
 defra-node.workspace = true
 defra-http.workspace = true
 defra-p2p-adapter.workspace = true
+events.workspace = true
 futures-util = "0.3"
 flate2 = "1"
 include_dir = "0.7"

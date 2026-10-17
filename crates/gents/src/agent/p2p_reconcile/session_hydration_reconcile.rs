@@ -320,10 +320,6 @@ pub async fn run_session_hydration_reconciler(
     identity: Arc<dyn NodeIdentity>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let hydration_collection_id = node
-        .get_collection("SessionHydrationRequest")?
-        .context("SessionHydrationRequest schema is not installed")?
-        .collection_id;
     let store = GraphqlHydrationStore {
         node: node.clone(),
         enrollment,
@@ -331,7 +327,7 @@ pub async fn run_session_hydration_reconciler(
     };
     let delivery: Arc<dyn HydrationDelivery> =
         Arc::new(EmbeddedHydrationDelivery { node: node.clone() });
-    let mut subscription = node.subscribe_document_changes();
+    let mut subscription = crate::subscribe_collections(&node, ["SessionHydrationRequest"])?;
     let sweep_interval = super::intervals::sweep_interval();
     let mut interval =
         tokio::time::interval_at(tokio::time::Instant::now() + sweep_interval, sweep_interval);
@@ -360,12 +356,6 @@ pub async fn run_session_hydration_reconciler(
                         updates = batch.updates,
                         "session-hydration document-change capacity exceeded; performing authoritative sweep"
                     );
-                } else if !batch
-                    .changes
-                    .iter()
-                    .any(|change| change.collection_id == hydration_collection_id)
-                {
-                    continue;
                 }
                 if !sweep_hydration_requests_until_cancelled(&store, delivery.as_ref(), &cancel).await {
                     return Ok(());

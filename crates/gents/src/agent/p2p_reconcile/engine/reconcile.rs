@@ -6,7 +6,9 @@ use super::super::{
     compute_owned_pairing_diff, owned_pairing_live_matches, DiffOp, PairingApplied, PairingDesired,
     RemoteP2pAdmin,
 };
-use super::remote_topology::{apply_op, read_actual, replay_replicator_after_reconnect};
+use super::remote_topology::{
+    apply_op, read_actual, replay_replicator_after_reconnect, replicator_acknowledged,
+};
 use super::{
     EnrollmentRouteGeneration, LoadedPairingApplied, PairingStateStore, PairingTickOutcome,
 };
@@ -25,7 +27,15 @@ pub(super) async fn reconcile_peer_tick_with_replay(
     peer_id: &str,
     force_replay: bool,
 ) -> Result<PairingTickOutcome> {
-    let prepared = prepare_pairing_peer(admin, store, peer_id.to_string(), force_replay).await;
+    let prepared = prepare_pairing_peer(
+        admin,
+        store,
+        peer_id.to_string(),
+        force_replay,
+        &std::collections::BTreeSet::new(),
+        None,
+    )
+    .await;
     reconcile_prepared_peer(admin, store, prepared).await
 }
 
@@ -51,6 +61,8 @@ pub(super) async fn prepare_pairing_peer(
     store: &dyn PairingStateStore,
     peer_id: String,
     force_replay_when_active: bool,
+    dropped: &std::collections::BTreeSet<String>,
+    applied: Option<LoadedPairingApplied>,
 ) -> PairingPeerPreparation {
     let loaded_desired = match store.load_desired_with_authority(&peer_id).await {
         Ok(desired) => desired,
@@ -75,7 +87,10 @@ pub(super) async fn prepare_pairing_peer(
         desired = None;
     }
     let desired_state = desired.clone().unwrap_or_default();
-    let applied = match store.load_applied(&peer_id).await {
+    let applied = match match applied {
+        Some(applied) => Ok(applied),
+        None => store.load_applied(&peer_id).await,
+    } {
         Ok(applied) => applied,
         Err(error) => {
             return PairingPeerPreparation {
@@ -87,6 +102,7 @@ pub(super) async fn prepare_pairing_peer(
     };
     let mut active_before = false;
     let mut reconnected = false;
+    let mut dropped_since_sweep = false;
     if desired_state.has_wiring() && !desired_state.replicator_addresses.is_empty() {
         let endpoint_changed = !applied.state.replicator_addresses.is_empty()
             && applied.state.replicator_addresses != desired_state.replicator_addresses;
@@ -95,6 +111,11 @@ pub(super) async fn prepare_pairing_peer(
             .iter()
             .filter_map(|address| super::super::TransportEndpoint::parse(address.clone()).ok())
             .collect::<Vec<_>>();
+        dropped_since_sweep = endpoints.iter().any(|endpoint| {
+            dropped
+                .iter()
+                .any(|entry| transport_entry_names_peer(entry, endpoint.peer_id()))
+        });
         for endpoint in &endpoints {
             if peer_already_active(admin, endpoint.peer_id()).await {
                 active_before = true;
@@ -153,7 +174,7 @@ pub(super) async fn prepare_pairing_peer(
             enrollment_generation,
             applied,
             reconnected,
-            force_replay: force_replay_when_active && active_before,
+            force_replay: (force_replay_when_active || dropped_since_sweep) && active_before,
         }),
     }
 }
@@ -205,9 +226,10 @@ pub(super) async fn reconcile_prepared_peer(
 
     // DefraDB's idempotent add_replicator skips initial replay for an existing
     // identity (#664), so after a reconnect force-reinstall every otherwise-
-    // converged agent-target replicator to replay owner-authored DAG heads. If
-    // the desired identity changed, the diff already contains the
-    // teardown+install replay; avoid doing it twice.
+    // converged agent-target replicator whose peer has not acknowledged every
+    // routed document, replaying owner-authored DAG heads. If the desired
+    // identity changed, the diff already contains the teardown+install replay;
+    // avoid doing it twice.
     if (reconnected || force_replay)
         && desired_state.uses_agent_target_template()
         && fresh_enrollment_generation_or_close(store, enrollment_generation.as_ref()).await
@@ -224,7 +246,9 @@ pub(super) async fn reconcile_prepared_peer(
                         if candidate == address
                 )
             });
-            if diff_reinstalls_address {
+            if diff_reinstalls_address
+                || replicator_acknowledged(admin, address, &desired_state, &actual).await
+            {
                 continue;
             }
             replay_replicator_after_reconnect(admin, address, &desired_state, &actual).await?;
@@ -330,11 +354,15 @@ async fn peer_already_active(admin: &dyn RemoteP2pAdmin, peer_id: &str) -> bool 
             return false;
         }
     };
-    peers.iter().any(|entry| {
-        parse_public_peer_addr(entry)
-            .map(|(parsed, _)| parsed.as_str() == peer_id)
-            .unwrap_or_else(|_| entry.contains(peer_id))
-    })
+    peers
+        .iter()
+        .any(|entry| transport_entry_names_peer(entry, peer_id))
+}
+
+fn transport_entry_names_peer(entry: &str, peer_id: &str) -> bool {
+    parse_public_peer_addr(entry)
+        .map(|(parsed, _)| parsed.as_str() == peer_id)
+        .unwrap_or_else(|_| entry.contains(peer_id))
 }
 
 pub fn update_applied_after_success(

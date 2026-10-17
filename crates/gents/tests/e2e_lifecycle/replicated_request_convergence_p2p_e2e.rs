@@ -21,6 +21,7 @@ async fn install_one_way_replicator(
     sender: &Arc<EmbeddedNode>,
     receiver: &Arc<EmbeddedNode>,
     collections: &[&str],
+    requester_scoped: bool,
 ) {
     let sender_addr = wait_for_listen_addr(sender).await;
     let receiver_addr = wait_for_listen_addr(receiver).await;
@@ -58,14 +59,43 @@ async fn install_one_way_replicator(
         .expect("authorize sender as receiver-side replicator");
     let sender_admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(sender));
     let mut filters = PairingFilters::new();
-    filters.insert(
-        "AgentRequest".to_string(),
-        equality_filter("requester_did", PEER_DID),
-    );
+    if requester_scoped {
+        filters.insert(
+            "AgentRequest".to_string(),
+            equality_filter("requester_did", PEER_DID),
+        );
+    }
     sender_admin
         .add_replicator(&[receiver_addr], &collection_names, &filters)
         .await
         .expect("install sender to receiver replicator");
+}
+
+async fn wait_for_acknowledged(owner: &Arc<EmbeddedNode>, peer: &EmbeddedNode, doc_ids: &[String]) {
+    let peer_id = peer
+        .p2p()
+        .expect("peer p2p")
+        .local_peer_id()
+        .await
+        .expect("peer id");
+    let admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(owner));
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let acknowledged = admin
+            .documents_acknowledged(&peer_id, "AgentRequest", doc_ids)
+            .await
+            .expect("replication acknowledgement");
+        if acknowledged.iter().all(|acknowledged| *acknowledged) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "peer never acknowledged {doc_ids:?}: {acknowledged:?} peer={peer_id} status={} replicators={:?}",
+            push_backlog_status(owner).await,
+            owner.p2p().unwrap().get_replicators().await
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 async fn push_backlog_status(node: &EmbeddedNode) -> serde_json::Value {
@@ -251,7 +281,9 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
     let owner = test_p2p_db("convergence-p2p-owner-live").await;
     let peer = test_p2p_db("convergence-p2p-peer-live").await;
 
-    install_one_way_replicator(&owner.node, &peer.node, &["AgentRequest"]).await;
+    // The pinned DefraDB records no acknowledgement for a filtered
+    // replicator's pushes, so acknowledgement is observed on a collection route.
+    install_one_way_replicator(&owner.node, &peer.node, &["AgentRequest"], false).await;
 
     let request_id = "convergence-p2p-live-req";
     let session_id = "convergence-p2p-live-session";
@@ -305,46 +337,28 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
         "peer must match owner terminal exactly"
     );
 
+    let doc_id = on_owner.doc_id.clone().expect("owner doc id");
+    wait_for_acknowledged(
+        &owner.node,
+        peer.node.as_ref(),
+        std::slice::from_ref(&doc_id),
+    )
+    .await;
+
     let first = RequestLifecycle::redrive_terminal_convergence(&owner.node, OWNER_DID)
         .await
         .expect("redrive");
-    assert!(
-        first.reasserted >= 1,
-        "owner re-drive must re-assert at least the terminal row; report={first:?}"
-    );
-
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let after_redrive = wait_for_request_lifecycle(
-        peer.node.as_ref(),
-        request_id,
-        RequestLifecycleState::Completed,
-        Duration::from_secs(15),
-        "peer (after re-drive)",
-    )
-    .await;
-    assert_eq!(after_redrive.node_did.as_deref(), Some(OWNER_DID));
-    assert_eq!(after_redrive.doc_id, on_peer_terminal.doc_id);
-
-    let mut total_reasserted = first.reasserted;
-    for _ in 0..TERMINAL_REDRIVE_CAP {
-        let report = RequestLifecycle::redrive_terminal_convergence(&owner.node, OWNER_DID)
-            .await
-            .expect("redrive drain");
-        total_reasserted += report.reasserted;
-        if report.reasserted == 0 {
-            break;
-        }
-    }
-    assert!(
-        total_reasserted <= TERMINAL_REDRIVE_CAP as usize,
-        "redrive must not exceed TERMINAL_REDRIVE_CAP={TERMINAL_REDRIVE_CAP}, got {total_reasserted}"
-    );
-    let exhausted = RequestLifecycle::redrive_terminal_convergence(&owner.node, OWNER_DID)
-        .await
-        .expect("redrive after cap");
     assert_eq!(
-        exhausted.reasserted, 0,
-        "after CAP re-asserts the row must self-drop from the re-drive budget"
+        (first.acknowledged, first.reasserted),
+        (1, 0),
+        "an acknowledged terminal request is retired, never re-asserted; report={first:?}"
+    );
+    let retired = RequestLifecycle::redrive_terminal_convergence(&owner.node, OWNER_DID)
+        .await
+        .expect("redrive after retirement");
+    assert!(
+        retired.is_noop(),
+        "a retired request leaves the re-drive budget; report={retired:?}"
     );
 
     let final_peer = fetch_request(peer.node.as_ref(), request_id)
@@ -398,7 +412,7 @@ async fn p2p_full_replay_converges_after_offline_peer_exhausts_redrive_cap() {
         .expect("redrive after persistent cap");
     assert!(exhausted.is_noop(), "persistent cap must be exhausted");
 
-    install_one_way_replicator(&owner.node, &peer.node, &["AgentRequest"]).await;
+    install_one_way_replicator(&owner.node, &peer.node, &["AgentRequest"], true).await;
 
     let on_peer = wait_for_request_lifecycle(
         peer.node.as_ref(),
@@ -425,7 +439,7 @@ async fn p2p_terminal_redrive_pushes_once_per_routed_request() {
 
     let owner = test_p2p_db("convergence-p2p-wave-owner").await;
     let peer = test_p2p_db("convergence-p2p-wave-peer").await;
-    install_one_way_replicator(&owner.node, &peer.node, &["AgentRequest"]).await;
+    install_one_way_replicator(&owner.node, &peer.node, &["AgentRequest"], true).await;
 
     for index in 0..REQUESTS {
         let request_id = format!("convergence-p2p-wave-{index:02}");
