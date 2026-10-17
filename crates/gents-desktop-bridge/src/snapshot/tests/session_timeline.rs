@@ -573,7 +573,7 @@ fn message_request_id_is_never_the_request_doc_id() {
 }
 
 #[test]
-fn only_the_authored_prompt_row_owns_the_request_turn() {
+fn runtime_context_stays_out_of_the_conversation_and_only_the_prompt_owns_the_turn() {
     let mut rows = ClientStoreRows {
         sessions: vec![timeline_session()],
         requests: vec![AgentRequestRow {
@@ -583,7 +583,7 @@ fn only_the_authored_prompt_row_owns_the_request_turn() {
             node_did: Some("did:test:amy".into()),
             session_id: Some("sess-1".into()),
             lifecycle_state: Some(RequestLifecycleState::Processing),
-            content: Some("inspect the repository".into()),
+            content: Some("<context>\ninspect the repository\n</context>".into()),
             ..Default::default()
         }],
         ..ClientStoreRows::default()
@@ -604,25 +604,23 @@ fn only_the_authored_prompt_row_owns_the_request_turn() {
         Some("bae-doc-1"),
         2,
         MessageRole::User,
-        "inspect the repository",
+        "<context>\ninspect the repository\n</context>",
     );
     let snapshot =
         build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
             .expect("snapshot");
+    assert!(snapshot.messages[0].runtime_control);
+    assert!(!snapshot.messages[1].runtime_control);
     assert!(matches!(
         &snapshot.timeline_items[..],
         [
             RenderedTimelineItem::UserMessage {
-                owns_turn: false,
-                request_id: Some(context_request),
-                ..
-            },
-            RenderedTimelineItem::UserMessage {
                 owns_turn: true,
                 request_id: Some(prompt_request),
+                content: Some(content),
                 ..
             },
-        ] if context_request == "req-1" && prompt_request == "req-1"
+        ] if prompt_request == "req-1" && content == "<context>\ninspect the repository\n</context>"
     ));
 }
 
