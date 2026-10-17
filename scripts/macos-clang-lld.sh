@@ -12,13 +12,4 @@ for llvm_bin in /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin; do
   fi
 done
 
-if command -v rustc >/dev/null 2>&1; then
-  rust_target_libdir="$(rustc --print target-libdir 2>/dev/null)" || rust_target_libdir=""
-  rust_llvm_bin="${rust_target_libdir%/lib}/bin/gcc-ld"
-  if [ -x "$rust_llvm_bin/ld64.lld" ]; then
-    export PATH="$rust_llvm_bin:$PATH"
-    exec clang -fuse-ld=lld "$@"
-  fi
-fi
-
 exec clang "$@"
