@@ -44,12 +44,10 @@ impl CommandKind {
 
 #[derive(Clone, Copy)]
 pub(super) enum Sweep {
-    /// Commands without any receipt; cheap enough for every tick.
     Unanswered,
-    /// Also commands whose receipt does not verify. A replica can overwrite a
-    /// valid receipt, and only its change notification names that command, so
-    /// this runs whenever notifications may have been lost: at startup, on
-    /// resync, and on every tick once the subscription has closed.
+    /// Replication can overwrite a receipt without the command's notification
+    /// arriving, so this mode also runs at startup, on resync, and after the
+    /// subscription closes.
     Unverified,
 }
 
@@ -126,8 +124,6 @@ pub(super) async fn unanswered_commands(
     Ok(unanswered)
 }
 
-/// Sweeps unanswered commands, processes each changed command, and retries each
-/// command deferred until its issuance at that instant.
 pub async fn run_session_command_reconciler(
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
@@ -152,9 +148,6 @@ pub async fn run_session_command_reconciler(
     let mut subscription_open = true;
     let mut deferred: HashMap<(CommandKind, String), DateTime<Utc>> = HashMap::new();
     let mut ids = Vec::new();
-    // Discovered commands and full sweeps that failed are owed to the next
-    // tick: unanswered-only ticks cannot rediscover a command whose invalid
-    // receipt is non-null.
     let mut failed = Vec::new();
     let mut full_sweep_owed = false;
     let mut sweep = Some(Sweep::Unverified);

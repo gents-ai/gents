@@ -53,7 +53,6 @@ pub const CODEX_UI_DIR_NAME: &str = "codex-ui";
 pub const EVAL_DIR_NAME: &str = "eval";
 pub const PACK_INSTALLS_DIR_NAME: &str = "pack-installs";
 
-
 pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
     DATA_DIR_NAME,
     INIT_CONFIG_FILE_NAME,
@@ -736,7 +735,6 @@ mod tests {
             );
         }
     }
-
 
     #[test]
     fn runtime_writers_name_home_entries_only_from_the_inventory() {

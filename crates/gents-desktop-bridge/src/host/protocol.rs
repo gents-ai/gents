@@ -27,6 +27,40 @@ pub enum ClientMessage {
 #[serde(tag = "name", content = "args")]
 #[serde(deny_unknown_fields)]
 pub enum ClientCommand {
+    #[serde(rename = "client_backend_authentication")]
+    BackendAuthentication {
+        request: crate::accounts::BackendAuthenticationRequest,
+    },
+    #[serde(rename = "client_backend_authentication_save")]
+    BackendAuthenticationSave {
+        request: crate::accounts::BackendAuthenticationSaveRequest,
+    },
+    #[serde(rename = "client_inference_setup_catalog")]
+    InferenceCatalog {},
+    #[serde(rename = "client_provider_accounts_list")]
+    AccountsList {
+        request: crate::accounts::ProviderAccountsRequest,
+    },
+    #[serde(rename = "client_provider_account_sign_in")]
+    AccountSignIn {
+        request: crate::accounts::ProviderSignInRequest,
+    },
+    #[serde(rename = "client_provider_account_disconnect")]
+    AccountDisconnect {
+        request: crate::accounts::ProviderAccountDisconnectRequest,
+    },
+    #[serde(rename = "client_provider_account_rename")]
+    AccountRename {
+        request: crate::accounts::ProviderAccountRenameRequest,
+    },
+    #[serde(rename = "client_provider_account_remove")]
+    AccountRemove {
+        request: crate::accounts::ProviderAccountRemoveRequest,
+    },
+    #[serde(rename = "client_provider_account_retry_save")]
+    AccountRetrySave {
+        request: crate::accounts::ProviderAccountRetrySaveRequest,
+    },
     #[serde(rename = "client_config_catalog")]
     ConfigCatalog {
         #[serde(rename = "nodeDid")]
@@ -152,6 +186,15 @@ pub enum ClientCommand {
 
 impl ClientCommand {
     pub const NAMES: &'static [&'static str] = &[
+        "client_backend_authentication",
+        "client_backend_authentication_save",
+        "client_inference_setup_catalog",
+        "client_provider_accounts_list",
+        "client_provider_account_sign_in",
+        "client_provider_account_disconnect",
+        "client_provider_account_rename",
+        "client_provider_account_remove",
+        "client_provider_account_retry_save",
         "client_config_catalog",
         "client_config_read",
         "client_config_save",
@@ -184,6 +227,9 @@ impl ClientCommand {
         matches!(
             self,
             Self::Snapshot {}
+                | Self::BackendAuthentication { .. }
+                | Self::InferenceCatalog {}
+                | Self::AccountsList { .. }
                 | Self::ConfigCatalog { .. }
                 | Self::ConfigRead { .. }
                 | Self::ActionCatalog { .. }

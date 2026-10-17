@@ -16,8 +16,19 @@ pub struct ClientHostService {
 
 impl ClientHostService {
     pub fn start(core: Arc<ClientCore>, listener: LocalListener) -> Self {
+        Self::with_accounts(core, listener, Arc::default())
+    }
+
+    pub(crate) fn with_accounts(
+        core: Arc<ClientCore>,
+        listener: LocalListener,
+        pending: Arc<crate::accounts::PendingOAuthCredentials>,
+    ) -> Self {
         let stop = CancellationToken::new();
-        let task = tokio::spawn(listener.serve(Arc::new(ClientHost::new(core)), stop.clone()));
+        let task = tokio::spawn(listener.serve(
+            Arc::new(ClientHost::with_accounts(core, pending)),
+            stop.clone(),
+        ));
         Self {
             stop,
             task: Some(task),

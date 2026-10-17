@@ -123,7 +123,7 @@ where
                             let approvals = approvals.clone();
                             calls.spawn(async move {
                                 let cancellable = command.is_cancellable();
-                                let result = run_operation(cancellable, cancel, host.execute(command, &approvals)).await;
+                                let result = run_operation(cancellable, cancel.clone(), host.execute(command, &approvals, cancel)).await;
                                 (id, result)
                             });
                         }

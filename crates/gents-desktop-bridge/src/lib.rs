@@ -1,3 +1,4 @@
+pub mod accounts;
 #[cfg(feature = "tauri-host")]
 mod app_exit;
 pub mod approvals_watch;

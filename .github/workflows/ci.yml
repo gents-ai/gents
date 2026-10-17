@@ -378,6 +378,8 @@ jobs:
 
       - name: Run native client runtime journey
         if: matrix.suite == 'desktop'
+        env:
+          RUST_MIN_STACK: 16777216
         run: |
           cargo build --profile test -p gents-cli -p gents-client-host -p gents-media-host --bins
           cargo test -p gents-client-host --features runtime-e2e --test runtime

@@ -2,169 +2,36 @@
 //! credentials remain node-scoped documents and never cross this bridge
 //! unredacted.
 
+use crate::accounts::{observe_provider_accounts, retry_pending_credential};
+#[cfg(test)]
+use crate::accounts::{require_reachable_configuration, save_issued_credential};
 use std::time::Duration;
 
-use gents::chatgpt_codex::normalize_provider;
 use gents::inference_setup::{
     InferenceAuthMethod, InferenceModelOption, InferenceModelRecommendation, InferenceProviderId,
     InferenceSetupCatalog,
 };
-use gents::oauth_credential::{list_oauth_credentials_on, OAuthCredential, SignIn, SignInResult};
-use gents_chatgpt_login::{run_login_server, LoginOptions};
+#[cfg(test)]
+use gents::oauth_credential::list_oauth_credentials_on;
+use gents::oauth_credential::OAuthCredential;
+use gents::oauth_credential::SignIn;
 use gents_desktop_core::client::ClientCore;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Runtime, State};
 
+#[cfg(test)]
+use crate::accounts::{CredentialSave, PendingOAuthCredentials};
 use crate::error::{BridgeError, BridgeErrorCode};
-use crate::state::{
-    current_core, CredentialSave, DesktopAppState, IssuedOAuthCredential, PendingOAuthCredentials,
-};
+use crate::state::{current_core, DesktopAppState};
 use crate::types::ClientUpdateEvent;
 
 const PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
 
-const CODEX_LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
-
 const LOG_TARGET: &str = "gents_desktop_bridge::inference_setup";
 
+mod sign_in;
 mod sign_in_platform;
-
-fn provider_label(provider: &str) -> &'static str {
-    match provider {
-        gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER => "ChatGPT",
-        gents::claude_oauth::CLAUDE_OAUTH_PROVIDER => "Claude",
-        gents::xai_grok_oauth::XAI_OAUTH_PROVIDER => "Grok",
-        _ => "provider",
-    }
-}
-
-async fn require_reachable_configuration(
-    access: anyhow::Result<gents::ConfigAccess>,
-    node_did: &str,
-    provider: &str,
-) -> Result<(), BridgeError> {
-    let probe = match access {
-        Ok(access) => list_oauth_credentials_on(&access, node_did)
-            .await
-            .map(|_| ()),
-        Err(error) => Err(error),
-    };
-    probe.map_err(|error| {
-        tracing::warn!(
-            target: LOG_TARGET,
-            node_did,
-            provider,
-            error = %format!("{error:#}"),
-            "node configuration is not reachable; not starting provider sign-in"
-        );
-        BridgeError::new(
-            BridgeErrorCode::EndpointUnreachable,
-            format!(
-                "The node is not running, so {} sign-in was not started. Start the node and try again.",
-                provider_label(provider)
-            ),
-        )
-    })
-}
-
-async fn upsert_through(
-    access: anyhow::Result<gents::ConfigAccess>,
-    credential: OAuthCredential,
-) -> anyhow::Result<SignIn> {
-    let access = access?;
-    let label = credential.label.clone();
-    let mut signed = gents::oauth_credential::store_sign_in(&access, credential, None).await?;
-    if let (SignInResult::Added, Some(label)) = (&signed.result, label) {
-        let stored = &signed.credential;
-        match gents::oauth_credential::set_account_label(
-            &access,
-            &stored.node_did,
-            &stored.credential_id,
-            &label,
-        )
-        .await
-        {
-            Ok(()) => signed.credential.label = Some(label),
-            Err(error) => tracing::warn!(
-                target: LOG_TARGET,
-                node_did = %stored.node_did,
-                provider = %stored.provider,
-                error = %format!("{error:#}"),
-                "labelling the added account failed; it keeps its default label"
-            ),
-        }
-    }
-    Ok(signed)
-}
-
-fn sign_in_label(label: Option<&str>) -> Result<Option<String>, BridgeError> {
-    label
-        .map(str::trim)
-        .filter(|label| !label.is_empty())
-        .map(gents::oauth_credential::validate_account_label)
-        .transpose()
-        .map_err(|error| BridgeError::new(BridgeErrorCode::InvalidArgument, error.to_string()))
-}
-
-fn credential_not_saved(credential: &OAuthCredential, error: &anyhow::Error) -> BridgeError {
-    tracing::warn!(
-        target: LOG_TARGET,
-        node_did = %credential.node_did,
-        provider = %credential.provider,
-        error = %format!("{error:#}"),
-        "saving the issued provider credential failed; holding it for retry"
-    );
-    BridgeError::new(
-        BridgeErrorCode::CredentialNotSaved,
-        format!(
-            "You are signed in to {}, but Gents could not save the sign-in to the node. Make sure the node is running, then retry saving.",
-            provider_label(&credential.provider)
-        ),
-    )
-}
-
-async fn save_issued_credential(
-    pending: &PendingOAuthCredentials,
-    access: anyhow::Result<gents::ConfigAccess>,
-    issued: IssuedOAuthCredential,
-) -> Result<SignIn, BridgeError> {
-    let credential = issued.credential().clone();
-    match pending
-        .save(issued, |credential| upsert_through(access, credential))
-        .await
-    {
-        CredentialSave::Saved(signed) => Ok(signed),
-        CredentialSave::Superseded => Err(BridgeError::untyped(format!(
-            "A newer {} sign-in for this node replaced this one.",
-            provider_label(&credential.provider)
-        ))),
-        CredentialSave::Failed(error) => Err(credential_not_saved(&credential, &error)),
-    }
-}
-
-async fn retry_pending_credential(
-    pending: &PendingOAuthCredentials,
-    access: anyhow::Result<gents::ConfigAccess>,
-    node_did: &str,
-    provider: &str,
-) -> Result<OAuthCredential, BridgeError> {
-    let (credential, saved) = pending
-        .retry(node_did, provider, |credential| {
-            upsert_through(access, credential)
-        })
-        .await
-        .ok_or_else(|| {
-            BridgeError::new(
-                BridgeErrorCode::NotFound,
-                "There is no unsaved sign-in to retry. Sign in again.",
-            )
-        })?;
-    match saved {
-        Ok(signed) => Ok(signed.credential),
-        Err(error) => Err(credential_not_saved(&credential, &error)),
-    }
-}
 
 async fn notify_config_changed<R: Runtime>(app: &AppHandle<R>, core: &ClientCore) {
     if let Err(error) = core.refresh_store().await {
@@ -178,39 +45,6 @@ async fn notify_config_changed<R: Runtime>(app: &AppHandle<R>, core: &ClientCore
         "desktop://client-updated",
         ClientUpdateEvent::coarse("config"),
     );
-}
-
-async fn observe_provider_accounts(
-    pending: &PendingOAuthCredentials,
-    access: anyhow::Result<gents::ConfigAccess>,
-    node_did: &str,
-) -> Result<Vec<ProviderAccountView>, BridgeError> {
-    let held: Vec<ProviderAccountView> = pending
-        .held_for(node_did)
-        .iter()
-        .map(ProviderAccountView::pending_save)
-        .collect();
-    let stored = match access {
-        Ok(access) => list_oauth_credentials_on(&access, node_did).await,
-        Err(error) => Err(error),
-    };
-    match stored {
-        Ok(stored) => Ok(stored
-            .iter()
-            .map(ProviderAccountView::from)
-            .chain(held)
-            .collect()),
-        Err(error) if !held.is_empty() => {
-            tracing::warn!(
-                target: LOG_TARGET,
-                node_did,
-                error = %format!("{error:#}"),
-                "reading stored provider accounts failed; reporting held sign-ins only"
-            );
-            Ok(held)
-        }
-        Err(error) => Err(BridgeError::untyped(error.to_string())),
-    }
 }
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
@@ -674,81 +508,22 @@ impl CodexLoginResult {
 #[tauri::command]
 pub(crate) async fn desktop_codex_login<R: Runtime>(
     app: AppHandle<R>,
+    window: tauri::WebviewWindow<R>,
     request: CodexLoginRequest,
     state: State<'_, DesktopAppState>,
 ) -> Result<CodexLoginResult, BridgeError> {
-    sign_in_platform::require_supported(
+    let provider =
+        gents::chatgpt_codex::normalize_provider(request.provider.as_deref().unwrap_or_default());
+    let signed = sign_in::run(
+        &app,
+        &state,
+        window.label(),
+        request.node_did.trim(),
         InferenceAuthMethod::ChatGptOauth,
-        cfg!(target_os = "ios"),
-    )?;
-    let Some(core) = current_core(&state) else {
-        return Err(BridgeError::untyped("desktop client is not running"));
-    };
-    let node_did = request.node_did.trim().to_string();
-    if node_did.is_empty() {
-        return Err(BridgeError::untyped("node_did is required"));
-    }
-    let label = sign_in_label(request.label.as_deref())?;
-    let provider = normalize_provider(request.provider.as_deref().unwrap_or_default());
-    require_reachable_configuration(core.operator_access(&node_did), &node_did, &provider).await?;
-
-    let server = run_login_server(LoginOptions {
-        open_browser: false,
-        ..LoginOptions::default()
-    })
-    .map_err(|error| BridgeError::untyped(format!("starting ChatGPT login server: {error}")))?;
-    let _ = app.emit(
-        "desktop://codex-login-url",
-        CodexLoginUrl {
-            url: server.auth_url.clone(),
-        },
-    );
-    if let Err(error) = crate::host_browser::open_url(&server.auth_url) {
-        tracing::warn!(%error, "could not open the ChatGPT sign-in page; the page link stands in");
-    }
-
-    let cancel = server.cancel_handle();
-    {
-        let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
-        bridge.codex_login_cancel = Some(cancel.clone());
-    }
-    let wait = tokio::time::timeout(CODEX_LOGIN_TIMEOUT, server.block_until_done()).await;
-    {
-        let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
-        bridge.codex_login_cancel = None;
-    }
-    let tokens = match wait {
-        Ok(result) => result.map_err(|error| {
-            BridgeError::untyped(format!("ChatGPT browser login failed: {error}"))
-        })?,
-        Err(_elapsed) => {
-            cancel.shutdown();
-            return Err(BridgeError::untyped(
-                "ChatGPT sign-in timed out waiting for the browser",
-            ));
-        }
-    };
-
-    let credential = OAuthCredential {
-        label,
-        ..OAuthCredential::from_login_tokens(
-            &node_did,
-            &provider,
-            &tokens.id_token,
-            tokens.access_token,
-            tokens.refresh_token,
-            chrono::Utc::now(),
-        )
-    };
-    let signed = save_issued_credential(
-        &state.pending_oauth_credentials,
-        core.operator_access(&node_did),
-        state.pending_oauth_credentials.issue(credential.clone()),
+        &provider,
+        request.label.as_deref(),
     )
     .await?;
-
-    notify_config_changed(&app, &core).await;
-
     Ok(CodexLoginResult::redacted(&signed))
 }
 
@@ -759,20 +534,11 @@ pub(crate) struct CodexLoginUrl {
 }
 
 #[tauri::command]
-pub(crate) fn desktop_codex_login_cancel(
+pub(crate) fn desktop_codex_login_cancel<R: Runtime>(
+    window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
 ) -> Result<(), BridgeError> {
-    let handle = {
-        let mut bridge = state
-            .bridge
-            .lock()
-            .map_err(|_| BridgeError::untyped("desktop bridge lock poisoned"))?;
-        bridge.codex_login_cancel.take()
-    };
-    if let Some(handle) = handle {
-        handle.shutdown();
-    }
-    Ok(())
+    sign_in::cancel(&state, window.label(), InferenceAuthMethod::ChatGptOauth)
 }
 
 #[derive(Debug, Clone, Deserialize, ts_rs::TS)]
@@ -818,86 +584,10 @@ pub(crate) struct GrokLoginUrl {
     pub url: String,
 }
 
-#[derive(Debug, Clone, Serialize, ts_rs::TS)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ProviderAccountView {
-    pub credential_id: String,
-    pub node_did: String,
-    pub provider: String,
-    pub account_id: Option<String>,
-    pub plan_type: Option<String>,
-    pub access_token_expires_at: String,
-    pub last_refresh: Option<String>,
-    pub enabled: bool,
-    /// A completed sign-in the bridge holds because saving it failed.
-    pub pending_save: bool,
-    pub account_ref: Option<String>,
-    pub label: String,
-}
-
-impl ProviderAccountView {
-    fn pending_save(credential: &OAuthCredential) -> Self {
-        Self {
-            pending_save: true,
-            ..Self::from(credential)
-        }
-    }
-}
-
-impl From<&OAuthCredential> for ProviderAccountView {
-    fn from(credential: &OAuthCredential) -> Self {
-        Self {
-            credential_id: credential.credential_id.clone(),
-            node_did: credential.node_did.clone(),
-            provider: credential.provider.clone(),
-            account_id: gents::oauth_credential::account_display_label(credential),
-            plan_type: credential.chatgpt_plan_type.clone(),
-            access_token_expires_at: credential.access_token_expires_at.to_rfc3339(),
-            last_refresh: credential.last_refresh.map(|value| value.to_rfc3339()),
-            enabled: credential.enabled,
-            pending_save: false,
-            account_ref: credential.account_ref.clone(),
-            label: gents::oauth_credential::effective_account_label(credential),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, ts_rs::TS)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct SignInView {
-    pub result: String,
-    pub label: String,
-    pub account_ref: Option<String>,
-    pub hint: Option<String>,
-}
-
-impl From<&SignIn> for SignInView {
-    fn from(signed: &SignIn) -> Self {
-        Self {
-            result: match signed.result {
-                SignInResult::Added => "added",
-                SignInResult::Refreshed => "refreshed",
-            }
-            .to_string(),
-            label: gents::oauth_credential::effective_account_label(&signed.credential),
-            account_ref: signed.credential.account_ref.clone(),
-            hint: signed.account_chooser_hint(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ProviderAccountsRequest {
-    pub node_did: String,
-}
-
-#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ProviderAccountDisconnectRequest {
-    pub node_did: String,
-    pub credential_id: String,
-}
+pub(crate) use crate::accounts::{
+    ProviderAccountDisconnectRequest, ProviderAccountRemoveRequest, ProviderAccountRenameRequest,
+    ProviderAccountRetrySaveRequest, ProviderAccountView, ProviderAccountsRequest, SignInView,
+};
 
 #[tauri::command]
 pub(crate) async fn desktop_provider_accounts_list(
@@ -936,21 +626,6 @@ pub(crate) async fn desktop_provider_account_disconnect<R: Runtime>(
     .map_err(|error| BridgeError::untyped(error.to_string()))?;
     notify_config_changed(&app, &core).await;
     Ok(())
-}
-
-#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ProviderAccountRenameRequest {
-    pub node_did: String,
-    pub credential_id: String,
-    pub label: String,
-}
-
-#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ProviderAccountRemoveRequest {
-    pub node_did: String,
-    pub credential_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize, ts_rs::TS)]
@@ -1150,14 +825,6 @@ pub(crate) async fn desktop_provider_usage_read(
         .map_err(|error| BridgeError::untyped(error.to_string()))
 }
 
-#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
-#[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ProviderAccountRetrySaveRequest {
-    pub node_did: String,
-    pub provider: String,
-}
-
 #[tauri::command]
 pub(crate) async fn desktop_provider_account_retry_save<R: Runtime>(
     app: AppHandle<R>,
@@ -1186,85 +853,22 @@ pub(crate) async fn desktop_provider_account_retry_save<R: Runtime>(
 #[tauri::command]
 pub(crate) async fn desktop_grok_login<R: Runtime>(
     app: AppHandle<R>,
+    window: tauri::WebviewWindow<R>,
     request: GrokLoginRequest,
     state: State<'_, DesktopAppState>,
 ) -> Result<GrokLoginResult, BridgeError> {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-
-    use gents::xai_grok_oauth::normalize_provider as normalize_xai_provider;
-    use gents::xai_oauth_login::{
-        credential_from_login_tokens, run_device_code_login_with_url_callback,
-    };
-
-    let Some(core) = current_core(&state) else {
-        return Err(BridgeError::untyped("desktop client is not running"));
-    };
-    let node_did = request.node_did.trim().to_string();
-    if node_did.is_empty() {
-        return Err(BridgeError::untyped("node_did is required"));
-    }
-    let label = sign_in_label(request.label.as_deref())?;
-    let provider = normalize_xai_provider(request.provider.as_deref().unwrap_or_default());
-    require_reachable_configuration(core.operator_access(&node_did), &node_did, &provider).await?;
-
-    let cancel = Arc::new(AtomicBool::new(false));
-    {
-        let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
-        bridge.grok_login_cancel = Some(cancel.clone());
-    }
-
-    let http = reqwest::Client::new();
-    let app_for_url = app.clone();
-    let login = tokio::time::timeout(
-        CODEX_LOGIN_TIMEOUT,
-        run_device_code_login_with_url_callback(&http, Some(cancel.clone()), move |url| {
-            let _ = app_for_url.emit(
-                crate::contract::GROK_LOGIN_URL_EVENT,
-                GrokLoginUrl {
-                    url: url.to_string(),
-                },
-            );
-            if let Err(error) = crate::host_browser::open_url(url) {
-                tracing::warn!(%error, "could not open the Grok sign-in page; the page link stands in");
-            }
-        }),
-    )
-    .await;
-
-    {
-        let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
-        bridge.grok_login_cancel = None;
-    }
-
-    let tokens = match login {
-        Ok(Ok(tokens)) => tokens,
-        Ok(Err(error)) => {
-            return Err(BridgeError::untyped(format!(
-                "Grok device-code login failed: {error}"
-            )));
-        }
-        Err(_elapsed) => {
-            cancel.store(true, Ordering::SeqCst);
-            return Err(BridgeError::untyped(
-                "Grok sign-in timed out waiting for browser approval",
-            ));
-        }
-    };
-
-    let credential = OAuthCredential {
-        label,
-        ..credential_from_login_tokens(&node_did, &provider, &tokens, chrono::Utc::now())
-    };
-    let signed = save_issued_credential(
-        &state.pending_oauth_credentials,
-        core.operator_access(&node_did),
-        state.pending_oauth_credentials.issue(credential.clone()),
+    let provider =
+        gents::xai_grok_oauth::normalize_provider(request.provider.as_deref().unwrap_or_default());
+    let signed = sign_in::run(
+        &app,
+        &state,
+        window.label(),
+        request.node_did.trim(),
+        InferenceAuthMethod::GrokOauth,
+        &provider,
+        request.label.as_deref(),
     )
     .await?;
-
-    notify_config_changed(&app, &core).await;
-
     Ok(GrokLoginResult::redacted(&signed))
 }
 
@@ -2541,22 +2145,11 @@ mod provider_account_tests {
 }
 
 #[tauri::command]
-pub(crate) fn desktop_grok_login_cancel(
+pub(crate) fn desktop_grok_login_cancel<R: Runtime>(
+    window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
 ) -> Result<(), BridgeError> {
-    use std::sync::atomic::Ordering;
-
-    let flag = {
-        let mut bridge = state
-            .bridge
-            .lock()
-            .map_err(|_| BridgeError::untyped("desktop bridge lock poisoned"))?;
-        bridge.grok_login_cancel.take()
-    };
-    if let Some(flag) = flag {
-        flag.store(true, Ordering::SeqCst);
-    }
-    Ok(())
+    sign_in::cancel(&state, window.label(), InferenceAuthMethod::GrokOauth)
 }
 
 #[derive(Debug, Clone, Deserialize, ts_rs::TS)]
@@ -2605,101 +2198,29 @@ pub(crate) struct ClaudeLoginUrl {
 #[tauri::command]
 pub(crate) async fn desktop_claude_login<R: Runtime>(
     app: AppHandle<R>,
+    window: tauri::WebviewWindow<R>,
     request: ClaudeLoginRequest,
     state: State<'_, DesktopAppState>,
 ) -> Result<ClaudeLoginResult, BridgeError> {
-    use gents::claude_oauth::{
-        credential_from_login_tokens, normalize_provider, ClaudeLoginTokens,
-    };
-    use gents_claude_login::{run_loopback_login, LoginOptions};
-
-    sign_in_platform::require_supported(InferenceAuthMethod::ClaudeOauth, cfg!(target_os = "ios"))?;
-    let Some(core) = current_core(&state) else {
-        return Err(BridgeError::untyped("desktop client is not running"));
-    };
-    let node_did = request.node_did.trim().to_string();
-    if node_did.is_empty() {
-        return Err(BridgeError::untyped("node_did is required"));
-    }
-    let label = sign_in_label(request.label.as_deref())?;
-    let provider = normalize_provider(request.provider.as_deref().unwrap_or_default());
-    require_reachable_configuration(core.operator_access(&node_did), &node_did, &provider).await?;
-
-    let server = run_loopback_login(LoginOptions {
-        open_browser: false,
-        ..LoginOptions::default()
-    })
-    .map_err(|error| BridgeError::untyped(format!("starting Claude login server: {error}")))?;
-    let _ = app.emit(
-        crate::contract::CLAUDE_LOGIN_URL_EVENT,
-        ClaudeLoginUrl {
-            url: server.auth_url.clone(),
-        },
-    );
-    if let Err(error) = crate::host_browser::open_url(&server.auth_url) {
-        tracing::warn!(%error, "could not open the Claude sign-in page; the page link stands in");
-    }
-
-    let cancel = server.cancel_handle();
-    {
-        let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
-        bridge.claude_login_cancel = Some(cancel.clone());
-    }
-    let wait = tokio::time::timeout(CODEX_LOGIN_TIMEOUT, server.block_until_done()).await;
-    {
-        let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
-        bridge.claude_login_cancel = None;
-    }
-    let tokens = match wait {
-        Ok(result) => result.map_err(|error| {
-            BridgeError::untyped(format!("Claude browser login failed: {error}"))
-        })?,
-        Err(_elapsed) => {
-            cancel.shutdown();
-            return Err(BridgeError::untyped(
-                "Claude sign-in timed out waiting for the browser",
-            ));
-        }
-    };
-
-    let login_tokens = ClaudeLoginTokens {
-        access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token,
-        expires_in: tokens.expires_in,
-        scope: tokens.scope,
-        account_id: tokens.account_id,
-        organization_uuid: tokens.organization_uuid,
-        account_uuid: tokens.account_uuid,
-    };
-    let credential = OAuthCredential {
-        label,
-        ..credential_from_login_tokens(&node_did, &provider, &login_tokens, chrono::Utc::now())
-    };
-    let signed = save_issued_credential(
-        &state.pending_oauth_credentials,
-        core.operator_access(&node_did),
-        state.pending_oauth_credentials.issue(credential.clone()),
+    let provider =
+        gents::claude_oauth::normalize_provider(request.provider.as_deref().unwrap_or_default());
+    let signed = sign_in::run(
+        &app,
+        &state,
+        window.label(),
+        request.node_did.trim(),
+        InferenceAuthMethod::ClaudeOauth,
+        &provider,
+        request.label.as_deref(),
     )
     .await?;
-
-    notify_config_changed(&app, &core).await;
-
     Ok(ClaudeLoginResult::redacted(&signed))
 }
 
 #[tauri::command]
-pub(crate) fn desktop_claude_login_cancel(
+pub(crate) fn desktop_claude_login_cancel<R: Runtime>(
+    window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
 ) -> Result<(), BridgeError> {
-    let handle = {
-        let mut bridge = state
-            .bridge
-            .lock()
-            .map_err(|_| BridgeError::untyped("desktop bridge lock poisoned"))?;
-        bridge.claude_login_cancel.take()
-    };
-    if let Some(handle) = handle {
-        handle.shutdown();
-    }
-    Ok(())
+    sign_in::cancel(&state, window.label(), InferenceAuthMethod::ClaudeOauth)
 }

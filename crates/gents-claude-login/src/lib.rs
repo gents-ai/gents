@@ -374,6 +374,7 @@ pub(crate) async fn exchange_code(
     };
     let response = reqwest::Client::new()
         .post(&options.token_url)
+        .timeout(std::time::Duration::from_secs(30))
         .header("Content-Type", "application/json")
         .json(&request)
         .send()

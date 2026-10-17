@@ -1,4 +1,3 @@
-
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -214,7 +213,6 @@ pub(crate) async fn process_command(
         })
     }).await
 }
-
 
 #[cfg(test)]
 mod recovery_tests;

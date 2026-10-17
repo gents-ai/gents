@@ -188,11 +188,11 @@ pub async fn poll_device_token(
 
         match error.as_str() {
             "authorization_pending" => {
-                tokio::time::sleep(interval).await;
+                wait_poll_interval(interval, cancel.as_deref()).await?;
             }
             "slow_down" => {
                 interval = (interval + Duration::from_secs(5)).min(Duration::from_secs(30));
-                tokio::time::sleep(interval).await;
+                wait_poll_interval(interval, cancel.as_deref()).await?;
             }
             "access_denied" | "authorization_denied" => {
                 anyhow::bail!("xAI device-code authorization was denied");
@@ -207,6 +207,28 @@ pub async fn poll_device_token(
                 anyhow::bail!("xAI device-code token poll failed ({other}): {body}");
             }
         }
+    }
+}
+
+/// Provider intervals must elapse before another HTTP poll. Observe the public
+/// cancellation flag during that wait without increasing request frequency.
+async fn wait_poll_interval(interval: Duration, cancel: Option<&AtomicBool>) -> Result<()> {
+    let Some(cancel) = cancel else {
+        tokio::time::sleep(interval).await;
+        return Ok(());
+    };
+    let deadline = Instant::now()
+        .checked_add(interval)
+        .context("xAI polling interval exceeds the host clock range")?;
+    loop {
+        if cancel.load(Ordering::SeqCst) {
+            anyhow::bail!("xAI device-code login was cancelled");
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(());
+        }
+        tokio::time::sleep(remaining.min(Duration::from_millis(100))).await;
     }
 }
 
@@ -304,6 +326,20 @@ pub fn credential_from_login_tokens(
 mod tests {
     use super::*;
     use chrono::DateTime;
+
+    #[tokio::test]
+    async fn cancellation_interrupts_a_long_provider_polling_interval() {
+        let cancel = AtomicBool::new(false);
+        let wait = wait_poll_interval(Duration::from_secs(3600), Some(&cancel));
+        tokio::pin!(wait);
+        assert!(futures::poll!(&mut wait).is_pending());
+        cancel.store(true, Ordering::SeqCst);
+        let error = tokio::time::timeout(Duration::from_secs(5), wait)
+            .await
+            .expect("cancellation must not wait for another provider poll")
+            .unwrap_err();
+        assert!(error.to_string().contains("cancelled"));
+    }
 
     #[test]
     fn login_tokens_debug_redacts_tokens() {
