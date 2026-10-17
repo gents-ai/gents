@@ -379,7 +379,7 @@ async fn metrics_handler(State(state): State<RuntimeHttpState>) -> Response {
     };
     let p2p_metrics = load_p2p_metrics_for_scrape(&state).await;
     match render_prometheus_metrics(
-        &state.graphql,
+        &state.p2p_graphql,
         &state.node_did,
         &measured_backend_health,
         Some(&p2p_metrics),
@@ -446,7 +446,7 @@ async fn version_handler() -> impl IntoResponse {
 }
 
 async fn healthz_handler(State(state): State<RuntimeHttpState>) -> Response {
-    match load_metrics_query_data(&state.graphql, &state.node_did).await {
+    match load_metrics_query_data(&state.p2p_graphql, &state.node_did).await {
         Ok(data) => {
             let data = with_local_native_executors(data);
             let health = render_healthz_payload(&state, Some(&data), None);
@@ -813,7 +813,7 @@ async fn fleet_handler(State(state): State<RuntimeHttpState>) -> Response {
 }
 
 async fn fleet_slots_handler(State(state): State<RuntimeHttpState>) -> Response {
-    match load_fleet_slot_snapshot(&state.graphql).await {
+    match load_fleet_slot_snapshot(&state.p2p_graphql).await {
         Ok(snapshot) => (StatusCode::OK, axum::Json(snapshot)).into_response(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
