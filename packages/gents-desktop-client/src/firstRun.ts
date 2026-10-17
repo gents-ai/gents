@@ -17,7 +17,12 @@ export function isLocalNode(
   );
 }
 
-export function inferenceIsConfigured(deployment: NodeView): boolean {
+export function inferenceIsConfigured(
+  deployment: Pick<
+    NodeView,
+    "node" | "agentConfigs" | "inferenceProfiles" | "inferenceBackends"
+  >,
+): boolean {
   const agent = deployment.agentConfigs.find(
     (row) => row.agent_id === deployment.node.defaultAgentId,
   );
@@ -44,7 +49,10 @@ export function backendIsConfigured(backend: InferenceBackendView): boolean {
 }
 
 export function shouldRebindSetupDefault(
-  deployment: NodeView,
+  deployment: Pick<
+    NodeView,
+    "nodeDid" | "node" | "agents" | "inferenceProfiles"
+  >,
   addingExtra: boolean,
 ): boolean {
   if (!addingExtra) return true;

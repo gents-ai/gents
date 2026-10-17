@@ -126,7 +126,9 @@ impl ClientHost {
                             "The configured runtime is no longer available.",
                         )
                     })?;
-                encode(deployment)
+                encode(crate::inference_setup::InferenceSetupState::from(
+                    deployment,
+                ))
             }
             ClientCommand::InferenceModelsDiscover { request } => {
                 self.require_configured_runtime(&request.node_did).await?;

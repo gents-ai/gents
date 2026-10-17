@@ -6,6 +6,7 @@ use gents_desktop_core::local_runtime::DesktopInitSummary;
 use ts_rs::TS;
 
 use crate::error::{BridgeError, BridgeErrorCode};
+use crate::inference_setup::InferenceSetupState;
 use crate::tauri_commands::chat::RequestResendResultView;
 use crate::tauri_commands::inference_setup::{
     BackendUsageView, ClaudeLoginRequest, ClaudeLoginResult, ClaudeLoginUrl, CodexLoginRequest,
@@ -251,6 +252,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         DesktopProbeMcpServiceRequest,
         InferenceProbeRequest,
         InferenceDiscoveryRequest,
+        InferenceSetupState,
         InferenceRecommendationRequest,
         InferenceBackendRecommendationRequest,
         CodexLoginRequest,
