@@ -127,21 +127,24 @@ impl GraphqlPairingStateStore {
         )
     }
 
+    /// A merge that brings in a second row for an existing `peer_id` keeps only
+    /// the smallest docID in the unique index; the other row is reachable by
+    /// scan but not by a `peer_id` filter, so twins are found by scanning the
+    /// collection (one row per paired peer).
     async fn load_applied_rows(&self, peer_id: &str) -> Result<Vec<AppliedStateRow>> {
-        let peer_id = escape_graphql_string(peer_id);
-        let query = format!(
-            r#"{{
-                PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
-                    _docID
-                    collections
-                    replicator_addresses
-                    replicator_filter
-                }}
-            }}"#
-        );
+        let query = r#"{
+            PeerPairingApplied {
+                _docID
+                peer_id
+                collections
+                replicator_addresses
+                replicator_filter
+            }
+        }"#;
         let response =
-            graphql_with_transaction_retry(&self.node, &query, "query PeerPairingApplied").await?;
+            graphql_with_transaction_retry(&self.node, query, "query PeerPairingApplied").await?;
         let mut rows = rows::<AppliedStateRow>(&response, "PeerPairingApplied")?;
+        rows.retain(|row| row.peer_id == peer_id);
         rows.sort_by(|left, right| left.doc_id.cmp(&right.doc_id));
         Ok(rows)
     }
