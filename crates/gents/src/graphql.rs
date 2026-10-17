@@ -326,7 +326,26 @@ pub async fn newest_document_composite_commit(
     doc_id: &str,
     operation: &str,
 ) -> Result<Option<CompositeCommit>> {
-    let query = format!(
+    let query = newest_composite_query(doc_id);
+    let response = graphql_with_transaction_retry(node, &query, operation).await?;
+    let commits = response_composite_commits(&response, "_commits")?;
+    unique_newest_composite_commit(commits, operation)
+}
+
+pub(crate) async fn newest_document_composite_commit_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    doc_id: &str,
+    operation: &str,
+) -> Result<Option<CompositeCommit>> {
+    let response = txn
+        .execute_local_response(&newest_composite_query(doc_id))
+        .await?;
+    let commits = response_composite_commits(&response, "_commits")?;
+    unique_newest_composite_commit(commits, operation)
+}
+
+fn newest_composite_query(doc_id: &str) -> String {
+    format!(
         r#"query {{
             _commits(
                 docID: "{}"
@@ -337,10 +356,7 @@ pub async fn newest_document_composite_commit(
             ) {{ cid height fieldName }}
         }}"#,
         escape_graphql_string(doc_id),
-    );
-    let response = graphql_with_transaction_retry(node, &query, operation).await?;
-    let commits = response_composite_commits(&response, "_commits")?;
-    unique_newest_composite_commit(commits, operation)
+    )
 }
 
 /// Load a document's DefraDB-native composite versions, newest first.

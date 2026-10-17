@@ -622,6 +622,32 @@ Denies the desktop_event_source_save command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-goal-control`
+
+</td>
+<td>
+
+Enables the desktop_goal_control command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-goal-control`
+
+</td>
+<td>
+
+Denies the desktop_goal_control command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-grok-login`
 
 </td>
@@ -2331,6 +2357,32 @@ Enables the desktop_schedule_save command without any pre-configured scope.
 <td>
 
 Denies the desktop_schedule_save command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-session-goal`
+
+</td>
+<td>
+
+Enables the desktop_session_goal command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-session-goal`
+
+</td>
+<td>
+
+Denies the desktop_session_goal command without any pre-configured scope.
 
 </td>
 </tr>

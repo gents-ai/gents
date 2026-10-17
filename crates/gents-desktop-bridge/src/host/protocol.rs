@@ -4,12 +4,13 @@ use ts_rs::TS;
 
 use crate::error::BridgeError;
 use crate::types::{
-    ChatSendRequest, DesktopInterruptRequest, EnrollmentStatusRequest, SessionRenameRequest,
+    ChatSendRequest, DesktopInterruptRequest, EnrollmentStatusRequest, PendingQueueEditRequest,
+    SessionRenameRequest,
 };
 
 /// Change the version for incompatible framing or operation semantics.
 /// Additional commands are negotiated through the initialization inventory.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_PENDING_CALLS: usize = 32;
 
@@ -34,8 +35,16 @@ pub enum ClientCommand {
     SessionSnapshot(SessionSnapshotArgs),
     #[serde(rename = "desktop_session_live_delta")]
     SessionLiveDelta(SessionLiveDeltaArgs),
+    #[serde(rename = "desktop_session_goal")]
+    SessionGoal(SessionGoalArgs),
+    #[serde(rename = "desktop_goal_control")]
+    GoalControl {
+        request: crate::types::GoalControlRequest,
+    },
     #[serde(rename = "desktop_chat_send")]
     Send { request: ChatSendRequest },
+    #[serde(rename = "desktop_pending_queue_edit")]
+    EditPending { request: PendingQueueEditRequest },
     #[serde(rename = "desktop_session_rename")]
     Rename { request: SessionRenameRequest },
     #[serde(rename = "desktop_interrupt_request")]
@@ -48,7 +57,10 @@ impl ClientCommand {
         "desktop_peer_enroll_status",
         "desktop_session_snapshot",
         "desktop_session_live_delta",
+        "desktop_session_goal",
+        "desktop_goal_control",
         "desktop_chat_send",
+        "desktop_pending_queue_edit",
         "desktop_session_rename",
         "desktop_interrupt_request",
     ];
@@ -56,7 +68,10 @@ impl ClientCommand {
     pub fn is_read(&self) -> bool {
         matches!(
             self,
-            Self::Snapshot {} | Self::SessionSnapshot(_) | Self::SessionLiveDelta(_)
+            Self::Snapshot {}
+                | Self::SessionSnapshot(_)
+                | Self::SessionLiveDelta(_)
+                | Self::SessionGoal(_)
         )
     }
 }
@@ -73,6 +88,13 @@ pub struct SessionSnapshotArgs {
     pub timeline_limit: Option<usize>,
     #[ts(optional = nullable)]
     pub timeline_before_item_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionGoalArgs {
+    pub node_did: String,
+    pub session_id: String,
 }
 
 #[derive(Debug, Deserialize, TS)]

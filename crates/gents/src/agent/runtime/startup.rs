@@ -33,7 +33,7 @@ enum BackgroundTaskResult {
     RegistryHeartbeat(Result<()>),
     EndpointHeartbeat(Result<()>),
     SessionHydrationReconcile(Result<()>),
-    SessionInputEditReconcile(Result<()>),
+    SessionCommandReconcile(Result<()>),
     DirectoryProjection(Result<()>),
 }
 
@@ -53,8 +53,8 @@ impl BackgroundTaskResult {
             Self::SessionHydrationReconcile(result) => {
                 result.context("session hydration reconcile task")
             }
-            Self::SessionInputEditReconcile(result) => {
-                result.context("session input edit reconcile task")
+            Self::SessionCommandReconcile(result) => {
+                result.context("session command reconcile task")
             }
             Self::DirectoryProjection(result) => result.context("directory projection task"),
         }
@@ -846,15 +846,15 @@ async fn run_agent_owned(
         )
     });
 
-    let input_edit_node = agent.node.clone();
-    let input_edit_identity = agent.runtime_node_arc().identity.clone();
-    let input_edit_cancel = cancel.child_token();
+    let session_command_node = agent.node.clone();
+    let session_command_identity = agent.runtime_node_arc().identity.clone();
+    let session_command_cancel = cancel.child_token();
     background_tasks.spawn(async move {
-        BackgroundTaskResult::SessionInputEditReconcile(
-            crate::agent::p2p_reconcile::session_input_edit::run_session_input_edit_reconciler(
-                input_edit_node,
-                input_edit_identity,
-                input_edit_cancel,
+        BackgroundTaskResult::SessionCommandReconcile(
+            crate::agent::p2p_reconcile::session_commands::run_session_command_reconciler(
+                session_command_node,
+                session_command_identity,
+                session_command_cancel,
             )
             .await,
         )

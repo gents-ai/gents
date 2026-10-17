@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use gents::agent::p2p_reconcile::session_input_edit::run_session_input_edit_reconciler;
+use gents::agent::p2p_reconcile::session_commands::run_session_command_reconciler;
 use gents::agent::p2p_reconcile::{
     enrollment_authority_channel, resolve_template, resolve_template_filters,
     run_enrollment_reconciler, run_pairing_reconciler, EmbeddedRemoteP2pAdmin, PairingDirection,
@@ -218,7 +218,7 @@ async fn generated_remote_edits_replicate_signed_effect_and_receipt() {
         prepared.push(remote.prepare(case).await);
     }
     let edit_cancel = cancel.child_token();
-    let edit_task = tokio::spawn(run_session_input_edit_reconciler(
+    let edit_task = tokio::spawn(run_session_command_reconciler(
         runtime.node.clone(),
         runtime.node_identity.clone(),
         edit_cancel.clone(),
@@ -244,7 +244,7 @@ async fn generated_remote_edits_replicate_signed_effect_and_receipt() {
         .await
         .unwrap()
         .is_none());
-    let revoked_task = tokio::spawn(run_session_input_edit_reconciler(
+    let revoked_task = tokio::spawn(run_session_command_reconciler(
         runtime.node.clone(),
         runtime.node_identity.clone(),
         cancel.clone(),
@@ -738,7 +738,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
     assert_eq!(db.node_identity.did(), did);
     let cancel = CancellationToken::new();
     let _stop = Stop(cancel.clone());
-    let task = tokio::spawn(run_session_input_edit_reconciler(
+    let task = tokio::spawn(run_session_command_reconciler(
         db.node.clone(),
         db.node_identity.clone(),
         cancel.clone(),
@@ -819,7 +819,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
         .await
         .unwrap();
     write_command(&db, &stale).await;
-    let task = tokio::spawn(run_session_input_edit_reconciler(
+    let task = tokio::spawn(run_session_command_reconciler(
         db.node.clone(),
         db.node_identity.clone(),
         cancel.clone(),
@@ -1027,7 +1027,7 @@ async fn same_physical_edit_replicates_and_replays_once() {
     wait_for_command_documents(&replica, std::slice::from_ref(&runtime_id)).await;
     let cancel = CancellationToken::new();
     let _stop = Stop(cancel.clone());
-    let worker = tokio::spawn(run_session_input_edit_reconciler(
+    let worker = tokio::spawn(run_session_command_reconciler(
         runtime.node.clone(),
         runtime.node_identity.clone(),
         cancel.clone(),
@@ -1105,7 +1105,7 @@ async fn same_physical_edit_replicates_and_replays_once() {
 
     let cancel = CancellationToken::new();
     let _stop = Stop(cancel.clone());
-    let worker = tokio::spawn(run_session_input_edit_reconciler(
+    let worker = tokio::spawn(run_session_command_reconciler(
         runtime.node.clone(),
         runtime.node_identity.clone(),
         cancel.clone(),
@@ -1204,7 +1204,7 @@ async fn conflicting_offline_edits_preserve_queue_and_prior_receipt(
     let prior_receipt = if late_twin {
         let cancel = CancellationToken::new();
         let _stop = Stop(cancel.clone());
-        let worker = tokio::spawn(run_session_input_edit_reconciler(
+        let worker = tokio::spawn(run_session_command_reconciler(
             owner.node.clone(),
             identity.clone(),
             cancel.clone(),
@@ -1289,7 +1289,7 @@ async fn conflicting_offline_edits_preserve_queue_and_prior_receipt(
     .await;
     let cancel = CancellationToken::new();
     let _stop = Stop(cancel.clone());
-    let worker = tokio::spawn(run_session_input_edit_reconciler(
+    let worker = tokio::spawn(run_session_command_reconciler(
         owner.node.clone(),
         identity.clone(),
         cancel.clone(),

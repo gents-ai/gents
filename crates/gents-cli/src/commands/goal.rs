@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use gents::config_client::ConfigAccess;
 use gents::goal::{
-    delete_goals_for_session, load_canonical_goal, set_goal_from_access, GoalDocument,
-    GoalSnapshot, GoalStatus, GOAL_FIELDS,
+    delete_goals_for_session, load_canonical_goal, set_goal_from_access, GoalDocument, GoalStatus,
+    GOAL_FIELDS,
 };
 use gents::graphql::escape_graphql_string;
 
@@ -40,7 +40,7 @@ async fn goal_show_value(
     let goal = load_goal(access, node_did, session_id)
         .await?
         .with_context(|| format!("no durable goal for session {session_id}"))?;
-    let mut value = serde_json::to_value(GoalSnapshot::from_document(&goal, now))?;
+    let mut value = serde_json::to_value(gents::goal::snapshot(&goal, now))?;
     value["auto_resume_at_reset"] = goal.auto_resume_at_reset.unwrap_or(false).into();
     let blocked = gents::blocked_turn::blocked_goal_turn(access, node_did, session_id)
         .await
@@ -80,7 +80,7 @@ async fn goal_set_value(
         args.auto_resume,
     )
     .await?;
-    Ok(serde_json::to_value(GoalSnapshot::from_document(
+    Ok(serde_json::to_value(gents::goal::snapshot(
         &goal,
         Utc::now(),
     ))?)

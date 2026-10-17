@@ -10,7 +10,7 @@ import {
   removeEdit,
   rewriteEdit,
   separatedBySettings,
-} from "../src/ui/screens/pendingQueue";
+} from "@source-inc/gents-desktop-client";
 
 const entry = (id: string, group: string | null = "same"): PendingQueueEntryView => ({
   requestDocId: `doc-${id}`,

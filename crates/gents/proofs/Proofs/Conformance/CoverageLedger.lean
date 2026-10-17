@@ -1433,6 +1433,26 @@ def caseCoverage : List CoverageEntry :=
       "goal::edit::contract_tests::generated_goal_edit_cases_drive_real_transactions")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "goal_client_control_cases"
+      "GoalClientControlCases"
+      "goal::client_control::contract_tests::generated_goal_client_controls_drive_signed_commands")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_client_start_cases"
+      "GoalClientStartCases"
+      "goal::client_control::start_tests::generated_goal_starts_commit_the_session_goal_and_first_request_together")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_client_receipt_cases"
+      "GoalClientReceiptCases"
+      "goal::client_control::receipt_tests::generated_goal_receipt_traces_preserve_results_and_reject_erased_stale_intents")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_observation_cases"
+      "GoalObservationCases"
+      "goal::observation::contract_tests::generated_goal_observations_drive_signature_and_scope_validation")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "goal_objective_whitespace_codepoints"
       "GoalObjectiveWhitespace"
       "goal::edit::contract_tests::generated_goal_objective_whitespace_matches_native_character_classification")

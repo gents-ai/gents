@@ -212,6 +212,7 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "PeerEndpoint",
     "SessionHydrationRequest",
     "AgentSessionInputEdit",
+    "AgentSessionGoalControl",
     "Agent",
     "AgentContext",
     "CompactionConfig",
@@ -231,6 +232,7 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "Trigger",
     "EventSource",
     "NodeReadiness",
+    "GoalObservation",
 ];
 
 pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = &[
@@ -244,6 +246,7 @@ pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = &[
     "PeerEndpoint",
     "SessionHydrationRequest",
     "AgentSessionInputEdit",
+    "AgentSessionGoalControl",
 ];
 
 const CONVERSATION_RULES: &[CollectionRule] = &[
@@ -320,6 +323,7 @@ const MACHINE_COLLECTIONS: &[&str] = &[
     "MailboxItem",
     "SessionHydrationRequest",
     "AgentSessionInputEdit",
+    "AgentSessionGoalControl",
     NODE_DIRECTORY_COLLECTION,
 ];
 
@@ -366,6 +370,11 @@ const MACHINE_RULES: &[CollectionRule] = &[
     },
     CollectionRule {
         collection: "AgentSessionInputEdit",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentSessionGoalControl",
         field: "requester_did",
         source: DidSource::PeerDid,
     },

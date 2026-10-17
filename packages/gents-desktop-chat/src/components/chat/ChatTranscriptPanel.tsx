@@ -15,6 +15,7 @@ export type ChatTranscriptPanelProps = {
   onRetryMessage?: (requestId: string) => void | Promise<void>;
   retryUnavailableHint?: string | null;
   onLoadOlder?: () => Promise<boolean>;
+  showGoal?: boolean;
 };
 
 export const TRANSCRIPT_PAGE_SIZE = 40;
@@ -34,6 +35,7 @@ function timelineChangeSignal(items: RenderedTimelineItem[]) {
             item.reasoning?.length ?? 0,
           ];
         case "userMessage":
+        case "automatedInput":
           return [item.kind, item.itemKey, item.content?.length ?? 0];
         case "pendingUserTurn":
           return [
@@ -70,6 +72,7 @@ export function ChatTranscriptPanel({
   onRetryMessage,
   retryUnavailableHint,
   onLoadOlder,
+  showGoal = true,
 }: ChatTranscriptPanelProps) {
   const transcriptPanelRef = useRef<HTMLElement | null>(null);
   const [autoFollowTranscript, setAutoFollowTranscript] = useState(true);
@@ -344,6 +347,8 @@ export function ChatTranscriptPanel({
       className="panel transcript-panel"
       data-scroll-owner="transcript"
       data-testid="transcript-panel"
+      aria-label="Conversation"
+      tabIndex={0}
       onScroll={handleTranscriptScroll}
       onWheel={(event) => {
         if (event.deltaY < 0 && event.currentTarget.scrollTop <= 160)
@@ -374,7 +379,7 @@ export function ChatTranscriptPanel({
     >
       {selectedSessionId && (session || timelineItems.length > 0) ? (
         <div className="message-list">
-          {session?.goal ? (
+          {showGoal && session?.goal ? (
             <article className="message-card" data-testid="durable-goal-card">
               <div className="message-role">
                 durable goal · {session.goal.status ?? "unknown"}
@@ -398,6 +403,14 @@ export function ChatTranscriptPanel({
               data-testid="transcript-older-status"
             >
               {loadingOlder ? "Loading older messages…" : null}
+              <button
+                className="transcript-load-older"
+                type="button"
+                disabled={loadingOlder}
+                onClick={() => void loadOlderItems()}
+              >
+                Load older messages
+              </button>
             </div>
           ) : null}
           <MessageList
