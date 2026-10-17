@@ -33,7 +33,7 @@ enum BackgroundTaskResult {
     RegistryHeartbeat(Result<()>),
     EndpointHeartbeat(Result<()>),
     SessionHydrationReconcile(Result<()>),
-    SessionInputEditReconcile(Result<()>),
+    SessionCommandReconcile(Result<()>),
     DirectoryProjection(Result<()>),
 }
 
@@ -53,8 +53,8 @@ impl BackgroundTaskResult {
             Self::SessionHydrationReconcile(result) => {
                 result.context("session hydration reconcile task")
             }
-            Self::SessionInputEditReconcile(result) => {
-                result.context("session input edit reconcile task")
+            Self::SessionCommandReconcile(result) => {
+                result.context("session command reconcile task")
             }
             Self::DirectoryProjection(result) => result.context("directory projection task"),
         }
@@ -408,6 +408,18 @@ async fn run_agent_owned(
     .with_plugins(agent.plugins().clone());
     backend_registry::probe_and_promote_enabled_backends(&agent.node).await;
 
+    // Subscribe before reading startup configuration so racing commits remain pending.
+    let control_subscription = match agent
+        .document_runtime_context()
+        .map(|_| super::control_watcher::subscribe_control_changes(&agent.node))
+        .transpose()
+    {
+        Ok(subscription) => subscription,
+        Err(error) => {
+            runtime_status.publish_error(&format!("{error:#}")).await;
+            return Err(error);
+        }
+    };
     let resolved_snapshot = match resolve_startup_snapshot(&agent).await {
         Ok(snapshot) => snapshot,
         Err(error) => {
@@ -419,12 +431,6 @@ async fn run_agent_owned(
         runtime_status.publish_error(&format!("{error:#}")).await;
         return Err(error);
     }
-    // Subscribe before the MCP health checker can persist a transition that
-    // makes a required service runnable.
-    let control_subscription = agent
-        .document_runtime_context()
-        .is_some()
-        .then(|| agent.node.subscribe_document_changes());
     log_recovery(
         &agent.node,
         agent.node_did(),
@@ -846,15 +852,15 @@ async fn run_agent_owned(
         )
     });
 
-    let input_edit_node = agent.node.clone();
-    let input_edit_identity = agent.runtime_node_arc().identity.clone();
-    let input_edit_cancel = cancel.child_token();
+    let session_command_node = agent.node.clone();
+    let session_command_identity = agent.runtime_node_arc().identity.clone();
+    let session_command_cancel = cancel.child_token();
     background_tasks.spawn(async move {
-        BackgroundTaskResult::SessionInputEditReconcile(
-            crate::agent::p2p_reconcile::session_input_edit::run_session_input_edit_reconciler(
-                input_edit_node,
-                input_edit_identity,
-                input_edit_cancel,
+        BackgroundTaskResult::SessionCommandReconcile(
+            crate::agent::p2p_reconcile::session_commands::run_session_command_reconciler(
+                session_command_node,
+                session_command_identity,
+                session_command_cancel,
             )
             .await,
         )

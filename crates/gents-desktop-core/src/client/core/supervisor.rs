@@ -105,6 +105,7 @@ pub(super) fn spawn_p2p_supervisor_task(
                 };
             run_pending_removal_cleanup(&sync_state, &route_manager, &mut removal_retries).await;
             run_saved_peer_repair_cycle(
+                node.event_bus().as_ref(),
                 &p2p,
                 &sync_state,
                 &remote_admin_actor,
@@ -213,6 +214,7 @@ fn removal_retry_delay(failures: u32) -> Duration {
 }
 
 async fn run_saved_peer_repair_cycle(
+    bus: &dyn events::Bus,
     p2p: &Arc<dyn P2POps>,
     sync_state: &ClientSyncStateOwner,
     remote_admin_actor: &Arc<PrincipalIdentity>,
@@ -273,6 +275,7 @@ async fn run_saved_peer_repair_cycle(
             .any(|candidate| candidate.peer_id == record.peer_id);
         if needs_repair {
             let updated = repair_saved_peer(
+                bus,
                 p2p,
                 &record,
                 current_status,
@@ -477,6 +480,7 @@ pub(super) async fn saved_peer_needs_repair(
 }
 
 pub(super) async fn repair_saved_peer(
+    bus: &dyn events::Bus,
     p2p: &Arc<dyn P2POps>,
     record: &PeerRecord,
     current_status: Option<ClientPeerStatus>,
@@ -525,9 +529,9 @@ pub(super) async fn repair_saved_peer(
         }
 
         let connect_result = if force_repair {
-            force_connect_peer_with_retry(p2p, &record.addr, &record.label).await
+            force_connect_peer_with_retry(bus, p2p, &record.addr, &record.label).await
         } else {
-            connect_peer_with_retry(p2p, &record.addr, &record.label).await
+            connect_peer_with_retry(bus, p2p, &record.addr, &record.label).await
         };
 
         match connect_result {

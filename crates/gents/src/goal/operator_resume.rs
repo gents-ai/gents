@@ -119,21 +119,7 @@ async fn resume_context_in_txn(
     let goal = load_canonical_goal_in_txn(txn, node_did, session_id)
         .await?
         .context("no canonical goal exists for this owner and session")?;
-    let escaped_did = escape_graphql_string(node_did);
-    let escaped_session = escape_graphql_string(session_id);
-    let response = txn
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{
-        node_did: {{ _eq: "{escaped_did}" }}, session_id: {{ _eq: "{escaped_session}" }}
-    }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {SIGNED_REQUEST_FIELDS} }} }}"#
-        ))
-        .await?;
-    let requests: Vec<AgentRequestRow> = serde_json::from_value(
-        response
-            .pointer("/data/AgentRequest")
-            .cloned()
-            .context("request query omitted rows")?,
-    )?;
+    let requests = super::request_head::load_session_requests(txn, node_did, session_id).await?;
     let parents: Vec<_> = requests
         .iter()
         .filter(|row| row.request_id == from_request_id)
@@ -314,8 +300,6 @@ async fn stage_resume_inner(
         resume_context_in_txn(txn, node_did, session_id, from_request_id).await?;
     let parent = crate::watcher::AgentRequest::try_from(parent_row.clone())?;
     let agent = parent.agent_id.clone();
-    let escaped_did = escape_graphql_string(node_did);
-
     if let Some(receipt) =
         existing_resume_receipt_in_txn(txn, &goal, &parent_row, from_request_id).await?
     {
@@ -419,30 +403,7 @@ async fn stage_resume_inner(
         .await?;
     }
 
-    let doc_id = escape_graphql_string(&goal.doc_id);
-    let expected_status = escape_graphql_string(&goal.status);
-    let expected_sequence = goal.continuation_sequence();
-    let from = escape_graphql_string(from_request_id);
-    let timestamp = escape_graphql_string(&now.to_rfc3339());
-    let active_time = goal.current_active_time_seconds(now);
-    let response = txn.execute(&format!(r#"mutation {{ update_Goal(filter: {{
-        _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{escaped_did}" }},
-        status: {{ _eq: "{expected_status}" }}, continuation_sequence: {{ _eq: {expected_sequence} }}
-    }}, input: {{
-        status: "{status}", continuation_sequence: {sequence}, last_continued_from_request_id: "{from}",
-        consecutive_blocked_audits: {audits}, wrapup_requested: {wrapup_requested}, wrapup_completed: {wrapup_completed},
-        last_blocked_request_id: null, last_blocked_reason: null, last_failure: null,
-        infrastructure_retry_count: 0, completion_evidence: null,
-        active_time_seconds: {active_time}, active_started_at: "{timestamp}", updated_at: "{timestamp}"
-    }}) {{ _docID }} }}"#,
-        status = post.status.as_str(), audits = post.blocked_audits,
-        wrapup_requested = post.wrapup_requested, wrapup_completed = post.wrapup_completed)).await?;
-    anyhow::ensure!(
-        response
-            .pointer("/data/update_Goal")
-            .is_some_and(mutation_returned_rows),
-        "goal changed while staging resume"
-    );
+    stage_resume_state(txn, &goal, post, Some((sequence, from_request_id)), now).await?;
     let response = txn
         .execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
         .await?;
@@ -463,6 +424,68 @@ async fn stage_resume_inner(
         doc_id,
         created: true,
     })
+}
+
+async fn stage_resume_state(
+    txn: &ConfigApplyTxn<'_>,
+    goal: &GoalDocument,
+    post: GoalState,
+    continuation: Option<(i64, &str)>,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let doc_id = escape_graphql_string(&goal.doc_id);
+    let expected_status = escape_graphql_string(&goal.status);
+    let expected_sequence = goal.continuation_sequence();
+    let continuation = continuation
+        .map(|(sequence, from)| {
+            format!(
+                "continuation_sequence: {sequence}, last_continued_from_request_id: \"{}\",",
+                escape_graphql_string(from),
+            )
+        })
+        .unwrap_or_default();
+    let escaped_did = escape_graphql_string(&goal.node_did);
+    let timestamp = escape_graphql_string(&now.to_rfc3339());
+    let active_time = goal.current_active_time_seconds(now);
+    let response = txn.execute(&format!(r#"mutation {{ update_Goal(filter: {{
+        _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{escaped_did}" }},
+        status: {{ _eq: "{expected_status}" }}, continuation_sequence: {{ _eq: {expected_sequence} }}
+    }}, input: {{
+        status: "{status}", {continuation}
+        consecutive_blocked_audits: {audits}, wrapup_requested: {wrapup_requested}, wrapup_completed: {wrapup_completed},
+        last_blocked_request_id: null, last_blocked_reason: null, last_failure: null,
+        infrastructure_retry_count: 0, completion_evidence: null,
+        active_time_seconds: {active_time}, active_started_at: "{timestamp}", updated_at: "{timestamp}"
+    }}) {{ _docID }} }}"#,
+        status = post.status.as_str(), audits = post.blocked_audits,
+        wrapup_requested = post.wrapup_requested, wrapup_completed = post.wrapup_completed)).await?;
+    anyhow::ensure!(
+        response
+            .pointer("/data/update_Goal")
+            .is_some_and(mutation_returned_rows),
+        "goal changed while staging resume"
+    );
+    Ok(())
+}
+
+pub(super) async fn stage_busy_resume(
+    txn: &ConfigApplyTxn<'_>,
+    identity: &dyn NodeIdentity,
+    goal: &GoalDocument,
+) -> Result<()> {
+    anyhow::ensure!(
+        identity.did() == goal.node_did,
+        "goal resume requires its node signing identity"
+    );
+    let state = goal.state().context("goal has an unknown status")?;
+    anyhow::ensure!(
+        state.status == GoalStatus::Paused,
+        "only a paused goal can resume current work"
+    );
+    let post = state
+        .step(GoalAction::Resume)
+        .context("goal status does not allow resume")?;
+    stage_resume_state(txn, goal, post, None, Utc::now()).await
 }
 
 #[cfg(test)]

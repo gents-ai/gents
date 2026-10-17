@@ -967,7 +967,7 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         retry_keys[1].rsplit_once(':').unwrap().0,
         "unrelated transcript writes must not advance the queue-local generation"
     );
-    let mut watcher = DefraWatcher::new(node.clone(), &did);
+    let mut watcher = DefraWatcher::new(node.clone(), &did).expect("request watcher");
     let second_request = watcher.next_request().await.unwrap().unwrap();
     assert_ne!(second_request.request_id, first_id);
     let mut second_lifecycle = crate::RequestLifecycle::new_with_execution_binding(

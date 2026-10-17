@@ -224,6 +224,8 @@ async fn run_detached_client_start<R: Runtime>(
     progress_tx: watch::Sender<ClientStartProgress>,
 ) {
     let state = app.state::<DesktopAppState>();
+    #[cfg(any(unix, windows))]
+    let mut client_listener = None;
     // Own the lifecycle before opening the peer directory and embedded node,
     // not only while installing the result. Managed-runtime restart refreshes
     // its ephemeral P2P endpoint under this same lock. Without covering the
@@ -235,6 +237,24 @@ async fn run_detached_client_start<R: Runtime>(
             .await
         {
             Ok(lifecycle) => {
+                #[cfg(any(unix, windows))]
+                {
+                    match reserve_client_listener(&state.policy).await {
+                        Ok((startup, listener)) => {
+                            client_listener = listener;
+                            let result = start_client_core_async(
+                                paths,
+                                state.policy.store_key_custody,
+                                lifecycle,
+                            )
+                            .await;
+                            drop(startup);
+                            result
+                        }
+                        Err(error) => Err((error, None)),
+                    }
+                }
+                #[cfg(not(any(unix, windows)))]
                 start_client_core_async(paths, state.policy.store_key_custody, lifecycle).await
             }
             Err(error) => Err((error, None)),
@@ -251,12 +271,24 @@ async fn run_detached_client_start<R: Runtime>(
     match start_result {
         Ok((core, _lifecycle_guard)) => {
             let core = Arc::new(core);
+            #[cfg(any(unix, windows))]
+            let mut client_host = client_listener.map(|listener| {
+                crate::host::ClientHostService::with_accounts(
+                    core.clone(),
+                    listener,
+                    state.pending_oauth_credentials.clone(),
+                )
+            });
             let orphan = {
                 let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
                 let orphan = if bridge.core.is_none() {
                     let updates_task = spawn_client_update_task(app.clone(), Arc::clone(&core));
                     bridge.install_core(Arc::clone(&core));
                     bridge.updates_task = Some(updates_task);
+                    #[cfg(any(unix, windows))]
+                    {
+                        bridge.client_host = client_host.take();
+                    }
                     None
                 } else {
                     // Drop our open node so the store is not held by an
@@ -268,6 +300,12 @@ async fn run_detached_client_start<R: Runtime>(
             };
 
             if let Some(orphan_core) = orphan {
+                #[cfg(any(unix, windows))]
+                if let Some(host) = client_host {
+                    if let Err(error) = host.shutdown().await {
+                        tracing::warn!(%error, "closing orphan client attachments failed");
+                    }
+                }
                 tracing::warn!(
                     "desktop client start: core already installed after open; shutting down orphan"
                 );
@@ -300,6 +338,58 @@ async fn run_detached_client_start<R: Runtime>(
             let _ = progress_tx.send(ClientStartProgress::Failed(error));
         }
     }
+}
+
+#[cfg(any(unix, windows))]
+async fn reserve_client_listener(
+    policy: &crate::config::ResolvedBridgePolicy,
+) -> Result<
+    (
+        Option<gents::file_lock::FileLock>,
+        Option<crate::host::local::LocalListener>,
+    ),
+    BridgeError,
+> {
+    use crate::host::local::{startup_lock, LocalListener};
+
+    if !policy.client_host {
+        return Ok((None, None));
+    }
+    let startup = match tokio::time::timeout(
+        CLIENT_LIFECYCLE_WAIT,
+        startup_lock(&policy.desktop_paths),
+    )
+    .await
+    {
+        Ok(Ok(startup)) => startup,
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "local client attachments are unavailable");
+            return Ok((None, None));
+        }
+        Err(_) => {
+            return Err(BridgeError::new(
+                BridgeErrorCode::ClientStartFailed,
+                "another frontend is starting the client installation; try again shortly",
+            ))
+        }
+    };
+    let listener = match LocalListener::bind(&policy.desktop_paths).await {
+        Ok(listener) => Some(listener),
+        Err(error)
+            if matches!(
+                error.downcast_ref::<std::fs::TryLockError>(),
+                Some(std::fs::TryLockError::WouldBlock)
+            ) =>
+        {
+            return Err(BridgeError::new(BridgeErrorCode::ClientStartFailed,
+                "the client installation is already in use; close its editor attachments before starting the desktop"));
+        }
+        Err(error) => {
+            tracing::warn!(%error, "local client attachments are unavailable");
+            None
+        }
+    };
+    Ok((Some(startup), listener))
 }
 
 async fn wait_for_client_start_progress(
@@ -400,37 +490,53 @@ pub(super) async fn exclude_client(
             drop(lifecycle_guard);
             continue;
         }
+        #[cfg(any(unix, windows))]
+        let client_host;
         let (core, updates_task) = {
             let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
+            #[cfg(any(unix, windows))]
+            {
+                client_host = bridge.client_host.take();
+            }
             (bridge.core.take(), bridge.updates_task.take())
         };
         if let Some(task) = updates_task {
             task.abort();
         }
-        if let Some(core) = core {
-            return shutdown_excluded_core(core, lifecycle_guard, |core| async move {
-                core.shutdown()
+        return shutdown_excluded_client(lifecycle_guard, async move {
+            #[cfg(any(unix, windows))]
+            let attachments_result = match client_host {
+                Some(host) => host
+                    .shutdown()
                     .await
-                    .map_err(|error| BridgeError::untyped(error.to_string()))
-            })
-            .await;
-        }
-        return Ok(lifecycle_guard);
+                    .map_err(|error| BridgeError::untyped(error.to_string())),
+                None => Ok(()),
+            };
+            let core_result = match core {
+                Some(core) => core
+                    .shutdown()
+                    .await
+                    .map_err(|error| BridgeError::untyped(error.to_string())),
+                None => Ok(()),
+            };
+            #[cfg(any(unix, windows))]
+            attachments_result?;
+            core_result
+        })
+        .await;
     }
 }
 
-async fn shutdown_excluded_core<F, Fut>(
-    core: Arc<ClientCore>,
+async fn shutdown_excluded_client<Fut>(
     lifecycle_guard: ClientLifecycleGuard,
-    shutdown: F,
+    shutdown: Fut,
 ) -> Result<ClientLifecycleGuard, BridgeError>
 where
-    F: FnOnce(Arc<ClientCore>) -> Fut + Send + 'static,
     Fut: std::future::Future<Output = Result<(), BridgeError>> + Send + 'static,
 {
     let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
-        let result = shutdown(core).await;
+        let result = shutdown.await;
         let _ = finished_tx.send((lifecycle_guard, result));
     });
     let (lifecycle_guard, result) = finished_rx
@@ -675,6 +781,10 @@ pub async fn desktop_observer_metrics(
     }))
 }
 
+#[cfg(all(test, unix))]
+#[path = "lifecycle/host_tests.rs"]
+mod host_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -853,7 +963,7 @@ mod tests {
         let access_released_signal = Arc::clone(&access_released);
         let owner_return_allowed = Arc::clone(&allow_owner_return);
         let waiter = tokio::spawn(async move {
-            shutdown_excluded_core(core, lifecycle_guard, move |core| async move {
+            shutdown_excluded_client(lifecycle_guard, async move {
                 shutdown_started.notify_one();
                 shutdown_allowed.notified().await;
                 core.shutdown()

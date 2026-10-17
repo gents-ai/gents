@@ -127,7 +127,7 @@ fn load_operator_node_identity(record: &crate::client::PeerRecord) -> Result<()>
     Ok(())
 }
 
-fn hosted_runtime_home(record: &crate::client::PeerRecord) -> Result<&Path> {
+pub fn hosted_runtime_home(record: &crate::client::PeerRecord) -> Result<&Path> {
     let endpoint = record
         .operator_graphql()
         .context("runtime record is not a runtime this desktop hosts")?;

@@ -4,8 +4,8 @@ use serde_json::json;
 use crate::goal::{
     create_goal_for_session, edit_active_goal, load_canonical_goal, next_blocked_audit,
     refresh_goal_usage, update_goal_fields_if_status, CreateGoalForSessionError, GoalAction,
-    GoalEdit, GoalSnapshot, GoalStatus, BLOCKED_AUDIT_THRESHOLD, CREATE_GOAL_TOOL_NAME,
-    GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME,
+    GoalEdit, GoalStatus, BLOCKED_AUDIT_THRESHOLD, CREATE_GOAL_TOOL_NAME, GET_GOAL_TOOL_NAME,
+    UPDATE_GOAL_TOOL_NAME,
 };
 use crate::graphql::escape_graphql_string;
 use crate::llm::ToolCallHookAction;
@@ -60,7 +60,7 @@ impl DefraSessionHook {
             Ok(outcome) => json!({
                 "accepted": true,
                 "disposition": outcome.disposition(),
-                "goal": GoalSnapshot::from_document(outcome.goal(), Utc::now()),
+                "goal": crate::goal::snapshot(outcome.goal(), Utc::now()),
             }),
             Err(
                 error @ (CreateGoalForSessionError::InvalidObjective
@@ -118,7 +118,7 @@ impl DefraSessionHook {
                 .await?
                 .unwrap_or(goal);
             crate::tool_output::render(
-                &GoalSnapshot::from_document(&goal, Utc::now()),
+                &crate::goal::snapshot(&goal, Utc::now()),
                 &[
                     "objective",
                     "status",
@@ -196,7 +196,7 @@ impl DefraSessionHook {
                 } else if let Err(error) = fields.validate() {
                     json!({"accepted": false, "error": error.to_string()})
                 } else if let Some(updated) = edit_active_goal(&self.node, &goal, &fields).await? {
-                    json!({"accepted": true, "goal": GoalSnapshot::from_document(&updated, Utc::now())})
+                    json!({"accepted": true, "goal": crate::goal::snapshot(&updated, Utc::now())})
                 } else {
                     json!({"accepted": false, "error": "goal is no longer active or its continuation changed; reload with get_goal"})
                 }

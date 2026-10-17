@@ -19,7 +19,7 @@ use gents_desktop_core::client::{
 };
 use gents_desktop_core::remote_admin::PairingErrorClass;
 
-use super::state::ResolvedBridgePolicy;
+use super::config::ResolvedBridgePolicy;
 use super::types::{
     normalize_optional, DesktopBootstrapSummary, DesktopClientSnapshot, InitConfigStatus,
     P2PHealthView, PairingCollectionStatusView, SavedPeerView, SessionHydrationView,

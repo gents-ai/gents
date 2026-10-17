@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,7 +9,10 @@ use tokio::time::timeout;
 
 use crate::defra_node::EmbeddedNode;
 
-use super::templates::{to_replication_filters, PairingFilters};
+use super::templates::{
+    filter_conditions, live_filter_string_eq, to_replication_filters, FilterPredicate,
+    PairingFilters,
+};
 use super::{
     resolve_embedded_collection_id, resolve_embedded_collection_name, RemoteP2pAdmin,
     RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
@@ -61,6 +65,132 @@ impl EmbeddedRemoteP2pAdmin {
             Ok(Err(error)) => Err(map_p2p_error(operation, error)),
             Err(_) => Err(RemoteP2pAdminError::RpcTimeout),
         }
+    }
+
+    /// For each of `doc_ids`, whether replicator `peer_id` acknowledged the
+    /// heads this node currently holds for it.
+    pub async fn documents_acknowledged(
+        &self,
+        peer_id: &str,
+        collection: &str,
+        doc_ids: &[String],
+    ) -> RemoteP2pAdminResult<Vec<bool>> {
+        let p2p = self.p2p()?;
+        self.run(
+            "replication_acknowledged",
+            p2p.replication_acknowledged(peer_id, collection, doc_ids),
+        )
+        .await
+    }
+
+    /// The `(doc_id, requester_did)` documents of `collection` whose current
+    /// heads every replicator carrying them acknowledged: those scoped to the
+    /// requester and those carrying the whole collection. A document no
+    /// replicator carries acknowledges nothing.
+    pub async fn requester_acknowledged(
+        &self,
+        collection: &str,
+        documents: &[(String, String)],
+    ) -> RemoteP2pAdminResult<BTreeSet<String>> {
+        let collection_id = self
+            .resolve_collection_id(collection)
+            .await?
+            .ok_or_else(|| {
+                RemoteP2pAdminError::LocalError(format!(
+                    "collection {collection} is not registered"
+                ))
+            })?;
+        let mut peers_by_requester: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut collection_peers = BTreeSet::new();
+        for replicator in self.list_replicators().await? {
+            let (Some(peer_id), Some(filters)) = (replicator.id, replicator.filters) else {
+                continue;
+            };
+            match filters.get(&collection_id) {
+                None if replicator.collections.contains(&collection_id) => {
+                    collection_peers.insert(peer_id);
+                }
+                None => {}
+                Some(filter) => {
+                    if let Some(requester) = live_filter_string_eq(filter, "requester_did") {
+                        peers_by_requester
+                            .entry(requester.to_string())
+                            .or_default()
+                            .insert(peer_id);
+                    }
+                }
+            }
+        }
+
+        let mut doc_ids_by_peer: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+        let mut routed = BTreeSet::new();
+        for (doc_id, requester) in documents {
+            for peer_id in peers_by_requester
+                .get(requester)
+                .into_iter()
+                .flatten()
+                .chain(&collection_peers)
+            {
+                doc_ids_by_peer
+                    .entry(peer_id)
+                    .or_default()
+                    .push(doc_id.clone());
+                routed.insert(doc_id.clone());
+            }
+        }
+        for (peer_id, doc_ids) in doc_ids_by_peer {
+            let acknowledged = self
+                .documents_acknowledged(peer_id, collection, &doc_ids)
+                .await?;
+            for (doc_id, acknowledged) in doc_ids.iter().zip(acknowledged) {
+                if !acknowledged {
+                    routed.remove(doc_id);
+                }
+            }
+        }
+        Ok(routed)
+    }
+
+    async fn selected_document_ids(
+        &self,
+        collection: &str,
+        filter: Option<&FilterPredicate>,
+    ) -> RemoteP2pAdminResult<Vec<String>> {
+        crate::graphql::validate_collection_identifier(collection)
+            .map_err(|error| RemoteP2pAdminError::LocalError(error.to_string()))?;
+        let filter = match filter {
+            None => serde_json::Value::Null,
+            Some(filter) => {
+                serde_json::Value::Object(filter_conditions(filter).ok_or_else(|| {
+                    RemoteP2pAdminError::LocalError(format!(
+                        "{collection} replicator filter has no document predicate"
+                    ))
+                })?)
+            }
+        };
+        let query = format!(
+            "query($filter: {collection}FilterArg) {{ {collection}(filter: $filter) {{ _docID }} }}"
+        );
+        let variables = serde_json::json!({ "filter": filter });
+        let response = crate::config_client::ConfigAccess::transact_local_readonly(
+            &self.node,
+            None,
+            "p2p_reconcile.replicated_document_ids",
+            move |txn| {
+                let query = query.clone();
+                let variables = variables.clone();
+                Box::pin(async move { txn.execute_with_variables(&query, &variables).await })
+            },
+        )
+        .await
+        .map_err(|error| RemoteP2pAdminError::LocalError(format!("{error:#}")))?;
+        Ok(response
+            .pointer(&format!("/data/{collection}"))
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|row| row.get("_docID")?.as_str().map(str::to_string))
+            .collect())
     }
 }
 
@@ -229,6 +359,24 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
             p2p.sync_branchable_collection(collection_id),
         )
         .await
+    }
+
+    async fn replication_acknowledged(
+        &self,
+        peer_id: &str,
+        collection: &str,
+        filter: Option<&FilterPredicate>,
+    ) -> RemoteP2pAdminResult<Option<bool>> {
+        let doc_ids = self.selected_document_ids(collection, filter).await?;
+        if doc_ids.is_empty() {
+            return Ok(Some(true));
+        }
+        let acknowledged = self
+            .documents_acknowledged(peer_id, collection, &doc_ids)
+            .await?;
+        Ok(Some(
+            acknowledged.into_iter().all(|acknowledged| acknowledged),
+        ))
     }
 }
 
@@ -1732,5 +1880,113 @@ mod tests {
         );
         sender.shutdown().await;
         receiver.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn applied_pairing_load_finds_the_twin_a_merge_left_out_of_the_unique_index() {
+        use crate::agent::p2p_reconcile::{GraphqlPairingStateStore, PairingStateStore};
+
+        for clear in [false, true] {
+            let identity_temp = tempfile::tempdir().expect("identity tempdir");
+            let identity: Arc<dyn NodeIdentity> = Arc::new(
+                KeyIdentity::load_or_create(identity_temp.path().join("node.key"), None)
+                    .expect("identity"),
+            );
+            let sender_test = runtime_test_node().await;
+            let receiver_test = runtime_test_node().await;
+            let sender = Arc::clone(&sender_test.node);
+            let receiver = Arc::clone(&receiver_test.node);
+            let sender_admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&sender));
+            let receiver_admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&receiver));
+            let sender_addresses = wait_for_peer_info(&sender_admin).await;
+            let receiver_addresses = wait_for_peer_info(&receiver_admin).await;
+            for (node, address) in [(&sender, "a"), (&receiver, "b")] {
+                exec(
+                node,
+                &format!(
+                    r#"mutation {{ create_PeerPairingApplied(input: {{ peer_id: "peer-x", replicator_addresses: ["{address}"] }}) {{ _docID }} }}"#
+                ),
+                "seed applied pairing",
+            )
+            .await;
+            }
+            let mut conflicts = receiver.subscribe(&[events::EventName::UniqueIndexConflict]);
+            let collections = vec!["PeerPairingApplied".to_string()];
+            sender_admin.connect(&receiver_addresses).await.unwrap();
+            wait_for_active_peer(&sender_admin).await;
+            receiver_admin
+                .add_replicator(&sender_addresses, &collections, &PairingFilters::default())
+                .await
+                .unwrap();
+            sender_admin
+                .add_replicator(
+                    &receiver_addresses,
+                    &collections,
+                    &PairingFilters::default(),
+                )
+                .await
+                .unwrap();
+            let message = tokio::time::timeout(Duration::from_secs(30), conflicts.recv())
+                .await
+                .expect("unique-index conflict")
+                .unwrap();
+            let conflict = message.as_unique_index_conflict().unwrap().clone();
+
+            let store =
+                GraphqlPairingStateStore::for_explicit_desired(Arc::clone(&receiver), identity);
+            let mut loaded = store.load_applied("peer-x").await.unwrap();
+            assert_eq!(
+                loaded.duplicate_doc_ids,
+                vec![conflict.unindexed_doc_id.clone()]
+            );
+            exec(
+            &receiver,
+            r#"mutation { create_PeerPairingApplied(input: { peer_id: "peer-y", replicator_addresses: ["other"] }) { _docID } }"#,
+            "seed another applied peer",
+        ).await;
+            let peers = BTreeSet::from([
+                "peer-x".to_owned(),
+                "peer-y".to_owned(),
+                "missing".to_owned(),
+            ]);
+            let batch = store.load_applied_many(&peers).await.unwrap();
+            assert_eq!(batch.len(), 2);
+            assert_eq!(batch["peer-x"], loaded);
+            assert!(batch["peer-y"].duplicate_doc_ids.is_empty());
+            assert_eq!(
+                batch["peer-y"].state.replicator_addresses,
+                BTreeSet::from(["other".to_owned()])
+            );
+            exec(
+            &receiver,
+            r#"mutation { delete_PeerPairingApplied(filter: { peer_id: { _eq: "peer-y" } }) { _docID } }"#,
+            "remove other applied peer",
+        ).await;
+            if clear {
+                loaded.state = Default::default();
+            }
+            store.persist_applied("peer-x", &loaded).await.unwrap();
+            let fresh = store.load_applied_many(&peers).await.unwrap();
+            assert_eq!(fresh.len(), usize::from(!clear));
+            if !clear {
+                assert!(fresh["peer-x"].duplicate_doc_ids.is_empty());
+            }
+            let remaining = receiver
+                .execute(r#"{ PeerPairingApplied { _docID } }"#)
+                .await
+                .data
+                .unwrap();
+            assert_eq!(
+                remaining["PeerPairingApplied"],
+                if clear {
+                    serde_json::json!([])
+                } else {
+                    serde_json::json!([{ "_docID": conflict.winner_doc_id }])
+                }
+            );
+
+            sender.shutdown().await;
+            receiver.shutdown().await;
+        }
     }
 }

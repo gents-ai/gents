@@ -99,7 +99,7 @@ const PROPOSAL_TIMEOUT: Duration = Duration::from_secs(5);
 
 async fn run_test_control_watcher(
     node: Arc<defra_node::EmbeddedNode>,
-    subscription: events::DocumentChangeSubscription,
+    subscription: ControlSubscription,
     node_did: String,
     resolve_context: DocumentResolveContext,
     proposals_tx: mpsc::Sender<ResolvedRuntimeSnapshot>,
@@ -204,7 +204,7 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     let subscriber = Registry::default().with(reloads).with(phases);
 
     // DefraDB subscriptions are live-only.
-    let subscription = node.subscribe_document_changes();
+    let subscription = subscribe_control_changes(&node).unwrap();
     let context = serde_json::json!({
         "node_did": agent.node_did(),
         "context_id": format!("{}:context", agent.default_agent_id()),
@@ -346,7 +346,7 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
         .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
-    let subscription = node.subscribe_document_changes();
+    let subscription = subscribe_control_changes(&node).unwrap();
     let watcher_task = tokio::spawn(run_control_watcher_with_timing(
         node.clone(),
         subscription,
@@ -438,7 +438,7 @@ async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
     let watcher_task = tokio::spawn(
         run_test_control_watcher(
             node.clone(),
-            node.subscribe_document_changes(),
+            subscribe_control_changes(&node).unwrap(),
             agent.node_did().to_string(),
             resolve_context,
             proposal_tx,
@@ -562,7 +562,7 @@ async fn control_watcher_recovers_after_resolve_error() {
     let watcher_task = tokio::spawn(
         run_test_control_watcher(
             node.clone(),
-            node.subscribe_document_changes(),
+            subscribe_control_changes(&node).unwrap(),
             agent.node_did().to_string(),
             resolve_context,
             proposal_tx,
@@ -635,7 +635,7 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
 
     let watcher_task = tokio::spawn(run_test_control_watcher(
         node.clone(),
-        node.subscribe_document_changes(),
+        subscribe_control_changes(&node).unwrap(),
         agent.node_did().to_string(),
         resolve_context,
         proposal_tx,
@@ -746,7 +746,7 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
 
-    let subscription = node.subscribe_document_changes();
+    let subscription = subscribe_control_changes(&node).unwrap();
     let spare_agent_id = format!("{selected_agent_id}:spare");
     let spare_profile_id = format!("{spare_agent_id}:inference");
     write_documents(
@@ -919,7 +919,7 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
     let (proposal_tx, mut proposal_rx) = mpsc::channel(8);
     let watcher_task = tokio::spawn(run_test_control_watcher(
         node.clone(),
-        node.subscribe_document_changes(),
+        subscribe_control_changes(&node).unwrap(),
         node_did.clone(),
         resolve_context,
         proposal_tx,

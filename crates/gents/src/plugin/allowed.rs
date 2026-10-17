@@ -23,6 +23,21 @@ fn file(home: &Path) -> PathBuf {
     home.join(crate::home::ALLOWED_DIRS_FILE_NAME)
 }
 
+fn lock_file(home: &Path) -> PathBuf {
+    home.join(crate::home::ALLOWED_DIRS_LOCK_FILE_NAME)
+}
+
+fn lock(home: &Path) -> Result<crate::file_lock::FileLock> {
+    std::fs::create_dir_all(home).context("creating the allowed-folders home")?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(lock_file(home))
+        .context("opening the allowed-folders lock")?;
+    crate::file_lock::FileLock::exclusive(file).context("locking allowed folders")
+}
 pub fn list(home: &Path) -> Result<Vec<AllowedDir>> {
     let path = file(home);
     let bytes = match std::fs::read(&path) {
@@ -48,6 +63,16 @@ fn save(home: &Path, dirs: Vec<AllowedDir>) -> Result<()> {
 }
 
 pub fn add(home: &Path, path: &Path, access: BindAccess) -> Result<AllowedDir> {
+    put(home, path, access, false)
+}
+
+/// An approval may widen a grant, but never downgrade a concurrent grant.
+/// All allowed-folder mutations share the same native exclusive lock.
+pub(super) fn grant_at_least(home: &Path, path: &Path, access: BindAccess) -> Result<AllowedDir> {
+    put(home, path, access, true)
+}
+
+fn put(home: &Path, path: &Path, access: BindAccess, preserve_wider: bool) -> Result<AllowedDir> {
     let path = path
         .canonicalize()
         .with_context(|| format!("{} does not exist or cannot be read", path.display()))?;
@@ -57,8 +82,16 @@ pub fn add(home: &Path, path: &Path, access: BindAccess) -> Result<AllowedDir> {
         path.display()
     );
     ensure_scope_path(&path, user_home().as_deref(), home)?;
-    let entry = AllowedDir { path, access };
+    let _lock = lock(home)?;
     let mut dirs = list(home)?;
+    let access = if preserve_wider {
+        dirs.iter()
+            .filter(|entry| entry.path == path)
+            .fold(access, |held, entry| held.max(entry.access))
+    } else {
+        access
+    };
+    let entry = AllowedDir { path, access };
     dirs.retain(|existing| existing.path != entry.path);
     dirs.push(entry.clone());
     save(home, dirs)?;
@@ -67,6 +100,7 @@ pub fn add(home: &Path, path: &Path, access: BindAccess) -> Result<AllowedDir> {
 
 pub fn remove(home: &Path, path: &Path) -> Result<bool> {
     let canonical = path.canonicalize().ok();
+    let _lock = lock(home)?;
     let mut dirs = list(home)?;
     let before = dirs.len();
     dirs.retain(|entry| entry.path != path && Some(&entry.path) != canonical.as_ref());
@@ -230,6 +264,8 @@ pub fn protect(home: &Path) {
     let home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
     let paths = [
         file(&home),
+        lock_file(&home),
+        super::approval::lock_file(&home),
         home.join(crate::home::PLUGIN_APPROVALS_DIR_NAME),
     ];
     if let Ok(mut protected) = PROTECTED.lock() {

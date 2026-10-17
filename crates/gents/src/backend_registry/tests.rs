@@ -559,12 +559,16 @@ async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catal
     older.observed_at = "2026-09-09T09:00:00Z".into();
     older.models.clear();
     record_model_catalog(&node, &backend, older).await?;
+    let mut rediscovered = catalog.clone();
+    rediscovered.observed_at = "2026-09-09T11:00:00Z".into();
+    record_model_catalog(&node, &backend, rediscovered).await?;
     assert_eq!(
         lookup_backend_observation(&node, &backend.node_did, &backend.backend_id)
             .await?
             .unwrap()
             .catalogs,
-        vec![catalog.clone()]
+        vec![catalog.clone()],
+        "older and unchanged discoveries must not rewrite the catalog"
     );
     let mut changed = backend.clone();
     changed.endpoint = "http://127.0.0.1:9000/v1".into();

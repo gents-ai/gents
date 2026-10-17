@@ -20,7 +20,45 @@ fn transient_graphql_read_retry_delay(retry: usize) -> Duration {
     Duration::from_millis(50 * retry.max(1) as u64)
 }
 
-const TERMINAL_POLL_INTERVAL: Duration = Duration::from_millis(200);
+/// Collections whose changes can produce novel projected session events.
+const PROJECTED_COLLECTIONS: [&str; 11] = [
+    "AgentRequest",
+    "AgentSession",
+    "AgentToolCall",
+    "AgentMessage",
+    "AgentOutputSegment",
+    "InferenceCall",
+    "CompactionEntry",
+    "ProviderContextReduction",
+    "Goal",
+    "GraphRun",
+    "Trigger",
+];
+
+/// Graph-run and goal panels read through owners whose rows lie outside
+/// [`PROJECTED_COLLECTIONS`]; this bounds how stale they can become.
+const PROJECTION_FALLBACK: Duration = Duration::from_secs(2);
+
+fn subscribe_projected_changes(node: &EmbeddedNode) -> Option<events::DocumentChangeSubscription> {
+    gents::subscribe_collections(node, PROJECTED_COLLECTIONS)
+        .inspect_err(|error| {
+            tracing::warn!(%error, "Grok shim projection polls without a change feed");
+        })
+        .ok()
+}
+
+/// Wait for a projected change, at most [`PROJECTION_FALLBACK`]. A closed
+/// feed degrades to fallback polling.
+async fn wait_for_projected_change(changes: &mut Option<events::DocumentChangeSubscription>) {
+    match changes.as_mut() {
+        Some(subscription) => {
+            if let Ok(None) = tokio::time::timeout(PROJECTION_FALLBACK, subscription.recv()).await {
+                *changes = None;
+            }
+        }
+        None => tokio::time::sleep(PROJECTION_FALLBACK).await,
+    }
+}
 
 pub(super) const SCREEN_MODES: [&str; 3] = ["fullscreen", "inline", "minimal"];
 
@@ -490,16 +528,20 @@ impl TurnManager {
         let session_id = session_id.to_owned();
         let manager = Arc::downgrade(self);
         let observed_session = session_id.clone();
+        let mut changes = subscribe_projected_changes(&self.node);
         observers.insert(
             session_id,
             tokio::spawn(async move {
+                let mut first_pass = true;
                 let mut after = String::new();
                 let mut delivery_after = String::new();
                 let mut goal_cursor = super::goals::GoalCursor::default();
                 let mut graph_cursor = super::graph_runs::GraphRunCursor::default();
                 let mut goal_refresh_at = tokio::time::Instant::now();
                 loop {
-                    tokio::time::sleep(TERMINAL_POLL_INTERVAL).await;
+                    if !std::mem::take(&mut first_pass) {
+                        wait_for_projected_change(&mut changes).await;
+                    }
                     let Some(manager) = manager.upgrade() else {
                         break;
                     };
@@ -1472,6 +1514,7 @@ impl TurnManager {
             ..
         } = progress;
         let mut consecutive_transient_read_failures = 0usize;
+        let mut changes = subscribe_projected_changes(&self.node);
         loop {
             if let Ok(result) = response_rx.try_recv() {
                 let value = result?;
@@ -1581,7 +1624,7 @@ impl TurnManager {
                 return Ok(outcome);
             }
             tokio::select! {
-                _ = tokio::time::sleep(TERMINAL_POLL_INTERVAL) => {}
+                () = wait_for_projected_change(&mut changes) => {}
                 result = &mut response_rx => {
                     if let Ok(result) = result {
                         let value = result?;
@@ -2046,7 +2089,7 @@ async fn wait_for_retry_or_cancel(
 }
 
 fn register_transient_read_retry(error: &anyhow::Error, consecutive: &mut usize) -> bool {
-    if !gents_protocol::graphql::graphql_error_is_retryable(error)
+    if !gents_protocol::graphql::graphql_transport_error_in_chain(error)
         || *consecutive >= MAX_TRANSIENT_GRAPHQL_READ_RETRIES
     {
         return false;
@@ -2411,10 +2454,23 @@ mod tests {
         assert!(text.contains("\"type\":\"image\""));
     }
 
-    #[test]
-    fn transient_read_retry_budget_is_consecutive_and_bounded() {
-        let transient = anyhow::anyhow!("database is locked");
+    #[tokio::test]
+    async fn transient_read_retry_budget_is_consecutive_and_bounded() {
+        let transient = anyhow::Error::new(
+            reqwest::Client::new()
+                .post("http://127.0.0.1:1/api/v0/graphql")
+                .send()
+                .await
+                .expect_err("nothing listens on port 1"),
+        )
+        .context("reading request terminal state");
         let fatal = anyhow::anyhow!("invalid query");
+        // DefraDB's HTTP handler already retried auto-commit read conflicts.
+        let mut fresh = 0;
+        assert!(!register_transient_read_retry(
+            &anyhow::anyhow!("transaction conflict. please retry"),
+            &mut fresh
+        ));
         let mut consecutive = 0;
         for expected in 1..=MAX_TRANSIENT_GRAPHQL_READ_RETRIES {
             assert!(register_transient_read_retry(&transient, &mut consecutive));
@@ -3849,6 +3905,18 @@ mod tests {
         assert!(!updates
             .iter()
             .any(|row| row.to_string().contains("MUST NOT LEAK")));
+    }
+
+    #[tokio::test]
+    async fn a_projected_write_wakes_observation_before_the_fallback() {
+        let (_tempdir, node, node_did) = test_node().await;
+        let mut changes = subscribe_projected_changes(&node);
+        assert!(changes.is_some(), "every projected collection is installed");
+        let started = tokio::time::Instant::now();
+        seed_runtime_wake(&node, &node_did, "wake").await;
+        wait_for_projected_change(&mut changes).await;
+        assert!(changes.is_some());
+        assert!(started.elapsed() < PROJECTION_FALLBACK);
     }
 
     #[tokio::test]

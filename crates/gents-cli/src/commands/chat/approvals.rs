@@ -87,7 +87,7 @@ mod tests {
         let mine = Request::new("team/ocr", &resolved, BindAccess::Read, Some("s1".into()));
         let other = Request::new("team/ocr", &resolved, BindAccess::Read, Some("s2".into()));
         for request in [&mine, &other] {
-            let dir = home.path().join(gents::home::PLUGIN_APPROVALS_DIR_NAME);
+            let dir = approval::queue_dir(home.path());
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(
                 dir.join(format!("{}.json", request.id)),

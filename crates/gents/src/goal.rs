@@ -7,7 +7,10 @@ use serde::{Deserialize, Serialize};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 
 mod claimed_publication;
+mod client_control;
+mod client_submission;
 mod edit;
+mod observation;
 mod operator_resume;
 mod readiness_gate;
 mod request_head;
@@ -15,7 +18,11 @@ mod reset_resume;
 pub(crate) use claimed_publication::{
     publish_claimed_continuation, stop_claimed_continuation_for_unavailable_agent,
 };
+pub(crate) use client_control::{prepare_goal_control, stage_goal_control};
+pub use client_submission::submit_session_goal_control;
 pub(crate) use edit::{edit_active_goal, GoalEdit};
+pub use observation::load_session_goal_observation;
+pub(crate) use observation::{reconcile_goal_observations, SOURCES as GOAL_OBSERVATION_SOURCES};
 pub use operator_resume::{
     resume_goal_on_account, resume_goal_request, GoalResumeOnReceipt, GoalResumeReceipt,
 };
@@ -611,48 +618,27 @@ impl GoalDocument {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct GoalSnapshot {
-    pub goal_id: String,
-    pub session_id: String,
-    pub node_did: String,
-    pub objective: String,
-    pub status: String,
-    pub token_budget: Option<i64>,
-    pub tokens_used: i64,
-    pub active_time_seconds: i64,
-    pub consecutive_blocked_audits: i64,
-    pub continuation_sequence: i64,
-    pub wrapup_requested: bool,
-    pub wrapup_completed: bool,
-    pub last_blocked_reason: Option<String>,
-    pub last_failure: Option<String>,
-    pub completion_evidence: Option<String>,
-    pub created_at: Option<String>,
-    pub updated_at: Option<String>,
-}
+pub use gents_protocol::goal::GoalSnapshot;
 
-impl GoalSnapshot {
-    pub fn from_document(goal: &GoalDocument, now: DateTime<Utc>) -> Self {
-        Self {
-            goal_id: goal.goal_id.clone(),
-            session_id: goal.session_id.clone(),
-            node_did: goal.node_did.clone(),
-            objective: goal.objective.clone(),
-            status: goal.status.clone(),
-            token_budget: goal.token_budget,
-            tokens_used: goal.tokens_used.unwrap_or_default().max(0),
-            active_time_seconds: goal.current_active_time_seconds(now),
-            consecutive_blocked_audits: goal.consecutive_blocked_audits.unwrap_or_default().max(0),
-            continuation_sequence: goal.continuation_sequence(),
-            wrapup_requested: goal.wrapup_requested.unwrap_or(false),
-            wrapup_completed: goal.wrapup_completed.unwrap_or(false),
-            last_blocked_reason: goal.last_blocked_reason.clone(),
-            last_failure: goal.last_failure.clone(),
-            completion_evidence: goal.completion_evidence.clone(),
-            created_at: goal.created_at.clone(),
-            updated_at: goal.updated_at.clone(),
-        }
+pub fn snapshot(goal: &GoalDocument, now: DateTime<Utc>) -> GoalSnapshot {
+    GoalSnapshot {
+        goal_id: goal.goal_id.clone(),
+        session_id: goal.session_id.clone(),
+        node_did: goal.node_did.clone(),
+        objective: goal.objective.clone(),
+        status: goal.status.clone(),
+        token_budget: goal.token_budget,
+        tokens_used: goal.tokens_used.unwrap_or_default().max(0),
+        active_time_seconds: goal.current_active_time_seconds(now),
+        consecutive_blocked_audits: goal.consecutive_blocked_audits.unwrap_or_default().max(0),
+        continuation_sequence: goal.continuation_sequence(),
+        wrapup_requested: goal.wrapup_requested.unwrap_or(false),
+        wrapup_completed: goal.wrapup_completed.unwrap_or(false),
+        last_blocked_reason: goal.last_blocked_reason.clone(),
+        last_failure: goal.last_failure.clone(),
+        completion_evidence: goal.completion_evidence.clone(),
+        created_at: goal.created_at.clone(),
+        updated_at: goal.updated_at.clone(),
     }
 }
 
@@ -800,13 +786,34 @@ pub(crate) async fn load_goal_creation_claim_fingerprint(
     node_did: &str,
     session_id: &str,
 ) -> Result<Option<GoalCreationFingerprint>> {
+    let query = goal_creation_claim_query(node_did, session_id);
+    let response = graphql_with_transaction_retry(node, &query, "load goal creation claim").await?;
+    goal_creation_claim_fingerprint(&response)
+}
+
+pub(crate) async fn load_goal_creation_claim_fingerprint_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+) -> Result<Option<GoalCreationFingerprint>> {
+    let response = txn
+        .execute_local_response(&goal_creation_claim_query(node_did, session_id))
+        .await?;
+    goal_creation_claim_fingerprint(&response)
+}
+
+fn goal_creation_claim_query(node_did: &str, session_id: &str) -> String {
     let key = escape_graphql_string(&deterministic_goal_creation_key(node_did, session_id));
-    let query = format!(
+    format!(
         r#"{{ GoalCreationClaim(filter: {{ creation_key: {{ _eq: "{key}" }} }}, limit: 2) {{
             node_did session_id objective token_budget
         }} }}"#
-    );
-    let response = graphql_with_transaction_retry(node, &query, "load goal creation claim").await?;
+    )
+}
+
+fn goal_creation_claim_fingerprint(
+    response: &defra_node::QueryResponse,
+) -> Result<Option<GoalCreationFingerprint>> {
     #[derive(Deserialize)]
     struct ClaimRow {
         node_did: String,
@@ -814,7 +821,7 @@ pub(crate) async fn load_goal_creation_claim_fingerprint(
         objective: String,
         token_budget: Option<i64>,
     }
-    let claims: Vec<ClaimRow> = rows(&response, "GoalCreationClaim")?;
+    let claims: Vec<ClaimRow> = rows(response, "GoalCreationClaim")?;
     anyhow::ensure!(
         claims.len() <= 1,
         "goal creation key resolved to multiple claims"

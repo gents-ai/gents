@@ -1,0 +1,402 @@
+use anyhow::{ensure, Result};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use crate::{
+    enrollment::canonical_domain_payload, goal::GoalSnapshot, request_admission::AgentRequestCreate,
+};
+
+pub const SESSION_GOAL_CONTROL_VERSION: u8 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct GoalRevision {
+    pub document: String,
+    pub composite: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct ObservedGoal {
+    pub revision: GoalRevision,
+    pub snapshot: GoalSnapshot,
+}
+
+/// A runtime-signed read projection. The Goal document remains authoritative;
+/// session writers cannot forge goal state by changing this observation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct SessionGoalObservation {
+    pub version: u8,
+    pub node_did: String,
+    pub session_id: String,
+    pub session_doc_id: String,
+    pub requester_did: Option<String>,
+    pub observed_at: String,
+    pub goal: Option<ObservedGoal>,
+    pub signature: Vec<u8>,
+}
+
+impl SessionGoalObservation {
+    pub fn signing_payload(&self) -> Result<Vec<u8>> {
+        let mut unsigned = self.clone();
+        unsigned.signature.clear();
+        signed_payload("gents-session-goal-observation-v1", &unsigned)
+    }
+
+    pub fn validate_scope(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        session_doc_id: &str,
+        requester_did: Option<&str>,
+    ) -> Result<()> {
+        ensure!(
+            self.version == SESSION_GOAL_CONTROL_VERSION,
+            "unsupported goal observation version"
+        );
+        ensure!(
+            self.node_did == node_did
+                && self.session_id == session_id
+                && self.session_doc_id == session_doc_id
+                && self.requester_did.as_deref() == requester_did,
+            "goal observation scope differs from its session"
+        );
+        chrono::DateTime::parse_from_rfc3339(&self.observed_at)?;
+        ensure!(
+            self.signature.len() == 64,
+            "invalid goal observation signature length"
+        );
+        if let Some(goal) = &self.goal {
+            ensure!(
+                goal.snapshot.node_did == node_did && goal.snapshot.session_id == session_id,
+                "observed goal belongs to another session"
+            );
+            ensure!(
+                !goal.revision.document.is_empty() && !goal.revision.composite.is_empty(),
+                "observed goal has no document revision"
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub enum GoalOperation {
+    Create {
+        objective: String,
+        token_budget: Option<i64>,
+    },
+    Edit {
+        objective: Option<String>,
+        token_budget: Option<i64>,
+    },
+    Pause {},
+    Resume {},
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionGoalControl {
+    pub version: u8,
+    pub command_id: String,
+    pub requester_did: String,
+    pub requester_peer_id: Option<String>,
+    pub node_did: String,
+    pub session_id: String,
+    pub session_doc_id: Option<String>,
+    pub issued_at: String,
+    pub expires_at: String,
+    pub expected: Option<GoalRevision>,
+    pub operation: GoalOperation,
+    /// Creation carries the author's signed first request. The existing goal
+    /// submission owner commits it with the Goal and creation claim.
+    pub initial_request: Option<Box<AgentRequestCreate>>,
+    pub signature: Vec<u8>,
+}
+
+impl SessionGoalControl {
+    pub fn signing_payload(&self) -> Result<Vec<u8>> {
+        let mut unsigned = self.clone();
+        unsigned.signature.clear();
+        signed_payload("gents-session-goal-control-v1", &unsigned)
+    }
+
+    pub fn computed_digest(&self) -> Result<String> {
+        let payload = signed_payload("gents-session-goal-control-digest-v1", self)?;
+        Ok(format!("sha256:{:x}", Sha256::digest(payload)))
+    }
+
+    pub fn validate_shape(&self) -> Result<()> {
+        ensure!(
+            self.version == SESSION_GOAL_CONTROL_VERSION,
+            "unsupported goal control version"
+        );
+        for value in [
+            &self.command_id,
+            &self.requester_did,
+            &self.node_did,
+            &self.session_id,
+        ] {
+            ensure!(!value.trim().is_empty(), "empty goal control identity");
+        }
+        ensure!(
+            self.requester_peer_id
+                .as_ref()
+                .is_none_or(|peer| !peer.trim().is_empty()),
+            "empty goal control peer identity"
+        );
+        let issued = chrono::DateTime::parse_from_rfc3339(&self.issued_at)?;
+        let expires = chrono::DateTime::parse_from_rfc3339(&self.expires_at)?;
+        ensure!(expires > issued, "goal control expiry must follow issuance");
+        ensure!(
+            self.signature.len() == 64,
+            "invalid goal control signature length"
+        );
+        ensure!(
+            matches!(self.operation, GoalOperation::Create { .. })
+                == self.initial_request.is_some(),
+            "goal creation requires its signed first request"
+        );
+        ensure!(
+            self.session_doc_id
+                .as_ref()
+                .is_none_or(|id| !id.trim().is_empty()),
+            "empty goal control session document"
+        );
+        match &self.operation {
+            GoalOperation::Create { .. } => {
+                ensure!(
+                    self.expected.is_none(),
+                    "goal creation has an existing revision"
+                );
+            }
+            _ => {
+                ensure!(
+                    self.session_doc_id.is_some(),
+                    "goal control lacks its session document"
+                );
+                let revision = self
+                    .expected
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("goal control lacks its observed revision"))?;
+                ensure!(
+                    !revision.document.trim().is_empty() && !revision.composite.trim().is_empty(),
+                    "empty goal control revision"
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub enum GoalControlOutcome {
+    Applied {
+        goal_id: String,
+        request_id: Option<String>,
+    },
+    Rejected {
+        reason: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct SessionGoalControlReceipt {
+    pub version: u8,
+    pub command_id: String,
+    pub command_digest: String,
+    pub requester_did: String,
+    pub node_did: String,
+    pub session_id: String,
+    pub outcome: GoalControlOutcome,
+    pub processed_at: String,
+    pub signature: Vec<u8>,
+}
+
+impl SessionGoalControlReceipt {
+    pub fn signing_payload(&self) -> Result<Vec<u8>> {
+        let mut unsigned = self.clone();
+        unsigned.signature.clear();
+        signed_payload("gents-session-goal-control-receipt-v1", &unsigned)
+    }
+
+    pub fn validate_for(&self, command: &SessionGoalControl) -> Result<()> {
+        ensure!(
+            self.version == SESSION_GOAL_CONTROL_VERSION,
+            "unsupported goal control receipt version"
+        );
+        ensure!(
+            self.command_id == command.command_id
+                && self.command_digest == command.computed_digest()?
+                && self.requester_did == command.requester_did
+                && self.node_did == command.node_did
+                && self.session_id == command.session_id,
+            "goal control receipt differs from its command"
+        );
+        chrono::DateTime::parse_from_rfc3339(&self.processed_at)?;
+        ensure!(
+            self.signature.len() == 64,
+            "invalid goal control receipt signature length"
+        );
+        if let GoalControlOutcome::Applied {
+            goal_id,
+            request_id,
+        } = &self.outcome
+        {
+            ensure!(
+                !goal_id.trim().is_empty(),
+                "goal control receipt has no goal identity"
+            );
+            ensure!(
+                request_id.as_ref().is_none_or(|id| !id.trim().is_empty()),
+                "empty resumed request identity"
+            );
+            ensure!(
+                request_id.is_none()
+                    || matches!(
+                        command.operation,
+                        GoalOperation::Create { .. } | GoalOperation::Resume {}
+                    ),
+                "goal control receipt publishes an unexpected request"
+            );
+            if let Some(initial) = command.initial_request.as_deref() {
+                ensure!(
+                    request_id.as_deref() == Some(initial.request_id.as_str()),
+                    "goal control receipt names another initial request"
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+fn signed_payload(domain: &str, value: &impl Serialize) -> Result<Vec<u8>> {
+    let json = serde_json::to_string(value)?;
+    Ok(canonical_domain_payload(domain, [json.as_str()]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{json, Value};
+
+    fn command() -> SessionGoalControl {
+        SessionGoalControl {
+            version: SESSION_GOAL_CONTROL_VERSION,
+            command_id: "command".into(),
+            requester_did: "requester".into(),
+            requester_peer_id: Some("peer".into()),
+            node_did: "node".into(),
+            session_id: "session".into(),
+            session_doc_id: Some("session-document".into()),
+            issued_at: "2026-10-17T00:00:00Z".into(),
+            expires_at: "2026-10-17T00:01:00Z".into(),
+            expected: Some(GoalRevision {
+                document: "goal".into(),
+                composite: "commit".into(),
+            }),
+            operation: GoalOperation::Pause {},
+            initial_request: None,
+            signature: vec![0; 64],
+        }
+    }
+
+    #[test]
+    fn control_signatures_cover_the_full_scope_and_observed_revision() {
+        let command = command();
+        command.validate_shape().unwrap();
+        let payload = command.signing_payload().unwrap();
+        let original = serde_json::to_value(&command).unwrap();
+        for field in [
+            "command_id",
+            "requester_did",
+            "requester_peer_id",
+            "node_did",
+            "session_id",
+            "session_doc_id",
+            "issued_at",
+            "expires_at",
+        ] {
+            let mut changed = original.clone();
+            changed[field] = json!(format!("{}-changed", original[field].as_str().unwrap()));
+            let changed: SessionGoalControl = serde_json::from_value(changed).unwrap();
+            assert_ne!(changed.signing_payload().unwrap(), payload, "{field}");
+        }
+        for field in ["document", "composite"] {
+            let mut changed = original.clone();
+            changed["expected"][field] = json!("changed");
+            let changed: SessionGoalControl = serde_json::from_value(changed).unwrap();
+            assert_ne!(changed.signing_payload().unwrap(), payload, "{field}");
+        }
+        let mut changed = command.clone();
+        changed.operation = GoalOperation::Resume {};
+        assert_ne!(changed.signing_payload().unwrap(), payload);
+        changed = command.clone();
+        changed.signature[0] = 1;
+        assert_eq!(changed.signing_payload().unwrap(), payload);
+        assert_ne!(
+            changed.computed_digest().unwrap(),
+            command.computed_digest().unwrap()
+        );
+    }
+
+    #[test]
+    fn unknown_fields_cannot_extend_signed_commands() {
+        let original = serde_json::to_value(command()).unwrap();
+        let mut changed = original.clone();
+        changed["override"] = json!(true);
+        assert!(serde_json::from_value::<SessionGoalControl>(changed).is_err());
+        let mut changed = original;
+        changed["operation"]["request_id"] = json!("foreign-request");
+        assert!(serde_json::from_value::<SessionGoalControl>(changed).is_err());
+    }
+
+    #[test]
+    fn observation_scope_and_signature_domain_are_distinct_from_commands() {
+        let observation = SessionGoalObservation {
+            version: SESSION_GOAL_CONTROL_VERSION,
+            node_did: "node".into(),
+            session_id: "session".into(),
+            session_doc_id: "session-document".into(),
+            requester_did: Some("requester".into()),
+            observed_at: "2026-10-17T00:00:00Z".into(),
+            goal: None,
+            signature: vec![0; 64],
+        };
+        observation
+            .validate_scope("node", "session", "session-document", Some("requester"))
+            .unwrap();
+        assert!(observation
+            .validate_scope("node", "session", "recreated-session", Some("requester"))
+            .is_err());
+        for (node, session, requester) in [
+            ("foreign-node", "session", Some("requester")),
+            ("node", "foreign-session", Some("requester")),
+            ("node", "session", Some("foreign-requester")),
+            ("node", "session", None),
+        ] {
+            assert!(observation
+                .validate_scope(node, session, "session-document", requester)
+                .is_err());
+        }
+        assert_ne!(
+            observation.signing_payload().unwrap(),
+            command().signing_payload().unwrap()
+        );
+        let mut encoded: Value = serde_json::to_value(observation).unwrap();
+        encoded["override"] = json!(true);
+        assert!(serde_json::from_value::<SessionGoalObservation>(encoded).is_err());
+    }
+}

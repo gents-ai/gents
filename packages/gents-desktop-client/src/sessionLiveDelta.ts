@@ -1,8 +1,5 @@
-import {
-  isTerminalTurnState,
-  type DesktopSessionSnapshot,
-  type SessionLiveDeltaView,
-} from "@source-inc/gents-desktop-client";
+import { isTerminalTurnState } from "./turnState.js";
+import type { DesktopSessionSnapshot, SessionLiveDeltaView } from "./types.js";
 
 const utf8 = new TextEncoder();
 
@@ -22,7 +19,9 @@ export function sessionLiveDeltaRequest(
   const revision = session.projectionRevision;
   if (!revision || !session.liveCursor || session.latestRequestId !== requestId)
     return null;
-  const live = session.timelineItems.find((item) => item.kind === "liveAssistant");
+  const live = session.timelineItems.find(
+    (item) => item.kind === "liveAssistant",
+  );
   const content = live?.content ?? "";
   const reasoning = live?.reasoning ?? "";
   return {

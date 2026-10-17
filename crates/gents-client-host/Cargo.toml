@@ -1,0 +1,40 @@
+[package]
+name = "gents-client-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Headless native host for Gents clients"
+
+[features]
+runtime-e2e = []
+editor-e2e = ["runtime-e2e"]
+
+[[test]]
+name = "runtime"
+required-features = ["runtime-e2e"]
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+gents-desktop-core.workspace = true
+gents-desktop-bridge = { path = "../gents-desktop-bridge", default-features = false }
+tokio.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
+tracing.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_System_Threading"] }
+
+[dev-dependencies]
+axum = "0.8"
+bytes.workspace = true
+futures = "0.3"
+futures-util = "0.3"
+gents = { path = "../gents" }
+gents-protocol.workspace = true
+tempfile = "3"
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"

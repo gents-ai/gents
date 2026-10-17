@@ -369,10 +369,20 @@ jobs:
             -p gents-desktop-core \
             -p gents-desktop \
             -p gents-desktop-bridge \
+            -p gents-client-host \
+            -p gents-media-host \
             -p fixture-domain-plugin \
             -p gents-fixture-host
           cargo test --no-fail-fast -p gents-desktop-tauri --lib
           cargo test -p gents-desktop-bridge --lib --features notify/macos_kqueue approvals_watch::tests::
+
+      - name: Run native client runtime journey
+        if: matrix.suite == 'desktop'
+        env:
+          RUST_MIN_STACK: 16777216
+        run: |
+          cargo build --profile test -p gents-cli -p gents-client-host -p gents-media-host --bins
+          cargo test -p gents-client-host --features runtime-e2e --test runtime
 
       - name: Run full CLI test suite
         if: matrix.suite == 'cli' && github.event_name != 'pull_request'

@@ -1,4 +1,4 @@
-use gents::agent::p2p_reconcile::session_input_edit::run_session_input_edit_reconciler;
+use gents::agent::p2p_reconcile::session_commands::run_session_command_reconciler;
 use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
 use gents::lifecycle::{
@@ -85,7 +85,7 @@ async fn submit_edit(
         crate::support::create_session_document(&db.node, &session).await;
     }
     let cancel = tokio_util::sync::CancellationToken::new();
-    let worker = tokio::spawn(run_session_input_edit_reconciler(
+    let worker = tokio::spawn(run_session_command_reconciler(
         db.node.clone(),
         db.node_identity.clone(),
         cancel.clone(),

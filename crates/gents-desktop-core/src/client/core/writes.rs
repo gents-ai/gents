@@ -154,6 +154,30 @@ pub struct RefreshedRequestProjection {
     pub published_version: Option<u64>,
 }
 
+/// A committed submission is acknowledged independently of replica refresh.
+/// Returning a read error here would invite a second durable submission.
+async fn observe_submitted_request(
+    store: &ObservedStore,
+    receipt: SubmittedRequest,
+    refresh: impl std::future::Future<Output = Result<u64>>,
+) -> SubmittedRequest {
+    store.set_focused_request_id(Some(receipt.request_id.clone()));
+    if let Err(error) = refresh.await {
+        store.request_resync(Some(&receipt.node_did));
+        tracing::warn!(
+            node_did = %receipt.node_did,
+            session_id = %receipt.session_id,
+            request_id = %receipt.request_id,
+            error = %error,
+            "submitted request awaits local projection refresh"
+        );
+    }
+    receipt
+}
+
+/// A validated applied receipt is the command result. The local projection is
+/// a separate replica observation; if it is unavailable, the selected-session
+/// refresh and normal observer path reconcile it without inviting replay.
 async fn merge_accepted_edit_projection(
     access: &ConfigAccess,
     store: &ObservedStore,
@@ -204,23 +228,32 @@ async fn merge_accepted_edit_projection(
     receipt
 }
 
+fn find_request_in_scope(
+    rows: &[AgentRequestRow],
+    request_id: &str,
+    node_did: Option<&str>,
+) -> Result<Option<AgentRequestRow>> {
+    let mut matches = rows.iter().filter(|row| {
+        row.request_id == request_id
+            && node_did.is_none_or(|did| row.node_did.as_deref() == Some(did))
+    });
+    let Some(row) = matches.next() else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        matches.next().is_none(),
+        "request {request_id} is ambiguous across node scopes"
+    );
+    Ok(Some(row.clone()))
+}
+
 fn request_in_scope(
     rows: &[AgentRequestRow],
     request_id: &str,
     node_did: Option<&str>,
 ) -> Result<AgentRequestRow> {
-    let mut matches = rows.iter().filter(|row| {
-        row.request_id == request_id
-            && node_did.is_none_or(|did| row.node_did.as_deref() == Some(did))
-    });
-    let row = matches
-        .next()
-        .with_context(|| format!("request {request_id} not found"))?;
-    anyhow::ensure!(
-        matches.next().is_none(),
-        "request {request_id} is ambiguous across node scopes"
-    );
-    Ok(row.clone())
+    find_request_in_scope(rows, request_id, node_did)?
+        .with_context(|| format!("request {request_id} not found"))
 }
 
 fn required_peer_generation<'a>(name: &str, value: Option<&'a str>) -> Result<&'a str> {
@@ -303,7 +336,7 @@ fn agent_id_for_write(requested_agent_id: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn ensure_peer_chat_ready_at(
+pub(super) fn ensure_peer_chat_ready_at(
     node_did: &str,
     peer_record: Option<&PeerRecord>,
     now: DateTime<Utc>,
@@ -428,9 +461,8 @@ impl ClientCore {
         .await
         {
             Ok(result) => {
-                self.store
-                    .set_focused_request_id(Some(result.request_id.clone()));
-                self.refresh_store().await?;
+                let result =
+                    observe_submitted_request(&self.store, result, self.refresh_store()).await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -444,7 +476,7 @@ impl ClientCore {
         }
     }
 
-    fn session_queue_access(&self, node_did: &str) -> ConfigAccess {
+    pub(super) fn session_queue_access(&self, node_did: &str) -> ConfigAccess {
         self.operator_graphql(node_did)
             .map(ConfigAccess::Graphql)
             .unwrap_or_else(|| ConfigAccess::local(self.node_arc()))
@@ -456,12 +488,28 @@ impl ClientCore {
         session_id: &str,
         input: gents_protocol::request_input::RequestInput,
     ) -> Result<gents_protocol::request_input::RequestInput> {
+        self.prepare_user_message_input_with_delivery(
+            node_did,
+            session_id,
+            input,
+            gents_protocol::request_input::QueueDelivery::Steer,
+        )
+        .await
+    }
+
+    pub async fn prepare_user_message_input_with_delivery(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        input: gents_protocol::request_input::RequestInput,
+        delivery: gents_protocol::request_input::QueueDelivery,
+    ) -> Result<gents_protocol::request_input::RequestInput> {
         gents::lifecycle::prepare_user_message_input(
             &self.session_queue_access(node_did),
             node_did,
             session_id,
             input,
-            gents_protocol::request_input::QueueDelivery::Steer,
+            delivery,
         )
         .await
     }
@@ -544,6 +592,55 @@ impl ClientCore {
         }
     }
 
+    pub async fn request_output(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        request_id: &str,
+    ) -> Result<Option<gents::session::CanonicalRequestOutput>> {
+        let node_did = normalize_required("node_did", node_did)?;
+        let session_id = normalize_required("session_id", session_id)?;
+        let request_id = normalize_required("request_id", request_id)?;
+        let Some(projection) = self
+            .refresh_local_request(node_did, session_id, Some(request_id), None, &[])
+            .await?
+        else {
+            return Ok(None);
+        };
+        let Some(row) = find_request_in_scope(&projection.requests, request_id, Some(node_did))?
+        else {
+            return Ok(None);
+        };
+        anyhow::ensure!(
+            row.session_id.as_deref() == Some(session_id),
+            "request output crossed the selected session scope"
+        );
+        let refs = projection.requests.iter().collect::<Vec<_>>();
+        let answer = super::super::store::request_answer_owner(&refs, &row);
+        anyhow::ensure!(
+            answer.node_did.as_deref() == Some(node_did)
+                && answer.session_id.as_deref() == Some(session_id)
+                && answer.requester_did == row.requester_did,
+            "request answer crossed its admitted scope"
+        );
+        if !answer.is_terminal() || gents::lifecycle::folded_into(answer).is_some() {
+            return Ok(None);
+        }
+        let access = match self.operator_graphql(node_did) {
+            Some(graphql) => ConfigAccess::Graphql(graphql),
+            None => self
+                .store_access
+                .lock()
+                .await
+                .as_ref()
+                .context("local store access is unavailable")?
+                .clone(),
+        };
+        gents::session::observe_request_output(&access, answer)
+            .await
+            .map(Some)
+    }
+
     pub async fn request_timeline(
         &self,
         node_did: &str,
@@ -590,7 +687,7 @@ impl ClientCore {
         }
     }
 
-    async fn peer_record_for_chat_write(
+    pub(super) async fn peer_record_for_chat_write(
         &self,
         node_did: &str,
         now: DateTime<Utc>,
@@ -617,7 +714,7 @@ impl ClientCore {
         Ok(None)
     }
 
-    async fn request_authority(
+    pub(super) async fn request_authority(
         &self,
         node_did: &str,
         record: Option<&PeerRecord>,
@@ -686,7 +783,7 @@ impl ClientCore {
         ))
     }
 
-    fn requester_did(&self, record: &PeerRecord) -> String {
+    pub(super) fn requester_did(&self, record: &PeerRecord) -> String {
         if record.is_enrollment() {
             self.node_identity.did().to_string()
         } else {
@@ -1240,9 +1337,8 @@ impl ClientCore {
         .await;
         match result {
             Ok(result) => {
-                self.store
-                    .set_focused_request_id(Some(result.request_id.clone()));
-                self.refresh_store().await?;
+                let result =
+                    observe_submitted_request(&self.store, result, self.refresh_store()).await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1323,9 +1419,8 @@ impl ClientCore {
         .await;
         match result {
             Ok(result) => {
-                self.store
-                    .set_focused_request_id(Some(result.request_id.clone()));
-                self.refresh_store().await?;
+                let result =
+                    observe_submitted_request(&self.store, result, self.refresh_store()).await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1491,6 +1586,72 @@ impl ClientCore {
             }
             Err(error) => Err(self.record_mutation_error("patch config components", error)),
         }
+    }
+
+    pub async fn read_config_editor(
+        &self,
+        node_did: &str,
+        target: gents::config_client::patch::SelfConfigTarget,
+        id: &str,
+    ) -> Result<mutations::ConfigEditorDocument> {
+        let access = self
+            .operator_graphql(node_did)
+            .map(ConfigAccess::Graphql)
+            .context("Connect this local runtime before editing its configuration.")?;
+        mutations::read_config_editor_on(&access, node_did, target, id).await
+    }
+
+    pub async fn read_backend_authentication(
+        &self,
+        node_did: &str,
+        id: &str,
+    ) -> Result<(mutations::ConfigEditorRevision, gents::InferenceBackend)> {
+        let access = self
+            .operator_graphql(node_did)
+            .map(ConfigAccess::Graphql)
+            .context("Connect this local runtime before changing authentication.")?;
+        mutations::read_backend_authentication_on(&access, node_did, id).await
+    }
+
+    pub async fn save_backend_authentication(
+        &self,
+        node_did: &str,
+        id: &str,
+        revision: &mutations::ConfigEditorRevision,
+        auth: &gents::document_config::BackendAuth,
+    ) -> Result<()> {
+        let access = self
+            .operator_graphql(node_did)
+            .map(ConfigAccess::Graphql)
+            .context("Connect this local runtime before changing authentication.")?;
+        mutations::save_backend_authentication_on(&access, node_did, id, revision, auth).await?;
+        if self.refresh_config_source(node_did).await.is_err() {
+            tracing::warn!("Authentication saved; client observation will resynchronize");
+            self.store.request_resync(Some(node_did));
+        }
+        Ok(())
+    }
+
+    pub async fn save_config_editor(
+        &self,
+        node_did: &str,
+        target: gents::config_client::patch::SelfConfigTarget,
+        id: &str,
+        revision: &mutations::ConfigEditorRevision,
+        content: &str,
+    ) -> Result<Option<mutations::ConfigEditorDocument>> {
+        let access = self
+            .operator_graphql(node_did)
+            .map(ConfigAccess::Graphql)
+            .context("Connect this local runtime before editing its configuration.")?;
+        let saved =
+            mutations::save_config_editor_on(&access, node_did, target, id, revision, content)
+                .await?;
+        if self.refresh_config_source(node_did).await.is_err() {
+            tracing::warn!("Configuration saved; client observation will resynchronize");
+            self.store.request_resync(Some(node_did));
+        }
+        Ok(saved)
     }
 
     pub async fn apply_config_components(
@@ -1827,9 +1988,8 @@ impl ClientCore {
         .await;
         match submitted {
             Ok(result) => {
-                self.store
-                    .set_focused_request_id(Some(result.request_id.clone()));
-                self.refresh_store().await?;
+                let result =
+                    observe_submitted_request(&self.store, result, self.refresh_store()).await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -2761,6 +2921,48 @@ mod accepted_edit_projection_tests {
     use gents_protocol::session_input_edit::{
         SessionInputEditOutcome, SessionInputEditReceipt, SESSION_INPUT_EDIT_VERSION,
     };
+
+    #[tokio::test]
+    async fn submitted_request_survives_refresh_failure_and_requests_scoped_resync() {
+        let (store, _version) = ObservedStore::new(ClientStore::default());
+        let mut wake = store.subscribe_resync_requests();
+        let receipt = SubmittedRequest {
+            request_id: "accepted-request".into(),
+            session_id: "accepted-session".into(),
+            node_did: "did:test:node".into(),
+            agent_id: Some("agent".into()),
+        };
+        let before = store.projection_revision();
+        let accepted = observe_submitted_request(&store, receipt.clone(), async {
+            anyhow::bail!("projection unavailable after commit")
+        })
+        .await;
+        assert_eq!(accepted, receipt);
+        assert!(wake.has_changed().unwrap());
+        wake.borrow_and_update();
+        assert_eq!(
+            store.take_resync_requests(),
+            (false, vec!["did:test:node".to_owned()])
+        );
+        assert_eq!(store.projection_revision(), before);
+        assert!(store.snapshot().requests.is_empty());
+    }
+
+    #[tokio::test]
+    async fn submitted_request_refresh_success_does_not_schedule_another_read() {
+        let (store, _version) = ObservedStore::new(ClientStore::default());
+        let wake = store.subscribe_resync_requests();
+        let receipt = SubmittedRequest {
+            request_id: "accepted-request".into(),
+            session_id: "accepted-session".into(),
+            node_did: "did:test:node".into(),
+            agent_id: None,
+        };
+        let accepted = observe_submitted_request(&store, receipt.clone(), async { Ok(1) }).await;
+        assert_eq!(accepted, receipt);
+        assert!(!wake.has_changed().unwrap());
+        assert_eq!(store.take_resync_requests(), (false, Vec::new()));
+    }
 
     fn applied_receipt() -> SessionInputEditReceipt {
         SessionInputEditReceipt {

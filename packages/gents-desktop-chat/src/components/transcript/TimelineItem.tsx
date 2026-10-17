@@ -18,6 +18,7 @@ export const TimelineItem = memo(function TimelineItem({
 }) {
   switch (item.kind) {
     case "userMessage":
+    case "automatedInput":
       return <UserMessageItem item={item} />;
     case "assistantMessage":
       return (

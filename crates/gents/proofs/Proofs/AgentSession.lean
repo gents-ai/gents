@@ -54,6 +54,23 @@ structure Document where
   provenance : Option Provenance := none
   observation : Option Observation := none
   deriving DecidableEq, Repr
+
+/-- Creation reserves immutable scope and agent selection. Reuse preserves
+the complete document, including closed state and presentation metadata. -/
+def ensure? (existing : Option Document) (requested : Document) : Option Document :=
+  match existing with
+  | none => some requested
+  | some current =>
+      if current.scope = requested.scope ∧ current.agent = requested.agent then some current
+      else none
+
+theorem ensure_existing_preserves_document (current requested : Document)
+    (scope : current.scope = requested.scope) (agent : current.agent = requested.agent) :
+    ensure? (some current) requested = some current := by simp [ensure?, scope, agent]
+
+theorem ensure_cannot_rebind_agent (current requested : Document)
+    (agent : current.agent ≠ requested.agent) : ensure? (some current) requested = none := by
+  simp [ensure?, agent]
 /-- Authoritative query projection, not another writable request/index. -/
 structure RequestFact where
   purpose : RequestPurpose

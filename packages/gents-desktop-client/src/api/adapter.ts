@@ -16,6 +16,10 @@ export function createDesktopApiAdapter(
   );
 
   return {
+    fetchSessionGoal: (nodeDid, sessionId) =>
+      invokeDesktop("desktop_session_goal", { nodeDid, sessionId }),
+    controlGoal: (request) =>
+      invokeDesktop("desktop_goal_control", { request }),
     fetchDesktopSnapshot: () => invokeDesktop("desktop_client_snapshot"),
     initLocalStandardRuntime: (request) =>
       invokeDesktop("desktop_init_local_standard", { request }),

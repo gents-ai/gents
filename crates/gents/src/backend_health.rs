@@ -623,7 +623,12 @@ pub fn spawn_backend_prober(
     cancel: CancellationToken,
     node_did: String,
 ) -> tokio::task::JoinHandle<()> {
-    let mut changes = node.subscribe_document_changes();
+    let backend_collection =
+        crate::collection_ids(&node, ["InferenceBackend"]).unwrap_or_else(|error| {
+            tracing::warn!(%error, "backend prober: probing on the interval only");
+            Vec::new()
+        });
+    let mut changes = node.subscribe_collection_changes(backend_collection);
     tokio::spawn(async move {
         let client = match reqwest::Client::builder()
             .timeout(options.probe_timeout)
@@ -649,21 +654,8 @@ pub fn spawn_backend_prober(
                 }
                 _ = ticker.tick() => true,
                 batch = changes.recv() => {
-                    let Some(batch) = batch else {
+                    if batch.is_none() {
                         return;
-                    };
-                    if !batch.resync_required {
-                        let collection = match node.get_collection("InferenceBackend") {
-                            Ok(Some(collection)) => collection,
-                            Ok(None) => continue,
-                            Err(error) => {
-                                tracing::warn!(%error, "backend prober: could not resolve backend collection");
-                                continue;
-                            }
-                        };
-                        if !batch.changes.iter().any(|change| change.collection_id == collection.collection_id) {
-                            continue;
-                        }
                     }
                     false
                 }

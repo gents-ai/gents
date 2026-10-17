@@ -312,11 +312,15 @@ pub fn spawn_request_interrupt_observer(
     interrupt_tx: watch::Sender<Option<InterruptIntent>>,
     mut shutdown: watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
-    let changes = node.subscribe_document_changes();
+    let changes = crate::subscribe_collections(&node, ["AgentRequest"])
+        .inspect_err(|error| {
+            tracing::warn!(doc_id = %request_doc_id, %error, "interrupt observer polling only");
+        })
+        .ok();
     tokio::spawn(async move {
         observe_request_interrupt(
             &request_doc_id,
-            Some(changes),
+            changes,
             || read_interrupt_requested_at(&node, &request_doc_id),
             &interrupt_tx,
             &mut shutdown,

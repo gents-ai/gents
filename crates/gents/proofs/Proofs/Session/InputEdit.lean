@@ -1,4 +1,5 @@
 import Proofs.Session.Management
+import Proofs.Session.CommandAuthority
 
 namespace SessionQueue.InputEdit
 
@@ -63,8 +64,9 @@ structure State where
   deriving DecidableEq
 
 def authorized (a : Authority) (c : Command) (now : Nat) : Bool :=
-  a.signatureValid && a.replacementsValid && a.sessionOwned && decide (now < c.expiresAt) &&
-  if c.hasPeer then a.enrollmentFresh && a.routeApplied else a.requesterIsNode
+  a.replacementsValid && AgentSession.CommandAuthority.authorized
+    ⟨a.signatureValid, a.sessionOwned, a.requesterIsNode, a.enrollmentFresh, a.routeApplied⟩
+    c.hasPeer now c.expiresAt
 
 def recorded (q : SessionQueueState) (id : RequestId) : Prop :=
   q.active = some id ∨ id ∈ q.terminal ∨ id ∈ (q.folding ++ q.pending).map (·.requestId)

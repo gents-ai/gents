@@ -150,6 +150,7 @@ fn contract_source_paths() -> Vec<PathBuf> {
     let source_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut paths = vec![
         source_root.join("contract.rs"),
+        source_root.join("host/protocol.rs"),
         source_root.join("../../gents-desktop-core/src/error.rs"),
         source_root.join("../../gents-desktop-core/src/home_reset.rs"),
         source_root.join("tauri_commands/chat.rs"),
@@ -177,6 +178,23 @@ fn export_all(dir: &Path) -> Result<(), String> {
     }
 
     export_types!(
+        crate::accounts::BackendAuthenticationView,
+        ConfiguredActionView,
+        crate::host::settings::ConfigEditorEntry,
+        gents_desktop_core::client::ConfigEditorDocument,
+        RequestOutputView,
+        gents_protocol::client_media::MediaCall,
+        gents_protocol::client_media::MediaOperation,
+        gents_protocol::client_media::MediaPcmClip,
+        gents_protocol::client_media::MediaMessage,
+        gents_protocol::client_media::MediaDevices,
+        crate::host::speech::SpeechServiceView,
+        crate::host::speech::SpeechToolReference,
+        crate::host::speech::SpeechRecognizeRequest,
+        crate::host::speech::SpeechSynthesizeRequest,
+        crate::host::protocol::ClientMessage,
+        crate::host::protocol::ClientCommand,
+        crate::host::protocol::HostMessage,
         DesktopInitRequest,
         ManagedServerStartRequest,
         ManagedServerRestartRequest,
@@ -188,6 +206,11 @@ fn export_all(dir: &Path) -> Result<(), String> {
         PendingMessageEditRequest,
         PendingQueueEditRequest,
         PendingQueueEditResult,
+        SessionGoalView,
+        GoalControlView,
+        GoalControlAction,
+        GoalControlRequest,
+        GoalControlResult,
         PendingQueueEntryView,
         MailboxItemRequest,
         gents_protocol::mailbox_question::MailboxQuestion,
@@ -320,6 +343,24 @@ fn export_all(dir: &Path) -> Result<(), String> {
     );
 
     commands::export(dir)?;
+    let protocol = format!(
+        "// Generated from gents-desktop-bridge::host::protocol. Do not edit.\n\nexport const CLIENT_HOST_VERSION = {};\nexport const CLIENT_HOST_MAX_FRAME_BYTES = {};\nexport const CLIENT_HOST_MAX_PENDING_CALLS = {};\nexport const CLIENT_HOST_COMMANDS = {} as const;\n",
+        crate::host::protocol::PROTOCOL_VERSION,
+        crate::host::protocol::MAX_FRAME_BYTES,
+        crate::host::protocol::MAX_PENDING_CALLS,
+        serde_json::to_string(crate::host::protocol::ClientCommand::NAMES)
+            .map_err(|error| error.to_string())?,
+    );
+    std::fs::write(dir.join("ClientHostProtocol.ts"), protocol)
+        .map_err(|error| error.to_string())?;
+    let media = format!(
+        "// Generated from gents-protocol::client_media. Do not edit.\n\nexport const MEDIA_HOST_VERSION = {};\nexport const MEDIA_HOST_MAX_FRAME_BYTES = {};\nexport const MEDIA_HOST_MAX_PCM_BYTES = {};\nexport const MEDIA_HOST_MAX_SECONDS = {};\n",
+        gents_protocol::client_media::VERSION,
+        gents_protocol::client_media::MAX_FRAME_BYTES,
+        gents_protocol::client_media::MAX_PCM_BYTES,
+        gents_protocol::client_media::MAX_SECONDS,
+    );
+    std::fs::write(dir.join("MediaHostProtocol.ts"), media).map_err(|error| error.to_string())?;
     normalize_generated_types(dir)?;
     Ok(())
 }
@@ -351,6 +392,12 @@ fn list_ts_files(dir: &Path) -> Result<Vec<String>, String> {
 fn ts_rs_exports_tagged_enum_and_camel_case_structs() {
     let tmp = tempfile::tempdir().expect("tempdir");
     export_all(tmp.path()).expect("export");
+    let goal = std::fs::read_to_string(tmp.path().join("GoalControlAction.ts"))
+        .expect("GoalControlAction.ts");
+    assert!(
+        goal.contains("\"kind\": \"pause\"") && goal.contains("tokenBudget: string"),
+        "goal controls must retain their tagged request shape and exact budget strings: {goal}"
+    );
 
     let timeline = std::fs::read_to_string(tmp.path().join("RenderedTimelineItem.ts"))
         .expect("RenderedTimelineItem.ts");
@@ -361,6 +408,27 @@ fn ts_rs_exports_tagged_enum_and_camel_case_structs() {
     assert!(
         timeline.contains("itemKey"),
         "per-variant rename_all should camelCase enum fields; got:\n{timeline}"
+    );
+
+    let client_message =
+        std::fs::read_to_string(tmp.path().join("ClientMessage.ts")).expect("ClientMessage.ts");
+    assert!(
+        client_message.contains("\"kind\": \"hello\"")
+            && client_message.contains("\"kind\": \"call\""),
+        "{client_message}"
+    );
+    let client_command =
+        std::fs::read_to_string(tmp.path().join("ClientCommand.ts")).expect("ClientCommand.ts");
+    assert!(
+        client_command.contains("\"name\": \"desktop_session_snapshot\"")
+            && client_command.contains("\"args\":"),
+        "{client_command}"
+    );
+    let session_args = std::fs::read_to_string(tmp.path().join("SessionSnapshotArgs.ts"))
+        .expect("SessionSnapshotArgs.ts");
+    assert!(
+        session_args.contains("nodeDid:") && session_args.contains("sessionId:"),
+        "{session_args}"
     );
 
     let bootstrap = std::fs::read_to_string(tmp.path().join("DesktopBootstrapSummary.ts"))
@@ -501,6 +569,21 @@ fn write_bindings() {
         }
     }
     eprintln!("wrote bindings to {}", dir.display());
+}
+
+#[test]
+fn media_commands_preserve_the_native_tag_in_generated_types() {
+    use gents_protocol::client_media::{MediaCall, MediaOperation};
+    let call: MediaCall = serde_json::from_value(serde_json::json!({
+        "id":1,"operation":{"command":"hello","version":1},
+    }))
+    .unwrap();
+    assert!(matches!(
+        call.operation,
+        MediaOperation::Hello { version: 1 }
+    ));
+    assert!(MediaOperation::decl().contains("\"command\": \"hello\""));
+    assert!(MediaOperation::decl().contains("\"command\": \"capture\""));
 }
 
 #[test]

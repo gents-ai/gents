@@ -571,6 +571,16 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         "bafyreiayfxrn7hgy6xmovsmhlenwoyyb22px63mo3cjogsp4u2dapo36oe"
     ),
     baseline_entry!(
+        gents_protocol::schemas::AGENT_SESSION_GOAL_CONTROL_NAME,
+        gents_protocol::schemas::AGENT_SESSION_GOAL_CONTROL,
+        "bafyreiaqwfpcxiyk5zjvejnd25kb2hml75oislo5xkyhxeae2d5xlvz33a"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::GOAL_OBSERVATION_NAME,
+        gents_protocol::schemas::GOAL_OBSERVATION,
+        "bafyreidurb7yltvd4xkvcna5gcljytu7yp42oqphjlpymtyscqchpdtzzq"
+    ),
+    baseline_entry!(
         gents_protocol::schemas::EVAL_DEFINITION_NAME,
         gents_protocol::schemas::EVAL_DEFINITION,
         "bafyreibeokxszqypuejna3pckyp36vujfpfg2yahl3y3u3scpngdbigjtm"
@@ -768,6 +778,7 @@ pub const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME,
     gents_protocol::schemas::SESSION_HYDRATION_REQUEST_NAME,
     gents_protocol::schemas::AGENT_SESSION_INPUT_EDIT_NAME,
+    gents_protocol::schemas::AGENT_SESSION_GOAL_CONTROL_NAME,
     gents_protocol::schemas::NODE_DIRECTORY_ENTRY_NAME,
     gents_protocol::schemas::MAILBOX_ITEM_NAME,
 ];

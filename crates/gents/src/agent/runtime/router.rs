@@ -116,7 +116,7 @@ pub(super) async fn run_router(
     if !admission_gate.wait_open(&mut shutdown).await {
         return Ok(());
     }
-    let watcher = DefraWatcher::new(node.clone(), &node_did);
+    let watcher = DefraWatcher::new(node.clone(), &node_did)?;
     let result = run_router_with_watcher(
         node,
         node_did,

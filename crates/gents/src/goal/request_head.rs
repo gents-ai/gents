@@ -369,3 +369,27 @@ pub(crate) async fn assignment_request_id_in_txn(
     );
     Ok(Some(requests[0].request_id.clone()))
 }
+
+pub(super) async fn load_session_requests(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+) -> Result<Vec<AgentRequestRow>> {
+    use crate::request_admission::SIGNED_REQUEST_FIELDS;
+    let escaped_did = escape_graphql_string(node_did);
+    let escaped_session = escape_graphql_string(session_id);
+    let response = txn
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{
+        node_did: {{ _eq: "{escaped_did}" }}, session_id: {{ _eq: "{escaped_session}" }}
+    }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {SIGNED_REQUEST_FIELDS} }} }}"#
+        ))
+        .await?;
+    serde_json::from_value(
+        response
+            .pointer("/data/AgentRequest")
+            .cloned()
+            .context("request query omitted rows")?,
+    )
+    .map_err(Into::into)
+}

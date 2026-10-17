@@ -325,6 +325,7 @@ async fn exchange_code_for_tokens(
     let endpoint = token_endpoint(&options.issuer);
     let response = build_http_client()?
         .post(endpoint)
+        .timeout(Duration::from_secs(30))
         .form(&[
             ("grant_type", "authorization_code"),
             ("code", code),

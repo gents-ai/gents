@@ -124,6 +124,34 @@ pub fn single_string_eq(filter: &FilterPredicate) -> Option<(&str, &str)> {
     (operators.len() == 1).then_some((field.as_str(), value))
 }
 
+/// The string `field` equals in a live replicator filter, either as its scalar
+/// equality or as a top-level or `_and` conjunct of its conditions.
+pub fn live_filter_string_eq<'a>(
+    filter: &'a defra_p2p_adapter::ReplicationFilter,
+    field: &str,
+) -> Option<&'a str> {
+    fn conjunct<'a>(conditions: &'a Map<String, Value>, field: &str) -> Option<&'a str> {
+        conditions
+            .get(field)
+            .and_then(|condition| condition.get("_eq"))
+            .and_then(Value::as_str)
+            .or_else(|| {
+                conditions
+                    .get("_and")?
+                    .as_array()?
+                    .iter()
+                    .filter_map(Value::as_object)
+                    .find_map(|nested| conjunct(nested, field))
+            })
+    }
+    match &filter.conditions {
+        Some(conditions) => conjunct(conditions, field),
+        None => (filter.field == field)
+            .then(|| filter.value.as_str())
+            .flatten(),
+    }
+}
+
 pub(super) fn conjunctive_string_eq<'a>(
     filter: &'a FilterPredicate,
     field: &str,
@@ -212,6 +240,7 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "PeerEndpoint",
     "SessionHydrationRequest",
     "AgentSessionInputEdit",
+    "AgentSessionGoalControl",
     "Agent",
     "AgentContext",
     "CompactionConfig",
@@ -231,6 +260,7 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "Trigger",
     "EventSource",
     "NodeReadiness",
+    "GoalObservation",
 ];
 
 pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = &[
@@ -244,6 +274,7 @@ pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = &[
     "PeerEndpoint",
     "SessionHydrationRequest",
     "AgentSessionInputEdit",
+    "AgentSessionGoalControl",
 ];
 
 const CONVERSATION_RULES: &[CollectionRule] = &[
@@ -320,6 +351,7 @@ const MACHINE_COLLECTIONS: &[&str] = &[
     "MailboxItem",
     "SessionHydrationRequest",
     "AgentSessionInputEdit",
+    "AgentSessionGoalControl",
     NODE_DIRECTORY_COLLECTION,
 ];
 
@@ -366,6 +398,11 @@ const MACHINE_RULES: &[CollectionRule] = &[
     },
     CollectionRule {
         collection: "AgentSessionInputEdit",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentSessionGoalControl",
         field: "requester_did",
         source: DidSource::PeerDid,
     },

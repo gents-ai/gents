@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
-use defra_node::{EmbeddedNode, EventName, QueryResponse};
+use defra_node::{EmbeddedNode, QueryResponse};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
@@ -192,13 +192,18 @@ pub async fn reconcile_directory_tick(
     Ok(outcome)
 }
 
+/// The source rows a directory sweep projects; its own NodeDirectoryEntry
+/// writes must not wake it again.
+const DIRECTORY_SOURCE_COLLECTIONS: [&str; 3] = ["Node", "NodeReadiness", "Agent"];
+
 pub async fn run_directory_projection(
     node: Arc<EmbeddedNode>,
     source_did: String,
     cancel: CancellationToken,
 ) -> Result<()> {
     let store = GraphqlDirectoryStore::new(node.clone());
-    let mut subscription = node.subscribe(&[EventName::Update]);
+    let mut subscription = crate::subscribe_collections(&node, DIRECTORY_SOURCE_COLLECTIONS)?;
+    let mut subscription_open = true;
     let mut interval =
         tokio::time::interval(crate::agent::p2p_reconcile::intervals::sweep_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -208,14 +213,11 @@ pub async fn run_directory_projection(
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
             _ = interval.tick() => sweep_directory(&store, &source_did).await,
-            message = subscription.recv() => {
-                if message.is_none() {
-                    tracing::warn!("directory projection update subscription closed; continuing with periodic sweeps");
+            batch = subscription.recv(), if subscription_open => {
+                if batch.is_none() {
+                    tracing::warn!("directory projection change subscription closed; continuing with periodic sweeps");
+                    subscription_open = false;
                     continue;
-                }
-                let dropped = subscription.check_and_reset_dropped();
-                if dropped > 0 {
-                    tracing::warn!(dropped, "directory projection update subscription dropped messages");
                 }
                 sweep_directory(&store, &source_did).await;
             }

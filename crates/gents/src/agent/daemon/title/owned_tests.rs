@@ -1049,7 +1049,7 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
             run_router_with_watcher(
                 router_node.clone(),
                 router_did.clone(),
-                DefraWatcher::new(router_node, &router_did),
+                DefraWatcher::new(router_node, &router_did).expect("request watcher"),
                 snapshot_rx,
                 shutdown_rx,
                 router_gate,

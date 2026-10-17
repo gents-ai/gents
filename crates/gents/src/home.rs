@@ -43,7 +43,9 @@ pub const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
 pub const P2P_SECRET_KEY_FILE_NAME: &str = "p2p-secret-key";
 pub const PACKS_DIR_NAME: &str = "packs";
 pub const ALLOWED_DIRS_FILE_NAME: &str = "allowed-dirs.json";
+pub const ALLOWED_DIRS_LOCK_FILE_NAME: &str = "allowed-dirs.lock";
 pub const PLUGIN_APPROVALS_DIR_NAME: &str = "plugin-approvals";
+pub const PLUGIN_APPROVALS_LOCK_FILE_NAME: &str = ".plugin-approvals.lock";
 pub const PLUGINS_DIR_NAME: &str = "plugins";
 pub const PLUGIN_SERVICES_DIR_NAME: &str = "plugin-services";
 pub const REGISTRY_DIR_NAME: &str = "registry";
@@ -66,6 +68,15 @@ pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
     CODEX_UI_DIR_NAME,
     EVAL_DIR_NAME,
     PACK_INSTALLS_DIR_NAME,
+];
+
+/// Lock files stay in place when state is retired: replacing a held lock file
+/// would let another writer acquire a different lock for the same resource.
+/// A custom data directory's store lock lives beside that directory instead.
+pub const RUNTIME_HOME_LOCK_FILES: &[&str] = &[
+    "data.lock",
+    ALLOWED_DIRS_LOCK_FILE_NAME,
+    PLUGIN_APPROVALS_LOCK_FILE_NAME,
 ];
 
 pub fn default_data_dir(home_dir: &Path) -> PathBuf {
@@ -635,6 +646,44 @@ mod tests {
     }
 
     #[test]
+    fn permission_locks_remain_in_place_when_owned_state_is_retired() {
+        let home = tempfile::tempdir().unwrap();
+        let open = |name: &str| {
+            fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(home.path().join(name))
+                .unwrap()
+        };
+        let _held: Vec<_> = RUNTIME_HOME_LOCK_FILES
+            .iter()
+            .map(|name| crate::file_lock::FileLock::exclusive(open(name)).unwrap())
+            .collect();
+        fs::write(home.path().join(ALLOWED_DIRS_FILE_NAME), b"{}").unwrap();
+        let entries = home_entries(home.path(), &[]).unwrap();
+        retire_entries(
+            &[RetireGroup {
+                name: "runtime",
+                entries: &entries.owned,
+            }],
+            RetireDisposition::Delete,
+        )
+        .unwrap();
+        assert!(!home.path().join(ALLOWED_DIRS_FILE_NAME).exists());
+        for name in RUNTIME_HOME_LOCK_FILES {
+            assert!(
+                matches!(
+                    crate::file_lock::FileLock::try_exclusive(open(name)),
+                    Err(fs::TryLockError::WouldBlock)
+                ),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
     fn archive_accepts_a_group_retired_in_two_passes() {
         let temp = tempfile::tempdir().unwrap();
         let root = fs::canonicalize(temp.path()).unwrap();
@@ -765,13 +814,17 @@ mod tests {
                 let at = || format!("{}:{}", path.display(), line_number + 1);
                 for capture in literal.captures_iter(line) {
                     let top = capture[1].split('/').next().unwrap_or_default();
-                    if !RUNTIME_HOME_ENTRIES.contains(&top) {
+                    if !RUNTIME_HOME_ENTRIES.contains(&top)
+                        && !RUNTIME_HOME_LOCK_FILES.contains(&top)
+                    {
                         unlisted.push(format!("{}: {top}", at()));
                     }
                 }
                 for capture in constant.captures_iter(line) {
                     match resolve(&capture[1]) {
-                        Some(value) if RUNTIME_HOME_ENTRIES.contains(&value.as_str()) => {}
+                        Some(value)
+                            if RUNTIME_HOME_ENTRIES.contains(&value.as_str())
+                                || RUNTIME_HOME_LOCK_FILES.contains(&value.as_str()) => {}
                         Some(value) => {
                             unlisted.push(format!("{}: {} = {value}", at(), &capture[1]))
                         }
@@ -785,7 +838,7 @@ mod tests {
         }
         assert!(
             unlisted.is_empty(),
-            "home entries written outside RUNTIME_HOME_ENTRIES: {unlisted:#?}"
+            "home entries written outside the home inventories: {unlisted:#?}"
         );
     }
 

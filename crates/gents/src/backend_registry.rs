@@ -510,7 +510,9 @@ pub async fn record_model_catalog_in_txn(
         "ambiguous catalog authentication scope"
     );
     if let Some((index, old)) = matching.first() {
-        if chrono::DateTime::parse_from_rfc3339(&old.observed_at)? > observed_at {
+        if chrono::DateTime::parse_from_rfc3339(&old.observed_at)? > observed_at
+            || old.models == catalog.models
+        {
             return Ok(());
         }
         let index = *index;

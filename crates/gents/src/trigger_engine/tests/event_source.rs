@@ -62,8 +62,11 @@ impl crate::UpdateSubscriptionSource for FakeUpdateSubscriptionSource {
         self.0.subscribe(&[EventName::Update])
     }
 
-    fn subscribe_document_changes(&self) -> DocumentChangeSubscription {
-        self.0.subscribe_document_changes()
+    fn subscribe_collection_changes(
+        &self,
+        collection_ids: Vec<String>,
+    ) -> DocumentChangeSubscription {
+        self.0.subscribe_collection_changes(collection_ids)
     }
 }
 

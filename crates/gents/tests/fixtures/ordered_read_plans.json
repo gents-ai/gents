@@ -700,6 +700,21 @@
   {
     "read": {
       "path": "crates/gents/src/toolset/session_history/discovery.rs",
+      "collection": "AgentMessage",
+      "arguments": "filter: {$GENTS_0$,session_id: {_eq: $GENTS_1$}$GENTS_bound$},order: {sequence: ASC},limit: $GENTS_SEARCH_MESSAGE_PAGE$"
+    },
+    "bindings": [
+      {
+        "0": "@session",
+        "1": "\"probe\"",
+        "bound": ", sequence: {_gt: 100}",
+        "SEARCH_MESSAGE_PAGE": "100"
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents/src/toolset/session_history/discovery.rs",
       "collection": "AgentSession",
       "arguments": "filter: $GENTS_condition$, order: [{created_at: DESC},{session_id: DESC}], limit: 100"
     },

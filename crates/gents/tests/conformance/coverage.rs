@@ -991,6 +991,17 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "ManagedExecLivenessCases".to_string(),
         ));
     }
+    for field in ["revisions", "fields", "savedProjections"] {
+        assert!(snapshot.client_settings_cases[field]
+            .as_array()
+            .is_some_and(|cases| !cases.is_empty()));
+    }
+    emitted.insert(("client_settings_cases".into(), "ClientSettingsCases".into()));
+    assert!(!snapshot.client_observation_scope_cases.is_empty());
+    emitted.insert((
+        "client_observation_scope_cases".into(),
+        "ClientObservationScopeCases".into(),
+    ));
     assert!(snapshot.client_data_publication_cases["notice_delivery"].is_object());
     for field in ["publications", "reuse"] {
         assert!(snapshot.client_request_patch_publication_cases[field]
@@ -1623,6 +1634,39 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "goal_transition_cases".to_string(),
             "GoalTransitionCases".to_string(),
         ));
+    }
+    for (cases, category, domain) in [
+        (
+            &snapshot.goal_client_control_cases,
+            "goal_client_control_cases",
+            "GoalClientControlCases",
+        ),
+        (
+            &snapshot.goal_client_start_cases,
+            "goal_client_start_cases",
+            "GoalClientStartCases",
+        ),
+        (
+            &snapshot.goal_client_receipt_cases,
+            "goal_client_receipt_cases",
+            "GoalClientReceiptCases",
+        ),
+        (
+            &snapshot.goal_observation_cases,
+            "goal_observation_cases",
+            "GoalObservationCases",
+        ),
+        (
+            &snapshot.plugin_approval_cases,
+            "plugin_approval_cases",
+            "PluginApprovalCases",
+        ),
+    ] {
+        assert!(
+            !cases.is_empty(),
+            "{domain} must export its executable cases"
+        );
+        emitted.insert((category.to_owned(), domain.to_owned()));
     }
     if !lean_goal_create_cases().is_empty() {
         emitted.insert((

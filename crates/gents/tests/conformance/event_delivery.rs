@@ -213,7 +213,8 @@ impl ProductionEventDeliveryDriver {
                     Arc::new(mock_subs.clone()),
                     db.node.clone(),
                     NODE_DID,
-                );
+                )
+                .expect("request watcher");
                 Self {
                     source,
                     db,

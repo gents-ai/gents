@@ -13,7 +13,10 @@ function scroller(page: Page) {
   return page.locator('[data-slot="scroll-area-viewport"][data-following]');
 }
 
-async function cost(viewport: Locator, act: "scroll" | "chunk"): Promise<Cost> {
+async function cost(
+  viewport: Locator,
+  act: "scroll" | "chunk" | "jump",
+): Promise<Cost> {
   return viewport.evaluate(async (scroller, act) => {
     const rect = Element.prototype.getBoundingClientRect;
     const point = document.elementFromPoint;
@@ -40,9 +43,10 @@ async function cost(viewport: Locator, act: "scroll" | "chunk"): Promise<Cost> {
       },
     });
     try {
-      if (act === "scroll") {
+      if (act !== "chunk") {
         const before = position.get!.call(scroller) as number;
-        const delta = before >= 20 ? -20 : 20;
+        const delta =
+          act === "jump" ? scroller.clientHeight * 2 : before >= 20 ? -20 : 20;
         await new Promise<void>((resolve) => {
           scroller.addEventListener("scroll", () => resolve(), { once: true });
           scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: delta }));
@@ -143,6 +147,30 @@ test.describe("what a transcript scroll costs", () => {
 
     expect(long.scroll.rects).toBeLessThanOrEqual(short.scroll.rects + 10);
     expect(long.chunk.rects).toBeLessThanOrEqual(short.chunk.rects + 4);
+  });
+
+  test("bounds layout reads when jumping through loaded history", async ({
+    page,
+  }, testInfo) => {
+    const viewport = scroller(page);
+    await loadEveryPage(page);
+    await expect(viewport.locator('[data-window-row="box"]')).not.toHaveCount(0);
+    const jump = await cost(viewport, "jump");
+    testInfo.annotations.push({ type: "cost", description: JSON.stringify(jump) });
+    expect(jump.rects).toBeLessThanOrEqual(24);
+    await expect
+      .poll(() =>
+        viewport.evaluate((scroller) => {
+          const view = scroller.getBoundingClientRect();
+          return Array.from(
+            scroller.querySelectorAll('[data-window-row="drawn"]'),
+          ).some((row) => {
+            const box = row.getBoundingClientRect();
+            return box.bottom > view.top && box.top < view.bottom;
+          });
+        }),
+      )
+      .toBe(true);
   });
 
   test("writes the position at most once per streamed chunk while following", async ({

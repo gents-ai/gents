@@ -40,6 +40,8 @@ impl DefraSessionHook {
         caller_deadline_at: chrono::DateTime<chrono::Utc>,
         wait_deadline_at: chrono::DateTime<chrono::Utc>,
     ) -> anyhow::Result<String> {
+        let mut changes =
+            crate::subscribe_collections(&self.node, ["AgentToolCall", "AgentRequest"])?;
         loop {
             let now = chrono::Utc::now();
             let lifecycle = self
@@ -88,7 +90,9 @@ impl DefraSessionHook {
             let remaining = (caller_deadline_at.min(wait_deadline_at) - now)
                 .to_std()
                 .unwrap_or(Duration::from_millis(0));
-            tokio::time::sleep(remaining.min(Duration::from_millis(100))).await;
+            if let Ok(None) = tokio::time::timeout(remaining, changes.recv()).await {
+                tokio::time::sleep(remaining).await;
+            }
         }
     }
 

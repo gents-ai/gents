@@ -2627,7 +2627,8 @@ async fn a_database_update_leaves_a_passed_reset_to_the_rescan_tick() {
         goal_and_children(&db).await,
         (Some(GoalStatus::UsageLimited), 0)
     );
-    updates.publish_update("Goal", "goal-doc");
+    let goal_collection_id = gents::collection_ids(&db.node, ["Goal"]).unwrap().remove(0);
+    updates.publish_update(goal_collection_id, "goal-doc");
     assert!(tokio::time::timeout(pass, source.next_fire())
         .await
         .is_err());

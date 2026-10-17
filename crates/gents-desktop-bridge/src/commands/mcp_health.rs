@@ -29,7 +29,7 @@ pub(crate) async fn load_mcp_services_with_health_for_node(
         r#"{{
             ToolServiceHealthState(
                 filter: {{ node_did: {{ _eq: "{escaped_node}" }} }},
-                order: {{ service_id: ASC }}
+                order: [{{ service_id: ASC }}, {{ updated_at: DESC }}, {{ _docID: ASC }}]
             ) {{
                 service_id
                 node_did
@@ -60,11 +60,14 @@ pub(crate) async fn load_mcp_services_with_health_for_node(
         .cloned()
         .unwrap_or_default();
 
-    let rows: Vec<ToolServiceHealthStateRow> = raw
+    let mut rows: Vec<ToolServiceHealthStateRow> = raw
         .into_iter()
         .map(serde_json::from_value)
         .collect::<std::result::Result<_, _>>()
         .map_err(|error| anyhow!("parsing ToolServiceHealthState rows: {error}"))?;
+    // Twins of one service are not schema-unique; the order puts the
+    // health checker's chosen row first.
+    rows.dedup_by(|later, first| later.service_id == first.service_id);
 
     rows.into_iter().map(view_from_row).collect()
 }
