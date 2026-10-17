@@ -13,6 +13,9 @@ use serde_json::{json, Value};
 use tokio::process::Child;
 use tokio::process::Command;
 
+#[path = "support/console_io.rs"]
+mod console_io;
+
 #[path = "support/console.rs"]
 #[cfg(windows)]
 mod console;

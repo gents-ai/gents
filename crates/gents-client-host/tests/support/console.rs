@@ -2,6 +2,7 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -10,13 +11,15 @@ use portable_pty::{CommandBuilder, ExitStatus, MasterPty, PtySize};
 
 /// A private console delivers Ctrl-C without signalling the runner's console.
 /// ConPTY output must remain drained while the console is being closed.
+/// portable-pty enables cursor inheritance, which requires replying to position
+/// queries before the child can start: https://learn.microsoft.com/windows/console/createpseudoconsole
 pub struct ConsoleChild {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     output: Option<ConsoleOutput>,
 }
 
 struct ConsoleOutput {
-    writer: Option<Box<dyn Write + Send>>,
+    writer: Option<Arc<Mutex<Box<dyn Write + Send>>>>,
     master: Option<Box<dyn MasterPty + Send>>,
     drain: Option<JoinHandle<io::Result<u64>>>,
 }
@@ -37,10 +40,19 @@ impl ConsoleChild {
         let mut log = File::create(log)?;
         let pair = portable_pty::native_pty_system().openpty(PtySize::default())?;
         let mut reader = pair.master.try_clone_reader()?;
-        let writer = pair.master.take_writer()?;
+        let writer = Arc::new(Mutex::new(pair.master.take_writer()?));
+        let input = Arc::clone(&writer);
         let drain = std::thread::Builder::new()
             .name("gents-fixture-console".into())
-            .spawn(move || io::copy(&mut reader, &mut log))?;
+            .spawn(move || {
+                super::console_io::drain(&mut reader, &mut log, || {
+                    let mut input = input
+                        .lock()
+                        .map_err(|_| io::Error::other("fixture console input lock poisoned"))?;
+                    input.write_all(b"\x1b[1;1R")?;
+                    input.flush()
+                })
+            })?;
         let output = ConsoleOutput {
             writer: Some(writer),
             master: Some(pair.master),
@@ -62,8 +74,11 @@ impl ConsoleChild {
         let writer = self
             .output
             .as_mut()
-            .and_then(|output| output.writer.as_mut())
+            .and_then(|output| output.writer.as_ref())
             .context("fixture console has already closed")?;
+        let mut writer = writer
+            .lock()
+            .map_err(|_| anyhow::anyhow!("fixture console input lock poisoned"))?;
         writer.write_all(b"\x03")?;
         writer.flush()?;
         Ok(())
