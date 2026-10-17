@@ -264,6 +264,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) prompt_assembly_claude_thinking_stream_cases:
         Vec<LeanPromptAssemblyClaudeThinkingStreamCase>,
     pub(crate) prompt_assembly_claude_wire_start_cases: Vec<LeanPromptAssemblyClaudeWireStartCase>,
+    pub(crate) prompt_assembly_service_tier_cases: Vec<LeanPromptAssemblyServiceTierCase>,
     pub(crate) prompt_assembly_responses_storage_cases: Vec<LeanPromptAssemblyResponsesStorageCase>,
     pub(crate) prompt_assembly_responses_effort_cases: Vec<LeanPromptAssemblyResponsesEffortCase>,
     pub(crate) prompt_assembly_claude_replay_cases: Vec<LeanPromptAssemblyClaudeReplayCase>,
@@ -3123,4 +3124,9 @@ pub(crate) struct LeanSessionInputEditReceipt {
     pub(crate) digest: u64,
     pub(crate) outcome: String,
     pub(crate) request_ids: Vec<u64>,
+}
+
+pub(crate) fn lean_prompt_assembly_service_tier_cases(
+) -> &'static [LeanPromptAssemblyServiceTierCase] {
+    &lean_contract_snapshot().prompt_assembly_service_tier_cases
 }
