@@ -495,6 +495,17 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         );
     }
     if matches!(journey, Journey::Editor) {
+        let completion_path = root.join("finish-provider");
+        let completion_gate = Arc::clone(&gate);
+        let _completion = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            loop {
+                if completion_path.is_file() {
+                    completion_gate.add_permits(1);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }));
         configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
         client
             .call(id, "client_connect_local", json!({"nodeHome":node_home}))
