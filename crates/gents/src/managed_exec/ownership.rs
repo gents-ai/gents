@@ -550,7 +550,7 @@ pub(crate) mod test_support {
             let sender = std::sync::Mutex::new(Some(sender));
             let observer = ProcessRecorder::new(move |identity: ProcessIdentity| {
                 if let Some(recorder) = recorder.as_ref() {
-                    (recorder.0)(identity.clone());
+                    (recorder._record)(identity.clone());
                 }
                 if let Some(sender) = sender
                     .lock()

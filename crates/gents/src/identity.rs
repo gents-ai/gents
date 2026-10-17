@@ -421,6 +421,8 @@ fn load_or_create_macos_keychain_raw_identity(
     label: &str,
     create_if_missing: bool,
 ) -> Result<RawIdentity> {
+    use crypto::Key as _;
+
     match macos_keychain_find(MACOS_KEYCHAIN_SERVICE, label)? {
         Ok(password) => RawIdentity::from_bytes(crypto::KeyType::Ed25519, &password)
             .map_err(anyhow::Error::from)
