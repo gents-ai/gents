@@ -126,6 +126,16 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .args(["init", "--store-key-custody", "file", "--home"])
         .arg(&node_home)
         .args([
+            "--tool-package",
+            if matches!(journey, Journey::Editor) {
+                "write"
+            } else {
+                "readonly"
+            },
+            "--tool-root",
+        ])
+        .arg(root)
+        .args([
             "--node-name",
             "editor-fixture",
             "--model-name",
@@ -503,17 +513,28 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         );
     }
     if matches!(journey, Journey::Editor) {
-        let projection = read_session(&mut client, &mut id, node_did, session).await?;
+        let context = access.execute(&format!(
+            r#"{{
+                AgentMessage(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ message_key request_doc_id }}
+                AgentOutputSegment(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ payload }}
+            }}"#,
+            gents::graphql::escape_graphql_string(session),
+            gents::graphql::escape_graphql_string(session),
+        )).await?;
         ensure!(
-            projection["messages"]
+            context["data"]["AgentMessage"]
                 .as_array()
-                .is_some_and(|messages| messages.iter().any(|message| {
-                    message["runtimeControl"] == true
-                        && message["displayContent"]
-                            .as_str()
-                            .is_some_and(|text| text.contains("Project instructions fixture"))
-                })),
-            "the fixture did not preserve its native workspace instructions"
+                .is_some_and(|messages| {
+                    messages.iter().any(|message| {
+                        message["request_doc_id"].as_str().is_some_and(|doc_id| {
+                            message["message_key"] == format!("authored:{doc_id}:context")
+                        })
+                    })
+                })
+                && context["data"]["AgentOutputSegment"]
+                    .to_string()
+                    .contains("Project instructions fixture"),
+            "the fixture did not preserve its native workspace instructions: {context}"
         );
         let completion_path = root.join("finish-provider");
         let completion_gate = Arc::clone(&gate);
@@ -595,21 +616,29 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         configured_actions::verify_editor_settings(&access, node_did, agent_id).await?;
         if std::env::var_os("GENTS_VSCODE_REMOTE_FIXTURE").is_none() {
             let submitted = access.execute(&format!(
-                r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}}, content: {{_eq: "Check this repository"}} }}) {{ input }} }}"#,
+                r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ content input }} }}"#,
                 gents::graphql::escape_graphql_string(node_did),
             )).await?;
             let rows = submitted["data"]["AgentRequest"]
                 .as_array()
-                .context("editor workspace request")?;
+                .context("editor workspace request")?
+                .iter()
+                .filter(|row| {
+                    row["content"]
+                        .as_str()
+                        .is_some_and(|content| content.starts_with("Check this repository"))
+                })
+                .collect::<Vec<_>>();
             ensure!(
                 rows.len() == 1,
-                "the editor must submit one workspace request"
+                "the editor must submit one workspace request: {submitted}"
             );
             let cwd = rows[0]["input"]["cwd"]
                 .as_str()
                 .context("the editor request has no workspace folder")?;
             ensure!(
-                std::fs::canonicalize(cwd)? == std::fs::canonicalize(root)?,
+                std::fs::canonicalize(cwd)?
+                    == std::fs::canonicalize(root.join("second-workspace"))?,
                 "the editor request used a different project folder"
             );
         }
