@@ -248,7 +248,8 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
         "{live}"
     );
 
-    let owner_home = home.to_str().context("utf-8 owner home")?;
+    let owner_home = home.join(".gents");
+    let owner_home = owner_home.to_str().context("utf-8 owner home")?;
     let remote = run_cli_json(
         &elsewhere,
         &[
