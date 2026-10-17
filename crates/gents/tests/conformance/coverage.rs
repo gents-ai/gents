@@ -500,6 +500,16 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             !snapshot.prompt_assembly_service_tier_cases.is_empty(),
         ),
         (
+            "workspace_permission_cases",
+            "WorkspacePermissionCases",
+            !snapshot.workspace_permission_cases.is_empty(),
+        ),
+        (
+            "workspace_permission_write_cases",
+            "WorkspacePermissionWriteCases",
+            !snapshot.workspace_permission_write_cases.is_empty(),
+        ),
+        (
             "prompt_assembly_responses_storage_cases",
             "PromptAssemblyResponsesStorageCases",
             !snapshot.prompt_assembly_responses_storage_cases.is_empty(),

@@ -1822,6 +1822,18 @@ def caseCoverage : List CoverageEntry :=
       "The four generated wire-start cases bind initial signature plus later delta, absent initial signature, ordered rejection of later thinking, and malformed signature type at the native SSE parser. The native test compares final content/error, not intermediate modeled steps or durable output capture.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "workspace_permission_write_cases"
+      "WorkspacePermissionWriteCases"
+      "tool_policy::workspace_permissions::tests::generated_workspace_permission_write_cases"
+      "Generated selection transitions cover stale revisions, missing reviewers, retained task references, no-op writes and exhausted revisions. Native filesystem locking, atomic replacement and canonical scope keys require adapter checks.")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "workspace_permission_cases"
+      "WorkspacePermissionCases"
+      "tool_policy::workspace_permissions::tests::generated_workspace_permission_cases"
+      "Generated decisions bind workspace isolation, configured ceilings, action/revision grants and automatic-review fallback to the native routing owner. Canonical host paths, command fingerprints, sandbox enforcement and reviewer accuracy require adapter checks.")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "prompt_assembly_service_tier_cases"
       "PromptAssemblyServiceTierCases"
       "completion_factory::tests::generated_service_tier_cases_drive_loop_config"

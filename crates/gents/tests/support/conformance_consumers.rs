@@ -266,6 +266,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_service_tier_cases_drive_loop_config",
         },
         ConformanceConsumer::RustTest {
+            id: "tool_policy::workspace_permissions::tests::generated_workspace_permission_cases",
+            package: "gents-loop",
+            source_path: "crates/gents-loop/src/tool_policy/workspace_permissions.rs",
+            module_path: "tool_policy::workspace_permissions::tests",
+            function: "generated_workspace_permission_cases",
+        },
+        ConformanceConsumer::RustTest {
+            id: "tool_policy::workspace_permissions::tests::generated_workspace_permission_write_cases",
+            package: "gents-loop",
+            source_path: "crates/gents-loop/src/tool_policy/workspace_permissions.rs",
+            module_path: "tool_policy::workspace_permissions::tests",
+            function: "generated_workspace_permission_write_cases",
+        },
+        ConformanceConsumer::RustTest {
             id: "completion_factory::tests::generated_responses_storage_cases_drive_loop_config",
             package: "gents",
             source_path: "crates/gents/src/completion_factory/tests.rs",
