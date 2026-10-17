@@ -6,6 +6,8 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+## 0.21.0-rc0 - 2026-10-17
+
 - `agent_list` now returns startup targets only. `agent_session_list` discovers
   messageable sessions, including trigger-started work, with filters and paging
   while preserving message and interrupt authority (#2038).
