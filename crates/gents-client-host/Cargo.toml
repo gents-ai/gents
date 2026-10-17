@@ -36,5 +36,8 @@ gents = { path = "../gents" }
 gents-protocol.workspace = true
 tempfile = "3"
 
+[target.'cfg(windows)'.dev-dependencies]
+portable-pty = "0.9"
+
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2"

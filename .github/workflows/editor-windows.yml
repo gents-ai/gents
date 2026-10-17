@@ -58,8 +58,8 @@ jobs:
           cache-bin: "false"
       - name: Check the native client and desktop adapters
         run: cargo check --locked -p gents-client-host -p gents-desktop-tauri
-      - name: Build the native client host
-        run: cargo build --locked --profile test -p gents-client-host --bin gents-client-host
+      - name: Build the native client and runtime
+        run: cargo build --locked --profile test -p gents-cli -p gents-client-host --bins
       - name: Check the native protocol descriptor
         run: |
           $hostInfo = & .\target\debug\gents-client-host.exe --describe | ConvertFrom-Json
@@ -71,3 +71,5 @@ jobs:
         run: cargo test --locked -p gents-desktop-bridge --no-default-features --lib host::local::windows
       - name: Exercise native metadata, shared ownership and stdio teardown
         run: cargo test --locked -p gents-client-host
+      - name: Exercise signed runtime input, goals and console shutdown
+        run: cargo test --locked -p gents-client-host --features runtime-e2e --test runtime
