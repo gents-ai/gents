@@ -27,7 +27,14 @@ pub(super) async fn reconcile_peer_tick_with_replay(
     peer_id: &str,
     force_replay: bool,
 ) -> Result<PairingTickOutcome> {
-    let prepared = prepare_pairing_peer(admin, store, peer_id.to_string(), force_replay).await;
+    let prepared = prepare_pairing_peer(
+        admin,
+        store,
+        peer_id.to_string(),
+        force_replay,
+        &std::collections::BTreeSet::new(),
+    )
+    .await;
     reconcile_prepared_peer(admin, store, prepared).await
 }
 
@@ -53,6 +60,7 @@ pub(super) async fn prepare_pairing_peer(
     store: &dyn PairingStateStore,
     peer_id: String,
     force_replay_when_active: bool,
+    dropped: &std::collections::BTreeSet<String>,
 ) -> PairingPeerPreparation {
     let loaded_desired = match store.load_desired_with_authority(&peer_id).await {
         Ok(desired) => desired,
@@ -89,6 +97,7 @@ pub(super) async fn prepare_pairing_peer(
     };
     let mut active_before = false;
     let mut reconnected = false;
+    let mut dropped_since_sweep = false;
     if desired_state.has_wiring() && !desired_state.replicator_addresses.is_empty() {
         let endpoint_changed = !applied.state.replicator_addresses.is_empty()
             && applied.state.replicator_addresses != desired_state.replicator_addresses;
@@ -97,6 +106,11 @@ pub(super) async fn prepare_pairing_peer(
             .iter()
             .filter_map(|address| super::super::TransportEndpoint::parse(address.clone()).ok())
             .collect::<Vec<_>>();
+        dropped_since_sweep = endpoints.iter().any(|endpoint| {
+            dropped
+                .iter()
+                .any(|entry| transport_entry_names_peer(entry, endpoint.peer_id()))
+        });
         for endpoint in &endpoints {
             if peer_already_active(admin, endpoint.peer_id()).await {
                 active_before = true;
@@ -155,7 +169,7 @@ pub(super) async fn prepare_pairing_peer(
             enrollment_generation,
             applied,
             reconnected,
-            force_replay: force_replay_when_active && active_before,
+            force_replay: (force_replay_when_active || dropped_since_sweep) && active_before,
         }),
     }
 }
@@ -335,11 +349,15 @@ async fn peer_already_active(admin: &dyn RemoteP2pAdmin, peer_id: &str) -> bool 
             return false;
         }
     };
-    peers.iter().any(|entry| {
-        parse_public_peer_addr(entry)
-            .map(|(parsed, _)| parsed.as_str() == peer_id)
-            .unwrap_or_else(|_| entry.contains(peer_id))
-    })
+    peers
+        .iter()
+        .any(|entry| transport_entry_names_peer(entry, peer_id))
+}
+
+fn transport_entry_names_peer(entry: &str, peer_id: &str) -> bool {
+    parse_public_peer_addr(entry)
+        .map(|(parsed, _)| parsed.as_str() == peer_id)
+        .unwrap_or_else(|_| entry.contains(peer_id))
 }
 
 pub fn update_applied_after_success(

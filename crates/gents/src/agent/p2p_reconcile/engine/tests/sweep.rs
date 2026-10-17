@@ -14,11 +14,13 @@ async fn cancellation_preempts_in_flight_pairing_sweep_admin_wait() {
     let cancel = CancellationToken::new();
     let mut replay_connections = BTreeMap::new();
     let mut failing_peers = BTreeSet::new();
+    let mut dropped = BTreeSet::new();
     let sweep = sweep_pairings_logged_until_cancelled(
         &admin,
         &store,
         &mut replay_connections,
         &mut failing_peers,
+        &mut dropped,
         &cancel,
     );
     tokio::pin!(sweep);
@@ -55,7 +57,9 @@ async fn pairing_reconciler_retries_initial_enumeration_failure_then_cancels_cle
     let event_bus = events::ChannelBus::new();
     let subscription = event_bus.subscribe_collection_changes(Vec::new());
     let cancel = CancellationToken::new();
-    let reconciler = run_pairing_reconciler_loop(&admin, &store, subscription, &cancel);
+    let connections = event_bus.subscribe(&[events::EventName::PeerConnection]);
+    let reconciler =
+        run_pairing_reconciler_loop(&admin, &store, subscription, connections, &cancel);
     tokio::pin!(reconciler);
     let retry_fence_time = tokio::time::Instant::now();
 
@@ -174,4 +178,89 @@ async fn read_failure_noops_without_remote_reads() {
     assert!(outcome.desired_read_failed);
     assert!(outcome.ops_applied.is_empty());
     assert!(admin.emitted.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn peer_reconnect_between_sweeps_replays_on_connection_event() {
+    let filter = one_filter("AgentRequest", "requester_did", "did:key:peer");
+    let store = MockStore::with_desired(Some(PairingDesired {
+        replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
+        replicator_collections: set(&["AgentRequest"]),
+        replicator_filter: filter.clone(),
+        template_ids: set(&["agent-target-host"]),
+        ..Default::default()
+    }));
+    *store.applied.lock().unwrap() = PairingApplied {
+        replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
+        replicator_filter: filter.clone(),
+        ..Default::default()
+    };
+    let installed = Arc::new(tokio::sync::Notify::new());
+    let admin = MockAdmin {
+        active: Mutex::new(vec![TEST_TRANSPORT_PEER_ID.into()]),
+        replicator_installed: Some(installed.clone()),
+        ..Default::default()
+    };
+    admin.replicators.lock().unwrap().insert(
+        TEST_TRANSPORT_ADDRESS_A.into(),
+        RemoteReplicator {
+            id: Some("id-current-endpoint".into()),
+            collections: vec![mock_collection_id("AgentRequest")],
+            address: Some(TEST_TRANSPORT_ADDRESS_A.into()),
+            filters: Some(mock_live_filters(&filter)),
+        },
+    );
+    let event_bus = events::ChannelBus::new();
+    let subscription = event_bus.subscribe_collection_changes(Vec::new());
+    let connections = event_bus.subscribe(&[events::EventName::PeerConnection]);
+    let cancel = CancellationToken::new();
+    let reconciler =
+        run_pairing_reconciler_loop(&admin, &store, subscription, connections, &cancel);
+    tokio::pin!(reconciler);
+
+    let startup_replay = installed.notified();
+    tokio::pin!(startup_replay);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::select! {
+            _ = &mut startup_replay => {}
+            result = &mut reconciler => panic!("reconciler stopped: {result:?}"),
+        }
+    })
+    .await
+    .expect("startup sweep replays once");
+
+    // The peer drops and reconnects long before the next periodic sweep.
+    for connected in [false, true] {
+        event_bus.publish(events::Message::peer_connection(
+            events::PeerConnectionData {
+                peer_id: TEST_TRANSPORT_PEER_ID.into(),
+                connected,
+            },
+        ));
+    }
+    let reconnect_replay = installed.notified();
+    tokio::pin!(reconnect_replay);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::select! {
+            _ = &mut reconnect_replay => {}
+            result = &mut reconciler => panic!("reconciler stopped: {result:?}"),
+        }
+    })
+    .await
+    .expect("the connection event replays without waiting for the sweep interval");
+    assert_eq!(
+        admin
+            .emitted
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|op| matches!(op, DiffOp::InstallReplicator(_)))
+            .count(),
+        2
+    );
+
+    cancel.cancel();
+    tokio::time::timeout(Duration::from_millis(100), &mut reconciler)
+        .await
+        .expect("cancellation must stop the reconciler");
 }
