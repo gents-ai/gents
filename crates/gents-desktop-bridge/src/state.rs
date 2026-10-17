@@ -8,22 +8,11 @@ use tauri::async_runtime::{spawn, JoinHandle};
 use tauri::{AppHandle, Emitter, Runtime, State};
 use tokio::sync::watch;
 
-use crate::config::{
-    AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, NodeHomePolicy,
-};
+use crate::config::{BootstrapPolicy, BridgeConfig, HomePolicy, NodeHomePolicy};
 use crate::snapshot::projection::SnapshotGrants;
 use crate::types::ClientUpdateEvent;
 
-#[derive(Debug, Clone)]
-pub struct ResolvedBridgePolicy {
-    pub desktop_paths: DesktopPaths,
-    pub node_home: Option<PathBuf>,
-    pub bootstrap: BootstrapPolicy,
-    pub app_meta: AppMeta,
-    pub snapshot_grants: SnapshotGrants,
-    pub managed_server: ManagedServerPolicy,
-    pub store_key_custody: gents::store_key::StoreKeyCustodyChoice,
-}
+pub use crate::config::ResolvedBridgePolicy;
 
 #[derive(Debug, Clone)]
 pub enum ClientStartProgress {
@@ -225,6 +214,8 @@ pub struct ManagedServerState {
 
 pub struct DesktopBridge {
     pub core: Option<Arc<ClientCore>>,
+    #[cfg(unix)]
+    pub(crate) client_host: Option<crate::host::ClientHostService>,
     /// Only native destruction retires a window selection; late IPC cannot
     /// register it again.
     selected_nodes_by_window: BTreeMap<String, Option<String>>,
@@ -256,9 +247,7 @@ impl DesktopBridge {
     fn apply_window_selection(&self) {
         if let Some(core) = &self.core {
             let selected = self.selected_node_did();
-            if core.selected_node_did() != selected {
-                core.set_selected_node_did(selected);
-            }
+            core.set_selected_node_did(selected);
         }
     }
 
@@ -285,6 +274,8 @@ impl DesktopAppState {
         Self {
             bridge: Mutex::new(DesktopBridge {
                 core: None,
+                #[cfg(unix)]
+                client_host: None,
                 selected_nodes_by_window: BTreeMap::new(),
                 updates_task: None,
                 approvals_watch_task: None,
@@ -406,6 +397,7 @@ pub fn resolve_policy(
         app_meta: config.app_meta.clone(),
         snapshot_grants: config.snapshot_grants,
         managed_server: config.managed_server,
+        client_host: config.client_host,
         store_key_custody: config.store_key_custody,
     })
 }

@@ -643,6 +643,7 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/Callback.lean` | Callback invocation lifecycle, action-journal prefix, and claim uniqueness |
 | `Proofs/Client.lean` | Barrel for client turn-state derivation and client theorems |
 | `Proofs/ClientShell.lean` | Barrel for multi-session shell workflow modules |
+| `Proofs/ClientShell/ObservationScope.lean` | Shared client observation focus while external frontend attachments are present; the last detachment restores current shell intent. |
 | `Proofs/CommandPolicy.lean` | Barrel for command/tool execution policy validation, sandbox, env, and safety proofs |
 | `Proofs/ToolExecution.lean` | MCP/tool preflight and retry eligibility boundary model |
 | `Proofs/ManagedExec.lean` | Barrel for managed native executor state, executable transitions, liveness properties, and tool composition |

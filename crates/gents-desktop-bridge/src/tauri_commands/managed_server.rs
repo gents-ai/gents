@@ -5128,6 +5128,7 @@ mod tests {
                 },
                 snapshot_grants: SnapshotGrants::core_only(),
                 managed_server: ManagedServerPolicy::Allowed,
+                client_host: false,
                 store_key_custody: gents::store_key::StoreKeyCustodyChoice::File,
             },
             None,
@@ -5964,6 +5965,7 @@ mod tests {
                 snapshot_grants: SnapshotGrants::core_only(),
                 managed_server: ManagedServerPolicy::Allowed,
                 store_key_custody: gents::store_key::StoreKeyCustodyChoice::File,
+                client_host: false,
             },
             None,
         )

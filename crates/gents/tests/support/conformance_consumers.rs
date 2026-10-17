@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "client::core::observation_scope::tests::generated_attachment_traces_keep_every_frontend_observable",
+            package: "gents-desktop-core",
+            source_path: "crates/gents-desktop-core/src/client/core/observation_scope.rs",
+            module_path: "client::core::observation_scope::tests",
+            function: "generated_attachment_traces_keep_every_frontend_observable",
+        },
+        ConformanceConsumer::RustTest {
             id: "client::observe::projection_store::reload_tests::generated_notice_delivery_never_regresses_watchers",
             package: "gents-desktop-core",
             source_path: "crates/gents-desktop-core/src/client/observe/projection_store.rs",

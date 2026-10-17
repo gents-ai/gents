@@ -991,6 +991,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "ManagedExecLivenessCases".to_string(),
         ));
     }
+    assert!(!snapshot.client_observation_scope_cases.is_empty());
+    emitted.insert((
+        "client_observation_scope_cases".into(),
+        "ClientObservationScopeCases".into(),
+    ));
     assert!(snapshot.client_data_publication_cases["notice_delivery"].is_object());
     for field in ["publications", "reuse"] {
         assert!(snapshot.client_request_patch_publication_cases[field]
