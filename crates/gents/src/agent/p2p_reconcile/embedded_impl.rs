@@ -407,11 +407,20 @@ mod tests {
     #[tokio::test]
     async fn collection_name_resolution_accepts_names_and_ids() {
         let test = test_node().await;
-        let definition = test
-            .node
-            .get_collection("P2pReconcileThing")
-            .expect("collection lookup")
-            .expect("collection definition");
+        let definition = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(definition) = test
+                    .node
+                    .get_collection("P2pReconcileThing")
+                    .expect("collection lookup")
+                {
+                    break definition;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("committed schema reaches the collection observation");
         let admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&test.node));
 
         assert_eq!(
