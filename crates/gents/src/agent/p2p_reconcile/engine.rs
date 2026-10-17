@@ -6,7 +6,7 @@ mod rows;
 mod store;
 mod sweep;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -85,6 +85,7 @@ pub struct PairingTickOutcome {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LoadedPairingApplied {
+    pub doc_id: Option<String>,
     pub state: PairingApplied,
     pub duplicate_doc_ids: Vec<String>,
 }
@@ -108,6 +109,17 @@ pub trait PairingStateStore: Send + Sync {
     }
 
     async fn load_applied(&self, peer_id: &str) -> Result<LoadedPairingApplied>;
+
+    async fn load_applied_many(
+        &self,
+        peer_ids: &BTreeSet<String>,
+    ) -> Result<BTreeMap<String, LoadedPairingApplied>> {
+        let mut applied = BTreeMap::new();
+        for peer_id in peer_ids {
+            applied.insert(peer_id.clone(), self.load_applied(peer_id).await?);
+        }
+        Ok(applied)
+    }
 
     async fn persist_applied(&self, peer_id: &str, applied: &LoadedPairingApplied) -> Result<()>;
 

@@ -23,8 +23,8 @@ fn publish_watcher_update(bus: &events::ChannelBus, collection_id: &str, doc_id:
 async fn unrelated_changes_do_not_wake_or_postpone_the_request_scan() {
     use events::Bus;
     let bus = events::ChannelBus::new();
-    let mut subscription = bus.subscribe_document_changes();
-    let wait = wait_for_request_change(&mut subscription, Some("requests"));
+    let mut subscription = bus.subscribe_collection_changes(vec!["requests".into()]);
+    let wait = wait_for_request_change(&mut subscription);
     tokio::pin!(wait);
     for _ in 0..30 {
         publish_watcher_update(&bus, "output", "streaming-output");
@@ -42,40 +42,29 @@ async fn unrelated_changes_do_not_wake_or_postpone_the_request_scan() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn request_changes_and_overflow_wake_without_waiting_for_the_fallback() {
+async fn request_changes_wake_without_waiting_for_the_fallback() {
     use events::Bus;
-    for overflow in [false, true] {
-        let bus = events::ChannelBus::with_config(
-            events::ChannelBusConfig::default().with_event_buffer_size(if overflow {
-                1
-            } else {
-                4096
-            }),
-        );
-        let mut subscription = bus.subscribe_document_changes();
-        publish_watcher_update(&bus, "output", "first");
-        publish_watcher_update(&bus, if overflow { "output" } else { "requests" }, "second");
-        let started = tokio::time::Instant::now();
-        let batch = wait_for_request_change(&mut subscription, Some("requests"))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(tokio::time::Instant::now(), started);
-        assert!(document_change_batch_wakes_request_scan(
-            &batch,
-            Some("requests")
-        ));
-        assert_eq!(batch.resync_required, overflow);
-    }
+    let bus = events::ChannelBus::new();
+    let mut subscription = bus.subscribe_collection_changes(vec!["requests".into()]);
+    publish_watcher_update(&bus, "output", "first");
+    publish_watcher_update(&bus, "requests", "second");
+    let started = tokio::time::Instant::now();
+    let batch = wait_for_request_change(&mut subscription)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(tokio::time::Instant::now(), started);
+    assert_eq!(batch.changes.len(), 1);
+    assert_eq!(batch.changes[0].doc_id, "second");
 }
 
 #[tokio::test]
 async fn a_closed_request_change_feed_stops_the_watcher_wait() {
     use events::Bus;
     let bus = events::ChannelBus::new();
-    let mut subscription = bus.subscribe_document_changes();
+    let mut subscription = bus.subscribe_collection_changes(vec!["requests".into()]);
     bus.close();
-    assert!(wait_for_request_change(&mut subscription, Some("requests"))
+    assert!(wait_for_request_change(&mut subscription)
         .await
         .unwrap()
         .is_none());
@@ -397,7 +386,7 @@ async fn generated_release_cases_preserve_native_session_order() {
             )
             .await;
         }
-        let mut watcher = DefraWatcher::new(node.clone(), owner);
+        let mut watcher = DefraWatcher::new(node.clone(), owner).expect("request watcher");
         watcher.processed_request_ids = case
             .pre
             .processed_set
@@ -476,7 +465,7 @@ async fn native_arrival_head_is_delivered_despite_reverse_lexical_timestamp_tie(
         "2026-03-12T00:00:00Z",
     )
     .await;
-    let watcher = DefraWatcher::new(node.clone(), owner);
+    let watcher = DefraWatcher::new(node.clone(), owner).expect("request watcher");
     let held = crate::config_client::ConfigApplyTxn::begin_local(&node, None)
         .await
         .unwrap();
@@ -558,7 +547,7 @@ async fn pending_requests_skip_queued_same_session_rows_until_claimable() {
     )
     .await;
 
-    let watcher = DefraWatcher::new(node.clone(), node_did);
+    let watcher = DefraWatcher::new(node.clone(), node_did).expect("request watcher");
     let pending = watcher.pending_requests().await.unwrap();
     assert_eq!(
         pending
@@ -610,7 +599,7 @@ async fn pending_requests_include_interrupted_queued_rows_for_terminalization() 
     )
     .await;
 
-    let watcher = DefraWatcher::new(node, node_did);
+    let watcher = DefraWatcher::new(node, node_did).expect("request watcher");
     let pending = watcher.pending_requests().await.unwrap();
     assert_eq!(
         pending
@@ -638,7 +627,7 @@ async fn pending_requests_quarantines_incoherent_row_without_hiding_valid_work()
     )
     .await;
 
-    let watcher = DefraWatcher::new(node.clone(), node_did);
+    let watcher = DefraWatcher::new(node.clone(), node_did).expect("request watcher");
     let pending = watcher.pending_requests().await.unwrap();
     assert_eq!(
         pending
@@ -678,7 +667,7 @@ async fn malformed_pending_row_terminalizes_by_doc_id_without_poisoning_valid_ro
     )
     .await;
 
-    let watcher = DefraWatcher::new(node.clone(), node_did);
+    let watcher = DefraWatcher::new(node.clone(), node_did).expect("request watcher");
     let pending = watcher.pending_requests().await.unwrap();
     assert_eq!(
         pending
@@ -711,7 +700,7 @@ async fn incoherent_live_row_still_blocks_a_second_same_session_claim() {
     )
     .await;
 
-    let watcher = DefraWatcher::new(node, node_did);
+    let watcher = DefraWatcher::new(node, node_did).expect("request watcher");
     assert!(watcher.pending_requests().await.unwrap().is_empty());
 }
 
@@ -724,7 +713,7 @@ async fn try_fetch_request_terminalizes_incoherent_parent_linkage() {
     let doc_id =
         insert_incoherent_agent_request(node.as_ref(), node_did, "req-incoherent-fetch").await;
 
-    let watcher = DefraWatcher::new(node.clone(), node_did);
+    let watcher = DefraWatcher::new(node.clone(), node_did).expect("request watcher");
     let result = watcher.try_fetch_request(&doc_id).await.unwrap();
     assert!(result.is_none());
     let terminal = request_terminal_fields(node.as_ref(), "req-incoherent-fetch").await;
@@ -765,9 +754,9 @@ async fn pending_requests_are_scoped_by_node_did_without_host_identity() {
     let response = node.execute(&mutation).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let foreign = DefraWatcher::new(node.clone(), "did:key:foreign");
+    let foreign = DefraWatcher::new(node.clone(), "did:key:foreign").expect("request watcher");
     assert!(foreign.pending_requests().await.unwrap().is_empty());
-    let owner = DefraWatcher::new(node, node_did);
+    let owner = DefraWatcher::new(node, node_did).expect("request watcher");
     let pending = owner.pending_requests().await.unwrap();
     assert_eq!(
         pending
@@ -818,7 +807,7 @@ async fn later_request_cannot_overtake_delivered_native_session_head() {
         second,
     )
     .await;
-    let mut watcher = DefraWatcher::new(node.clone(), node_did);
+    let mut watcher = DefraWatcher::new(node.clone(), node_did).expect("request watcher");
     let continuation = tokio::time::timeout(deliver, watcher.next_request())
         .await
         .expect("first delivery")

@@ -1010,31 +1010,43 @@ pub async fn reconcile_owned_graph_runs(
     Ok(terminalized)
 }
 
+/// Run deadlines are wall-clock facts no document change announces, so the
+/// sweep also runs on this interval; it bounds deadline detection latency.
+const GRAPH_RUN_DEADLINE_SWEEP: Duration = Duration::from_secs(5);
+
 pub async fn run_graph_run_reconciler(
     node: Arc<EmbeddedNode>,
     owner_did: String,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let mut interval = tokio::time::interval(Duration::from_secs(1));
+    let mut changes = crate::subscribe_collections(&node, ["GraphRun", "AgentRequest"])?;
+    let mut changes_open = true;
+    let mut interval = tokio::time::interval(GRAPH_RUN_DEADLINE_SWEEP);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
-            _ = interval.tick() => {
-                match reconcile_owned_graph_runs(&node, &owner_did).await {
-                    Ok(terminalized) if terminalized > 0 => tracing::info!(
-                        owner_did,
-                        terminalized,
-                        "materialized durable graph run completion"
-                    ),
-                    Ok(_) => {}
-                    Err(error) => tracing::warn!(
-                        owner_did,
-                        %error,
-                        "graph run reconciliation sweep failed; retrying"
-                    ),
+            _ = interval.tick() => {}
+            batch = changes.recv(), if changes_open => {
+                if batch.is_none() {
+                    tracing::warn!(owner_did, "graph run change subscription closed; sweeping on the interval only");
+                    changes_open = false;
+                    continue;
                 }
             }
+        }
+        match reconcile_owned_graph_runs(&node, &owner_did).await {
+            Ok(terminalized) if terminalized > 0 => tracing::info!(
+                owner_did,
+                terminalized,
+                "materialized durable graph run completion"
+            ),
+            Ok(_) => {}
+            Err(error) => tracing::warn!(
+                owner_did,
+                %error,
+                "graph run reconciliation sweep failed; retrying"
+            ),
         }
     }
 }

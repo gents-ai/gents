@@ -255,7 +255,7 @@ fn desktop_p2p_config(paths: &DesktopPaths, options: &ClientCoreOptions) -> P2PC
 }
 
 pub(super) async fn bootstrap_saved_peers(
-    _node: &Arc<EmbeddedNode>,
+    node: &Arc<EmbeddedNode>,
     p2p: &Arc<dyn P2POps>,
     records: &[PeerRecord],
     options: &ClientCoreOptions,
@@ -286,7 +286,9 @@ pub(super) async fn bootstrap_saved_peers(
             continue;
         }
 
-        match connect_peer_with_retry(p2p, &record.addr, &record.label).await {
+        match connect_peer_with_retry(node.event_bus().as_ref(), p2p, &record.addr, &record.label)
+            .await
+        {
             Ok(()) => {
                 status.dial_succeeded = true;
 
@@ -323,22 +325,25 @@ fn bootstrap_deferred_to_enrollment_authority(record: &PeerRecord) -> bool {
 }
 
 pub(super) async fn connect_peer_with_retry(
+    bus: &dyn events::Bus,
     p2p: &Arc<dyn P2POps>,
     addr: &str,
     label: &str,
 ) -> Result<()> {
-    connect_peer_with_retry_until(p2p, addr, label, BOOTSTRAP_OPERATION_TIMEOUT).await
+    connect_peer_with_retry_until(bus, p2p, addr, label, BOOTSTRAP_OPERATION_TIMEOUT).await
 }
 
 pub(super) async fn force_connect_peer_with_retry(
+    bus: &dyn events::Bus,
     p2p: &Arc<dyn P2POps>,
     addr: &str,
     label: &str,
 ) -> Result<()> {
-    force_connect_peer_with_retry_until(p2p, addr, label, BOOTSTRAP_OPERATION_TIMEOUT).await
+    force_connect_peer_with_retry_until(bus, p2p, addr, label, BOOTSTRAP_OPERATION_TIMEOUT).await
 }
 
 pub(super) async fn connect_peer_with_retry_until(
+    bus: &dyn events::Bus,
     p2p: &Arc<dyn P2POps>,
     addr: &str,
     label: &str,
@@ -359,7 +364,7 @@ pub(super) async fn connect_peer_with_retry_until(
         match p2p_connect_peer(p2p, addr).await {
             Ok(()) => {
                 if let Some(peer_id) = expected_peer_id.as_deref() {
-                    wait_for_connected_peer(p2p, peer_id, deadline, label).await?;
+                    wait_for_connected_peer(bus, p2p, peer_id, deadline, label).await?;
                 }
                 return Ok(());
             }
@@ -379,6 +384,7 @@ pub(super) async fn connect_peer_with_retry_until(
 }
 
 pub(super) async fn force_connect_peer_with_retry_until(
+    bus: &dyn events::Bus,
     p2p: &Arc<dyn P2POps>,
     addr: &str,
     label: &str,
@@ -393,7 +399,7 @@ pub(super) async fn force_connect_peer_with_retry_until(
         match p2p_connect_peer(p2p, addr).await {
             Ok(()) => {
                 if let Some(peer_id) = expected_peer_id.as_deref() {
-                    wait_for_connected_peer(p2p, peer_id, deadline, label).await?;
+                    wait_for_connected_peer(bus, p2p, peer_id, deadline, label).await?;
                 }
                 return Ok(());
             }
@@ -416,27 +422,46 @@ pub(super) async fn force_connect_peer_with_retry_until(
 
 pub(super) async fn is_connected_peer(p2p: &Arc<dyn P2POps>, peer_id: &str) -> Result<bool> {
     let peers = p2p_connected_peers(p2p).await?;
-    Ok(peers.iter().any(|peer| {
-        parse_public_peer_addr(peer)
-            .map(|(parsed_peer_id, _)| parsed_peer_id.as_str() == peer_id)
-            .unwrap_or_else(|_| peer.contains(peer_id))
-    }))
+    Ok(peers
+        .iter()
+        .any(|peer| transport_entry_names_peer(peer, peer_id)))
+}
+
+fn transport_entry_names_peer(entry: &str, peer_id: &str) -> bool {
+    parse_public_peer_addr(entry)
+        .map(|(parsed_peer_id, _)| parsed_peer_id.as_str() == peer_id)
+        .unwrap_or_else(|_| entry.contains(peer_id))
 }
 
 async fn wait_for_connected_peer(
+    bus: &dyn events::Bus,
     p2p: &Arc<dyn P2POps>,
     peer_id: &str,
     deadline: Instant,
     label: &str,
 ) -> Result<()> {
-    loop {
-        if is_connected_peer(p2p, peer_id).await? {
-            return Ok(());
+    // Subscribe before the first observation so a connection that lands
+    // between them still wakes this wait.
+    let mut connections = bus.subscribe(&[events::EventName::PeerConnection]);
+    if is_connected_peer(p2p, peer_id).await? {
+        return Ok(());
+    }
+    let connected = tokio::time::timeout_at(deadline, async {
+        while let Some(message) = connections.recv().await {
+            if message.as_peer_connection().is_some_and(|change| {
+                change.connected && transport_entry_names_peer(&change.peer_id, peer_id)
+            }) {
+                return true;
+            }
         }
-        if Instant::now() >= deadline {
-            anyhow::bail!("timed out waiting for bootstrap peer {peer_id} to connect for {label}");
-        }
-        sleep(Duration::from_millis(100)).await;
+        false
+    })
+    .await;
+    match connected {
+        Ok(true) => Ok(()),
+        // A closed bus delivers no further events; fall back to one live read.
+        Ok(false) if is_connected_peer(p2p, peer_id).await? => Ok(()),
+        _ => anyhow::bail!("timed out waiting for bootstrap peer {peer_id} to connect for {label}"),
     }
 }
 

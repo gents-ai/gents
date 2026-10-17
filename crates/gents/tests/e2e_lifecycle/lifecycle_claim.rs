@@ -248,6 +248,7 @@ async fn claim_rejects_an_agent_change_without_mutating_the_session() {
     )
     .doc_id;
     let request = DefraWatcher::new(db.node.clone(), NODE_DID)
+        .expect("request watcher")
         .try_fetch_request(&doc_id)
         .await
         .unwrap()
@@ -346,7 +347,7 @@ async fn claim_synthesizes_deadline_when_request_deadline_is_invalid() {
         "AgentRequest",
     )
     .doc_id;
-    let watcher = DefraWatcher::new(db.node.clone(), NODE_DID);
+    let watcher = DefraWatcher::new(db.node.clone(), NODE_DID).expect("request watcher");
     let request = watcher
         .try_fetch_request(&doc_id)
         .await

@@ -1,10 +1,9 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::{EmbeddedNode, EventName};
+use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;

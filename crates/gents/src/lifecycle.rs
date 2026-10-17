@@ -629,13 +629,15 @@ pub const TERMINAL_REDRIVE_BATCH_LIMIT: usize = 64;
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct TerminalRedriveReport {
     pub reasserted: usize,
+    /// Requests retired because every requester replicator acknowledged them.
+    pub acknowledged: usize,
     pub scanned: usize,
     pub failed: usize,
 }
 
 impl TerminalRedriveReport {
     pub fn is_noop(&self) -> bool {
-        self.reasserted == 0
+        self.reasserted == 0 && self.acknowledged == 0
     }
 }
 

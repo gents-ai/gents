@@ -167,6 +167,8 @@ fn compact(row: &Value, current_session: Option<&str>, agent: &str) -> Value {
 }
 
 const OUTPUT_PAGE_BYTES: usize = 16_000;
+/// Search stops reading a session's headers once it has enough hits.
+const SEARCH_MESSAGE_PAGE: usize = if cfg!(test) { 1 } else { 100 };
 
 pub(super) const OUTPUT_ORDER: &[&str] = &[
     "text",
@@ -734,39 +736,47 @@ async fn search_session(
     if resume_sequence.is_none() && matches_text(session, Some(needle)) {
         hits.push((-1, json!({"session_id":id,"session_doc_id":session["_docID"],"title":session["title"]["text"],"source":"metadata"})));
     }
-    let headers = rows(txn.execute(&format!("{{AgentMessage(filter: {{{},session_id: {{_eq: {}}}}},order: {{sequence: ASC}}) {{{}}}}}",scope(agent,requester),quoted(id),crate::session::canonical_rows::AGENT_MESSAGE_FIELDS)).await?,"AgentMessage")?;
     let mut reader = TxnCanonicalReader::new(txn, agent, requester);
-    let observed = headers
-        .iter()
-        .map(crate::session::canonical_rows::decode_transcript_message_row)
-        .collect::<Result<Vec<_>>>()?;
-    reader.observe_headers(&observed);
     let needle_lower = needle.to_lowercase();
-    for row in headers {
-        if hits.len() >= remaining {
+    let mut after = resume_sequence;
+    'pages: loop {
+        let bound = after
+            .map(|sequence| format!(",sequence: {{_gt: {sequence}}}"))
+            .unwrap_or_default();
+        let headers = rows(txn.execute(&format!("{{AgentMessage(filter: {{{},session_id: {{_eq: {}}}{bound}}},order: {{sequence: ASC}},limit: {SEARCH_MESSAGE_PAGE}) {{{}}}}}",scope(agent,requester),quoted(id),crate::session::canonical_rows::AGENT_MESSAGE_FIELDS)).await?,"AgentMessage")?;
+        let observed = headers
+            .iter()
+            .map(crate::session::canonical_rows::decode_transcript_message_row)
+            .collect::<Result<Vec<_>>>()?;
+        reader.observe_headers(&observed);
+        let exhausted = headers.len() < SEARCH_MESSAGE_PAGE;
+        for row in headers {
+            if hits.len() >= remaining {
+                break 'pages;
+            }
+            let header_id = row["_docID"].as_str().context("header ID missing")?;
+            let sequence = row["sequence"]
+                .as_i64()
+                .context("message has no sequence")?;
+            after = Some(sequence);
+            let (header, message) = reader.load_message(header_id).await?;
+            let text = gents_protocol::transcript::present_message(&message).body_markdown;
+            if let Some(position) = text.to_lowercase().find(&needle_lower) {
+                let excerpt: String = text
+                    .chars()
+                    .skip(
+                        text.to_lowercase()[..position]
+                            .chars()
+                            .count()
+                            .saturating_sub(80),
+                    )
+                    .take(240)
+                    .collect();
+                hits.push((sequence, json!({"session_id":id,"message_doc_id":header_id,"sequence":header.sequence,"excerpt":excerpt,"payload_references":header.payload_references()})));
+            }
+        }
+        if exhausted {
             break;
-        }
-        let header_id = row["_docID"].as_str().context("header ID missing")?;
-        let sequence = row["sequence"]
-            .as_i64()
-            .context("message has no sequence")?;
-        if resume_sequence.is_some_and(|after| sequence <= after) {
-            continue;
-        }
-        let (header, message) = reader.load_message(header_id).await?;
-        let text = gents_protocol::transcript::present_message(&message).body_markdown;
-        if let Some(position) = text.to_lowercase().find(&needle_lower) {
-            let excerpt: String = text
-                .chars()
-                .skip(
-                    text.to_lowercase()[..position]
-                        .chars()
-                        .count()
-                        .saturating_sub(80),
-                )
-                .take(240)
-                .collect();
-            hits.push((sequence, json!({"session_id":id,"message_doc_id":header_id,"sequence":header.sequence,"excerpt":excerpt,"payload_references":header.payload_references()})));
         }
     }
     Ok(hits)
