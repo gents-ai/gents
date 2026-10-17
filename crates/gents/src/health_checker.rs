@@ -773,27 +773,17 @@ async fn upsert_persisted_health_state(
     let service_id = escape_graphql_string(&entry.service_id);
     let node_did = escape_graphql_string(persistence.node_did);
     let mut fields = persisted_health_fields(entry);
-    let previous = previous.map(persisted_health_fields);
-    let mut changed = fields
-        .iter()
-        .filter(|(name, value)| {
-            previous
-                .as_ref()
-                .is_none_or(|old| old.get(*name) != Some(*value))
-        })
-        .map(|(name, value)| (name.clone(), value.clone()))
-        .collect::<serde_json::Map<_, _>>();
-    if changed.is_empty() {
+    // `updated_at` moves on every write, so an unchanged row is skipped here;
+    // DefraDB writes no block for the other fields an update leaves unchanged.
+    if previous.map(persisted_health_fields).as_ref() == Some(&fields) {
         return Ok(());
     }
-    let updated_at = serde_json::json!(now);
-    changed.insert("updated_at".into(), updated_at.clone());
-    fields.insert("updated_at".into(), updated_at);
+    fields.insert("updated_at".into(), serde_json::json!(now));
+    let update =
+        gents_protocol::graphql::graphql_input_literal(&serde_json::Value::Object(fields.clone()))?;
     fields.insert("service_id".into(), serde_json::json!(entry.service_id));
     fields.insert("node_did".into(), serde_json::json!(persistence.node_did));
     let add = gents_protocol::graphql::graphql_input_literal(&serde_json::Value::Object(fields))?;
-    let update =
-        gents_protocol::graphql::graphql_input_literal(&serde_json::Value::Object(changed))?;
     let mutation = format!(
         r#"mutation {{
             upsert_ToolServiceHealthState(
