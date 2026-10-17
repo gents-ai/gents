@@ -11,6 +11,8 @@ use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use serde_json::{json, Value};
 use tokio::process::{Child, Command};
 
+#[path = "support/configured_actions.rs"]
+mod configured_actions;
 #[allow(dead_code)]
 #[path = "../../gents-cli/tests/support/mocks/fake_llm.rs"]
 mod fake_llm;
@@ -660,6 +662,17 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         user_rounds == 1,
         "expected one submitted user round, observed {user_rounds}"
     );
+    if matches!(journey, Journey::Conversation) {
+        configured_actions::exercise(
+            &mut client,
+            &mut id,
+            &access,
+            node_did,
+            agent_id,
+            &client_did,
+        )
+        .await?;
+    }
     client.close().await;
     stop(&mut host).await?;
     stop(&mut runtime).await?;

@@ -215,9 +215,9 @@ async fn services(
     let records = core.peer_records().await;
     ensure!(records.iter().filter(|record| record.node_did == node_did).count() == 1,
         "Choose a connected runtime with an operator configuration route to configure speech services.");
-    let access = core.operator_access(node_did).map_err(|_| anyhow::anyhow!(
+    let access = core.operator_graphql(node_did).map(gents::ConfigAccess::Graphql).context(
         "Speech configuration cannot be read for this runtime. Use Gents: Connect Local Runtime on this machine, or choose another service runtime."
-    ))?;
+    )?;
     gents::registry::configured_mcp_services_on(&access, node_did).await
 }
 

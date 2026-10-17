@@ -262,7 +262,14 @@ fn response_composite_commits(
     response: &QueryResponse,
     field: &str,
 ) -> Result<Vec<CompositeCommit>> {
-    let Some(value) = response.data.as_ref().and_then(|data| data.get(field)) else {
+    composite_commits_at(
+        response.data.as_ref().and_then(|data| data.get(field)),
+        field,
+    )
+}
+
+fn composite_commits_at(value: Option<&Value>, field: &str) -> Result<Vec<CompositeCommit>> {
+    let Some(value) = value else {
         return Ok(Vec::new());
     };
     let rows = value
@@ -332,15 +339,16 @@ pub async fn newest_document_composite_commit(
     unique_newest_composite_commit(commits, operation)
 }
 
-pub(crate) async fn newest_document_composite_commit_in_txn(
+pub async fn newest_document_composite_commit_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     doc_id: &str,
     operation: &str,
 ) -> Result<Option<CompositeCommit>> {
-    let response = txn
-        .execute_local_response(&newest_composite_query(doc_id))
-        .await?;
-    let commits = response_composite_commits(&response, "_commits")?;
+    let response = txn.execute(&newest_composite_query(doc_id)).await?;
+    let commits = composite_commits_at(
+        response.get("data").and_then(|data| data.get("_commits")),
+        "_commits",
+    )?;
     unique_newest_composite_commit(commits, operation)
 }
 

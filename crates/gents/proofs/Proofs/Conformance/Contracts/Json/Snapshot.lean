@@ -1,6 +1,7 @@
 import Proofs.Conformance.RequestPatchPublicationCases
 import Proofs.Conformance.ClientDataPublicationCases
 import Proofs.Conformance.ClientObservationScope
+import Proofs.Conformance.ClientSettings
 import Proofs.Conformance.ClientRequestClosureCases
 import Proofs.Conformance.ClientRequestCacheIdentityCases
 import Proofs.Conformance.SessionQueueOrderCases
@@ -266,6 +267,8 @@ def snapshotJson : String :=
       ++ Conformance.ClientShellContracts.desktopClientShellCasesJson ++ ","
     ++ "\"client_observation_scope_cases\":"
       ++ Conformance.ClientObservationScope.casesJson ++ ","
+    ++ "\"client_settings_cases\":"
+      ++ clientSettingsCases.compress ++ ","
     ++ "\"client_data_publication_cases\":"
       ++ Conformance.ClientDataPublication.casesJson ++ ","
     ++ "\"client_request_patch_publication_cases\":"

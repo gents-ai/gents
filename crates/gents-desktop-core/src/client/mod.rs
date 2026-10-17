@@ -19,6 +19,7 @@ pub use core::{
     STUCK_THRESHOLD_ATTEMPTS,
 };
 pub use gents::P2pSyncStatusSnapshot;
+pub use mutations::{ConfigEditorDocument, ConfigEditorRevision};
 pub use mutations::{PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
 pub use observe::{
     ObservedStore, ObserverHandle, ObserverMetricsSnapshot, StoreProjectionRevision,

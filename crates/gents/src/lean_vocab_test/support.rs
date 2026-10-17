@@ -70,6 +70,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
     pub(crate) mailbox_sweep_cases: Vec<serde_json::Value>,
     pub(crate) client_observation_scope_cases: Vec<serde_json::Value>,
+    pub(crate) client_settings_cases: serde_json::Value,
     pub(crate) client_data_publication_cases: serde_json::Value,
     pub(crate) client_request_patch_publication_cases: serde_json::Value,
     pub(crate) client_request_closure_cases: Vec<serde_json::Value>,
