@@ -13,6 +13,10 @@ use gents_protocol::output::{
 use std::sync::Arc;
 
 #[path = "../../../../gents/tests/support/streaming_backend.rs"]
+#[expect(
+    dead_code,
+    reason = "The shared backend also supports stream gates and counters used by other test binaries."
+)]
 pub(super) mod streaming_backend;
 
 pub(super) async fn configure_runtime_agent(

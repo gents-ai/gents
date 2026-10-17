@@ -384,19 +384,7 @@ impl Drop for BackgroundExecutionReservation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TranscriptTurnState {
     Idle,
-    AssistantBuilding {
-        sequence: u32,
-    },
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Hook conformance tests construct persisted-turn states."
-        )
-    )]
-    AssistantPersisted {
-        sequence: u32,
-    },
+    AssistantBuilding { sequence: u32 },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -413,15 +401,12 @@ struct SessionState {
     request_deadline_at: Option<DateTime<Utc>>,
     sequence: u32,
     transcript_turn: TranscriptTurnState,
-    persisted_tool_result_keys: HashSet<String>,
     tool_result_identities: HashMap<String, ToolResultIdentity>,
 }
 
 impl SessionState {
-    // Reset on a genuine user message only. Tool-result messages must not
-    // reset the turn state: the first streamed result of several parallel
-    // calls must not revoke the persisted-turn gate the remaining results
-    // still need (Lean: `Transcript.parallel_results_complete_independently`).
+    // Tool-result messages stay in the assistant turn so parallel calls share
+    // its sequence (Lean: `Transcript.parallel_results_complete_independently`).
     fn reset_after_user_message(&mut self) {
         self.transcript_turn = TranscriptTurnState::Idle;
     }
@@ -429,7 +414,7 @@ impl SessionState {
     fn begin_or_continue_assistant_turn(&mut self) -> u32 {
         match self.transcript_turn {
             TranscriptTurnState::AssistantBuilding { sequence } => sequence,
-            TranscriptTurnState::Idle | TranscriptTurnState::AssistantPersisted { .. } => {
+            TranscriptTurnState::Idle => {
                 self.sequence += 1;
                 let sequence = self.sequence;
                 self.transcript_turn = TranscriptTurnState::AssistantBuilding { sequence };
@@ -454,85 +439,6 @@ impl SessionState {
         if let Some(call_id) = non_empty(call_id) {
             identity.call_id = Some(call_id.to_string());
         }
-    }
-
-    fn tool_result_message_identity(
-        &self,
-        internal_call_id: &str,
-        call_id: Option<&str>,
-    ) -> (String, Option<String>) {
-        let registered = self.tool_result_identities.get(internal_call_id);
-        let result_id = registered
-            .and_then(|identity| identity.result_id.clone())
-            .or_else(|| non_empty(call_id).map(ToOwned::to_owned))
-            .unwrap_or_else(|| internal_call_id.to_string());
-        let call_id = registered
-            .and_then(|identity| identity.call_id.clone())
-            .or_else(|| non_empty(call_id).map(ToOwned::to_owned));
-
-        (result_id, call_id)
-    }
-
-    fn mark_tool_result_seen_for_persisted_turn(
-        &mut self,
-        internal_call_id: &str,
-        result_id: Option<&str>,
-        call_id: Option<&str>,
-    ) -> bool {
-        self.register_tool_result_identity(internal_call_id, result_id, call_id);
-        if !matches!(
-            self.transcript_turn,
-            TranscriptTurnState::AssistantPersisted { .. }
-        ) {
-            return false;
-        }
-
-        let keys = self.tool_result_dedupe_keys(internal_call_id, result_id, call_id);
-        self.mark_tool_result_keys_seen(keys)
-    }
-
-    fn tool_result_dedupe_keys(
-        &self,
-        internal_call_id: &str,
-        result_id: Option<&str>,
-        call_id: Option<&str>,
-    ) -> Vec<String> {
-        let mut keys = Vec::new();
-        push_tool_result_key(&mut keys, "internal", Some(internal_call_id));
-
-        if let Some(identity) = self.tool_result_identities.get(internal_call_id) {
-            push_tool_result_key(&mut keys, "result", identity.result_id.as_deref());
-            push_tool_result_key(&mut keys, "call", identity.call_id.as_deref());
-        }
-        push_tool_result_key(&mut keys, "result", result_id);
-        push_tool_result_key(&mut keys, "call", call_id);
-
-        keys
-    }
-
-    fn mark_tool_result_keys_seen(&mut self, keys: Vec<String>) -> bool {
-        let already_seen = self.tool_result_keys_already_seen(&keys);
-        self.persist_tool_result_keys(keys);
-        !already_seen
-    }
-
-    fn tool_result_keys_already_seen(&self, keys: &[String]) -> bool {
-        keys.iter()
-            .any(|key| self.persisted_tool_result_keys.contains(key))
-    }
-
-    fn persist_tool_result_keys(&mut self, keys: Vec<String>) {
-        self.persisted_tool_result_keys.extend(keys);
-    }
-}
-
-fn push_tool_result_key(keys: &mut Vec<String>, namespace: &str, value: Option<&str>) {
-    let Some(value) = non_empty(value) else {
-        return;
-    };
-    let key = format!("{namespace}:{value}");
-    if !keys.iter().any(|existing| existing == &key) {
-        keys.push(key);
     }
 }
 
@@ -715,7 +621,6 @@ impl DefraSessionHook {
                 request_deadline_at: None,
                 sequence: 0,
                 transcript_turn: TranscriptTurnState::Idle,
-                persisted_tool_result_keys: HashSet::new(),
                 tool_result_identities: HashMap::new(),
             })),
             in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
@@ -763,7 +668,6 @@ impl DefraSessionHook {
                 request_deadline_at: None,
                 sequence: max_seq,
                 transcript_turn: TranscriptTurnState::Idle,
-                persisted_tool_result_keys: HashSet::new(),
                 tool_result_identities: HashMap::new(),
             })),
             in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),

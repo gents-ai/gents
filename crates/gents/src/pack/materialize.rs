@@ -145,7 +145,10 @@ fn no_follow_open(path: &std::path::Path) -> Result<std::fs::File> {
     }
 }
 
-pub fn set_distribution_permissions(file: &std::fs::File) -> Result<()> {
+pub fn set_distribution_permissions(
+    #[cfg(unix)] file: &std::fs::File,
+    #[cfg(not(unix))] _file: &std::fs::File,
+) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

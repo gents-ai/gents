@@ -4,8 +4,9 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
-use crypto::Key;
-use defra_core::signing::{RemoteSigner, SigningConfig, SigningKeyType};
+#[cfg(target_os = "macos")]
+use defra_core::signing::RemoteSigner;
+use defra_core::signing::{SigningConfig, SigningKeyType};
 use identity::{FullIdentity as _, Identity as _, RawIdentity};
 
 mod file_key;
@@ -623,6 +624,7 @@ fn public_key_bytes_for_sec_key(key: &security_framework::key::SecKey) -> Result
     Ok(data.to_vec())
 }
 
+#[cfg(target_os = "macos")]
 fn did_for_secp256r1_public_key(public_key_bytes: &[u8]) -> Result<String> {
     let public_key = crypto::public_key_from_bytes(crypto::KeyType::Secp256r1, public_key_bytes)
         .map_err(anyhow::Error::from)?;
