@@ -153,6 +153,21 @@ impl ClientHost {
             ClientCommand::InferenceModelRecommendation { request } => encode(
                 crate::inference_setup::inference_model_recommendation(request)?,
             ),
+            ClientCommand::AgentModelSelect { request } => {
+                self.require_configured_runtime(&request.node_did).await?;
+                encode(
+                    self.core
+                        .select_agent_model(
+                            &request.node_did,
+                            &request.agent_id,
+                            &request.backend_id,
+                            &request.model_name,
+                            request.reasoning_effort,
+                        )
+                        .await
+                        .map_err(backend_error)?,
+                )
+            }
             ClientCommand::ConfigApply { request } => {
                 self.require_configured_runtime(&request.document.node.node_did)
                     .await?;
