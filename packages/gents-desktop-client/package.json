@@ -30,7 +30,7 @@
     "test": "tsc -p tests/tsconfig.json && vitest run"
   },
   "dependencies": {
-    "@tauri-apps/api": "~2.10.0"
+    "@tauri-apps/api": "^2"
   },
   "devDependencies": {
     "typescript": "~5.8.3",

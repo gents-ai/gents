@@ -14,7 +14,7 @@
     "@source-inc/gents-desktop-fleet": "0.20.0",
     "@source-inc/gents-desktop-tokens": "0.20.0",
     "@source-inc/gents-desktop-ui": "0.20.0",
-    "@tauri-apps/api": "~2.10.0",
+    "@tauri-apps/api": "^2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0",
