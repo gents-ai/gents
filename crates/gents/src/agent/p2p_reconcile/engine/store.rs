@@ -249,6 +249,9 @@ impl PairingStateStore for GraphqlPairingStateStore {
         &self,
         peer_ids: &BTreeSet<String>,
     ) -> Result<BTreeMap<String, LoadedPairingApplied>> {
+        if peer_ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
         let mut grouped = BTreeMap::<String, Vec<AppliedStateRow>>::new();
         for row in self.load_applied_rows().await? {
             if peer_ids.contains(&row.peer_id) {
