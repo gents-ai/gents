@@ -1,0 +1,209 @@
+namespace ToolPolicy.WorkspacePermissions
+
+inductive Mode where
+  | ask | autoReview | fullAccess
+  deriving DecidableEq, Repr
+
+inductive Route where
+  | allow | ask | review | deny
+  deriving DecidableEq, Repr
+
+structure Scope where
+  workspace : Nat
+  revision : Nat
+  deriving DecidableEq, Repr
+
+structure Grant where
+  scope : Scope
+  action : Nat
+  deriving DecidableEq, Repr
+
+structure Input where
+  current : Scope
+  configuredWorkspace : Nat
+  mode : Mode
+  action : Nat
+  ceilingAllows : Bool
+  crossesBoundary : Bool
+  grant : Option Grant := none
+  deriving DecidableEq, Repr
+
+/-- Workspace mode changes consent routing, not the configured tool ceiling,
+workspace authority, document ACP, or another workspace's permissions.
+A grant names the immutable action and the policy revision under which it was
+reviewed; host adapters must canonicalize paths and bind their complete command
+arguments before constructing these facts. -/
+def validGrant (input : Input) : Bool :=
+  match input.grant with
+  | none => false
+  | some grant => decide (grant.scope = input.current ∧ grant.action = input.action)
+
+def effectiveMode (input : Input) : Mode :=
+  if input.configuredWorkspace = input.current.workspace then input.mode else .ask
+
+def route (input : Input) : Route :=
+  if !input.ceilingAllows then .deny
+  else if !input.crossesBoundary || validGrant input then .allow
+  else match effectiveMode input with
+    | .ask => .ask
+    | .autoReview => .review
+    | .fullAccess => .allow
+
+inductive Review where
+  | allow | ask | deny | unavailable
+  deriving DecidableEq, Repr
+
+/-- Automatic review may authorize only the action that was reviewed. An
+unavailable reviewer falls back to a person; it cannot remove the workspace
+boundary. Review accuracy is an external premise, not a theorem of routing. -/
+def reviewedRoute (input : Input) (review : Review) (grant : Grant) : Route :=
+  if route input ≠ .review then route input
+  else if grant.scope ≠ input.current ∨ grant.action ≠ input.action then .deny
+  else match review with
+    | .allow => .allow
+    | .ask | .unavailable => .ask
+    | .deny => .deny
+
+theorem ceiling_is_preserved (input : Input) (h : input.ceilingAllows = false) :
+    route input = .deny := by simp [route, h]
+
+theorem routine_actions_do_not_prompt (input : Input)
+    (h : input.ceilingAllows = true) (boundary : input.crossesBoundary = false) :
+    route input = .allow := by simp [route, h, boundary]
+
+theorem another_workspace_cannot_inherit_full_access (input : Input)
+    (different : input.configuredWorkspace ≠ input.current.workspace) :
+    effectiveMode input = .ask := by
+  simp [effectiveMode, different]
+
+theorem stale_grant_cannot_authorize (input : Input) (grant : Grant)
+    (current : input.grant = some grant) (stale : grant.scope ≠ input.current) :
+    validGrant input = false := by
+  simp [validGrant, current, stale]
+
+theorem another_action_cannot_reuse_a_grant (input : Input) (grant : Grant)
+    (current : input.grant = some grant) (different : grant.action ≠ input.action) :
+    validGrant input = false := by
+  simp [validGrant, current, different]
+
+theorem unavailable_review_requires_a_person (input : Input) (grant : Grant)
+    (routed : route input = .review) (sameScope : grant.scope = input.current)
+    (sameAction : grant.action = input.action) :
+    reviewedRoute input .unavailable grant = .ask := by
+  simp [reviewedRoute, routed, sameScope, sameAction]
+
+theorem review_cannot_authorize_another_action (input : Input) (grant : Grant)
+    (routed : route input = .review) (different : grant.action ≠ input.action) :
+    reviewedRoute input .allow grant = .deny := by
+  simp [reviewedRoute, routed, different]
+
+def Mode.wireName : Mode → String
+  | .ask => "ask"
+  | .autoReview => "autoReview"
+  | .fullAccess => "fullAccess"
+
+def Route.wireName : Route → String
+  | .allow => "allow"
+  | .ask => "ask"
+  | .review => "review"
+  | .deny => "deny"
+
+def Review.wireName : Review → String
+  | .allow => "allow"
+  | .ask => "ask"
+  | .deny => "deny"
+  | .unavailable => "unavailable"
+
+structure Case where
+  input : Input
+  review : Review
+  reviewedGrant : Grant
+
+def cases : List Case := Id.run do
+  let current : Scope := { workspace := 1, revision := 2 }
+  let same : Grant := { scope := current, action := 3 }
+  let stale : Grant := { scope := { current with revision := 1 }, action := 3 }
+  let otherWorkspace : Grant := { scope := { current with workspace := 2 }, action := 3 }
+  let otherAction : Grant := { same with action := 4 }
+  let mut cases := []
+  for mode in [Mode.ask, .autoReview, .fullAccess] do
+    for configuredWorkspace in [1, 2] do
+      for ceilingAllows in [false, true] do
+        for crossesBoundary in [false, true] do
+          for grant in [none, some same, some stale, some otherWorkspace, some otherAction] do
+            let input : Input := {
+              current := current
+              configuredWorkspace := configuredWorkspace
+              mode := mode
+              action := 3
+              ceilingAllows := ceilingAllows
+              crossesBoundary := crossesBoundary
+              grant := grant }
+            if route input = .review then
+              for review in [Review.allow, .ask, .deny, .unavailable] do
+                for reviewedGrant in [same, stale, otherWorkspace, otherAction] do
+                  cases := cases ++ [{ input, review, reviewedGrant }]
+            else
+              cases := cases ++ [{ input, review := .allow, reviewedGrant := same }]
+  return cases
+
+structure Preference where
+  revision : Nat
+  mode : Mode
+  reviewTask : Option Nat
+  deriving DecidableEq, Repr
+
+structure WriteResult where
+  accepted : Bool
+  changed : Bool
+  next : Option Preference
+  deriving DecidableEq, Repr
+
+def maxRevision : Nat := 18446744073709551615
+
+/-- Only the observed revision may change. A retained reviewer remains bound
+when a user switches modes; a no-op consumes no revision or filesystem write. -/
+def selectMode (previous : Option Preference) (expected : Nat) (mode : Mode)
+    (requestedTask : Option Nat) : WriteResult := Id.run do
+  let revision := (previous.map Preference.revision).getD 0
+  let reviewTask := requestedTask.or (previous.bind Preference.reviewTask)
+  if revision != expected || (mode == .autoReview && reviewTask.isNone) then
+    return { accepted := false, changed := false, next := previous }
+  if previous.isSome && previous.map Preference.mode == some mode &&
+      previous.bind Preference.reviewTask == reviewTask then
+    return { accepted := true, changed := false, next := previous }
+  if revision >= maxRevision then
+    return { accepted := false, changed := false, next := previous }
+  return {
+    accepted := true
+    changed := true
+    next := some {
+      revision := revision + 1
+      mode := mode
+      reviewTask := reviewTask } }
+
+theorem stale_write_keeps_the_prior_selection (previous : Option Preference)
+    (expected : Nat) (mode : Mode) (requestedTask : Option Nat)
+    (stale : (previous.map Preference.revision).getD 0 ≠ expected) :
+    (selectMode previous expected mode requestedTask).next = previous := by
+  simp [selectMode, stale, Id.run]
+
+structure WriteCase where
+  previous : Option Preference
+  expected : Nat
+  mode : Mode
+  requestedTask : Option Nat
+
+def writeCases : List WriteCase := Id.run do
+  let mut rows := []
+  let previous : List (Option Preference) := none :: ([0, 1, maxRevision].flatMap fun revision =>
+    [Mode.ask, .autoReview, .fullAccess].flatMap fun mode =>
+      [none, some 1].map fun reviewTask => some { revision := revision, mode := mode, reviewTask := reviewTask })
+  for before in previous do
+    for expected in [0, 1, maxRevision] do
+      for mode in [Mode.ask, .autoReview, .fullAccess] do
+        for requestedTask in [none, some 1, some 2] do
+          rows := rows ++ [{ previous := before, expected := expected, mode := mode, requestedTask := requestedTask }]
+  return rows
+
+end ToolPolicy.WorkspacePermissions

@@ -4,7 +4,52 @@ import Proofs.ToolPolicy.FieldRead
 import Proofs.ToolPolicy.WriteInput
 import Proofs.ToolPolicy.ApplicationWrite
 
+import Proofs.ToolPolicy.WorkspacePermissions
+
 namespace Conformance.Contracts
+
+private def permissionPreferenceJson (value : ToolPolicy.WorkspacePermissions.Preference) : String :=
+  "{\"revision\":" ++ toString value.revision
+  ++ ",\"mode\":" ++ jsonString value.mode.wireName
+  ++ ",\"reviewTask\":" ++ (match value.reviewTask with | none => "null" | some task => toString task) ++ "}"
+
+private def permissionOptionalPreferenceJson (value : Option ToolPolicy.WorkspacePermissions.Preference) : String :=
+  match value with
+  | none => "null"
+  | some value => permissionPreferenceJson value
+
+def workspacePermissionWriteCasesJson : String :=
+  jsonArray (ToolPolicy.WorkspacePermissions.writeCases.map fun witness =>
+    let result := ToolPolicy.WorkspacePermissions.selectMode witness.previous witness.expected witness.mode witness.requestedTask
+    "{\"previous\":" ++ permissionOptionalPreferenceJson witness.previous
+    ++ ",\"expected\":" ++ toString witness.expected
+    ++ ",\"mode\":" ++ jsonString witness.mode.wireName
+    ++ ",\"requestedTask\":" ++ (match witness.requestedTask with | none => "null" | some task => toString task)
+    ++ ",\"accepted\":" ++ (if result.accepted then "true" else "false")
+    ++ ",\"changed\":" ++ (if result.changed then "true" else "false")
+    ++ ",\"next\":" ++ permissionOptionalPreferenceJson result.next ++ "}")
+
+private def permissionScopeJson (scope : ToolPolicy.WorkspacePermissions.Scope) : String :=
+  "{\"workspace\":" ++ toString scope.workspace ++ ",\"revision\":" ++ toString scope.revision ++ "}"
+
+private def permissionGrantJson (grant : ToolPolicy.WorkspacePermissions.Grant) : String :=
+  "{\"scope\":" ++ permissionScopeJson grant.scope ++ ",\"action\":" ++ toString grant.action ++ "}"
+
+def workspacePermissionCasesJson : String :=
+  jsonArray (ToolPolicy.WorkspacePermissions.cases.map fun witness =>
+    let input := witness.input
+    "{\"input\":{\"current\":" ++ permissionScopeJson input.current
+    ++ ",\"configuredWorkspace\":" ++ toString input.configuredWorkspace
+    ++ ",\"mode\":" ++ jsonString input.mode.wireName
+    ++ ",\"action\":" ++ toString input.action
+    ++ ",\"ceilingAllows\":" ++ (if input.ceilingAllows then "true" else "false")
+    ++ ",\"crossesBoundary\":" ++ (if input.crossesBoundary then "true" else "false")
+    ++ ",\"grant\":" ++ (match input.grant with | none => "null" | some grant => permissionGrantJson grant) ++ "}"
+    ++ ",\"review\":" ++ jsonString witness.review.wireName
+    ++ ",\"reviewedGrant\":" ++ permissionGrantJson witness.reviewedGrant
+    ++ ",\"expectedRoute\":" ++ jsonString (ToolPolicy.WorkspacePermissions.route input).wireName
+    ++ ",\"expectedReviewedRoute\":" ++ jsonString (ToolPolicy.WorkspacePermissions.reviewedRoute input witness.review witness.reviewedGrant).wireName
+    ++ ",\"expectedValidGrant\":" ++ (if ToolPolicy.WorkspacePermissions.validGrant input then "true" else "false") ++ "}")
 
 open ToolPolicy.ContractCases
 

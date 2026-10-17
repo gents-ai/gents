@@ -126,6 +126,8 @@ def snapshotJson : String :=
     ++ "\"goal_client_start_cases\":" ++ Conformance.GoalClientStartContracts.casesJson ++ ","
     ++ "\"goal_client_receipt_cases\":" ++ Conformance.GoalClientMutationContracts.receiptCasesJson ++ ","
     ++ "\"goal_observation_cases\":" ++ Conformance.GoalObservationContracts.casesJson ++ ","
+    ++ "\"workspace_permission_write_cases\":" ++ workspacePermissionWriteCasesJson ++ ","
+    ++ "\"workspace_permission_cases\":" ++ workspacePermissionCasesJson ++ ","
     ++ "\"plugin_approval_cases\":" ++ Conformance.PluginApproval.casesJson.compress ++ ","
     ++ "\"goal_objective_whitespace_codepoints\":"
       ++ Conformance.GoalEditContracts.whitespaceCodepointsJson ++ ","
