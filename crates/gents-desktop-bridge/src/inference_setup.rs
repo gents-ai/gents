@@ -12,6 +12,30 @@ const LOG_TARGET: &str = "gents_desktop_bridge::inference_setup";
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+pub struct InferenceSetupState {
+    pub node_did: String,
+    pub node: crate::types::NodeView,
+    pub agents: Vec<crate::types::AgentView>,
+    pub agent_configs: Vec<crate::types::Agent>,
+    pub inference_backends: Vec<crate::types::InferenceBackendView>,
+    pub inference_profiles: Vec<crate::types::InferenceProfile>,
+}
+
+impl From<crate::types::DeploymentView> for InferenceSetupState {
+    fn from(node: crate::types::DeploymentView) -> Self {
+        Self {
+            node_did: node.node_did,
+            node: node.node,
+            agents: node.agents,
+            agent_configs: node.agent_configs,
+            inference_backends: node.inference_backends,
+            inference_profiles: node.inference_profiles,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
 pub struct InferenceDiscoveryFailure {
     pub kind: String,
     pub message: String,

@@ -1,5 +1,13 @@
 import type { DeploymentView } from "./generated/DeploymentView.js";
-type NodeView = Omit<DeploymentView, "sessions" | "mailboxItems">;
+type NodeView = Pick<
+  DeploymentView,
+  | "nodeDid"
+  | "node"
+  | "agents"
+  | "agentConfigs"
+  | "inferenceProfiles"
+  | "inferenceBackends"
+>;
 import type {
   InferenceDiscoveryResult,
   InferenceModelRecommendation,
