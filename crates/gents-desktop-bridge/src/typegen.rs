@@ -151,6 +151,7 @@ fn contract_source_paths() -> Vec<PathBuf> {
     let mut paths = vec![
         source_root.join("contract.rs"),
         source_root.join("host/protocol.rs"),
+        source_root.join("inference_setup.rs"),
         source_root.join("../../gents-desktop-core/src/error.rs"),
         source_root.join("../../gents-desktop-core/src/home_reset.rs"),
         source_root.join("tauri_commands/chat.rs"),
