@@ -27,7 +27,7 @@ pub enum ChatAction {
 pub type Responder = Arc<dyn Fn(&Value) -> ChatAction + Send + Sync>;
 
 struct FakeState {
-    model_name: String,
+    model_names: Vec<String>,
     required_bearer: Option<String>,
     captured: Arc<Mutex<Vec<Value>>>,
     responder: Responder,
@@ -50,11 +50,19 @@ impl FakeLlm {
         required_bearer: Option<&str>,
         responder: Responder,
     ) -> Result<Self> {
+        Self::start_with_models(&[model_name], required_bearer, responder)
+    }
+
+    pub fn start_with_models(
+        model_names: &[&str],
+        required_bearer: Option<&str>,
+        responder: Responder,
+    ) -> Result<Self> {
         let captured = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(Notify::new());
         let stopped = Arc::new(AtomicBool::new(false));
         let state = Arc::new(FakeState {
-            model_name: model_name.to_string(),
+            model_names: model_names.iter().map(|name| (*name).to_owned()).collect(),
             required_bearer: required_bearer.map(ToOwned::to_owned),
             captured: captured.clone(),
             responder,
@@ -171,7 +179,7 @@ async fn handle_models(State(state): State<Arc<FakeState>>, headers: HeaderMap) 
     }
     json_response(
         StatusCode::OK,
-        format!(r#"{{"data":[{{"id":"{}"}}]}}"#, state.model_name),
+        serde_json::json!({"data": state.model_names.iter().map(|name| serde_json::json!({"id":name})).collect::<Vec<_>>()}).to_string(),
     )
 }
 
