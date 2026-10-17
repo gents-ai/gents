@@ -1296,8 +1296,8 @@ async fn observed_case_request(
 async fn generated_renewal_invalidates_real_publication_point_read_transaction() {
     use crate::lean_vocab_test::LeanRequestExecutionAction;
     use crate::session::canonical_rows::{
-        CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
         output_segment_create_variables, transcript_message_create_variables,
+        CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
     use gents_protocol::output::{
         MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
@@ -1388,11 +1388,9 @@ async fn generated_renewal_invalidates_real_publication_point_read_transaction()
     )
     .await
     .unwrap();
-    let [
-        LeanRequestExecutionAction::Renew {
-            expected_deadline, ..
-        },
-    ] = case.intervening.as_slice()
+    let [LeanRequestExecutionAction::Renew {
+        expected_deadline, ..
+    }] = case.intervening.as_slice()
     else {
         panic!("generated renewal interleaving")
     };
@@ -1424,14 +1422,15 @@ async fn generated_renewal_invalidates_real_publication_point_read_transaction()
         )
     .await
     .unwrap();
-    assert_eq!(published["data"]["AgentMessage"].as_array().unwrap().len(), 0);
-    assert!(
-        published["data"]["AgentOutputSegment"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|row| row["source"]["key"] != message_key)
+    assert_eq!(
+        published["data"]["AgentMessage"].as_array().unwrap().len(),
+        0
     );
+    assert!(published["data"]["AgentOutputSegment"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|row| row["source"]["key"] != message_key));
 }
 
 #[tokio::test]

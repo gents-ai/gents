@@ -1940,11 +1940,11 @@ async fn append_tool_output_with_time(
 #[cfg(test)]
 mod spawned_background_tests {
     use super::*;
-    use crate::tool_call_lifecycle::SpawnedBackgroundToolAdmission;
     use crate::tool_call_lifecycle::admission_fixture::{
-        PublishedAdmission, PublishedAdmissionOptions, published_admission_with_owner,
-        published_background_bridge, published_spawn_parent,
+        published_admission_with_owner, published_background_bridge, published_spawn_parent,
+        PublishedAdmission, PublishedAdmissionOptions,
     };
+    use crate::tool_call_lifecycle::SpawnedBackgroundToolAdmission;
     use defra_node::EmbeddedNode;
 
     #[test]
