@@ -41,6 +41,24 @@ pub struct ChatSendResult {
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct RequestOutputView {
+    pub node_did: String,
+    pub session_id: String,
+    pub request_id: String,
+    pub output: RequestOutputStateView,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RequestOutputStateView {
+    Loading,
+    TerminalMessage { content: String },
+    TerminalNoMessage,
+    Unavailable { reason: String },
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct ClientUpdateEvent {
 
     #[ts(type = "string")]

@@ -5,6 +5,7 @@ pub mod local;
 pub mod protocol;
 #[cfg(unix)]
 mod service;
+pub mod speech;
 
 #[cfg(unix)]
 pub use service::ClientHostService;
@@ -27,6 +28,7 @@ use protocol::ClientCommand;
 pub struct ClientHost {
     core: Arc<ClientCore>,
     policy: ResolvedBridgePolicy,
+    speech: speech::SpeechClient,
 }
 
 impl ClientHost {
@@ -50,6 +52,7 @@ impl ClientHost {
                 store_key_custody: core.options().store_key_custody,
             },
             core,
+            speech: speech::SpeechClient::default(),
         }
     }
 
@@ -66,6 +69,42 @@ impl ClientHost {
         approvals: &approvals::AttachmentApprovals,
     ) -> Result<Value, BridgeError> {
         match command {
+            ClientCommand::RequestOutput {
+                node_did,
+                session_id,
+                request_id,
+            } => encode(
+                crate::commands::request_output(&self.core, node_did, session_id, request_id)
+                    .await
+                    .map_err(backend_error)?,
+            ),
+            ClientCommand::SpeechServices { node_did } => encode(
+                self.speech
+                    .services(&self.core, &node_did)
+                    .await
+                    .map_err(backend_error)?,
+            ),
+            ClientCommand::SpeechTools {
+                node_did,
+                service_id,
+            } => encode(
+                self.speech
+                    .tools(&self.core, &node_did, &service_id)
+                    .await
+                    .map_err(backend_error)?,
+            ),
+            ClientCommand::SpeechRecognize { request } => encode(
+                self.speech
+                    .recognize(&self.core, request)
+                    .await
+                    .map_err(backend_error)?,
+            ),
+            ClientCommand::SpeechSynthesize { request } => encode(
+                self.speech
+                    .synthesize(&self.core, request)
+                    .await
+                    .map_err(backend_error)?,
+            ),
             ClientCommand::ConnectLocal { node_home } => {
                 let home = match node_home {
                     Some(path) if !path.trim().is_empty() => std::path::PathBuf::from(path.trim()),

@@ -8,7 +8,7 @@ mod turns;
 
 pub(crate) use indexing::sort_request_rows;
 
-pub use turns::{folded_requests, queued_behind_turn, session_turn_request};
+pub use turns::{folded_requests, queued_behind_turn, request_answer_owner, session_turn_request};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

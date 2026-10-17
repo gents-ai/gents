@@ -18,6 +18,8 @@ use crate::client::store::ClientStore;
 use super::super::graphql::{escape_graphql_string, normalize_optional_string, normalize_required};
 use super::binding::resolve_agent_binding;
 
+/// The durable submission receipt. Replica observation may still be pending;
+/// callers must not replay the mutation when a subsequent refresh fails.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubmittedRequest {
     pub request_id: String,

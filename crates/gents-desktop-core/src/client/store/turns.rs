@@ -46,7 +46,26 @@ pub fn session_turn_request<'a>(
     requests: &[&'a AgentRequestRow],
     newest: &'a AgentRequestRow,
 ) -> &'a AgentRequestRow {
-    resolve(requests, requests.len() + 1, &mut HashSet::new(), newest)
+    resolve(
+        requests,
+        requests.len() + 1,
+        &mut HashSet::new(),
+        newest,
+        true,
+    )
+}
+
+pub fn request_answer_owner<'a>(
+    requests: &[&'a AgentRequestRow],
+    request: &'a AgentRequestRow,
+) -> &'a AgentRequestRow {
+    resolve(
+        requests,
+        requests.len() + 1,
+        &mut HashSet::new(),
+        request,
+        false,
+    )
 }
 
 fn in_scope<'a>(
@@ -65,6 +84,7 @@ fn resolve<'a>(
     fuel: usize,
     seen: &mut HashSet<RequestRowIdentity<'a>>,
     row: &'a AgentRequestRow,
+    follow_queue: bool,
 ) -> &'a AgentRequestRow {
     if fuel == 0 {
         return row;
@@ -85,7 +105,9 @@ fn resolve<'a>(
                 candidate.doc_id.as_deref() == Some(doc.as_str())
             })
         });
-        return owner.map_or(row, |owner| resolve(requests, fuel - 1, seen, owner));
+        return owner.map_or(row, |owner| {
+            resolve(requests, fuel - 1, seen, owner, follow_queue)
+        });
     }
     match row.lifecycle_state {
         Some(state) if state.is_terminal() => {
@@ -93,9 +115,11 @@ fn resolve<'a>(
                 clean_string(candidate.retry_parent_request.as_deref()).as_deref()
                     == Some(row.request_id.as_str())
             });
-            next.map_or(row, |next| resolve(requests, fuel - 1, seen, next))
+            next.map_or(row, |next| {
+                resolve(requests, fuel - 1, seen, next, follow_queue)
+            })
         }
-        _ if unclaimed(row) => {
+        _ if follow_queue && unclaimed(row) => {
             let ahead = row
                 .input
                 .as_ref()
@@ -104,7 +128,7 @@ fn resolve<'a>(
                 .and_then(|ahead| {
                     in_scope(requests, row, |candidate| candidate.request_id == ahead)
                 });
-            match ahead.map(|ahead| resolve(requests, fuel - 1, seen, ahead)) {
+            match ahead.map(|ahead| resolve(requests, fuel - 1, seen, ahead, follow_queue)) {
                 Some(turn)
                     if turn
                         .lifecycle_state

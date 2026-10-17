@@ -27,6 +27,35 @@ pub enum ClientMessage {
 #[serde(tag = "name", content = "args")]
 #[serde(deny_unknown_fields)]
 pub enum ClientCommand {
+    #[serde(rename = "desktop_request_output")]
+    RequestOutput {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+    #[serde(rename = "client_speech_services")]
+    SpeechServices {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+    },
+    #[serde(rename = "client_speech_tools")]
+    SpeechTools {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+        #[serde(rename = "serviceId")]
+        service_id: String,
+    },
+    #[serde(rename = "client_speech_recognize")]
+    SpeechRecognize {
+        request: super::speech::SpeechRecognizeRequest,
+    },
+    #[serde(rename = "client_speech_synthesize")]
+    SpeechSynthesize {
+        request: super::speech::SpeechSynthesizeRequest,
+    },
     #[serde(rename = "client_connect_local")]
     ConnectLocal {
         #[serde(rename = "nodeHome")]
@@ -80,6 +109,11 @@ pub enum ClientCommand {
 
 impl ClientCommand {
     pub const NAMES: &'static [&'static str] = &[
+        "desktop_request_output",
+        "client_speech_services",
+        "client_speech_tools",
+        "client_speech_recognize",
+        "client_speech_synthesize",
         "client_connect_local",
         "client_plugin_approval_subscribe",
         "client_plugin_approval_unsubscribe",
@@ -97,10 +131,15 @@ impl ClientCommand {
         "desktop_interrupt_request",
     ];
 
-    pub fn is_read(&self) -> bool {
+    pub fn is_cancellable(&self) -> bool {
         matches!(
             self,
             Self::Snapshot {}
+                | Self::RequestOutput { .. }
+                | Self::SpeechServices { .. }
+                | Self::SpeechTools { .. }
+                | Self::SpeechRecognize { .. }
+                | Self::SpeechSynthesize { .. }
                 | Self::ApprovalPending { .. }
                 | Self::SessionSnapshot(_)
                 | Self::SessionLiveDelta(_)

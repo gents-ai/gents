@@ -154,6 +154,27 @@ pub struct RefreshedRequestProjection {
     pub published_version: Option<u64>,
 }
 
+/// A committed submission is acknowledged independently of replica refresh.
+/// Returning a read error here would invite a second durable submission.
+async fn observe_submitted_request(
+    store: &ObservedStore,
+    receipt: SubmittedRequest,
+    refresh: impl std::future::Future<Output = Result<u64>>,
+) -> SubmittedRequest {
+    store.set_focused_request_id(Some(receipt.request_id.clone()));
+    if let Err(error) = refresh.await {
+        store.request_resync(Some(&receipt.node_did));
+        tracing::warn!(
+            node_did = %receipt.node_did,
+            session_id = %receipt.session_id,
+            request_id = %receipt.request_id,
+            error = %error,
+            "submitted request awaits local projection refresh"
+        );
+    }
+    receipt
+}
+
 /// A validated applied receipt is the command result. The local projection is
 /// a separate replica observation; if it is unavailable, the selected-session
 /// refresh and normal observer path reconcile it without inviting replay.
@@ -207,23 +228,32 @@ async fn merge_accepted_edit_projection(
     receipt
 }
 
+fn find_request_in_scope(
+    rows: &[AgentRequestRow],
+    request_id: &str,
+    node_did: Option<&str>,
+) -> Result<Option<AgentRequestRow>> {
+    let mut matches = rows.iter().filter(|row| {
+        row.request_id == request_id
+            && node_did.is_none_or(|did| row.node_did.as_deref() == Some(did))
+    });
+    let Some(row) = matches.next() else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        matches.next().is_none(),
+        "request {request_id} is ambiguous across node scopes"
+    );
+    Ok(Some(row.clone()))
+}
+
 fn request_in_scope(
     rows: &[AgentRequestRow],
     request_id: &str,
     node_did: Option<&str>,
 ) -> Result<AgentRequestRow> {
-    let mut matches = rows.iter().filter(|row| {
-        row.request_id == request_id
-            && node_did.is_none_or(|did| row.node_did.as_deref() == Some(did))
-    });
-    let row = matches
-        .next()
-        .with_context(|| format!("request {request_id} not found"))?;
-    anyhow::ensure!(
-        matches.next().is_none(),
-        "request {request_id} is ambiguous across node scopes"
-    );
-    Ok(row.clone())
+    find_request_in_scope(rows, request_id, node_did)?
+        .with_context(|| format!("request {request_id} not found"))
 }
 
 fn required_peer_generation<'a>(name: &str, value: Option<&'a str>) -> Result<&'a str> {
@@ -431,9 +461,8 @@ impl ClientCore {
         .await
         {
             Ok(result) => {
-                self.store
-                    .set_focused_request_id(Some(result.request_id.clone()));
-                self.refresh_store().await?;
+                let result =
+                    observe_submitted_request(&self.store, result, self.refresh_store()).await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -561,6 +590,55 @@ impl ClientCore {
             }
             Err(error) => Err(self.record_mutation_error("edit pending messages", error)),
         }
+    }
+
+    pub async fn request_output(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        request_id: &str,
+    ) -> Result<Option<gents::session::CanonicalRequestOutput>> {
+        let node_did = normalize_required("node_did", node_did)?;
+        let session_id = normalize_required("session_id", session_id)?;
+        let request_id = normalize_required("request_id", request_id)?;
+        let Some(projection) = self
+            .refresh_local_request(node_did, session_id, Some(request_id), None, &[])
+            .await?
+        else {
+            return Ok(None);
+        };
+        let Some(row) = find_request_in_scope(&projection.requests, request_id, Some(node_did))?
+        else {
+            return Ok(None);
+        };
+        anyhow::ensure!(
+            row.session_id.as_deref() == Some(session_id),
+            "request output crossed the selected session scope"
+        );
+        let refs = projection.requests.iter().collect::<Vec<_>>();
+        let answer = super::super::store::request_answer_owner(&refs, &row);
+        anyhow::ensure!(
+            answer.node_did.as_deref() == Some(node_did)
+                && answer.session_id.as_deref() == Some(session_id)
+                && answer.requester_did == row.requester_did,
+            "request answer crossed its admitted scope"
+        );
+        if !answer.is_terminal() || gents::lifecycle::folded_into(answer).is_some() {
+            return Ok(None);
+        }
+        let access = match self.operator_graphql(node_did) {
+            Some(graphql) => ConfigAccess::Graphql(graphql),
+            None => self
+                .store_access
+                .lock()
+                .await
+                .as_ref()
+                .context("local store access is unavailable")?
+                .clone(),
+        };
+        gents::session::observe_request_output(&access, answer)
+            .await
+            .map(Some)
     }
 
     pub async fn request_timeline(
@@ -1259,9 +1337,8 @@ impl ClientCore {
         .await;
         match result {
             Ok(result) => {
-                self.store
-                    .set_focused_request_id(Some(result.request_id.clone()));
-                self.refresh_store().await?;
+                let result =
+                    observe_submitted_request(&self.store, result, self.refresh_store()).await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1342,9 +1419,8 @@ impl ClientCore {
         .await;
         match result {
             Ok(result) => {
-                self.store
-                    .set_focused_request_id(Some(result.request_id.clone()));
-                self.refresh_store().await?;
+                let result =
+                    observe_submitted_request(&self.store, result, self.refresh_store()).await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1846,9 +1922,8 @@ impl ClientCore {
         .await;
         match submitted {
             Ok(result) => {
-                self.store
-                    .set_focused_request_id(Some(result.request_id.clone()));
-                self.refresh_store().await?;
+                let result =
+                    observe_submitted_request(&self.store, result, self.refresh_store()).await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -2780,6 +2855,48 @@ mod accepted_edit_projection_tests {
     use gents_protocol::session_input_edit::{
         SessionInputEditOutcome, SessionInputEditReceipt, SESSION_INPUT_EDIT_VERSION,
     };
+
+    #[tokio::test]
+    async fn submitted_request_survives_refresh_failure_and_requests_scoped_resync() {
+        let (store, _version) = ObservedStore::new(ClientStore::default());
+        let mut wake = store.subscribe_resync_requests();
+        let receipt = SubmittedRequest {
+            request_id: "accepted-request".into(),
+            session_id: "accepted-session".into(),
+            node_did: "did:test:node".into(),
+            agent_id: Some("agent".into()),
+        };
+        let before = store.projection_revision();
+        let accepted = observe_submitted_request(&store, receipt.clone(), async {
+            anyhow::bail!("projection unavailable after commit")
+        })
+        .await;
+        assert_eq!(accepted, receipt);
+        assert!(wake.has_changed().unwrap());
+        wake.borrow_and_update();
+        assert_eq!(
+            store.take_resync_requests(),
+            (false, vec!["did:test:node".to_owned()])
+        );
+        assert_eq!(store.projection_revision(), before);
+        assert!(store.snapshot().requests.is_empty());
+    }
+
+    #[tokio::test]
+    async fn submitted_request_refresh_success_does_not_schedule_another_read() {
+        let (store, _version) = ObservedStore::new(ClientStore::default());
+        let wake = store.subscribe_resync_requests();
+        let receipt = SubmittedRequest {
+            request_id: "accepted-request".into(),
+            session_id: "accepted-session".into(),
+            node_did: "did:test:node".into(),
+            agent_id: None,
+        };
+        let accepted = observe_submitted_request(&store, receipt.clone(), async { Ok(1) }).await;
+        assert_eq!(accepted, receipt);
+        assert!(!wake.has_changed().unwrap());
+        assert_eq!(store.take_resync_requests(), (false, Vec::new()));
+    }
 
     fn applied_receipt() -> SessionInputEditReceipt {
         SessionInputEditReceipt {

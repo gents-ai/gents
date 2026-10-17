@@ -220,10 +220,18 @@ fn request_ids_for_docs(rows: &[AgentRequestRow], docs: &[usize]) -> Vec<String>
 #[test]
 fn session_snapshot_binds_generated_session_turn_cases() {
     let cases = lean_vocab_test::lean_client_session_turn_cases();
-    assert_eq!(cases.len(), 20);
+    assert_eq!(cases.len(), 22);
     for case in cases {
         let rows = lean_session_rows("session-1", &case.rows);
         let newest = rows.last().expect("case has rows");
+        let refs = rows.iter().collect::<Vec<_>>();
+        let answer = gents_desktop_core::client::request_answer_owner(&refs, newest);
+        assert_eq!(
+            answer.doc_id,
+            Some(format!("doc-{}", case.expected_answer_doc)),
+            "{}",
+            case.name
+        );
         let store = ClientStore::from_rows(ClientStoreRows {
             sessions: vec![contract_session(
                 "session-1",
@@ -301,6 +309,13 @@ fn session_snapshot_binds_generated_session_turn_cases() {
             bounded_rows.len(),
             case.expected_read_docs.len(),
             "{} read closure has each expected physical row once",
+            case.name
+        );
+        let bounded_refs = bounded_rows.iter().collect::<Vec<_>>();
+        assert_eq!(
+            gents_desktop_core::client::request_answer_owner(&bounded_refs, newest).doc_id,
+            answer.doc_id,
+            "{} bounded read closure retains the modeled answer owner",
             case.name
         );
         let bounded_store = ClientStore::from_rows(ClientStoreRows {
