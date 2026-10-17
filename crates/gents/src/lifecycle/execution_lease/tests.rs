@@ -1362,11 +1362,7 @@ async fn generated_renewal_invalidates_real_publication_point_read_transaction()
         message_key: message_key.clone(),
         session_id: lifecycle.request.session_id.clone(),
         node_did: lifecycle.request.node_did.clone(),
-        requester_did: lifecycle
-            .request
-            .requester_did
-            .clone()
-            .expect("fixture request has a requester DID"),
+        requester_did: lifecycle.request.requester_did.clone(),
         request_doc_id: Some(lifecycle.request.doc_id.clone()),
         publication: MessagePublication::RequestExecution {
             execution_generation: generation.to_owned(),
