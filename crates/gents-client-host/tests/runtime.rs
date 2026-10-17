@@ -1,4 +1,4 @@
-#![cfg(unix)]
+#![cfg(any(unix, windows))]
 
 use std::path::Path;
 use std::process::Stdio;
@@ -9,7 +9,15 @@ use anyhow::{ensure, Context, Result};
 use gents::identity::NodeIdentity;
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use serde_json::{json, Value};
-use tokio::process::{Child, Command};
+#[cfg(unix)]
+use tokio::process::Child;
+use tokio::process::Command;
+
+#[path = "support/console.rs"]
+#[cfg(windows)]
+mod console;
+#[cfg(windows)]
+use console::ConsoleChild as Child;
 
 #[path = "support/configured_actions.rs"]
 mod configured_actions;
@@ -80,7 +88,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let cli = Path::new(env!("CARGO_BIN_EXE_gents-client-host"))
         .parent()
         .context("native binary directory")?
-        .join("gents");
+        .join(format!("gents{}", std::env::consts::EXE_SUFFIX));
     ensure!(cli.is_file(), "build gents-cli before running runtime-e2e");
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     let (emitted, _) = tokio::sync::watch::channel(None);
@@ -135,14 +143,17 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         None,
     )?;
     let port = ports::allocate_port()?;
-    let mut runtime = Command::new(&cli)
+    let mut runtime_command = Command::new(&cli);
+    runtime_command
         .current_dir(root)
         .env_remove("GENTS_SYSTEM_LOG")
         .args(["server", "--home"])
         .arg(&node_home)
         .arg("--http-port")
         .arg(port.to_string())
-        .arg("--no-codex-shim")
+        .arg("--no-codex-shim");
+    #[cfg(unix)]
+    let mut runtime = runtime_command
         .stdin(Stdio::null())
         .stdout(Stdio::from(std::fs::File::create(
             root.join("runtime.log"),
@@ -152,7 +163,19 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )?))
         .kill_on_drop(true)
         .spawn()?;
+    #[cfg(windows)]
+    let mut runtime =
+        console::ConsoleChild::spawn(runtime_command.as_std(), &root.join("runtime.log"))?;
+    #[cfg(unix)]
     let ready = wait_ready(&mut runtime, &root.join("runtime.log")).await?;
+    let status = wait_for_status(&mut runtime, &cli, &node_home, port).await?;
+    #[cfg(unix)]
+    ensure!(
+        status["graphql"] == ready["graphql"] && status["node_did"] == ready["node_did"],
+        "runtime readiness output and status command must identify the same runtime"
+    );
+    #[cfg(windows)]
+    let ready = status;
     ensure!(ready["readiness_status"] == "ready", "{ready}");
     let graphql = ready["graphql"]
         .as_str()
@@ -165,9 +188,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let client_did = seed.node_identity().did().to_owned();
     seed.shutdown().await?;
     drop(seed);
-    let mut host = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
-        .args(["--serve", "--home"])
-        .arg(paths.root())
+    let mut host_command = Command::new(env!("CARGO_BIN_EXE_gents-client-host"));
+    host_command.args(["--serve", "--home"]).arg(paths.root());
+    #[cfg(unix)]
+    let mut host = host_command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::from(std::fs::File::create(
@@ -175,6 +199,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )?))
         .kill_on_drop(true)
         .spawn()?;
+    #[cfg(windows)]
+    let mut host =
+        console::ConsoleChild::spawn(host_command.as_std(), &root.join("client-host.log"))?;
     wait_listener(&mut host, &paths).await?;
     let mut client = Attachment::start(&paths).await;
     let access = gents::ConfigAccess::Graphql(gents::config_client::GraphqlEndpoint::as_principal(
@@ -744,6 +771,7 @@ async fn wait_goal(
     .context("the signed goal observation did not reach the client")
 }
 
+#[cfg(unix)]
 async fn wait_ready(child: &mut Child, path: &Path) -> Result<Value> {
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
@@ -763,6 +791,35 @@ async fn wait_ready(child: &mut Child, path: &Path) -> Result<Value> {
                 "runtime exited before readiness"
             );
             tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .context("runtime readiness timed out")?
+}
+
+async fn wait_for_status(child: &mut Child, cli: &Path, home: &Path, port: u16) -> Result<Value> {
+    let graphql = ports::graphql_url(port);
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            ensure!(
+                child.try_wait()?.is_none(),
+                "runtime exited before readiness"
+            );
+            let output = Command::new(cli)
+                .args(["status", "--home"])
+                .arg(home)
+                .arg("--graphql")
+                .arg(&graphql)
+                .kill_on_drop(true)
+                .output()
+                .await?;
+            if output.status.success() {
+                let ready: Value = serde_json::from_slice(&output.stdout)?;
+                if ready["readiness_status"] == "ready" {
+                    return Ok(ready);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await
@@ -790,9 +847,14 @@ async fn wait_listener(child: &mut Child, paths: &DesktopPaths) -> Result<()> {
 }
 
 async fn stop(child: &mut Child) -> Result<()> {
-    let pid = child.id().context("live fixture child")?;
-    // SAFETY: the PID belongs to the live child owned by this fixture.
-    ensure!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGINT) } == 0);
+    #[cfg(unix)]
+    {
+        let pid = child.id().context("live fixture child")?;
+        // SAFETY: the PID belongs to the live child owned by this fixture.
+        ensure!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGINT) } == 0);
+    }
+    #[cfg(windows)]
+    child.interrupt()?;
     let status = tokio::time::timeout(Duration::from_secs(30), child.wait()).await??;
     ensure!(status.success(), "fixture child exited with {status}");
     Ok(())
