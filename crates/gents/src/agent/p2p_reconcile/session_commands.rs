@@ -269,7 +269,7 @@ mod tests {
     use crate::config_client::ConfigAccess;
     use crate::identity::KeyIdentity;
     use gents_protocol::goal_control::{
-        GoalOperation, GoalRevision, SESSION_GOAL_CONTROL_VERSION, SessionGoalControl,
+        GoalOperation, GoalRevision, SessionGoalControl, SESSION_GOAL_CONTROL_VERSION,
     };
 
     #[tokio::test]
