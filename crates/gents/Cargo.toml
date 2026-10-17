@@ -112,15 +112,15 @@ semver = "1"
 # `afterburner_afb::Afb` parses a plugin's compiled `.afb` (src/pack_archive.rs
 # reads a pack's declared assets, one of which may be a plugin's artifact;
 # src/plugin.rs parses that artifact to classify it before ever running it).
-afterburner-afb = { git = "https://github.com/jackzampolin/afterburner.git", rev = "0a9ff5df3696f0b3fdd64c845c361dc7f789140e" }
-afterburner-core = { git = "https://github.com/jackzampolin/afterburner.git", rev = "0a9ff5df3696f0b3fdd64c845c361dc7f789140e" }
+afterburner-afb = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "23113c5e6ffa238fd02fdf8ee76a338af11ab742" }
+afterburner-core = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "23113c5e6ffa238fd02fdf8ee76a338af11ab742" }
 # The plugin runner (src/plugin.rs): runs a plugin's compiled `.afb` via
 # Afterburner's own `afb_run::run_afb_bytes`, the library entry point built
 # for an embedder that needs to run a package without the `burn` CLI's
 # registry-client weight (`bin` feature, pulled in separately by
 # `gents-cli`). Pinned to the same rev as the other afterburner-* crates
 # above so all of them always agree on the `.afb`/`Manifold` wire shapes.
-afterburner = { git = "https://github.com/jackzampolin/afterburner.git", rev = "0a9ff5df3696f0b3fdd64c845c361dc7f789140e", default-features = false, features = [
+afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "23113c5e6ffa238fd02fdf8ee76a338af11ab742", default-features = false, features = [
     "afb-run",
 ] }
 
