@@ -163,6 +163,7 @@ impl ClientHost {
                             &request.backend_id,
                             &request.model_name,
                             request.reasoning_effort,
+                            request.service_tier,
                         )
                         .await
                         .map_err(backend_error)?,

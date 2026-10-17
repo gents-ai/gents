@@ -1765,6 +1765,7 @@ impl ClientCore {
         backend_id: &str,
         model_name: &str,
         reasoning_effort: Option<gents::config::ReasoningEffort>,
+        service_tier: Option<gents::config::ServiceTier>,
     ) -> Result<gents::InferenceProfile> {
         let access = self.operator_access(node_did)?;
         let saved = mutations::select_agent_model_on(
@@ -1774,6 +1775,7 @@ impl ClientCore {
             backend_id,
             model_name,
             reasoning_effort,
+            service_tier,
         )
         .await?;
         if self.refresh_config_source(node_did).await.is_err() {

@@ -20,6 +20,7 @@ pub async fn select_agent_model_on(
     backend_id: &str,
     model_name: &str,
     reasoning_effort: Option<gents::config::ReasoningEffort>,
+    service_tier: Option<gents::config::ServiceTier>,
 ) -> Result<InferenceProfile> {
     anyhow::ensure!(!model_name.trim().is_empty(), "Choose a model.");
     access
@@ -45,6 +46,7 @@ pub async fn select_agent_model_on(
                 selected.backend_id = backend_id.to_owned();
                 selected.model_name = model_name.trim().to_owned();
                 selected.reasoning_effort = reasoning_effort;
+                selected.service_tier = service_tier;
                 if selected == current {
                     return Ok(current);
                 }
@@ -180,14 +182,31 @@ mod tests {
             }))?;
             super::super::upsert_agent_on(&access, &agent).await?;
         }
-        let selected =
-            select_agent_model_on(&access, owner, "first", "backend", "replacement", None).await?;
+        let selected = select_agent_model_on(
+            &access,
+            owner,
+            "first",
+            "backend",
+            "replacement",
+            None,
+            None,
+        )
+        .await?;
         assert_ne!(selected.profile_id, original.profile_id);
         assert_eq!(selected.context_window, original.context_window);
         assert_eq!(selected.max_output_tokens, original.max_output_tokens);
         assert_eq!(selected.tags, original.tags);
         assert_eq!(
-            select_agent_model_on(&access, owner, "first", "backend", "replacement", None,).await?,
+            select_agent_model_on(
+                &access,
+                owner,
+                "first",
+                "backend",
+                "replacement",
+                None,
+                None,
+            )
+            .await?,
             selected
         );
         assert!(select_agent_model_on(
@@ -196,6 +215,7 @@ mod tests {
             "first",
             "missing-backend",
             "rejected",
+            None,
             None,
         )
         .await
@@ -206,6 +226,7 @@ mod tests {
             "first",
             "backend",
             "replacement",
+            None,
             None,
         )
         .await
@@ -242,6 +263,89 @@ mod tests {
                 "backend",
                 "original",
                 Some(gents::config::ReasoningEffort::High),
+                None,
+            )
+            .await?,
+            original
+        );
+        let fast = select_agent_model_on(
+            &access,
+            owner,
+            "first",
+            "backend",
+            "original",
+            Some(gents::config::ReasoningEffort::High),
+            Some(gents::config::ServiceTier::Fast),
+        )
+        .await?;
+        assert_eq!(fast.service_tier, Some(gents::config::ServiceTier::Fast));
+        assert_ne!(fast.profile_id, original.profile_id);
+        assert_eq!(
+            select_agent_model_on(
+                &access,
+                owner,
+                "first",
+                "backend",
+                "original",
+                Some(gents::config::ReasoningEffort::High),
+                Some(gents::config::ServiceTier::Fast),
+            )
+            .await?,
+            fast
+        );
+        let standard = select_agent_model_on(
+            &access,
+            owner,
+            "first",
+            "backend",
+            "original",
+            Some(gents::config::ReasoningEffort::High),
+            Some(gents::config::ServiceTier::Default),
+        )
+        .await?;
+        assert_eq!(
+            standard.service_tier,
+            Some(gents::config::ServiceTier::Default)
+        );
+        let unsupported = serde_json::from_value(json!({
+            "node_did":owner,"backend_id":"unsupported","name":"Unsupported",
+            "provider_kind":"AnthropicApiKey","endpoint":"https://api.anthropic.com",
+            "auth":{"kind":"api_key","key":"fixture"}
+        }))?;
+        gents::config_client::write_inference_backend_document(&access, &unsupported).await?;
+        assert!(select_agent_model_on(
+            &access,
+            owner,
+            "first",
+            "unsupported",
+            "original",
+            None,
+            Some(gents::config::ServiceTier::Fast),
+        )
+        .await
+        .is_err());
+        assert_eq!(
+            select_agent_model_on(
+                &access,
+                owner,
+                "first",
+                "backend",
+                "original",
+                Some(gents::config::ReasoningEffort::High),
+                Some(gents::config::ServiceTier::Default),
+            )
+            .await?,
+            standard
+        );
+        assert_eq!(
+            select_agent_model_on(
+                &access,
+                owner,
+                "second",
+                "backend",
+                "original",
+                Some(gents::config::ReasoningEffort::High),
+                None,
             )
             .await?,
             original
