@@ -98,6 +98,27 @@ impl ClientHost {
             ClientCommand::InferenceCatalog {} => {
                 encode(gents::inference_setup::inference_setup_catalog())
             }
+            ClientCommand::InferenceModelsDiscover { request } => {
+                self.require_configured_runtime(&request.node_did).await?;
+                encode(
+                    crate::inference_setup::discover_inference_models_for_core(
+                        request,
+                        Some(&self.core),
+                    )
+                    .await?,
+                )
+            }
+            ClientCommand::InferenceModelRecommendation { request } => encode(
+                crate::inference_setup::inference_model_recommendation(request)?,
+            ),
+            ClientCommand::ConfigApply { request } => {
+                self.require_configured_runtime(&request.document.node.node_did)
+                    .await?;
+                crate::commands::apply_config_components(&self.core, request)
+                    .await
+                    .map_err(backend_error)?;
+                encode(())
+            }
             ClientCommand::AccountsList { request } => {
                 self.require_configured_runtime(&request.node_did).await?;
                 let access = self
