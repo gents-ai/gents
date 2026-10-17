@@ -27,7 +27,6 @@ from urllib.request import Request, urlopen
 
 import browser_connection
 
-ORIGIN = "http://127.0.0.1:18765"
 MAX_OUTPUT = 2 * 1024 * 1024
 STARTUP_TIMEOUT = 60
 NAME = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
@@ -340,8 +339,25 @@ if not _target_file.exists():
                 "failed": f"Python exited with code {self.process.returncode}; inspect stderr.",
             }[status]
             response["next"] = (
-                "Actions may have executed. Inspect the page before retrying any write. Python variables are fresh on each call."
+                "Earlier actions may have completed before the error. Read the current page and inspect its receipt or saved state without navigating, clicking, submitting, or reloading. Keep the same tab and URL. Do not rerun the whole code block: a later exception does not undo an earlier write. If the outcome remains unclear, report uncertainty instead of submitting again. Python variables are fresh on each call."
             )
+            if (
+                status == "failed"
+                and response["stderr"]
+                .strip()
+                .startswith("browser-harness: connecting to ")
+                and "\n" not in response["stderr"].strip()
+            ):
+                response["error"] = (
+                    f"Browser harness exited with code {self.process.returncode}; its only diagnostic concerns the driver connection. Execution remains uncertain."
+                )
+                response["next"] += (
+                    " Use doctor to inspect browser availability; do not switch browsers or URLs to recover."
+                )
+            if "NameError:" in response["stderr"]:
+                response["next"] += (
+                    " After inspecting the page, call browser_exec with op=help, topic=overview for supported helper names; do not guess replacements."
+                )
         parts = []
         if images_file.exists():
             from PIL import Image
@@ -554,18 +570,32 @@ class Worker:
                     "Session absent. For the user's running browser, call discover then connect. For a public URL, call exec in this session with code=goto_url('https://...'); assert wait_for_element('body'), then call read in the SAME session. read does not navigate or accept a url argument."
                 )
             target = None
-            if op in ("exec", "read") and existing and existing.live_browser:
-                if not existing.connected:
+            if op in ("exec", "read"):
+                if data.get("target_id") is not None and not existing:
                     raise ValueError(
-                        "Live browser connection has not completed. Call connect, approve Chrome's dialog, then inspect tabs before acting."
+                        "Session absent; start it before selecting a tab from tabs"
                     )
-                target = data.get("target_id") or existing.selected_target
-                if not isinstance(target, str) or not re.fullmatch(
-                    r"[A-Za-z0-9_-]{1,128}", target
-                ):
-                    raise ValueError(
-                        "Choose target_id from connect/tabs before acting on a live browser; do not guess the user's current tab."
+                if existing:
+                    if existing.live_browser and not existing.connected:
+                        raise ValueError(
+                            "Live browser connection has not completed. Call connect, approve Chrome's dialog, then inspect tabs before acting."
+                        )
+                    target = (
+                        data["target_id"]
+                        if data.get("target_id") is not None
+                        else existing.selected_target
                     )
+                    if (
+                        data.get("target_id") is not None
+                        or target is not None
+                        or existing.live_browser
+                    ) and (
+                        not isinstance(target, str)
+                        or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", target)
+                    ):
+                        raise ValueError(
+                            "Choose target_id from connect/tabs before acting on a live browser; do not guess the user's current tab."
+                        )
             if len(self.jobs) >= 64:
                 completed = sorted(
                     (v["created"], k)
@@ -617,8 +647,14 @@ class Worker:
                 response = record["result"]["response"]
                 response["session"] = name
                 if response["status"] != "completed":
-                    response["next_call"] = {"op": "tabs", "session": name}
+                    response["next_call"] = {
+                        "op": "read"
+                        if op == "exec" and response.get("phase") == "execution"
+                        else "tabs",
+                        "session": name,
+                    }
                     if "Session with given id not found" in response.get("stderr", ""):
+                        response["next_call"] = {"op": "tabs", "session": name}
                         response["next"] = (
                             "The selected tab session ended; the failed command was not replayed on another tab. Earlier actions may have completed. Call tabs, explicitly select the intended target_id, and inspect before retrying writes."
                         )
@@ -837,6 +873,12 @@ def main():
     )
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument(
+        "--port",
+        type=int,
+        default=18765,
+        help="Loopback port; must match the installed plugin network grant",
+    )
+    parser.add_argument(
         "--cdp",
         help="Explicit existing CDP endpoint; omitted starts dedicated Chromium",
     )
@@ -855,6 +897,9 @@ def main():
         "--gents", default="gents", help="Gents executable used with --gents-home"
     )
     args = parser.parse_args()
+    if not 1 <= args.port <= 65535:
+        parser.error("--port must be 1..65535")
+    origin = f"http://127.0.0.1:{args.port}"
     if args.command == "managed" and not args.cdp:
         args.cdp = os.environ.get("GENTS_BROWSER_CDP")
     state = args.state.expanduser().resolve()
@@ -930,7 +975,7 @@ def main():
                     setup_result(True)
                     return
             importlib.metadata.version("browser-harness")
-            connection = {"endpoint": ORIGIN, "token": secrets.token_hex(32)}
+            connection = {"endpoint": origin, "token": secrets.token_hex(32)}
             write_json(connection_path, connection)
             write_json(
                 state / "settings.json", {"cdp": args.cdp, "headed": args.headed}
@@ -941,6 +986,8 @@ def main():
                         sys.executable,
                         str(Path(__file__).resolve()),
                         "serve",
+                        "--port",
+                        str(args.port),
                         "--state",
                         str(state),
                     ],
@@ -961,7 +1008,7 @@ def main():
                     return
             terminate(proc)
             raise RuntimeError(
-                f"Worker failed to start. Inspect {state / 'worker.log'}; port 18765 may already be in use."
+                f"Worker failed to start. Inspect {state / 'worker.log'}; port {args.port} may already be in use."
             )
     if args.command == "managed":
         if not args.allow_host_execution:
@@ -969,7 +1016,7 @@ def main():
         os.environ["GENTS_MANAGED_SERVICE"] = "1"
         importlib.metadata.version("browser-harness")
         write_json(
-            connection_path, {"endpoint": ORIGIN, "token": secrets.token_hex(32)}
+            connection_path, {"endpoint": origin, "token": secrets.token_hex(32)}
         )
         write_json(state / "settings.json", {"cdp": args.cdp, "headed": args.headed})
     with open(state / "worker.lock", "a") as lock:
@@ -978,7 +1025,7 @@ def main():
         settings = json.loads((state / "settings.json").read_text())
         worker = Worker(state, **settings)
         server = ThreadingHTTPServer(
-            ("127.0.0.1", 18765), handler(worker, connection["token"])
+            ("127.0.0.1", args.port), handler(worker, connection["token"])
         )
 
         def stop(*_):

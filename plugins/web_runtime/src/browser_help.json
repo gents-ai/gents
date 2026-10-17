@@ -1,9 +1,8 @@
 {
   "overview": {
-    "usage": "browser_exec(code, session?, timeout_s?). Gents starts the worker automatically; omit connection. Python helpers are imported. Print observations. Browser/files persist; variables do not.",
+    "usage": "browser_exec(code, session?, timeout_s?). Gents starts the worker automatically; omit connection. Python helpers are imported. Print observations. Browser/files persist; variables do not. For ordinary websites and localhost, exec starts an isolated browser directly. discover/connect are only for a user-requested running-browser connection. On follow-ups, inspect the existing tab before acting. Do not run the new-session example or navigate unless requested.",
     "helpers": "goto_url(url), page_info(), js(expression), fill_input(selector,text), click_at_xy(x,y), type_text(text), press_key(key), scroll(x,y,dy=-300), wait_for_element(selector,timeout=10), list_tabs(), new_tab(url), switch_tab(target), capture_screenshot(), upload_file(selector,path)",
-    "start": "goto_url('https://example.com')\nassert wait_for_element('body')\nprint(page_info())\nprint(js('document.body.innerText.slice(0,6000)'))",
-    "important": "Navigation and clicks can return before page data appears. Wait for the content you need, not just document load. For screenshots use capture_screenshot(), not screenshot().",
+    "important": "Navigation and clicks can return before page data appears. Wait for the content you need, not just document load. For screenshots use capture_screenshot(), not screenshot(). Before unfamiliar calls, use these signatures or inspect.signature on an existing helper. click(), wait_for_text(), page_html() and file_help() are not supplied helpers. Use js() for DOM clicks/text and op=help for recipes.",
     "topics": [
       "interaction",
       "tabs",
@@ -12,7 +11,8 @@
       "setup",
       "connection"
     ],
-    "next": "For recipes call op=help, topic=<topic>, omitting connection. Help never needs the worker."
+    "next": "For recipes call op=help, topic=<topic>, omitting connection. Help never needs the worker.",
+    "new_session_example": "goto_url('https://example.com')\nassert wait_for_element('body')\nprint(page_info())\nprint(js('document.body.innerText.slice(0,6000)'))"
   },
   "interaction": {
     "waits": "wait_for_element returns True when found and False on timeout; it does not raise. Check the result before accessing the element, e.g. assert wait_for_element('#result'), 'Result did not appear'. After False, inspect the current URL/content and adjust the selector or report an access failure.",
@@ -20,31 +20,35 @@
     "read": "Use js() to inspect live DOM text, links, labels, roles and attributes. It returns Python values, including lists and dictionaries; print the relevant subset.",
     "inspect": "print(js(\"Array.from(document.querySelectorAll('input,select,button')).map(e=>({tag:e.tagName,id:e.id,name:e.name,type:e.type,text:e.innerText,disabled:e.disabled}))\"))",
     "form": "fill_input('#name','Ada')\njs(\"document.querySelector('#region').value='west'; document.querySelector('#region').dispatchEvent(new Event('change',{bubbles:true}))\")\nassert wait_for_element('#service:not([disabled])')",
-    "click": "js(\"document.querySelector('#submit').click()\")\nassert wait_for_element('[data-confirmation]')\nprint(js(\"document.querySelector('[data-confirmation]').textContent\"))",
+    "click": "js(\"document.querySelector('#submit').click()\")",
     "pagination": "js(\"document.querySelector('#next').click()\")\nassert wait_for_element('tbody tr')\nprint(js(\"document.querySelector('table').innerText\"))",
     "selects": "Inspect select.options and use the exact option.value, which may differ from its visible label or capitalization. After setting a value and dispatching change, verify the selected value before submitting. For dependent fields, wait until enabled and inspect the newly loaded options.",
     "notes": "Inspect actual selectors first. Dispatch input/change for programmatically changed controls. Check disabled states. wait_for_load only waits document readiness; it does not wait for delayed app data. Use a selector identifying the NEW page or expected state. Python controls loops; js() runs inside the current page.",
-    "rendered_read": "After navigation and waiting for content, call op=read in the same session. This uses the same Rust Donsetch extraction as web_fetch, including focus, selector, max_chars and offset. On live connections supply target_id for the first read. HTTP fetch does not inherit browser cookies; use read for logged-in/rendered content. Live DOM pagination is not a frozen snapshot; check for page changes. Example: exec(code=\"goto_url('https://example.com'); assert wait_for_element('body')\",session=\"research\"), then read(session=\"research\"). There is no url argument on browser_exec; read never navigates. It serializes top-level HTML, not iframe/shadow DOM or live form-control properties; inspect those with exec. focus_omitted and partial indicate incomplete extraction. Capture is limited to 1 MB of top-level HTML before max_chars/selector apply; larger pages need scoped exec inspection."
+    "rendered_read": "After navigation and waiting for content, call op=read in the same session. This uses the same Rust Donsetch extraction as web_fetch, including focus, selector, max_chars and offset. On live connections supply target_id for the first read. HTTP fetch does not inherit browser cookies; use read for logged-in/rendered content. Live DOM pagination is not a frozen snapshot; check for page changes. Example: exec(code=\"goto_url('https://example.com'); assert wait_for_element('body')\",session=\"research\"), then read(session=\"research\"). There is no url argument on browser_exec; read never navigates. It serializes top-level HTML, not iframe/shadow DOM or live form-control properties; inspect those with exec. focus_omitted and partial indicate incomplete extraction. Capture is limited to 1 MB of top-level HTML before max_chars/selector apply; larger pages need scoped exec inspection.",
+    "verify_submission": "In a separate read-only call: assert wait_for_element('[data-confirmation]:not(:empty)'); print(js(\"document.querySelector('[data-confirmation]').textContent\")). Inspect the real receipt selector first. If verification fails, inspect current state; do not click again merely because later code failed. An empty/pending receipt can mean the request is still running; continue read-only polling, never repeat the click just because the receipt has not appeared.",
+    "checkboxes": "Inspect the checkbox selector, then use js(\"document.querySelector('#confirmed').checked = true\") and dispatch change if needed. Do not clear or fill its value: that is the submitted payload, not its checked state. Verify both checked and value before submitting."
   },
   "tabs": {
     "helpers": "list_tabs(), current_tab(), new_tab(url), switch_tab(target, activate=False), close_tab(target=None)",
     "recipe": "print(list_tabs())\nnew_tab('https://example.com')\nassert wait_for_element('body')\nprint(current_tab())",
-    "ownership": "Isolated sessions own their browser. Environment-configured CDP sessions create a task tab. Explicit connect sessions list existing tabs without opening a task tab; select target_id before first exec or read. Reuse session; disconnect/close never kills borrowed Chrome or closes user tabs."
+    "ownership": "Isolated sessions own their browser. Environment-configured CDP sessions create a task tab. Explicit connect sessions list existing tabs without opening a task tab; select target_id before first exec or read. Reuse session; disconnect/close never kills borrowed Chrome or closes user tabs. target_id selects and pins tabs in isolated sessions too; later calls reuse that pin. Helper switch_tab changes only the current call when a pin exists."
   },
   "files": {
     "upload": "from pathlib import Path\np=Path('items.csv').resolve()\np.write_text('name,quantity\\napples,3\\npears,5\\n')\nupload_file('#csv',str(p))\nprint(js(\"document.querySelector('#csv').files[0].name\"))",
     "images": "capture_screenshot() saves an image and returns image parts to supported Gents providers. Use page DOM text if the provider cannot receive tool images. Full output files are named in response.artifacts.",
     "workspace": "Python runs in the named session workspace. Relative task files persist between calls. Save reusable functions in agent_helpers.py there; the harness imports them on subsequent calls. Other Python variables and imports must be recreated each call.",
     "extraction": "For multi-page work, append each completed batch to a JSON/CSV file in the workspace. Read it back and deduplicate, count, sort and total in Python (Decimal for money). Verify the collected count before answering. Use bounded batches so completed work survives timeouts.",
-    "discovery": "For additional upstream helpers: import inspect; print(inspect.signature(upload_file)). Do not guess Playwright/Selenium methods: this is Browser Use, with preloaded Python helpers and js/CDP."
+    "discovery": "For additional upstream helpers: import inspect; print(inspect.signature(upload_file)). Do not guess Playwright/Selenium methods: this is Browser Use, with preloaded Python helpers and js/CDP.",
+    "submit": "upload_file only selects the file. Inspect the enabled submit control, click once, then wait for a nonempty receipt in a separate read-only call. A still-empty receipt means keep waiting, not click again. Use the interaction topic for recipes."
   },
   "recovery": {
-    "errors": "Read response.status, error, phase, code_executed and next, plus stdout/stderr. code_executed=false means this call's code did not run; null means unknown, so earlier actions may have completed. Follow next before retrying. stderr preserves the final 4000 characters, including the exception; artifacts contain full bounded logs. Tool transport success is not task success.",
+    "errors": "Read response.status, error, phase, code_executed and next, plus stdout/stderr. code_executed=false means this call's code did not run; null means unknown, so earlier actions may have completed. Follow next before retrying. stderr preserves the final 4000 characters, including the exception; artifacts contain full bounded logs. Tool transport success is not task success. A NameError after a click does not roll back the click. Stay on the same tab and URL; read the receipt or saved state first, then consult help/overview to correct the missing helper. Never replay the entire block; report an uncertain outcome if read-only inspection cannot resolve it.",
     "timeout": "Actions before a timeout may have completed. Inspect the page in the same session before repeating a submit. Prefer smaller bounded batches.",
     "startup": "startup_failed with code_executed=false means no model code ran. Managed Chrome startup is polled separately for up to 60 seconds and requires a responding CDP endpoint. Inspect the returned chrome_log path and host process-launch health. A dead previously started browser requires explicit close/reopen; it is never silently replaced.",
     "binding": "A cannot-read-connection error occurs BEFORE the worker is contacted. It means Gents needs read permission for the connection FILE, not that the worker is offline. Run setup with --gents-home or gents plugin dirs add <connection.json> --home <home>. Do not try alternate spellings of the same path.",
     "help": "Call {op:help,topic:setup} WITHOUT connection to diagnose offline. Doctor requires an admitted connection and checks the worker.",
-    "missing": "If an element is absent, inspect current page and wait for the relevant content. If the browser died, report it or close/reopen the session; do not silently change identity."
+    "missing": "If an element is absent, inspect current page and wait for the relevant content. If the browser died, report it or close/reopen the session; do not silently change identity.",
+    "driver": "A failed call whose only stderr is browser-harness: connecting to ... may have failed during driver initialization. Execution is still uncertain. Use doctor to inspect availability, then read the existing session before any retry. Do not navigate to a help example or connect to the user's browser as a substitute."
   },
   "setup": {
     "command": "uv run --locked --project <pack>/worker python <pack>/worker/browser_worker.py setup --state <private-state-directory> --allow-host-execution --gents-home <gents-home>",

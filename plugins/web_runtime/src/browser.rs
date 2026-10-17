@@ -5,6 +5,7 @@ use std::{
     path::Path,
 };
 
+#[cfg(test)]
 const ORIGIN: &str = "http://127.0.0.1:18765";
 
 fn unavailable(input: &Value, reason: &str) -> Value {
@@ -213,15 +214,22 @@ fn run(input: &Value) -> Result<Value, String> {
         };
         serde_json::from_str(&fs::read_to_string(path).map_err(|_| "Cannot read connection.json. Run worker setup and bind its returned connection file.")?).map_err(|_| "Invalid connection.json; rerun setup")?
     };
-    if connection["endpoint"] != ORIGIN {
-        return Err(format!("connection endpoint must be {ORIGIN}"));
+    let origin = connection["endpoint"]
+        .as_str()
+        .ok_or("Missing worker endpoint")?;
+    let port = origin
+        .strip_prefix("http://127.0.0.1:")
+        .and_then(|port| port.parse::<u16>().ok())
+        .filter(|port| *port > 0);
+    if !port.is_some_and(|port| origin == format!("http://127.0.0.1:{port}")) {
+        return Err("Worker endpoint must be http://127.0.0.1:<port>, without a path; its port must match the plugin network grant".into());
     }
     let token = connection["token"]
         .as_str()
         .filter(|v| v.len() == 64 && v.bytes().all(|b| b.is_ascii_hexdigit()))
         .ok_or("Invalid worker token; rerun setup")?;
     let request = |method: &str, route: String, body: Option<Value>, state: Value| {
-        let mut req = json!({"id":"browser", "method":method, "url":format!("{ORIGIN}{route}"), "headers":{"Authorization":format!("Bearer {token}"), "Content-Type":"application/json"}});
+        let mut req = json!({"id":"browser", "method":method, "url":format!("{origin}{route}"), "headers":{"Authorization":format!("Bearer {token}"), "Content-Type":"application/json"}});
         if let Some(body) = body {
             req["body"] = Value::String(body.to_string());
         }
@@ -269,6 +277,28 @@ pub fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_endpoints_are_canonical_loopback_origins() {
+        for endpoint in ["http://127.0.0.1:21001", ORIGIN] {
+            let result = run(&json!({"op":"doctor", "http_calls":true,"service":{"endpoint":endpoint,"token":"a".repeat(64)}})).unwrap();
+            assert_eq!(
+                result["http_calls"]["requests"][0]["url"],
+                format!("{endpoint}/call")
+            );
+        }
+        for endpoint in [
+            "http://example.com:18765",
+            "http://127.0.0.1:0",
+            "http://127.0.0.1:99999",
+            "http://127.0.0.1:18765/path",
+            "http://127.0.0.1:18765@evil",
+            "http://127.0.0.1:018765",
+            "https://127.0.0.1:18765",
+        ] {
+            assert!(run(&json!({"op":"doctor","http_calls":true,"service":{"endpoint":endpoint,"token":"a".repeat(64)}})).is_err(), "{endpoint}");
+        }
+    }
 
     #[test]
     fn absent_native_support_keeps_public_http_available() {

@@ -90,3 +90,38 @@ discovery, existing authenticated tabs, live editing, disconnect and browser
 preservation. `--managed --web-research` exercises the combined public search,
 HTTP fetch and rendered reader. These integration modes are executable today;
 they are not claims that the native Gents trial-provisioning bridge is complete.
+
+## Concurrent real-model runs
+
+`run_live.py` provisions fresh Gents homes, fixture servers, worker ports and
+browsers. It builds the WASM artifacts once, then builds trial archives with exact
+loopback grants matching each worker port. The shipped pack still defaults to
+18765. No wildcard network grant or personal browser is used.
+
+```sh
+uv run --locked --project packs/gents/web/worker python packs/gents/web/evals/run_live.py \
+  --gents /path/to/gents \
+  --endpoint http://workstation-1:8000/v1 \
+  --endpoint http://workstation-2:8000/v1 \
+  --concurrency-per-server 32 --output /tmp/browser-eval-64
+```
+
+This launches 32 independent trials per endpoint (64 total), alternating the full
+six-task suite and a two-task help/post-submit recovery probe: 256 model tasks if
+all trials finish. The probe deliberately calls an undefined helper after Import;
+passing requires the actual exception, a subsequent successful receipt inspection
+(read or Python DOM output), and exactly one import recorded independently by the
+fixture. The form/tab task uses an independent CDP connection to compare the
+original tab ID, URL, page contents and navigation timestamp before and after the task;
+it also requires a distinct request tab and exactly one recorded submission.
+Finished suite sessions close before the next independent task to limit local browser memory use. The request
+wait and provider idle deadlines both use `--timeout-secs` (default 900).
+
+Use a fresh output directory. `plan.json`, incremental `results.json`,
+`summary.json` and each trial's traces/logs remain there, including failed runs.
+The plan records the base archive hash and live-runner comparability version,
+which is separate from the native definition version.
+Trials are not automatically rerun; any runtime/provider retries remain in the logs.
+The concurrency setting counts active trial processes; each trial issues sequential model requests and browser calls, so
+inference requests in flight vary. This runner uses `gents chat`; it does not
+implement the native eval provisioning bridge described above.

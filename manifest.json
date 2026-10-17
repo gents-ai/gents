@@ -12,6 +12,7 @@
     "evals/cases/upload.json",
     "evals/manifest.json",
     "evals/oracle.py",
+    "evals/run_live.py",
     "evals/pack_config.json",
     "evals/subject/README.md",
     "evals/subject/manifest.json",
@@ -495,7 +496,7 @@
           "target_id": {
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]{1,128}$",
-            "description": "Existing tab ID from connect/tabs, required for the first live exec or read. Supplying another ID changes the session pin."
+            "description": "Tab ID from connect/tabs. Selects and pins a tab in isolated or live sessions; required before the first live exec/read. Supplying another ID changes the pin."
           },
           "max_chars": {
             "type": "integer",

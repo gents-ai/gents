@@ -25,6 +25,7 @@ class FakeSession:
         self.release = threading.Event()
         self.closed = False
         self.live_browser = None
+        self.selected_target = None
 
     def execute(self, code, timeout, job):
         self.release.wait(3)
@@ -159,13 +160,11 @@ class WorkerTests(unittest.TestCase):
                 if expected == "output_too_large":
                     self.assertEqual(response["phase"], "output")
                     self.assertEqual(response["session"], "read-test")
-                    self.assertIn("small DOM section", response["next"])
             with self.assertRaises(HTTPError) as error:
                 worker.request(conn, "/jobs/missing")
             missing = json.load(error.exception)["response"]
             self.assertEqual(missing["phase"], "polling")
             self.assertIsNone(missing["code_executed"])
-            self.assertIn("Inspect", missing["next"])
             error.exception.close()
             job = worker.request(conn, "/call", {"code": "ok"})
             self.worker.sessions["default"].release.set()

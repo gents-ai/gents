@@ -80,14 +80,81 @@ js("document.title='WRONG TAB'")
             assert "MODEL CODE RAN" not in response["stderr"]
             assert live.selected_target == observed[0]["target_id"]
             assert response["next_call"] == {"op": "tabs", "session": "live"}
+            run(
+                owner,
+                'js("document.body.innerHTML = \'<button onclick=\\"this.textContent=Number(this.textContent)+1\\">0</button>\'")',
+            )
+            response = call(
+                {
+                    "code": "js(\"document.querySelector('button').click()\")\nwait_for_text('button', '1')"
+                }
+            )
+            assert (
+                response["phase"] == "execution" and response["code_executed"] is None
+            ), response
+            assert response["next_call"] == {"op": "read", "session": "live"}, response
+            assert "help" in response["next"], response
+            recovered = call(response["next_call"])
+            assert recovered["status"] == "completed", recovered
+            assert (
+                run(
+                    owner, "print(js(\"document.querySelector('button').textContent\"))"
+                )["stdout"].strip()
+                == "1"
+            )
             run(owner, "js(\"document.body.innerText='x'.repeat(1100000)\")")
             response = call({"op": "read", "max_chars": 500})
             assert response["phase"] == "read" and response["code_executed"] is False, (
                 response
             )
             assert response["next_call"]["op"] == "exec"
+            worker.sessions["owned"] = owner
+            original = observed[0]["target_id"]
+            run(owner, "new_tab('data:text/html,<title>Second</title><p>second</p>')")
+            response = call(
+                {
+                    "session": "owned",
+                    "target_id": original,
+                    "code": "print(js('document.title'))",
+                }
+            )
+            assert (
+                response["status"] == "completed"
+                and response["stdout"].strip() == "Untouched"
+            ), response
+            response = call(
+                {
+                    "session": "owned",
+                    "target_id": None,
+                    "code": "print(js('document.title'))",
+                }
+            )
+            assert response["stdout"].strip() == "Untouched", response
+            for invalid in ("", 0, False):
+                try:
+                    worker.call(
+                        {
+                            "session": "owned",
+                            "target_id": invalid,
+                            "code": "raise Exception('MODEL CODE RAN')",
+                        }
+                    )
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError(
+                        f"Invalid explicit target accepted: {invalid!r}"
+                    )
+            run(owner, f"cdp('Target.closeTarget', targetId={original!r})")
+            response = call(
+                {"session": "owned", "code": "js(\"document.title='WRONG TAB'\")"}
+            )
+            assert (
+                response["phase"] == "target" and response["code_executed"] is False
+            ), response
+            assert "WRONG TAB" not in run(owner, "print(list_tabs())")["stdout"]
             print(
-                "PASS: internal-only connection, no stale-tab replay, pre-execution rejection preserves pin, oversized read recovery"
+                "PASS: internal-only connection, no stale-tab replay, pre-execution rejection preserves pin, oversized read recovery, isolated target pin and closed-target rejection"
             )
         finally:
             worker.shutdown()

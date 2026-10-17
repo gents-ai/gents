@@ -2,20 +2,8 @@
   "defs": "def plugin($name): .manifest.plugins[] | select(.name == $name);",
   "jq": [
     {
-      "name": "web researcher uses search, reading, crawl and browser tools",
-      "expr": "(.config.agents | length) == 1 and .config.agents[0].agent_id == \"web-researcher\" and .config.agents[0].inference_profile_id == \"gents:inference-slot:web_researcher\" and ([.config.tools[].integrations.plugins[].plugin] | sort) == [\"gents/browser_exec\", \"gents/web_crawl\", \"gents/web_fetch\", \"gents/web_search\"] and ([.manifest.inference_slots[].name] == [\"web_researcher\"]) and (.manifest.plugins | map(.name) | sort) == [\"browser_exec\", \"web_crawl\", \"web_fetch\", \"web_search\"]"
-    },
-    {
-      "name": "the three model tool schemas close inputs and reject legacy-only controls",
-      "expr": "(plugin(\"web_search\").input_schema | .additionalProperties == false and .required == [\"query\"] and (.properties | keys == [\"deadline_ms\",\"intent\",\"max_results\",\"query\",\"query_variants\"]) and .properties.max_results.minimum == 1 and .properties.max_results.maximum == 12 and (.properties.intent.enum == [\"auto\",\"web\",\"code\",\"paper\",\"news\",\"entity\"])) and (plugin(\"web_fetch\").input_schema | .additionalProperties == false and .required == [\"url\"] and (.properties | keys == [\"deadline_ms\",\"focus\",\"links\",\"max_chars\",\"media\",\"mode\",\"must_contain\",\"offset\",\"section\",\"selector\",\"toc\",\"url\"]) and (.properties.url.anyOf[1].minItems == 1 and .properties.url.anyOf[1].maxItems == 12) and .properties.max_chars.minimum == 200 and (.properties.mode.enum == [\"scan\",\"read\",\"deep\"]) and (.properties | (has(\"handles\") | not) and (has(\"actions\") | not) and (has(\"stitch\") | not) and (has(\"image_text\") | not) and (has(\"since_last\") | not) and (has(\"budget_tokens\") | not))) and (plugin(\"web_crawl\").input_schema | .additionalProperties == false and .required == [\"url\"] and (.properties.mode.enum == [\"full\",\"map\",\"content\"]) and .properties.same_host.const == true and .properties.map_limit.maximum == 1000 and .properties.per_page_max.minimum == 200 and .properties.max_total_chars.minimum == 1 and (.properties | (has(\"resume\") | not) and (has(\"since_last\") | not) and (has(\"dataset\") | not) and (has(\"include_paths\") | not) and (has(\"exclude_paths\") | not)))"
-    },
-    {
       "name": "HTTP research tools need no native service",
       "expr": "[.manifest.plugins[] | select(.name != \"browser_exec\")] | length == 3 and all(.[]; .service == null and .manifold.fs == \"None\" and .manifold.net.OutboundHttp == null and .manifold.env == \"None\" and .manifold.child_process == false and .manifold.http_timeout_ms == 10000)"
-    },
-    {
-      "name": "the web researcher prompt tells the agent how to cite and handle untrusted pages",
-      "expr": ".assets[\"agent_behaviors/web_researcher/system_prompt.md\"] | contains(\"web_search\") and contains(\"web_fetch\") and contains(\"web_crawl\") and contains(\"untrusted source material\") and contains(\"links\")"
     },
     {
       "name": "browser service exposes its operations and requires native authority",

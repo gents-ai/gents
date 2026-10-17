@@ -26,7 +26,8 @@
     "subject/manifest.json",
     "subject/pack_config.json",
     "subject/system_prompt.txt",
-    "test_oracle.py"
+    "test_oracle.py",
+    "run_live.py"
   ],
   "config": "pack_config.json"
 }

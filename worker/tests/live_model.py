@@ -1,12 +1,15 @@
 """Fresh Gents node + real inference + browser tasks, checked by independent oracles.
 
-Run with the worker project's locked Python environment. Requires free 18765.
+Run with the worker project's locked Python environment. Default worker port: 18765.
 Artifacts stay in --output (or a newly created /tmp directory); no logs enter packs.
 """
 
 import argparse
+import csv
+import io
 import json
 import os
+import re
 import secrets
 import signal
 import socket
@@ -38,6 +41,22 @@ def main():
     parser.add_argument("--model")
     parser.add_argument("--output", type=Path)
     parser.add_argument(
+        "--pack-archive",
+        type=Path,
+        help="Prebuilt trial pack; avoids concurrent builds",
+    )
+    parser.add_argument(
+        "--submit-recovery",
+        action="store_true",
+        help="Submit once, trigger a missing-helper error, and recover without duplicate writes",
+    )
+    parser.add_argument(
+        "--timeout-secs",
+        type=int,
+        default=300,
+        help="Per-request model deadline, including inference queue time",
+    )
+    parser.add_argument(
         "--research",
         action="store_true",
         help="Run public-web research and source-audit tasks instead of the fixture suite",
@@ -58,6 +77,11 @@ def main():
         help="Exercise search, HTTP fetch and rendered reading together on public sources",
     )
     args = parser.parse_args()
+
+    def interrupted(signum, _frame):
+        raise InterruptedError(f"Trial interrupted by signal {signum}")
+
+    signal.signal(signal.SIGTERM, interrupted)
     if args.connected and not args.managed:
         parser.error("--connected requires --managed")
     root = (
@@ -86,13 +110,14 @@ def main():
     fixture_thread.start()
     site = f"http://127.0.0.1:{fixture.server_port}"
     owner = None
+    inspector = None
     login_fixture = None
     browser_roots = {"fixture-unavailable": str(root / "no-browser")}
     server = None
     worker_started = False
     report = {"endpoint": args.endpoint, "model": model, "tasks": []}
 
-    def run(command, name, timeout=60):
+    def run(command, name, timeout=180):
         with (
             open(root / f"{name}.json", "w") as out,
             open(root / f"{name}.log", "w") as err,
@@ -107,6 +132,7 @@ def main():
         return json.loads((root / f"{name}.json").read_text())
 
     def chat(name, prompt, session=None):
+        report["active_task"] = name
         prompt_file = root / f"{name}-prompt.txt"
         prompt_file.write_text(prompt)
         cmd = [
@@ -121,12 +147,12 @@ def main():
             "--output",
             "json",
             "--timeout-secs",
-            "300",
+            str(args.timeout_secs),
         ]
         if session:
             cmd += ["--session-id", session]
         start = time.monotonic()
-        result = run(cmd, name, timeout=320)
+        result = run(cmd, name, timeout=args.timeout_secs + 30)
         body = result.get("output", {}).get("presentation", {}).get("body_markdown", "")
         trace_path = root / f"{name}-trace.jsonl"
         subprocess.run(
@@ -171,16 +197,65 @@ def main():
         )
         return result, body, browser
 
-    try:
-        archive = root / "web.pack"
-        with open(root / "build.log", "w") as log:
-            subprocess.run(
-                [gents, "pack", "build", str(pack), "--out", str(archive)],
-                check=True,
-                stdout=log,
-                stderr=log,
-                timeout=600,
+    def worker_connection_path():
+        paths = (
+            list((home / "plugin-services").glob("run-*/worker/connection.json"))
+            if args.managed
+            else [state / "connection.json"]
+        )
+        assert len(paths) == 1, paths
+        return paths[0]
+
+    def close_session(name):
+        from live_service import worker
+
+        result = worker.request(
+            json.loads(worker_connection_path().read_text()),
+            "/call",
+            {"op": "close", "session": name},
+        )
+        assert result.get("response", {}).get("status") == "closed", result
+
+    def invoice_snapshot():
+        nonlocal inspector
+        from live_service import worker
+
+        if inspector is None:
+            active = (
+                worker_connection_path().parent
+                / "sessions/invoice-task/profile/DevToolsActivePort"
             )
+            browser_port = int(active.read_text().splitlines()[0])
+            inspector = worker.Session(
+                root / "oracle",
+                "invoice",
+                cdp=f"http://127.0.0.1:{browser_port}",
+                live_browser="oracle",
+            )
+        code = """import json
+observations = []
+for tab in list_tabs():
+    switch_tab(tab['target_id'])
+    observations.append({'id':tab['target_id'], 'page':js('({url:location.href, text:document.body.innerText, timeOrigin:performance.timeOrigin})')})
+print(json.dumps(observations))
+"""
+        response = inspector.execute(code, 30, secrets.token_hex(16))["response"]
+        assert response["status"] == "completed", response
+        return json.loads(response["stdout"])
+
+    try:
+        archive = (
+            args.pack_archive.resolve() if args.pack_archive else root / "web.pack"
+        )
+        with open(root / "build.log", "w") as log:
+            if not args.pack_archive:
+                subprocess.run(
+                    [gents, "pack", "build", str(pack), "--out", str(archive)],
+                    check=True,
+                    stdout=log,
+                    stderr=log,
+                    timeout=600,
+                )
         if args.connected:
             from http.server import ThreadingHTTPServer
 
@@ -248,6 +323,28 @@ def main():
             )
             worker_started = True
             assert setup["gents_binding"] == "read"
+        execution = root / "execution-config"
+        execution.mkdir()
+        (execution / "pack_config.json").write_text(
+            json.dumps(
+                {
+                    "node": {
+                        key: init[key] for key in ("node_did", "default_agent_id")
+                    },
+                    "inference_execution": [
+                        {
+                            "node_did": init["node_did"],
+                            "execution_id": init["inference_profile_id"] + "-execution",
+                            "provider_idle_timeout_secs": args.timeout_secs,
+                        }
+                    ],
+                }
+            )
+        )
+        run(
+            [gents, "config", "apply", "--home", str(home), "--root", str(execution)],
+            "execution",
+        )
         tools = {
             "node_did": init["node_did"],
             "tools_id": init["tools_id"],
@@ -308,7 +405,7 @@ def main():
                     "GENTS_BROWSER_ROOTS": json.dumps(browser_roots),
                 },
             )
-        until = time.monotonic() + 30
+        until = time.monotonic() + 120
         while time.monotonic() < until:
             try:
                 with socket.create_connection(("127.0.0.1", port), timeout=1):
@@ -422,6 +519,68 @@ def main():
             and not row["final_arguments_sent"].get("connection")
             for row in help_calls
         )
+        if args.submit_recovery:
+            csv_text = "name,quantity\nbolts,7\nnuts,11\nwashers,4\n"
+            code = (
+                f"goto_url({site + '/upload'!r})\n"
+                "assert wait_for_element('#csv')\n"
+                "from pathlib import Path\n"
+                "p = Path('quantities.csv').resolve()\n"
+                f"p.write_text({csv_text!r})\n"
+                "upload_file('#csv', str(p))\n"
+                "assert wait_for_element('#import:not([disabled])')\n"
+                "js(\"document.querySelector('#import').click()\")\n"
+                "wait_for_text('[role=status]', 'rows')\n"
+            )
+            _, answer, calls = chat(
+                "submit_recovery",
+                "Run this diagnostic code exactly as written in browser session submit-recovery. It intentionally contains an undefined helper after the submission. Then recover using the tool's guidance and report the import receipt.\n```python\n"
+                + code
+                + "```\n"
+                + context,
+            )
+            ordered = sorted(calls, key=lambda row: row["started_at"])
+            failures = [
+                i
+                for i, row in enumerate(ordered)
+                if "NameError: name 'wait_for_text'"
+                in native(row).get("response", {}).get("stderr", "")
+            ]
+            assert failures, (
+                "Model did not exercise the post-submit missing-helper failure"
+            )
+            receipt_reads = []
+            for row in ordered[failures[0] + 1 :]:
+                response = native(row).get("response", {})
+                content = response.get("page", {}).get("content", "") + response.get(
+                    "stdout", ""
+                )
+                if (
+                    row["final_arguments_sent"].get("session", "default")
+                    == "submit-recovery"
+                    and response.get("status") == "completed"
+                    and any(
+                        json.loads(match) == {"rows": 3, "quantity_total": 22}
+                        for match in re.findall(
+                            r'\{\s*"rows"\s*:\s*3\s*,\s*"quantity_total"\s*:\s*22\s*\}',
+                            content,
+                        )
+                    )
+                ):
+                    receipt_reads.append(row["final_arguments_sent"].get("op", "exec"))
+            assert receipt_reads, "No successful receipt inspection after the error"
+            report["receipt_read_via"] = receipt_reads
+            imports = json.loads((root / "fixture-state.json").read_text())["imports"]
+            assert imports == [
+                {"csv": csv_text, "receipt": {"rows": 3, "quantity_total": 22}}
+            ], imports
+            assert "22" in answer and "3" in answer, answer
+            report["passed"] = True
+            print(
+                "PASS: post-submit NameError, read-only receipt recovery, exactly one import",
+                flush=True,
+            )
+            return
         if args.connected:
             connected, answer, calls = chat(
                 "connect_read",
@@ -485,6 +644,15 @@ def main():
         assert all(f"/api/invoices?page={page}" in visited for page in (1, 2, 3)), (
             visited
         )
+        before_tabs = invoice_snapshot()
+        (root / "tab-observations.json").write_text(
+            json.dumps({"before": before_tabs}, indent=2)
+        )
+        invoice_tabs = [
+            tab for tab in before_tabs if tab["page"]["url"] == site + "/invoices"
+        ]
+        assert len(invoice_tabs) == 1, before_tabs
+        before_invoice = invoice_tabs[0]
         _, answer, _ = chat(
             "form_tabs",
             f"Continue using that browser session. Open {site}/request in a NEW tab, keeping the invoice tab intact. Submit exactly one delivery request for recipient Casey, region West, service Express, reference BR-2048, and check the confirmation checkbox. Report its confirmation ID. Then switch back to the existing invoice tab and report which page it is on without navigating or reloading it."
@@ -501,17 +669,46 @@ def main():
                 "confirmed": "on",
             }
         ], fixture_state["requests"]
-        assert "SHIP-0001" in answer and "3" in answer, answer
+        after_tabs = invoice_snapshot()
+        (root / "tab-observations.json").write_text(
+            json.dumps({"before": before_tabs, "after": after_tabs}, indent=2)
+        )
+        after_invoice = next(
+            (tab for tab in after_tabs if tab["id"] == before_invoice["id"]), None
+        )
+        assert after_invoice == before_invoice, {
+            "before": before_invoice,
+            "after": after_invoice,
+        }
+        assert any(
+            tab["id"] != before_invoice["id"]
+            and tab["page"]["url"] == site + "/request"
+            for tab in after_tabs
+        ), after_tabs
+        assert "SHIP-0001" in answer, answer
+        inspector.close()
+        inspector = None
+        close_session("invoice-task")
         _, answer, _ = chat(
             "upload",
             f"In browser session upload-task, open {site}/upload. Create a CSV named quantities.csv with columns name,quantity and exactly these rows: bolts=7, nuts=11, washers=4. Upload it using the file input, click Import, and report the receipt from the page. Consult the tool's file help if needed."
             + context,
         )
         fixture_state = json.loads((root / "fixture-state.json").read_text())
-        assert len(fixture_state["imports"]) == 1 and fixture_state["imports"][0][
-            "receipt"
-        ] == {"rows": 3, "quantity_total": 22}, fixture_state["imports"]
+        imports = fixture_state["imports"]
+        assert len(imports) == 1 and imports[0]["receipt"] == {
+            "rows": 3,
+            "quantity_total": 22,
+        }, imports
+        rows = list(csv.reader(io.StringIO(imports[0]["csv"])))
+        assert rows == [
+            ["name", "quantity"],
+            ["bolts", "7"],
+            ["nuts", "11"],
+            ["washers", "4"],
+        ], rows
         assert "22" in answer and "3" in answer, answer
+        close_session("upload-task")
         _, answer, recovery = chat(
             "timeout_recovery",
             f"Test browser recovery in session recovery-task: first open {site}/invoices and inspect it. Then deliberately run Python import time; time.sleep(5) with browser_exec timeout_s=1. After that timeout, use the SAME browser session to inspect the page title and visible invoice page again. Report the timeout and whether the page survived. Do not submit any forms."
@@ -554,7 +751,8 @@ def main():
         )
     except Exception as error:
         report["passed"] = False
-        report["error"] = str(error)
+        report["error"] = str(error) or repr(error)
+        report["error_type"] = type(error).__name__
         raise
     finally:
         (root / "report.json").write_text(json.dumps(report, indent=2))
@@ -596,6 +794,8 @@ def main():
                 raise
             finally:
                 (root / "report.json").write_text(json.dumps(report, indent=2))
+        if inspector:
+            inspector.close()
         if owner:
             owner.close()
         if login_fixture:
