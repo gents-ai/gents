@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "client::mutations::manage::principal::editor::tests::config_editor_matches_executable_lean_contract",
+            package: "gents-desktop-core",
+            source_path: "crates/gents-desktop-core/src/client/mutations/manage/principal/editor.rs",
+            module_path: "client::mutations::manage::principal::editor::tests",
+            function: "config_editor_matches_executable_lean_contract",
+        },
+        ConformanceConsumer::RustTest {
             id: "client::core::observation_scope::tests::generated_attachment_traces_keep_every_frontend_observable",
             package: "gents-desktop-core",
             source_path: "crates/gents-desktop-core/src/client/core/observation_scope.rs",

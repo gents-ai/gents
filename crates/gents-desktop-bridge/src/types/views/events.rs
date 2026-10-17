@@ -39,6 +39,33 @@ pub struct ChatSendResult {
     pub agent_id: Option<String>,
 }
 
+impl From<gents_desktop_core::client::SubmittedRequest> for ChatSendResult {
+    fn from(receipt: gents_desktop_core::client::SubmittedRequest) -> Self {
+        Self {
+            session_id: receipt.session_id,
+            request_id: receipt.request_id,
+            node_did: receipt.node_did,
+            agent_id: receipt.agent_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ConfiguredActionKind {
+    Task,
+    Schedule,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfiguredActionView {
+    pub kind: ConfiguredActionKind,
+    pub id: String,
+    pub label: String,
+    pub description: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestOutputView {

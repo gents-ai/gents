@@ -1588,6 +1588,41 @@ impl ClientCore {
         }
     }
 
+    pub async fn read_config_editor(
+        &self,
+        node_did: &str,
+        target: gents::config_client::patch::SelfConfigTarget,
+        id: &str,
+    ) -> Result<mutations::ConfigEditorDocument> {
+        let access = self
+            .operator_graphql(node_did)
+            .map(ConfigAccess::Graphql)
+            .context("Connect this local runtime before editing its configuration.")?;
+        mutations::read_config_editor_on(&access, node_did, target, id).await
+    }
+
+    pub async fn save_config_editor(
+        &self,
+        node_did: &str,
+        target: gents::config_client::patch::SelfConfigTarget,
+        id: &str,
+        revision: &mutations::ConfigEditorRevision,
+        content: &str,
+    ) -> Result<Option<mutations::ConfigEditorDocument>> {
+        let access = self
+            .operator_graphql(node_did)
+            .map(ConfigAccess::Graphql)
+            .context("Connect this local runtime before editing its configuration.")?;
+        let saved =
+            mutations::save_config_editor_on(&access, node_did, target, id, revision, content)
+                .await?;
+        if self.refresh_config_source(node_did).await.is_err() {
+            tracing::warn!("Configuration saved; client observation will resynchronize");
+            self.store.request_resync(Some(node_did));
+        }
+        Ok(saved)
+    }
+
     pub async fn apply_config_components(
         &self,
         document: &gents::document_config::PackConfig,

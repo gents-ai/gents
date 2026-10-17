@@ -178,6 +178,9 @@ fn export_all(dir: &Path) -> Result<(), String> {
     }
 
     export_types!(
+        ConfiguredActionView,
+        crate::host::settings::ConfigEditorEntry,
+        gents_desktop_core::client::ConfigEditorDocument,
         RequestOutputView,
         gents_protocol::client_media::MediaCall,
         gents_protocol::client_media::MediaOperation,

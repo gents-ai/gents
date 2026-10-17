@@ -1093,6 +1093,11 @@ def caseCoverage : List CoverageEntry :=
       "client::core::observation_scope::tests::generated_attachment_traces_keep_every_frontend_observable")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
+      "client_settings_cases"
+      "ClientSettingsCases"
+      "client::mutations::manage::principal::editor::tests::config_editor_matches_executable_lean_contract")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
       "client_data_publication_cases"
       "ClientDataNoticeDeliveryCases"
       "client::observe::projection_store::reload_tests::generated_notice_delivery_never_regresses_watchers")

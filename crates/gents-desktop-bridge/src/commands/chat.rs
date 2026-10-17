@@ -109,12 +109,7 @@ pub async fn send_chat_message(
         )
         .await?;
 
-    Ok(ChatSendResult {
-        session_id,
-        request_id: submitted.request_id,
-        node_did: submitted.node_did,
-        agent_id: submitted.agent_id,
-    })
+    Ok(submitted.into())
 }
 
 pub(super) fn chat_folder(raw: Option<&str>) -> Result<Option<String>> {

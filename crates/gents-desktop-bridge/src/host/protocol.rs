@@ -27,6 +27,49 @@ pub enum ClientMessage {
 #[serde(tag = "name", content = "args")]
 #[serde(deny_unknown_fields)]
 pub enum ClientCommand {
+    #[serde(rename = "client_config_catalog")]
+    ConfigCatalog {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+    },
+    #[serde(rename = "client_config_read")]
+    ConfigRead {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+        collection: String,
+        id: String,
+    },
+    #[serde(rename = "client_config_save")]
+    ConfigSave {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+        collection: String,
+        id: String,
+        revision: gents_desktop_core::client::ConfigEditorRevision,
+        content: String,
+    },
+    #[serde(rename = "client_action_catalog")]
+    ActionCatalog {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+    },
+    #[serde(rename = "client_start_task")]
+    StartTask {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+        #[serde(rename = "taskId")]
+        task_id: String,
+        #[serde(rename = "argumentsJson")]
+        /// Parsed natively to avoid a JavaScript number round trip.
+        arguments_json: String,
+    },
+    #[serde(rename = "client_run_schedule")]
+    RunSchedule {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+        #[serde(rename = "scheduleId")]
+        schedule_id: String,
+    },
     #[serde(rename = "desktop_request_output")]
     RequestOutput {
         #[serde(rename = "nodeDid")]
@@ -109,6 +152,12 @@ pub enum ClientCommand {
 
 impl ClientCommand {
     pub const NAMES: &'static [&'static str] = &[
+        "client_config_catalog",
+        "client_config_read",
+        "client_config_save",
+        "client_action_catalog",
+        "client_start_task",
+        "client_run_schedule",
         "desktop_request_output",
         "client_speech_services",
         "client_speech_tools",
@@ -135,6 +184,9 @@ impl ClientCommand {
         matches!(
             self,
             Self::Snapshot {}
+                | Self::ConfigCatalog { .. }
+                | Self::ConfigRead { .. }
+                | Self::ActionCatalog { .. }
                 | Self::RequestOutput { .. }
                 | Self::SpeechServices { .. }
                 | Self::SpeechTools { .. }
