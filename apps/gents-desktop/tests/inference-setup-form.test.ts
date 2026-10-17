@@ -123,3 +123,45 @@ describe("the inference setup form", () => {
     expect(again.accounts.switching).toEqual({});
   });
 });
+
+it("selects the first explicit provider from an unselected welcome screen", () => {
+  expect(
+    setupFormReducer(initialSetupForm(), {
+      type: "providerPicked",
+      provider: "openai",
+      current: null,
+    }).provider,
+  ).toBe("openai");
+});
+
+it("leaves manual entry when a discovered model is chosen", () => {
+  const manual = setupFormReducer(initialSetupForm(), {
+    type: "manualModelTyped",
+    name: "manual",
+  });
+  const chosen = setupFormReducer(manual, {
+    type: "modelChosen",
+    option: {
+      advertised: {
+        model_name: "discovered",
+        display_name: null,
+        context_window: null,
+        max_context_window: null,
+        max_output_tokens: null,
+        reasoning_efforts: null,
+      },
+      recommendation: {
+        defaultsVersion: "fixture",
+        summary: "",
+        contextWindow: null,
+        maxOutputTokens: null,
+        temperature: null,
+        topP: null,
+        reasoningEffort: null,
+        maxConcurrent: { recommended: 1, min: 1, max: null },
+      },
+    },
+  });
+  expect(chosen.model.name).toBe("discovered");
+  expect(chosen.model.manual).toBe(false);
+});
