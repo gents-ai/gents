@@ -136,15 +136,10 @@ pub async fn observe_embedded_sync_status(
     node: &crate::defra_node::EmbeddedNode,
 ) -> anyhow::Result<P2pSyncStatusSnapshot> {
     use anyhow::Context;
-    let p2p = node
-        .p2p_arc()
-        .context("embedded node has no P2P transport")?;
-    let upstream = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        crate::identity::as_node_identity(node, p2p.sync_status()),
-    )
-    .await
-    .context("native P2P sync observation timed out")??;
+    let p2p = crate::identity::node_p2p(node).context("embedded node has no P2P transport")?;
+    let upstream = tokio::time::timeout(std::time::Duration::from_secs(5), p2p.sync_status())
+        .await
+        .context("native P2P sync observation timed out")??;
     Ok(JsonP2pSyncStatusAdapter.adapt(&upstream)?)
 }
 

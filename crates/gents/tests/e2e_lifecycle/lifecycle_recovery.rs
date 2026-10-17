@@ -1118,10 +1118,9 @@ async fn seed_completed_canonical_output(
         created_at: created_at.to_string(),
     };
     let segment_response = node
-        .execute_request_with_retry(
+        .execute_request(
             gents::defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                 .with_variables(output_segment_create_variables(&segment).unwrap()),
-            gents::defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(
@@ -1156,10 +1155,9 @@ async fn seed_completed_canonical_output(
         created_at: created_at.to_string(),
     };
     let message_response = node
-        .execute_request_with_retry(
+        .execute_request(
             gents::defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                 .with_variables(transcript_message_create_variables(&message).unwrap()),
-            gents::defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(
@@ -1205,10 +1203,9 @@ async fn seed_open_canonical_flush(
         created_at: created_at.to_string(),
     };
     let segment_response = node
-        .execute_request_with_retry(
+        .execute_request(
             gents::defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                 .with_variables(output_segment_create_variables(&segment).unwrap()),
-            gents::defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(

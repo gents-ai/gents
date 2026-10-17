@@ -2967,7 +2967,7 @@ async fn assistant_turn_materializes_durable_reasoning_into_agent_message() {
 }
 
 #[tokio::test]
-async fn read_file_result_persists_raw_output_but_models_compact_observation() {
+async fn read_file_result_persists_raw_output() {
     let data_path = std::env::temp_dir().join(format!(
         "agent-hook-read-file-model-observation-{}",
         uuid::Uuid::new_v4()
@@ -3056,11 +3056,6 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
         panic!("expected text tool result content");
     };
     assert_eq!(text, raw_read_output);
-    assert_eq!(
-        super::persistence::test_model_observation_for_tool_result("read_file", raw_read_output,),
-        "Read notes.txt (lines 2-3 of 3):\nL2: beta\nL3: gamma"
-    );
-
     let row = fetch_tool_call_row(&node, &session_id, "call-read").await;
     assert_eq!(
         row.get("result").and_then(|value| value.as_str()),

@@ -80,7 +80,6 @@ pub(crate) trait PayloadPresentationAdapter {
     ) -> ExecutionFuture<'a, Result<Option<u64>, Self::Error>>;
 }
 
-/// Check presentation length, independently of provider serialization/sizing.
 pub(crate) async fn assert_native_payload_presentation_case<A>(
     case: &LeanPayloadPresentationCase,
     adapter: &mut A,

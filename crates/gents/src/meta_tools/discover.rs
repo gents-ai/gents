@@ -286,31 +286,41 @@ mod tests {
         }
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn discover_stays_bounded_when_a_service_endpoint_blackholes() {
         let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         seed_registry_service(&node, "x-data", "elsewhere", 9198).await;
         seed_registry_service(&node, "hf-data", "strangenas", 9200).await;
 
-        let pool = McpPool::new_with_list_tools_handler(|service_id, _endpoint| async move {
-            if service_id == "hf-data" {
-                std::future::pending::<()>().await;
+        let blackholed = Arc::new(tokio::sync::Notify::new());
+        let handler_entered = Arc::clone(&blackholed);
+        let pool = McpPool::new_with_list_tools_handler(move |service_id, _endpoint| {
+            let handler_entered = Arc::clone(&handler_entered);
+            async move {
+                if service_id == "hf-data" {
+                    handler_entered.notify_one();
+                    std::future::pending::<()>().await;
+                }
+                Ok(ListToolsResult::with_all_items(vec![stub_tool(
+                    "search_posts",
+                )]))
             }
-            Ok(ListToolsResult::with_all_items(vec![stub_tool(
-                "search_posts",
-            )]))
         });
 
         let tool = DiscoverToolsTool::new(test_context(node, pool, ServiceHealthMap::new()));
-
-        let output = tokio::time::timeout(
-            Duration::from_secs(3600),
-            tool.call(DiscoverToolsArgs { query: None }),
-        )
-        .await
-        .expect("discover_tools must stay bounded when a service endpoint blackholes")
-        .expect("discover returns model-readable text");
+        let discovery =
+            tokio::spawn(async move { tool.call(DiscoverToolsArgs { query: None }).await });
+        tokio::time::timeout(Duration::from_secs(10), blackholed.notified())
+            .await
+            .expect("discovery reaches the blackholed endpoint after its native reads");
+        tokio::time::pause();
+        let output = tokio::time::timeout(Duration::from_secs(3600), discovery)
+            .await
+            .expect("discover_tools must stay bounded when a service endpoint blackholes")
+            .expect("discovery task completes")
+            .expect("discover returns model-readable text");
+        tokio::time::resume();
 
         assert!(
             output.contains("search_posts"),

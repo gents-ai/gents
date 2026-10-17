@@ -629,7 +629,6 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                                         );
                                         return Err(error.context("persisting received provider audit during interrupt"));
                                     }
-                                    // Tool terminalization publishes its result atomically.
                                     return Err(anyhow!("request interrupted during inference"));
                                 }
                                 _ = lease_poll.tick() => {

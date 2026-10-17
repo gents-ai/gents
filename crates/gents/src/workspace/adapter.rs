@@ -229,7 +229,7 @@ async fn managed_git_with_index(cwd: &Path, index: &Path, args: &[&str]) -> Resu
             stdout_truncated: true,
             ..
         } => bail!(
-            "git {} output exceeded {MANAGED_GIT_OUTPUT_BYTE_CAP} bytes",
+            "git {} output capture was incomplete (capture limit {MANAGED_GIT_OUTPUT_BYTE_CAP} bytes or post-exit drain cutoff)",
             args.join(" ")
         ),
         ManagedExecOutcome::Exited { stderr, .. } => bail!(

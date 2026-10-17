@@ -1,9 +1,4 @@
-use std::future::Future;
-use std::pin::Pin;
-
 use serde::Deserialize;
-
-pub(crate) type ProjectionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]

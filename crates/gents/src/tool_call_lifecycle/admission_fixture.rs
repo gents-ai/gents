@@ -638,7 +638,20 @@ mod lifecycle_tests {
 
     #[tokio::test]
     async fn admitted_native_lifecycle_persists_completed_terminal() {
-        let (node, path, mut tool) = pending_spawn_parent("native-complete").await;
+        let (admission, _request_owner) =
+            published_admission_with_owner(PublishedAdmissionOptions {
+                name: "native-complete".to_owned(),
+                start_running: false,
+                ..Default::default()
+            })
+            .await
+            .expect("publish pending canonical native tool admission");
+        let PublishedAdmission {
+            node,
+            path,
+            mut tool,
+            ..
+        } = admission;
         let request_doc_id = tool.request_doc_id().unwrap().to_owned();
         tool.start_running().await.unwrap();
         let running = row(&node, "session-native-complete").await;

@@ -543,10 +543,9 @@ mod tests {
     use super::*;
 
     /// The one deadline-expiry predicate (#1334), shared by tool-call
-    /// recovery here and by `gents-cli`'s fleet-slot and liveness
-    /// snapshots. Past deadlines (including exactly `now`) are expired;
-    /// future, missing, and malformed deadlines are documented as not
-    /// expired.
+    /// recovery here and by `gents-cli`'s fleet-slot and liveness snapshots.
+    /// Past deadlines (including exactly `now`) are expired; future, missing,
+    /// and malformed deadlines are documented as not expired.
     #[test]
     fn deadline_is_expired_covers_past_future_missing_and_malformed() {
         let now = DateTime::parse_from_rfc3339("2026-09-03T12:00:00Z")
@@ -571,7 +570,6 @@ mod tests {
             !deadline_is_expired(now, Some("   ")),
             "blank deadline is documented as missing, not malformed"
         );
-
         // The typed variant agrees with the string-form convenience.
         assert_eq!(
             deadline_at_is_expired(now, parse_datetime(Some(past))),

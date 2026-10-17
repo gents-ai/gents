@@ -1038,7 +1038,6 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
         Ok(())
     }
     .await;
-    // Release the provider even when an assertion prerequisite failed.
     gate.add_permits(1);
     result
 }

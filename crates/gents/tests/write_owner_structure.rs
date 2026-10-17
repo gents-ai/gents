@@ -20,12 +20,7 @@ const NODE_EXECUTE_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-migration/src/materialize.rs", 1),
 ];
 
-const NODE_ONLY_METHODS: &[&str] = &[
-    "execute_request",
-    "execute_request_with_retry",
-    "execute_with_retry",
-    "runner",
-];
+const NODE_ONLY_METHODS: &[&str] = &["execute_as", "execute_request", "runner"];
 
 const FORBIDDEN_FUNCTIONS: &[&str] = &[
     "begin_apply_txn",
@@ -45,7 +40,6 @@ const FORBIDDEN_METHODS: &[&str] = &[
     "commit_txn",
     "rollback_txn",
     "execute_request_in_txn",
-    "execute_with_retry",
     "begin_apply_txn",
 ];
 
@@ -695,7 +689,8 @@ fn read_fence_counts_direct_node_execution() {
         "impl S { fn f(&self, q: &str) { let db = &self.node; db.execute(q); } }",
         "impl EmbeddedNodeExt for EmbeddedNode { fn f(&self, q: &str) { self.execute(q); } }",
         "fn f(x: &X) { x.runner(); }",
-        "fn f(x: &X, q: &str, p: P) { x.execute_with_retry(q, p); }",
+        "fn f(x: &X, context: &C, q: &str) { x.execute_as(context, q); }",
+        "fn f(x: &X, request: R) { x.execute_request(request); }",
     ] {
         assert_eq!(snippet_sites(source), 1, "{source}");
     }

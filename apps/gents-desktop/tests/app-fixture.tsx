@@ -76,9 +76,6 @@ export function renderIn(app: DesktopApp, ui: ReactElement) {
   return render(ui, { wrapper: withApp(app) });
 }
 
-/** Renders `page` for the route shown, starting at `initial`, under `app`
-    and a memory nav that `navigate`, `back` and `replace` drive, as the
-    app does. `nav()` is the nav as last rendered. */
 export function renderRouted(
   app: DesktopApp,
   initial: Route,

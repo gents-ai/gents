@@ -164,7 +164,6 @@ struct ReadCache {
     /// Rows the caller read by an exact scoped query in the same transaction;
     /// each still passes coordinate validation before it enters `headers`.
     observed: BTreeMap<String, super::canonical_rows::TranscriptMessageRow>,
-    /// Bulk readers cache scoped session headers; single-header readers query twins only.
     sessions: Option<BTreeMap<String, SessionHeaderRows>>,
     /// One bounded bulk pass reconstructs every message of a request
     /// against the same scan. A reused scan that lacks a referenced close is
@@ -390,9 +389,6 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
         }
     }
 
-    /// Reuse headers from an exact scoped batch read. A separate `_docID`
-    /// equality is a point lookup, but reusing the rows avoids another read
-    /// per header in this transaction.
     pub(crate) fn observe_headers(
         &mut self,
         headers: &[super::canonical_rows::TranscriptMessageRow],
@@ -1590,8 +1586,6 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
             message: candidate.message,
         });
     }
-    // Capture reads are the pass's dominant per-candidate store cost; they
-    // stay batched across the pass.
     let capture_rows = load_replay_capture_rows(node, &selected).await?;
     preload_replay_capture_blocks(node, &capture_rows, &mut capture_cache).await?;
 
@@ -2563,10 +2557,7 @@ mod tests {
         field: &str,
     ) -> String {
         let response = node
-            .execute_request_with_retry(
-                defra_node::QueryRequest::new(mutation).with_variables(variables),
-                defra_node::ExecuteRetryPolicy::default(),
-            )
+            .execute_request(defra_node::QueryRequest::new(mutation).with_variables(variables))
             .await;
         assert!(!response.has_errors(), "{:?}", response.errors);
         crate::graphql::single_mutation_document(&response, field)

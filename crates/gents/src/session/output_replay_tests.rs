@@ -272,10 +272,9 @@ impl ReplayFixture {
         };
         let created = self
             .node
-            .execute_request_with_retry(
+            .execute_request(
                 defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                     .with_variables(output_segment_create_variables(&segment).unwrap()),
-                defra_node::ExecuteRetryPolicy::default(),
             )
             .await;
         assert!(!created.has_errors(), "{:?}", created.errors);
@@ -328,10 +327,9 @@ impl ReplayFixture {
         };
         let created = self
             .node
-            .execute_request_with_retry(
+            .execute_request(
                 defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                     .with_variables(transcript_message_create_variables(&header).unwrap()),
-                defra_node::ExecuteRetryPolicy::default(),
             )
             .await;
         assert!(!created.has_errors(), "{:?}", created.errors);
@@ -390,10 +388,9 @@ impl ReplayFixture {
         };
         let created = self
             .node
-            .execute_request_with_retry(
+            .execute_request(
                 defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                     .with_variables(output_segment_create_variables(&segment).unwrap()),
-                defra_node::ExecuteRetryPolicy::default(),
             )
             .await;
         assert!(!created.has_errors(), "{:?}", created.errors);
@@ -433,10 +430,9 @@ impl ReplayFixture {
         };
         let created = self
             .node
-            .execute_request_with_retry(
+            .execute_request(
                 defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                     .with_variables(transcript_message_create_variables(&header).unwrap()),
-                defra_node::ExecuteRetryPolicy::default(),
             )
             .await;
         assert!(!created.has_errors(), "{:?}", created.errors);
@@ -702,10 +698,9 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
         created_at: now.clone(),
     };
     let created = node
-        .execute_request_with_retry(
+        .execute_request(
             defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                 .with_variables(output_segment_create_variables(&segment).unwrap()),
-            defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
@@ -786,10 +781,9 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
         created_at: now,
     };
     let created = node
-        .execute_request_with_retry(
+        .execute_request(
             defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                 .with_variables(transcript_message_create_variables(&header).unwrap()),
-            defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
@@ -1108,7 +1102,7 @@ async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive(
 }
 
 #[tokio::test]
-async fn replay_high_water_and_header_twins_fail_closed() {
+async fn replay_rejects_forged_high_water_and_storage_rejects_sequence_twins() {
     let observed = fixture().await;
     let mut forged = observed.boundary.clone();
     forged.canonical_through.as_mut().unwrap().commit_cid = "not-a-header-commit".into();
@@ -1136,14 +1130,20 @@ async fn replay_high_water_and_header_twins_fail_closed() {
     twin.message_key.push_str(":twin");
     let created = observed
         .node
-        .execute_request_with_retry(
+        .execute_request(
             defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                 .with_variables(transcript_message_create_variables(&twin).unwrap()),
-            defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
-    assert!(!created.has_errors(), "{:?}", created.errors);
-    assert!(observed.candidates().await.is_err());
+    assert!(
+        created.has_errors(),
+        "a sequence slot cannot hold a second header"
+    );
+    assert!(created
+        .errors
+        .iter()
+        .any(|error| error.message.contains("unique index")));
+    assert!(observed.candidates().await.is_ok());
 }
 
 #[tokio::test]
@@ -1606,10 +1606,9 @@ async fn replay_resolution_observes_a_header_replicated_before_dispatch() {
     duplicate.message_key.push_str("-replicated-twin");
     let created = fixture
         .node
-        .execute_request_with_retry(
+        .execute_request(
             defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                 .with_variables(transcript_message_create_variables(&duplicate).unwrap()),
-            defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
@@ -1724,10 +1723,9 @@ async fn a_header_twin_arriving_between_the_admission_estimate_and_dispatch_wait
     duplicate.message_key.push_str("-estimate-twin");
     let created = fixture
         .node
-        .execute_request_with_retry(
+        .execute_request(
             defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                 .with_variables(transcript_message_create_variables(&duplicate).unwrap()),
-            defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
@@ -1936,7 +1934,7 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
     );
     let created = fixture
         .node
-        .execute_request_with_retry(
+        .execute_request(
             defra_node::QueryRequest::new(
                 "mutation($input: RenderedRequestBlockMutationInputArg!) { \
                  create_RenderedRequestBlock(input: $input) { _docID } }",
@@ -1947,7 +1945,6 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
                 "byte_len": chunks[index].bytes.len(),
                 "created_at": chrono::Utc::now().to_rfc3339(),
             }})),
-            defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);

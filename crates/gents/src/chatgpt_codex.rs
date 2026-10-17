@@ -532,7 +532,6 @@ mod tests {
         }
     }
 
-    /// Inner transport yielding a fixed HTTP status.
     #[derive(Clone, Debug)]
     struct StatusInjectingClient {
         status: u16,
@@ -707,8 +706,6 @@ mod tests {
             sink,
         );
 
-        // The pre-rewrite body: system text still in `input`, sampling params
-        // Codex rejects still present, and a strict tool.
         let assembled = serde_json::json!({
             "model": "gpt-5-codex",
             "prompt_cache_key": "session",

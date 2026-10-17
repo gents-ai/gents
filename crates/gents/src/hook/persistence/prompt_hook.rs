@@ -272,7 +272,7 @@ impl DefraSessionHook {
         tool_name: &str,
         tool_call_id: Option<String>,
         internal_call_id: &str,
-        args: &str,
+        _args: &str,
         outcome: &crate::tool_call_lifecycle::ToolOutcome,
     ) -> HookAction {
         use crate::tool_call_lifecycle::ToolOutcome;
@@ -345,28 +345,18 @@ impl DefraSessionHook {
                     })?
             };
 
-            let (session_id, should_persist_message, persisted_result_id, persisted_call_id) = {
+            {
                 let mut state = self.state.lock().await;
-                let session_id = state
-                    .session_id
-                    .clone()
-                    .ok_or_else(|| anyhow::anyhow!("session hook missing session id"))?;
-                let should_persist_message = state.mark_tool_result_seen_for_persisted_turn(
+                state.register_tool_result_identity(
                     internal_call_id,
                     None,
                     tool_call_id.as_deref(),
                 );
-                let (persisted_result_id, persisted_call_id) =
-                    state.tool_result_message_identity(internal_call_id, tool_call_id.as_deref());
-                (
-                    session_id,
-                    should_persist_message,
-                    persisted_result_id,
-                    persisted_call_id,
-                )
-            };
-
-            let _ = (&session_id, &tool_call_doc_id, args);
+                anyhow::ensure!(
+                    state.session_id.is_some(),
+                    "session hook missing session id"
+                );
+            }
 
             let mut lc = self
                 .in_flight_lifecycles
@@ -409,13 +399,6 @@ impl DefraSessionHook {
                     unreachable!("managed terminals returned above")
                 }
             }
-
-            let _ = (
-                should_persist_message,
-                persisted_result_id,
-                persisted_call_id,
-                model_observation_for_tool_result(tool_name, result),
-            );
 
             self.release_live_output(&tool_call_doc_id).await;
 

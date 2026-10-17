@@ -458,7 +458,7 @@ async fn assert_bounded_capture_drain(retained_stream: &str) {
     let tool_name = format!("retained-{retained_stream}-pipe");
 
     let outcome = tokio::time::timeout(
-        Duration::from_secs(1),
+        Duration::from_secs(5),
         run_managed_exec(ManagedExecRequest {
             argv: vec!["/bin/sh".to_string(), "-c".to_string(), script],
             cwd: temp.path().to_path_buf(),

@@ -3,12 +3,9 @@ import type { EventGroupCount } from "./EventGroupCount.js";
 
 /**
  * Completion conditions for documents sharing an event correlation.
- * Existing group deduplication, bounds, and durable ownership remain authoritative.
- * Shared validation requires correlation and expected_count or timeout_secs.
- * Counts/timeouts must be positive; min_count defaults to 1 and cannot exceed
- * a known expected count. Source-field counts are validated on delivery too.
- * Graph compilation additionally requires expected_count >= 2 and refuses
- * latest_only concurrency on every graph edge (Lean
+ * Existing group deduplication, bounds, and durable ownership remain
+ * authoritative. Graph compilation additionally requires expected_count >= 2
+ * and refuses latest_only concurrency on every graph edge (Lean
  * `GraphPipeline.graphEdgeValid`); shared types do not widen graph semantics.
  */
 export type EventGroup = {

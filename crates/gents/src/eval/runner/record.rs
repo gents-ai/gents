@@ -42,7 +42,6 @@ pub trait Recorder: Send + Sync {
 
 pub struct DocumentRecorder<'a> {
     access: &'a ConfigAccess,
-    /// Avoid HTTP conflict retries for shared report-store writes.
     writes: tokio::sync::Mutex<()>,
 }
 

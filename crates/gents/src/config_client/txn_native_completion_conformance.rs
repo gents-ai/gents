@@ -15,6 +15,14 @@ use super::{
 };
 use crate::config_client::write_telemetry::WriteOperation;
 
+fn gate_owns_operation(gate: &super::MutationWriteGate, operation: &str) -> bool {
+    gate.owners
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .values()
+        .any(|owner| owner.operation.as_str() == operation)
+}
+
 struct BlockingSigner {
     private_key: Vec<u8>,
     armed: AtomicBool,
@@ -133,6 +141,7 @@ async fn lean_auto_commit_completion_owns_the_real_signed_worker() {
         assert_eq!(case.events.len(), case.observations.len());
         let (node, signer, _release_on_panic) = signed_node().await;
         let gate = mutation_write_gate(&node);
+        let mut capacity_fillers = Vec::new();
         let mut caller = None;
         for (event, expected) in case.events.iter().zip(&case.observations) {
             match event.as_str() {
@@ -150,6 +159,16 @@ async fn lean_auto_commit_completion_owns_the_real_signed_worker() {
                     tokio::time::timeout(Duration::from_secs(10), signer.entered.notified())
                         .await
                         .expect("the real signed database worker reaches the signer");
+                    for _ in 1..super::MUTATION_WRITE_GATE_CAPACITY {
+                        capacity_fillers.push(
+                            gate.acquire(
+                                WriteOperation::new("test.native_completion.capacity_filler")
+                                    .unwrap(),
+                            )
+                            .await
+                            .expect("fill the admission pool while the modeled owner is blocked"),
+                        );
+                    }
                 }
                 "caller_timed_out" => {
                     tokio::time::pause();
@@ -180,18 +199,13 @@ async fn lean_auto_commit_completion_owns_the_real_signed_worker() {
                     .expect("completed native worker releases its gate")
                     .unwrap();
                     drop(acquired);
+                    capacity_fillers.clear();
                     continue;
                 }
                 "gate_release_requested" => {}
                 other => panic!("unsupported native auto-commit action {other}"),
             }
-            let held = match gate.lock.clone().try_lock_owned() {
-                Ok(guard) => {
-                    drop(guard);
-                    false
-                }
-                Err(_) => true,
-            };
+            let held = gate_owns_operation(&gate, "test.native_completion.actual_signer");
             assert_eq!(held, expected.gate_held, "{} after {event}", case.name);
         }
         assert!(
@@ -263,6 +277,14 @@ async fn lean_abandoned_registry_retains_gate_until_every_native_operation_drain
         _ => unreachable!(),
     };
     let gate = mutation_write_gate(&node);
+    let mut capacity_fillers = Vec::new();
+    for _ in 1..super::MUTATION_WRITE_GATE_CAPACITY {
+        capacity_fillers.push(
+            gate.acquire(WriteOperation::new("test.native_completion.capacity_filler").unwrap())
+                .await
+                .expect("fill admission capacity while the modeled transaction owns its lease"),
+        );
+    }
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let worker_release = release.clone();
@@ -290,7 +312,7 @@ async fn lean_abandoned_registry_retains_gate_until_every_native_operation_drain
         abandoned.native_outstanding
     );
     assert_eq!(
-        gate.lock.clone().try_lock_owned().is_err(),
+        gate_owns_operation(&gate, "test.begin_local"),
         abandoned.gate_held
     );
     let response = node
@@ -304,7 +326,7 @@ async fn lean_abandoned_registry_retains_gate_until_every_native_operation_drain
     release.notify_one();
     wait_for_native_count(&tracker, expected.native_outstanding).await;
     assert_eq!(
-        gate.lock.clone().try_lock_owned().is_err(),
+        gate_owns_operation(&gate, "test.begin_local"),
         expected.gate_held
     );
     let response = node
@@ -316,16 +338,17 @@ async fn lean_abandoned_registry_retains_gate_until_every_native_operation_drain
     assert_eq!(response.has_errors(), expected.registry_abandoned);
 
     release.notify_one();
-    let acquired = tokio::time::timeout(
-        Duration::from_secs(10),
-        gate.acquire(WriteOperation::new("test.native_completion.all_drained").unwrap()),
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let acquire_after_drain =
+        gate.acquire(WriteOperation::new("test.native_completion.all_drained").unwrap());
+    let acquired = tokio::time::timeout(Duration::from_secs(10), acquire_after_drain)
+        .await
+        .unwrap()
+        .unwrap();
     drop(acquired);
+    assert!(!gate_owns_operation(&gate, "test.begin_local"));
+    drop(capacity_fillers);
     assert_eq!(
-        gate.lock.clone().try_lock_owned().is_err(),
+        gate.permits.available_permits() < super::MUTATION_WRITE_GATE_CAPACITY,
         concurrent.observations.last().unwrap().gate_held
     );
     let drained = concurrent.observations.last().unwrap();

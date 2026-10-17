@@ -83,8 +83,6 @@ fn canonicalize_workspace_root_path(path: &Path) -> Result<PathBuf> {
 
 pub(super) async fn workspace_root_set(args: WorkspaceRootUpsertArgs) -> Result<()> {
     let path = canonicalize_workspace_root_path(&args.path)?;
-    // Reject rather than lossy-convert: a lossy string would silently
-    // register a root_path different from the actual directory.
     let root_path = path
         .to_str()
         .with_context(|| {

@@ -1,8 +1,3 @@
-//! Freezing a run: packs are materialized under the run directory and one
-//! `EvalRun` row records the comparability facts later stages read. Freezing
-//! is idempotent per `run_id`: the same request reuses the run that is already
-//! there; anything else about that id is a [`FreezeRefused`].
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -100,9 +95,6 @@ fn refused(reason: impl Into<String>) -> anyhow::Error {
     anyhow::Error::from(FreezeRefused(reason.into()))
 }
 
-/// Run-level settings with no slot on the frozen [`RunOrigin`]; neither is
-/// comparability data, so both live beside the run rather than widening the
-/// replicating row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct RunSidecar {
     breaker_threshold: u32,
@@ -110,9 +102,8 @@ struct RunSidecar {
     captures: Vec<Capture>,
 }
 
-/// Validate `request`, materialize its packs and write its run. Returns the
-/// run that exists for `request.run_id`: a new one, or the one already frozen
-/// from the same request.
+/// Validate `request`, materialize its packs and write its run; returns the
+/// run already frozen for `request.run_id` when one exists.
 pub async fn freeze(
     access: &ConfigAccess,
     request: &RunRequest,
@@ -322,9 +313,8 @@ pub(crate) fn directory_name(kind: &str, value: &str) -> Result<()> {
     )))
 }
 
-/// A cell is one directory under the run and one row in its origin. Two cells
-/// sharing an id would record two digests against one materialized pack, so the
-/// second is refused rather than silently handed the first one's bytes.
+/// A cell is one directory under the run and one row in its origin; a
+/// duplicate id would record two digests against one materialized pack.
 fn validate_cell_identity(request: &RunRequest) -> Result<()> {
     directory_name("run_id", &request.run_id)?;
     if request.cells.is_empty() {
@@ -343,8 +333,7 @@ fn validate_cell_identity(request: &RunRequest) -> Result<()> {
     Ok(())
 }
 
-/// A trial's seed is `seed_base + trial_index`, so the last trial index's seed
-/// has to fit in an i64; the planner never wraps one.
+/// A trial's seed is `seed_base + trial_index`, so the last one must fit an i64.
 fn validate_seed_range(request: &RunRequest) -> Result<()> {
     let last_index = i64::from(request.trials_per_case.saturating_sub(1));
     if request.seed_base.checked_add(last_index).is_some() {
@@ -677,10 +666,9 @@ async fn inference_binding(
 /// Under [`Isolation::Embedded`] the only host bash mode a pack may grant is
 /// [`BashMode::Off`]: an embedded trial shares this host, and `ReadOnly` is an
 /// argv allowlist with this host's network and no confining root, not a
-/// boundary the executor can enforce. [`Isolation::Process`] is unchanged.
-/// Freezing and resuming both go through here, so a run frozen under a
-/// sandboxed executor cannot be resumed into an embedded one and quietly lose
-/// the guarantee it was frozen with.
+/// boundary the executor can enforce. Freezing and resuming both go through
+/// here, so a run frozen under a sandboxed executor cannot be resumed into an
+/// embedded one and quietly lose the guarantee it was frozen with.
 fn refuse_host_bash(config: &PackConfig, isolation: Isolation) -> Result<Option<String>> {
     if isolation == Isolation::Embedded {
         if let Some((tools_id, mode)) = host_bash(config) {
@@ -809,9 +797,8 @@ pub fn read_frozen_definition(
     Ok(Some(definition))
 }
 
-/// A `run_id` means one run: the same request reuses it, anything else is
-/// refused rather than reinterpreted. The evaluator DID is not compared — it
-/// records who asked, so a second caller re-freezing keeps the first one's row.
+/// A run_id reuses the run already frozen for it; a different request for the
+/// same id is refused. The evaluator DID records who asked and is not compared.
 fn reuse_or_refuse(
     record: &RunRecord,
     origin: &RunOrigin,

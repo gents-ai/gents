@@ -353,7 +353,6 @@ pub(crate) struct PackListArgs {
     pub(crate) home: Option<PathBuf>,
 }
 
-/// What `gents pack new` and `init` start a pack from.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum PackTemplate {
@@ -542,7 +541,6 @@ pub(crate) struct PackTestArgs {
     pub(crate) scenario: bool,
 }
 
-/// The ecosystem a plugin being imported comes from.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PackImportFrom {
     /// Agent Plugins: `plugin.json`, `skills/`, `mcp.json`.
@@ -968,14 +966,11 @@ pub(crate) struct PackInstallArgs {
     )]
     pub(crate) grant_authority: bool,
     /// Whether this install was requested for its own sake, rather than only
-    /// as a documents pack's dependency; never a CLI flag, so a parsed
-    /// top-level `gents pack install` always reads `true`, and code
-    /// constructing a dependency's own args sets `false`.
+    /// as a documents pack's dependency; never a CLI flag.
     #[arg(skip = true)]
     pub(crate) explicit: bool,
 }
 
-/// What to do with pack documents someone edited since the pack wrote them.
 #[derive(clap::Args, Clone, Copy, Debug, Default)]
 pub(crate) struct PackDriftArgs {
     #[arg(long, conflicts_with = "keep", help = "Replace edited pack documents")]
@@ -2912,7 +2907,6 @@ pub(crate) struct SkillShowArgs {
     pub(crate) skill_id: String,
 }
 
-/// Shared args for skill commands that target a single skill by id.
 #[derive(clap::Args)]
 pub(crate) struct SkillRefArgs {
     #[arg(long)]
@@ -2960,7 +2954,6 @@ pub(crate) struct WorkspaceRootUpsertArgs {
     pub(crate) disabled: bool,
 }
 
-/// Replace one canonical agent document through the shared config writer.
 #[derive(clap::Args)]
 pub(crate) struct AgentUpsertArgs {
     #[arg(long)]
@@ -2989,7 +2982,6 @@ pub(crate) struct AgentUpsertArgs {
     pub(crate) enabled: bool,
 }
 
-/// Configure an agent through the shared self-config owner.
 #[derive(clap::Args)]
 pub(crate) struct AgentCreateArgs {
     #[arg(long)]
@@ -3026,7 +3018,6 @@ pub(crate) struct AgentCreateArgs {
     pub(crate) profile_id: String,
 }
 
-/// Clone an agent belonging to the initialized home signer.
 #[derive(clap::Args)]
 pub(crate) struct AgentCloneArgs {
     #[arg(long)]
@@ -3050,7 +3041,6 @@ pub(crate) struct AgentCloneArgs {
     pub(crate) profile_id: String,
 }
 
-/// Disable an agent belonging to the initialized home signer.
 #[derive(clap::Args)]
 pub(crate) struct AgentDisableArgs {
     #[arg(long)]
@@ -3464,7 +3454,6 @@ mode (push or replicate). Enrollment approvals select the authoritative route sc
     },
 }
 
-/// Subcommands for `p2p network` — the peer-registry front door.
 #[derive(Subcommand)]
 pub(crate) enum P2pNetworkCommand {
     #[command(about = "Register this node into the peer discovery registry (idempotent upsert)")]
@@ -3533,7 +3522,6 @@ pub(crate) struct P2pEnrollmentDecisionArgs {
     pub(crate) lease_seconds: u64,
 }
 
-/// Subcommands for `p2p templates`.
 #[derive(Subcommand)]
 pub(crate) enum P2pTemplatesCommand {
     #[command(about = "List all built-in scope templates")]
@@ -3546,7 +3534,6 @@ pub(crate) struct P2pTemplatesListArgs {
     pub(crate) output: OutputFormat,
 }
 
-/// Low-level live P2P admin commands. Escape hatch beneath `p2p pairings`.
 #[derive(Subcommand)]
 pub(crate) enum P2pAdminCommand {
     #[command(about = "Connect the running runtime to another peer")]
@@ -4216,8 +4203,6 @@ pub(crate) struct ResponseWaitArgs {
     pub(crate) poll_secs: u64,
 }
 
-/// `--home` and `--graphql`, resolved the way every home-reading command
-/// resolves them.
 #[derive(clap::Args, Clone, Debug, Default)]
 pub(crate) struct EvalScopeArgs {
     #[arg(long)]
@@ -4447,7 +4432,6 @@ pub(crate) struct EvalGcArgs {
     pub(crate) scope: EvalScopeArgs,
 }
 
-/// No scope: the catalog is the binary's builtin registry, read with no home.
 #[derive(clap::Args)]
 pub(crate) struct EvalChecksArgs {
     #[arg(long)]
@@ -4560,9 +4544,7 @@ pub(crate) fn parse_split(raw: &str) -> Result<gents::document_config::EvalSplit
         .map_err(|_| format!("unknown split {raw:?}; expected train, validation or held_out"))
 }
 
-/// A saved collection of existing `eval run` arguments. The shared ceiling
-/// counts complete trial attempts, not individual provider requests.
-
+/// The shared ceiling counts complete trial attempts, not individual provider requests.
 #[derive(clap::Args)]
 pub(crate) struct EvalBatchArgs {
     /// JSON object with `runs: [{args: ["definition-id", "--cell", ...]}]`.
@@ -4620,7 +4602,6 @@ pub(crate) struct EvalRunArgs {
     pub(crate) scope: EvalScopeArgs,
 }
 
-/// `gents eval init`'s exit statuses.
 const EVAL_INIT_AFTER_HELP: &str = "Needs a terminal (this command is an interview) and a served home: start `gents server` first, or the command refuses before reading anything. An existing --out refuses unless --force replaces it, and --force replaces only a definition pack gents eval init wrote; an --out that is, lies inside, or contains the subject's directory, a Gents home, the user home or the working directory always refuses. --validation-min (default 6) is the floor the author drafts the validation split against; lower it when the operator wants fewer validation cases. --pilot runs the written pack once against the subject, one trial per case and one run per populated split (train, validation, held-out), and asks to spend that before it does, unless --yes; a decline leaves the pack written at --out but the command still exits 1. The session id printed at the end continues with `gents chat --session-id <id> --agent-id <the author's agent>`. A documents capture filter's only variable is \"$trial\", replaced with the trial's DID wherever it appears in a string value. Exit status: 0 when the pack was written and validated (piloted too, with --pilot) or the operator ended the interview with nothing written; 1 when refused (an existing --out without --force, an --out overlapping the subject, a non-terminal stdin, an unserved home, a declined pilot, or another failure) or when three drafts did not validate; 2 on a usage error.";
 
 #[derive(clap::Args)]

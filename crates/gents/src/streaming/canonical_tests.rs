@@ -121,10 +121,9 @@ async fn selected_history_missing_later_payload_never_returns_a_shortened_prefix
         created_at: chrono::Utc::now().to_rfc3339(),
     };
     let response = node
-        .execute_request_with_retry(
+        .execute_request(
             defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                 .with_variables(transcript_message_create_variables(&header).unwrap()),
-            defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -1328,14 +1327,13 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
     late.runs[0].bytes = 4;
     late.runs[0].declaration = None;
     let late = node
-        .execute_request_with_retry(
+        .execute_request(
             defra_node::QueryRequest::new(
                 crate::session::canonical_rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
             )
             .with_variables(
                 crate::session::canonical_rows::output_segment_create_variables(&late).unwrap(),
             ),
-            defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(

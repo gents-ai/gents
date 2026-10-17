@@ -244,10 +244,10 @@ mod probe_scope_tests {
             &core.node_arc(),
             "test.mcp_probe_scope",
             r#"mutation {
-                create_ToolServiceRegistry(input: {
+                first: create_ToolServiceRegistry(input: {
                     node_did: "did:test:first", service_id: "shared", hostname: "first", enabled: true
                 }) { _docID }
-                create_ToolServiceRegistry(input: {
+                second: create_ToolServiceRegistry(input: {
                     node_did: "did:test:second", service_id: "shared", hostname: "second", enabled: true
                 }) { _docID }
             }"#,

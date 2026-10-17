@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use storage::corekv::{IterOptions, Store};
-use storage::encrypted_store::EncryptedStore;
 use storage::RegolithStore;
 
 use super::{StoreEncryption, StoreKey};
@@ -303,6 +302,9 @@ pub fn finish(data: &Path) -> Result<()> {
     sync_parent(data)
 }
 
+/// Only the offline staging writer uses snapshot isolation: DefraLevel forbids
+/// raw writes to assigned log keys. Close it before verification and promotion
+/// so every subsequent open restores normal append and validation rules.
 async fn copy_and_verify(
     data: &Path,
     stage: &Path,
@@ -317,15 +319,20 @@ async fn copy_and_verify(
         }
         fs::create_dir(stage)?;
         fs::set_permissions(stage, fs::metadata(data)?.permissions())?;
-        let destination = EncryptedStore::new(
-            RegolithStore::open_with_options(stage, crate::storage_backend::regolith_options())?,
-            *key.0,
-        );
+        let target_options = crate::storage_backend::regolith_options()
+            .with_encryption_key(*key.0)
+            .with_isolation(regolith::IsolationLevel::SnapshotIsolation);
+        let destination = RegolithStore::open_with_options(stage, target_options)?;
         let copied = copy_values(&source, &destination, progress).await;
-        let verified = match copied {
-            Ok(()) => verify_values(&source, &destination, progress).await,
-            Err(error) => Err(error),
-        };
+        let closed = destination.close().await;
+        drop(destination);
+        copied?;
+        closed?;
+        let destination = RegolithStore::open_with_options(
+            stage,
+            crate::storage_backend::regolith_options().with_encryption_key(*key.0),
+        )?;
+        let verified = verify_values(&source, &destination, progress).await;
         let closed = destination.close().await;
         drop(destination);
         verified?;
@@ -348,6 +355,9 @@ async fn copy_values(
     destination: &dyn Store,
     progress: &mut (dyn FnMut(&'static str) + Send),
 ) -> Result<()> {
+    const BATCH_BYTES: usize = 1024 * 1024;
+    const BATCH_ENTRIES: usize = 1024;
+
     let read = source.new_txn(true).await?;
     let mut entries = read.iterator(IterOptions::default()).await?;
     let mut write = destination.new_txn(false).await?;
@@ -357,7 +367,7 @@ async fn copy_values(
         write.set(&entry.key, &entry.value).await?;
         bytes += entry.key.len() + entry.value.len();
         count += 1;
-        if bytes >= 1024 * 1024 || count >= 1024 {
+        if bytes >= BATCH_BYTES || count >= BATCH_ENTRIES {
             write.commit().await?;
             progress("store_encryption_copy");
             write = destination.new_txn(false).await?;
@@ -384,10 +394,10 @@ async fn recheck_source(
     let source =
         RegolithStore::open_with_options(data, crate::storage_backend::regolith_options())?;
     let result = async {
-        let destination = EncryptedStore::new(
-            RegolithStore::open_with_options(stage, crate::storage_backend::regolith_options())?,
-            *key.0,
-        );
+        let destination = RegolithStore::open_with_options(
+            stage,
+            crate::storage_backend::regolith_options().with_encryption_key(*key.0),
+        )?;
         let equal = values_equal(&source, &destination, progress).await;
         let closed = destination.close().await;
         drop(destination);

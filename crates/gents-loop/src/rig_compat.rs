@@ -475,8 +475,6 @@ pub fn from_rig_user_content(
         }),
         R::ToolResult(result) => message::UserContent::ToolResult(from_rig_tool_result(result)),
         R::Image(image) => message::UserContent::Image(from_rig_image(image)),
-        // Audio/Video/Document inbound conversions are lossy stubs; extend when
-        // a provider sends them.
         R::Audio(_) => {
             tracing::warn!("audio content discarded at the inbound rig seam (lossy stub)");
             message::UserContent::Audio(message::Audio::default())

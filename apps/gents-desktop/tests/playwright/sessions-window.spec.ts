@@ -1,4 +1,4 @@
-import { expect, test } from "./desktopTest";
+import { composer, expect, gotoHarness, test } from "./desktopTest";
 
 test.describe("a large session index", () => {
   test.beforeEach(async ({ page }) => {
@@ -84,4 +84,31 @@ test.describe("a large session index", () => {
       page.getByRole("list", { name: "Sessions", exact: true }),
     ).toHaveAttribute("data-session-count", "1");
   });
+});
+
+test("configuration returns to a responsive new session", async ({ page }) => {
+  test.skip(test.info().project.name === "chromium-narrow", "Desktop rail navigation");
+  await gotoHarness(page);
+  for (let pass = 0; pass < 5; pass++) {
+    const config = await page
+      .getByRole("link", { name: /configuration/i })
+      .first()
+      .boundingBox();
+    expect(config).not.toBeNull();
+    await page.mouse.move(
+      config!.x + config!.width / 2,
+      config!.y + config!.height / 2,
+    );
+    if (pass === 0) {
+      await page.waitForTimeout(650);
+      await expect(page.locator('[data-slot="hover-card-content"]')).toHaveCount(0);
+    }
+    await page.getByRole("link", { name: /Local node.*Configure/ }).click();
+    await expect(page.getByTestId("agent-screen")).toBeVisible();
+    await page.getByRole("link", { name: "New session", exact: true }).last().click();
+    await expect(page.getByTestId("session-screen")).toBeVisible();
+    await composer(page).click();
+    await composer(page).fill(`Navigation ${pass}`);
+    await expect(composer(page)).toHaveValue(`Navigation ${pass}`);
+  }
 });

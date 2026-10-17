@@ -259,9 +259,6 @@ pub(crate) async fn load_session_current_hop(
     .await
 }
 
-/// Read the actual request head, never the session's presentation cache.
-/// Outer `None` explicitly selects all requesters; `Some(None)` is the exact
-/// absent requester scope. Ordering uses parsed time then logical request ID.
 pub async fn load_latest_request_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -366,12 +363,6 @@ fn normalize_preview(content: &str) -> String {
         .join(" ")
 }
 
-/// Publish the physical `_docID`, logical `request_id`, observed state and
-/// normalized preview as one atomic observation patch inside the caller's
-/// transaction. The incoming request must match the session owner's exact
-/// scope, be present in the complete scoped request facts (including the
-/// currently observed row), and be the canonical latest by
-/// (created_at DESC, request_id DESC); anything else is a no-op rejection.
 pub(crate) async fn advance_session_request_observation_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     incoming: &SessionRequestFact,
@@ -482,12 +473,6 @@ async fn advance_observation_in_txn(
     Ok(true)
 }
 
-/// Lifecycle/preview refresh inside the caller's transaction: reread the
-/// authoritative row by its exact physical `_docID` **and** logical
-/// `request_id`, validate the session scope/agent and stored-observation
-/// identity, and copy the observed state from the authoritative row. Event
-/// lifecycle payloads have no influence; a missing or mismatched row is a
-/// no-op, never an older-local-request fallback.
 pub(crate) async fn refresh_session_request_observation_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -614,11 +599,6 @@ pub(crate) async fn update_session_title_with_source(
     .await
 }
 
-/// In-transaction title replacement: generated titles replace only an absent
-/// or placeholder title; an explicit user rename (including clear) always applies.
-/// Automatic task/placeholder titles never overwrite an existing title. Identity, creation
-/// time, closure, provenance, tags, preview and the latest request identity
-/// are preserved; activity advances monotonically.
 pub async fn apply_title_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,

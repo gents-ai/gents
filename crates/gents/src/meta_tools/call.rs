@@ -590,7 +590,7 @@ mod tests {
     fn oversized_mcp_result_is_capped_and_truncation_is_signalled() {
         let big_line = "x".repeat(200);
         let lines: Vec<String> = (0..500).map(|_| big_line.clone()).collect();
-        let big_text = lines.join("\n"); // ~100 KiB, well over the 50 KiB cap
+        let big_text = lines.join("\n");
 
         let limits = TruncationLimits {
             max_bytes: CALL_TOOL_MAX_BYTES,

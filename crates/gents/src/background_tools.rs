@@ -635,6 +635,7 @@ mod tests {
     /// `read_retained_output_slice`; the rows are computed from the Lean
     /// `ToolOutput.readSlice` model, so paging drift in either direction
     /// fails here. ASCII payloads keep byte and UTF-8 boundaries identical.
+
     #[test]
     fn generated_tool_output_paging_cases_match_slice_function() {
         let cases = crate::lean_vocab_test::lean_tool_output_paging_cases();

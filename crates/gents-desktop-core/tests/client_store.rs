@@ -506,7 +506,7 @@ async fn conflicting_immutable_transcript_facts_are_not_silently_selected() -> R
             second: create_AgentMessage(input: {
                 message_key: "conflict:1", session_id: "conflict", node_did: "did:conflict",
                 publication: {kind: "fork", origin_message_doc_id: "origin-b"},
-                outcome: "complete", sequence: 1, role: "user", native_id: "second",
+                outcome: "complete", sequence: 2, role: "user", native_id: "second",
                 blocks: [], created_at: "2026-05-07T00:00:01Z"
             }) { _docID }
         }"#,

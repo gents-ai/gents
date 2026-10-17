@@ -105,6 +105,7 @@ pub(crate) struct ProcessIdentity {
 }
 
 impl ProcessIdentity {
+    #[cfg(unix)]
     pub(crate) fn of_live(pid: i32) -> Option<Self> {
         let info = platform::process_info(pid)?;
         (!info.zombie).then_some(Self {
@@ -312,11 +313,15 @@ impl<R: HostRecord> HostRecordStore<R> {
 type RecordFn = dyn Fn(ProcessIdentity) + Send + Sync;
 
 #[derive(Clone)]
-pub(crate) struct ProcessRecorder(Arc<RecordFn>);
+pub(crate) struct ProcessRecorder {
+    _record: Arc<RecordFn>,
+}
 
 impl ProcessRecorder {
     pub(crate) fn new(record: impl Fn(ProcessIdentity) + Send + Sync + 'static) -> Self {
-        Self(Arc::new(record))
+        Self {
+            _record: Arc::new(record),
+        }
     }
 }
 
@@ -331,12 +336,13 @@ where
     PROCESS_RECORDER.scope(recorder, future).await
 }
 
+#[cfg(unix)]
 pub(super) fn record_spawned(pid: i32) {
     let Ok(recorder) = PROCESS_RECORDER.try_with(Clone::clone) else {
         return;
     };
     match ProcessIdentity::of_live(pid) {
-        Some(identity) => (recorder.0)(identity),
+        Some(identity) => (recorder._record)(identity),
         None => tracing::warn!(
             pid,
             "spawned background process exited before it was recorded"
@@ -544,7 +550,7 @@ pub(crate) mod test_support {
             let sender = std::sync::Mutex::new(Some(sender));
             let observer = ProcessRecorder::new(move |identity: ProcessIdentity| {
                 if let Some(recorder) = recorder.as_ref() {
-                    (recorder.0)(identity.clone());
+                    (recorder._record)(identity.clone());
                 }
                 if let Some(sender) = sender
                     .lock()

@@ -246,7 +246,6 @@ where
     run
 }
 
-/// User interrupts cancel ordinary phases; shutdown also cancels `finally` hooks.
 #[derive(Clone)]
 pub(crate) struct TaskHookCancellation {
     shutdown: CancellationToken,

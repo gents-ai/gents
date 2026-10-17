@@ -314,8 +314,6 @@ pub(crate) fn source_fields_query(collection: &str) -> anyhow::Result<String> {
     ))
 }
 
-/// A collection's own fields from [`source_fields_query`]'s data: no system
-/// fields and no aggregates.
 pub(crate) fn source_fields_from(
     data: Option<&serde_json::Value>,
     collection: &str,
@@ -415,17 +413,6 @@ impl EventSource {
         self
     }
 
-    /// Override the reconciliation debounce; mirrors
-    /// `ScheduleSource::with_tick_every`.
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(crate) fn with_reconcile_debounce(mut self, debounce: Duration) -> Self {
-        self.reconcile_debounce = debounce;
-        self
-    }
-
-    /// Snapshot of the source-collection names the event source is currently
-    /// filtering on. Test-only accessor.
     #[cfg(test)]
     pub(crate) fn subscribed_collections(&self) -> Vec<String> {
         let mut v: Vec<String> = self.desired_collections.iter().cloned().collect();
@@ -433,8 +420,6 @@ impl EventSource {
         v
     }
 
-    /// Lose every buffered and future notification until the source
-    /// resubscribes on its next rescan tick. Test-only.
     #[cfg(test)]
     pub(crate) fn drop_subscription(&mut self) {
         self.subscription = None;
@@ -1684,6 +1669,10 @@ impl EventSource {
         });
     }
 
+    /// A candidate's filter miss or probe/fetch error is settled in
+    /// isolation: it must not prevent the other matching triggers from
+    /// firing. Candidates are ordered by `trigger_id` so dispatch order is
+    /// stable across ticks.
     /// Build a `FireIntent` for every active event-source trigger whose
     /// `source_collection` matches `collection_name` AND `event_kind` matches
     /// `kind`. Each candidate's operator-authored filter is probed against
@@ -2144,8 +2133,6 @@ impl TriggerSource for EventSource {
                 let message = message.expect("subscription recv branch sets message");
 
                 if dropped > 0 {
-                    // Dropped events are a correctness hazard; this log keeps
-                    // the loss visible operationally.
                     tracing::warn!(
                         dropped = dropped,
                         "event source dropped messages; periodic rescan will recover created docs",

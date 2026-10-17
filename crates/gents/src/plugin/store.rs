@@ -24,7 +24,6 @@ fn store_path(home: &Path, digest_hex: &str) -> Result<PathBuf> {
     Ok(store_dir(home).join(format!("{digest_hex}.afb")))
 }
 
-/// Rejects coordinates that could escape their namespace/name path components.
 fn checked_component(kind: &str, value: &str) -> Result<()> {
     anyhow::ensure!(
         !value.is_empty()
@@ -314,7 +313,6 @@ pub fn write_record(home: &Path, record: &InstalledPlugin) -> Result<()> {
         serde_json::to_vec_pretty(record).context("encoding the installed-plugin record")?;
     // Readers take no lock: each write stages a temporary file and renames
     // it into place, so a reader only ever observes a complete record.
-    // Atomic replacement keeps unlocked readers from observing a partial record.
     let mut staged = tempfile::NamedTempFile::new_in(parent)
         .with_context(|| format!("staging a plugin record in {}", parent.display()))?;
     std::io::Write::write_all(&mut staged, &bytes).context("writing the staged record")?;
