@@ -495,6 +495,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             !snapshot.prompt_assembly_claude_wire_start_cases.is_empty(),
         ),
         (
+            "prompt_assembly_service_tier_cases",
+            "PromptAssemblyServiceTierCases",
+            !snapshot.prompt_assembly_service_tier_cases.is_empty(),
+        ),
+        (
             "prompt_assembly_responses_storage_cases",
             "PromptAssemblyResponsesStorageCases",
             !snapshot.prompt_assembly_responses_storage_cases.is_empty(),
