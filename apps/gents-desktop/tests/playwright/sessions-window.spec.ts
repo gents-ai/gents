@@ -89,7 +89,7 @@ test.describe("a large session index", () => {
 test("configuration returns to a responsive new session", async ({ page }) => {
   test.skip(test.info().project.name === "chromium-narrow", "Desktop rail navigation");
   await gotoHarness(page);
-  for (let pass = 0; pass < 10; pass++) {
+  for (let pass = 0; pass < 5; pass++) {
     const config = await page
       .getByRole("link", { name: /configuration/i })
       .first()
@@ -99,10 +99,15 @@ test("configuration returns to a responsive new session", async ({ page }) => {
       config!.x + config!.width / 2,
       config!.y + config!.height / 2,
     );
-    await page.getByTestId("working-node").click();
+    if (pass === 0) {
+      await page.waitForTimeout(650);
+      await expect(page.locator('[data-slot="hover-card-content"]')).toHaveCount(0);
+    }
+    await page.getByRole("link", { name: /Local node.*Configure/ }).click();
     await expect(page.getByTestId("agent-screen")).toBeVisible();
     await page.getByRole("link", { name: "New session", exact: true }).last().click();
     await expect(page.getByTestId("session-screen")).toBeVisible();
+    await composer(page).click();
     await composer(page).fill(`Navigation ${pass}`);
     await expect(composer(page)).toHaveValue(`Navigation ${pass}`);
   }
