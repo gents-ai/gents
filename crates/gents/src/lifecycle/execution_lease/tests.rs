@@ -1295,6 +1295,14 @@ async fn observed_case_request(
 #[tokio::test]
 async fn generated_renewal_invalidates_real_publication_point_read_transaction() {
     use crate::lean_vocab_test::LeanRequestExecutionAction;
+    use crate::session::canonical_rows::{
+        CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+        output_segment_create_variables, transcript_message_create_variables,
+    };
+    use gents_protocol::output::{
+        MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
+        OutputWriter, SegmentRun, SourceClose, StreamDeclaration, StreamPayload, TranscriptMessage,
+    };
     let case = crate::lean_vocab_test::lean_request_execution_lease_observed_cases()
         .iter()
         .find(|case| case.name == "renewal_invalidates_admitted_publication")
@@ -1308,9 +1316,87 @@ async fn generated_renewal_invalidates_real_publication_point_read_transaction()
         .await
         .unwrap();
     txn.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}) {{ execution_generation execution_lease_expires_at }} }}"#)).await.unwrap();
-    let [LeanRequestExecutionAction::Renew {
-        expected_deadline, ..
-    }] = case.intervening.as_slice()
+    let now = epoch.to_rfc3339();
+    let generation = row.execution_generation.as_deref().unwrap();
+    let message_key = format!("renewal-publication:{}", lifecycle.request.doc_id);
+    let payload = "publication staged before renewal";
+    let segment = OutputSegment {
+        node_did: lifecycle.request.node_did.clone(),
+        requester_did: lifecycle.request.requester_did.clone(),
+        session_id: lifecycle.request.session_id.clone(),
+        request_doc_id: lifecycle.request.doc_id.clone(),
+        source: OutputSource::Authored {
+            key: message_key.clone(),
+        },
+        writer: OutputWriter::RequestExecution {
+            execution_generation: generation.to_owned(),
+        },
+        ordinal: Some(0),
+        runs: vec![SegmentRun {
+            stream: 0,
+            bytes: payload.len().try_into().unwrap(),
+            declaration: Some(StreamDeclaration {
+                block_index: 0,
+                part_index: 0,
+                payload: StreamPayload::Text,
+            }),
+        }],
+        payload: payload.to_owned(),
+        close: Some(SourceClose::Closed {
+            outcome: OutputOutcome::Complete,
+            segments: 1,
+            stream_bytes: vec![payload.len() as u64],
+        }),
+        created_at: now.clone(),
+    };
+    let segment_result = txn
+        .execute_with_variables(
+            CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+            &output_segment_create_variables(&segment).unwrap(),
+        )
+        .await
+        .unwrap();
+    let segment_doc_id =
+        crate::graphql::created_doc_id(&segment_result, "AgentOutputSegment").unwrap();
+    let message = TranscriptMessage {
+        message_key: message_key.clone(),
+        session_id: lifecycle.request.session_id.clone(),
+        node_did: lifecycle.request.node_did.clone(),
+        requester_did: lifecycle
+            .request
+            .requester_did
+            .clone()
+            .expect("fixture request has a requester DID"),
+        request_doc_id: Some(lifecycle.request.doc_id.clone()),
+        publication: MessagePublication::RequestExecution {
+            execution_generation: generation.to_owned(),
+        },
+        outcome: OutputOutcome::Complete,
+        sequence: 0,
+        role: MessageRole::Assistant,
+        native_id: None,
+        blocks: vec![MessageBlock::Text {
+            text: gents_protocol::output::PresentedPayload {
+                output: gents_protocol::output::PayloadRef {
+                    close_doc_id: segment_doc_id,
+                    stream: 0,
+                },
+                presentation: gents_protocol::output::PayloadPresentation::Full,
+            },
+        }],
+        created_at: now,
+    };
+    txn.execute_with_variables(
+        CREATE_AGENT_MESSAGE_MUTATION,
+        &transcript_message_create_variables(&message).unwrap(),
+    )
+    .await
+    .unwrap();
+    let [
+        LeanRequestExecutionAction::Renew {
+            expected_deadline, ..
+        },
+    ] = case.intervening.as_slice()
     else {
         panic!("generated renewal interleaving")
     };
@@ -1333,6 +1419,23 @@ async fn generated_renewal_invalidates_real_publication_point_read_transaction()
     assert!(crate::config_client::is_classified_transaction_conflict(
         &result.unwrap_err()
     ));
+    let request = escape_graphql_string(&lifecycle.request.doc_id);
+    let key = escape_graphql_string(&message_key);
+    let access = crate::config_client::ConfigAccess::local(Arc::clone(&node));
+    let published = access
+        .execute(
+            &format!(r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{key}" }} }}) {{ _docID }} AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID source }} }}"#),
+        )
+    .await
+    .unwrap();
+    assert_eq!(published["data"]["AgentMessage"].as_array().unwrap().len(), 0);
+    assert!(
+        published["data"]["AgentOutputSegment"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["source"]["key"] != message_key)
+    );
 }
 
 #[tokio::test]

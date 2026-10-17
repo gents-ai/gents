@@ -1940,10 +1940,11 @@ async fn append_tool_output_with_time(
 #[cfg(test)]
 mod spawned_background_tests {
     use super::*;
+    use crate::tool_call_lifecycle::SpawnedBackgroundToolAdmission;
     use crate::tool_call_lifecycle::admission_fixture::{
+        PublishedAdmission, PublishedAdmissionOptions, published_admission_with_owner,
         published_background_bridge, published_spawn_parent,
     };
-    use crate::tool_call_lifecycle::SpawnedBackgroundToolAdmission;
     use defra_node::EmbeddedNode;
 
     #[test]
@@ -2562,7 +2563,19 @@ mod spawned_background_tests {
 
     #[tokio::test]
     async fn spawned_background_replays_parent_provenance_and_never_authors_a_child_tool_result() {
-        let (node, path, mut parent) = published_spawn_parent("replay").await;
+        let (published, _request_owner) =
+            published_admission_with_owner(PublishedAdmissionOptions {
+                name: "replay".to_owned(),
+                ..Default::default()
+            })
+            .await
+            .expect("publish canonical native tool admission");
+        let PublishedAdmission {
+            node,
+            path,
+            tool: mut parent,
+            ..
+        } = published;
         let parent_doc_id = parent.doc_id().unwrap().to_owned();
         let deadline = parent.deadline_at;
         let receipt = r#"{"ok":true,"status":"started"}"#;

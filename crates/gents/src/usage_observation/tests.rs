@@ -454,11 +454,13 @@ async fn queued_usage_write_rechecks_removed_or_disabled_account_under_gate() {
                 let acquired = acquired.clone();
                 Box::pin(async move {
                     let gate_node = Arc::clone(&node);
-                    let fillers =
+                    let fillers = tokio::spawn(async move {
                         crate::config_client::ConfigApplyTxn::fill_mutation_write_gate_for_test(
                             gate_node.as_ref(),
                         )
-                        .await;
+                        .await
+                    })
+                    .await?;
                     let writing_queued = queued.clone();
                     let writing_acquired = acquired.clone();
                     let writer = tokio::spawn(async move {

@@ -2114,7 +2114,7 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     seed_completed_request(&db, "parent-budget").await;
     let usage = format!(
         r#"mutation {{
-        add_InferenceCall(input: {{
+        local_usage: add_InferenceCall(input: {{
             call_id: "goal-budget-call",
             runtime_instance_id: "goal-test",
             request_id: "parent-budget",
@@ -2136,7 +2136,7 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
             completion_tokens: 5,
             cached_input_tokens: 90
         }}) {{ _docID }}
-        add_InferenceCall(input: {{
+        foreign_usage: add_InferenceCall(input: {{
             call_id: "goal-budget-call-foreign",
             runtime_instance_id: "goal-test-foreign",
             request_id: "parent-budget",
