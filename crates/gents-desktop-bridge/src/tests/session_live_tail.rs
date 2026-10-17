@@ -4,7 +4,7 @@ use gents_protocol::output::{
 use serde_json::Value;
 
 use super::support::{boot_core, refresh_request_and_assert_fresh_projection, OPERATOR};
-use crate::tauri_commands::chat::session_snapshot;
+use crate::commands::session_snapshot;
 use crate::types::RenderedTimelineItem;
 
 async fn create(
