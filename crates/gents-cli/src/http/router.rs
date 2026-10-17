@@ -801,7 +801,7 @@ fn render_self_agent(agent_config: &SelfAgent) -> Value {
 }
 
 async fn fleet_handler(State(state): State<RuntimeHttpState>) -> Response {
-    match load_fleet_snapshot(&state.graphql).await {
+    match load_fleet_snapshot(&state.p2p_graphql).await {
         Ok(snapshot) => (StatusCode::OK, axum::Json(snapshot)).into_response(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -825,7 +825,7 @@ async fn fleet_slots_handler(State(state): State<RuntimeHttpState>) -> Response 
 }
 
 async fn mcp_pool_handler(State(state): State<RuntimeHttpState>) -> Response {
-    match load_mcp_pool_snapshot(&state.graphql, &state.node_did).await {
+    match load_mcp_pool_snapshot(&state.p2p_graphql, &state.node_did).await {
         Ok(snapshot) => (StatusCode::OK, axum::Json(snapshot)).into_response(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
