@@ -5,6 +5,7 @@ import type {
   DesktopSessionSnapshot,
   RenderedTimelineItem,
 } from "@source-inc/gents-desktop-client";
+import { LIST_WINDOW_THRESHOLD } from "@source-inc/gents-desktop-ui";
 import { isTerminalTurnState } from "@source-inc/gents-desktop-client";
 import { MessageList } from "../Transcript.js";
 
@@ -65,6 +66,7 @@ function scrollPanelToTip(panel: HTMLElement) {
   panel.scrollTo({ top: panel.scrollHeight, behavior: "instant" });
 }
 
+/** Viewport corrections must be immediate; a delayed correction can target a different row range. */
 export function ChatTranscriptPanel({
   selectedSessionId,
   session,
@@ -74,7 +76,9 @@ export function ChatTranscriptPanel({
   onLoadOlder,
   showGoal = true,
 }: ChatTranscriptPanelProps) {
-  const transcriptPanelRef = useRef<HTMLElement | null>(null);
+  const [transcriptPanel, setTranscriptPanel] = useState<HTMLElement | null>(
+    null,
+  );
   const [autoFollowTranscript, setAutoFollowTranscript] = useState(true);
   const [transcriptWindow, setTranscriptWindow] = useState({
     sessionId: selectedSessionId,
@@ -139,6 +143,8 @@ export function ChatTranscriptPanel({
     () => timelineItems.slice(firstVisibleIndex),
     [firstVisibleIndex, timelineItems],
   );
+  const windowed =
+    !!transcriptPanel && visibleTimelineItems.length > LIST_WINDOW_THRESHOLD;
   const hasLocalOlderItems = firstVisibleIndex > 0;
   const hasOlderItems =
     hasLocalOlderItems ||
@@ -189,18 +195,18 @@ export function ChatTranscriptPanel({
     setLoadingOlder(false);
     lastScrollTop.current = 0;
     setAutoFollowTranscript(true);
-    const panel = transcriptPanelRef.current;
+    const panel = transcriptPanel;
     if (panel) scrollPanelToTip(panel);
-  }, [selectedSessionId]);
+  }, [selectedSessionId, transcriptPanel]);
 
   useLayoutEffect(() => {
     if (!sendIdentity) {
       return;
     }
     setAutoFollowTranscript(true);
-    const panel = transcriptPanelRef.current;
+    const panel = transcriptPanel;
     if (panel) scrollPanelToTip(panel);
-  }, [sendIdentity]);
+  }, [sendIdentity, transcriptPanel]);
 
   useLayoutEffect(() => {
     if (!autoFollowTranscript) {
@@ -220,10 +226,11 @@ export function ChatTranscriptPanel({
                 : TRANSCRIPT_PAGE_SIZE,
           },
     );
-    const panel = transcriptPanelRef.current;
+    const panel = transcriptPanel;
     if (panel) scrollPanelToTip(panel);
   }, [
     autoFollowTranscript,
+    transcriptPanel,
     selectedSessionId,
     transcriptChange,
     timelineItems.length,
@@ -232,16 +239,16 @@ export function ChatTranscriptPanel({
 
   useLayoutEffect(() => {
     const previousScrollHeight = prependScrollHeightRef.current;
-    const panel = transcriptPanelRef.current;
+    const panel = transcriptPanel;
     if (previousScrollHeight == null || !panel) return;
 
     prependScrollHeightRef.current = null;
-    panel.scrollTop += panel.scrollHeight - previousScrollHeight;
+    if (!windowed) panel.scrollTop += panel.scrollHeight - previousScrollHeight;
     lastScrollTop.current = panel.scrollTop;
-  }, [firstVisibleIndex, timelineItems.length]);
+  }, [firstVisibleIndex, timelineItems.length, transcriptPanel, windowed]);
 
   async function loadOlderItems() {
-    const panel = transcriptPanelRef.current;
+    const panel = transcriptPanel;
     if (
       !panel ||
       !hasOlderItems ||
@@ -257,7 +264,8 @@ export function ChatTranscriptPanel({
     setTranscriptWindow({
       sessionId: selectedSessionId,
       timelineLength: timelineItems.length,
-      visibleCount: visibleCount + TRANSCRIPT_PAGE_SIZE,
+      visibleCount:
+        visibleCount + (hasLocalOlderItems ? TRANSCRIPT_PAGE_SIZE : 0),
     });
     if (!hasLocalOlderItems && onLoadOlder) {
       pageFlight.current = true;
@@ -296,7 +304,7 @@ export function ChatTranscriptPanel({
   const retryEligible = session?.retryEligibility?.eligible ?? false;
 
   function handleTranscriptScroll() {
-    const panel = transcriptPanelRef.current;
+    const panel = transcriptPanel;
     if (!panel) {
       return;
     }
@@ -375,7 +383,7 @@ export function ChatTranscriptPanel({
         )
           void loadOlderItems();
       }}
-      ref={transcriptPanelRef}
+      ref={setTranscriptPanel}
     >
       {selectedSessionId && (session || timelineItems.length > 0) ? (
         <div className="message-list">
@@ -416,6 +424,7 @@ export function ChatTranscriptPanel({
           <MessageList
             timelineItems={visibleTimelineItems}
             timelineIdentity={selectedSessionId}
+            scrollElement={transcriptPanel}
             requestCancelCause={requestOutcome?.cancelCause}
           />
           {showThinking ? (

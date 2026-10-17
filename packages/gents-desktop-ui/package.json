@@ -40,5 +40,8 @@
     "react-dom": "^19.1.0",
     "typescript": "~5.8.3",
     "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "@tanstack/react-virtual": "^3.14.13"
   }
 }

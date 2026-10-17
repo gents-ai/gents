@@ -23,7 +23,7 @@ import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { href, navigate } from "@/lib/router";
-import { useListWindow } from "@/lib/listWindow";
+import { useListWindow } from "@source-inc/gents-desktop-ui";
 import { Age } from "./time";
 import {
   defaultScope,
