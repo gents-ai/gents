@@ -302,6 +302,9 @@ pub fn finish(data: &Path) -> Result<()> {
     sync_parent(data)
 }
 
+/// Only the offline staging writer uses snapshot isolation: DefraLevel forbids
+/// raw writes to assigned log keys. Close it before verification and promotion
+/// so every subsequent open restores normal append and validation rules.
 async fn copy_and_verify(
     data: &Path,
     stage: &Path,
@@ -314,11 +317,21 @@ async fn copy_and_verify(
         if exists(stage)? {
             fs::remove_dir_all(stage)?;
         }
-        let target_options = crate::storage_backend::regolith_options().with_encryption_key(*key.0);
-        source.copy_snapshot_to(stage, &target_options, &mut || {
-            progress("store_encryption_copy");
-        })?;
+        fs::create_dir(stage)?;
+        fs::set_permissions(stage, fs::metadata(data)?.permissions())?;
+        let target_options = crate::storage_backend::regolith_options()
+            .with_encryption_key(*key.0)
+            .with_isolation(regolith::IsolationLevel::SnapshotIsolation);
         let destination = RegolithStore::open_with_options(stage, target_options)?;
+        let copied = copy_values(&source, &destination, progress).await;
+        let closed = destination.close().await;
+        drop(destination);
+        copied?;
+        closed?;
+        let destination = RegolithStore::open_with_options(
+            stage,
+            crate::storage_backend::regolith_options().with_encryption_key(*key.0),
+        )?;
         let verified = verify_values(&source, &destination, progress).await;
         let closed = destination.close().await;
         drop(destination);
@@ -334,6 +347,41 @@ async fn copy_and_verify(
     drop(source);
     result?;
     closed?;
+    Ok(())
+}
+
+async fn copy_values(
+    source: &dyn Store,
+    destination: &dyn Store,
+    progress: &mut (dyn FnMut(&'static str) + Send),
+) -> Result<()> {
+    const BATCH_BYTES: usize = 1024 * 1024;
+    const BATCH_ENTRIES: usize = 1024;
+
+    let read = source.new_txn(true).await?;
+    let mut entries = read.iterator(IterOptions::default()).await?;
+    let mut write = destination.new_txn(false).await?;
+    let mut bytes = 0;
+    let mut count = 0;
+    while let Some(entry) = entries.next().await? {
+        write.set(&entry.key, &entry.value).await?;
+        bytes += entry.key.len() + entry.value.len();
+        count += 1;
+        if bytes >= BATCH_BYTES || count >= BATCH_ENTRIES {
+            write.commit().await?;
+            progress("store_encryption_copy");
+            write = destination.new_txn(false).await?;
+            bytes = 0;
+            count = 0;
+        }
+    }
+    write.commit().await?;
+    if count > 0 {
+        progress("store_encryption_copy");
+    }
+    entries.close().await?;
+    drop(entries);
+    read.discard();
     Ok(())
 }
 
