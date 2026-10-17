@@ -534,17 +534,30 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
         let replicators = run_cli_json(&home_dir, &["p2p", "admin", "replicators", "list"])
             .with_context(|| format!("{phase}: CLI P2P administration over HTTP"))?;
         assert_eq!(replicators["status"], "ok", "{phase}: {replicators}");
-        let rows = gents::config_client::ConfigAccess::graphql(graphql.clone())
+        let anonymous_rows = gents::config_client::ConfigAccess::graphql(graphql.clone())
             .execute(r#"{ CompactionEntry(filter: { node_did: { _eq: "did:test:nac" } }) { compaction_key } }"#)
             .await
             .with_context(|| format!("{phase}: anonymous HTTP read"))?;
         assert!(
-            rows["data"]["CompactionEntry"]
+            anonymous_rows
+                .pointer("/data/CompactionEntry")
+                .and_then(Value::as_array)
+                .is_none_or(Vec::is_empty),
+            "{phase}: anonymous HTTP read exposed the owner's row: {anonymous_rows}"
+        );
+        let owner_rows = gents::config_client::ConfigAccess::Graphql(
+            support::graphql::served_endpoint(&graphql),
+        )
+        .execute(r#"{ CompactionEntry(filter: { node_did: { _eq: "did:test:nac" } }) { compaction_key } }"#)
+        .await
+        .with_context(|| format!("{phase}: principal HTTP read"))?;
+        assert!(
+            owner_rows["data"]["CompactionEntry"]
                 .as_array()
                 .is_some_and(|rows| rows
                     .iter()
                     .any(|row| row["compaction_key"] == format!("nac-{phase}"))),
-            "{phase}: {rows}"
+            "{phase}: principal could not read its row: {owner_rows}"
         );
         for surface in ["self", "sessions"] {
             let response = reqwest::Client::new()
@@ -2594,9 +2607,7 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
     );
 
     let args = serde_json::json!({
-        "argv": ["find"], "collection": "AgentToolCall",
-        "options": {"fields": ["request_id", "request_doc_id", "tool_name", "lifecycle_state"],
-        "filter": { "request_id": { "_eq": "mcp-req" } }}
+        "argv": ["fields"], "collection": "AgentToolCall"
     });
     let params =
         CallToolRequestParams::new("query").with_arguments(args.as_object().unwrap().clone());
@@ -2604,18 +2615,43 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
         .peer()
         .call_tool(params)
         .await
-        .context("call_tool defra_query")?;
+        .context("call_tool defra_query fields")?;
     let text = result
         .content
         .iter()
         .filter_map(|content| content.raw.as_text().map(|t| t.text.clone()))
         .collect::<Vec<_>>()
         .join("");
-    let payload: Value = serde_json::from_str(&text).context("MCP tool result is JSON")?;
-    assert_eq!(payload["returned_count"].as_i64(), Some(1), "{payload}");
-    let tc = &payload["results"][0];
-    assert_eq!(tc["tool_name"].as_str(), Some("query"));
-    assert_eq!(tc["request_id"].as_str(), Some("mcp-req"));
+    let payload: Value = serde_json::from_str(&text).context("MCP field inventory is JSON")?;
+    assert_eq!(payload["discovery"], true, "{payload}");
+    assert!(
+        payload["fields"]
+            .as_array()
+            .is_some_and(|fields| fields.iter().any(|field| field["name"] == "tool_name")),
+        "public schema introspection should list AgentToolCall fields: {payload}"
+    );
+
+    let protected_args = serde_json::json!({
+        "argv": ["find"], "collection": "AgentToolCall",
+        "options": {"fields": ["request_id", "request_doc_id", "tool_name", "lifecycle_state"],
+        "filter": { "request_id": { "_eq": "mcp-req" } }}
+    });
+    let params = CallToolRequestParams::new("query")
+        .with_arguments(protected_args.as_object().unwrap().clone());
+    let protected = mcp.peer().call_tool(params).await;
+    let protected_text = match protected {
+        Err(error) => error.to_string(),
+        Ok(result) => result
+            .content
+            .iter()
+            .filter_map(|content| content.raw.as_text().map(|t| t.text.clone()))
+            .collect::<Vec<_>>()
+            .join(""),
+    };
+    assert!(
+        !protected_text.contains("mcp-req"),
+        "anonymous MCP query exposed a protected AgentToolCall row: {protected_text}"
+    );
 
     let denied_args = serde_json::json!({"argv":["find"], "collection": "InferenceBackend", "options":{"fields": ["auth"]} });
     let denied_params = CallToolRequestParams::new("query")
@@ -3028,35 +3064,58 @@ async fn mcp_graph_tools_read_a_cli_started_run_with_the_owner_bearer() -> Resul
     Ok(())
 }
 
-/// Graph collections declare no document policy, so DefraDB admits these
-/// reads for any valid bearer DID; this pins the read subject, not
-/// authorization.
+/// The caller bearer selects the graph subject, and ACP keeps another DID
+/// from observing the owner's graph.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_graph_tools_take_the_subject_did_from_the_bearer() -> Result<()> {
     let served =
         McpGraphHome::start("mcp-graph-subject", &["--enable-mcp", "--mcp-graph-tools"]).await?;
     let run_id = start_prepared_graph_run(&served).await?;
+
+    let owner_bearer =
+        gents::identity::defradb_bearer_authorization(&served.owner_did, &served.audience())?;
+    let owner = served.client(Some(&owner_bearer)).await?;
+    let owner_listing = call_mcp_tool(&owner, "list_graphs", json!({}))
+        .await?
+        .map_err(|refusal| anyhow::anyhow!("owner graph listing was refused: {refusal}"))?;
+    anyhow::ensure!(
+        owner_listing["node_did"] == served.owner_did
+            && owner_listing["graphs"].as_array().is_some_and(|graphs| {
+                graphs
+                    .iter()
+                    .any(|graph| graph["active_plan"]["package"]["name"] == "prepared_graph")
+            }),
+        "owner bearer did not see its graph: {owner_listing}"
+    );
+
     let other = gents::KeyIdentity::load_or_create(served.tempdir.path().join("other.key"), None)?;
     let bearer = gents::identity::defradb_bearer_authorization(other.did(), &served.audience())?;
     let client = served.client(Some(&bearer)).await?;
-    let listed = call_mcp_tool(&client, "list_graphs", json!({}))
-        .await?
-        .map_err(|refusal| {
-            anyhow::anyhow!(
-                "DefraDB refused another DID's listing, so a non-admin bearer cannot read the graph collections: {refusal}"
-            )
-        })?;
-    anyhow::ensure!(
-        listed["node_did"] == other.did() && listed["graphs"] == json!([]),
-        "the listing is the bearer DID's own: {listed}"
-    );
+    let listed = call_mcp_tool(&client, "list_graphs", json!({})).await?;
+    match listed {
+        Err(refusal) => anyhow::ensure!(
+            !refusal.contains(&run_id) && !refusal.contains("prepared_graph"),
+            "foreign listing refusal disclosed the owner's graph: {refusal}"
+        ),
+        Ok(listing) => anyhow::ensure!(
+            listing["node_did"] == other.did()
+                && listing["graphs"].as_array().is_some_and(|graphs| {
+                    graphs
+                        .iter()
+                        .all(|graph| graph["active_plan"]["package"]["name"] != "prepared_graph")
+                }),
+            "foreign bearer saw the owner's graph: {listing}"
+        ),
+    }
     for tool in ["get_graph_run", "get_graph_result"] {
         let refused = call_mcp_tool(&client, tool, json!({"run_id": run_id})).await?;
         anyhow::ensure!(
-            matches!(&refused, Err(message) if message.contains("actor is not authorized to observe this graph run")),
-            "{tool}: the run view takes the bearer's DID as its actor: {refused:?}"
+            matches!(&refused, Err(_))
+                || refused.as_ref().is_ok_and(|view| view["run_id"] != run_id),
+            "{tool}: foreign bearer saw the owner run: {refused:?}"
         );
     }
+    let _ = owner.cancel().await;
     let _ = client.cancel().await;
     Ok(())
 }
