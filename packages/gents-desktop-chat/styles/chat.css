@@ -193,7 +193,8 @@
     overflow: auto;
     display: grid;
     align-content: start;
-    scroll-behavior: smooth;
+    scroll-behavior: auto;
+    overflow-anchor: none;
     scroll-padding-bottom: var(--space-10);
     background:
       linear-gradient(

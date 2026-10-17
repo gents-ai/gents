@@ -2,6 +2,7 @@ import type {
   DerivedCancelCauseView,
   RenderedTimelineItem,
 } from "@source-inc/gents-desktop-client";
+import { useListWindow } from "@source-inc/gents-desktop-ui";
 import { memo, useLayoutEffect, useRef, useState } from "react";
 
 import { AssistantCancelCauseTurn } from "./transcript/MessageItems.js";
@@ -11,11 +12,20 @@ export const MessageList = memo(function MessageList({
   timelineItems,
   timelineIdentity,
   requestCancelCause,
+  scrollElement,
 }: {
   timelineItems: RenderedTimelineItem[];
   timelineIdentity?: string | null;
   requestCancelCause?: DerivedCancelCauseView | null;
+  scrollElement?: HTMLElement | null;
 }) {
+  const window = useListWindow(
+    timelineItems,
+    scrollElement ?? null,
+    timelineKey,
+    estimateItemSize,
+    { enabled: !!scrollElement, anchorTo: "end" },
+  );
   const previousTailRef = useRef<{
     identity?: string | null;
     itemKey: string;
@@ -43,16 +53,34 @@ export const MessageList = memo(function MessageList({
 
   return (
     <>
-      {timelineItems.map((item) => (
-        <TimelineItem
-          item={item}
-          key={`${item.kind}-${item.itemKey}`}
-          animateAssistantReveal={item.itemKey === revealAssistantItemKey}
-        />
-      ))}
+      <ul
+        {...window.listProps}
+        className="transcript-items"
+        aria-label="Messages"
+      >
+        {window.items.map(({ index, start }) => {
+          const item = timelineItems[index]!;
+          return (
+            <li key={timelineKey(item)} {...window.attributes(index, start)}>
+              <TimelineItem
+                item={item}
+                animateAssistantReveal={item.itemKey === revealAssistantItemKey}
+              />
+            </li>
+          );
+        })}
+      </ul>
       {requestCancelCause ? (
         <AssistantCancelCauseTurn cause={requestCancelCause} />
       ) : null}
     </>
   );
 });
+
+function timelineKey(item: RenderedTimelineItem) {
+  return `${item.kind}-${item.itemKey}`;
+}
+
+function estimateItemSize() {
+  return 120;
+}
