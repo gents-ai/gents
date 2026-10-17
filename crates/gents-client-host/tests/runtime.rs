@@ -211,48 +211,54 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         graphql,
         identity.did(),
     ));
-    let pending = client
-        .call(
-            1,
-            "desktop_peer_enroll_status",
-            json!({
-                "request": { "serverAddress": format!("http://127.0.0.1:{port}") }
-            }),
-        )
-        .await;
-    let pending_id = pending["requestId"]
-        .as_str()
-        .context("pending enrollment")?;
-    let pending_query = format!(
-        "{{ NetworkEnrollmentRequest(filter: {{ request_id: {{ _eq: \"{}\" }} }}) {{ _docID }} }}",
-        gents::graphql::escape_graphql_string(pending_id)
-    );
-    tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            let response = access.execute(&pending_query).await?;
-            if response["data"]["NetworkEnrollmentRequest"]
-                .as_array()
-                .is_some_and(|rows| !rows.is_empty())
-            {
-                return Ok::<_, anyhow::Error>(());
+    if matches!(journey, Journey::Conversation) {
+        client
+            .call(1, "client_connect_local", json!({"nodeHome":node_home}))
+            .await;
+    } else {
+        let pending = client
+            .call(
+                1,
+                "desktop_peer_enroll_status",
+                json!({
+                    "request": { "serverAddress": format!("http://127.0.0.1:{port}") }
+                }),
+            )
+            .await;
+        let pending_id = pending["requestId"]
+            .as_str()
+            .context("pending enrollment")?;
+        let pending_query = format!(
+            "{{ NetworkEnrollmentRequest(filter: {{ request_id: {{ _eq: \"{}\" }} }}) {{ _docID }} }}",
+            gents::graphql::escape_graphql_string(pending_id)
+        );
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let response = access.execute(&pending_query).await?;
+                if response["data"]["NetworkEnrollmentRequest"]
+                    .as_array()
+                    .is_some_and(|rows| !rows.is_empty())
+                {
+                    return Ok::<_, anyhow::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .context("runtime did not observe the enrollment request")??;
-    let approved = Command::new(&cli)
-        .current_dir(root)
-        .args(["p2p", "enrollment", "approve", pending_id, "--home"])
-        .arg(&node_home)
-        .kill_on_drop(true)
-        .output();
-    let approved = tokio::time::timeout(Duration::from_secs(30), approved).await??;
-    ensure!(
-        approved.status.success(),
-        "enrollment approval failed: {}",
-        String::from_utf8_lossy(&approved.stderr)
-    );
+        })
+        .await
+        .context("runtime did not observe the enrollment request")??;
+        let approved = Command::new(&cli)
+            .current_dir(root)
+            .args(["p2p", "enrollment", "approve", pending_id, "--home"])
+            .arg(&node_home)
+            .kill_on_drop(true)
+            .output();
+        let approved = tokio::time::timeout(Duration::from_secs(30), approved).await??;
+        ensure!(
+            approved.status.success(),
+            "enrollment approval failed: {}",
+            String::from_utf8_lossy(&approved.stderr)
+        );
+    }
     let mut id = 2;
     let mut last_snapshot = Value::Null;
     let deployment = tokio::time::timeout(Duration::from_secs(30), async {
@@ -285,6 +291,17 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .and_then(|agents| agents.iter().find(|agent| agent["isDefault"] == true))
         .and_then(|agent| agent["agentId"].as_str())
         .context("runtime default agent")?;
+    if matches!(journey, Journey::Conversation) {
+        configure_inference(
+            &mut client,
+            &mut id,
+            node_did,
+            agent_id,
+            &deployment,
+            provider.endpoint(),
+        )
+        .await?;
+    }
     let speech = if matches!(journey, Journey::Conversation) {
         client
             .call(id, "client_connect_local", json!({"nodeHome":node_home}))
@@ -772,6 +789,70 @@ async fn wait_goal(
     })
     .await
     .context("the signed goal observation did not reach the client")
+}
+
+async fn configure_inference(
+    client: &mut Attachment,
+    id: &mut u32,
+    node_did: &str,
+    agent_id: &str,
+    deployment: &Value,
+    endpoint: &str,
+) -> Result<()> {
+    let catalog = client
+        .call(*id, "client_inference_setup_catalog", json!({}))
+        .await;
+    *id += 1;
+    ensure!(
+        catalog["providers"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["id"] == "local")),
+        "the native setup catalog has no local provider"
+    );
+    let discovery = client.call(*id, "client_inference_models_discover", json!({"request": {
+        "requestKey":"editor-setup", "nodeDid":node_did, "provider":"local",
+        "authMethod":"optional_api_key", "endpoint":endpoint, "apiKey":null, "accountRef":null,
+    }})).await;
+    *id += 1;
+    ensure!(
+        discovery["reachable"] == true
+            && discovery["models"].as_array().is_some_and(|models| models
+                .iter()
+                .any(|model| model["advertised"]["model_name"] == "editor-fixture")),
+        "native model discovery did not observe the provider: {discovery}"
+    );
+    let mut agent = deployment["agentConfigs"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|row| row["agent_id"] == agent_id))
+        .context("the setup default agent configuration")?
+        .clone();
+    agent["inference_profile_id"] = json!("editor-setup");
+    client.call(*id, "client_config_apply", json!({"request":{"document":{
+        "node":{"node_did":node_did},
+        "inference_backends":[{"node_did":node_did,"backend_id":"editor-setup",
+            "name":"Editor setup", "provider_kind":discovery["providerKind"],
+            "openai_wire_api":discovery["openaiWireApi"], "endpoint":discovery["effectiveEndpoint"],
+            "auth":{"kind":"unauthenticated"},"max_concurrent":1,"max_queue_depth":100,"enabled":true}],
+        "inference_profiles":[{"node_did":node_did,"profile_id":"editor-setup",
+            "backend_id":"editor-setup","model_name":"editor-fixture"}],
+        "agents":[agent],
+    }}})).await;
+    *id += 1;
+    let snapshot = client.snapshot(*id).await;
+    *id += 1;
+    let observed = snapshot["client"]["deployments"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|row| row["nodeDid"] == node_did))
+        .context("the configured runtime observation")?;
+    ensure!(
+        observed["agentConfigs"].as_array().is_some_and(|rows| rows
+            .iter()
+            .any(
+                |row| row["agent_id"] == agent_id && row["inference_profile_id"] == "editor-setup"
+            )),
+        "the selected model was not bound to the default agent: {observed}"
+    );
+    Ok(())
 }
 
 #[cfg(unix)]

@@ -376,10 +376,35 @@ impl ClientHost {
                         "use an absolute local runtime home path",
                     ));
                 }
-                self.core
+                let peer = self
+                    .core
                     .refresh_local_standard_peer(&home, "Local runtime")
                     .await
                     .map_err(backend_error)?;
+                let target = crate::local_pairing::ManagedPairingTarget {
+                    node_name: peer.label,
+                    node_did: peer.node_did,
+                    graphql: peer.graphql.ok_or_else(|| {
+                        BridgeError::untyped(
+                            "The local runtime did not provide a configuration endpoint.",
+                        )
+                    })?,
+                };
+                crate::local_pairing::retry_managed_pairing(
+                    &cancel,
+                    crate::local_pairing::MANAGED_PAIRING_ATTEMPTS,
+                    crate::local_pairing::MANAGED_PAIRING_RETRY_DELAY,
+                    || {
+                        crate::local_pairing::ensure_managed_runtime_pairing(
+                            Arc::clone(&self.core),
+                            &home,
+                            &target,
+                            &cancel,
+                        )
+                    },
+                )
+                .await
+                .map_err(|error| BridgeError::untyped(error.to_string()))?;
                 encode(())
             }
             ClientCommand::ApprovalSubscribe { node_did, token } => {
