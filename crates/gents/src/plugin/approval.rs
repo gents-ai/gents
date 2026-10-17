@@ -300,7 +300,6 @@ pub async fn ask(home: &Path, request: &Request, wait: Duration) -> Result<bool>
     }
 }
 
-
 pub fn pending(home: &Path) -> Result<Vec<Request>> {
     mark_listening(home)?;
     pending_requests(home)

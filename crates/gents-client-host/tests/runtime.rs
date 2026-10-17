@@ -451,6 +451,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         );
     }
     if matches!(journey, Journey::Editor) {
+        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
         client
             .call(id, "client_connect_local", json!({"nodeHome":node_home}))
             .await;
@@ -515,6 +516,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         }
         let status = status.context("editor journey timed out")??;
         ensure!(status.success(), "editor journey exited with {status}");
+        configured_actions::verify_editor_settings(&access, node_did, agent_id).await?;
         ensure!(tokio::time::timeout(Duration::from_secs(5), approval_wait)
             .await
             .context("the editor's approval did not reach the waiting call")???);

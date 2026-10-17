@@ -1601,6 +1601,37 @@ impl ClientCore {
         mutations::read_config_editor_on(&access, node_did, target, id).await
     }
 
+    pub async fn read_backend_authentication(
+        &self,
+        node_did: &str,
+        id: &str,
+    ) -> Result<(mutations::ConfigEditorRevision, gents::InferenceBackend)> {
+        let access = self
+            .operator_graphql(node_did)
+            .map(ConfigAccess::Graphql)
+            .context("Connect this local runtime before changing authentication.")?;
+        mutations::read_backend_authentication_on(&access, node_did, id).await
+    }
+
+    pub async fn save_backend_authentication(
+        &self,
+        node_did: &str,
+        id: &str,
+        revision: &mutations::ConfigEditorRevision,
+        auth: &gents::document_config::BackendAuth,
+    ) -> Result<()> {
+        let access = self
+            .operator_graphql(node_did)
+            .map(ConfigAccess::Graphql)
+            .context("Connect this local runtime before changing authentication.")?;
+        mutations::save_backend_authentication_on(&access, node_did, id, revision, auth).await?;
+        if self.refresh_config_source(node_did).await.is_err() {
+            tracing::warn!("Authentication saved; client observation will resynchronize");
+            self.store.request_resync(Some(node_did));
+        }
+        Ok(())
+    }
+
     pub async fn save_config_editor(
         &self,
         node_did: &str,

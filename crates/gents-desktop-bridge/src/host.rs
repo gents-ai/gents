@@ -31,10 +31,18 @@ pub struct ClientHost {
     core: Arc<ClientCore>,
     policy: ResolvedBridgePolicy,
     speech: speech::SpeechClient,
+    pending_oauth_credentials: Arc<crate::accounts::PendingOAuthCredentials>,
 }
 
 impl ClientHost {
     pub fn new(core: Arc<ClientCore>) -> Self {
+        Self::with_accounts(core, Arc::default())
+    }
+
+    pub(crate) fn with_accounts(
+        core: Arc<ClientCore>,
+        pending_oauth_credentials: Arc<crate::accounts::PendingOAuthCredentials>,
+    ) -> Self {
         Self {
             policy: ResolvedBridgePolicy {
                 desktop_paths: core.paths().clone(),
@@ -55,6 +63,7 @@ impl ClientHost {
             },
             core,
             speech: speech::SpeechClient::default(),
+            pending_oauth_credentials,
         }
     }
 
@@ -69,8 +78,152 @@ impl ClientHost {
         &self,
         command: ClientCommand,
         approvals: &approvals::AttachmentApprovals,
+        cancel: CancellationToken,
     ) -> Result<Value, BridgeError> {
         match command {
+            ClientCommand::BackendAuthentication { request } => {
+                self.require_configured_runtime(&request.node_did).await?;
+                let (revision, backend) = self.core.read_backend_authentication(&request.node_did, &request.backend_id)
+                    .await.map_err(|_| BridgeError::untyped("Authentication settings could not be read. Reopen Accounts after checking the runtime."))?;
+                encode(crate::accounts::BackendAuthenticationView::from_backend(
+                    revision, &backend,
+                ))
+            }
+            ClientCommand::BackendAuthenticationSave { request } => {
+                self.require_configured_runtime(&request.node_did).await?;
+                self.core.save_backend_authentication(&request.node_did, &request.backend_id, &request.revision, &request.auth)
+                    .await.map_err(|_| BridgeError::untyped("Authentication save could not be confirmed. Reopen Accounts before trying again."))?;
+                encode(())
+            }
+            ClientCommand::InferenceCatalog {} => {
+                encode(gents::inference_setup::inference_setup_catalog())
+            }
+            ClientCommand::AccountsList { request } => {
+                self.require_configured_runtime(&request.node_did).await?;
+                let access = self
+                    .core
+                    .operator_graphql(&request.node_did)
+                    .map(gents::ConfigAccess::Graphql)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Connect this local runtime before managing its accounts.")
+                    });
+                encode(
+                    crate::accounts::observe_provider_accounts(
+                        &self.pending_oauth_credentials,
+                        access,
+                        &request.node_did,
+                    )
+                    .await?,
+                )
+            }
+            ClientCommand::AccountSignIn { request } => {
+                self.require_configured_runtime(&request.node_did).await?;
+                let provider = crate::accounts::login::provider(request.method)?;
+                let signed = crate::accounts::login::sign_in(&self.pending_oauth_credentials,
+                    || self.core.operator_graphql(&request.node_did).map(gents::ConfigAccess::Graphql)
+                        .ok_or_else(|| anyhow::anyhow!("Connect this local runtime before managing its accounts.")),
+                    &request.node_did, request.method, provider, request.label.as_deref(), &cancel,
+                    |url| crate::host_browser::open_url(url).map_err(|_| BridgeError::untyped("Could not open the sign-in page. Check your default browser and try again.")),
+                ).await?;
+                if self.core.refresh_store().await.is_err() {
+                    tracing::warn!("Account saved; its client observation is unavailable");
+                }
+                encode(crate::accounts::SignInView::from(&signed))
+            }
+            ClientCommand::AccountDisconnect { request } => {
+                self.require_configured_runtime(&request.node_did).await?;
+                let access = self
+                    .core
+                    .operator_graphql(&request.node_did)
+                    .map(gents::ConfigAccess::Graphql)
+                    .ok_or_else(|| {
+                        BridgeError::untyped(
+                            "Connect this local runtime before managing its accounts.",
+                        )
+                    })?;
+                gents::oauth_credential::set_account_enabled(
+                    &access,
+                    &request.node_did,
+                    &request.credential_id,
+                    false,
+                )
+                .await
+                .map_err(backend_error)?;
+                if self.core.refresh_store().await.is_err() {
+                    tracing::warn!("Account disconnected; its client observation is unavailable");
+                }
+                encode(())
+            }
+            ClientCommand::AccountRename { request } => {
+                self.require_configured_runtime(&request.node_did).await?;
+                let access = self
+                    .core
+                    .operator_graphql(&request.node_did)
+                    .map(gents::ConfigAccess::Graphql)
+                    .ok_or_else(|| {
+                        BridgeError::untyped(
+                            "Connect this local runtime before managing its accounts.",
+                        )
+                    })?;
+                gents::oauth_credential::set_account_label(
+                    &access,
+                    &request.node_did,
+                    &request.credential_id,
+                    &request.label,
+                )
+                .await
+                .map_err(backend_error)?;
+                if self.core.refresh_store().await.is_err() {
+                    tracing::warn!("Account renamed; its client observation is unavailable");
+                }
+                encode(())
+            }
+            ClientCommand::AccountRemove { request } => {
+                self.require_configured_runtime(&request.node_did).await?;
+                let access = self
+                    .core
+                    .operator_graphql(&request.node_did)
+                    .map(gents::ConfigAccess::Graphql)
+                    .ok_or_else(|| {
+                        BridgeError::untyped(
+                            "Connect this local runtime before managing its accounts.",
+                        )
+                    })?;
+                gents_server::accounts::remove_account(
+                    &access,
+                    &request.node_did,
+                    &request.credential_id,
+                    None,
+                    true,
+                )
+                .await
+                .map_err(backend_error)?;
+                if self.core.refresh_store().await.is_err() {
+                    tracing::warn!("Account removed; its client observation is unavailable");
+                }
+                encode(())
+            }
+            ClientCommand::AccountRetrySave { request } => {
+                self.require_configured_runtime(&request.node_did).await?;
+                let access = self
+                    .core
+                    .operator_graphql(&request.node_did)
+                    .map(gents::ConfigAccess::Graphql)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Connect this local runtime before managing its accounts.")
+                    });
+                let credential = crate::accounts::retry_pending_credential(
+                    &self.pending_oauth_credentials,
+                    access,
+                    &request.node_did,
+                    &request.provider,
+                )
+                .await?;
+                if self.core.refresh_store().await.is_err() {
+                    tracing::warn!("Account saved; its client observation is unavailable");
+                }
+                encode(crate::accounts::ProviderAccountView::from(&credential))
+            }
             ClientCommand::ConfigCatalog { node_did } => {
                 self.require_configured_runtime(&node_did).await?;
                 encode(

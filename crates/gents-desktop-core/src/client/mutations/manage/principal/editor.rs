@@ -104,6 +104,43 @@ fn adopt_saved_projection(
     read_succeeded && physical_matches && content_matches
 }
 
+pub async fn read_backend_authentication_on(
+    access: &ConfigAccess,
+    node_did: &str,
+    id: &str,
+) -> Result<(ConfigEditorRevision, gents::InferenceBackend)> {
+    access
+        .transact_readonly("client.backend.authentication.read", |txn| {
+            Box::pin(async move {
+                let (revision, value) =
+                    read_in_txn(txn, node_did, SelfConfigTarget::InferenceBackend, id).await?;
+                Ok((revision, serde_json::from_value(value)?))
+            })
+        })
+        .await
+}
+
+/// The native credential control patches only authentication. It retains the
+/// other canonical fields and rejects an edit against an unseen document version.
+pub async fn save_backend_authentication_on(
+    access: &ConfigAccess,
+    node_did: &str,
+    id: &str,
+    expected: &ConfigEditorRevision,
+    auth: &gents::document_config::BackendAuth,
+) -> Result<()> {
+    let patch = vec![("auth".to_owned(), Some(serde_json::to_value(auth)?))];
+    access.transact_write("client.backend.authentication.save", |txn| {
+        let patch = &patch;
+        Box::pin(async move {
+            let (current, _) = read_in_txn(txn, node_did, SelfConfigTarget::InferenceBackend, id).await?;
+            ensure!(revision_matches(Some(expected), Some(&current)), "Configuration changed since Accounts opened. Reopen Accounts before changing authentication.");
+            super::patch_config_components_in_txn(txn, node_did,
+                &[(SelfConfigTarget::InferenceBackend, id.to_owned(), patch.clone())]).await
+        })
+    }).await
+}
+
 /// A committed save remains successful when its follow-up observation fails.
 /// `None` requires reopening before another edit; a newer, unseen revision must
 /// never become the baseline for the editor's existing buffer.
@@ -306,6 +343,52 @@ mod tests {
         )
         .await?;
         assert_ne!(current.revision, original.revision);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn config_editor_native_authentication_rejects_stale_edits_and_retains_public_settings(
+    ) -> Result<()> {
+        let access = fixture().await?;
+        let (revision, original) =
+            read_backend_authentication_on(&access, "did:test:editor", "backend").await?;
+        let replacement = gents::document_config::BackendAuth::ApiKey {
+            key: "replacement-private-key".into(),
+        };
+        save_backend_authentication_on(
+            &access,
+            "did:test:editor",
+            "backend",
+            &revision,
+            &replacement,
+        )
+        .await?;
+        let (current, saved) =
+            read_backend_authentication_on(&access, "did:test:editor", "backend").await?;
+        assert_eq!(saved.auth, replacement);
+        assert_eq!(saved.endpoint, original.endpoint);
+        assert_eq!(saved.name, original.name);
+        assert!(save_backend_authentication_on(
+            &access,
+            "did:test:editor",
+            "backend",
+            &revision,
+            &gents::document_config::BackendAuth::Unauthenticated
+        )
+        .await
+        .is_err());
+        let (unchanged, saved) =
+            read_backend_authentication_on(&access, "did:test:editor", "backend").await?;
+        assert_eq!(current, unchanged);
+        assert_eq!(saved.auth, replacement);
+        let public = read_config_editor_on(
+            &access,
+            "did:test:editor",
+            SelfConfigTarget::InferenceBackend,
+            "backend",
+        )
+        .await?;
+        assert!(!public.content.contains("replacement-private-key"));
         Ok(())
     }
 
