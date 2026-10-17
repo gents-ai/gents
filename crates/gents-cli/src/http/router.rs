@@ -519,12 +519,12 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
     let probe_deadline = tokio::time::Instant::now() + STATUS_PROBE_BUDGET;
     let metrics = tokio::time::timeout_at(
         probe_deadline,
-        load_metrics_core_data(&state.graphql, &state.node_did),
+        load_metrics_core_data(&state.p2p_graphql, &state.node_did),
     )
     .await;
     let metrics = match metrics {
         Ok(Ok(core)) => Ok(Ok(core
-            .with_liveness_activity(&state.graphql, probe_deadline)
+            .with_liveness_activity(&state.p2p_graphql, probe_deadline)
             .await)),
         Ok(Err(error)) => Ok(Err(error)),
         Err(elapsed) => Err(elapsed),

@@ -248,7 +248,18 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
         "{live}"
     );
 
-    let remote = run_cli_json(&elsewhere, &["tools", "explain", "--graphql", &graphql])?;
+    let owner_home = home.to_str().context("utf-8 owner home")?;
+    let remote = run_cli_json(
+        &elsewhere,
+        &[
+            "tools",
+            "explain",
+            "--home",
+            owner_home,
+            "--graphql",
+            &graphql,
+        ],
+    )?;
     assert_eq!(remote["node_did"], owner.as_str(), "{remote}");
     assert_eq!(
         remote["host_tool_ceiling"]["tool_ceiling"], "readonly",
