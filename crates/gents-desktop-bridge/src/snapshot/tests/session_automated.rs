@@ -159,7 +159,7 @@ fn automated_store() -> ClientStore {
 }
 
 #[test]
-fn automated_inputs_render_in_stream_order_with_their_sender_and_full_content() {
+fn external_inputs_keep_their_sender_while_internal_controls_stay_hidden() {
     let snapshot =
         build_session_snapshot_from_store(&automated_store(), "sess-1", None).expect("snapshot");
     let items = snapshot
@@ -189,9 +189,6 @@ fn automated_inputs_render_in_stream_order_with_their_sender_and_full_content() 
             "automated:sessionMessage",
             "assistant:reviewed",
             "automated:trigger",
-            "automated:background",
-            "automated:background",
-            "automated:goal",
             "assistant:goal answer",
         ]
     );
@@ -224,17 +221,15 @@ fn automated_inputs_render_in_stream_order_with_their_sender_and_full_content() 
             trigger_kind: Some("schedule".into()),
         }
     );
-    assert!(automated[2].1.starts_with("<agent-notification"));
+    assert_eq!(automated.len(), 2);
+    assert_eq!(snapshot.messages.len(), 9);
     assert_eq!(
-        automated[3].1,
-        gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT
-    );
-    assert_eq!(
-        automated[4].0,
-        RequestOriginView::GoalContinuation {
-            goal_id: Some("goal-1".into()),
-            sequence: Some(3),
-        }
+        snapshot
+            .messages
+            .iter()
+            .filter(|message| message.runtime_control && message.role.as_deref() == Some("user"))
+            .count(),
+        3
     );
 }
 

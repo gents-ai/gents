@@ -422,14 +422,8 @@ fn versioned_background_wake_never_projects_as_a_user_turn() {
     let snapshot =
         build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
             .expect("snapshot");
-    assert!(matches!(
-        snapshot.timeline_items.as_slice(),
-        [RenderedTimelineItem::AutomatedInput {
-            origin: crate::types::RequestOriginView::BackgroundCompletion,
-            content,
-            ..
-        }] if content.as_deref() == Some("wake")
-    ));
+    assert!(snapshot.messages[0].runtime_control);
+    assert!(snapshot.timeline_items.is_empty());
 }
 
 #[test]
