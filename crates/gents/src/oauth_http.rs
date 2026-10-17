@@ -126,6 +126,11 @@ impl<S: BearerSource, P: OAuthHttpPolicy, T> BearerAuthHttpClient<S, P, T> {
         }
     }
 
+    pub fn with_policy(mut self, policy: P) -> Self {
+        self.policy = policy;
+        self
+    }
+
     async fn fresh_auth_header(&self) -> http_client::Result<http_client::HeaderValue> {
         let bearer = self.bearer.as_ref().ok_or_else(|| {
             http_client::Error::Instance(

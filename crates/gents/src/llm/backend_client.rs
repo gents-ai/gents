@@ -171,7 +171,8 @@ pub(crate) async fn build_backend_client(
                             crate::rendered_request::RenderedRequestCapturingHttpClient::new(
                                 api_key_http(&node, agent),
                             ),
-                        ),
+                        )
+                        .with_service_tier(agent.service_tier),
                     ),
                     Default::default(),
                 )
@@ -208,6 +209,7 @@ pub(crate) async fn build_backend_client(
                     agent.node_did(),
                     agent.backend_auth.oauth_account_ref(),
                     &agent.backend_endpoint,
+                    agent.service_tier,
                 ),
             )
             .await
