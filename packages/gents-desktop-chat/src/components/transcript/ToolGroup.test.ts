@@ -4,8 +4,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { ToolGroup } from "./ToolGroup.js";
+import { TranscriptNavigationProvider } from "./TranscriptNavigation.js";
 
-const tool = (state: RenderedToolCallView["reconstruction"]["state"]): RenderedToolCallView => ({
+const tool = (
+  state: RenderedToolCallView["reconstruction"]["state"],
+): RenderedToolCallView => ({
   itemKey: "tool-physical",
   toolName: "read_file",
   statusKind: "success",
@@ -22,8 +25,12 @@ describe("canonical tool payload availability", () => {
   it.each(["loading", "denied", "invalid"] as const)(
     "shows %s without presenting a partial result",
     (state) => {
-      const html = renderToStaticMarkup(createElement(ToolGroup, { tools: [tool(state)] }));
-      expect(html).toContain(`data-testid="tool-output-${state}-tool-physical"`);
+      const html = renderToStaticMarkup(
+        createElement(ToolGroup, { tools: [tool(state)] }),
+      );
+      expect(html).toContain(
+        `data-testid="tool-output-${state}-tool-physical"`,
+      );
       expect(html).not.toContain("stale input");
       expect(html).not.toContain("stale partial result");
       expect(html).not.toContain("tool-payload-copy");
@@ -32,10 +39,49 @@ describe("canonical tool payload availability", () => {
   );
 
   it("keeps an empty ready result distinct from loading", () => {
-    const html = renderToStaticMarkup(createElement(ToolGroup, {
-      tools: [{ ...tool("ready"), presentation: { kind: "generic", summary: null, input: null, output: "" } }],
-    }));
+    const html = renderToStaticMarkup(
+      createElement(ToolGroup, {
+        tools: [
+          {
+            ...tool("ready"),
+            presentation: {
+              kind: "generic",
+              summary: null,
+              input: null,
+              output: "",
+            },
+          },
+        ],
+      }),
+    );
     expect(html).not.toContain("tool-output-loading");
     expect(html).toContain("completed");
   });
 });
+
+it.each(["grep", "glob", "list_files"])(
+  "does not treat a %s search target as a file",
+  (operation) => {
+    const row: RenderedToolCallView = {
+      ...tool("ready"),
+      presentation: {
+        kind: "fileRead",
+        operation,
+        target: "/workspace",
+        returnedCount: 1,
+        totalCount: 1,
+        truncated: false,
+        body: "matches",
+        fallbackOutput: null,
+      },
+    };
+    const html = renderToStaticMarkup(
+      createElement(TranscriptNavigationProvider, {
+        navigation: { openFile() {}, openDiff() {} },
+        children: createElement(ToolGroup, { tools: [row] }),
+      }),
+    );
+    expect(html).not.toContain("Open file");
+    expect(html).toContain("matches");
+  },
+);

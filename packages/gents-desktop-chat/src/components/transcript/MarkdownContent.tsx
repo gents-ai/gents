@@ -2,14 +2,18 @@ import {
   isValidElement,
   memo,
   useEffect,
+  useContext,
   useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
+  type ComponentProps,
 } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type ExtraProps } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
+import { TranscriptNavigationContext } from "./TranscriptNavigation.js";
+import { fileReference } from "./fileReference.js";
 
 import { CopyButton, formatMessageTime } from "@source-inc/gents-desktop-ui";
 
@@ -45,10 +49,35 @@ export const MarkdownContent = memo(function MarkdownContent({
 }: {
   value: string;
 }) {
+  const navigation = useContext(TranscriptNavigationContext);
   return (
     <div className="markdown-content">
       <ReactMarkdown
-        components={{ pre: CodeBlock }}
+        components={{
+          pre: CodeBlock,
+          ...(navigation
+            ? {
+                a: (props: ComponentProps<"a"> & ExtraProps) => {
+                  const anchor = { ...props };
+                  delete anchor.node;
+                  const file = fileReference(props.href);
+                  return (
+                    <a
+                      {...anchor}
+                      onClick={
+                        file
+                          ? (event) => {
+                              event.preventDefault();
+                              navigation.openFile(file.path, file.line);
+                            }
+                          : anchor.onClick
+                      }
+                    />
+                  );
+                },
+              }
+            : {}),
+        }}
         rehypePlugins={[rehypeHighlight]}
         remarkPlugins={[remarkGfm]}
       >
