@@ -37,6 +37,8 @@ pub enum ClientCommand {
     },
     #[serde(rename = "client_inference_setup_catalog")]
     InferenceCatalog {},
+    #[serde(rename = "client_inference_setup_state")]
+    InferenceSetupState { node_did: String },
     #[serde(rename = "client_inference_models_discover")]
     InferenceModelsDiscover {
         request: crate::inference_setup::InferenceDiscoveryRequest,
@@ -201,6 +203,7 @@ impl ClientCommand {
         "client_backend_authentication",
         "client_backend_authentication_save",
         "client_inference_setup_catalog",
+        "client_inference_setup_state",
         "client_inference_models_discover",
         "client_inference_model_recommendation",
         "client_config_apply",
@@ -244,6 +247,7 @@ impl ClientCommand {
             Self::Snapshot {}
                 | Self::BackendAuthentication { .. }
                 | Self::InferenceCatalog {}
+                | Self::InferenceSetupState { .. }
                 | Self::InferenceModelsDiscover { .. }
                 | Self::InferenceModelRecommendation { .. }
                 | Self::AccountsList { .. }

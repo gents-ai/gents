@@ -98,6 +98,36 @@ impl ClientHost {
             ClientCommand::InferenceCatalog {} => {
                 encode(gents::inference_setup::inference_setup_catalog())
             }
+            ClientCommand::InferenceSetupState { node_did } => {
+                self.require_configured_runtime(&node_did).await?;
+                self.core
+                    .operator_access(&node_did)
+                    .map_err(backend_error)?;
+                self.core
+                    .refresh_node(&node_did)
+                    .await
+                    .map_err(backend_error)?;
+                let snapshot = crate::snapshot::build_runtime_snapshot(self.core.as_ref()).await;
+                if !snapshot
+                    .operator_config_authoritative_node_dids
+                    .as_ref()
+                    .is_some_and(|nodes| nodes.contains(&node_did))
+                {
+                    return Err(BridgeError::new(BridgeErrorCode::EndpointUnreachable,
+                        "Runtime configuration is not available. Check the runtime connection and try again."));
+                }
+                let deployment = snapshot
+                    .deployments
+                    .into_iter()
+                    .find(|node| node.node_did == node_did)
+                    .ok_or_else(|| {
+                        BridgeError::new(
+                            BridgeErrorCode::InvalidArgument,
+                            "The configured runtime is no longer available.",
+                        )
+                    })?;
+                encode(deployment)
+            }
             ClientCommand::InferenceModelsDiscover { request } => {
                 self.require_configured_runtime(&request.node_did).await?;
                 encode(

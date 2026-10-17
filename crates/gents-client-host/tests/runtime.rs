@@ -297,7 +297,6 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             &mut id,
             node_did,
             agent_id,
-            &deployment,
             provider.endpoint(),
         )
         .await?;
@@ -807,7 +806,6 @@ async fn configure_inference(
     id: &mut u32,
     node_did: &str,
     agent_id: &str,
-    deployment: &Value,
     endpoint: &str,
 ) -> Result<()> {
     let catalog = client
@@ -832,6 +830,15 @@ async fn configure_inference(
                 .any(|model| model["advertised"]["model_name"] == "editor-fixture")),
         "native model discovery did not observe the provider: {discovery}"
     );
+    let deployment = client
+        .call(
+            *id,
+            "client_inference_setup_state",
+            json!({"nodeDid":node_did}),
+        )
+        .await;
+    *id += 1;
+    ensure!(deployment["nodeDid"] == node_did);
     let mut agent = deployment["agentConfigs"]
         .as_array()
         .and_then(|rows| rows.iter().find(|row| row["agent_id"] == agent_id))
@@ -849,12 +856,14 @@ async fn configure_inference(
         "agents":[agent],
     }}})).await;
     *id += 1;
-    let snapshot = client.snapshot(*id).await;
+    let observed = client
+        .call(
+            *id,
+            "client_inference_setup_state",
+            json!({"nodeDid":node_did}),
+        )
+        .await;
     *id += 1;
-    let observed = snapshot["client"]["deployments"]
-        .as_array()
-        .and_then(|rows| rows.iter().find(|row| row["nodeDid"] == node_did))
-        .context("the configured runtime observation")?;
     ensure!(
         observed["agentConfigs"].as_array().is_some_and(|rows| rows
             .iter()
