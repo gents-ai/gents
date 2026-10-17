@@ -370,6 +370,7 @@ jobs:
             -p gents-desktop \
             -p gents-desktop-bridge \
             -p gents-client-host \
+            -p gents-media-host \
             -p fixture-domain-plugin \
             -p gents-fixture-host
           cargo test --no-fail-fast -p gents-desktop-tauri --lib
@@ -378,7 +379,7 @@ jobs:
       - name: Run native client runtime journey
         if: matrix.suite == 'desktop'
         run: |
-          cargo build --profile test -p gents-cli -p gents-client-host --bins
+          cargo build --profile test -p gents-cli -p gents-client-host -p gents-media-host --bins
           cargo test -p gents-client-host --features runtime-e2e --test runtime
 
       - name: Run full CLI test suite

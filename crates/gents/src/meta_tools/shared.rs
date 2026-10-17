@@ -5,7 +5,6 @@ use defra_node::EmbeddedNode;
 use serde::Serialize;
 
 use crate::health_checker::{HealthStatus, ServiceHealth, ServiceHealthMap};
-use crate::mcp_pool::resolve_mcp_url;
 use crate::mcp_pool::McpPool;
 use crate::tool_call_lifecycle::FailureClass;
 
@@ -311,10 +310,7 @@ impl StructuredToolError {
     }
 }
 
-pub(super) struct ResolvedMcpService {
-    pub(super) endpoint: String,
-    pub(super) send_node_did: bool,
-}
+pub(super) use crate::registry::{resolve_mcp_service as resolve_service, ResolvedMcpService};
 
 impl ResolvedMcpService {
     pub(super) fn outbound_node_did<'a>(&self, ctx: &'a MetaToolContext) -> Option<&'a str> {
@@ -334,38 +330,6 @@ pub(super) async fn lookup_service(
             anyhow!("service '{service_id}' is not configured or enabled for this node")
         })?;
     resolve_service(&entry, &ctx.local_hostname, ctx.local_subnet.as_deref())
-}
-
-pub(super) fn resolve_service(
-    entry: &crate::document_config::ToolServiceRegistry,
-    hostname: &str,
-    subnet: Option<&str>,
-) -> anyhow::Result<ResolvedMcpService> {
-    let port = entry
-        .mcp_port
-        .and_then(|port| u16::try_from(port).ok())
-        .filter(|port| *port > 0)
-        .ok_or_else(|| anyhow!("service '{}' has no valid MCP port", entry.service_id))?;
-    let host = entry.hostname.as_deref().unwrap_or_default();
-    let tailscale = entry.tailscale_ip.as_deref().unwrap_or_default();
-    let lan = entry.lan_ip.as_deref().unwrap_or_default();
-    anyhow::ensure!(
-        !host.is_empty() || !tailscale.is_empty() || !lan.is_empty(),
-        "service '{}' has no MCP address",
-        entry.service_id
-    );
-    Ok(ResolvedMcpService {
-        endpoint: resolve_mcp_url(
-            host,
-            tailscale,
-            lan,
-            port,
-            entry.mcp_path.as_deref().unwrap_or_default(),
-            hostname,
-            subnet,
-        ),
-        send_node_did: entry.send_node_did,
-    })
 }
 
 pub(super) fn extract_text(result: &rmcp::model::CallToolResult) -> String {

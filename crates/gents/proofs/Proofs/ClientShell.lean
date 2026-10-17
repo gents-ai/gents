@@ -9,3 +9,4 @@ import Proofs.ClientShell.Theorems
 import Proofs.ClientShell.ObservationOrdering
 import Proofs.ClientShell.RequestCacheIdentity
 import Proofs.ClientShell.ObservationScope
+import Proofs.ClientShell.Voice

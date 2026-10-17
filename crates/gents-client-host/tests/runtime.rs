@@ -17,6 +17,8 @@ mod fake_llm;
 #[allow(dead_code)]
 #[path = "../../gents-cli/tests/support/ports.rs"]
 mod ports;
+#[path = "support/speech.rs"]
+mod speech;
 mod support;
 
 use fake_llm::{ChatAction, FakeLlm};
@@ -251,15 +253,80 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .and_then(|agents| agents.iter().find(|agent| agent["isDefault"] == true))
         .and_then(|agent| agent["agentId"].as_str())
         .context("runtime default agent")?;
+    let speech = if matches!(journey, Journey::Conversation) {
+        client
+            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .await;
+        id += 1;
+        let service = speech::SpeechService::start().await?;
+        access
+            .write(
+                "seed_editor_speech_service",
+                &format!(
+                    r#"mutation {{ create_ToolServiceRegistry(input: {{
+                node_did:"{}", service_id:"editor-speech", display_name:"Editor speech",
+                hostname:"127.0.0.1", mcp_port:{}, mcp_path:"/mcp", enabled:true, send_node_did:true
+            }}) {{ _docID }} }}"#,
+                    gents::graphql::escape_graphql_string(node_did),
+                    service.port,
+                ),
+            )
+            .await?;
+        let services = client
+            .call(id, "client_speech_services", json!({"nodeDid":node_did}))
+            .await;
+        id += 1;
+        ensure!(
+            services.as_array().is_some_and(|services| services
+                .iter()
+                .any(|service| service["serviceId"] == "editor-speech")),
+            "configured speech service was not discovered: {services}"
+        );
+        let tools = client
+            .call(
+                id,
+                "client_speech_tools",
+                json!({"nodeDid":node_did,"serviceId":"editor-speech"}),
+            )
+            .await;
+        id += 1;
+        ensure!(
+            tools.as_array().is_some_and(|tools| tools.len() == 2),
+            "speech adapter tools were not discovered: {tools}"
+        );
+        Some(service)
+    } else {
+        None
+    };
+    let content =
+        if speech.is_some() {
+            let transcript = client.call(id, "client_speech_recognize", json!({"request": {
+            "tool":{"nodeDid":node_did,"serviceId":"editor-speech","toolName":"transcribe"},
+            "clip":{"pcm":"AAAAAA==","sampleRate":48000},"language":"en"
+        }})).await;
+            id += 1;
+            transcript
+                .as_str()
+                .context("configured speech transcript")?
+                .to_owned()
+        } else {
+            "Return the fixture response.".to_owned()
+        };
     let receipt = if matches!(journey, Journey::Goal) {
         client.call(id, "desktop_goal_control", json!({"request": {
             "nodeDid":node_did, "agentId":agent_id,
             "action":{"kind":"create", "objective":"Return the fixture response.", "tokenBudget":"1000"}
         }})).await
     } else {
-        client.call(id, "desktop_chat_send", json!({"request":{
-            "nodeDid":node_did,"agentId":agent_id,"content":"Return the fixture response.","delivery":"queue"
-        }})).await
+        client
+            .call(
+                id,
+                "desktop_chat_send",
+                json!({"request":{
+                    "nodeDid":node_did,"agentId":agent_id,"content":content,"delivery":"queue"
+                }}),
+            )
+            .await
     };
     id += 1;
     let session = receipt["sessionId"].as_str().context("submitted session")?;
@@ -475,6 +542,85 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     })
     .await
     .with_context(|| format!("canonical completed output was not observed: {last_projection}"))??;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let output = client
+                .call(
+                    id,
+                    "desktop_request_output",
+                    json!({
+                        "nodeDid":node_did, "sessionId":session, "requestId":request,
+                    }),
+                )
+                .await;
+            id += 1;
+            ensure!(
+                output["nodeDid"] == node_did
+                    && output["sessionId"] == session
+                    && output["requestId"] == request,
+                "request output crossed the accepted request scope"
+            );
+            match output["output"]["kind"].as_str() {
+                Some("terminalMessage") => {
+                    ensure!(
+                        output["output"]["content"] == "First part and final part.",
+                        "{output}"
+                    );
+                    break Ok::<_, anyhow::Error>(());
+                }
+                Some("loading") => tokio::time::sleep(Duration::from_millis(50)).await,
+                _ => anyhow::bail!("unexpected canonical output: {output}"),
+            }
+        }
+    })
+    .await
+    .context("the exact request's terminal answer was not observed")??;
+    let wrong_scope = client
+        .try_call(
+            id,
+            "desktop_request_output",
+            json!({
+                "nodeDid":node_did,"sessionId":"another-session","requestId":request,
+            }),
+        )
+        .await;
+    id += 1;
+    ensure!(
+        wrong_scope.is_err()
+            || wrong_scope
+                .as_ref()
+                .is_ok_and(|value| value["output"]["kind"] == "loading"),
+        "a request's answer escaped its session scope"
+    );
+    if let Some(speech) = speech.as_ref() {
+        let clip = client
+            .call(
+                id,
+                "client_speech_synthesize",
+                json!({"request":{
+                    "tool":{"nodeDid":node_did,"serviceId":"editor-speech","toolName":"synthesize"},
+                    "text":"First part and final part.","sampleRate":48000
+                }}),
+            )
+            .await;
+        id += 1;
+        let clip: gents_protocol::client_media::MediaPcmClip = serde_json::from_value(clip)?;
+        ensure!(clip.sample_rate == 48000 && clip.samples()? == [i16::MIN, i16::MAX]);
+        let calls = speech.calls.lock().unwrap();
+        ensure!(
+            calls.len() == 2 && calls.iter().all(|(actor, _)| actor == &client_did),
+            "speech calls must use the actual client actor exactly once per operation"
+        );
+        ensure!(
+            calls[0].1["arguments"]["audio"]
+                == json!({"data":"AAAAAA==","format":"pcm_s16le","sampleRate":48000,"channels":1})
+        );
+        ensure!(calls[1].1["arguments"]["text"] == "First part and final part.");
+        ensure!(
+            calls[1].1["arguments"].get("language").is_none()
+                && calls[1].1["arguments"].get("voice").is_none()
+        );
+    }
     if matches!(journey, Journey::Goal) {
         wait_goal(&mut client, &mut id, node_did, session, "paused").await?;
         let requests = access

@@ -122,8 +122,8 @@ where
                             let host = host.clone();
                             let approvals = approvals.clone();
                             calls.spawn(async move {
-                                let read = command.is_read();
-                                let result = run_operation(read, cancel, host.execute(command, &approvals)).await;
+                                let cancellable = command.is_cancellable();
+                                let result = run_operation(cancellable, cancel, host.execute(command, &approvals)).await;
                                 (id, result)
                             });
                         }
@@ -230,14 +230,14 @@ fn cancelled() -> BridgeError {
 }
 
 async fn run_operation<F>(
-    read: bool,
+    cancellable: bool,
     cancel: CancellationToken,
     work: F,
 ) -> Result<serde_json::Value, BridgeError>
 where
     F: std::future::Future<Output = Result<serde_json::Value, BridgeError>>,
 {
-    if read {
+    if cancellable {
         tokio::select! {
             _ = cancel.cancelled() => Err(cancelled()),
             result = work => result,

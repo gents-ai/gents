@@ -178,6 +178,16 @@ fn export_all(dir: &Path) -> Result<(), String> {
     }
 
     export_types!(
+        RequestOutputView,
+        gents_protocol::client_media::MediaCall,
+        gents_protocol::client_media::MediaOperation,
+        gents_protocol::client_media::MediaPcmClip,
+        gents_protocol::client_media::MediaMessage,
+        gents_protocol::client_media::MediaDevices,
+        crate::host::speech::SpeechServiceView,
+        crate::host::speech::SpeechToolReference,
+        crate::host::speech::SpeechRecognizeRequest,
+        crate::host::speech::SpeechSynthesizeRequest,
         crate::host::protocol::ClientMessage,
         crate::host::protocol::ClientCommand,
         crate::host::protocol::HostMessage,
@@ -339,6 +349,14 @@ fn export_all(dir: &Path) -> Result<(), String> {
     );
     std::fs::write(dir.join("ClientHostProtocol.ts"), protocol)
         .map_err(|error| error.to_string())?;
+    let media = format!(
+        "// Generated from gents-protocol::client_media. Do not edit.\n\nexport const MEDIA_HOST_VERSION = {};\nexport const MEDIA_HOST_MAX_FRAME_BYTES = {};\nexport const MEDIA_HOST_MAX_PCM_BYTES = {};\nexport const MEDIA_HOST_MAX_SECONDS = {};\n",
+        gents_protocol::client_media::VERSION,
+        gents_protocol::client_media::MAX_FRAME_BYTES,
+        gents_protocol::client_media::MAX_PCM_BYTES,
+        gents_protocol::client_media::MAX_SECONDS,
+    );
+    std::fs::write(dir.join("MediaHostProtocol.ts"), media).map_err(|error| error.to_string())?;
     normalize_generated_types(dir)?;
     Ok(())
 }
@@ -547,6 +565,21 @@ fn write_bindings() {
         }
     }
     eprintln!("wrote bindings to {}", dir.display());
+}
+
+#[test]
+fn media_commands_preserve_the_native_tag_in_generated_types() {
+    use gents_protocol::client_media::{MediaCall, MediaOperation};
+    let call: MediaCall = serde_json::from_value(serde_json::json!({
+        "id":1,"operation":{"command":"hello","version":1},
+    }))
+    .unwrap();
+    assert!(matches!(
+        call.operation,
+        MediaOperation::Hello { version: 1 }
+    ));
+    assert!(MediaOperation::decl().contains("\"command\": \"hello\""));
+    assert!(MediaOperation::decl().contains("\"command\": \"capture\""));
 }
 
 #[test]

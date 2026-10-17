@@ -31,35 +31,57 @@ def findRequest (rows : List Row) (requester : Nat) (request : RequestId) : Opti
 def retrySuccessor (rows : List Row) (row : Row) : Option Row :=
   rows.find? (fun r => r.retryParent == some row.request && r.requester == row.requester)
 
-def resolveSeen (rows : List Row) : Nat → List Nat → Row → Row
-  | 0, _, row => row
-  | fuel + 1, seen, row =>
+def resolveSeen (rows : List Row) (fuel : Nat) (seen : List Nat) (row : Row)
+    (followQueue : Bool := true) : Row :=
+  match fuel with
+  | 0 => row
+  | fuel + 1 =>
     if row.doc ∈ seen then row else
     let seen := row.doc :: seen
     match row.foldedInto with
     | some head =>
       match findDoc rows row.requester head with
-      | some owner => resolveSeen rows fuel seen owner
+      | some owner => resolveSeen rows fuel seen owner followQueue
       | none => row
     | none =>
       match row.state with
       | .terminal =>
         match retrySuccessor rows row with
-        | some next => resolveSeen rows fuel seen next
+        | some next => resolveSeen rows fuel seen next followQueue
         | none => row
       | .active => row
       | .unclaimed =>
-        match row.queuedAfter.bind (findRequest rows row.requester) with
-        | some ahead =>
-          let turn := resolveSeen rows fuel seen ahead
-          if turn.state == .terminal then row else turn
-        | none => row
+        if followQueue then
+          match row.queuedAfter.bind (findRequest rows row.requester) with
+          | some ahead =>
+            let turn := resolveSeen rows fuel seen ahead followQueue
+            if turn.state == .terminal then row else turn
+          | none => row
+        else row
+termination_by structural fuel
 
 def resolve (rows : List Row) (row : Row) : Row :=
   resolveSeen rows (rows.length + 1) [] row
 
 def turnOf (rows : List Row) (newest : Row) : Row :=
   resolve rows newest
+
+/-- A request's answer follows its physical fold owner and retry successor.
+A queue predecessor can occupy the session's turn without having consumed
+this request's input, so it never supplies this request's answer. -/
+def answerOf (rows : List Row) (row : Row) : Row :=
+  resolveSeen rows (rows.length + 1) [] row false
+
+theorem unclaimed_answer_does_not_follow_queue (rows : List Row) (row : Row)
+    (hunfolded : row.foldedInto = none) (hunclaimed : row.state = .unclaimed) :
+    answerOf rows row = row := by
+  simp [answerOf, resolveSeen, hunfolded, hunclaimed]
+
+theorem answer_follows_fold_owner (rows : List Row) (fuel : Nat) (row owner : Row)
+    (head : Nat) (hfold : row.foldedInto = some head)
+    (hown : findDoc rows row.requester head = some owner) :
+    resolveSeen rows (fuel + 1) [] row false = resolveSeen rows fuel [row.doc] owner false := by
+  simp [resolveSeen, hfold, hown]
 
 def queuedBehind (rows : List Row) (turn : Row) : List Row :=
   rows.filter (fun r =>
@@ -286,6 +308,43 @@ theorem resolve_stays_in_requester_scope (rows : List Row) :
                   simp [hq] at hqueued
                   exact find_preserves_requester
                     (by intro x hx; simp at hx; exact hx.2) hqueued
+
+theorem answer_resolution_stays_in_requester_scope (rows : List Row) :
+    ∀ (fuel : Nat) (seen : List Nat) (row : Row),
+      (resolveSeen rows fuel seen row false).requester = row.requester := by
+  intro fuel
+  induction fuel with
+  | zero => intro seen row; rfl
+  | succ n ih =>
+      intro seen row
+      cases hseen : seen.contains row.doc with
+      | true =>
+        have hmem : row.doc ∈ seen := by simpa using hseen
+        simp [resolveSeen, hmem]
+      | false =>
+        have hnotmem : row.doc ∉ seen := by simpa using hseen
+        simp only [resolveSeen, hnotmem, Bool.false_eq_true, ↓reduceIte]
+        cases hfold : row.foldedInto with
+        | some head =>
+          cases howner : findDoc rows row.requester head with
+          | none => simp [hfold, howner]
+          | some owner =>
+            simp only [hfold, howner]
+            rw [ih (row.doc :: seen) owner]
+            exact find_preserves_requester
+              (by intro x hx; simp at hx; exact hx.2) howner
+        | none =>
+          cases hstate : row.state with
+          | terminal =>
+            cases hnext : retrySuccessor rows row with
+            | none => simp [hfold, hstate, hnext]
+            | some next =>
+              simp only [hfold, hstate, hnext]
+              rw [ih (row.doc :: seen) next]
+              exact find_preserves_requester
+                (by intro x hx; simp at hx; exact hx.2) hnext
+          | active => simp [hfold, hstate]
+          | unclaimed => simp [hfold, hstate]
 
 def requestReadProjection (all : List Row) (requester selectedDoc latestDoc : Nat)
     (pageRequestDocs : List Nat) : Option SessionObservation :=
