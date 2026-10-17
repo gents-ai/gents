@@ -13,7 +13,16 @@ def row (doc request : Nat) (state : RowState) (requester : Nat := 1)
     retryParentDoc, completed, publicInput, authoredInputMaterialized }
 
 def scenarios : List (String × List Row) :=
-  [ ("queued_behind_running_turn",
+  [ ("retry_waiting_behind_another_turn_has_no_answer_yet",
+      [ row 1 100 .terminal
+      , row 2 200 .active
+      , row 3 101 .unclaimed (queuedAfter := some 200) (retryParent := some 100) ])
+  , ("folded_answer_waits_for_its_queued_retry",
+      [ row 1 100 .terminal
+      , row 2 200 .active
+      , row 3 101 .unclaimed (queuedAfter := some 200) (retryParent := some 100)
+      , row 4 102 .terminal (foldedInto := some 1) ])
+  , ("queued_behind_running_turn",
       [ row 1 100 .active
       , row 2 101 .unclaimed (queuedAfter := some 100)
       , row 3 102 .unclaimed (queuedAfter := some 101) ])
@@ -134,6 +143,7 @@ def caseJsonWithPage (name : String) (rows : List Row) (pageRequestDocs : List N
     ",\"rows\":" ++ rowsJson rows ++
     ",\"expected_read_docs\":" ++ natList (readRows.map (·.doc)) ++
     ",\"expected_turn_doc\":" ++ toString turn.doc ++
+    ",\"expected_answer_doc\":" ++ toString (answerOf rows last).doc ++
     ",\"expected_queued_docs\":" ++ natList ((queuedBehind rows turn).map (·.doc)) ++
     ",\"expected_folded_requests\":" ++
       natList ((foldedIn rows last.requester).map (·.request)) ++ "}"

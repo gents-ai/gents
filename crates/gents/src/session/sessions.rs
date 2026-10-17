@@ -317,7 +317,21 @@ pub async fn load_agent_session_row_in_txn(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Option<super::rows::SessionOwnerRow>> {
-    let scope = session_scope_filter(node_did, session_id, requester_did);
+    Ok(load_agent_session_owner_in_txn(txn, node_did, session_id)
+        .await?
+        .filter(|row| row.session.requester_did.as_deref() == requester_did))
+}
+
+pub(crate) async fn load_agent_session_owner_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+) -> Result<Option<super::rows::SessionOwnerRow>> {
+    let scope = format!(
+        r#"node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}"#,
+        escape_graphql_string(node_did),
+        escape_graphql_string(session_id),
+    );
     let query = format!(
         r#"{{
             AgentSession(filter: {{ {scope} }}) {{

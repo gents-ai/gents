@@ -103,12 +103,20 @@ def clientRouteFilters (direction : RouteDirection) (requesterDid ownerDid : Did
     , { collection := "AgentSessionInputEdit"
       , clauses :=
           [ { field := "requester_did", value := requesterDid }
+          , { field := "node_did", value := ownerDid } ] }
+    , { collection := "AgentSessionGoalControl"
+      , clauses :=
+          [ { field := "requester_did", value := requesterDid }
           , { field := "node_did", value := ownerDid } ] } ] ++
     match direction with
     | .clientToRuntime => []
     | .runtimeToClient =>
         [ { collection := "NodeReadiness"
-          , clauses := [ { field := "node_did", value := ownerDid } ] } ]
+          , clauses := [ { field := "node_did", value := ownerDid } ] }
+        , { collection := "GoalObservation"
+          , clauses :=
+              [ { field := "requester_did", value := requesterDid }
+              , { field := "node_did", value := ownerDid } ] } ]
 
 def directionalScopeFilters (template : Template) (direction : RouteDirection)
     (requesterDid ownerDid : Did) : List CollectionPredicate :=
@@ -186,6 +194,9 @@ theorem machine_filter_eq (peerDid homeDid : Did) :
         , { collection := "AgentSessionInputEdit"
           , field := "requester_did"
           , value := peerDid }
+        , { collection := "AgentSessionGoalControl"
+          , field := "requester_did"
+          , value := peerDid }
         , { collection := "NodeDirectoryEntry"
           , field := "source_did"
           , value := homeDid } ] := by
@@ -195,7 +206,7 @@ theorem machine_filters_transcript_and_directory (peerDid homeDid : Did) :
     ((scopeFilter machineTemplate.scope [] peerDid homeDid).map
         (fun k => k.collection)).toFinset
       = (transcriptCollections ++
-          ["MailboxItem", "SessionHydrationRequest", "AgentSessionInputEdit", "NodeDirectoryEntry"]).toFinset := by
+          ["MailboxItem", "SessionHydrationRequest", "AgentSessionInputEdit", "AgentSessionGoalControl", "NodeDirectoryEntry"]).toFinset := by
   simp [scopeFilter, machineTemplate, machineRules, machineCollections,
     conversationRules, conversationCollections, transcriptCollections]
 
@@ -261,6 +272,19 @@ theorem client_transcript_match_iff_requester_and_destination
     clientTranscriptMatches requesterDid ownerDid row = true ↔
       row.requesterDid = requesterDid ∧ row.nodeDid = ownerDid := by
   simp [clientTranscriptMatches]
+
+theorem client_goal_control_conjoins_requester_and_destination
+    (direction : RouteDirection) (requesterDid ownerDid : Did) :
+    (clientRouteFilters direction requesterDid ownerDid).find?
+        (fun predicate => predicate.collection = "AgentSessionGoalControl") =
+      some
+        { collection := "AgentSessionGoalControl"
+        , clauses :=
+            [ { field := "requester_did", value := requesterDid }
+            , { field := "node_did", value := ownerDid } ] } := by
+  cases direction <;>
+    simp [clientRouteFilters, clientTranscriptPredicates,
+      clientTranscriptCollections, transcriptCollections]
 
 theorem client_transcript_destination_scoped
     (requesterDid ownerDid : Did) (row : TranscriptIdentity)
@@ -524,5 +548,18 @@ theorem agent_target_filter_values_local_or_peer
   simp [scopeFilter] at hk
   obtain ⟨r, _, hr⟩ := hk
   cases hsrc : r.source <;> simp [hsrc] at hr <;> subst hr <;> simp
+
+theorem goal_observation_is_return_only :
+    "GoalObservation" ∉ clientRouteCollections .clientToRuntime ∧
+      "GoalObservation" ∈ clientRouteCollections .runtimeToClient := by decide
+
+theorem goal_observation_conjoins_requester_and_destination (requesterDid ownerDid : Did) :
+    (clientRouteFilters .runtimeToClient requesterDid ownerDid).find?
+        (fun predicate => predicate.collection = "GoalObservation") =
+      some { collection := "GoalObservation", clauses :=
+        [ { field := "requester_did", value := requesterDid }
+        , { field := "node_did", value := ownerDid } ] } := by
+  simp [clientRouteFilters, clientTranscriptPredicates,
+    clientTranscriptCollections, transcriptCollections]
 
 end ScopeTemplates

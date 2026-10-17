@@ -18,6 +18,8 @@ use crate::client::store::ClientStore;
 use super::super::graphql::{escape_graphql_string, normalize_optional_string, normalize_required};
 use super::binding::resolve_agent_binding;
 
+/// The durable submission receipt. Replica observation may still be pending;
+/// callers must not replay the mutation when a subsequent refresh fails.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubmittedRequest {
     pub request_id: String,
@@ -48,7 +50,7 @@ pub async fn submit_request(
     agent_id: Option<&str>,
     options: SubmitRequestOptions,
 ) -> Result<SubmittedRequest> {
-    let (result, create) = build_request_submission(
+    let (result, create) = prepare_request_submission(
         node,
         store,
         session_id,
@@ -90,7 +92,7 @@ pub async fn submit_goal_backed_request(
             normalize_required("session_id", session_id)?
         ));
     }
-    let (result, create) = build_request_submission(
+    let (result, create) = prepare_request_submission(
         node,
         store,
         session_id,
@@ -130,7 +132,7 @@ pub async fn submit_task_request(
     mut options: SubmitRequestOptions,
 ) -> Result<SubmittedRequest> {
     options.retry_key = Some(fire.fire_key.clone());
-    let (result, create) = build_request_submission(
+    let (result, create) = prepare_request_submission(
         node,
         store,
         &fire.session_id,
@@ -153,7 +155,7 @@ pub async fn submit_task_request(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn build_request_submission(
+pub(crate) async fn prepare_request_submission(
     node: &EmbeddedNode,
     store: &ClientStore,
     session_id: &str,

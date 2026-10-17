@@ -1,5 +1,7 @@
 import Proofs.Conformance.RequestPatchPublicationCases
 import Proofs.Conformance.ClientDataPublicationCases
+import Proofs.Conformance.ClientObservationScope
+import Proofs.Conformance.ClientSettings
 import Proofs.Conformance.ClientRequestClosureCases
 import Proofs.Conformance.ClientRequestCacheIdentityCases
 import Proofs.Conformance.SessionQueueOrderCases
@@ -72,6 +74,11 @@ import Proofs.Conformance.GoalClaimedPublication
 import Proofs.Conformance.GoalResetResume
 import Proofs.Conformance.GoalRequestHead
 import Proofs.Conformance.GoalEdit
+import Proofs.Conformance.GoalClientControl
+import Proofs.Conformance.GoalClientMutation
+import Proofs.Conformance.GoalClientStart
+import Proofs.Conformance.GoalObservation
+import Proofs.Conformance.PluginApproval
 import Proofs.Conformance.GraphFailureAttribution
 import Proofs.Conformance.GraphLogicalInvocation
 import Proofs.Conformance.RequestExecutionLease
@@ -114,6 +121,11 @@ def snapshotJson : String :=
     ++ "\"goal_request_head_cases\":"
       ++ Conformance.GoalRequestHeadContracts.casesJson ++ ","
     ++ "\"goal_edit_cases\":" ++ Conformance.GoalEditContracts.casesJson ++ ","
+    ++ "\"goal_client_control_cases\":" ++ Conformance.GoalClientControlContracts.casesJson ++ ","
+    ++ "\"goal_client_start_cases\":" ++ Conformance.GoalClientStartContracts.casesJson ++ ","
+    ++ "\"goal_client_receipt_cases\":" ++ Conformance.GoalClientMutationContracts.receiptCasesJson ++ ","
+    ++ "\"goal_observation_cases\":" ++ Conformance.GoalObservationContracts.casesJson ++ ","
+    ++ "\"plugin_approval_cases\":" ++ Conformance.PluginApproval.casesJson.compress ++ ","
     ++ "\"goal_objective_whitespace_codepoints\":"
       ++ Conformance.GoalEditContracts.whitespaceCodepointsJson ++ ","
     ++ "\"graph_logical_invocation_cases\":"
@@ -253,6 +265,10 @@ def snapshotJson : String :=
       ++ toString Conformance.ClientShellContracts.desktopClientShellCaseCount ++ ","
     ++ "\"desktop_client_shell_cases\":"
       ++ Conformance.ClientShellContracts.desktopClientShellCasesJson ++ ","
+    ++ "\"client_observation_scope_cases\":"
+      ++ Conformance.ClientObservationScope.casesJson ++ ","
+    ++ "\"client_settings_cases\":"
+      ++ clientSettingsCases.compress ++ ","
     ++ "\"client_data_publication_cases\":"
       ++ Conformance.ClientDataPublication.casesJson ++ ","
     ++ "\"client_request_patch_publication_cases\":"

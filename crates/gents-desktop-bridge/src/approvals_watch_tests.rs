@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use gents::home::PLUGIN_APPROVALS_DIR_NAME;
 use gents::pack::BindAccess;
 use gents::plugin::approval::{self, Answer, Request};
 use notify::event::{AccessKind, CreateKind, Flag, ModifyKind, RenameMode};
@@ -27,12 +26,13 @@ fn question(id: &str) -> Request {
         access: BindAccess::Read,
         session_id: None,
         created_at_ms: now_ms(),
+        expires_at_ms: now_ms() + approval::WAIT.as_millis() as u64,
     }
 }
 
 fn file_question(home: &Path, id: &str) {
     use std::io::Write;
-    let queue = home.join(PLUGIN_APPROVALS_DIR_NAME);
+    let queue = approval::queue_dir(home);
     std::fs::create_dir_all(&queue).unwrap();
     let mut file = tempfile::NamedTempFile::new_in(&queue).unwrap();
     file.write_all(&serde_json::to_vec(&question(id)).unwrap())
@@ -117,7 +117,7 @@ async fn a_partial_question_is_announced_when_its_write_finishes() {
     let (send, mut receive) = mpsc::channel(1);
     let _watch = QueueWatch::start(home.path(), send).unwrap();
     let mut pending = PendingQueue::default();
-    let path = home.path().join(PLUGIN_APPROVALS_DIR_NAME).join("q1.json");
+    let path = approval::queue_dir(home.path()).join("q1.json");
     std::fs::write(&path, b"{").unwrap();
     signalled(&mut receive).await;
     assert!(!pending.refresh(home.path()).unwrap());
@@ -148,12 +148,11 @@ async fn native_watch_recovers_after_the_queue_is_replaced() {
     ));
     file_question(home.path(), "q1");
     signalled(&mut receive).await;
-    std::fs::remove_dir_all(home.path().join(PLUGIN_APPROVALS_DIR_NAME)).unwrap();
+    std::fs::remove_dir_all(approval::queue_dir(home.path())).unwrap();
     signalled(&mut receive).await;
     assert!(approval::pending_requests(home.path()).unwrap().is_empty());
     assert!(
-        home.path()
-            .join(PLUGIN_APPROVALS_DIR_NAME)
+        approval::queue_dir(home.path())
             .join(".listening")
             .metadata()
             .unwrap()
@@ -188,10 +187,7 @@ async fn native_heartbeat_keeps_listening_without_queue_reads_or_webview_command
             let _ = send.try_send(changed);
         },
     ));
-    let mark = home
-        .path()
-        .join(PLUGIN_APPROVALS_DIR_NAME)
-        .join(".listening");
+    let mark = approval::queue_dir(home.path()).join(".listening");
     assert!(!signalled(&mut receive).await, "the startup queue is empty");
     let stale = SystemTime::now() - Duration::from_secs(60);
     std::fs::OpenOptions::new()
@@ -211,6 +207,64 @@ async fn native_heartbeat_keeps_listening_without_queue_reads_or_webview_command
         receive.try_recv().is_err(),
         "heartbeats must not scan the queue"
     );
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_replaced_queue_root_reattaches_the_current_format_watch() {
+    let home = tempfile::tempdir().unwrap();
+    let (send, mut receive) = mpsc::channel(8);
+    let (_active, subscriptions) = watch::channel(true);
+    let task = tokio::spawn(watch_queue(
+        home.path().to_owned(),
+        Duration::from_millis(100),
+        subscriptions,
+        move |changed| {
+            if changed {
+                let _ = send.try_send(());
+            }
+        },
+    ));
+    file_question(home.path(), "first");
+    signalled(&mut receive).await;
+    std::fs::remove_dir_all(approval::queue_dir(home.path()).parent().unwrap()).unwrap();
+    signalled(&mut receive).await;
+    assert!(approval::pending_requests(home.path()).unwrap().is_empty());
+    file_question(home.path(), "second");
+    signalled(&mut receive).await;
+    assert_eq!(
+        approval::pending_requests(home.path()).unwrap()[0].id,
+        "second"
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_short_waiter_deadline_expires_without_waiting_for_the_heartbeat() {
+    let home = tempfile::tempdir().unwrap();
+    let queue = approval::prepare_listener(home.path()).unwrap();
+    let (send, mut receive) = mpsc::channel(8);
+    let (_active, subscriptions) = watch::channel(true);
+    let task = tokio::spawn(watch_queue(
+        home.path().to_owned(),
+        Duration::from_secs(60),
+        subscriptions,
+        move |changed| {
+            let _ = send.try_send(changed);
+        },
+    ));
+    assert!(!signalled(&mut receive).await);
+    let mut request = question("short");
+    request.expires_at_ms = now_ms() + 2_000;
+    std::fs::write(
+        queue.join("short.json"),
+        serde_json::to_vec(&request).unwrap(),
+    )
+    .unwrap();
+    while !signalled(&mut receive).await {}
+    assert_eq!(approval::pending_requests(home.path()).unwrap().len(), 1);
+    while !signalled(&mut receive).await {}
+    assert!(approval::pending_requests(home.path()).unwrap().is_empty());
     task.abort();
 }
 
@@ -247,10 +301,7 @@ async fn native_watch_advertises_only_while_a_prompt_is_subscribed() {
             }
         },
     ));
-    let mark = home
-        .path()
-        .join(PLUGIN_APPROVALS_DIR_NAME)
-        .join(".listening");
+    let mark = approval::queue_dir(home.path()).join(".listening");
     file_question(home.path(), "q1");
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(
@@ -289,7 +340,8 @@ async fn native_watch_advertises_only_while_a_prompt_is_subscribed() {
 #[tokio::test]
 async fn an_unavailable_queue_does_not_advertise_a_prompt_listener() {
     let home = tempfile::tempdir().unwrap();
-    let queue = home.path().join(PLUGIN_APPROVALS_DIR_NAME);
+    let queue = approval::queue_dir(home.path());
+    std::fs::create_dir_all(queue.parent().unwrap()).unwrap();
     std::fs::write(&queue, b"not a directory").unwrap();
     let (_active, subscriptions) = watch::channel(true);
     let task = tokio::spawn(watch_queue(
@@ -301,6 +353,34 @@ async fn an_unavailable_queue_does_not_advertise_a_prompt_listener() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(!queue.join(".listening").exists());
     assert!(!task.is_finished(), "the native watcher must stay alive");
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+}
+
+#[tokio::test]
+async fn an_incompatible_question_does_not_advertise_a_prompt_listener() {
+    let home = tempfile::tempdir().unwrap();
+    let queue = approval::prepare_listener(home.path()).unwrap();
+    let mut value = serde_json::to_value(question("q1")).unwrap();
+    value.as_object_mut().unwrap().remove("expires_at_ms");
+    std::fs::write(queue.join("q1.json"), serde_json::to_vec(&value).unwrap()).unwrap();
+    let (_active, subscriptions) = watch::channel(true);
+    let task = tokio::spawn(watch_queue(
+        home.path().to_owned(),
+        Duration::from_millis(20),
+        subscriptions,
+        |_| panic!("an incompatible queue must not be announced"),
+    ));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        queue
+            .join(".listening")
+            .metadata()
+            .unwrap()
+            .modified()
+            .unwrap(),
+        UNIX_EPOCH
+    );
     task.abort();
     assert!(task.await.unwrap_err().is_cancelled());
 }

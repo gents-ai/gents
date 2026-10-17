@@ -4,7 +4,7 @@ use gents_codex_protocol as codex;
 
 use gents::goal::{
     delete_goals_for_session, load_canonical_goal, refresh_goal_usage, set_goal, GoalDocument,
-    GoalSnapshot, GoalStatus,
+    GoalStatus,
 };
 
 use crate::commands::codex_shim::ShimState;
@@ -67,7 +67,7 @@ async fn enrich(state: &ShimState, mut goal: GoalDocument) -> Result<codex::Thre
     goal = load_canonical_goal(&state.node, state.node_did.as_ref(), &goal.session_id)
         .await?
         .unwrap_or(goal);
-    let snapshot = GoalSnapshot::from_document(&goal, Utc::now());
+    let snapshot = gents::goal::snapshot(&goal, Utc::now());
     Ok(codex::ThreadGoal {
         thread_id: snapshot.session_id,
         objective: snapshot.objective,

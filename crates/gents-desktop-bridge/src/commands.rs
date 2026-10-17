@@ -1,5 +1,8 @@
 #[path = "commands/chat.rs"]
 mod chat;
+#[path = "commands/goal.rs"]
+mod goal;
+pub use goal::{control_goal, session_goal};
 #[path = "commands/config.rs"]
 mod config;
 #[path = "commands/mailbox.rs"]
@@ -8,6 +11,8 @@ mod mailbox;
 pub mod mcp_health;
 #[path = "commands/peer.rs"]
 mod peer;
+#[path = "commands/session.rs"]
+mod session;
 #[path = "commands/task.rs"]
 mod task;
 #[path = "commands/tool_service.rs"]
@@ -15,7 +20,7 @@ mod tool_service;
 #[path = "commands/util.rs"]
 mod util;
 
-pub use chat::{edit_pending_queue, rename_session, send_chat_message};
+pub use chat::{edit_pending_queue, rename_session, request_output, send_chat_message};
 #[cfg_attr(test, allow(unused_imports))]
 pub use config::{
     apply_config_components, delete_agent_config, delete_backend_config, delete_context_config,
@@ -25,9 +30,11 @@ pub use config::{
     save_node_config, save_skill_config, save_tools_config, set_default_agent,
 };
 pub use mailbox::{dismiss_mailbox, list_mailbox, start_mailbox_request};
-pub use peer::{remove_peer, rename_peer, repair_p2p};
+pub use peer::{remove_peer, rename_peer, repair_p2p, request_status_enrollment};
 pub use task::{
     delete_event_source_config, run_schedule_config, run_task_config, save_event_source_config,
     save_schedule_config, save_task_config, save_trigger_config,
 };
 pub use tool_service::{save_tool_service_config, test_tool_service_config};
+
+pub use session::session_snapshot;

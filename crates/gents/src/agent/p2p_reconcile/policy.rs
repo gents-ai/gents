@@ -234,14 +234,23 @@ fn client_route_filters(
             equality_filter("node_did", owner_node_did),
         ),
     );
-    filters.insert(
-        "AgentSessionInputEdit".to_owned(),
-        combine_filters(
-            equality_filter("requester_did", requester_did),
-            equality_filter("node_did", owner_node_did),
-        ),
-    );
+    for collection in ["AgentSessionInputEdit", "AgentSessionGoalControl"] {
+        filters.insert(
+            collection.to_owned(),
+            combine_filters(
+                equality_filter("requester_did", requester_did),
+                equality_filter("node_did", owner_node_did),
+            ),
+        );
+    }
     if direction == PairingDirection::RuntimeToClient {
+        filters.insert(
+            "GoalObservation".to_owned(),
+            combine_filters(
+                equality_filter("requester_did", requester_did),
+                equality_filter("node_did", owner_node_did),
+            ),
+        );
         filters.insert(
             "NodeReadiness".to_string(),
             equality_filter("node_did", owner_node_did),

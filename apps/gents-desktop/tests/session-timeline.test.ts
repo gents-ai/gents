@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
-import { applySessionLiveDelta, sessionLiveDeltaRequest } from "../src/hooks/liveDelta";
+import {
+  applySessionLiveDelta,
+  sessionLiveDeltaRequest,
+} from "@source-inc/gents-desktop-client";
 import {
   mergeOlderSessionTimelinePage,
   mergeSessionTipSnapshot,
-} from "../src/hooks/timelinePaging";
+} from "@source-inc/gents-desktop-client";
 
 describe("live session deltas", () => {
   it("applies a verified suffix while preserving historical row identity", () => {

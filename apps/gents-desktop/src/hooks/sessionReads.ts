@@ -2,13 +2,16 @@ import type {
   DesktopApiAdapter,
   DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
-import { applySessionLiveDelta, sessionLiveDeltaRequest } from "./liveDelta";
+import {
+  applySessionLiveDelta,
+  sessionLiveDeltaRequest,
+} from "@source-inc/gents-desktop-client";
 import { acceptsAsyncResult } from "./observationOrdering";
 import { timingConfig } from "./timing";
 import {
   mergeOlderSessionTimelinePage,
   mergeSessionTipSnapshot,
-} from "./timelinePaging";
+} from "@source-inc/gents-desktop-client";
 import type { SessionLoadState } from "../lib/loadingStatus";
 import type { SelectionStore } from "./selectionStore";
 import {

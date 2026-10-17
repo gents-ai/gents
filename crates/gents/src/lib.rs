@@ -363,7 +363,7 @@ pub mod optimization;
 pub mod periodic_recovery;
 pub mod prompt;
 pub mod provider_context_reduction;
-pub(crate) mod registry;
+pub mod registry;
 pub mod rendered_request;
 mod request_admission;
 #[doc(hidden)]

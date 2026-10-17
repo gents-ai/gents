@@ -210,3 +210,8 @@ export type { Tools } from "./generated/Tools.js";
 export type { ToolServiceRegistry } from "./generated/ToolServiceRegistry.js";
 export type { AgentTargetDocument } from "./generated/AgentTargetDocument.js";
 export type { Node } from "./generated/Node.js";
+export type { SessionGoalView } from "./generated/SessionGoalView.js";
+export type { GoalControlView } from "./generated/GoalControlView.js";
+export type { GoalControlAction } from "./generated/GoalControlAction.js";
+export type { GoalControlRequest } from "./generated/GoalControlRequest.js";
+export type { GoalControlResult } from "./generated/GoalControlResult.js";

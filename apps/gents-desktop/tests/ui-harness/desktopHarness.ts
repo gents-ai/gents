@@ -827,6 +827,12 @@ export function createDesktopUiHarness(
 
   let allowedFolders: AllowedFolder[] = [];
   const adapter: DesktopApiAdapter = {
+    async fetchSessionGoal() {
+      return null;
+    },
+    async controlGoal() {
+      throw new Error("Goal controls are unavailable in this fixture.");
+    },
     async editPendingQueue() {
       throw new Error("Pending queue edits are unavailable in this fixture.");
     },

@@ -157,6 +157,12 @@ pub const AGENT_SESSION_INPUT_EDIT_NAME: &str = "AgentSessionInputEdit";
 pub const AGENT_SESSION_INPUT_EDIT: &str =
     include_str!("../schemas/agent/agent_session_input_edit.graphql");
 
+pub const AGENT_SESSION_GOAL_CONTROL_NAME: &str = "AgentSessionGoalControl";
+pub const AGENT_SESSION_GOAL_CONTROL: &str =
+    include_str!("../schemas/agent/agent_session_goal_control.graphql");
+pub const GOAL_OBSERVATION_NAME: &str = "GoalObservation";
+pub const GOAL_OBSERVATION: &str = include_str!("../schemas/agent/goal_observation.graphql");
+
 pub const ALL: &[&str] = &[
     NODE,
     AGENT,
@@ -222,6 +228,8 @@ pub const ALL: &[&str] = &[
     ENROLLMENT_OPERATOR_NONCE,
     SESSION_HYDRATION_REQUEST,
     AGENT_SESSION_INPUT_EDIT,
+    AGENT_SESSION_GOAL_CONTROL,
+    GOAL_OBSERVATION,
     EVAL_DEFINITION,
     EVAL_RUN,
     EVAL_TRIAL,
@@ -295,6 +303,8 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     ENROLLMENT_OPERATOR_NONCE_NAME,
     SESSION_HYDRATION_REQUEST_NAME,
     AGENT_SESSION_INPUT_EDIT_NAME,
+    AGENT_SESSION_GOAL_CONTROL_NAME,
+    GOAL_OBSERVATION_NAME,
     EVAL_DEFINITION_NAME,
     EVAL_RUN_NAME,
     EVAL_TRIAL_NAME,

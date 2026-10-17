@@ -1088,6 +1088,16 @@ def caseCoverage : List CoverageEntry :=
       "conformance::pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "client_observation_scope_cases"
+      "ClientObservationScopeCases"
+      "client::core::observation_scope::tests::generated_attachment_traces_keep_every_frontend_observable")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "client_settings_cases"
+      "ClientSettingsCases"
+      "client::mutations::manage::principal::editor::tests::config_editor_matches_executable_lean_contract")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
       "client_data_publication_cases"
       "ClientDataNoticeDeliveryCases"
       "client::observe::projection_store::reload_tests::generated_notice_delivery_never_regresses_watchers")
@@ -1427,6 +1437,31 @@ def caseCoverage : List CoverageEntry :=
       "GoalEditCases"
       "goal::edit::contract_tests::generated_goal_edit_cases_drive_real_transactions")
       "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_client_control_cases"
+      "GoalClientControlCases"
+      "goal::client_control::contract_tests::generated_goal_client_controls_drive_signed_commands")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_client_start_cases"
+      "GoalClientStartCases"
+      "goal::client_control::start_tests::generated_goal_starts_commit_the_session_goal_and_first_request_together")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_client_receipt_cases"
+      "GoalClientReceiptCases"
+      "goal::client_control::receipt_tests::generated_goal_receipt_traces_preserve_results_and_reject_erased_stale_intents")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_observation_cases"
+      "GoalObservationCases"
+      "goal::observation::contract_tests::generated_goal_observations_drive_signature_and_scope_validation")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "plugin_approval_cases"
+      "PluginApprovalCases"
+      "plugin::approval::contract_tests::generated_approval_traces_drive_native_queue_and_grants")
+      "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_objective_whitespace_codepoints"
       "GoalObjectiveWhitespace"

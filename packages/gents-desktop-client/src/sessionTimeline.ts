@@ -1,7 +1,4 @@
-import type {
-  DesktopSessionSnapshot,
-  RenderedTimelineItem,
-} from "@source-inc/gents-desktop-client";
+import type { DesktopSessionSnapshot, RenderedTimelineItem } from "./types.js";
 
 function timelineItemIdentity(item: RenderedTimelineItem) {
   return `${item.kind}:${item.itemKey}`;
@@ -13,17 +10,23 @@ function removeMaterializedPendingTurns(items: RenderedTimelineItem[]) {
       item.kind === "userMessage" || item.kind === "automatedInput"
         ? [
             item.inputRequestId ??
-              (item.kind === "userMessage" && item.ownsTurn ? item.requestId : null),
+              (item.kind === "userMessage" && item.ownsTurn
+                ? item.requestId
+                : null),
           ].filter((id): id is string => Boolean(id))
         : [],
     ),
   );
   return items.filter(
-    (item) => item.kind !== "pendingUserTurn" || !materialized.has(item.requestId),
+    (item) =>
+      item.kind !== "pendingUserTurn" || !materialized.has(item.requestId),
   );
 }
 
-function sameOptionalStrings(left: string[] | undefined, right: string[] | undefined) {
+function sameOptionalStrings(
+  left: string[] | undefined,
+  right: string[] | undefined,
+) {
   if (left === right) return true;
   if (!left || !right || left.length !== right.length) return false;
   return left.every((value, index) => value === right[index]);
@@ -33,7 +36,8 @@ function timelineItemUnchanged(
   previous: RenderedTimelineItem,
   next: RenderedTimelineItem,
 ) {
-  if (previous.kind !== next.kind || previous.itemKey !== next.itemKey) return false;
+  if (previous.kind !== next.kind || previous.itemKey !== next.itemKey)
+    return false;
   switch (previous.kind) {
     case "userMessage":
       return (
@@ -94,7 +98,8 @@ function timelineItemUnchanged(
       );
     case "toolGroup":
       return (
-        next.kind === "toolGroup" && JSON.stringify(previous) === JSON.stringify(next)
+        next.kind === "toolGroup" &&
+        JSON.stringify(previous) === JSON.stringify(next)
       );
   }
 }
@@ -127,22 +132,30 @@ export function mergeSessionTipSnapshot(
   const firstShown = current.timelineItems[0];
   const shownFrom = firstShown
     ? tip.timelineItems.findIndex(
-        (item) => timelineItemIdentity(item) === timelineItemIdentity(firstShown),
+        (item) =>
+          timelineItemIdentity(item) === timelineItemIdentity(firstShown),
       )
     : -1;
   const trimmed = shownFrom > 0;
   const next = {
     ...tip,
-    timelineItems: trimmed ? tip.timelineItems.slice(shownFrom) : tip.timelineItems,
+    timelineItems: trimmed
+      ? tip.timelineItems.slice(shownFrom)
+      : tip.timelineItems,
     timelinePage: trimmed
-      ? { ...tip.timelinePage, hasOlder: true, oldestItemKey: firstShown!.itemKey }
+      ? {
+          ...tip.timelinePage,
+          hasOlder: true,
+          oldestItemKey: firstShown!.itemKey,
+        }
       : tip.timelinePage,
   };
 
   const firstIncoming = next.timelineItems[0];
   const overlapIndex = firstIncoming
     ? current.timelineItems.findIndex(
-        (item) => timelineItemIdentity(item) === timelineItemIdentity(firstIncoming),
+        (item) =>
+          timelineItemIdentity(item) === timelineItemIdentity(firstIncoming),
       )
     : -1;
   const retainedPrefix =
@@ -160,7 +173,8 @@ export function mergeSessionTipSnapshot(
     overlapIndex >= 0 &&
     currentPage.oldestItemKey != null &&
     currentPage.oldestItemKey !== currentFirstVisibleKey;
-  const preserveLoadedOlderState = retainedPrefix.length > 0 || hasSyntheticOlderCursor;
+  const preserveLoadedOlderState =
+    retainedPrefix.length > 0 || hasSyntheticOlderCursor;
 
   return {
     ...next,
@@ -182,10 +196,16 @@ export function mergeOlderSessionTimelinePage(
   current: DesktopSessionSnapshot | null,
   older: DesktopSessionSnapshot,
 ): DesktopSessionSnapshot {
-  if (!current || current.sessionId !== older.sessionId || !older.timelinePage) {
+  if (
+    !current ||
+    current.sessionId !== older.sessionId ||
+    !older.timelinePage
+  ) {
     return current ?? older;
   }
-  const currentIdentities = new Set(current.timelineItems.map(timelineItemIdentity));
+  const currentIdentities = new Set(
+    current.timelineItems.map(timelineItemIdentity),
+  );
   const prefix = older.timelineItems.filter(
     (item) => !currentIdentities.has(timelineItemIdentity(item)),
   );
@@ -214,7 +234,8 @@ export function mergeOlderSessionTimelinePage(
           ? (timelineItems[0]?.itemKey ?? null)
           : older.timelinePage.oldestItemKey,
       newestItemKey: timelineItems[timelineItems.length - 1]?.itemKey ?? null,
-      queryCount: (currentPage.queryCount ?? 0) + (older.timelinePage.queryCount ?? 0),
+      queryCount:
+        (currentPage.queryCount ?? 0) + (older.timelinePage.queryCount ?? 0),
       queriedRows:
         (currentPage.queriedRows ?? 0) + (older.timelinePage.queriedRows ?? 0),
       messageQueryLimit: Math.max(

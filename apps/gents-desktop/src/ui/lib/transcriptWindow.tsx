@@ -63,10 +63,30 @@ export function TranscriptWindowProvider({
       if (!jumped) return;
       const view = scroller.getBoundingClientRect();
       const landed: Watch[] = [];
-      for (const [el, watch] of watches) {
-        if ((el as HTMLElement).dataset.windowRow !== "box") continue;
-        const box = el.getBoundingClientRect();
-        if (box.bottom > view.top && box.top < view.bottom) landed.push(watch);
+      const placeholders = scroller.querySelectorAll<HTMLElement>(
+        '[data-window-row="box"]',
+      );
+      const measured = new Map<Element, DOMRect>();
+      const bounds = (index: number) => {
+        const el = placeholders[index]!;
+        let box = measured.get(el);
+        if (!box) {
+          box = el.getBoundingClientRect();
+          measured.set(el, box);
+        }
+        return box;
+      };
+      let first = 0;
+      let end = placeholders.length;
+      while (first < end) {
+        const middle = Math.floor((first + end) / 2);
+        if (bounds(middle).bottom <= view.top) first = middle + 1;
+        else end = middle;
+      }
+      for (let index = first; index < placeholders.length; index += 1) {
+        if (bounds(index).top >= view.bottom) break;
+        const watch = watches.get(placeholders[index]!);
+        if (watch) landed.push(watch);
       }
       if (landed.length) flushSync(() => landed.forEach((watch) => watch.near(true)));
     };
@@ -103,6 +123,7 @@ export function TranscriptWindowProvider({
   );
 }
 
+/** Placeholder rows must stay in transcript flow without overlapping; jump recovery searches their DOM order. */
 export function WindowedRow({
   rowKey,
   drawn: alwaysDrawn = false,

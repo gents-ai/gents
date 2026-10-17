@@ -262,7 +262,14 @@ fn response_composite_commits(
     response: &QueryResponse,
     field: &str,
 ) -> Result<Vec<CompositeCommit>> {
-    let Some(value) = response.data.as_ref().and_then(|data| data.get(field)) else {
+    composite_commits_at(
+        response.data.as_ref().and_then(|data| data.get(field)),
+        field,
+    )
+}
+
+fn composite_commits_at(value: Option<&Value>, field: &str) -> Result<Vec<CompositeCommit>> {
+    let Some(value) = value else {
         return Ok(Vec::new());
     };
     let rows = value
@@ -326,7 +333,27 @@ pub async fn newest_document_composite_commit(
     doc_id: &str,
     operation: &str,
 ) -> Result<Option<CompositeCommit>> {
-    let query = format!(
+    let query = newest_composite_query(doc_id);
+    let response = graphql_with_transaction_retry(node, &query, operation).await?;
+    let commits = response_composite_commits(&response, "_commits")?;
+    unique_newest_composite_commit(commits, operation)
+}
+
+pub async fn newest_document_composite_commit_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    doc_id: &str,
+    operation: &str,
+) -> Result<Option<CompositeCommit>> {
+    let response = txn.execute(&newest_composite_query(doc_id)).await?;
+    let commits = composite_commits_at(
+        response.get("data").and_then(|data| data.get("_commits")),
+        "_commits",
+    )?;
+    unique_newest_composite_commit(commits, operation)
+}
+
+fn newest_composite_query(doc_id: &str) -> String {
+    format!(
         r#"query {{
             _commits(
                 docID: "{}"
@@ -337,10 +364,7 @@ pub async fn newest_document_composite_commit(
             ) {{ cid height fieldName }}
         }}"#,
         escape_graphql_string(doc_id),
-    );
-    let response = graphql_with_transaction_retry(node, &query, operation).await?;
-    let commits = response_composite_commits(&response, "_commits")?;
-    unique_newest_composite_commit(commits, operation)
+    )
 }
 
 /// Load a document's DefraDB-native composite versions, newest first.

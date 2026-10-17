@@ -7,7 +7,7 @@ import {
   type RefObject,
 } from "react";
 import type { PendingQueueEntryView } from "@source-inc/gents-desktop-client";
-import { rewriteEdit, type QueueEdit } from "../pendingQueue";
+import { rewriteEdit, type QueueEdit } from "@source-inc/gents-desktop-client";
 
 export type ComposerEdit = {
   editingDocId: string | null;

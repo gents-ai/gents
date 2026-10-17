@@ -98,11 +98,11 @@ def clientTranscriptCollections : List String :=
   transcriptCollections ++ ["MailboxItem"]
 
 def clientOwnerProjectionCollections : List String :=
-  ["NodeReadiness"]
+  ["NodeReadiness", "GoalObservation"]
 
 def clientToRuntimeCollections : List String :=
   clientTranscriptCollections ++
-    ["PeerEndpoint", "SessionHydrationRequest", "AgentSessionInputEdit"]
+    ["PeerEndpoint", "SessionHydrationRequest", "AgentSessionInputEdit", "AgentSessionGoalControl"]
 
 def clientControlPlaneCollections : List String :=
   agentConfigCollections ++
@@ -119,7 +119,7 @@ def clientRouteCollections : RouteDirection → List String
 
 def machineCollections : List String :=
   conversationCollections ++
-    ["MailboxItem", "SessionHydrationRequest", "AgentSessionInputEdit", "NodeDirectoryEntry"]
+    ["MailboxItem", "SessionHydrationRequest", "AgentSessionInputEdit", "AgentSessionGoalControl", "NodeDirectoryEntry"]
 
 def agentTargetCallerCollections : List String :=
   ["AgentRequest"]
@@ -143,6 +143,7 @@ def machineRules : List CollectionRule :=
     [ { collection := "MailboxItem", field := "requester_did", source := .peerDid }
     , { collection := "SessionHydrationRequest", field := "requester_did", source := .peerDid }
     , { collection := "AgentSessionInputEdit", field := "requester_did", source := .peerDid }
+    , { collection := "AgentSessionGoalControl", field := "requester_did", source := .peerDid }
     , { collection := "NodeDirectoryEntry", field := "source_did", source := .homeDid } ]
 
 def agentTargetCallerRules : List CollectionRule :=

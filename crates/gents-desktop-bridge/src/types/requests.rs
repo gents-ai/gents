@@ -82,6 +82,9 @@ pub struct ChatSendRequest {
     pub content: String,
     #[serde(default)]
     #[ts(optional = nullable)]
+    pub delivery: Option<gents_protocol::request_input::QueueDelivery>,
+    #[serde(default)]
+    #[ts(optional = nullable)]
     pub caused_by_source_doc_id: Option<String>,
     #[serde(default)]
     #[ts(optional = nullable)]

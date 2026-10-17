@@ -22,3 +22,33 @@ pub async fn rename_peer(core: &ClientCore, peer_id: String, label: String) -> R
     core.rename_peer(&peer_id, &label).await?;
     Ok(())
 }
+
+pub async fn request_status_enrollment(
+    core: &ClientCore,
+    request: crate::types::EnrollmentStatusRequest,
+) -> Result<crate::types::EnrollmentRequestView, crate::error::BridgeError> {
+    use crate::error::BridgeError;
+    use crate::types::EnrollmentRequestView;
+    use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
+    let address = request.server_address.trim();
+    if address.is_empty() {
+        return Err(BridgeError::untyped("server_address is required"));
+    }
+    let status = fetch_runtime_connection_payload(address)
+        .await
+        .map_err(BridgeError::classify_transport_error)?;
+    let server_label = status
+        .get("node_name")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .map(str::to_owned);
+    core.request_status_enrollment_with_label(&status, server_label.as_deref())
+        .await
+        .map(|result| {
+            let mut view = EnrollmentRequestView::from(result);
+            view.server_label = server_label;
+            view
+        })
+        .map_err(|error| BridgeError::untyped(format!("{error:#}")))
+}

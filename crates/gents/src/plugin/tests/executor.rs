@@ -630,7 +630,7 @@ mod bound {
         let work = fx.root.join("work");
         let target = fx.root.join("outside/in.json");
         let home = fx.home.path().to_owned();
-        let queue = home.join(crate::home::PLUGIN_APPROVALS_DIR_NAME);
+        let queue = approval::queue_dir(&home);
         let call = scope_request_tool_execution_with_workspace_overlay(
             None,
             tokio_util::sync::CancellationToken::new(),

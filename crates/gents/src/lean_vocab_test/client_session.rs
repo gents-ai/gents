@@ -58,6 +58,7 @@ pub(crate) struct LeanSessionTurnCase {
     pub(crate) rows: Vec<LeanSessionTurnRow>,
     pub(crate) expected_read_docs: Vec<usize>,
     pub(crate) expected_turn_doc: usize,
+    pub(crate) expected_answer_doc: usize,
     pub(crate) expected_queued_docs: Vec<usize>,
     pub(crate) expected_folded_requests: Vec<usize>,
 }

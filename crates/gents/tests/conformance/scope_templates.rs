@@ -196,7 +196,7 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         "Trigger",
         "EventSource",
     ];
-    const OWNER_PROJECTION: &[&str] = &["NodeReadiness"];
+    const OWNER_PROJECTION: &[&str] = &["NodeReadiness", "GoalObservation"];
     let runtime_to_client = client_to_runtime
         .iter()
         .copied()
@@ -283,6 +283,21 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         PairingDirection::RuntimeToClient,
         requester,
         owner,
+    );
+    for filters in [&outbound, &returning] {
+        assert_and_eq_filter(
+            filters
+                .get("AgentSessionGoalControl")
+                .expect("goal control filter"),
+            &[("requester_did", requester), ("node_did", owner)],
+        );
+    }
+    assert!(!outbound.contains_key("GoalObservation"));
+    assert_and_eq_filter(
+        returning
+            .get("GoalObservation")
+            .expect("goal observation filter"),
+        &[("requester_did", requester), ("node_did", owner)],
     );
     assert_and_eq_filter(
         returning

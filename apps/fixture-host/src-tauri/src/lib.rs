@@ -25,6 +25,7 @@ fn bridge_config() -> BridgeConfig {
             runtime_admin: false,
         },
         managed_server: ManagedServerPolicy::Disabled,
+        client_host: false,
         store_key_custody: gents_desktop_bridge::StoreKeyCustodyChoice::default(),
     }
 }

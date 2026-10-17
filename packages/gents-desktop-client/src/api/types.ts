@@ -1,5 +1,8 @@
 import type { PendingQueueEditRequest } from "../generated/PendingQueueEditRequest.js";
 import type { PendingQueueEditResult } from "../generated/PendingQueueEditResult.js";
+import type { GoalControlRequest } from "../generated/GoalControlRequest.js";
+import type { GoalControlResult } from "../generated/GoalControlResult.js";
+import type { SessionGoalView } from "../generated/SessionGoalView.js";
 import type { OauthProvider } from "../transport.js";
 import type { ConfigComponentsApplyRequest } from "../generated/ConfigComponentsApplyRequest.js";
 import type { ConfigComponentsPatchRequest } from "../generated/ConfigComponentsPatchRequest.js";
@@ -26,6 +29,7 @@ import type {
   AgentDeleteRequest,
   ContextDeleteRequest,
   AgentSaveRequest,
+  ChatSendRequest,
   ChatSendResult,
   CodexLoginResult,
   ClaudeLoginResult,
@@ -45,7 +49,6 @@ import type {
   InitSummary,
   InterruptRequestResult,
   MailboxItemView,
-  MailboxQuestionAnswer,
   MCPServiceHealthView,
   McpServiceProbeResult,
   NetworkStatusView,
@@ -95,6 +98,11 @@ export type ManagedServerAuthorityInput = {
 };
 
 export type DesktopApiAdapter = {
+  fetchSessionGoal: (
+    nodeDid: string,
+    sessionId: string,
+  ) => Promise<SessionGoalView | null>;
+  controlGoal: (request: GoalControlRequest) => Promise<GoalControlResult>;
   fetchDesktopSnapshot: () => Promise<DesktopClientSnapshot>;
   initLocalStandardRuntime: (request: {
     label: string;
@@ -174,15 +182,7 @@ export type DesktopApiAdapter = {
     baseReasoningByteLen: number;
     baseReasoningHash: string;
   }) => Promise<SessionLiveDeltaView | null>;
-  sendChatMessage: (request: {
-    nodeDid: string;
-    agentId?: string | null;
-    sessionId?: string | null;
-    content: string;
-    causedBySourceDocId?: string | null;
-    answer?: MailboxQuestionAnswer | null;
-    cwd?: string | null;
-  }) => Promise<ChatSendResult>;
+  sendChatMessage: (request: ChatSendRequest) => Promise<ChatSendResult>;
   editPendingQueue: (
     request: PendingQueueEditRequest,
   ) => Promise<PendingQueueEditResult>;

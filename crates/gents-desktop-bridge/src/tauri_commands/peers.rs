@@ -45,27 +45,7 @@ pub async fn desktop_peer_enroll_status(
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
-    let address = request.server_address.trim();
-    if address.is_empty() {
-        return Err(BridgeError::untyped("server_address is required"));
-    }
-    let status = fetch_runtime_connection_payload(address)
-        .await
-        .map_err(BridgeError::classify_transport_error)?;
-    let server_label = status
-        .get("node_name")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|label| !label.is_empty())
-        .map(str::to_owned);
-    core.request_status_enrollment_with_label(&status, server_label.as_deref())
-        .await
-        .map(|result| {
-            let mut view = EnrollmentRequestView::from(result);
-            view.server_label = server_label;
-            view
-        })
-        .map_err(|error| BridgeError::untyped(format!("{error:#}")))
+    crate::commands::request_status_enrollment(&core, request).await
 }
 
 #[tauri::command]

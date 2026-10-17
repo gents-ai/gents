@@ -8,22 +8,11 @@ use tauri::async_runtime::{spawn, JoinHandle};
 use tauri::{AppHandle, Emitter, Runtime, State};
 use tokio::sync::watch;
 
-use crate::config::{
-    AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, NodeHomePolicy,
-};
+use crate::config::{BootstrapPolicy, BridgeConfig, HomePolicy, NodeHomePolicy};
 use crate::snapshot::projection::SnapshotGrants;
 use crate::types::ClientUpdateEvent;
 
-#[derive(Debug, Clone)]
-pub struct ResolvedBridgePolicy {
-    pub desktop_paths: DesktopPaths,
-    pub node_home: Option<PathBuf>,
-    pub bootstrap: BootstrapPolicy,
-    pub app_meta: AppMeta,
-    pub snapshot_grants: SnapshotGrants,
-    pub managed_server: ManagedServerPolicy,
-    pub store_key_custody: gents::store_key::StoreKeyCustodyChoice,
-}
+pub use crate::config::ResolvedBridgePolicy;
 
 #[derive(Debug, Clone)]
 pub enum ClientStartProgress {
@@ -39,174 +28,10 @@ pub struct DesktopAppState {
     pub managed_server_lifecycle: tokio::sync::Mutex<()>,
     pub policy: ResolvedBridgePolicy,
     pub managed_server: tokio::sync::Mutex<ManagedServerState>,
-    pub pending_oauth_credentials: PendingOAuthCredentials,
+    pub pending_oauth_credentials: Arc<PendingOAuthCredentials>,
 }
 
-type CredentialKey = (String, String, String);
-
-pub struct IssuedOAuthCredential {
-    sequence: u64,
-    credential: gents::oauth_credential::OAuthCredential,
-}
-
-impl IssuedOAuthCredential {
-    pub fn credential(&self) -> &gents::oauth_credential::OAuthCredential {
-        &self.credential
-    }
-
-    fn key(&self) -> CredentialKey {
-        let identity = [
-            &self.credential.provider_account_key,
-            &self.credential.account_id,
-        ]
-        .into_iter()
-        .flatten()
-        .map(|value| value.trim())
-        .find(|value| !value.is_empty())
-        .unwrap_or_default();
-        (
-            self.credential.node_did.clone(),
-            self.credential.provider.clone(),
-            identity.to_owned(),
-        )
-    }
-}
-
-pub enum CredentialSave<T> {
-    Saved(T),
-    Superseded,
-    Failed(anyhow::Error),
-}
-
-#[derive(Default)]
-struct CredentialSlot {
-    write_gate: Arc<tokio::sync::Mutex<()>>,
-    newest: u64,
-    held: Option<IssuedOAuthCredential>,
-}
-
-/// Issued-but-unsaved OAuth credentials, keyed by node DID and credential
-/// provider. Never serialized, written to disk, or returned to the webview.
-/// Saves and retries for one key run one at a time in issuance order, so an
-/// older credential can neither overwrite a newer one nor discard a newer
-/// held one.
-#[derive(Default)]
-pub struct PendingOAuthCredentials {
-    issued: std::sync::atomic::AtomicU64,
-    slots: Mutex<std::collections::HashMap<CredentialKey, CredentialSlot>>,
-}
-
-impl PendingOAuthCredentials {
-    pub fn issue(
-        &self,
-        credential: gents::oauth_credential::OAuthCredential,
-    ) -> IssuedOAuthCredential {
-        IssuedOAuthCredential {
-            sequence: self
-                .issued
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-                + 1,
-            credential,
-        }
-    }
-
-    fn slots(
-        &self,
-    ) -> std::sync::MutexGuard<'_, std::collections::HashMap<CredentialKey, CredentialSlot>> {
-        self.slots
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    fn write_gate(&self, key: &CredentialKey) -> Arc<tokio::sync::Mutex<()>> {
-        self.slots()
-            .entry(key.clone())
-            .or_default()
-            .write_gate
-            .clone()
-    }
-
-    pub async fn save<T, F, Fut>(
-        &self,
-        issued: IssuedOAuthCredential,
-        write: F,
-    ) -> CredentialSave<T>
-    where
-        F: FnOnce(gents::oauth_credential::OAuthCredential) -> Fut,
-        Fut: std::future::Future<Output = anyhow::Result<T>>,
-    {
-        let key = issued.key();
-        let gate = self.write_gate(&key);
-        let _ordered = gate.lock().await;
-        {
-            let mut slots = self.slots();
-            let slot = slots.entry(key.clone()).or_default();
-            if issued.sequence < slot.newest {
-                return CredentialSave::Superseded;
-            }
-            slot.newest = issued.sequence;
-        }
-        let written = write(issued.credential.clone()).await;
-        let mut slots = self.slots();
-        let slot = slots.entry(key).or_default();
-        match written {
-            Ok(value) => {
-                slot.held = None;
-                CredentialSave::Saved(value)
-            }
-            Err(error) => {
-                slot.held = Some(issued);
-                CredentialSave::Failed(error)
-            }
-        }
-    }
-
-    pub async fn retry<T, F, Fut>(
-        &self,
-        node_did: &str,
-        provider: &str,
-        write: F,
-    ) -> Option<(gents::oauth_credential::OAuthCredential, anyhow::Result<T>)>
-    where
-        F: FnOnce(gents::oauth_credential::OAuthCredential) -> Fut,
-        Fut: std::future::Future<Output = anyhow::Result<T>>,
-    {
-        let key = self
-            .slots()
-            .iter()
-            .filter(|((node, held_provider, _), slot)| {
-                node == node_did && held_provider == provider && slot.held.is_some()
-            })
-            .max_by_key(|(_, slot)| slot.held.as_ref().map(|held| held.sequence))
-            .map(|(key, _)| key.clone())?;
-        let gate = self.write_gate(&key);
-        let _ordered = gate.lock().await;
-        let credential = self
-            .slots()
-            .get(&key)?
-            .held
-            .as_ref()
-            .map(|held| held.credential.clone())?;
-        let written = write(credential.clone()).await;
-        if written.is_ok() {
-            if let Some(slot) = self.slots().get_mut(&key) {
-                slot.held = None;
-            }
-        }
-        Some((credential, written))
-    }
-
-    pub fn held_for(&self, node_did: &str) -> Vec<gents::oauth_credential::OAuthCredential> {
-        let mut held: Vec<_> = self
-            .slots()
-            .iter()
-            .filter(|((node, _, _), _)| node == node_did)
-            .filter_map(|(_, slot)| slot.held.as_ref().map(|held| held.credential.clone()))
-            .collect();
-        held.sort_by(|left, right| left.provider.cmp(&right.provider));
-        held
-    }
-}
+pub use crate::accounts::{CredentialSave, IssuedOAuthCredential, PendingOAuthCredentials};
 
 #[derive(Default)]
 pub struct ManagedServerState {
@@ -223,17 +48,24 @@ pub struct ManagedServerState {
     pub incompatible_store: Option<gents::storage_backend::IncompatibleStore>,
 }
 
+pub struct ProviderLoginWait {
+    pub(crate) window: String,
+    pub(crate) cancel: tokio_util::sync::CancellationToken,
+}
+
 pub struct DesktopBridge {
     pub core: Option<Arc<ClientCore>>,
+    #[cfg(any(unix, windows))]
+    pub(crate) client_host: Option<crate::host::ClientHostService>,
     /// Only native destruction retires a window selection; late IPC cannot
     /// register it again.
     selected_nodes_by_window: BTreeMap<String, Option<String>>,
     pub updates_task: Option<JoinHandle<()>>,
     pub approvals_watch_task: Option<JoinHandle<()>>,
     pub(crate) approvals_prompt_subscriptions: crate::approvals_watch::PromptSubscriptions,
-    pub codex_login_cancel: Option<gents_chatgpt_login::ShutdownHandle>,
-    pub claude_login_cancel: Option<gents_claude_login::ShutdownHandle>,
-    pub grok_login_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    pub codex_login_cancel: Option<ProviderLoginWait>,
+    pub claude_login_cancel: Option<ProviderLoginWait>,
+    pub grok_login_cancel: Option<ProviderLoginWait>,
     /// Shared progress for an in-flight client start; waiters must not open a
     /// second node.
     pub start_inflight: Option<watch::Sender<ClientStartProgress>>,
@@ -256,9 +88,7 @@ impl DesktopBridge {
     fn apply_window_selection(&self) {
         if let Some(core) = &self.core {
             let selected = self.selected_node_did();
-            if core.selected_node_did() != selected {
-                core.set_selected_node_did(selected);
-            }
+            core.set_selected_node_did(selected);
         }
     }
 
@@ -285,6 +115,8 @@ impl DesktopAppState {
         Self {
             bridge: Mutex::new(DesktopBridge {
                 core: None,
+                #[cfg(any(unix, windows))]
+                client_host: None,
                 selected_nodes_by_window: BTreeMap::new(),
                 updates_task: None,
                 approvals_watch_task: None,
@@ -300,7 +132,7 @@ impl DesktopAppState {
             managed_server_lifecycle: tokio::sync::Mutex::new(()),
             policy,
             managed_server: tokio::sync::Mutex::new(ManagedServerState::default()),
-            pending_oauth_credentials: PendingOAuthCredentials::default(),
+            pending_oauth_credentials: Arc::default(),
         }
     }
 
@@ -327,6 +159,18 @@ impl DesktopAppState {
         }
         let mut bridge = self.bridge.lock().expect("desktop bridge lock poisoned");
         bridge.approvals_prompt_subscriptions.remove_window(label);
+        for wait in [
+            &bridge.codex_login_cancel,
+            &bridge.claude_login_cancel,
+            &bridge.grok_login_cancel,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if wait.window == label {
+                wait.cancel.cancel();
+            }
+        }
         if bridge.selected_nodes_by_window.remove(label).is_some() {
             bridge.apply_window_selection();
         }
@@ -406,6 +250,7 @@ pub fn resolve_policy(
         app_meta: config.app_meta.clone(),
         snapshot_grants: config.snapshot_grants,
         managed_server: config.managed_server,
+        client_host: config.client_host,
         store_key_custody: config.store_key_custody,
     })
 }

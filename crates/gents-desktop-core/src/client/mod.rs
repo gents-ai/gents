@@ -13,11 +13,13 @@ mod sync_projection;
 
 pub use collection_resolver::CollectionResolver;
 pub use core::{
-    ClientCore, ClientCoreOptions, ClientPeerStatus, ClientRouteStatus, ClientSyncStateSnapshot,
-    EnrollmentRequestResult, P2PHealth, P2PHealthStatus, PairingCollectionStatus,
-    RefreshedRequestProjection, RuntimeSchemaObservation, STUCK_THRESHOLD_ATTEMPTS,
+    ClientCore, ClientCoreOptions, ClientObservationAttachment, ClientPeerStatus,
+    ClientRouteStatus, ClientSyncStateSnapshot, EnrollmentRequestResult, P2PHealth,
+    P2PHealthStatus, PairingCollectionStatus, RefreshedRequestProjection, RuntimeSchemaObservation,
+    STUCK_THRESHOLD_ATTEMPTS,
 };
 pub use gents::P2pSyncStatusSnapshot;
+pub use mutations::{ConfigEditorDocument, ConfigEditorRevision};
 pub use mutations::{PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
 pub use observe::{
     ObservedStore, ObserverHandle, ObserverMetricsSnapshot, StoreProjectionRevision,
@@ -40,7 +42,7 @@ pub use query::{
 };
 pub use schema::subscribed_collection_names;
 pub use store::{
-    folded_requests, queued_behind_turn, session_turn_request, ClientStore, ClientStoreRows,
-    TaskRecentRuns, TranscriptView,
+    folded_requests, queued_behind_turn, request_answer_owner, session_turn_request, ClientStore,
+    ClientStoreRows, TaskRecentRuns, TranscriptView,
 };
 pub use sync_projection::{project_sync_health, SyncHealth, SyncHealthState};
