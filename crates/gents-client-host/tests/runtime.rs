@@ -93,6 +93,12 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .context("native binary directory")?
         .join(format!("gents{}", std::env::consts::EXE_SUFFIX));
     ensure!(cli.is_file(), "build gents-cli before running runtime-e2e");
+    if matches!(journey, Journey::Editor) {
+        std::fs::write(
+            root.join("AGENTS.md"),
+            "# Project instructions fixture\nUse the current editor workspace.\n",
+        )?;
+    }
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     let (emitted, _) = tokio::sync::watch::channel(None);
     let provider_gate = gate.clone();
@@ -497,6 +503,18 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         );
     }
     if matches!(journey, Journey::Editor) {
+        let projection = read_session(&mut client, &mut id, node_did, session).await?;
+        ensure!(
+            projection["messages"]
+                .as_array()
+                .is_some_and(|messages| messages.iter().any(|message| {
+                    message["runtimeControl"] == true
+                        && message["displayContent"]
+                            .as_str()
+                            .is_some_and(|text| text.contains("Project instructions fixture"))
+                })),
+            "the fixture did not preserve its native workspace instructions"
+        );
         let completion_path = root.join("finish-provider");
         let completion_gate = Arc::clone(&gate);
         let _completion = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
@@ -575,6 +593,26 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         let status = status.context("editor journey timed out")??;
         ensure!(status.success(), "editor journey exited with {status}");
         configured_actions::verify_editor_settings(&access, node_did, agent_id).await?;
+        if std::env::var_os("GENTS_VSCODE_REMOTE_FIXTURE").is_none() {
+            let submitted = access.execute(&format!(
+                r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}}, content: {{_eq: "Check this repository"}} }}) {{ input }} }}"#,
+                gents::graphql::escape_graphql_string(node_did),
+            )).await?;
+            let rows = submitted["data"]["AgentRequest"]
+                .as_array()
+                .context("editor workspace request")?;
+            ensure!(
+                rows.len() == 1,
+                "the editor must submit one workspace request"
+            );
+            let cwd = rows[0]["input"]["cwd"]
+                .as_str()
+                .context("the editor request has no workspace folder")?;
+            ensure!(
+                std::fs::canonicalize(cwd)? == std::fs::canonicalize(root)?,
+                "the editor request used a different project folder"
+            );
+        }
         ensure!(tokio::time::timeout(Duration::from_secs(5), approval_wait)
             .await
             .context("the editor's approval did not reach the waiting call")???);
