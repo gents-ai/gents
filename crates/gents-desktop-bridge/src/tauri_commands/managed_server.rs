@@ -4,9 +4,8 @@ use crate::local_pairing::{
     select_managed_request, PairingApproval,
 };
 use crate::local_pairing::{
-    ensure_managed_runtime_pairing, fetch_managed_runtime_status, observe_managed_runtime_schema,
-    retry_managed_pairing, ManagedPairingTarget, PairingFailure, MANAGED_PAIRING_ATTEMPTS,
-    MANAGED_PAIRING_RETRY_DELAY,
+    ensure_managed_runtime_pairing, observe_managed_runtime_schema, retry_managed_pairing,
+    ManagedPairingTarget, PairingFailure, MANAGED_PAIRING_ATTEMPTS, MANAGED_PAIRING_RETRY_DELAY,
 };
 use gents_desktop_core::home_reset::*;
 use gents_desktop_core::preference::{ReviewedHome, StoredManagedServer, MANAGED_SERVER_CONFIG};
