@@ -594,6 +594,24 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                     None,
                 ),
             };
+            let runtime_context = gents_protocol::output::origin::resolve_origin(
+                &observed_messages,
+                denied_headers,
+                &row.doc_id,
+                &row.message.node_did,
+                row.message.requester_did.as_deref(),
+            )
+            .ok()
+            .is_some_and(|origin| {
+                origin.message.role == gents_protocol::output::MessageRole::User
+                    && origin
+                        .message
+                        .request_doc_id
+                        .as_deref()
+                        .is_some_and(|doc_id| {
+                            origin.message.message_key == format!("authored:{doc_id}:context")
+                        })
+            });
             let presentation = reconstructed.as_ref().map(present_message);
             let input_text = match reconstructed.as_ref() {
                 Some(gents_protocol::message::Message::User { content }) => {
@@ -653,13 +671,18 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 reconstruction_state,
                 reconstruction_error,
                 denied_dependency_doc_id,
-                runtime_control: message_is_runtime_control(row, &requests_by_doc_id),
+                runtime_control: runtime_context
+                    || message_is_runtime_control(row, &requests_by_doc_id),
                 input_request_id: row.message.request_doc_id.as_ref().and_then(|doc| {
                     input_owners
                         .get(&(doc.clone(), row.message.message_key.clone()))
                         .map(|id| (*id).to_owned())
                 }),
-                origin: message_origin(store, row, &requests_by_doc_id),
+                origin: if runtime_context {
+                    None
+                } else {
+                    message_origin(store, row, &requests_by_doc_id)
+                },
                 input_text,
                 timestamp: Some(row.message.created_at.clone()),
             }
