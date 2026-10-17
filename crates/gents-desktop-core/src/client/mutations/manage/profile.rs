@@ -1,13 +1,87 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 #[cfg(test)]
 use defra_node::EmbeddedNode;
 use gents::collection::Collection;
-#[cfg(test)]
-use gents::config_client::{apply_desired_state_plan, read_desired_state_record_in_txn};
+use gents::config_client::{
+    apply_desired_state_plan, list_inference_profiles_in_txn, read_desired_state_record_in_txn,
+};
 use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::InferenceProfile;
 #[cfg(test)]
 use std::sync::Arc;
+
+/// Profiles can be shared by other agents and compaction. Selecting a model
+/// replaces only this agent's binding, preserving those consumers and all
+/// unrelated configuration in the same transaction.
+pub async fn select_agent_model_on(
+    access: &ConfigAccess,
+    node_did: &str,
+    agent_id: &str,
+    backend_id: &str,
+    model_name: &str,
+    reasoning_effort: Option<gents::config::ReasoningEffort>,
+) -> Result<InferenceProfile> {
+    anyhow::ensure!(!model_name.trim().is_empty(), "Choose a model.");
+    access
+        .transact_write("desktop.agent.model", |txn| {
+            Box::pin(async move {
+                let (_, mut agent) =
+                    read_desired_state_record_in_txn(txn, Collection::Agent, node_did, agent_id)
+                        .await?
+                        .context("The selected agent no longer exists.")?;
+                let profile_id = agent["inference_profile_id"]
+                    .as_str()
+                    .context("The selected agent has no inference profile.")?;
+                let (_, value) = read_desired_state_record_in_txn(
+                    txn,
+                    Collection::InferenceProfile,
+                    node_did,
+                    profile_id,
+                )
+                .await?
+                .context("The agent's inference profile is unavailable.")?;
+                let current: InferenceProfile = serde_json::from_value(value)?;
+                let mut selected = current.clone();
+                selected.backend_id = backend_id.to_owned();
+                selected.model_name = model_name.trim().to_owned();
+                selected.reasoning_effort = reasoning_effort;
+                if selected == current {
+                    return Ok(current);
+                }
+                let profiles = list_inference_profiles_in_txn(txn, node_did).await?;
+                let reusable = profiles.into_iter().find(|candidate| {
+                    let mut comparable = selected.clone();
+                    comparable.profile_id = candidate.profile_id.clone();
+                    comparable.display_name = candidate.display_name.clone();
+                    comparable.description = candidate.description.clone();
+                    comparable == *candidate
+                });
+                let mut documents = Vec::new();
+                if let Some(existing) = reusable {
+                    selected = existing;
+                } else {
+                    selected.profile_id = format!("model-{}", uuid::Uuid::new_v4());
+                    selected.display_name = Some(selected.model_name.clone());
+                    selected.description = None;
+                    let value = serde_json::to_value(&selected)?;
+                    documents.push(DesiredStateApplyDocument {
+                        collection: Collection::InferenceProfile,
+                        add: value.clone(),
+                        update: value,
+                    });
+                }
+                agent["inference_profile_id"] = selected.profile_id.clone().into();
+                documents.push(DesiredStateApplyDocument {
+                    collection: Collection::Agent,
+                    add: agent.clone(),
+                    update: agent,
+                });
+                apply_desired_state_plan(txn, &DesiredStateApplyPlan::new(documents)?).await?;
+                Ok(selected)
+            })
+        })
+        .await
+}
 
 pub async fn upsert_inference_profile_on(
     access: &ConfigAccess,
@@ -79,6 +153,101 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn model_selection_preserves_shared_consumers_and_reuses_profiles() -> Result<()> {
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        gents::ensure_runtime_schemas(&node).await?;
+        let owner = "did:test:model-selection";
+        gents::ensure_node(&node, owner).await?;
+        let access = ConfigAccess::local(node.clone());
+        let backend = serde_json::from_value(json!({
+            "node_did":owner,"backend_id":"backend","name":"Backend",
+            "provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1",
+            "auth":{"kind":"unauthenticated"}
+        }))?;
+        gents::config_client::write_inference_backend_document(&access, &backend).await?;
+        let original: InferenceProfile = serde_json::from_value(json!({
+            "node_did":owner,"profile_id":"shared","backend_id":"backend",
+            "model_name":"original","reasoning_effort":"high",
+            "context_window":64000,"max_output_tokens":100,"tags":["retained"]
+        }))?;
+        upsert_inference_profile_on(&access, &original).await?;
+        for id in ["first", "second"] {
+            let agent = serde_json::from_value(json!({
+                "node_did":owner,"agent_id":id,"inference_profile_id":"shared",
+                "display_name":id,"tags":["preserved"]
+            }))?;
+            super::super::upsert_agent_on(&access, &agent).await?;
+        }
+        let selected =
+            select_agent_model_on(&access, owner, "first", "backend", "replacement", None).await?;
+        assert_ne!(selected.profile_id, original.profile_id);
+        assert_eq!(selected.context_window, original.context_window);
+        assert_eq!(selected.max_output_tokens, original.max_output_tokens);
+        assert_eq!(selected.tags, original.tags);
+        assert_eq!(
+            select_agent_model_on(&access, owner, "first", "backend", "replacement", None,).await?,
+            selected
+        );
+        assert!(select_agent_model_on(
+            &access,
+            owner,
+            "first",
+            "missing-backend",
+            "rejected",
+            None,
+        )
+        .await
+        .is_err());
+        assert!(select_agent_model_on(
+            &access,
+            "did:test:other",
+            "first",
+            "backend",
+            "replacement",
+            None,
+        )
+        .await
+        .is_err());
+        access
+            .transact_write("test.model.inspect", |txn| {
+                let selected = &selected;
+                let original = &original;
+                Box::pin(async move {
+                    let profiles = list_inference_profiles_in_txn(txn, owner).await?;
+                    assert_eq!(profiles.len(), 2);
+                    assert!(profiles.contains(original));
+                    for (id, expected) in [
+                        ("first", selected.profile_id.as_str()),
+                        ("second", "shared"),
+                    ] {
+                        let (_, agent) =
+                            read_desired_state_record_in_txn(txn, Collection::Agent, owner, id)
+                                .await?
+                                .unwrap();
+                        assert_eq!(agent["inference_profile_id"], expected);
+                        assert_eq!(agent["display_name"], id);
+                        assert_eq!(agent["tags"], json!(["preserved"]));
+                    }
+                    Ok(())
+                })
+            })
+            .await?;
+        assert_eq!(
+            select_agent_model_on(
+                &access,
+                owner,
+                "first",
+                "backend",
+                "original",
+                Some(gents::config::ReasoningEffort::High),
+            )
+            .await?,
+            original
+        );
+        Ok(())
+    }
 
     #[tokio::test]
     async fn profile_save_validates_bounds_and_resolves_backend_in_exact_owner_scope() -> Result<()>
