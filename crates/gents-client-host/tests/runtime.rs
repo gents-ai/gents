@@ -614,34 +614,31 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         let status = status.context("editor journey timed out")??;
         ensure!(status.success(), "editor journey exited with {status}");
         configured_actions::verify_editor_settings(&access, node_did, agent_id).await?;
-        if std::env::var_os("GENTS_VSCODE_REMOTE_FIXTURE").is_none() {
-            let submitted = access.execute(&format!(
-                r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ content input }} }}"#,
-                gents::graphql::escape_graphql_string(node_did),
-            )).await?;
-            let rows = submitted["data"]["AgentRequest"]
-                .as_array()
-                .context("editor workspace request")?
-                .iter()
-                .filter(|row| {
-                    row["content"]
-                        .as_str()
-                        .is_some_and(|content| content.starts_with("Check this repository"))
-                })
-                .collect::<Vec<_>>();
-            ensure!(
-                rows.len() == 1,
-                "the editor must submit one workspace request: {submitted}"
-            );
-            let cwd = rows[0]["input"]["cwd"]
-                .as_str()
-                .context("the editor request has no workspace folder")?;
-            ensure!(
-                std::fs::canonicalize(cwd)?
-                    == std::fs::canonicalize(root.join("second-workspace"))?,
-                "the editor request used a different project folder"
-            );
-        }
+        let submitted = access.execute(&format!(
+            r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ content input }} }}"#,
+            gents::graphql::escape_graphql_string(node_did),
+        )).await?;
+        let rows = submitted["data"]["AgentRequest"]
+            .as_array()
+            .context("editor workspace request")?
+            .iter()
+            .filter(|row| {
+                row["content"]
+                    .as_str()
+                    .is_some_and(|content| content.starts_with("Check this repository"))
+            })
+            .collect::<Vec<_>>();
+        ensure!(
+            rows.len() == 1,
+            "the editor must submit one workspace request: {submitted}"
+        );
+        let cwd = rows[0]["input"]["cwd"]
+            .as_str()
+            .context("the editor request has no workspace folder")?;
+        ensure!(
+            std::fs::canonicalize(cwd)? == std::fs::canonicalize(root.join("second-workspace"))?,
+            "the editor request used a different project folder"
+        );
         ensure!(tokio::time::timeout(Duration::from_secs(5), approval_wait)
             .await
             .context("the editor's approval did not reach the waiting call")???);
