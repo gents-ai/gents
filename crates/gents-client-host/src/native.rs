@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -29,11 +30,17 @@ pub async fn serve(paths: DesktopPaths) -> Result<()> {
     result.and(closed)
 }
 
+/// Windows named pipes cannot close only their write side. Stdio EOF must
+/// release both pipe handles so the installation can retire the attachment.
 pub async fn attach(paths: DesktopPaths) -> Result<()> {
-    let mut connection = tokio::time::timeout(Duration::from_secs(90), async {
-        if let Ok(connection) = local::connect(&paths).await { return Ok(connection); }
+    let connection = tokio::time::timeout(Duration::from_secs(90), async {
+        if let Ok(connection) = local::connect(&paths).await {
+            return Ok(connection);
+        }
         let _startup = local::startup_lock(&paths).await?;
-        if let Ok(connection) = local::connect(&paths).await { return Ok(connection); }
+        if let Ok(connection) = local::connect(&paths).await {
+            return Ok(connection);
+        }
         let mut command = Command::new(std::env::current_exe()?);
         command
             .arg("--serve")
@@ -42,17 +49,29 @@ pub async fn attach(paths: DesktopPaths) -> Result<()> {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::inherit());
+        #[cfg(unix)]
         command.as_std_mut().process_group(0);
-        let mut child = command.spawn().context("starting the native client installation")?;
+        #[cfg(windows)]
+        command.creation_flags(
+            windows_sys::Win32::System::Threading::CREATE_NO_WINDOW
+                | windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP,
+        );
+        let mut child = command
+            .spawn()
+            .context("starting the native client installation")?;
         loop {
-            if let Ok(connection) = local::connect(&paths).await { return Ok(connection); }
+            if let Ok(connection) = local::connect(&paths).await {
+                return Ok(connection);
+            }
             if let Some(status) = child.try_wait()? {
                 bail!("client host exited with {status}; inspect the Gents output for the startup error");
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-    }).await.context("waiting for the native client installation")??;
-    let (mut reader, mut writer) = connection.split();
+    })
+    .await
+    .context("waiting for the native client installation")??;
+    let (mut reader, mut writer) = tokio::io::split(connection);
     let input = async {
         tokio::io::copy(&mut tokio::io::stdin(), &mut writer).await?;
         writer.shutdown().await
@@ -61,6 +80,12 @@ pub async fn attach(paths: DesktopPaths) -> Result<()> {
         tokio::io::copy(&mut reader, &mut tokio::io::stdout()).await?;
         Result::<(), std::io::Error>::Ok(())
     };
+    #[cfg(unix)]
     tokio::try_join!(input, output)?;
+    #[cfg(windows)]
+    tokio::select! {
+        result = input => result?,
+        result = output => result?,
+    }
     Ok(())
 }

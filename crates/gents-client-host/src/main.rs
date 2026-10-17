@@ -18,7 +18,7 @@ struct Args {
     describe: bool,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod native;
 
 #[tokio::main]
@@ -37,7 +37,7 @@ async fn main() -> Result<()> {
                 "commands": protocol::ClientCommand::NAMES,
                 "os": std::env::consts::OS,
                 "arch": std::env::consts::ARCH,
-                "transportSupported": cfg!(unix),
+                "transportSupported": cfg!(any(unix, windows)),
             }),
         )?;
         output.write_all(b"\n")?;
@@ -57,13 +57,13 @@ async fn main() -> Result<()> {
         }
         None => DesktopPaths::discover()?,
     };
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     return if args.serve {
         native::serve(paths).await
     } else {
         native::attach(paths).await
     };
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = paths;
         anyhow::bail!("the native client transport is not available on this platform")

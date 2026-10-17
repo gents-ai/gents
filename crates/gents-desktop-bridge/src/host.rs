@@ -1,15 +1,15 @@
 mod actions;
 mod approvals;
 mod connection;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub mod local;
 pub mod protocol;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod service;
 pub mod settings;
 pub mod speech;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub use service::ClientHostService;
 
 use std::sync::Arc;

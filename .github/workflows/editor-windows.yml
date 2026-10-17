@@ -1,0 +1,73 @@
+name: Editor transport
+
+on:
+  pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - .cargo/**
+      - crates/**
+      - .github/workflows/editor-windows.yml
+  push:
+    branches: [main]
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - .cargo/**
+      - crates/**
+      - .github/workflows/editor-windows.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: editor-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  named-pipes:
+    runs-on: windows-2025
+    timeout-minutes: 180
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: "0"
+      RUST_MIN_STACK: 16777216
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.1"
+          cache: false
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install --no-self-update
+      - name: Install migration fixture target
+        run: rustup target add wasm32-unknown-unknown
+      - name: Install protobuf compiler
+        run: choco install protoc --yes --no-progress
+      - name: Restore Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: editor-windows
+          cache-on-failure: "true"
+          cache-workspace-crates: "false"
+          cache-bin: "false"
+      - name: Check the native client and desktop adapters
+        run: cargo check --locked -p gents-client-host -p gents-desktop-tauri
+      - name: Build the native client host
+        run: cargo build --locked --profile test -p gents-client-host --bin gents-client-host
+      - name: Check the native protocol descriptor
+        run: |
+          $hostInfo = & .\target\debug\gents-client-host.exe --describe | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($hostInfo.os -ne "windows" -or $hostInfo.arch -ne "x86_64" -or -not $hostInfo.transportSupported) {
+            throw "The native host did not advertise its Windows transport."
+          }
+      - name: Exercise private pipe ownership and attachment lifecycle
+        run: cargo test --locked -p gents-desktop-bridge --no-default-features --lib host::local::windows
+      - name: Exercise native metadata, shared ownership and stdio teardown
+        run: cargo test --locked -p gents-client-host

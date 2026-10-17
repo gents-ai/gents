@@ -24,6 +24,9 @@ tokio-util = { workspace = true, features = ["rt"] }
 tracing.workspace = true
 serde_json.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_System_Threading"] }
+
 [dev-dependencies]
 axum = "0.8"
 bytes.workspace = true
