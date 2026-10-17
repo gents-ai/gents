@@ -502,6 +502,8 @@ def snapshotJson : String :=
     ++ "\"prompt_assembly_claude_wire_start_cases\":" ++
       promptAssemblyClaudeWireStartCasesJson ++ ","
     ++ "\"routing_affinity_cases\":" ++ routingAffinityCasesJson ++ ","
+    ++ "\"prompt_assembly_service_tier_cases\":" ++
+      promptAssemblyServiceTierCasesJson ++ ","
     ++ "\"prompt_assembly_responses_storage_cases\":" ++
       promptAssemblyResponsesStorageCasesJson ++ ","
     ++ "\"prompt_assembly_responses_effort_cases\":" ++
