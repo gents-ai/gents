@@ -207,7 +207,7 @@ async fn classify_preset(access: &ConfigAccess, value: &Value) -> Result<Option<
 
 const CANONICAL_AGENT_SHOW_FIELDS: &str = "agent_id node_did display_name description context_id inference_profile_id enabled tags created_at";
 
-const CANONICAL_PROFILE_SHOW_FIELDS: &str = "profile_id display_name description backend_id model_name reasoning_effort context_window max_output_tokens sampling_id execution_id tags";
+const CANONICAL_PROFILE_SHOW_FIELDS: &str = "profile_id display_name description backend_id model_name reasoning_effort service_tier context_window max_output_tokens sampling_id execution_id tags";
 
 pub(super) async fn agent_show(args: ConfigShowArgs) -> Result<()> {
     let id = resolve_dual_id("agent", "--id", args.id.as_deref(), args.id_flag.as_deref())?;

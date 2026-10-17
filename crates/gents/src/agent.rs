@@ -485,6 +485,7 @@ pub(crate) fn agent_config_from_documents(
         backend_endpoint: backend.backend_endpoint,
         backend_auth: backend.backend_auth,
         model_name: inference.profile.model_name.clone(),
+        service_tier: inference.profile.service_tier,
         resolved_reasoning_efforts: inference.resolved_reasoning_efforts(),
         context_window: inference.context_window()?,
         max_output_tokens: inference.max_output_tokens()?,

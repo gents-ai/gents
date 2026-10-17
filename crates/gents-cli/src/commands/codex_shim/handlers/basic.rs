@@ -359,6 +359,7 @@ mod tests {
                 backend_id: backend.backend_id.clone(),
                 model_name: "model-a".into(),
                 reasoning_effort: None,
+                service_tier: None,
                 context_window: None,
                 max_output_tokens: None,
                 sampling_id: None,
