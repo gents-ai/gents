@@ -69,7 +69,8 @@ pub(crate) fn loop_config(
                 agent_config.backend_provider_kind,
                 agent_config.openai_wire_api,
                 agent_config.model_name.clone(),
-            ),
+            )
+            .with_service_tier(agent_config.service_tier),
         ),
         preamble: Some(preamble),
         context_message: None,
@@ -99,7 +100,15 @@ pub(crate) fn loop_config(
                         &agent_config.backend_endpoint,
                     ),
                 ),
-                agent_config.sampling.additional_params(),
+                merge_optional_params(
+                    agent_config.sampling.additional_params(),
+                    agent_config
+                        .service_tier
+                        .filter(|_| {
+                            agent_config.openai_wire_api == crate::OpenAiWireApi::ChatCompletions
+                        })
+                        .map(|tier| serde_json::json!({"service_tier":tier.as_str()})),
+                ),
             ),
             agent_config.backend_provider_kind,
             agent_config.resolved_reasoning_efforts.as_deref(),
@@ -464,6 +473,7 @@ pub(crate) async fn build_compaction_engine(
     summary.backend_endpoint = backend.backend_endpoint;
     summary.backend_auth = backend.backend_auth;
     summary.model_name = inference.profile.model_name.clone();
+    summary.service_tier = inference.profile.service_tier;
     summary.resolved_reasoning_efforts = inference.resolved_reasoning_efforts();
     summary.context_window = inference.context_window()?;
     summary.max_output_tokens = inference.max_output_tokens()?;

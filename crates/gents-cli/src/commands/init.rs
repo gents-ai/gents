@@ -1361,6 +1361,7 @@ fn standard_inference_profile(
         backend_id: backend_id.to_string(),
         model_name: model_name.to_string(),
         reasoning_effort: None,
+        service_tier: None,
         context_window: Some(DEFAULT_CONTEXT_WINDOW as i64),
         max_output_tokens: Some(DEFAULT_MAX_OUTPUT_TOKENS as i64),
         sampling_id: None,

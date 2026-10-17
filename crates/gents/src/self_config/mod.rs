@@ -727,6 +727,7 @@ async fn agent_list(
                     "backend_id": effective.pointer("/inference_profile/backend_id"),
                     "model_name": effective.pointer("/inference_profile/model_name"),
                     "reasoning_effort": effective.pointer("/inference_profile/reasoning_effort"),
+                    "service_tier": effective.pointer("/inference_profile/service_tier"),
                 })
             }
             Err(error) => json!({

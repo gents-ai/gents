@@ -6,6 +6,7 @@ type InferenceProfile @branchable @index(fields: ["node_did", "profile_id"], uni
     backend_id: String @index
     model_name: String
     reasoning_effort: String
+    service_tier: String
     context_window: Int
     max_output_tokens: Int
     sampling_id: String @index

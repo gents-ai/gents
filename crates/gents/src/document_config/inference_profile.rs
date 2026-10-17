@@ -27,6 +27,9 @@ pub struct InferenceProfile {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub reasoning_effort: Option<crate::config::ReasoningEffort>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub service_tier: Option<crate::config::ServiceTier>,
     /// Model-specific context budget override; resolution uses the selected
     /// model's capabilities.
     #[serde(skip_serializing_if = "Option::is_none")]
