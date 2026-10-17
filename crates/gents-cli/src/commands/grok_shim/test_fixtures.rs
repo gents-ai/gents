@@ -460,6 +460,17 @@ pub(super) async fn seed_canonical_tool_call(
         None,
         "grok.seed_canonical_tool_call",
         move |txn| {
+            let tool_mutation = tool_mutation.clone();
+            let admitted_variables = admitted_variables.clone();
+            let admitted_generation = admitted_generation.clone();
+            let requester_did_for_header = requester_did_for_header.clone();
+            let node_did_for_header = node_did_for_header.clone();
+            let session_id_for_header = session_id_for_header.clone();
+            let request_doc_id_for_header = request_doc_id_for_header.clone();
+            let tool_call_id_for_header = tool_call_id_for_header.clone();
+            let tool_name_for_header = tool_name_for_header.clone();
+            let created_at_for_header = created_at_for_header.clone();
+            let message_key = message_key.clone();
             Box::pin(async move {
                 let tool_response = txn.execute(&tool_mutation).await?;
                 let tool_doc_id = gents_protocol::graphql::extract_mutation_doc_id(
