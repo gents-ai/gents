@@ -309,7 +309,7 @@ mod tests {
         );
         let unsupported = serde_json::from_value(json!({
             "node_did":owner,"backend_id":"unsupported","name":"Unsupported",
-            "provider_kind":"AnthropicApiKey","endpoint":"https://api.anthropic.com",
+            "provider_kind":"AnthropicApiKey","endpoint":"https://api.anthropic.com/v1",
             "auth":{"kind":"api_key","key":"fixture"}
         }))?;
         gents::config_client::write_inference_backend_document(&access, &unsupported).await?;

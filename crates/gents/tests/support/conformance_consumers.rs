@@ -252,6 +252,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_workspace_permission_write_cases",
         },
         ConformanceConsumer::RustTest {
+            id: "completion_factory::tests::generated_service_tier_cases_drive_loop_config",
+            package: "gents",
+            source_path: "crates/gents/src/completion_factory/tests.rs",
+            module_path: "completion_factory::tests",
+            function: "generated_service_tier_cases_drive_loop_config",
+        },
+        ConformanceConsumer::RustTest {
             id: "completion_factory::tests::generated_responses_storage_cases_drive_loop_config",
             package: "gents",
             source_path: "crates/gents/src/completion_factory/tests.rs",
