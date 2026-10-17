@@ -52,6 +52,8 @@ export function createBridgeHttpAdapter(
     renamePeer: unsupported("renamePeer"),
     listWorkspace: unsupported("listWorkspace"),
     fetchRequestTimeline: unsupported("fetchRequestTimeline"),
+    fetchSessionGoal: unsupported("fetchSessionGoal"),
+    controlGoal: unsupported("controlGoal"),
     explainToolSurface: unsupported("explainToolSurface"),
     fetchNetworkStatus: unsupported("fetchNetworkStatus"),
     listMailbox: unsupported("listMailbox"),
