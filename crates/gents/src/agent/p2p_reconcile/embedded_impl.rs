@@ -1934,7 +1934,33 @@ mod tests {
             loaded.duplicate_doc_ids,
             vec![conflict.unindexed_doc_id.clone()]
         );
+        exec(
+            &receiver,
+            r#"mutation { create_PeerPairingApplied(input: { peer_id: "peer-y", replicator_addresses: ["other"] }) { _docID } }"#,
+            "seed another applied peer",
+        ).await;
+        let peers = BTreeSet::from([
+            "peer-x".to_owned(),
+            "peer-y".to_owned(),
+            "missing".to_owned(),
+        ]);
+        let batch = store.load_applied_many(&peers).await.unwrap();
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch["peer-x"], loaded);
+        assert!(batch["peer-y"].duplicate_doc_ids.is_empty());
+        assert_eq!(
+            batch["peer-y"].state.replicator_addresses,
+            BTreeSet::from(["other".to_owned()])
+        );
+        exec(
+            &receiver,
+            r#"mutation { delete_PeerPairingApplied(filter: { peer_id: { _eq: "peer-y" } }) { _docID } }"#,
+            "remove other applied peer",
+        ).await;
         store.persist_applied("peer-x", &loaded).await.unwrap();
+        let fresh = store.load_applied_many(&peers).await.unwrap();
+        assert_eq!(fresh.len(), 1);
+        assert!(fresh["peer-x"].duplicate_doc_ids.is_empty());
         let remaining = receiver
             .execute(r#"{ PeerPairingApplied { _docID } }"#)
             .await

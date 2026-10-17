@@ -33,6 +33,7 @@ pub(super) async fn reconcile_peer_tick_with_replay(
         peer_id.to_string(),
         force_replay,
         &std::collections::BTreeSet::new(),
+        None,
     )
     .await;
     reconcile_prepared_peer(admin, store, prepared).await
@@ -61,6 +62,7 @@ pub(super) async fn prepare_pairing_peer(
     peer_id: String,
     force_replay_when_active: bool,
     dropped: &std::collections::BTreeSet<String>,
+    applied: Option<LoadedPairingApplied>,
 ) -> PairingPeerPreparation {
     let loaded_desired = match store.load_desired_with_authority(&peer_id).await {
         Ok(desired) => desired,
@@ -85,7 +87,10 @@ pub(super) async fn prepare_pairing_peer(
         desired = None;
     }
     let desired_state = desired.clone().unwrap_or_default();
-    let applied = match store.load_applied(&peer_id).await {
+    let applied = match match applied {
+        Some(applied) => Ok(applied),
+        None => store.load_applied(&peer_id).await,
+    } {
         Ok(applied) => applied,
         Err(error) => {
             return PairingPeerPreparation {

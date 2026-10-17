@@ -209,9 +209,9 @@ pub(super) async fn sweep_pairings_after_drops(
     dropped: &mut BTreeSet<String>,
 ) -> Result<()> {
     store.begin_sweep().await?;
-    let preparation_inputs = store
-        .list_peer_ids()
-        .await?
+    let peer_ids = store.list_peer_ids().await?;
+    let mut applied = store.load_applied_many(&peer_ids).await?;
+    let preparation_inputs = peer_ids
         .into_iter()
         .map(|peer_id| {
             let was_active = replay_connections.get(&peer_id).copied();
@@ -219,20 +219,23 @@ pub(super) async fn sweep_pairings_after_drops(
         })
         .collect::<Vec<_>>();
     let dropped_peers = &*dropped;
-    let mut preparations = stream::iter(preparation_inputs.into_iter().map(
-        |(peer_id, was_active)| async move {
-            let force_replay_when_active = was_active.is_none_or(|active| !active);
-            prepare_pairing_peer(
-                admin,
-                store,
-                peer_id,
-                force_replay_when_active,
-                dropped_peers,
-            )
-            .await
-        },
-    ))
-    .buffer_unordered(MAX_CONCURRENT_PEER_PREPARATIONS);
+    let mut preparations =
+        stream::iter(preparation_inputs.into_iter().map(|(peer_id, was_active)| {
+            let applied = applied.remove(&peer_id).unwrap_or_default();
+            async move {
+                let force_replay_when_active = was_active.is_none_or(|active| !active);
+                prepare_pairing_peer(
+                    admin,
+                    store,
+                    peer_id,
+                    force_replay_when_active,
+                    dropped_peers,
+                    Some(applied),
+                )
+                .await
+            }
+        }))
+        .buffer_unordered(MAX_CONCURRENT_PEER_PREPARATIONS);
 
     while let Some(prepared) = preparations.next().await {
         let peer_id = prepared.peer_id.clone();
