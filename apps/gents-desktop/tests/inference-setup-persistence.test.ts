@@ -304,9 +304,14 @@ describe("inference setup persistence", () => {
   });
 });
 
-it("binds the chosen model to the default agent without changing other configured agents", () => {
+it("binds the chosen model to the default agent without changing other agents", () => {
   const deployment = structuredClone(fixtureDeployment);
   deployment.inferenceBackends[0]!.apiKeyConfigured = true;
+  deployment.agentConfigs.push({
+    ...deployment.agentConfigs[0]!,
+    agent_id: "unconfigured-other",
+    inference_profile_id: "",
+  });
   const original = structuredClone(deployment);
   const plan = buildInferenceSetupPlan({
     deployment,
@@ -331,11 +336,10 @@ it("binds the chosen model to the default agent without changing other configure
       (agent) => agent.agent_id === deployment.node.defaultAgentId,
     )?.inference_profile_id,
   ).toBe(plan.profileId);
-  const configuredOthers = deployment.agentConfigs.filter(
-    (agent) =>
-      agent.agent_id !== deployment.node.defaultAgentId && agent.inference_profile_id,
+  const others = deployment.agentConfigs.filter(
+    (agent) => agent.agent_id !== deployment.node.defaultAgentId,
   );
-  for (const other of configuredOthers)
+  for (const other of others)
     expect(
       plan.document.agents?.some((agent) => agent.agent_id === other.agent_id),
     ).toBe(false);

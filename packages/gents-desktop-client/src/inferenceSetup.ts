@@ -100,10 +100,11 @@ export function buildInferenceSetupPlan({
     purpose === "select-model" ||
     shouldRebindSetupDefault(deployment, addingExtra);
   const agentConfigs = (addingBackend ? [] : deployment.agentConfigs)
-    .filter(
-      (agent) =>
-        !agent.inference_profile_id ||
-        (agent.agent_id === defaultAgentId && shouldRebindDefault),
+    .filter((agent) =>
+      purpose === "select-model"
+        ? agent.agent_id === defaultAgentId
+        : !agent.inference_profile_id ||
+          (agent.agent_id === defaultAgentId && shouldRebindDefault),
     )
     .map((agent) => ({
       ...agent,
