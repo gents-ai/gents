@@ -49,6 +49,13 @@ jobs:
         run: rustup target add wasm32-unknown-unknown
       - name: Install protobuf compiler
         run: choco install protoc --yes --no-progress
+      - name: Restore Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: editor-windows
+          cache-on-failure: "true"
+          cache-workspace-crates: "false"
+          cache-bin: "false"
       - name: Check the native client and desktop adapters
         run: cargo check --locked -p gents-client-host -p gents-desktop-tauri
       - name: Build the native client host
