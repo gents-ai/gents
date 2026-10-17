@@ -449,6 +449,11 @@ mod tests {
             let count = if request == "completed" { 120 } else { 1 };
             let mutations = (0..count)
                 .map(|sequence| {
+                    let storage_sequence = if request == "active" {
+                        1_000 + sequence
+                    } else {
+                        sequence
+                    };
                     let key = if sequence == 0 {
                         format!("authored:{request}:prompt")
                     } else {
@@ -461,7 +466,7 @@ mod tests {
                     message_key: "{key}", session_id: "session", node_did: "agent",
                     request_doc_id: "{request}", requester_did: null,
                     publication: {{kind: "request_execution", execution_generation: "generation"}},
-                    outcome: "complete", sequence: {sequence}, role: "user", blocks: null,
+                    outcome: "complete", sequence: {storage_sequence}, role: "user", blocks: null,
                     created_at: "2026-09-30T00:00:00Z"
                 }}) {{ _docID }}"#
                     )
