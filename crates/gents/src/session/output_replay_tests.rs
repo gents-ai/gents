@@ -1102,7 +1102,7 @@ async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive(
 }
 
 #[tokio::test]
-async fn replay_high_water_and_header_twins_fail_closed() {
+async fn replay_rejects_forged_high_water_and_storage_rejects_sequence_twins() {
     let observed = fixture().await;
     let mut forged = observed.boundary.clone();
     forged.canonical_through.as_mut().unwrap().commit_cid = "not-a-header-commit".into();
@@ -1135,8 +1135,15 @@ async fn replay_high_water_and_header_twins_fail_closed() {
                 .with_variables(transcript_message_create_variables(&twin).unwrap()),
         )
         .await;
-    assert!(!created.has_errors(), "{:?}", created.errors);
-    assert!(observed.candidates().await.is_err());
+    assert!(
+        created.has_errors(),
+        "a sequence slot cannot hold a second header"
+    );
+    assert!(created
+        .errors
+        .iter()
+        .any(|error| error.message.contains("unique index")));
+    assert!(observed.candidates().await.is_ok());
 }
 
 #[tokio::test]

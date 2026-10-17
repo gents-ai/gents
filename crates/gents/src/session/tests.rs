@@ -1326,75 +1326,86 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
             None,
         )
         .await;
-        ConfigAccess::transact_local_write(&node, None, "test.single_header_coordinates", |txn| {
-            Box::pin(async move {
-                let response = txn
-                    .execute(&format!("{{ AgentMessage {{ {AGENT_MESSAGE_FIELDS} }} }}"))
-                    .await?;
-                let original = decode_transcript_message_row(&response["data"]["AgentMessage"][0])?;
-                let mut noise = transcript_message_create_variables(&original.message)?;
-                noise["input"]["message_key"] = serde_json::json!("unrelated-key");
-                noise["input"]["sequence"] = serde_json::json!(99);
-                noise["input"]["blocks"] = serde_json::json!({"invalid": "unrelated"});
-                for index in 0..if case == "unrelated" { 49 } else { 1 } {
-                    noise["input"]["message_key"] = serde_json::json!(format!("unrelated-{index}"));
-                    noise["input"]["sequence"] = serde_json::json!(99 + index);
-                    txn.execute_with_variables(CREATE_AGENT_MESSAGE_MUTATION, &noise)
+        let result = ConfigAccess::transact_local_write(
+            &node,
+            None,
+            "test.single_header_coordinates",
+            |txn| {
+                Box::pin(async move {
+                    let response = txn
+                        .execute(&format!("{{ AgentMessage {{ {AGENT_MESSAGE_FIELDS} }} }}"))
                         .await?;
-                }
+                    let original =
+                        decode_transcript_message_row(&response["data"]["AgentMessage"][0])?;
+                    let mut noise = transcript_message_create_variables(&original.message)?;
+                    noise["input"]["message_key"] = serde_json::json!("unrelated-key");
+                    noise["input"]["sequence"] = serde_json::json!(99);
+                    noise["input"]["blocks"] = serde_json::json!({"invalid": "unrelated"});
+                    for index in 0..if case == "unrelated" { 49 } else { 1 } {
+                        noise["input"]["message_key"] =
+                            serde_json::json!(format!("unrelated-{index}"));
+                        noise["input"]["sequence"] = serde_json::json!(99 + index);
+                        txn.execute_with_variables(CREATE_AGENT_MESSAGE_MUTATION, &noise)
+                            .await?;
+                    }
 
-                let mut other = original.message.clone();
-                let mut target = original.doc_id.clone();
-                match case {
-                    "key" => other.sequence = 2,
-                    "sequence" => other.message_key = "sequence-twin".into(),
-                    "both" => other.native_id = Some("distinct-physical-twin".into()),
-                    "foreign" => other.node_did = "did:test:foreign".into(),
-                    "requester" => other.requester_did = Some("did:test:requester".into()),
-                    "fork" => {
-                        other.session_id = "child-session".into();
-                        other.message_key = "fork-key".into();
-                        other.request_doc_id = None;
-                        other.publication = MessagePublication::Fork {
-                            origin_message_doc_id: original.doc_id.clone(),
-                        };
+                    let mut other = original.message.clone();
+                    let mut target = original.doc_id.clone();
+                    match case {
+                        "key" => other.sequence = 2,
+                        "sequence" => other.message_key = "sequence-twin".into(),
+                        "both" => other.native_id = Some("distinct-physical-twin".into()),
+                        "foreign" => other.node_did = "did:test:foreign".into(),
+                        "requester" => {
+                            other.requester_did = Some("did:test:requester".into());
+                            other.sequence = 2;
+                        }
+                        "fork" => {
+                            other.session_id = "child-session".into();
+                            other.message_key = "fork-key".into();
+                            other.request_doc_id = None;
+                            other.publication = MessagePublication::Fork {
+                                origin_message_doc_id: original.doc_id.clone(),
+                            };
+                        }
+                        _ => {}
                     }
-                    _ => {}
-                }
-                if case != "unrelated" {
-                    let created = txn
-                        .execute_with_variables(
-                            CREATE_AGENT_MESSAGE_MUTATION,
-                            &transcript_message_create_variables(&other)?,
-                        )
-                        .await?;
-                    assert_ne!(
-                        crate::graphql::created_doc_id(&created, "AgentMessage")?,
-                        original.doc_id,
-                    );
-                    if case == "fork" {
-                        target = crate::graphql::created_doc_id(&created, "AgentMessage")?;
+                    if case != "unrelated" {
+                        let created = txn
+                            .execute_with_variables(
+                                CREATE_AGENT_MESSAGE_MUTATION,
+                                &transcript_message_create_variables(&other)?,
+                            )
+                            .await?;
+                        assert_ne!(
+                            crate::graphql::created_doc_id(&created, "AgentMessage")?,
+                            original.doc_id,
+                        );
+                        if case == "fork" {
+                            target = crate::graphql::created_doc_id(&created, "AgentMessage")?;
+                        }
                     }
-                }
-                let single =
-                    output::load_canonical_message_in_txn(txn, &target, "did:test:owner", None)
+                    let single =
+                        output::load_canonical_message_in_txn(txn, &target, "did:test:owner", None)
+                            .await
+                            .map_err(|error| format!("{error:#}"));
+                    let bulk = output::TxnCanonicalReader::new(txn, "did:test:owner", None)
+                        .load_message(&target)
                         .await
                         .map_err(|error| format!("{error:#}"));
-                let bulk = output::TxnCanonicalReader::new(txn, "did:test:owner", None)
-                    .load_message(&target)
-                    .await
-                    .map_err(|error| format!("{error:#}"));
-                assert_eq!(single, bulk, "single/bulk mismatch for {case}");
-                assert_eq!(
-                    single.is_err(),
-                    matches!(case, "key" | "sequence" | "both"),
-                    "{case}"
-                );
-                Ok(())
-            })
-        })
-        .await
-        .unwrap();
+                    assert_eq!(single, bulk, "single/bulk mismatch for {case}");
+                    assert_eq!(single.is_err(), case == "key", "{case}");
+                    Ok(())
+                })
+            },
+        )
+        .await;
+        if matches!(case, "sequence" | "both") {
+            let error = result.expect_err("the existing session sequence is already occupied");
+            assert!(format!("{error:#}").contains("unique index"), "{error:#}");
+        } else {
+            result.unwrap();
+        }
         node.shutdown().await;
     }
 }
