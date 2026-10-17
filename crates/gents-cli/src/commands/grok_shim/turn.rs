@@ -2901,7 +2901,7 @@ mod tests {
         result: &str,
     ) -> String {
         crate::commands::grok_shim::test_fixtures::seed_canonical_tool_call(
-            node.as_ref(),
+            node,
             request,
             tool_call_id,
             tool_name,
@@ -3732,7 +3732,7 @@ mod tests {
             }
         }
         let spawn_doc = crate::commands::grok_shim::test_fixtures::seed_canonical_tool_call(
-            node.as_ref(),
+            node,
             &child,
             "child-process-meta",
             "spawn_process",
@@ -3745,7 +3745,7 @@ mod tests {
         )
         .await;
         let child_tool_doc = crate::commands::grok_shim::test_fixtures::seed_canonical_tool_call(
-            node.as_ref(),
+            node,
             &child,
             "child-bash",
             "bash",

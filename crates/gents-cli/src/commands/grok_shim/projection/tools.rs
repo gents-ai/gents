@@ -1849,7 +1849,7 @@ mod tests {
     }
 
     async fn seed_canonical_tool_call(
-        node: &EmbeddedNode,
+        node: &Arc<EmbeddedNode>,
         request_doc_id: &str,
         request_id: &str,
         session_id: &str,
