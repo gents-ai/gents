@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -13,6 +14,8 @@ struct Args {
     serve: bool,
     #[arg(long)]
     stdio: bool,
+    #[arg(long, conflicts_with_all = ["home", "serve", "stdio"])]
+    describe: bool,
 }
 
 #[cfg(unix)]
@@ -21,6 +24,25 @@ mod native;
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    if args.describe {
+        use gents_desktop_bridge::host::protocol;
+        let mut output = std::io::stdout().lock();
+        serde_json::to_writer(
+            &mut output,
+            &serde_json::json!({
+                "name": env!("CARGO_PKG_NAME"),
+                "version": env!("CARGO_PKG_VERSION"),
+                "protocolVersion": protocol::PROTOCOL_VERSION,
+                "maxFrameBytes": protocol::MAX_FRAME_BYTES,
+                "commands": protocol::ClientCommand::NAMES,
+                "os": std::env::consts::OS,
+                "arch": std::env::consts::ARCH,
+                "transportSupported": cfg!(unix),
+            }),
+        )?;
+        output.write_all(b"\n")?;
+        return Ok(());
+    }
     gents_desktop_bridge::logging::init_tracing_with_config(gents_desktop_bridge::TracingConfig {
         filter: None,
         console: true,
