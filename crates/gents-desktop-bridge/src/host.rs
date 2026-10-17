@@ -95,6 +95,16 @@ impl ClientHost {
                     .await.map_err(|_| BridgeError::untyped("Authentication save could not be confirmed. Reopen Accounts before trying again."))?;
                 encode(())
             }
+            ClientCommand::RuntimeIsLocal { node_did } => {
+                self.require_configured_runtime(&node_did).await?;
+                encode(
+                    self.core
+                        .peer_records()
+                        .await
+                        .iter()
+                        .any(|peer| peer.node_did == node_did && peer.is_managed_runtime()),
+                )
+            }
             ClientCommand::InferenceCatalog {} => {
                 encode(gents::inference_setup::inference_setup_catalog())
             }

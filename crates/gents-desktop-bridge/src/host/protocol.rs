@@ -35,6 +35,11 @@ pub enum ClientCommand {
     BackendAuthenticationSave {
         request: crate::accounts::BackendAuthenticationSaveRequest,
     },
+    #[serde(rename = "client_runtime_is_local")]
+    RuntimeIsLocal {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+    },
     #[serde(rename = "client_inference_setup_catalog")]
     InferenceCatalog {},
     #[serde(rename = "client_inference_setup_state")]
@@ -205,6 +210,7 @@ impl ClientCommand {
     pub const NAMES: &'static [&'static str] = &[
         "client_backend_authentication",
         "client_backend_authentication_save",
+        "client_runtime_is_local",
         "client_inference_setup_catalog",
         "client_inference_setup_state",
         "client_inference_models_discover",
@@ -251,6 +257,7 @@ impl ClientCommand {
                 | Self::BackendAuthentication { .. }
                 | Self::InferenceCatalog {}
                 | Self::InferenceSetupState { .. }
+                | Self::RuntimeIsLocal { .. }
                 | Self::InferenceModelsDiscover { .. }
                 | Self::InferenceModelRecommendation { .. }
                 | Self::AccountsList { .. }

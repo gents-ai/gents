@@ -808,6 +808,14 @@ async fn configure_inference(
     agent_id: &str,
     endpoint: &str,
 ) -> Result<()> {
+    let local = client
+        .call(*id, "client_runtime_is_local", json!({"nodeDid":node_did}))
+        .await;
+    *id += 1;
+    ensure!(
+        local == true,
+        "the enrolled local runtime lost its local home observation"
+    );
     let catalog = client
         .call(*id, "client_inference_setup_catalog", json!({}))
         .await;
