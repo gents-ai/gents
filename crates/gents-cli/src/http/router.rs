@@ -606,7 +606,7 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
     if body.get("error").is_none() {
         if let Ok(Ok((agents, context_budget, context))) = tokio::time::timeout(
             STATUS_PROBE_BUDGET,
-            load_self_view(&state.graphql, &state.node_did),
+            load_self_view(&state.p2p_graphql, &state.node_did),
         )
         .await
         {
@@ -661,7 +661,7 @@ fn replicated_schema_status(
 
 async fn self_handler(State(state): State<RuntimeHttpState>) -> Response {
     let (health, runtime, readiness, status_code) =
-        match load_metrics_query_data(&state.graphql, &state.node_did).await {
+        match load_metrics_query_data(&state.p2p_graphql, &state.node_did).await {
             Ok(data) => {
                 let data = with_local_native_executors(data);
                 let health = render_healthz_payload(&state, Some(&data), None);
@@ -688,7 +688,7 @@ async fn self_handler(State(state): State<RuntimeHttpState>) -> Response {
             }
         };
 
-    match load_self_view(&state.graphql, &state.node_did).await {
+    match load_self_view(&state.p2p_graphql, &state.node_did).await {
         Ok((agents, context_budget, _context_indicator)) => {
             let body = render_self_payload(
                 &state,
