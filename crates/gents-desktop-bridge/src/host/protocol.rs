@@ -38,7 +38,10 @@ pub enum ClientCommand {
     #[serde(rename = "client_inference_setup_catalog")]
     InferenceCatalog {},
     #[serde(rename = "client_inference_setup_state")]
-    InferenceSetupState { node_did: String },
+    InferenceSetupState {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+    },
     #[serde(rename = "client_inference_models_discover")]
     InferenceModelsDiscover {
         request: crate::inference_setup::InferenceDiscoveryRequest,
