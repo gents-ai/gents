@@ -573,4 +573,13 @@ def protectedReplayCompactionCaseJson
 def protectedReplayCompactionCasesJson : String :=
   jsonArray (Compaction.protectedReplayCompactionCases.map protectedReplayCompactionCaseJson)
 
+def promptAssemblyServiceTierCasesJson : String :=
+  jsonArray (PromptAssembly.ServiceTier.cases.map fun witness =>
+    let expected := PromptAssembly.ServiceTier.decide witness.family witness.requested
+    "{\"family\":" ++ jsonString witness.family.wireName ++
+    ",\"requested\":" ++ jsonOptionalString (witness.requested.map (·.wireName)) ++
+    ",\"allowed\":" ++ boolString expected.allowed ++
+    ",\"wire\":" ++ jsonOptionalString expected.wire ++ "}")
+
+
 end Conformance.Contracts
