@@ -20,7 +20,7 @@ pub const MANAGED_SERVER_TRAY_RESTART_EVENT: &str = "desktop://managed-server-tr
 pub const GROK_LOGIN_URL_EVENT: &str = "desktop://grok-login-url";
 pub const CLAUDE_LOGIN_URL_EVENT: &str = "desktop://claude-login-url";
 pub const PLUGIN_APPROVALS_CHANGED_EVENT: &str = "desktop://plugin-approvals-changed";
-pub const EVENT_REASONS: &[&str] = &["store", "health", "lifecycle", "config"];
+pub const EVENT_REASONS: &[&str] = &["store", "health", "lifecycle", "config", "approvals"];
 
 pub fn command_inventory() -> Vec<CommandContract> {
     let entries: &[(&str, &str)] = &[

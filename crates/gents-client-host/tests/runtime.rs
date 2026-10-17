@@ -382,6 +382,41 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         );
     }
     if matches!(journey, Journey::Editor) {
+        client
+            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .await;
+        let approval_home = node_home.clone();
+        let approval_path = root.join("approval-fixture.txt");
+        std::fs::write(&approval_path, "fixture access")?;
+        let approval_session = session.to_owned();
+        let approval_wait = tokio::spawn(async move {
+            let mark = gents::plugin::approval::queue_dir(&approval_home).join(".listening");
+            tokio::time::timeout(Duration::from_secs(90), async {
+                loop {
+                    if std::fs::metadata(&mark)
+                        .and_then(|metadata| metadata.modified())
+                        .is_ok_and(|modified| modified > std::time::UNIX_EPOCH)
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .context("the editor did not open an approval listener")?;
+            let resolved = gents::plugin::allowed::Resolved {
+                target: approval_path,
+                is_dir: false,
+            };
+            let question = gents::plugin::approval::Request::new(
+                "fixture/files",
+                &resolved,
+                gents::pack::BindAccess::Read,
+                Some(approval_session),
+            );
+            gents::plugin::approval::ask(&approval_home, &question, gents::plugin::approval::WAIT)
+                .await
+        });
         let extension_root = std::env::var_os("GENTS_VSCODE_ROOT")
             .context("Set GENTS_VSCODE_ROOT to the extension checkout before running editor-e2e")?;
         let extension_root = Path::new(&extension_root);
@@ -405,10 +440,20 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             .stderr(Stdio::from(log))
             .kill_on_drop(true)
             .status();
-        let status = tokio::time::timeout(Duration::from_secs(120), child)
-            .await
-            .context("editor journey timed out")??;
+        let status = tokio::time::timeout(Duration::from_secs(120), child).await;
+        if !matches!(&status, Ok(Ok(status)) if status.success()) {
+            approval_wait.abort();
+        }
+        let status = status.context("editor journey timed out")??;
         ensure!(status.success(), "editor journey exited with {status}");
+        ensure!(tokio::time::timeout(Duration::from_secs(5), approval_wait)
+            .await
+            .context("the editor's approval did not reach the waiting call")???);
+        ensure!(
+            gents::plugin::allowed::list(&node_home)?.is_empty(),
+            "allow-once must not persist a file or folder grant"
+        );
+        id += 1;
     }
     gate.add_permits(1);
     let mut last_projection = Value::Null;

@@ -5,14 +5,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use gents::plugin::approval;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use tauri::async_runtime::{spawn, JoinHandle};
-use tauri::{AppHandle, Emitter, Runtime};
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
-use crate::contract::PLUGIN_APPROVALS_CHANGED_EVENT;
-
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+pub(crate) const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 pub(crate) struct PromptSubscriptions {
     windows: BTreeMap<String, BTreeSet<String>>,
@@ -35,6 +31,16 @@ impl PromptSubscriptions {
 
     pub(crate) fn contains_window(&self, window: &str) -> bool {
         self.windows.contains_key(window)
+    }
+
+    pub(crate) fn contains_token(&self, window: &str, token: &str) -> bool {
+        self.windows
+            .get(window)
+            .is_some_and(|tokens| tokens.contains(token))
+    }
+
+    pub(crate) fn token_count(&self) -> usize {
+        self.windows.values().map(BTreeSet::len).sum()
     }
 
     pub(crate) fn subscribe(&mut self, window: &str, token: String) {
@@ -83,7 +89,7 @@ impl PendingQueue {
         self.expires_at = requests
             .iter()
             .filter_map(|request| {
-                let expires = u128::from(request.created_at_ms) + approval::WAIT.as_millis();
+                let expires = u128::from(request.expires_at_ms);
                 let remaining = expires.saturating_sub(now_ms).saturating_add(1);
                 Instant::now().checked_add(Duration::from_millis(
                     remaining.min(u128::from(u64::MAX)) as u64,
@@ -107,6 +113,7 @@ fn changes_queue(event: &Event, queue: &Path) -> bool {
     // Kqueue may report only one transient entry for a coalesced directory write.
     event.paths.iter().any(|path| {
         path == queue
+            || Some(path.as_path()) == queue.parent()
             || (path.parent() == Some(queue)
                 && path.file_name().is_some_and(|name| name != ".listening"))
     })
@@ -123,7 +130,7 @@ impl QueueWatch {
     fn start(home: &Path, changes: mpsc::Sender<()>) -> Result<Self> {
         approval::prepare_listener(home)?;
         let parent = home.canonicalize().context("resolving the approval home")?;
-        let queue = parent.join(gents::home::PLUGIN_APPROVALS_DIR_NAME);
+        let queue = approval::queue_dir(&parent);
         let watched_queue = queue.clone();
         let mut watcher = notify::recommended_watcher(move |event: notify::Result<Event>| {
             let changed = match event {
@@ -139,12 +146,22 @@ impl QueueWatch {
         })?;
         // Keep watching the parent across queue removal or atomic replacement.
         watcher.watch(&parent, RecursiveMode::NonRecursive)?;
+        watcher.watch(
+            queue.parent().context("approval queue has no parent")?,
+            RecursiveMode::NonRecursive,
+        )?;
         watcher.watch(&queue, RecursiveMode::Recursive)?;
         Ok(Self { watcher, queue })
     }
 
     fn reattach(&mut self, home: &Path) -> Result<()> {
         approval::prepare_listener(home)?;
+        let root = self
+            .queue
+            .parent()
+            .context("approval queue has no parent")?;
+        let _ = self.watcher.unwatch(root);
+        self.watcher.watch(root, RecursiveMode::NonRecursive)?;
         let _ = self.watcher.unwatch(&self.queue);
         self.watcher.watch(&self.queue, RecursiveMode::Recursive)?;
         Ok(())
@@ -167,7 +184,7 @@ async fn until_expiry(expiry: Option<Instant>) {
     }
 }
 
-async fn watch_queue(
+pub(crate) async fn watch_queue(
     home: PathBuf,
     heartbeat_interval: Duration,
     mut subscriptions: watch::Receiver<bool>,
@@ -198,6 +215,10 @@ async fn watch_queue(
                 if watcher.is_none() {
                     match QueueWatch::start(&home, send.clone()) {
                         Ok(watch) => {
+                            if let Err(error) = approval::pending_requests(&home) {
+                                tracing::warn!(%error, "validating the plugin approval queue");
+                                continue;
+                            }
                             watcher = Some(watch);
                             let _ = send.try_send(());
                         }
@@ -258,18 +279,20 @@ async fn watch_queue(
     }
 }
 
-pub fn spawn_plugin_approvals_watch<R: Runtime>(
-    app: AppHandle<R>,
+#[cfg(feature = "tauri-host")]
+pub fn spawn_plugin_approvals_watch<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     home: PathBuf,
     subscriptions: watch::Receiver<bool>,
-) -> JoinHandle<()> {
-    spawn(watch_queue(
+) -> tauri::async_runtime::JoinHandle<()> {
+    use tauri::Emitter;
+    tauri::async_runtime::spawn(watch_queue(
         home,
         HEARTBEAT_INTERVAL,
         subscriptions,
         move |changed| {
             if changed {
-                let _ = app.emit(PLUGIN_APPROVALS_CHANGED_EVENT, ());
+                let _ = app.emit(crate::contract::PLUGIN_APPROVALS_CHANGED_EVENT, ());
             }
         },
     ))

@@ -1453,6 +1453,11 @@ def caseCoverage : List CoverageEntry :=
       "goal::observation::contract_tests::generated_goal_observations_drive_signature_and_scope_validation")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "plugin_approval_cases"
+      "PluginApprovalCases"
+      "plugin::approval::contract_tests::generated_approval_traces_drive_native_queue_and_grants")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "goal_objective_whitespace_codepoints"
       "GoalObjectiveWhitespace"
       "goal::edit::contract_tests::generated_goal_objective_whitespace_matches_native_character_classification")

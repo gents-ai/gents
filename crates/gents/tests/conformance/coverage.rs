@@ -1650,6 +1650,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "goal_observation_cases",
             "GoalObservationCases",
         ),
+        (
+            &snapshot.plugin_approval_cases,
+            "plugin_approval_cases",
+            "PluginApprovalCases",
+        ),
     ] {
         assert!(
             !cases.is_empty(),

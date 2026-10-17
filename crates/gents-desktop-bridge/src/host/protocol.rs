@@ -27,6 +27,33 @@ pub enum ClientMessage {
 #[serde(tag = "name", content = "args")]
 #[serde(deny_unknown_fields)]
 pub enum ClientCommand {
+    #[serde(rename = "client_connect_local")]
+    ConnectLocal {
+        #[serde(rename = "nodeHome")]
+        node_home: Option<String>,
+    },
+    #[serde(rename = "client_plugin_approval_subscribe")]
+    ApprovalSubscribe {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+        token: String,
+    },
+    #[serde(rename = "client_plugin_approval_unsubscribe")]
+    ApprovalUnsubscribe { token: String },
+    #[serde(rename = "client_plugin_approval_pending")]
+    ApprovalPending {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+        token: String,
+    },
+    #[serde(rename = "client_plugin_approval_decide")]
+    ApprovalDecide {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+        token: String,
+        id: String,
+        decision: String,
+    },
     #[serde(rename = "desktop_client_snapshot")]
     Snapshot {},
     #[serde(rename = "desktop_peer_enroll_status")]
@@ -53,6 +80,11 @@ pub enum ClientCommand {
 
 impl ClientCommand {
     pub const NAMES: &'static [&'static str] = &[
+        "client_connect_local",
+        "client_plugin_approval_subscribe",
+        "client_plugin_approval_unsubscribe",
+        "client_plugin_approval_pending",
+        "client_plugin_approval_decide",
         "desktop_client_snapshot",
         "desktop_peer_enroll_status",
         "desktop_session_snapshot",
@@ -69,6 +101,7 @@ impl ClientCommand {
         matches!(
             self,
             Self::Snapshot {}
+                | Self::ApprovalPending { .. }
                 | Self::SessionSnapshot(_)
                 | Self::SessionLiveDelta(_)
                 | Self::SessionGoal(_)
