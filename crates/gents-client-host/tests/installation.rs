@@ -1,4 +1,4 @@
-#![cfg(unix)]
+#![cfg(any(unix, windows))]
 
 use std::process::Stdio;
 use std::sync::Arc;
@@ -71,12 +71,20 @@ async fn standalone_installation_shares_one_store_between_stdio_clients_and_rele
     first.close().await;
     assert_eq!(second.snapshot(2).await["client"]["localPeerId"], peer_id);
     second.close().await;
-    // SAFETY: this is the live child created above, with a registered SIGINT handler.
-    assert_eq!(
-        unsafe { libc::kill(server.id().unwrap() as libc::pid_t, libc::SIGINT) },
-        0
-    );
-    let status = tokio::time::timeout(Duration::from_secs(30), server.wait())
+    #[cfg(unix)]
+    {
+        // SAFETY: this is the live child created above, with a registered SIGINT handler.
+        assert_eq!(
+            unsafe { libc::kill(server.id().unwrap() as libc::pid_t, libc::SIGINT) },
+            0
+        );
+    }
+    let shutdown_wait = if cfg!(windows) {
+        Duration::from_secs(210)
+    } else {
+        Duration::from_secs(30)
+    };
+    let status = tokio::time::timeout(shutdown_wait, server.wait())
         .await
         .unwrap()
         .unwrap();

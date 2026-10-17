@@ -225,7 +225,7 @@ async fn run_detached_client_start<R: Runtime>(
     progress_tx: watch::Sender<ClientStartProgress>,
 ) {
     let state = app.state::<DesktopAppState>();
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     let mut client_listener = None;
     // Own the lifecycle before opening the peer directory and embedded node,
     // not only while installing the result. Managed-runtime restart refreshes
@@ -238,7 +238,7 @@ async fn run_detached_client_start<R: Runtime>(
             .await
         {
             Ok(lifecycle) => {
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 {
                     match reserve_client_listener(&state.policy).await {
                         Ok((startup, listener)) => {
@@ -255,7 +255,7 @@ async fn run_detached_client_start<R: Runtime>(
                         Err(error) => Err((error, None)),
                     }
                 }
-                #[cfg(not(unix))]
+                #[cfg(not(any(unix, windows)))]
                 start_client_core_async(paths, state.policy.store_key_custody, lifecycle).await
             }
             Err(error) => Err((error, None)),
@@ -272,7 +272,7 @@ async fn run_detached_client_start<R: Runtime>(
     match start_result {
         Ok((core, _lifecycle_guard)) => {
             let core = Arc::new(core);
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             let mut client_host = client_listener.map(|listener| {
                 crate::host::ClientHostService::with_accounts(
                     core.clone(),
@@ -286,7 +286,7 @@ async fn run_detached_client_start<R: Runtime>(
                     let updates_task = spawn_client_update_task(app.clone(), Arc::clone(&core));
                     bridge.install_core(Arc::clone(&core));
                     bridge.updates_task = Some(updates_task);
-                    #[cfg(unix)]
+                    #[cfg(any(unix, windows))]
                     {
                         bridge.client_host = client_host.take();
                     }
@@ -301,7 +301,7 @@ async fn run_detached_client_start<R: Runtime>(
             };
 
             if let Some(orphan_core) = orphan {
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 if let Some(host) = client_host {
                     if let Err(error) = host.shutdown().await {
                         tracing::warn!(%error, "closing orphan client attachments failed");
@@ -341,7 +341,7 @@ async fn run_detached_client_start<R: Runtime>(
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 async fn reserve_client_listener(
     policy: &crate::config::ResolvedBridgePolicy,
 ) -> Result<
@@ -491,11 +491,11 @@ pub(super) async fn exclude_client(
             drop(lifecycle_guard);
             continue;
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let client_host;
         let (core, updates_task) = {
             let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             {
                 client_host = bridge.client_host.take();
             }
@@ -505,7 +505,7 @@ pub(super) async fn exclude_client(
             task.abort();
         }
         return shutdown_excluded_client(lifecycle_guard, async move {
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             let attachments_result = match client_host {
                 Some(host) => host
                     .shutdown()
@@ -520,7 +520,7 @@ pub(super) async fn exclude_client(
                     .map_err(|error| BridgeError::untyped(error.to_string())),
                 None => Ok(()),
             };
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             attachments_result?;
             core_result
         })

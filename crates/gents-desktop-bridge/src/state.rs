@@ -55,7 +55,7 @@ pub struct ProviderLoginWait {
 
 pub struct DesktopBridge {
     pub core: Option<Arc<ClientCore>>,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(crate) client_host: Option<crate::host::ClientHostService>,
     /// Only native destruction retires a window selection; late IPC cannot
     /// register it again.
@@ -115,7 +115,7 @@ impl DesktopAppState {
         Self {
             bridge: Mutex::new(DesktopBridge {
                 core: None,
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 client_host: None,
                 selected_nodes_by_window: BTreeMap::new(),
                 updates_task: None,

@@ -4739,6 +4739,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4803,6 +4804,7 @@ dependencies = [
  "ts-rs",
  "uuid",
  "webbrowser",
+ "windows-sys 0.61.2",
  "wiremock",
 ]
 
