@@ -120,3 +120,34 @@ fn wire_commands_reject_privileged_raw_access_and_unscoped_session_reads() {
         assert!(serde_json::from_value::<protocol::ClientCommand>(command).is_err());
     }
 }
+
+#[test]
+fn inference_setup_state_uses_scoped_wire_arguments() {
+    let command: protocol::ClientCommand = serde_json::from_value(json!({
+        "name":"client_inference_setup_state", "args":{"nodeDid":"did:fixture"}
+    }))
+    .unwrap();
+    assert!(command.is_cancellable());
+    assert!(serde_json::from_value::<protocol::ClientCommand>(json!({
+        "name":"client_inference_setup_state", "args":{}
+    }))
+    .is_err());
+}
+
+#[tokio::test]
+async fn inference_setup_state_rejects_an_unconfigured_runtime() {
+    let (core, _dir) = crate::tests::support::boot_core().await;
+    let host = ClientHost::new(core.clone());
+    let error = host
+        .execute(
+            protocol::ClientCommand::InferenceSetupState {
+                node_did: "did:unconfigured".into(),
+            },
+            &super::approvals::AttachmentApprovals::default(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, crate::BridgeErrorCode::InvalidArgument);
+    core.shutdown().await.unwrap();
+}
