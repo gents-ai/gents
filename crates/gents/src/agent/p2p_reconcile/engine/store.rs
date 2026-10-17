@@ -267,6 +267,7 @@ impl PairingStateStore for GraphqlPairingStateStore {
                 (
                     peer_id,
                     LoadedPairingApplied {
+                        doc_id: Some(canonical.doc_id.clone()),
                         state: canonical.into_applied(),
                         duplicate_doc_ids: rows.map(|row| row.doc_id).collect(),
                     },
@@ -277,12 +278,23 @@ impl PairingStateStore for GraphqlPairingStateStore {
 
     async fn persist_applied(&self, peer_id: &str, applied: &LoadedPairingApplied) -> Result<()> {
         if applied.state.is_empty() {
+            let delete_observed =
+                if applied.doc_id.is_none() && applied.duplicate_doc_ids.is_empty() {
+                    String::new()
+                } else {
+                    let ids = graphql_string_list_literal(
+                        applied
+                            .doc_id
+                            .iter()
+                            .chain(&applied.duplicate_doc_ids)
+                            .map(String::as_str),
+                    );
+                    format!("observed: delete_PeerPairingApplied(docIDs: {ids}) {{ _docID }}")
+                };
             let peer_id = escape_graphql_string(peer_id);
             let mutation = format!(
-                r#"mutation {{
-                    delete_PeerPairingApplied(
-                        filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}
-                    ) {{ _docID }}
+                r#"mutation {{ {delete_observed}
+                    current: delete_PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{ _docID }}
                 }}"#
             );
             return crate::config_client::ConfigAccess::write_local_response(

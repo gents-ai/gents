@@ -85,6 +85,7 @@ pub struct PairingTickOutcome {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LoadedPairingApplied {
+    pub doc_id: Option<String>,
     pub state: PairingApplied,
     pub duplicate_doc_ids: Vec<String>,
 }
