@@ -731,7 +731,7 @@ async fn sessions_handler(
     State(state): State<RuntimeHttpState>,
     Query(query): Query<SessionHistoryParams>,
 ) -> Response {
-    match load_session_history_snapshot(&state.graphql, &state.node_did, query.limit).await {
+    match load_session_history_snapshot(&state.p2p_graphql, &state.node_did, query.limit).await {
         Ok(snapshot) => (StatusCode::OK, axum::Json(snapshot)).into_response(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
