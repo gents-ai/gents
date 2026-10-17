@@ -134,6 +134,24 @@ fn inference_setup_state_uses_scoped_wire_arguments() {
     .is_err());
 }
 
+#[test]
+fn agent_model_selection_is_scoped_and_not_cancellable() {
+    let mut request = json!({
+        "nodeDid":"did:fixture", "agentId":"agent", "backendId":"backend",
+        "modelName":"model", "reasoningEffort":"high"
+    });
+    let command: protocol::ClientCommand = serde_json::from_value(json!({
+        "name":"client_agent_model_select", "args":{"request":request}
+    }))
+    .unwrap();
+    assert!(!command.is_cancellable());
+    request["sessionId"] = "session".into();
+    assert!(serde_json::from_value::<protocol::ClientCommand>(json!({
+        "name":"client_agent_model_select", "args":{"request":request}
+    }))
+    .is_err());
+}
+
 #[tokio::test]
 async fn inference_setup_state_rejects_an_unconfigured_runtime() {
     let (core, _dir) = crate::tests::support::boot_core().await;

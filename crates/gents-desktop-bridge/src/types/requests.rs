@@ -544,3 +544,13 @@ pub struct PendingQueueEditResult {
     pub request_doc_ids: Vec<String>,
     pub request_ids: Vec<String>,
 }
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentModelSelectionRequest {
+    pub node_did: String,
+    pub agent_id: String,
+    pub backend_id: String,
+    pub model_name: String,
+    pub reasoning_effort: Option<gents::config::ReasoningEffort>,
+}
