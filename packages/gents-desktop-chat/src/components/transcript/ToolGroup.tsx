@@ -275,7 +275,47 @@ function ToolSummary({ tool }: { tool: RenderedToolCallView }) {
   );
 }
 
-function ToolBody({ tool }: { tool: RenderedToolCallView }) {
+function ExecutionDetails({ tool }: { tool: RenderedToolCallView }) {
+  const command =
+    tool.reconstruction.state === "ready" &&
+    tool.presentation.kind === "command"
+      ? tool.presentation
+      : null;
+  const fields = [
+    ["Status", statusLabel(tool)],
+    [
+      "Duration",
+      command?.durationMs != null ? formatDuration(command.durationMs) : null,
+    ],
+    ["Working directory", command?.cwd],
+    ["Exit code", command?.exitCode != null ? String(command.exitCode) : null],
+    ["Execution", tool.awaitMode],
+    ["Deadline", tool.deadlineAt],
+    ["Sandbox", command?.executionMode],
+    ["Network", command?.networkMode],
+  ].filter((field): field is [string, string] => Boolean(field[1]));
+  return (
+    <details className="tool-execution-details">
+      <summary>Execution details</summary>
+      <dl>
+        {fields.map(([label, value]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </details>
+  );
+}
+
+function ToolBody({
+  tool,
+  compactDetails = false,
+}: {
+  tool: RenderedToolCallView;
+  compactDetails?: boolean;
+}) {
   const navigation = useContext(TranscriptNavigationContext);
   const view = tool.presentation;
   const payloadReady = tool.reconstruction.state === "ready";
@@ -284,7 +324,7 @@ function ToolBody({ tool }: { tool: RenderedToolCallView }) {
       {tool.cancelCause ? (
         <CancelCauseDetails cause={tool.cancelCause} />
       ) : null}
-      {tool.awaitMode || tool.deadlineAt ? (
+      {!compactDetails && (tool.awaitMode || tool.deadlineAt) ? (
         <div
           className="tool-meta muted small"
           data-testid={`tool-lifecycle-${tool.itemKey}`}
@@ -324,10 +364,14 @@ function ToolBody({ tool }: { tool: RenderedToolCallView }) {
         )}
       {payloadReady && view.kind === "command" ? (
         <>
-          {view.durationMs != null ||
-          view.cwd ||
-          view.executionMode ||
-          view.networkMode ? (
+          {compactDetails ? (
+            <Payload label="Command" value={view.command} />
+          ) : null}
+          {!compactDetails &&
+          (view.durationMs != null ||
+            view.cwd ||
+            view.executionMode ||
+            view.networkMode) ? (
             <div className="tool-meta muted small">
               {view.durationMs != null ? (
                 <span>{formatDuration(view.durationMs)}</span>
@@ -341,8 +385,14 @@ function ToolBody({ tool }: { tool: RenderedToolCallView }) {
               ) : null}
             </div>
           ) : null}
-          <Payload label="stdout" value={view.stdout} />
-          <Payload label="stderr" value={view.stderr} />
+          <Payload
+            label={compactDetails ? "Output" : "stdout"}
+            value={view.stdout}
+          />
+          <Payload
+            label={compactDetails ? "Errors" : "stderr"}
+            value={view.stderr}
+          />
           <Payload label="output" value={view.fallbackOutput} />
         </>
       ) : null}
@@ -414,11 +464,18 @@ function ToolBody({ tool }: { tool: RenderedToolCallView }) {
         </>
       ) : null}
       <LiveOutput tool={tool} />
+      {compactDetails ? <ExecutionDetails tool={tool} /> : null}
     </div>
   );
 }
 
-function UnifiedToolItem({ tool }: { tool: RenderedToolCallView }) {
+function UnifiedToolItem({
+  tool,
+  compactDetails = false,
+}: {
+  tool: RenderedToolCallView;
+  compactDetails?: boolean;
+}) {
   const live =
     tool.statusKind.toLowerCase() === "running" &&
     Boolean(tool.partialOutputTail);
@@ -437,12 +494,18 @@ function UnifiedToolItem({ tool }: { tool: RenderedToolCallView }) {
           ▸
         </span>
       </summary>
-      <ToolBody tool={tool} />
+      <ToolBody tool={tool} compactDetails={compactDetails} />
     </details>
   );
 }
 
-export function ToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
+export function ToolGroup({
+  tools,
+  compactDetails = false,
+}: {
+  tools: RenderedToolCallView[];
+  compactDetails?: boolean;
+}) {
   return (
     <section className="tool-group">
       {tools.map((tool) => {
@@ -455,7 +518,11 @@ export function ToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
             tool={tool}
           />
         ) : (
-          <UnifiedToolItem key={tool.itemKey} tool={tool} />
+          <UnifiedToolItem
+            key={tool.itemKey}
+            tool={tool}
+            compactDetails={compactDetails}
+          />
         );
       })}
     </section>

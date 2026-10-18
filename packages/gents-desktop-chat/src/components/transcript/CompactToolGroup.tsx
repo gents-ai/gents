@@ -67,9 +67,9 @@ function completedLabel(tools: RenderedToolCallView[]) {
     .map(([kind, count]) => {
       switch (kind) {
         case "fileRead":
-        return "explored files";
+          return "explored files";
         case "fileEdit":
-        return "edited files";
+          return "edited files";
         case "command":
           return `ran ${count} ${count === 1 ? "command" : "commands"}`;
         default:
@@ -128,7 +128,7 @@ function ActivityDetails({
         </button>
       </header>
       <div className="tool-activity-body">
-        <ToolGroup tools={tools} />
+        <ToolGroup tools={tools} compactDetails />
       </div>
     </dialog>,
     document.body,
