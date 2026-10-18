@@ -59,6 +59,7 @@ impl Fixture {
                     argv: vec!["echo".into(), "fixture".into()],
                     cwd: self.key.path.clone(),
                     root: self.key.path.clone(),
+                    writable_root: None,
                     policy: crate::toolset::CommandExecutionPolicy::write_capable(),
                 })
             },

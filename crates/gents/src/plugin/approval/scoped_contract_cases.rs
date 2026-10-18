@@ -47,6 +47,7 @@ fn binding(
                 argv: vec!["fixture-command".into(), format!("action-{}", value.action)],
                 cwd: root.to_owned(),
                 root: root.to_owned(),
+                writable_root: None,
                 policy: crate::toolset::CommandExecutionPolicy::write_capable(),
             },
             policy::ApprovalKind::FileMutation => workspace::BindingAction::FileMutation {

@@ -7,7 +7,7 @@ mod command;
 mod context;
 mod file;
 mod review_task;
-pub(crate) use command::authorize_command;
+pub(crate) use command::{authorize_command, writable_root as command_writable_root};
 pub(crate) use context::{carry, for_request, scope, ReviewInvocation, Reviewer};
 pub(crate) use file::authorize_file_mutation;
 pub use review_task::{
@@ -116,6 +116,7 @@ pub(crate) enum BindingAction {
         argv: Vec<String>,
         cwd: PathBuf,
         root: PathBuf,
+        writable_root: Option<PathBuf>,
         policy: crate::toolset::CommandExecutionPolicy,
     },
     FileMutation {
@@ -159,7 +160,11 @@ impl BindingAction {
                 crate::plugin::allowed::canonical_target(path, Some(*is_dir))?;
             }
             Self::Command {
-                argv, cwd, root, ..
+                argv,
+                cwd,
+                root,
+                writable_root,
+                ..
             } => {
                 anyhow::ensure!(
                     !argv.is_empty() && !argv[0].trim().is_empty(),
@@ -167,6 +172,13 @@ impl BindingAction {
                 );
                 crate::plugin::allowed::canonical_target(root, Some(true))?;
                 crate::plugin::allowed::canonical_target(cwd, Some(true))?;
+                if let Some(writable) = writable_root {
+                    crate::plugin::allowed::canonical_target(writable, Some(true))?;
+                    anyhow::ensure!(
+                        writable.starts_with(root),
+                        "the writable root exceeds the tool root"
+                    );
+                }
                 anyhow::ensure!(
                     cwd.starts_with(root),
                     "the command working directory is outside its tool root"

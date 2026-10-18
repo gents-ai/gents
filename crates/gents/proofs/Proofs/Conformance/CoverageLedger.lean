@@ -1841,6 +1841,12 @@ def caseCoverage : List CoverageEntry :=
       "Generated Task documents bind node, task, agent, operator-selected policy text, eligibility and excluded execution effects. Store lookup, template evaluation, policy fingerprint integrity, concurrent edits and provider behavior remain native adapter boundaries.")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "workspace_command_root_cases"
+      "WorkspaceCommandRootCases"
+      "plugin::approval::workspace::command::tests::generated_workspace_command_roots_preserve_the_tool_ceiling"
+      "Canonical host paths drive the production writable-root selection. A macOS execution regression checks real writes inside the project, rejection in its sibling and Full access restoring the configured root; other platforms retain the existing sandbox-unavailable barrier.")
+      "tool-policy" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "workspace_permission_cases"
       "WorkspacePermissionCases"
       "tool_policy::workspace_permissions::tests::generated_workspace_permission_cases"
