@@ -261,12 +261,58 @@ async fn access_review_cannot_replace_a_budgeted_callers_ledger_or_invocation() 
 }
 
 #[tokio::test]
+async fn access_review_without_reported_usage_invalidates_the_callers_allowance() {
+    let action_id = uuid::Uuid::new_v4().to_string();
+    let fixture = TitleFixture::with_auxiliary(
+        RequestPurpose::AccessReview,
+        Some(review_input(&action_id)),
+        Some(10_000),
+    )
+    .await;
+    let provider = TitleProvider::new(
+        vec![
+            RawStreamingChoice::Message(
+                serde_json::json!({ "actionId": action_id, "decision": "allow", "reason": "Within the requested work." }).to_string(),
+            ),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+        false,
+    );
+    let calls = provider.calls.clone();
+    let budget = crate::agent::loop_stream::AggregateTokenBudget::new(10_000);
+    let tasks = super::super::auxiliary_tasks::AuxiliaryTasks::default();
+    let (_shutdown, shutdown_rx) = watch::channel(false);
+    let error = fixture
+        .task(provider, true)
+        .run_review(
+            fixture.title.clone(),
+            review_execution(&fixture, &action_id, Some(budget.clone())),
+            shutdown_rx,
+            &tasks,
+        )
+        .await
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("aggregate_token_usage_missing"));
+    drain_reviews(&tasks, false).await;
+    assert!(budget.snapshot().is_err());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.session_message_count().await, 0);
+    assert_eq!(
+        fixture.terminal_row().await,
+        (
+            RequestLifecycleState::Failed,
+            Some(gents_protocol::output::TerminalOutput::NoMessage)
+        )
+    );
+}
+
+#[tokio::test]
 async fn dropping_an_access_review_caller_drains_received_output_before_join() {
     let action_id = uuid::Uuid::new_v4().to_string();
     let mut fixture = TitleFixture::with_auxiliary(
         RequestPurpose::AccessReview,
         Some(review_input(&action_id)),
-        None,
+        Some(10_000),
     )
     .await;
     Arc::get_mut(&mut fixture.agent_config)
@@ -276,7 +322,8 @@ async fn dropping_an_access_review_caller_drains_received_output_before_join() {
     let calls = provider.calls.clone();
     let task = fixture.task(provider, true);
     let request = fixture.title.clone();
-    let execution = review_execution(&fixture, &action_id, None);
+    let budget = crate::agent::loop_stream::AggregateTokenBudget::new(10_000);
+    let execution = review_execution(&fixture, &action_id, Some(budget.clone()));
     let caller_token = execution.cancellation.clone();
     let tasks = super::super::auxiliary_tasks::AuxiliaryTasks::default();
     let (_shutdown, shutdown_rx) = watch::channel(false);
@@ -296,6 +343,7 @@ async fn dropping_an_access_review_caller_drains_received_output_before_join() {
     caller.abort();
     assert!(caller.await.unwrap_err().is_cancelled());
     drain_reviews(&tasks, true).await;
+    assert!(budget.snapshot().is_err());
     assert!(!caller_token.is_cancelled());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(

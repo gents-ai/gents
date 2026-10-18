@@ -48,6 +48,18 @@ impl std::error::Error for ReviewFailure {
     }
 }
 
+/// A failed or dropped call need not carry a final usage report. Its caller
+/// cannot resume provider work using the allowance from before that call.
+struct ReviewBudgetGuard(Option<AggregateTokenBudget>);
+
+impl Drop for ReviewBudgetGuard {
+    fn drop(&mut self) {
+        if let Some(budget) = &self.0 {
+            let _ = budget.invalidate();
+        }
+    }
+}
+
 impl<M: crate::llm::rig_compat::ProviderModel> AuxiliaryTask<M> {
     pub(super) async fn execute_review(
         &self,
@@ -94,6 +106,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AuxiliaryTask<M> {
         config.max_turns = 1;
         config.retry_policy = crate::agent::completion_retry::CompletionRetryPolicy::no_retry();
         config.aggregate_token_budget = execution.aggregate_token_budget;
+        let mut budget_guard = ReviewBudgetGuard(config.aggregate_token_budget.clone());
         let call = admission::scope_call(
             CallKind::OneOff,
             1,
@@ -120,10 +133,14 @@ impl<M: crate::llm::rig_compat::ProviderModel> AuxiliaryTask<M> {
             return Ok(AuxiliaryResult::Interrupted);
         };
         match result {
-            Ok(Ok(reply)) if !execution.cancellation.is_cancelled() => {
-                Ok(AuxiliaryResult::Reviewed(reply))
+            Ok(Ok(reply)) => {
+                budget_guard.0 = None;
+                if execution.cancellation.is_cancelled() {
+                    Ok(AuxiliaryResult::Interrupted)
+                } else {
+                    Ok(AuxiliaryResult::Reviewed(reply))
+                }
             }
-            Ok(Ok(_)) => Ok(AuxiliaryResult::Interrupted),
             Ok(Err(error)) => {
                 super::super::request::flush_received_preparation_partial("access review failure")
                     .await?;
