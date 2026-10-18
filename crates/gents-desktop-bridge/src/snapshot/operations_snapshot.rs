@@ -1,6 +1,6 @@
 use super::super::types::{
     ActiveToolCallView, BackgroundedToolView, NativeExecutorStatusView, RuntimeLivenessView,
-    StuckWorkDiagnosticView,
+    StuckWorkDiagnosticView, WaitStatusProjectionView,
 };
 
 #[derive(Debug, Clone)]

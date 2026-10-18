@@ -232,7 +232,10 @@ pub(crate) async fn handle_read_tool_output(
 pub(crate) async fn read_tool_output_slice(
     node: &EmbeddedNode,
     caller: &ProcessControlScope,
-    live_outputs: &LiveToolOutputRegistry,
+    // Unused here by design: elapsed/status come from the authoritative
+    // persisted lifecycle projection and output evidence from the canonical
+    // output owner, not the live-output registry.
+    _live_outputs: &LiveToolOutputRegistry,
     tool_call_id: &str,
     offset: u64,
     max_bytes: usize,
@@ -292,10 +295,6 @@ pub(crate) async fn read_tool_output_slice(
     );
     let status = projection.status_token().to_string();
     let exited = projection.lifecycle.is_terminal();
-    // Live-output registry is unused here: elapsed/status come from the
-    // authoritative persisted lifecycle projection, and output evidence
-    // comes from the canonical output owner below.
-    let _ = &live_outputs;
     let combined = canonical_tool_output(
         node,
         &row.doc_id,

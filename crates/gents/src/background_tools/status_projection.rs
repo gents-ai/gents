@@ -4,7 +4,7 @@
 //! `gents_protocol::wait_status` so the desktop bridge consumes the exact
 //! same pure contract without duplicating logic.
 
-pub use gents_protocol::wait_status::{WaitLifecycle, WaitStatusProjection, PREVIEW_MAX_BYTES};
+pub use gents_protocol::wait_status::{WaitStatusProjection, PREVIEW_MAX_BYTES};
 
 /// Bounded recent-output evidence derived from the canonical ToolOutput
 /// text. Byte volume is always truthful; text is exposed only as a trailing
