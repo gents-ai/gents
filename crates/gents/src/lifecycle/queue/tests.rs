@@ -255,15 +255,16 @@ struct CanonicalBackgroundFixture {
 }
 
 async fn canonical_background_fixture(db: &TestDb, session_id: &str) -> CanonicalBackgroundFixture {
+    canonical_background_fixture_with_input(db, session_id, &RequestInput::default()).await
+}
+
+async fn canonical_background_fixture_with_input(
+    db: &TestDb,
+    session_id: &str,
+    input: &RequestInput,
+) -> CanonicalBackgroundFixture {
     let request_id = format!("background-parent-{}", uuid::Uuid::new_v4());
-    insert_raw_queue_request(
-        &db.node,
-        db.node_did(),
-        &request_id,
-        session_id,
-        &RequestInput::default(),
-    )
-    .await;
+    insert_raw_queue_request(&db.node, db.node_did(), &request_id, session_id, input).await;
     let request = crate::request_binding::load_agent_request(&db.node, &request_id)
         .await
         .expect("load canonical fixture parent")
@@ -497,6 +498,39 @@ mod pin_tests {
             normalized,
             "request_id: \"req-session-mutation-1\", purpose: \"normal\", node_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", agent_id: \"behavior-1\", session_id: \"sess-pin-parent\", retry_root_request: \"req-session-mutation-1\", retry_key: \"retry-key-session-1\", content: \"steering content\", input: { queue: { policy: \"append\", source: \"steering\" } }, execution_origin: \"interactive\", caused_by_correlation: \"corr-parent\", caused_by_trigger_context: \"{\\\"a\\\":\\\"b\\\"}\", created_at: \"2030-01-01T00:00:00Z\", retry_count: 0, max_retries: 3, request_hop: 2, caused_by_parent_request_id: \"pin-parent-request\", caused_by_parent_request_doc_id: \"pin-parent-doc\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"pin-parent-request\", runtime_source_kind: \"local-control\", lifecycle_state: \"pending\", failure_reason: \"\""
         );
+    }
+
+    #[tokio::test]
+    async fn runtime_controls_keep_the_parent_workspace_binding() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let _identity = pin_fixed_signing_identity(tempdir.path());
+        let mut parent = pin_parent_request();
+        parent.workspace_id = Some("workspace".into());
+        parent.workspace_owner_node_did = Some("did:key:workspace-owner".into());
+        parent.workspace_authority = Some("readOnly".into());
+        parent.workspace_seal_hash = Some("seal".into());
+        for source in [QueueSource::BackgroundCompletion, QueueSource::Steering] {
+            let mutation = session_request_create_mutation(
+                &parent,
+                TEST_AGENT_ID,
+                "continue",
+                ExecutionOrigin::Scheduled,
+                wake_queue_input(hints(source, QueuePolicy::Append)),
+                "runtime-control",
+                "2030-01-01T00:00:00Z",
+                None,
+            )
+            .await
+            .unwrap();
+            for field in [
+                "workspace_id: \"workspace\"",
+                "workspace_owner_node_did: \"did:key:workspace-owner\"",
+                "workspace_authority: \"readOnly\"",
+                "workspace_seal_hash: \"seal\"",
+            ] {
+                assert!(mutation.contains(field), "{field}: {mutation}");
+            }
+        }
     }
 
     #[tokio::test]
