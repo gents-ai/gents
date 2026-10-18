@@ -1036,4 +1036,71 @@ describe("ChatTranscriptPanel states", () => {
       screen.getByRole("button", { name: "Scroll to bottom" }),
     ).toBeInTheDocument();
   });
+  it("holds the reading anchor while remote pagination crosses hidden input pages", async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const recent = userMessage({ itemKey: "recent", content: "Recent message" });
+    function HiddenHistory() {
+      const [session, setSession] = useState(() =>
+        makeSession({
+          timelineItems: [recent],
+          timelinePage: {
+            totalItems: -1,
+            pageItems: 1,
+            hasOlder: true,
+            hasNewer: false,
+            oldestItemKey: "recent",
+            newestItemKey: "recent",
+          },
+        }),
+      );
+      return (
+        <ChatTranscriptPanel
+          selectedSessionId="s1"
+          session={session}
+          onLoadOlder={async () => {
+            setSession((current) => ({
+              ...current,
+              timelinePage: { ...current.timelinePage!, oldestItemKey: "hidden-input" },
+            }));
+            await pending;
+            setSession((current) => ({
+              ...current,
+              timelineItems: [
+                userMessage({ itemKey: "older", content: "Older message" }),
+                recent,
+              ],
+              timelinePage: {
+                ...current.timelinePage!,
+                oldestItemKey: "older",
+                hasOlder: false,
+              },
+            }));
+            return true;
+          }}
+        />
+      );
+    }
+    render(<HiddenHistory />);
+    const panel = screen.getByTestId("transcript-panel");
+    Object.defineProperties(panel, {
+      scrollHeight: {
+        configurable: true,
+        get: () => panel.querySelectorAll(".message-card").length * 200 + 200,
+      },
+      scrollTop: { configurable: true, writable: true, value: 0 },
+      clientHeight: { configurable: true, value: 200 },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await act(async () => {
+      finish();
+      await pending;
+    });
+    await waitFor(() => expect(panel.scrollTop).toBe(200));
+  });
 });
