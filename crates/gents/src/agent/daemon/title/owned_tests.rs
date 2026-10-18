@@ -54,8 +54,9 @@ impl rig::completion::GetTokenUsage for ReviewUsage {
 
 #[derive(Clone)]
 struct ReviewProvider {
-    reply: String,
+    reply: Option<String>,
     requests: Arc<Mutex<Vec<CompletionRequest>>>,
+    pause: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
 }
 
 impl CompletionModel for ReviewProvider {
@@ -78,10 +79,25 @@ impl CompletionModel for ReviewProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<ReviewUsage>, CompletionError> {
+        if let Some((entered, release)) = &self.pause {
+            entered.notify_one();
+            release.notified().await;
+        }
         crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
+        let reply = self.reply.clone().unwrap_or_else(|| {
+            let action_id = request.chat_history.iter().find_map(|message| {
+                let rig::message::Message::User { content } = message else { return None; };
+                content.iter().find_map(|part| {
+                    let rig::message::UserContent::Text(text) = part else { return None; };
+                    serde_json::from_str::<serde_json::Value>(&text.text).ok()?
+                        .get("actionId")?.as_str().map(str::to_owned)
+                })
+            }).expect("review prompt names its invocation");
+            serde_json::json!({"actionId":action_id,"decision":"allow","reason":"Within the requested work."}).to_string()
+        });
         self.requests.lock().unwrap().push(request);
         let events = vec![
-            RawStreamingChoice::Message(self.reply.clone()),
+            RawStreamingChoice::Message(reply),
             RawStreamingChoice::FinalResponse(ReviewUsage {
                 usage: rig::completion::Usage {
                     input_tokens: 3,
@@ -143,8 +159,9 @@ async fn access_review_uses_the_caller_ledger_without_tools_or_chat_publication(
     .await;
     let reply = serde_json::json!({ "actionId": action_id, "decision": "allow", "reason": "The command checks the project." }).to_string();
     let provider = ReviewProvider {
-        reply: reply.clone(),
+        reply: Some(reply.clone()),
         requests: Arc::default(),
+        pause: None,
     };
     let observed = provider.requests.clone();
     let budget = crate::agent::loop_stream::AggregateTokenBudget::new(10_000);
@@ -218,6 +235,299 @@ async fn access_review_uses_the_caller_ledger_without_tools_or_chat_publication(
         .as_array()
         .unwrap()
         .is_empty());
+}
+
+async fn install_review_policy(fixture: &TitleFixture, prompt: &str) {
+    use crate::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    let document = serde_json::json!({
+        "node_did": fixture.parent.node_did,
+        "task_id": "review",
+        "agent_id": fixture.parent.agent_id,
+        "prompt_template": prompt,
+    });
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: crate::Collection::Task,
+        add: document.clone(),
+        update: document,
+    }])
+    .unwrap();
+    ConfigAccess::transact_local_write(&fixture.node, None, "test.review_policy", |txn| {
+        let plan = &plan;
+        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn workspace_command_uses_the_configured_review_task_and_the_callers_ledger() {
+    use crate::plugin::approval::workspace;
+
+    let fixture = TitleFixture::with_auxiliary(
+        RequestPurpose::AccessReview,
+        Some(review_input("unused")),
+        Some(10_000),
+    )
+    .await;
+    install_review_policy(
+        &fixture,
+        "Allow commands that validate the requested project changes.",
+    )
+    .await;
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let key = workspace::WorkspaceKey::canonical(
+        &fixture.parent.node_did,
+        fixture.parent.requester_did.as_deref().unwrap(),
+        &fixture.parent.agent_id,
+        project.path(),
+    )
+    .unwrap();
+    workspace::save_mode(
+        home.path(),
+        &key,
+        0,
+        workspace::Mode::AutoReview,
+        Some("review"),
+    )
+    .unwrap();
+    let calls = Arc::default();
+    let provider = ReviewProvider {
+        reply: None,
+        requests: Arc::clone(&calls),
+        pause: None,
+    };
+    let tasks = super::super::auxiliary_tasks::AuxiliaryTasks::default();
+    let budget = crate::agent::loop_stream::AggregateTokenBudget::new(10_000);
+    let (_shutdown, shutdown_rx) = watch::channel(false);
+    let reviewer = fixture
+        .task(fixture.admitted(provider), true)
+        .workspace_reviewer(
+            &fixture.parent,
+            Some(budget.clone()),
+            tokio_util::sync::CancellationToken::new(),
+            shutdown_rx,
+            tasks.clone(),
+        );
+    let context = workspace::for_request(
+        Some(home.path()),
+        &fixture.parent.node_did,
+        fixture.parent.requester_did.as_deref(),
+        &fixture.parent.agent_id,
+        Some(project.path()),
+    )
+    .unwrap()
+    .unwrap()
+    .with_reviewer(reviewer.callback.clone());
+    let tool_context = crate::toolset::ToolContext::new(key.path.clone(), false).unwrap();
+    let (program, arguments) = if cfg!(windows) {
+        (
+            "cmd.exe",
+            vec!["/D".into(), "/C".into(), "echo".into(), "fixture".into()],
+        )
+    } else {
+        ("/bin/echo", vec!["fixture".into()])
+    };
+    let output = workspace::scope(
+        Some(context),
+        crate::toolset::run_command_for_test(
+            &tool_context,
+            "bash_unrestricted",
+            program,
+            &arguments,
+            None,
+            Duration::from_secs(5),
+            &crate::toolset::CommandExecutionPolicy::write_capable()
+                .with_mode(crate::toolset::CommandExecutionMode::Unrestricted),
+            true,
+            2048,
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&output).unwrap()["stdout"]
+            .as_str()
+            .unwrap()
+            .trim_end(),
+        "fixture"
+    );
+    drain_reviews(&tasks, true).await;
+    assert!(reviewer.take_failure().is_none());
+    assert_eq!(budget.snapshot().unwrap().used, 8);
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert!(calls[0].tools.is_empty());
+    drop(calls);
+    assert_eq!(fixture.session_message_count().await, 0);
+    assert!(crate::plugin::approval::pending_requests(home.path())
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn changing_the_review_task_while_it_runs_discards_its_allowance() {
+    use crate::plugin::approval::workspace;
+
+    let fixture = TitleFixture::with_auxiliary(
+        RequestPurpose::AccessReview,
+        Some(review_input("unused")),
+        None,
+    )
+    .await;
+    install_review_policy(&fixture, "Review the requested project changes.").await;
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let key = workspace::WorkspaceKey::canonical(
+        &fixture.parent.node_did,
+        fixture.parent.requester_did.as_deref().unwrap(),
+        &fixture.parent.agent_id,
+        project.path(),
+    )
+    .unwrap();
+    workspace::save_mode(
+        home.path(),
+        &key,
+        0,
+        workspace::Mode::AutoReview,
+        Some("review"),
+    )
+    .unwrap();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let calls = Arc::default();
+    let provider = ReviewProvider {
+        reply: None,
+        requests: Arc::clone(&calls),
+        pause: Some((entered.clone(), release.clone())),
+    };
+    let tasks = super::super::auxiliary_tasks::AuxiliaryTasks::default();
+    let (_shutdown, shutdown_rx) = watch::channel(false);
+    let reviewer = fixture
+        .task(fixture.admitted(provider), true)
+        .workspace_reviewer(
+            &fixture.parent,
+            None,
+            tokio_util::sync::CancellationToken::new(),
+            shutdown_rx,
+            tasks.clone(),
+        );
+    let context = workspace::for_request(
+        Some(home.path()),
+        &fixture.parent.node_did,
+        fixture.parent.requester_did.as_deref(),
+        &fixture.parent.agent_id,
+        Some(project.path()),
+    )
+    .unwrap()
+    .unwrap()
+    .with_reviewer(reviewer.callback.clone());
+    let home_path = home.path().to_owned();
+    let project_path = key.path.clone();
+    let consent = tokio::spawn(workspace::scope(Some(context), async move {
+        workspace::authorize_command(
+            &["echo".into(), "fixture".into()],
+            &project_path,
+            &project_path,
+            &crate::toolset::CommandExecutionPolicy::write_capable(),
+        )
+        .await
+    }));
+    tokio::time::timeout(Duration::from_secs(10), entered.notified())
+        .await
+        .unwrap();
+    install_review_policy(&fixture, "Ask before running commands.").await;
+    release.notify_one();
+    let error = consent.await.unwrap().unwrap_err();
+    assert!(error.to_string().contains("not approved"));
+    drain_reviews(&tasks, true).await;
+    assert!(reviewer.take_failure().is_none());
+    assert_eq!(calls.lock().unwrap().len(), 1);
+    assert!(crate::plugin::approval::pending_requests(&home_path)
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn a_lost_review_worker_cancels_the_caller_and_retains_the_fatal_error() {
+    use crate::plugin::approval::workspace;
+
+    let fixture = TitleFixture::with_auxiliary(
+        RequestPurpose::AccessReview,
+        Some(review_input("unused")),
+        None,
+    )
+    .await;
+    install_review_policy(&fixture, "Review the requested action.").await;
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let key = workspace::WorkspaceKey::canonical(
+        &fixture.parent.node_did,
+        fixture.parent.requester_did.as_deref().unwrap(),
+        &fixture.parent.agent_id,
+        project.path(),
+    )
+    .unwrap();
+    workspace::save_mode(
+        home.path(),
+        &key,
+        0,
+        workspace::Mode::AutoReview,
+        Some("review"),
+    )
+    .unwrap();
+    let mut provider = TitleProvider::new(Vec::new(), false);
+    provider.panic_on_stream = true;
+    let cancellation = tokio_util::sync::CancellationToken::new();
+    let tasks = super::super::auxiliary_tasks::AuxiliaryTasks::default();
+    let (_shutdown, shutdown_rx) = watch::channel(false);
+    let reviewer = fixture.task(provider, true).workspace_reviewer(
+        &fixture.parent,
+        None,
+        cancellation.clone(),
+        shutdown_rx,
+        tasks.clone(),
+    );
+    let context = workspace::for_request(
+        Some(home.path()),
+        &fixture.parent.node_did,
+        fixture.parent.requester_did.as_deref(),
+        &fixture.parent.agent_id,
+        Some(project.path()),
+    )
+    .unwrap()
+    .unwrap()
+    .with_reviewer(reviewer.callback.clone());
+    let result = workspace::scope(
+        Some(context),
+        crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+            None,
+            cancellation.clone(),
+            workspace::authorize_command(
+                &["echo".into(), "fixture".into()],
+                &key.path,
+                &key.path,
+                &crate::toolset::CommandExecutionPolicy::write_capable(),
+            ),
+        ),
+    )
+    .await;
+    assert!(result.is_err());
+    assert!(cancellation.is_cancelled());
+    assert!(super::super::ShutdownDrainFailure::occurs_in(
+        &reviewer.take_failure().unwrap()
+    ));
+    tasks.close();
+    let joined = tokio::time::timeout(Duration::from_secs(10), tasks.join_next())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(joined.unwrap_err().is_panic());
+    assert!(tasks.join_next().await.is_none());
+    assert!(crate::plugin::approval::pending_requests(home.path())
+        .unwrap()
+        .is_empty());
+    assert_eq!(fixture.session_message_count().await, 0);
 }
 
 #[tokio::test]
@@ -485,6 +795,7 @@ struct TitleProvider {
     third_poll: Option<Arc<tokio::sync::Notify>>,
     fence_generation: Option<(Arc<EmbeddedNode>, String, String)>,
     error: Option<String>,
+    panic_on_stream: bool,
 }
 
 #[derive(Default)]
@@ -512,6 +823,7 @@ impl TitleProvider {
             third_poll: None,
             fence_generation: None,
             error: None,
+            panic_on_stream: false,
         }
     }
 }
@@ -537,6 +849,7 @@ impl CompletionModel for TitleProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
+        assert!(!self.panic_on_stream, "scripted review worker panic");
         self.calls.fetch_add(1, Ordering::SeqCst);
         crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
         if let Some(error) = &self.error {

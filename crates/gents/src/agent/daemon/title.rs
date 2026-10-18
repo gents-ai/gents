@@ -25,6 +25,7 @@ async fn flush_received_title_partial(context: &str) -> Result<()> {
     super::request::flush_received_preparation_partial(&format!("title {context}")).await
 }
 
+#[derive(Clone)]
 pub(super) struct AuxiliaryTask<M: crate::llm::rig_compat::ProviderModel> {
     node: Arc<EmbeddedNode>,
     agent_config: Arc<crate::config::ResolvedAgent>,
@@ -167,7 +168,11 @@ impl<M: crate::llm::rig_compat::ProviderModel> AuxiliaryTask<M> {
         })?;
         let result = reply_rx
             .await
-            .context("access review worker stopped without a result")?
+            .map_err(|error| ShutdownDrainFailure {
+                reason: format!(
+                    "access review worker stopped before confirming output retention: {error}"
+                ),
+            })?
             .map_err(anyhow::Error::new);
         guard.disarm();
         result
