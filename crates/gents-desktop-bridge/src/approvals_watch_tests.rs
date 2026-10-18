@@ -9,6 +9,9 @@ use tokio::sync::{mpsc, watch};
 
 use super::{changes_queue, watch_queue, PendingQueue, PromptSubscriptions, QueueWatch};
 
+#[path = "approvals_watch_scoped_tests.rs"]
+mod scoped;
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -17,17 +20,19 @@ fn now_ms() -> u64 {
 }
 
 fn question(id: &str) -> Request {
-    Request {
-        id: id.to_owned(),
-        plugin: "team/ocr".to_owned(),
-        path: "/data/x.pdf".to_owned(),
-        folder: PathBuf::from("/data"),
-        is_dir: false,
-        access: BindAccess::Read,
-        session_id: None,
-        created_at_ms: now_ms(),
-        expires_at_ms: now_ms() + approval::WAIT.as_millis() as u64,
-    }
+    let mut request = Request::new(
+        "team/ocr",
+        &gents::plugin::allowed::Resolved {
+            target: PathBuf::from("/data/x.pdf"),
+            is_dir: false,
+        },
+        BindAccess::Read,
+        None,
+    );
+    request.id = id.to_owned();
+    request.created_at_ms = now_ms();
+    request.expires_at_ms = now_ms() + approval::WAIT.as_millis() as u64;
+    request
 }
 
 fn file_question(home: &Path, id: &str) {
