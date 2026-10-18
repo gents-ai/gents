@@ -83,7 +83,10 @@ export const MessageList = memo(function MessageList({
         })}
       </ul>
       {requestCancelCause ? (
-        <AssistantCancelCauseTurn cause={requestCancelCause} />
+        <AssistantCancelCauseTurn
+          cause={requestCancelCause}
+          compact={compactTools}
+        />
       ) : null}
     </>
   );

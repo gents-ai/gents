@@ -29,6 +29,26 @@ function tool(itemKey: string, statusKind = "success"): RenderedToolCallView {
 }
 
 describe("compact action history", () => {
+  it("keeps cancellation evidence behind a compact stop disclosure", () => {
+    const html = renderToStaticMarkup(
+      createElement(MessageList, {
+        timelineItems: [],
+        compactTools: true,
+        requestCancelCause: {
+          cause: "userCancelled",
+          source: "requestInterrupt",
+          confidence: "certain",
+          at: null,
+          evidence: ["direct interrupt"],
+        },
+      }),
+    );
+    expect(html).toContain(
+      '<details class="turn-stop"><summary>Stopped by you</summary>',
+    );
+    expect(html).not.toContain('class="cause-badge');
+    expect(html).toContain("direct interrupt");
+  });
   it("combines consecutive groups without crossing a message or changing native items", () => {
     const group = (itemKey: string): RenderedTimelineItem => ({
       kind: "toolGroup",
