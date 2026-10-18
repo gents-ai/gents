@@ -108,14 +108,29 @@ def approvalScope (available : List Scope) (expected : Scope) : Option Scope :=
 def approvalScopeMatches (available : List Scope) (expected : Scope) : Bool :=
   approvalScope available expected == some expected
 
+inductive ApprovalKind where
+  | filesystem | command
+  deriving DecidableEq, Repr
+
+/-- A command decision covers its complete argument vector, working directory
+and execution policy. Remembering a filesystem path cannot authorize later
+commands; command questions admit only an allow-once or deny answer. -/
+def answerAllowed (kind : ApprovalKind) (remembered : Bool) : Bool :=
+  kind == .filesystem || !remembered
+
+def rememberedAnswer : ToolPolicy.PluginApproval.Answer → Bool
+  | .path | .folder => true
+  | .once | .deny => false
+
 /-- Scoped answers reuse the ordinary question's expiry, cancellation and
 single-answer rules. Native adapters persist remembered paths only under
 the question's exact workspace key and keep their queue format separate
 from unscoped questions that older responders can answer. -/
 def answerApproval (available : List Scope) (expected : Grant)
     (state : ToolPolicy.PluginApproval.State) (id : String) (now : Nat)
-    (choice : ToolPolicy.PluginApproval.Answer) : ToolPolicy.PluginApproval.State × Bool :=
-  if approvalScopeMatches available expected.scope then
+    (choice : ToolPolicy.PluginApproval.Answer) (kind : ApprovalKind := .filesystem) :
+    ToolPolicy.PluginApproval.State × Bool :=
+  if approvalScopeMatches available expected.scope && answerAllowed kind (rememberedAnswer choice) then
     ToolPolicy.PluginApproval.answer state id now choice
   else (state, false)
 
@@ -135,18 +150,36 @@ def consumeApproval (available : List Scope) (expected received : Grant)
     grant := some received }
   if approvalScopeMatches available expected.scope && validGrant input then some allowed else none
 
-theorem unavailable_workspace_cannot_receive_an_answer (expected : Grant)
+theorem unavailable_workspace_cannot_receive_an_answer (expected : Grant) (kind : ApprovalKind)
     (state : ToolPolicy.PluginApproval.State) (id : String) (now : Nat)
     (choice : ToolPolicy.PluginApproval.Answer) :
-    answerApproval [] expected state id now choice = (state, false) := by
+    answerApproval [] expected state id now choice kind = (state, false) := by
   simp [answerApproval, approvalScopeMatches, approvalScope]
 
 theorem a_changed_selection_rejects_the_answer (available : List Scope) (expected : Grant)
+    (kind : ApprovalKind)
     (state : ToolPolicy.PluginApproval.State) (id : String) (now : Nat)
     (choice : ToolPolicy.PluginApproval.Answer)
     (changed : approvalScopeMatches available expected.scope = false) :
-    answerApproval available expected state id now choice = (state, false) := by
+    answerApproval available expected state id now choice kind = (state, false) := by
   simp [answerApproval, changed]
+
+theorem command_questions_cannot_remember_a_file (available : List Scope) (expected : Grant)
+    (state : ToolPolicy.PluginApproval.State) (id : String) (now : Nat) :
+    answerApproval available expected state id now .path .command = (state, false) := by
+  simp [answerApproval, answerAllowed, rememberedAnswer]
+
+theorem command_questions_cannot_remember_a_folder (available : List Scope) (expected : Grant)
+    (state : ToolPolicy.PluginApproval.State) (id : String) (now : Nat) :
+    answerApproval available expected state id now .folder .command = (state, false) := by
+  simp [answerApproval, answerAllowed, rememberedAnswer]
+
+theorem transient_answers_use_the_same_admission (available : List Scope) (expected : Grant)
+    (state : ToolPolicy.PluginApproval.State) (id : String) (now : Nat)
+    (choice : ToolPolicy.PluginApproval.Answer) (transient : rememberedAnswer choice = false) :
+    answerApproval available expected state id now choice .command =
+      answerApproval available expected state id now choice .filesystem := by
+  simp [answerApproval, answerAllowed, transient]
 
 theorem a_changed_selection_rejects_delivery (available : List Scope)
     (expected received : Grant) (allowed : Bool)
@@ -180,6 +213,10 @@ def Review.wireName : Review → String
   | .ask => "ask"
   | .deny => "deny"
   | .unavailable => "unavailable"
+
+def ApprovalKind.wireName : ApprovalKind → String
+  | .filesystem => "filesystem"
+  | .command => "command"
 
 structure Case where
   input : Input
