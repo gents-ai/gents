@@ -1825,8 +1825,8 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "workspace_permission_write_cases"
       "WorkspacePermissionWriteCases"
-      "tool_policy::workspace_permissions::tests::generated_workspace_permission_write_cases"
-      "Generated selection transitions cover stale revisions, missing reviewers, retained task references, no-op writes and exhausted revisions. Native filesystem locking, atomic replacement and canonical scope keys require adapter checks.")
+      "plugin::approval::workspace::tests::generated_workspace_permission_writes_preserve_selected_policy_versions"
+      "Generated transitions drive persisted selections with policy fingerprints on one Task ID, stale revisions, missing reviewers, retained references, no-op writes and exhausted revisions. Concurrent locking and filesystem failure handling need adapter checks.")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "access_review_cases"
@@ -1838,7 +1838,7 @@ def caseCoverage : List CoverageEntry :=
       "access_review_task_cases"
       "AccessReviewTaskCases"
       "agent::daemon::title::review::task::tests::generated_task_policies_bind_the_configured_task_fields"
-      "Generated Task documents bind exact node, task and agent selection, enabled policy text and excluded execution effects. Store lookup, template evaluation, stale-policy rejection and provider behavior remain native adapter boundaries.")
+      "Generated Task documents bind node, task, agent, operator-selected policy text, eligibility and excluded execution effects. Store lookup, template evaluation, policy fingerprint integrity, concurrent edits and provider behavior remain native adapter boundaries.")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "workspace_permission_cases"

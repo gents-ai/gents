@@ -80,7 +80,11 @@ private def completionCases : List Json :=
 def casesJson : Json := toJson (replyCases ++ traceCases ++ routeCases ++ completionCases)
 
 private def taskCaseJson (policy : ToolPolicy.AccessReview.TaskPolicy)
-    (budgetOnly : Bool := false) : Json := Json.mkObj [
+    (budgetOnly : Bool := false) (approvedPrompt : Option String := none) : Json :=
+  let selected := approvedPrompt.getD policy.prompt
+  Json.mkObj [
+  ("approvedPrompt", toJson selected),
+  ("selectedEligible", toJson (ToolPolicy.AccessReview.selectedTaskEligible "node" "review" "agent" selected policy)),
   ("node", toJson "node"), ("taskId", toJson "review"), ("agent", toJson "agent"),
   ("document", Json.mkObj [
     ("node_did", toJson policy.node), ("task_id", toJson policy.task),
@@ -116,7 +120,9 @@ def taskCasesJson : Json :=
         schema := schema }
   toJson (combinations ++ [taskCaseJson { base with prompt := "" },
     taskCaseJson { base with prompt := " \n\t" },
-    taskCaseJson { base with goal := true } true] ++
+    taskCaseJson { base with goal := true } true,
+    taskCaseJson base false (some "Earlier policy."),
+    taskCaseJson base false (some (base.prompt ++ " "))] ++
     GoalAutomation.objectiveWhitespaceCodepoints.map (fun value =>
       taskCaseJson { base with prompt := String.singleton (Char.ofNat value) }))
 

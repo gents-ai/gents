@@ -10,7 +10,10 @@ mod review_task;
 pub(crate) use command::authorize_command;
 pub(crate) use context::{carry, for_request, scope, ReviewInvocation, Reviewer};
 pub(crate) use file::authorize_file_mutation;
-pub use review_task::{default_review_task, review_task_is_eligible, review_task_policy};
+pub use review_task::{
+    default_review_task, review_task_is_eligible, review_task_matches_selection,
+    review_task_policy, ReviewTaskSelection,
+};
 
 use gents_loop::tool_policy::workspace_permissions::{self as policy, Grant, Input, Review, Route};
 
@@ -77,7 +80,7 @@ impl WorkspaceKey {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Settings {
     pub workspace: WorkspaceKey,
-    pub selection: Preference<String>,
+    pub selection: Preference<ReviewTaskSelection>,
     #[serde(default)]
     pub dirs: Vec<crate::plugin::allowed::AllowedDir>,
 }
@@ -391,20 +394,22 @@ pub fn save_mode(
     key: &WorkspaceKey,
     expected_revision: u64,
     mode: Mode,
-    review_task_id: Option<&str>,
+    review_task: Option<&ReviewTaskSelection>,
 ) -> Result<Settings> {
     let _lock = lock(home)?;
     let mut stored = read(home)?;
     let previous = stored.entries.iter().find(|entry| entry.workspace == *key);
     anyhow::ensure!(
-        review_task_id.is_none_or(|id| !id.trim().is_empty()),
+        review_task
+            .is_none_or(|selection| !selection.task_id.trim().is_empty()
+                && !selection.policy_digest.is_empty()),
         "Choose a valid access reviewer task."
     );
     let selected = gents_loop::tool_policy::workspace_permissions::select_mode(
         previous.map(|entry| &entry.selection),
         expected_revision,
         mode,
-        review_task_id.map(str::to_owned),
+        review_task.cloned(),
     )?;
     if !selected.changed {
         return Ok(previous
@@ -473,6 +478,63 @@ mod tests {
     use super::*;
 
     #[test]
+    fn generated_workspace_permission_writes_preserve_selected_policy_versions() -> Result<()> {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Case {
+            previous: Option<Preference<u64>>,
+            expected: u64,
+            mode: Mode,
+            requested_task: Option<u64>,
+            accepted: bool,
+            changed: bool,
+            next: Option<Preference<u64>>,
+        }
+        fn selection(id: u64) -> ReviewTaskSelection {
+            let mut task = default_review_task("node", "agent");
+            task.prompt_template = format!("Review policy {id}.");
+            ReviewTaskSelection::for_task(&task)
+        }
+        fn preference(value: Preference<u64>) -> Preference<ReviewTaskSelection> {
+            Preference {
+                mode: value.mode,
+                revision: value.revision,
+                review_task: value.review_task.map(selection),
+            }
+        }
+        let directory = tempfile::tempdir()?;
+        let home = directory.path().join("home");
+        std::fs::create_dir(&home)?;
+        let key = WorkspaceKey::canonical("node", "requester", "agent", directory.path())?;
+        let cases =
+            &crate::lean_vocab_test::lean_contract_snapshot().workspace_permission_write_cases;
+        assert!(!cases.is_empty());
+        for raw in cases {
+            let case: Case = serde_json::from_value(raw.clone())?;
+            let previous = case.previous.map(preference);
+            let stored = Stored {
+                entries: previous
+                    .clone()
+                    .map(|selection| Settings {
+                        workspace: key.clone(),
+                        selection,
+                        dirs: Vec::new(),
+                    })
+                    .into_iter()
+                    .collect(),
+            };
+            save(&home, &stored)?;
+            let task = case.requested_task.map(selection);
+            let result = save_mode(&home, &key, case.expected, case.mode, task.as_ref());
+            assert_eq!(result.is_ok(), case.accepted, "{raw}");
+            let observed = get(&home, &key)?.map(|settings| settings.selection);
+            assert_eq!(observed, case.next.map(preference), "{raw}");
+            assert_eq!(observed != previous, case.changed, "{raw}");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn modes_are_scoped_to_the_exact_node_agent_and_canonical_workspace() -> Result<()> {
         let root = tempfile::tempdir()?;
         let home = root.path().join("home");
@@ -505,15 +567,19 @@ mod tests {
         assert!(ask.selection.revision > full.selection.revision);
         assert!(save_mode(&home, &key, ask.selection.revision, Mode::AutoReview, None).is_err());
         assert_eq!(get(&home, &key)?.unwrap().selection.mode, Mode::Ask);
+        let selected = ReviewTaskSelection::for_task(&crate::document_config::Task {
+            task_id: "review-task".into(),
+            ..default_review_task("node", "agent")
+        });
         let review = save_mode(
             &home,
             &key,
             ask.selection.revision,
             Mode::AutoReview,
-            Some("review-task"),
+            Some(&selected),
         )?;
         let ask = save_mode(&home, &key, review.selection.revision, Mode::Ask, None)?;
-        assert_eq!(ask.selection.review_task.as_deref(), Some("review-task"));
+        assert_eq!(ask.selection.review_task.as_ref(), Some(&selected));
         Ok(())
     }
 

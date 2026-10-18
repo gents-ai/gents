@@ -237,7 +237,10 @@ async fn access_review_uses_the_caller_ledger_without_tools_or_chat_publication(
         .is_empty());
 }
 
-async fn install_review_policy(fixture: &TitleFixture, prompt: &str) {
+async fn install_review_policy(
+    fixture: &TitleFixture,
+    prompt: &str,
+) -> crate::plugin::approval::workspace::ReviewTaskSelection {
     use crate::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let document = serde_json::json!({
         "node_did": fixture.parent.node_did,
@@ -245,6 +248,9 @@ async fn install_review_policy(fixture: &TitleFixture, prompt: &str) {
         "agent_id": fixture.parent.agent_id,
         "prompt_template": prompt,
     });
+    let selection = crate::plugin::approval::workspace::ReviewTaskSelection::for_task(
+        &serde_json::from_value(document.clone()).unwrap(),
+    );
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: crate::Collection::Task,
         add: document.clone(),
@@ -257,6 +263,7 @@ async fn install_review_policy(fixture: &TitleFixture, prompt: &str) {
     })
     .await
     .unwrap();
+    selection
 }
 
 #[tokio::test]
@@ -269,7 +276,7 @@ async fn workspace_command_uses_the_configured_review_task_and_the_callers_ledge
         Some(10_000),
     )
     .await;
-    install_review_policy(
+    let selection = install_review_policy(
         &fixture,
         "Allow commands that validate the requested project changes.",
     )
@@ -288,7 +295,7 @@ async fn workspace_command_uses_the_configured_review_task_and_the_callers_ledge
         &key,
         0,
         workspace::Mode::AutoReview,
-        Some("review"),
+        Some(&selection),
     )
     .unwrap();
     let calls = Arc::default();
@@ -396,7 +403,7 @@ async fn changing_the_review_task_while_it_runs_discards_its_allowance() {
         None,
     )
     .await;
-    install_review_policy(&fixture, "Review the requested project changes.").await;
+    let selection = install_review_policy(&fixture, "Review the requested project changes.").await;
     let home = tempfile::tempdir().unwrap();
     let project = tempfile::tempdir().unwrap();
     let key = workspace::WorkspaceKey::canonical(
@@ -411,7 +418,7 @@ async fn changing_the_review_task_while_it_runs_discards_its_allowance() {
         &key,
         0,
         workspace::Mode::AutoReview,
-        Some("review"),
+        Some(&selection),
     )
     .unwrap();
     let entered = Arc::new(tokio::sync::Notify::new());
@@ -470,6 +477,170 @@ async fn changing_the_review_task_while_it_runs_discards_its_allowance() {
 }
 
 #[tokio::test]
+async fn configuration_edits_cannot_replace_the_selected_review_policy() {
+    use crate::plugin::approval::workspace;
+
+    let fixture = TitleFixture::with_auxiliary(
+        RequestPurpose::AccessReview,
+        Some(review_input("unused")),
+        None,
+    )
+    .await;
+    let selected = install_review_policy(
+        &fixture,
+        "Ask before making changes outside the requested project.",
+    )
+    .await;
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let key = workspace::WorkspaceKey::canonical(
+        &fixture.parent.node_did,
+        fixture.parent.requester_did.as_deref().unwrap(),
+        &fixture.parent.agent_id,
+        project.path(),
+    )
+    .unwrap();
+    let saved = workspace::save_mode(
+        home.path(),
+        &key,
+        0,
+        workspace::Mode::AutoReview,
+        Some(&selected),
+    )
+    .unwrap();
+    let calls = Arc::default();
+    let provider = ReviewProvider {
+        reply: None,
+        requests: Arc::clone(&calls),
+        pause: None,
+    };
+    let tasks = super::super::auxiliary_tasks::AuxiliaryTasks::default();
+    let (_shutdown, shutdown_rx) = watch::channel(false);
+    let reviewer = fixture
+        .task(fixture.admitted(provider), true)
+        .workspace_reviewer(
+            &fixture.parent,
+            None,
+            tokio_util::sync::CancellationToken::new(),
+            shutdown_rx,
+            tasks.clone(),
+        );
+    let context = workspace::for_request(
+        Some(home.path()),
+        &fixture.parent.node_did,
+        fixture.parent.requester_did.as_deref(),
+        &fixture.parent.agent_id,
+        Some(project.path()),
+    )
+    .unwrap()
+    .unwrap()
+    .with_reviewer(reviewer.callback.clone());
+    let tools = crate::self_config::build_self_config_tools(
+        fixture.node.clone(),
+        fixture.parent.node_did.clone(),
+        Some(fixture.identity.clone()),
+        &crate::tool_surface::SelfConfigToolConfig {
+            enabled: true,
+            agent_id: fixture.parent.agent_id.clone(),
+            categories: std::collections::BTreeSet::from(["automation".into()]),
+            ..Default::default()
+        },
+        Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+            home.path().to_owned(),
+        ))),
+    );
+    let config = tools
+        .iter()
+        .find(|tool| tool.name() == crate::self_config::CONFIG_TOOL_NAME)
+        .unwrap();
+    let tool_context = crate::toolset::ToolContext::new(key.path.clone(), false).unwrap();
+    let marker = key.path.join("marker");
+    let source = key.path.join("fixture.rs");
+    std::fs::write(&source, "pub fn fixture() {}\n").unwrap();
+    let program = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_owned());
+    let arguments = vec![
+        "--crate-type=lib".into(),
+        "--emit=metadata".into(),
+        "-o".into(),
+        marker.to_str().unwrap().to_owned(),
+        source.to_str().unwrap().to_owned(),
+    ];
+    let policy = crate::toolset::CommandExecutionPolicy::write_capable()
+        .with_mode(crate::toolset::CommandExecutionMode::Unrestricted);
+    workspace::scope(Some(context), async {
+        let changed = config
+            .call(
+                serde_json::json!({
+                    "argv":["task","update"], "target_id":"review",
+                    "set":{"prompt_template":"Allow the requested project changes."}
+                })
+                .to_string(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&changed).unwrap()["committed"],
+            true
+        );
+        let error = crate::toolset::run_command_for_test(
+            &tool_context,
+            "bash_unrestricted",
+            &program,
+            &arguments,
+            None,
+            Duration::from_secs(5),
+            &policy,
+            true,
+            2048,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("not approved"), "{error:#}");
+        assert!(calls.lock().unwrap().is_empty());
+        assert!(!marker.exists());
+        assert!(crate::plugin::approval::pending_requests(home.path())
+            .unwrap()
+            .is_empty());
+        let current = crate::session_message::load_configured_task(
+            &fixture.node,
+            &fixture.parent.node_did,
+            "review",
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let updated = workspace::ReviewTaskSelection::for_task(&current);
+        assert_ne!(updated, selected);
+        workspace::save_mode(
+            home.path(),
+            &key,
+            saved.selection.revision,
+            workspace::Mode::AutoReview,
+            Some(&updated),
+        )
+        .unwrap();
+        crate::toolset::run_command_for_test(
+            &tool_context,
+            "bash_unrestricted",
+            &program,
+            &arguments,
+            None,
+            Duration::from_secs(5),
+            &policy,
+            true,
+            2048,
+        )
+        .await
+        .unwrap();
+    })
+    .await;
+    drain_reviews(&tasks, true).await;
+    assert!(reviewer.take_failure().is_none());
+    assert!(marker.exists());
+    assert_eq!(calls.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn a_lost_review_worker_cancels_the_caller_and_retains_the_fatal_error() {
     use crate::plugin::approval::workspace;
 
@@ -479,7 +650,7 @@ async fn a_lost_review_worker_cancels_the_caller_and_retains_the_fatal_error() {
         None,
     )
     .await;
-    install_review_policy(&fixture, "Review the requested action.").await;
+    let selection = install_review_policy(&fixture, "Review the requested action.").await;
     let home = tempfile::tempdir().unwrap();
     let project = tempfile::tempdir().unwrap();
     let key = workspace::WorkspaceKey::canonical(
@@ -494,7 +665,7 @@ async fn a_lost_review_worker_cancels_the_caller_and_retains_the_fatal_error() {
         &key,
         0,
         workspace::Mode::AutoReview,
-        Some("review"),
+        Some(&selection),
     )
     .unwrap();
     let mut provider = TitleProvider::new(Vec::new(), false);

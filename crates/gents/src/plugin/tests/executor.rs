@@ -418,7 +418,12 @@ mod bound {
             &key,
             0,
             Mode::AutoReview,
-            Some("review-task"),
+            Some(&workspace::ReviewTaskSelection::for_task(
+                &crate::document_config::Task {
+                    task_id: "review-task".into(),
+                    ..workspace::default_review_task("node", "agent")
+                },
+            )),
         )
         .unwrap();
         let context = workspace::for_request(

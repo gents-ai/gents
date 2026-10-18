@@ -14,11 +14,21 @@ pub(super) struct Policy {
 pub(super) async fn load(
     node: &Arc<EmbeddedNode>,
     parent: &AgentRequest,
-    task_id: &str,
+    selection: &crate::plugin::approval::workspace::ReviewTaskSelection,
 ) -> Result<Policy> {
+    let task_id = selection.task_id.as_str();
     let definition = crate::session_message::load_configured_task(node, &parent.node_did, task_id)
         .await?
         .context("access review Task is not configured")?;
+    anyhow::ensure!(
+        crate::plugin::approval::workspace::review_task_matches_selection(
+            &definition,
+            selection,
+            &parent.node_did,
+            &parent.agent_id,
+        ),
+        "The access review policy changed. Select Approve for me again to use the updated policy."
+    );
     let text = crate::plugin::approval::workspace::review_task_policy(
         &definition,
         &parent.node_did,
@@ -58,6 +68,8 @@ mod tests {
         agent: String,
         document: Task,
         eligible: bool,
+        approved_prompt: String,
+        selected_eligible: bool,
     }
 
     #[test]
@@ -66,6 +78,22 @@ mod tests {
         assert!(!cases.is_empty());
         for case in cases {
             let case: Case = serde_json::from_value(case.clone()).unwrap();
+            let mut approved = case.document.clone();
+            approved.task_id = case.task_id.clone();
+            approved.prompt_template = case.approved_prompt.clone();
+            let selection =
+                crate::plugin::approval::workspace::ReviewTaskSelection::for_task(&approved);
+            assert_eq!(
+                crate::plugin::approval::workspace::review_task_matches_selection(
+                    &case.document,
+                    &selection,
+                    &case.node,
+                    &case.agent,
+                ),
+                case.selected_eligible,
+                "{}",
+                serde_json::to_string(&case.document).unwrap(),
+            );
             assert_eq!(
                 crate::plugin::approval::workspace::review_task_is_eligible(
                     &case.document,

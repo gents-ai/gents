@@ -37,6 +37,22 @@ theorem another_agent_cannot_supply_review_policy (node task agent : String)
     taskEligible node task agent policy = false := by
   simp [taskEligible, different]
 
+/-- Selection approves the exact policy template, not every future revision
+of a mutable Task. Native adapters identify its bytes with SHA-256; collision
+resistance is an external premise. Display metadata does not select policy,
+and eligibility independently rejects changes to execution requirements. -/
+def selectedTaskEligible (node task agent selectedPrompt : String) (policy : TaskPolicy) : Bool :=
+  taskEligible node task agent policy && policy.prompt == selectedPrompt
+
+theorem changed_policy_requires_selection (node task agent selectedPrompt : String)
+    (policy : TaskPolicy) (changed : policy.prompt ≠ selectedPrompt) :
+    selectedTaskEligible node task agent selectedPrompt policy = false := by
+  simp [selectedTaskEligible, changed]
+
+theorem selected_policy_preserves_eligibility (node task agent : String) (policy : TaskPolicy) :
+    selectedTaskEligible node task agent policy.prompt policy = taskEligible node task agent policy := by
+  simp [selectedTaskEligible]
+
 /-- The reply names the invocation supplied by the native caller. A model
 cannot select an action, widen its scope, or authorize a later invocation.
 Malformed, oversized, or incomplete replies require a person. JSON transport

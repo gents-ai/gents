@@ -99,7 +99,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AuxiliaryTask<M> {
                         if cancellation.is_cancelled() || *shutdown.borrow() {
                             return Ok(None);
                         }
-                        let policy = task::load(&worker.node, &parent, &invocation.task_id).await?;
+                        let policy = task::load(&worker.node, &parent, &invocation.task).await?;
                         let history = crate::session::load_sequenced_history_projection(
                             &worker.node,
                             &parent.session_id,
