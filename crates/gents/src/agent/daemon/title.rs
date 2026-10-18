@@ -6,7 +6,6 @@ use defra_node::EmbeddedNode;
 use gents_protocol::output::TerminalOutput;
 use gents_protocol::request_admission::RequestPurpose;
 use tokio::sync::watch;
-use tokio::task::JoinSet;
 
 use super::{AgentDaemon, ShutdownDrainFailure};
 use crate::admission::{self, AdmissionCallContext, CallKind};
@@ -14,6 +13,8 @@ use crate::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, T
 use crate::session;
 use crate::streaming::DefraStreamWriter;
 use crate::watcher::AgentRequest;
+
+pub(super) mod review;
 
 const RECENT_TITLE_LIMIT: usize = 5;
 const TITLE_GENERATION_MAX_ATTEMPTS: i64 = 2;
@@ -24,7 +25,7 @@ async fn flush_received_title_partial(context: &str) -> Result<()> {
     super::request::flush_received_preparation_partial(&format!("title {context}")).await
 }
 
-struct TitleTask<M: crate::llm::rig_compat::ProviderModel> {
+pub(super) struct AuxiliaryTask<M: crate::llm::rig_compat::ProviderModel> {
     node: Arc<EmbeddedNode>,
     agent_config: Arc<crate::config::ResolvedAgent>,
     provider_family: Option<String>,
@@ -33,18 +34,19 @@ struct TitleTask<M: crate::llm::rig_compat::ProviderModel> {
     capture_factory: Option<crate::rendered_request::RenderedRequestCaptureFactory>,
 }
 
-enum TitleResult {
+enum AuxiliaryResult {
     Generated {
         title: String,
         parent_requester_did: Option<String>,
     },
+    Reviewed(String),
     Skipped,
     Interrupted,
 }
 
 impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
-    fn title_task(&self) -> TitleTask<M> {
-        TitleTask {
+    pub(super) fn auxiliary_task(&self) -> AuxiliaryTask<M> {
+        AuxiliaryTask {
             node: Arc::clone(&self.node),
             agent_config: Arc::clone(&self.agent_config),
             provider_family: self.provider_family.clone(),
@@ -76,10 +78,12 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                 {
                     return Ok(());
                 }
-                crate::lifecycle::materialize::write_pending_title_request(
+                crate::lifecycle::materialize::write_pending_auxiliary_request(
                     &node,
                     &parent,
+                    RequestPurpose::TitleAudit,
                     parent.content.clone(),
+                    None,
                 )
                 .await?;
                 Ok(())
@@ -94,14 +98,14 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
         }));
     }
 
-    pub(super) fn spawn_title_audit_request(
+    pub(super) fn spawn_auxiliary_request(
         &self,
-        tasks: &mut JoinSet<Result<()>>,
         request: AgentRequest,
         shutdown: watch::Receiver<bool>,
-    ) {
-        let task = self.title_task();
-        tasks.spawn(async move { task.run(request, shutdown).await });
+    ) -> Result<()> {
+        let task = self.auxiliary_task();
+        self.auxiliary_tasks
+            .spawn(async move { task.run(request, shutdown).await })
     }
 }
 
@@ -127,12 +131,55 @@ fn title_attempt_is_retryable(error: &anyhow::Error) -> bool {
         || error.is::<crate::agent::loop_stream::OneShotNoVisibleOutput>()
 }
 
-impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
+impl<M: crate::llm::rig_compat::ProviderModel> AuxiliaryTask<M> {
     async fn run(self, request: AgentRequest, shutdown: watch::Receiver<bool>) -> Result<()> {
+        self.run_owned(request, shutdown, None).await.map(|_| ())
+    }
+
+    /// Interrupting a caller must cancel its audit worker without dropping
+    /// received output. The daemon retains the worker's join through shutdown.
+    pub(super) async fn run_review(
+        self,
+        request: AgentRequest,
+        mut execution: review::ReviewExecution,
+        shutdown: watch::Receiver<bool>,
+        tasks: &super::auxiliary_tasks::AuxiliaryTasks,
+    ) -> Result<Option<String>> {
         anyhow::ensure!(
-            request.purpose == RequestPurpose::TitleAudit,
-            "expected title audit request"
+            request.purpose == RequestPurpose::AccessReview,
+            "expected access review"
         );
+        let cancellation = execution.cancellation.child_token();
+        let guard = cancellation.clone().drop_guard();
+        execution.cancellation = cancellation;
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        tasks.spawn(async move {
+            let result = self
+                .run_owned(request, shutdown, Some(execution))
+                .await
+                .map_err(|error| review::ReviewFailure(Arc::new(error)));
+            let reply = match &result {
+                Ok(reply) => Ok(reply.clone()),
+                Err(error) => Err(error.clone()),
+            };
+            let _ = reply_tx.send(reply);
+            result.map(|_| ()).map_err(anyhow::Error::new)
+        })?;
+        let result = reply_rx
+            .await
+            .context("access review worker stopped without a result")?
+            .map_err(anyhow::Error::new);
+        guard.disarm();
+        result
+    }
+
+    async fn run_owned(
+        self,
+        request: AgentRequest,
+        shutdown: watch::Receiver<bool>,
+        review: Option<review::ReviewExecution>,
+    ) -> Result<Option<String>> {
+        anyhow::ensure!(request.purpose.is_auxiliary(), "expected auxiliary request");
         let Some(request) = super::verify_request_at_claim_boundary(
             &self.verifier,
             Arc::clone(&self.node),
@@ -141,11 +188,11 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
         )
         .await
         else {
-            return Ok(());
+            return Ok(None);
         };
         let origin =
             crate::lifecycle::ExecutionOrigin::from_persisted(request.execution_origin.as_deref())
-                .context("admitted title request is missing execution origin")?;
+                .context("admitted auxiliary request is missing execution origin")?;
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             Arc::clone(&self.node),
             &self.agent_config.agent_id,
@@ -160,13 +207,13 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
         match lifecycle.claim_with_identity().await {
             Ok(ClaimOutcome::Claimed) => {}
             Ok(ClaimOutcome::Queued | ClaimOutcome::Interrupted | ClaimOutcome::Expired) => {
-                return Ok(())
+                return Ok(None)
             }
             Err(error) if crate::lifecycle::is_claim_admission_error(&error) => {
                 lifecycle.reject_admission(&error.to_string()).await?;
-                return Ok(());
+                return Ok(None);
             }
-            Err(error) => return Err(error.context("claiming title audit request")),
+            Err(error) => return Err(error.context("claiming auxiliary request")),
         }
         let writer = DefraStreamWriter::new(
             Arc::clone(&self.node),
@@ -190,27 +237,34 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
                 title_request.clone(),
                 shutdown,
                 interrupt_rx,
+                review,
             )
             .await;
         if result
             .as_ref()
             .err()
-            .is_some_and(|error| error.is::<ShutdownDrainFailure>())
+            .is_some_and(ShutdownDrainFailure::occurs_in)
         {
-            return result.map(|_| ());
+            return result.map(|_| None);
         }
-        let (outcome, title, reason) = match result {
-            Ok(TitleResult::Generated {
+        let (outcome, title, reply, reason) = match result {
+            Ok(AuxiliaryResult::Generated {
                 title,
                 parent_requester_did,
             }) => (
                 RequestTerminalOutcome::Completed,
                 Some((title, parent_requester_did)),
                 None,
+                None,
             ),
-            Ok(TitleResult::Skipped) => (RequestTerminalOutcome::Completed, None, None),
-            Ok(TitleResult::Interrupted) => (RequestTerminalOutcome::Interrupted, None, None),
-            Err(error) => (RequestTerminalOutcome::Failed, None, Some(error)),
+            Ok(AuxiliaryResult::Reviewed(reply)) => {
+                (RequestTerminalOutcome::Completed, None, Some(reply), None)
+            }
+            Ok(AuxiliaryResult::Skipped) => (RequestTerminalOutcome::Completed, None, None, None),
+            Ok(AuxiliaryResult::Interrupted) => {
+                (RequestTerminalOutcome::Interrupted, None, None, None)
+            }
+            Err(error) => (RequestTerminalOutcome::Failed, None, None, Some(error)),
         };
         let reason_text = reason.as_ref().map(ToString::to_string);
         let terminal = lifecycle
@@ -220,9 +274,8 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
             Ok(value) => value,
             Err(terminal_error) => {
                 if let Some(error) = reason {
-                    return Err(
-                        terminal_error.context(format!("title audit failed first: {error:#}"))
-                    );
+                    return Err(terminal_error
+                        .context(format!("auxiliary request failed first: {error:#}")));
                 }
                 return Err(terminal_error);
             }
@@ -246,7 +299,9 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
                 }
             }
         }
-        Ok(())
+        Ok((terminal == TerminalizeResult::Won)
+            .then_some(reply)
+            .flatten())
     }
 
     async fn execute(
@@ -256,19 +311,20 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
         request: AgentRequest,
         shutdown: watch::Receiver<bool>,
         mut interrupt_rx: watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
-    ) -> Result<TitleResult> {
+        review: Option<review::ReviewExecution>,
+    ) -> Result<AuxiliaryResult> {
         let Some(parent) = super::request::prepare_unless_interrupted(
             &mut interrupt_rx,
-            load_title_parent(&self.node, &request),
+            load_auxiliary_parent(&self.node, &request),
         )
         .await
         else {
-            return Ok(TitleResult::Interrupted);
+            return Ok(AuxiliaryResult::Interrupted);
         };
         let parent = parent?;
         let commit_cid = lifecycle
             .request_commit_cid()
-            .context("claimed title request has no exact commit CID")?;
+            .context("claimed auxiliary request has no exact commit CID")?;
         let generation = lifecycle.execution_generation()?.to_owned();
         let capture_context = crate::rendered_request::context_for_claimed_request(
             &request,
@@ -280,9 +336,9 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
             capture_context,
             self.capture_factory.as_ref(),
         )
-        .context("title audit has no durable provider capture authority")?;
+        .context("auxiliary request has no durable provider capture authority")?;
         Arc::get_mut(&mut capture_scope)
-            .context("new title capture scope is already shared")?
+            .context("new auxiliary capture scope is already shared")?
             .set_auxiliary_output_sink(writer.auxiliary_output_sink(
                 request.clone(),
                 generation,
@@ -300,6 +356,11 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
             admission_context,
             crate::rendered_request::scope::scope_request(capture_scope, async {
                 lifecycle.begin_owned_execution(writer).await?;
+                if request.purpose == RequestPurpose::AccessReview {
+                    return self
+                        .execute_review(&request, &parent, review, shutdown, &mut interrupt_rx)
+                        .await;
+                }
                 let preparation = async {
                     if !session::session_needs_generated_title(
                         self.node.as_ref(),
@@ -344,10 +405,10 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
                     super::request::prepare_unless_interrupted(&mut interrupt_rx, preparation)
                         .await
                 else {
-                    return Ok(TitleResult::Interrupted);
+                    return Ok(AuxiliaryResult::Interrupted);
                 };
                 let Some((prompt, config)) = prepared? else {
-                    return Ok(TitleResult::Skipped);
+                    return Ok(AuxiliaryResult::Skipped);
                 };
                 self.generate_with_fallback(
                     &request,
@@ -371,11 +432,11 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
         parent_requester_did: Option<String>,
         mut shutdown: watch::Receiver<bool>,
         interrupt_rx: &mut watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
-    ) -> Result<TitleResult> {
+    ) -> Result<AuxiliaryResult> {
         let mut last_error = None;
         for attempt in 1..=TITLE_GENERATION_MAX_ATTEMPTS {
             if *shutdown.borrow() {
-                return Ok(TitleResult::Interrupted);
+                return Ok(AuxiliaryResult::Interrupted);
             }
             let run = admission::scope_call(
                 CallKind::OneOff,
@@ -394,7 +455,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
                     let _ = shutdown.wait_for(|value| *value).await;
                 } => {
                     flush_received_title_partial("shutdown").await?;
-                    return Ok(TitleResult::Interrupted);
+                    return Ok(AuxiliaryResult::Interrupted);
                 }
                 result = super::request::prepare_unless_interrupted(
                     interrupt_rx,
@@ -403,13 +464,13 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
                     Some(result) => result,
                     None => {
                         flush_received_title_partial("interrupt").await?;
-                        return Ok(TitleResult::Interrupted);
+                        return Ok(AuxiliaryResult::Interrupted);
                     }
                 },
             };
             match result {
                 Ok(Ok(raw)) => {
-                    return Ok(TitleResult::Generated {
+                    return Ok(AuxiliaryResult::Generated {
                         title: sanitize_generated_title(&raw, &request.content),
                         parent_requester_did,
                     })
@@ -433,39 +494,45 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
         }
         let fallback = sanitize_generated_title("", &request.content);
         tracing::info!(request_id = %request.request_id, title = %fallback, error = ?last_error.map(|error| error.to_string()), "using fallback conversation title after provider failures");
-        Ok(TitleResult::Generated {
+        Ok(AuxiliaryResult::Generated {
             title: fallback,
             parent_requester_did,
         })
     }
 }
 
-async fn load_title_parent(node: &EmbeddedNode, title: &AgentRequest) -> Result<AgentRequest> {
-    let parent_doc_id = title
+async fn load_auxiliary_parent(
+    node: &EmbeddedNode,
+    request: &AgentRequest,
+) -> Result<AgentRequest> {
+    let parent_doc_id = request
         .caused_by_parent_request_doc_id
         .as_deref()
-        .context("title request lacks parent document")?;
+        .context("auxiliary request lacks parent document")?;
     let escaped = crate::graphql::escape_graphql_string(parent_doc_id);
     let query = format!(
         "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{escaped}\" }} }}, limit: 1) {{ {} }} }}",
         crate::request_admission::SIGNED_REQUEST_FIELDS
     );
-    let response =
-        crate::graphql::graphql_with_transaction_retry(node, &query, "load title parent receipt")
-            .await?;
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "load auxiliary parent receipt",
+    )
+    .await?;
     let row: gents_protocol::row::AgentRequestRow =
         crate::graphql::first_row(&response, "AgentRequest")?
-            .context("title parent request disappeared")?;
+            .context("request parent request disappeared")?;
     crate::request_admission::verify_request_receipt_signature(&row)?;
     let parent = AgentRequest::try_from(row)?;
     anyhow::ensure!(
         parent.purpose == RequestPurpose::Normal
             && parent.doc_id == parent_doc_id
-            && title.caused_by_parent_request_id.as_deref() == Some(parent.request_id.as_str())
-            && parent.node_did == title.node_did
-            && parent.session_id == title.session_id
-            && parent.agent_id == title.agent_id,
-        "title parent receipt does not match signed provenance"
+            && request.caused_by_parent_request_id.as_deref() == Some(parent.request_id.as_str())
+            && parent.node_did == request.node_did
+            && parent.session_id == request.session_id
+            && parent.agent_id == request.agent_id,
+        "request parent receipt does not match signed provenance"
     );
     Ok(parent)
 }

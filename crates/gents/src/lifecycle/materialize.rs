@@ -456,15 +456,23 @@ pub async fn build_signed_request(
     Ok(create)
 }
 
-pub(crate) async fn write_pending_title_request(
+/// A review exists only while its caller is waiting. Its finite validity lets
+/// the preclaim owner settle abandoned work without replaying provider calls.
+pub(crate) async fn write_pending_auxiliary_request(
     node: &std::sync::Arc<EmbeddedNode>,
     parent: &AgentRequest,
+    purpose: gents_protocol::request_admission::RequestPurpose,
     content: String,
+    valid_until: Option<String>,
 ) -> Result<AgentRequest> {
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     anyhow::ensure!(
-        parent.purpose == RequestPurpose::Normal,
-        "a title audit request cannot recursively create title work"
+        parent.purpose == RequestPurpose::Normal && purpose.is_auxiliary(),
+        "auxiliary requests require an ordinary parent"
+    );
+    anyhow::ensure!(
+        purpose != RequestPurpose::AccessReview || valid_until.is_some(),
+        "access review requires finite validity"
     );
     let identity = RequestIdentity {
         request_id: uuid::Uuid::new_v4().to_string(),
@@ -479,12 +487,13 @@ pub(crate) async fn write_pending_title_request(
     let admission =
         AgentRequestAdmissionRecord::runtime_local_control(&parent.node_did, &parent.request_id);
     let spec = RequestSpec {
+        valid_until,
         parent: Some(ParentLink {
             parent_request_id: parent.request_id.clone(),
             parent_request_doc_id: parent.doc_id.clone(),
             ..Default::default()
         }),
-        ..RequestSpec::new(RequestPurpose::TitleAudit, identity, admission)
+        ..RequestSpec::new(purpose, identity, admission)
     };
     let create = build_signed_request(spec, RequestSigner::RegisteredTarget).await?;
     let mutation = create
@@ -492,12 +501,12 @@ pub(crate) async fn write_pending_title_request(
         .map_err(anyhow::Error::msg)?;
     let response = crate::config_client::ConfigAccess::write_local_response(
         node,
-        "lifecycle.materialize_title_audit",
+        "lifecycle.materialize_auxiliary",
         &mutation,
     )
     .await?;
     crate::watcher::agent_request_from_mutation_response(&response, "create_AgentRequest")?
-        .context("title request creation omitted its exact durable request")
+        .context("auxiliary request creation omitted its exact durable request")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

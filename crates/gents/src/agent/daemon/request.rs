@@ -663,7 +663,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
             if result
                 .as_ref()
                 .err()
-                .is_some_and(|error| error.is::<super::ShutdownDrainFailure>())
+                .is_some_and(super::ShutdownDrainFailure::occurs_in)
             {
                 return result;
             }

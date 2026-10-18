@@ -247,6 +247,9 @@ impl DefraWatcher {
             PreclaimSignal::None => {}
         }
 
+        if !replays_pending_request(request.purpose) {
+            return Ok(false);
+        }
         if request.purpose.is_auxiliary() {
             return Ok(true);
         }
@@ -365,6 +368,13 @@ fn prioritize_aged_background_wakes(
     rows
 }
 
+/// Reviews borrow the live caller's token ledger. Replaying a pending review
+/// would lose that ownership; expired and interrupted reviews still settle
+/// through the ordinary preclaim owner.
+fn replays_pending_request(purpose: gents_protocol::request_admission::RequestPurpose) -> bool {
+    purpose != gents_protocol::request_admission::RequestPurpose::AccessReview
+}
+
 fn claimable_pending_rows_from_rows(rows: Vec<AgentRequestRow>) -> Vec<AgentRequestRow> {
     let blocked_sessions = rows
         .iter()
@@ -413,7 +423,9 @@ fn claimable_pending_rows_from_rows(rows: Vec<AgentRequestRow>) -> Vec<AgentRequ
                     );
                 }
                 PreclaimSignal::None => {
-                    if auxiliary || (!session_blocked && !pending_session_seen) {
+                    if row.purpose.is_some_and(replays_pending_request)
+                        && (auxiliary || (!session_blocked && !pending_session_seen))
+                    {
                         claimable.push(row.clone());
                     }
                 }
@@ -552,5 +564,40 @@ mod tests {
             "malformed valid_until must never be claimable, got {} row(s)",
             rows.len()
         );
+    }
+
+    #[test]
+    fn a_pending_review_keeps_its_live_caller_and_does_not_block_chat() {
+        let mut review = pending_row(
+            "review",
+            "session",
+            "2026-08-12T21:00:00Z",
+            None,
+            "interactive",
+        );
+        review["purpose"] = serde_json::json!("access-review");
+        review["caused_by_parent_request_id"] = serde_json::json!("parent");
+        review["caused_by_parent_request_doc_id"] = serde_json::json!("doc-parent");
+        review["valid_until"] = serde_json::json!("2999-01-01T00:00:00Z");
+        let normal = pending_row(
+            "normal",
+            "session",
+            "2026-08-12T21:00:01Z",
+            None,
+            "interactive",
+        );
+        let data = serde_json::json!({ "AgentRequest": [review.clone(), normal] });
+        let rows = claimable_pending_rows_from_rows(active_runtime_rows(Some(&data)).unwrap());
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.request_id.as_str())
+                .collect::<Vec<_>>(),
+            ["normal"]
+        );
+        review["valid_until"] = serde_json::json!("2000-01-01T00:00:00Z");
+        let data = serde_json::json!({ "AgentRequest": [review] });
+        let rows = claimable_pending_rows_from_rows(active_runtime_rows(Some(&data)).unwrap());
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].request_id, "review");
     }
 }

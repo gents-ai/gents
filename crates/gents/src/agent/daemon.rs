@@ -5,9 +5,10 @@ use std::time::Duration;
 use crate::llm::rig_compat::ProviderModel;
 use anyhow::Result;
 use tokio::sync::{mpsc, Mutex};
-use tokio::task::{JoinError, JoinSet};
+use tokio::task::JoinError;
 use tracing::Instrument;
 
+mod auxiliary_tasks;
 mod inference;
 mod request;
 #[cfg(test)]
@@ -19,6 +20,14 @@ mod wake_input;
 #[error("graceful shutdown could not confirm received provider output was retained: {reason}")]
 pub(super) struct ShutdownDrainFailure {
     pub(super) reason: String,
+}
+
+impl ShutdownDrainFailure {
+    fn occurs_in(error: &anyhow::Error) -> bool {
+        error
+            .chain()
+            .any(|cause| cause.downcast_ref::<Self>().is_some())
+    }
 }
 
 use super::runtime::StartupBarrier;
@@ -172,6 +181,7 @@ pub(super) struct AgentDaemon<M: ProviderModel> {
     operator_tool_root: Option<PathBuf>,
     approval_home: Option<PathBuf>,
     request_admission: crate::request_admission::AgentRequestAdmissionVerifier,
+    auxiliary_tasks: auxiliary_tasks::AuxiliaryTasks,
     root_execution_guard: Option<crate::tool_surface::RootExecutionGuard>,
 }
 
@@ -200,17 +210,15 @@ impl RequestInterruptionSource {
     }
 }
 
-fn title_task_join_result(joined: std::result::Result<Result<()>, JoinError>) -> Result<()> {
+fn auxiliary_task_join_result(joined: std::result::Result<Result<()>, JoinError>) -> Result<()> {
     match joined {
         Ok(Ok(())) => Ok(()),
-        Ok(Err(error)) if error.is::<ShutdownDrainFailure>() => Err(error),
+        Ok(Err(error)) if ShutdownDrainFailure::occurs_in(&error) => Err(error),
         Ok(Err(error)) => {
-            tracing::warn!(error = %error, "failed to resume owned conversation title request");
+            tracing::warn!(error = %error, "failed to resume owned auxiliary request");
             Ok(())
         }
-        Err(error) => Err(anyhow::anyhow!(
-            "owned conversation title task join failed: {error}"
-        )),
+        Err(error) => Err(anyhow::anyhow!("owned auxiliary task join failed: {error}")),
     }
 }
 
@@ -272,6 +280,7 @@ impl<M: ProviderModel> AgentDaemon<M> {
             approval_home: None,
             request_admission,
             root_execution_guard: None,
+            auxiliary_tasks: auxiliary_tasks::AuxiliaryTasks::default(),
         })
     }
 
@@ -380,7 +389,7 @@ impl<M: ProviderModel> AgentDaemon<M> {
             "gents agent executor online"
         );
 
-        let mut title_tasks = JoinSet::new();
+        let auxiliary_tasks = self.auxiliary_tasks.clone();
         let run_result: Result<()> = loop {
             if *shutdown.borrow() {
                 break Ok(());
@@ -393,8 +402,8 @@ impl<M: ProviderModel> AgentDaemon<M> {
                     break Ok(());
                 }
 
-                Some(joined) = title_tasks.join_next(), if !title_tasks.is_empty() => {
-                    if let Err(error) = title_task_join_result(joined) {
+                Some(joined) = auxiliary_tasks.join_next() => {
+                    if let Err(error) = auxiliary_task_join_result(joined) {
                         break Err(error);
                     }
                     continue;
@@ -412,7 +421,9 @@ impl<M: ProviderModel> AgentDaemon<M> {
             };
 
             if request.purpose.is_auxiliary() {
-                self.spawn_title_audit_request(&mut title_tasks, request, shutdown.clone());
+                if let Err(error) = self.spawn_auxiliary_request(request, shutdown.clone()) {
+                    break Err(error);
+                }
                 continue;
             }
 
@@ -473,19 +484,20 @@ impl<M: ProviderModel> AgentDaemon<M> {
             }
         };
 
-        let mut title_error = None;
-        while let Some(joined) = title_tasks.join_next().await {
-            if let Err(error) = title_task_join_result(joined) {
-                tracing::error!(error = %error, "owned conversation title task failed during daemon exit");
-                if title_error.is_none() {
-                    title_error = Some(error);
+        auxiliary_tasks.close();
+        let mut auxiliary_error = None;
+        while let Some(joined) = auxiliary_tasks.join_next().await {
+            if let Err(error) = auxiliary_task_join_result(joined) {
+                tracing::error!(error = %error, "owned auxiliary task failed during daemon exit");
+                if auxiliary_error.is_none() {
+                    auxiliary_error = Some(error);
                 }
             }
         }
-        match (run_result, title_error) {
-            (Err(error), Some(title_error)) => {
-                Err(error.context(format!("owned title task also failed: {title_error:#}")))
-            }
+        match (run_result, auxiliary_error) {
+            (Err(error), Some(auxiliary_error)) => Err(error.context(format!(
+                "owned auxiliary task also failed: {auxiliary_error:#}"
+            ))),
             (Err(error), None) => Err(error),
             (Ok(()), Some(error)) => Err(error),
             (Ok(()), None) => Ok(()),
@@ -1182,7 +1194,7 @@ impl<M: ProviderModel> AgentDaemon<M> {
                 );
                 OwnedWorkOutcome::observed(TaskAgentResult::Failure, Some(error.to_string()), true)
             }
-            Err(error) if error.is::<ShutdownDrainFailure>() => {
+            Err(error) if ShutdownDrainFailure::occurs_in(&error) => {
                 record_current_request_outcome("shutdown_drain_failed");
                 record_current_failure_class(&error);
                 tracing::error!(
