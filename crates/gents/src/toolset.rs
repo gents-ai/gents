@@ -82,6 +82,7 @@ pub use session_history::{
 };
 #[cfg(test)]
 pub(crate) use shared::apply_workspace_authority;
+pub(crate) use shared::shell_join;
 #[cfg(test)]
 pub(crate) use shared::validate_command_policy;
 pub(crate) use shared::ToolContext;

@@ -20,11 +20,20 @@ fn request(home: &Path) -> Request {
 #[test]
 fn the_prompt_names_the_plugin_the_exact_path_and_the_access() {
     let home = tempfile::tempdir().unwrap();
-    let mut request = request(home.path());
+    let request = request(home.path());
     assert!(request.prompt().starts_with("Allow team/ocr to read "));
     assert!(request.prompt().ends_with("x.pdf?"));
-    request.access = BindAccess::ReadWrite;
-    assert!(request.prompt().contains("to read and write"));
+    let file = request.filesystem().unwrap();
+    let write = Request::new(
+        file.label,
+        &allowed::Resolved {
+            target: file.path.to_owned(),
+            is_dir: file.is_dir,
+        },
+        BindAccess::ReadWrite,
+        request.session_id.clone(),
+    );
+    assert!(write.prompt().contains("to read and write"));
 }
 
 #[test]
@@ -134,7 +143,12 @@ async fn always_allow_adds_the_folder_and_keeps_wider_access() {
     let home = tempfile::tempdir().unwrap();
     let documents = tempfile::tempdir().unwrap();
     let request = request(documents.path());
-    allowed::add(home.path(), &request.folder, BindAccess::ReadWrite).unwrap();
+    allowed::add(
+        home.path(),
+        request.filesystem().unwrap().folder,
+        BindAccess::ReadWrite,
+    )
+    .unwrap();
     let waiting = {
         let home = home.path().to_owned();
         let request = request.clone();
@@ -314,11 +328,12 @@ async fn always_allow_this_file_adds_only_the_file() {
     assert!(waiting.await.unwrap().unwrap());
     let listed = allowed::list(home.path()).unwrap();
     assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0].path, PathBuf::from(&request.path));
+    let file = request.filesystem().unwrap();
+    assert_eq!(listed[0].path.as_path(), file.path);
     let scope = allowed::Scope::load(home.path(), None, None).unwrap();
-    assert!(scope.granted(Path::new(&request.path)).is_some());
+    assert!(scope.granted(file.path).is_some());
     assert!(
-        scope.granted(&request.folder.join("other.pdf")).is_none(),
+        scope.granted(&file.folder.join("other.pdf")).is_none(),
         "the sibling stays closed"
     );
 }

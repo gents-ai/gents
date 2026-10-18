@@ -85,14 +85,67 @@ impl Settings {
 /// The canonical target and its kind are frozen when consent is requested.
 /// Both must still match before an answer can authorize the bound action.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct BindingAction {
-    pub plugin: String,
-    pub artifact_digest: String,
-    pub input_digest: String,
-    pub path: PathBuf,
-    pub is_dir: bool,
-    pub access: crate::pack::BindAccess,
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub(crate) enum BindingAction {
+    Plugin {
+        plugin: String,
+        artifact_digest: String,
+        input_digest: String,
+        path: PathBuf,
+        is_dir: bool,
+        access: crate::pack::BindAccess,
+    },
+    Command {
+        argv: Vec<String>,
+        cwd: PathBuf,
+        root: PathBuf,
+        policy: crate::toolset::CommandExecutionPolicy,
+    },
+}
+
+impl BindingAction {
+    pub(super) fn filesystem(&self) -> Option<super::FilesystemApproval<'_>> {
+        match self {
+            Self::Plugin {
+                plugin,
+                path,
+                is_dir,
+                access,
+                ..
+            } => Some(super::FilesystemApproval::new(
+                plugin, path, *is_dir, *access,
+            )),
+            Self::Command { .. } => None,
+        }
+    }
+
+    pub(super) fn validate(&self) -> Result<()> {
+        match self {
+            Self::Plugin { path, is_dir, .. } => {
+                crate::plugin::allowed::canonical_target(path, Some(*is_dir))?;
+            }
+            Self::Command {
+                argv, cwd, root, ..
+            } => {
+                anyhow::ensure!(
+                    !argv.is_empty() && !argv[0].trim().is_empty(),
+                    "the command approval has no executable"
+                );
+                crate::plugin::allowed::canonical_target(root, Some(true))?;
+                crate::plugin::allowed::canonical_target(cwd, Some(true))?;
+                anyhow::ensure!(
+                    cwd.starts_with(root),
+                    "the command working directory is outside its tool root"
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 pub(crate) type Binding = Grant<WorkspaceKey, BindingAction>;
@@ -113,7 +166,7 @@ pub(crate) fn validate_binding(home: &Path, binding: &Binding) -> Result<Setting
         return Err(SelectionChanged.into());
     }
     crate::plugin::allowed::canonical_target(&binding.scope.workspace.path, Some(true))?;
-    crate::plugin::allowed::canonical_target(&binding.action.path, Some(binding.action.is_dir))?;
+    binding.action.validate()?;
     settings.context("workspace permissions are unavailable")
 }
 
