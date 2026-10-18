@@ -7,7 +7,7 @@ mod command;
 mod context;
 mod file;
 pub(crate) use command::authorize_command;
-pub(crate) use context::{carry, for_request, scope};
+pub(crate) use context::{carry, for_request, scope, ReviewInvocation, Reviewer};
 pub(crate) use file::authorize_file_mutation;
 
 use gents_loop::tool_policy::workspace_permissions::{self as policy, Grant, Input, Review, Route};
@@ -195,6 +195,8 @@ pub(crate) type Binding = Grant<WorkspaceKey, BindingAction>;
 pub(crate) struct BindingDecision {
     pub route: Route,
     pub binding: Binding,
+    input: Input<WorkspaceKey, BindingAction>,
+    review_payload: Option<serde_json::Value>,
 }
 
 async fn authorize_binding(
@@ -202,26 +204,67 @@ async fn authorize_binding(
     decision: BindingDecision,
     denied: &str,
 ) -> Result<Binding> {
+    let session_id = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+        .and_then(|context| context.session_id);
+    let binding = decision.binding.clone();
+    let allowed = consent_binding(home, decision, super::interactive(), session_id).await?;
+    anyhow::ensure!(allowed, "{denied}");
+    Ok(binding)
+}
+
+pub(crate) async fn consent_binding(
+    home: &Path,
+    decision: BindingDecision,
+    interactive: bool,
+    session_id: Option<String>,
+) -> Result<bool> {
     use super::{Consent, Request};
 
-    validate_binding(home, &decision.binding)?;
-    let allowed = match decision.route {
-        Route::Allow => true,
-        Route::Deny => false,
-        Route::Ask | Route::Review => match super::consent(super::interactive()) {
-            Consent::Deny => false,
-            Consent::Ask => {
-                let session_id =
-                    crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
-                        .and_then(|context| context.session_id);
-                let request = Request::for_binding(decision.binding.clone(), session_id);
-                super::ask(home, &request, super::WAIT).await?
-            }
-        },
+    let bounds = crate::tool_call_lifecycle::runtime::tool_execution_bounds(super::WAIT);
+    let deadline = bounds.deadline_at.context("approval deadline is missing")?;
+    let remaining = deadline
+        .signed_duration_since(chrono::Utc::now())
+        .to_std()
+        .unwrap_or_default();
+    let mut request = Request::for_binding(decision.binding.clone(), session_id);
+    request.expires_at_ms = request
+        .expires_at_ms
+        .min(u64::try_from(deadline.timestamp_millis()).unwrap_or_default());
+    let consent = async {
+        let ensure_open = || -> Result<()> {
+            anyhow::ensure!(
+                !bounds.cancellation_token.is_cancelled(),
+                "action cancelled while awaiting approval"
+            );
+            anyhow::ensure!(
+                chrono::Utc::now() < deadline,
+                "action approval exceeded the request deadline"
+            );
+            Ok(())
+        };
+        ensure_open()?;
+        validate_binding(home, &decision.binding)?;
+        let route = context::resolve_review(home, &decision, &request.id).await?;
+        ensure_open()?;
+        let allowed = match route {
+            Route::Allow => true,
+            Route::Deny => false,
+            Route::Ask | Route::Review => match super::consent(interactive) {
+                Consent::Deny => false,
+                Consent::Ask => super::ask(home, &request, remaining).await?,
+            },
+        };
+        ensure_open()?;
+        validate_binding(home, &decision.binding)?;
+        Ok(allowed)
     };
-    anyhow::ensure!(allowed, "{denied}");
-    validate_binding(home, &decision.binding)?;
-    Ok(decision.binding)
+    tokio::select! {
+        biased;
+        _ = bounds.cancellation_token.cancelled() => anyhow::bail!("action cancelled while awaiting approval"),
+        result = tokio::time::timeout(remaining, consent) => {
+            result.context("action approval exceeded the request deadline")?
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -267,12 +310,14 @@ pub(crate) fn allowed_scope(
 /// controls only consent for the exact bound input under that ceiling.
 pub(crate) fn binding_route(
     home: &Path,
-    action: BindingAction,
+    action: impl FnOnce() -> Result<BindingAction>,
     covered: bool,
+    payload: impl FnOnce() -> Result<serde_json::Value>,
 ) -> Result<Option<BindingDecision>> {
     let Some(settings) = context::settings(home)? else {
         return Ok(None);
     };
+    let action = action()?;
     let current = settings.scope();
     let input = Input {
         current: current.clone(),
@@ -287,8 +332,14 @@ pub(crate) fn binding_route(
         scope: current,
         action,
     };
-    let route = context::review_route(&input, Review::Unavailable, &binding);
-    Ok(Some(BindingDecision { route, binding }))
+    let route = policy::route(&input);
+    let review_payload = (route == Route::Review).then(payload).transpose()?;
+    Ok(Some(BindingDecision {
+        route,
+        binding,
+        input,
+        review_payload,
+    }))
 }
 
 #[derive(Default, Serialize, Deserialize)]

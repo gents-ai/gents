@@ -313,30 +313,35 @@ impl PluginExecutor {
         if !covered {
             let route = approval::workspace::binding_route(
                 home,
-                approval::workspace::BindingAction::Plugin {
-                    plugin: plugin.clone(),
-                    artifact_digest: record.digest.clone(),
-                    input_digest: json_digest(input),
-                    path: resolved.target.clone(),
-                    is_dir: resolved.is_dir,
-                    access,
+                || {
+                    Ok(approval::workspace::BindingAction::Plugin {
+                        plugin: plugin.clone(),
+                        artifact_digest: record.digest.clone(),
+                        input_digest: json_digest(input),
+                        path: resolved.target.clone(),
+                        is_dir: resolved.is_dir,
+                        access,
+                    })
                 },
                 covered,
+                || Ok(input.clone()),
             )
             .map_err(|error| refuse(format!("{error:#}")))?;
-            let allowed = match route.as_ref().map(|decision| decision.route) {
-                Some(gents_loop::tool_policy::workspace_permissions::Route::Allow) => true,
-                Some(gents_loop::tool_policy::workspace_permissions::Route::Deny) => false,
-                _ => match approval::consent(context.interactive) {
+            let allowed = match route {
+                Some(decision) => approval::workspace::consent_binding(
+                    home,
+                    decision,
+                    context.interactive,
+                    context.session_id.map(str::to_owned),
+                )
+                .await
+                .map_err(|error| refuse(format!("{error:#}")))?,
+                None => match approval::consent(context.interactive) {
                     approval::Consent::Deny => false,
                     approval::Consent::Ask => {
                         let session_id = context.session_id.map(str::to_owned);
-                        let request = match route {
-                            Some(decision) => {
-                                approval::Request::for_binding(decision.binding, session_id)
-                            }
-                            None => approval::Request::new(&plugin, &resolved, access, session_id),
-                        };
+                        let request =
+                            approval::Request::new(&plugin, &resolved, access, session_id);
                         approval::ask(home, &request, approval::WAIT)
                             .await
                             .map_err(|error| refuse(format!("{error:#}")))?

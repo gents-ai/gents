@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context as _, Result};
@@ -7,11 +8,33 @@ use anyhow::{Context as _, Result};
 use super::WorkspaceKey;
 use gents_loop::tool_policy::access_review::History;
 
-#[derive(Clone, Debug)]
+pub(crate) struct ReviewInvocation {
+    pub action_id: String,
+    pub task_id: String,
+    pub binding: super::Binding,
+    pub payload: serde_json::Value,
+}
+
+pub(crate) type Reviewer = Arc<
+    dyn Fn(ReviewInvocation) -> Pin<Box<dyn Future<Output = Result<Option<String>>> + Send>>
+        + Send
+        + Sync,
+>;
+
+#[derive(Clone)]
 pub(crate) struct Context {
     home: PathBuf,
     workspace: WorkspaceKey,
     review_history: Arc<Mutex<History>>,
+    review_gate: Arc<tokio::sync::Mutex<()>>,
+    reviewer: Option<Reviewer>,
+}
+
+impl Context {
+    pub(crate) fn with_reviewer(mut self, reviewer: Reviewer) -> Self {
+        self.reviewer = Some(reviewer);
+        self
+    }
 }
 
 tokio::task_local! {
@@ -39,7 +62,63 @@ pub(crate) fn for_request(
         home,
         workspace: WorkspaceKey::canonical(node_did, requester, agent_id, workspace)?,
         review_history: Arc::default(),
+        review_gate: Arc::default(),
+        reviewer: None,
     }))
+}
+
+pub(super) async fn resolve_review(
+    home: &Path,
+    decision: &super::BindingDecision,
+    action_id: &str,
+) -> Result<super::Route> {
+    use super::{Review, Route};
+
+    let Some(context) = CURRENT.try_with(Clone::clone).ok().flatten() else {
+        return Ok(Route::Deny);
+    };
+    if context.workspace != decision.binding.scope.workspace {
+        return Ok(Route::Deny);
+    }
+    if decision.route != Route::Review {
+        return Ok(decision.route);
+    }
+    let _gate = context.review_gate.lock().await;
+    let settings = super::validate_binding(home, &decision.binding)?;
+    if context
+        .review_history
+        .lock()
+        .expect("review history lock poisoned")
+        .blocked()
+    {
+        return Ok(Route::Ask);
+    }
+    let verdict = match (&context.reviewer, settings.selection.review_task) {
+        (Some(reviewer), Some(task_id)) => {
+            let invocation = ReviewInvocation {
+                action_id: action_id.to_owned(),
+                task_id,
+                binding: decision.binding.clone(),
+                payload: decision
+                    .review_payload
+                    .clone()
+                    .context("access review input is missing")?,
+            };
+            match reviewer(invocation).await {
+                Ok(Some(reply)) => {
+                    gents_loop::tool_policy::access_review::decode_reply(action_id, &reply)
+                }
+                Ok(None) => Review::Unavailable,
+                Err(error) => {
+                    tracing::warn!(%error, "workspace access review was unavailable");
+                    Review::Unavailable
+                }
+            }
+        }
+        _ => Review::Unavailable,
+    };
+    super::validate_binding(home, &decision.binding)?;
+    Ok(review_route(&decision.input, verdict, &decision.binding))
 }
 
 pub(super) fn review_route(
@@ -105,6 +184,9 @@ pub(super) fn settings(home: &Path) -> Result<Option<super::Settings>> {
     }
     Ok(settings)
 }
+
+#[cfg(test)]
+mod review_tests;
 
 #[cfg(test)]
 mod tests {
