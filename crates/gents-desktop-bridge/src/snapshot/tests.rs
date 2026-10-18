@@ -201,6 +201,7 @@ mod runtime;
 mod session_automated;
 #[path = "tests/session_basic.rs"]
 mod session_basic;
+mod session_titles;
 #[path = "tests/session_queue.rs"]
 mod session_queue;
 #[path = "tests/session_stale_rows.rs"]

@@ -16,12 +16,9 @@ use crate::streaming::DefraStreamWriter;
 use crate::watcher::AgentRequest;
 
 const RECENT_TITLE_LIMIT: usize = 5;
-const GENERATED_TITLE_MAX_WORDS: usize = 5;
-const GENERATED_TITLE_MAX_LEN: usize = 48;
 const TITLE_GENERATION_MAX_ATTEMPTS: i64 = 2;
 const TITLE_GENERATION_TIMEOUT_SECS: u64 = 10;
 const TITLE_VISIBLE_MAX_TOKENS: u64 = 24;
-const TITLE_GENERATION_PREAMBLE: &str = "Generate concise conversation titles. Return only a lowercase hyphenated 3-5 word title. Never call tools. Never explain.";
 
 async fn flush_received_title_partial(context: &str) -> Result<()> {
     super::request::flush_received_preparation_partial(&format!("title {context}")).await
@@ -474,101 +471,15 @@ async fn load_title_parent(node: &EmbeddedNode, title: &AgentRequest) -> Result<
 }
 
 pub(super) fn title_generation_preamble() -> String {
-    TITLE_GENERATION_PREAMBLE.to_string()
+    crate::session::title_text::GENERATION_PREAMBLE.to_owned()
 }
 
 fn title_generation_prompt(request_content: &str, recent_titles: &[String]) -> String {
-    let request_excerpt = truncate_for_title_prompt(request_content, 600);
-    let recent = if recent_titles.is_empty() {
-        "none".to_string()
-    } else {
-        recent_titles
-            .iter()
-            .take(RECENT_TITLE_LIMIT)
-            .map(|title| format!("- {title}"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-
-    format!(
-        "Generate a concise session title for this conversation.\n\
-Return only the title.\n\
-Constraints:\n\
-- 3-5 words\n\
-- lowercase\n\
-- hyphenated\n\
-- no punctuation except hyphens\n\
-- no quotes\n\
-- avoid repeating a recent title exactly\n\n\
-Recent session titles:\n{recent}\n\n\
-First user request:\n{request_excerpt}"
-    )
-}
-
-fn truncate_for_title_prompt(value: &str, max_chars: usize) -> String {
-    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    normalized.chars().take(max_chars).collect()
+    crate::session::title_text::generation_prompt(request_content, recent_titles)
 }
 
 fn sanitize_generated_title(raw_title: &str, fallback_source: &str) -> String {
-    let first_line = raw_title
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or_default()
-        .trim()
-        .trim_matches('`')
-        .trim_matches('"')
-        .trim_matches('\'')
-        .to_ascii_lowercase();
-
-    let mut words = first_line
-        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
-        .flat_map(|part| part.split(['-', '_']))
-        .map(str::trim)
-        .filter(|word| !word.is_empty())
-        .take(GENERATED_TITLE_MAX_WORDS)
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-
-    if words.is_empty() {
-        words = fallback_words(fallback_source);
-    }
-
-    let mut title = words.join("-");
-    if title.len() > GENERATED_TITLE_MAX_LEN {
-        title.truncate(GENERATED_TITLE_MAX_LEN);
-        title = title.trim_matches('-').to_string();
-    }
-
-    if title.is_empty() {
-        "conversation".to_string()
-    } else {
-        title
-    }
-}
-
-fn fallback_words(source: &str) -> Vec<String> {
-    const STOPWORDS: &[&str] = &[
-        "a", "about", "agent", "amy", "an", "and", "are", "by", "can", "desktop", "do", "for",
-        "give", "hello", "help", "hey", "how", "i", "in", "is", "it", "its", "me", "model", "of",
-        "on", "please", "s", "tell", "that", "thats", "the", "think", "this", "to", "used", "via",
-        "what", "with", "works", "you",
-    ];
-
-    let mut words = source
-        .to_ascii_lowercase()
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|word| !word.is_empty())
-        .filter(|word| !STOPWORDS.contains(word))
-        .take(GENERATED_TITLE_MAX_WORDS)
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-
-    if words.is_empty() {
-        words.push("conversation".to_string());
-    }
-
-    words
+    crate::session::title_text::generated_title(raw_title, fallback_source)
 }
 
 #[cfg(test)]

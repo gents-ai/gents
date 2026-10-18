@@ -17,6 +17,8 @@ mod query;
 mod request_output;
 mod rows;
 mod sessions;
+pub(crate) mod title_text;
+pub use title_text::display_session_title;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
