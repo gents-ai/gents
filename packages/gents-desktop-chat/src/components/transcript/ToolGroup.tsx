@@ -4,7 +4,7 @@ import type {
   ToolPresentationView,
 } from "@source-inc/gents-desktop-client";
 import { CopyButton } from "@source-inc/gents-desktop-ui";
-import { memo, useContext } from "react";
+import { memo, useContext, useState } from "react";
 import { TranscriptNavigationContext } from "./TranscriptNavigation.js";
 import {
   actionCommand,
@@ -502,6 +502,7 @@ function UnifiedToolItem({
   compactDetails?: boolean;
   initiallyExpanded?: boolean;
 }) {
+  const [expanded, setExpanded] = useState(initiallyExpanded);
   const live =
     tool.statusKind.toLowerCase() === "running" &&
     Boolean(tool.partialOutputTail);
@@ -509,7 +510,12 @@ function UnifiedToolItem({
     <details
       className={`tool-item tool-item-${tool.presentation.kind}`}
       data-testid={`tool-${tool.itemKey}`}
-      open={compactDetails ? initiallyExpanded : live}
+      open={compactDetails ? expanded : live}
+      onToggle={
+        compactDetails
+          ? (event) => setExpanded(event.currentTarget.open)
+          : undefined
+      }
     >
       <summary className="tool-item-summary">
         <span className={statusClass(tool.statusKind)} aria-hidden="true" />
@@ -526,12 +532,14 @@ function UnifiedToolItem({
           </svg>
         </span>
       </summary>
-      <ToolBody
-        tool={tool}
-        compactDetails={compactDetails}
-        commandHint={actionCommand({ tool, launcher })}
-      />
-      {launcher ? (
+      {!compactDetails || expanded ? (
+        <ToolBody
+          tool={tool}
+          compactDetails={compactDetails}
+          commandHint={actionCommand({ tool, launcher })}
+        />
+      ) : null}
+      {launcher && expanded ? (
         <details className="tool-launch-details">
           <summary>Launch details</summary>
           <ToolBody tool={launcher} compactDetails />
