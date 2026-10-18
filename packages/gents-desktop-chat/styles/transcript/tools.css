@@ -373,6 +373,10 @@
     background: var(--color-error);
   }
 
+  .tool-item-dot-cancelled {
+    background: var(--color-text-muted);
+  }
+
   .tool-item-dot-denied {
     background: var(--color-warning);
   }

@@ -113,4 +113,29 @@ describe("compact action history", () => {
     expect(html).toContain("Explored files");
     expect(html).toContain("Reading README.md");
   });
+
+  it.each(["userCancelled", "interrupted"])(
+    "keeps %s actions separate from failures",
+    (cause) => {
+      const stopped = {
+        ...tool("stopped", "error"),
+        cancelCause: {
+          cause,
+          source: "toolLifecycle",
+          confidence: "certain",
+          at: null,
+          evidence: [],
+        },
+      };
+      const html = renderToStaticMarkup(
+        createElement(CompactToolGroup, {
+          tools: [tool("failed", "error"), stopped, tool("current", "running")],
+        }),
+      );
+      expect(html).toContain("1 action failed");
+      expect(html).toContain("1 action stopped");
+      expect(html).not.toContain("2 actions failed");
+      expect(html).toContain("Reading README.md");
+    },
+  );
 });
