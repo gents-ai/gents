@@ -10,6 +10,7 @@ import {
   actionCommand,
   actionEntries,
   actionKind,
+  actionItemKeys,
   actionTitle,
   type ActionEntry,
 } from "./actionPresentation.js";
@@ -564,21 +565,22 @@ export function ToolGroup({
         ? actionEntries(tools)
         : tools.map((tool) => ({ tool, launcher: undefined }))
       ).map(({ tool, launcher }) => {
+        const itemKey =
+          expandedItemKey &&
+          actionItemKeys({ tool, launcher }).includes(expandedItemKey)
+            ? expandedItemKey
+            : tool.itemKey;
         const denial =
           tool.statusKind.toLowerCase() === "error" ? tool.denial : null;
         return denial ? (
-          <CommandDenialToolItem
-            denial={denial}
-            key={tool.itemKey}
-            tool={tool}
-          />
+          <CommandDenialToolItem denial={denial} key={itemKey} tool={tool} />
         ) : (
           <UnifiedToolItem
-            key={tool.itemKey}
+            key={itemKey}
             tool={tool}
             launcher={launcher}
             compactDetails={compactDetails}
-            initiallyExpanded={tool.itemKey === expandedItemKey}
+            initiallyExpanded={itemKey === expandedItemKey}
           />
         );
       })}
