@@ -1,9 +1,10 @@
 mod final_output;
 pub(crate) mod r4c_args;
+pub mod status_projection;
 
 use crate::llm::message::{AssistantContent, Message, Text};
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
@@ -22,6 +23,9 @@ use self::r4c_args::{
 pub(crate) use gents_loop::live_output::{
     LiveOutputStream, LiveToolOutputRegistry, LiveToolOutputWriter,
 };
+use gents_protocol::wait_status::WaitLifecycle;
+pub use status_projection::OutputEvidence;
+use status_projection::WaitStatusProjection;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProcessControlScope {
@@ -155,27 +159,18 @@ pub(crate) async fn handle_list_background_tools(
         if row.await_mode.as_deref() != Some("background") {
             continue;
         }
+        let projection = WaitStatusProjection::from_parts(
+            row.lifecycle_state.as_deref(),
+            row.started_at.as_deref(),
+            row.completed_at.as_deref(),
+            Utc::now(),
+        );
+        if !list_projection_matches(args.status, &projection) {
+            continue;
+        }
         let Some(tool_call_id) = non_empty_string(Some(&row.tool_call_id)) else {
             continue;
         };
-        let status = row
-            .lifecycle_state
-            .as_deref()
-            .filter(|state| !state.trim().is_empty())
-            .unwrap_or("running");
-        if !list_status_matches(args.status, status) {
-            continue;
-        }
-        let Some(created_at) = parse_rfc3339(row.started_at.as_deref()) else {
-            tracing::warn!(
-                tool_call_id,
-                started_at = ?row.started_at,
-                "skipping malformed background tool call with invalid started_at"
-            );
-            continue;
-        };
-        let last_update = parse_rfc3339(row.completed_at.as_deref()).unwrap_or(created_at);
-        let _ = live_outputs;
         let output = canonical_tool_output(
             node,
             &row.doc_id,
@@ -185,18 +180,24 @@ pub(crate) async fn handle_list_background_tools(
             row.requester_did.as_deref(),
         )
         .await?;
-        let (stdout_bytes, stderr_bytes) = (output.len() as u64, 0);
+        let evidence = OutputEvidence::from_text(&output);
 
         entries.push(ListBackgroundToolsEntry {
             tool_call_id,
             tool_name: row.tool_name,
             deployment_id: local_deployment_id.to_string(),
             await_mode: "background".to_string(),
-            status: status.to_string(),
-            created_at,
-            last_update,
-            stdout_bytes,
-            stderr_bytes,
+            status: projection.status_token().to_string(),
+            lifecycle_state_raw: projection.lifecycle_state_raw.clone(),
+            started_at: projection.started_at,
+            completed_at: projection.completed_at,
+            elapsed_seconds: projection.running_elapsed_seconds,
+            terminal_elapsed_seconds: projection.terminal_elapsed_seconds,
+            available_bytes: evidence.total_bytes,
+            preview: evidence.preview,
+            preview_truncated: evidence.preview_truncated,
+            stdout_bytes: evidence.total_bytes,
+            stderr_bytes: 0,
         });
     }
 
@@ -279,13 +280,14 @@ pub(crate) async fn read_tool_output_slice(
         return Ok(ReadToolOutputOutcome::NotBackgrounded);
     }
 
-    let status = row
-        .lifecycle_state
-        .as_deref()
-        .filter(|state| !state.trim().is_empty())
-        .unwrap_or("running")
-        .to_string();
-    let exited = status != "running";
+    let projection = WaitStatusProjection::from_parts(
+        row.lifecycle_state.as_deref(),
+        row.started_at.as_deref(),
+        row.completed_at.as_deref(),
+        Utc::now(),
+    );
+    let status = projection.status_token().to_string();
+    let exited = projection.lifecycle.is_terminal();
     let _ = live_outputs;
     let combined = canonical_tool_output(
         node,
@@ -505,27 +507,15 @@ fn read_retained_output_slice(
     }
 }
 
-fn list_status_matches(filter: ListStatusFilter, status: &str) -> bool {
+/// Filter against the shared projection: `running` matches only a parsed
+/// Running lifecycle, `terminal` only a terminal one; unknown states surface
+/// under `All` (projected as `unknown`, never relabeled `running`).
+fn list_projection_matches(filter: ListStatusFilter, projection: &WaitStatusProjection) -> bool {
     match filter {
-        ListStatusFilter::Running => status == "running",
-        ListStatusFilter::Terminal => bridge_state_is_terminal(status),
-        ListStatusFilter::All => !status.trim().is_empty(),
+        ListStatusFilter::Running => projection.lifecycle == WaitLifecycle::Running,
+        ListStatusFilter::Terminal => projection.lifecycle.is_terminal(),
+        ListStatusFilter::All => true,
     }
-}
-
-fn bridge_state_is_terminal(status: &str) -> bool {
-    matches!(
-        status,
-        "completed"
-            | "complete"
-            | "failed"
-            | "error"
-            | "timedOut"
-            | "cancelled"
-            | "dead"
-            | "interrupted"
-            | "superseded"
-    )
 }
 
 pub use final_output::load_caused_request_terminal;
@@ -545,13 +535,6 @@ fn render_assistant_message_text(message: &Message) -> Result<String> {
         })
         .collect();
     Ok(text_parts.join("\n"))
-}
-
-fn parse_rfc3339(value: Option<&str>) -> Option<DateTime<Utc>> {
-    value
-        .filter(|value| !value.trim().is_empty())
-        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| value.with_timezone(&Utc))
 }
 
 fn first_row<T>(data: Option<&serde_json::Value>, collection: &str) -> Option<T>

@@ -401,6 +401,7 @@ pub mod watcher;
 pub mod workspace;
 
 pub use background_tools::load_caused_request_terminal;
+pub use background_tools::status_projection::OutputEvidence;
 pub use callback::reject_secret_bearing_callback_fields;
 pub use collection::{Collection, DESIRED_STATE_APPLY_ORDER};
 pub use eth::{

@@ -215,7 +215,17 @@ export function WorkerStep({
   const p = tool.presentation;
   if (p.kind === "process") {
     const bg = workers.background(tool);
-    const running = tool.statusKind === "running";
+    const ws = bg?.waitStatus ?? null;
+    // Truthful lifecycle from the shared projection: unknown stays unknown;
+    // pending is never relabeled running.
+    const running = ws ? ws.lifecycle === "running" || ws.lifecycle === "pending" : tool.statusKind === "running";
+    const terminal = ws?.lifecycle ?? null;
+    const stableElapsed =
+      ws?.terminalElapsedSeconds != null
+        ? `${ws.terminalElapsedSeconds}s`
+        : null;
+    const runningAge =
+      ws?.runningElapsedSeconds != null ? `${ws.runningElapsedSeconds}s` : null;
     const overdue = bg?.deadlineExpired
       ? `past its deadline by ${since(bg.deadlineAt) ?? "?"}`
       : null;
@@ -223,7 +233,9 @@ export function WorkerStep({
       ? "running"
       : tool.statusKind === "error"
         ? "failed"
-        : "done";
+        : terminal === "unknown"
+          ? "unknown"
+          : "done";
     return (
       <Row
         tone={tone}
@@ -231,8 +243,11 @@ export function WorkerStep({
         name={p.target ?? tool.toolName}
         state={
           running
-            ? (overdue ?? `running${bg ? ` · ${since(bg.startedAt)}` : ""}`)
-            : tool.statusKind
+            ? (overdue ??
+              `running${runningAge ? ` · ${runningAge}` : since(bg?.startedAt ?? null) ? ` · ${since(bg?.startedAt ?? null)}` : ""}`)
+            : terminal === "unknown"
+              ? "state unknown"
+              : (stableElapsed ?? tool.statusKind)
         }
         detail={bg?.nativeExecutor ? `pid ${bg.nativeExecutor.pid}` : null}
         sessionId={null}

@@ -11,27 +11,40 @@ pub struct ToolCallRow {
     pub lifecycle_state: Option<String>,
     pub status: Option<String>,
     pub started_at: Option<String>,
+    pub completed_at: Option<String>,
     pub deadline_at: Option<String>,
     pub await_mode: Option<String>,
     pub stuck_since: Option<String>,
 }
 
-const TERMINAL_LIFECYCLE_STATES: &[&str] =
-    &["completed", "failed", "cancelled", "timedOut", "superseded"];
 const CORRELATION_WINDOW_MS: i64 = 1_000;
 
 pub fn project_backgrounded_tools(
     rows: &[ToolCallRow],
     liveness: &RuntimeLivenessView,
 ) -> Vec<BackgroundedToolView> {
+    let now = chrono::Utc::now();
     rows.iter()
         .filter(|r| r.await_mode.as_deref() == Some("background"))
+        // Preserve existing panel semantics: terminal calls (per the shared
+        // projection) and legacy `superseded` rows are not active workers.
         .filter(|r| {
-            !r.lifecycle_state
-                .as_deref()
-                .is_some_and(|s| TERMINAL_LIFECYCLE_STATES.contains(&s))
+            let projection = gents_protocol::wait_status::WaitStatusProjection::from_parts(
+                r.lifecycle_state.as_deref(),
+                r.started_at.as_deref(),
+                r.completed_at.as_deref(),
+                now,
+            );
+            !projection.lifecycle.is_terminal()
+                && r.lifecycle_state.as_deref() != Some("superseded")
         })
         .map(|r| {
+            let projection = gents_protocol::wait_status::WaitStatusProjection::from_parts(
+                r.lifecycle_state.as_deref(),
+                r.started_at.as_deref(),
+                r.completed_at.as_deref(),
+                now,
+            );
             let age_ms =
                 age_from_live_snapshot(r.tool_call_id.as_str(), &liveness.active_tool_calls);
             let deadline_expired = liveness
@@ -41,6 +54,7 @@ pub fn project_backgrounded_tools(
                 .map(|tc| tc.deadline_expired)
                 .unwrap_or(false);
             let native_executor = correlate_native_executor(r, &liveness.active_native_executors);
+            let wait_status = wait_status_view(&projection);
             BackgroundedToolView {
                 request_id: r.request_id.clone(),
                 tool_call_id: r.tool_call_id.clone(),
@@ -54,18 +68,42 @@ pub fn project_backgrounded_tools(
                 await_mode: r.await_mode.clone(),
                 stuck_since: r.stuck_since.clone(),
                 native_executor,
+                wait_status,
             }
         })
         .collect()
 }
 
+fn wait_status_view(
+    projection: &gents_protocol::wait_status::WaitStatusProjection,
+) -> Option<WaitStatusProjectionView> {
+    Some(WaitStatusProjectionView {
+        lifecycle: projection.status_token().to_string(),
+        lifecycle_state_raw: projection.lifecycle_state_raw.clone(),
+        started_at: projection
+            .started_at
+            .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)),
+        completed_at: projection
+            .completed_at
+            .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)),
+        running_elapsed_seconds: projection.running_elapsed_seconds,
+        terminal_elapsed_seconds: projection.terminal_elapsed_seconds,
+    })
+}
+
 pub fn stuck_diagnostics_from_tool_calls(rows: &[ToolCallRow]) -> Vec<StuckWorkDiagnosticView> {
+    let now = chrono::Utc::now();
     rows.iter()
         .filter(|r| r.await_mode.as_deref() == Some("background"))
         .filter(|r| {
-            !r.lifecycle_state
-                .as_deref()
-                .is_some_and(|s| TERMINAL_LIFECYCLE_STATES.contains(&s))
+            let projection = gents_protocol::wait_status::WaitStatusProjection::from_parts(
+                r.lifecycle_state.as_deref(),
+                r.started_at.as_deref(),
+                r.completed_at.as_deref(),
+                now,
+            );
+            !projection.lifecycle.is_terminal()
+                && r.lifecycle_state.as_deref() != Some("superseded")
         })
         .filter(|r| r.stuck_since.is_some())
         .map(|r| StuckWorkDiagnosticView {

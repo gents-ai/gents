@@ -66,10 +66,35 @@ pub(crate) struct ListBackgroundToolsEntry {
     pub(crate) tool_name: String,
     pub(crate) deployment_id: String,
     pub(crate) await_mode: String,
+    /// Parsed lifecycle token, or "unknown" when absent/unparseable.
     pub(crate) status: String,
-    pub(crate) created_at: DateTime<Utc>,
-    pub(crate) last_update: DateTime<Utc>,
+    /// Verbatim persisted lifecycle_state token (may be Some("garbage")).
+    pub(crate) lifecycle_state_raw: Option<String>,
+    pub(crate) started_at: Option<DateTime<Utc>>,
+    pub(crate) completed_at: Option<DateTime<Utc>>,
+    /// Active age; None when terminal/unknown or timestamps unusable.
+    pub(crate) elapsed_seconds: Option<i64>,
+    /// Stable terminal duration; None unless both endpoints parse and are
+    /// ordered.
+    pub(crate) terminal_elapsed_seconds: Option<i64>,
+    /// Truthful total volume of the combined canonical output. The legacy
+    /// stdout/stderr fields were never channel-accounting: `stdout_bytes`
+    /// carried this combined volume and `stderr_bytes` was always 0. Both
+    /// are kept as deprecated wire-compat aliases with unchanged (combined /
+    /// zero) values; they do NOT become truthful stdout/stderr accounting,
+    /// and the channel defect remains open. New consumers must use
+    /// `available_bytes` plus `preview`.
+    pub(crate) available_bytes: u64,
+    /// Trailing preview of the combined canonical output, char-boundary
+    /// safe. NOTE: the preview is computed after the full canonical output
+    /// is retrieved; it bounds what is *embedded in the response*, not the
+    /// retrieval itself. Bounded retrieval drilldown remains read_process.
+    pub(crate) preview: Option<String>,
+    pub(crate) preview_truncated: bool,
+    /// Deprecated compat alias: equals `available_bytes` (combined canonical
+    /// output volume), NOT stdout-only accounting.
     pub(crate) stdout_bytes: u64,
+    /// Deprecated: always 0; stderr was never separately tracked here.
     pub(crate) stderr_bytes: u64,
 }
 

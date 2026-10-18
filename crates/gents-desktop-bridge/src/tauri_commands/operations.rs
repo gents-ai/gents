@@ -130,6 +130,10 @@ async fn fetch_background_tool_calls(
                 .get("started_at")
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
+            completed_at: row
+                .get("completed_at")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
             deadline_at: row
                 .get("deadline_at")
                 .and_then(|v| v.as_str())
@@ -166,6 +170,7 @@ fn background_tool_calls_query(node_did: &str) -> String {
                 lifecycle_state
                 status
                 started_at
+                completed_at
                 deadline_at
                 await_mode
                 stuck_since
