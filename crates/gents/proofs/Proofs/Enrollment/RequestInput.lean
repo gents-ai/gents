@@ -34,6 +34,26 @@ structure RequestInput where
   goalContinuation : Option GoalContinuationInput := none
   deriving DecidableEq, Repr
 
+/-- Runtime continuations remain in their parent's invocation directory. They
+do not replay the parent's title intent, queue position, or goal issuance facts.
+The executing host still validates the inherited directory against its policy. -/
+def continuationInput (parent : RequestInput) (queue : RequestQueue)
+    (goal : Option GoalContinuationInput := none) : RequestInput :=
+  { cwd := parent.cwd, queue := some queue, goalContinuation := goal }
+
+theorem continuation_preserves_directory (parent : RequestInput) (queue : RequestQueue)
+    (goal : Option GoalContinuationInput) :
+    (continuationInput parent queue goal).cwd = parent.cwd := rfl
+
+theorem continuation_does_not_replay_creation (parent : RequestInput) (queue : RequestQueue)
+    (goal : Option GoalContinuationInput) :
+    (continuationInput parent queue goal).initialTitle = none := rfl
+
+theorem continuation_uses_current_control (parent : RequestInput) (queue : RequestQueue)
+    (goal : Option GoalContinuationInput) :
+    (continuationInput parent queue goal).queue = some queue ∧
+    (continuationInput parent queue goal).goalContinuation = goal := ⟨rfl, rfl⟩
+
 /-- The implementation must use its one canonical input encoder for signing and
 verification, rather than concatenating unescaped JSON or arbitrary metadata. -/
 private def optionFields {α : Type} (encode : α → List String) : Option α → List String
@@ -83,6 +103,13 @@ def inputWithinContext (input : RequestInput) (skillIds : List String)
   input.selectedSkillIds.all skillIds.contains &&
     (input.cwd.map cwdAllowed).getD true &&
     (input.queue.map (fun q => queueSourceAllowed q.source)).getD true
+
+theorem continuation_retains_host_policy_checks (parent : RequestInput)
+    (queue : RequestQueue) (goal : Option GoalContinuationInput) (skills : List String)
+    (cwdAllowed : String → Bool) (queueAllowed : SessionQueue.QueueSource → Bool) :
+    inputWithinContext (continuationInput parent queue goal) skills cwdAllowed queueAllowed =
+      ((parent.cwd.map cwdAllowed).getD true && queueAllowed queue.source) := by
+  simp [continuationInput, inputWithinContext]
 
 def agentMatchesSession (selected observed : String) : Bool :=
   !selected.trim.isEmpty && selected == observed
