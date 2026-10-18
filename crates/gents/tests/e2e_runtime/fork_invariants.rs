@@ -165,7 +165,7 @@ async fn setup(node: &defra_node::EmbeddedNode, session: &str) {
 fn params(session: &str, turn: u32) -> ForkParams<'_> {
     ForkParams {
         source_session_id: session,
-        fork_at_user_turn: turn,
+        boundary: gents::session::ForkBoundary::UserTurn(turn),
         caller_node_did: NODE_DID,
         caller_requester_did: None,
         target_agent_id: None,
