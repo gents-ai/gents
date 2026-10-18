@@ -20,7 +20,10 @@ mod tool_service;
 #[path = "commands/util.rs"]
 mod util;
 
-pub use chat::{edit_pending_queue, rename_session, request_output, send_chat_message};
+pub use chat::{
+    edit_pending_queue, fork_session_before_message, rename_session, request_output,
+    send_chat_message,
+};
 #[cfg_attr(test, allow(unused_imports))]
 pub use config::{
     apply_config_components, delete_agent_config, delete_backend_config, delete_context_config,

@@ -1,3 +1,5 @@
+import type { SessionForkBeforeRequest } from "../generated/SessionForkBeforeRequest.js";
+import type { SessionForkResult } from "../generated/SessionForkResult.js";
 import type { PendingQueueEditRequest } from "../generated/PendingQueueEditRequest.js";
 import type { PendingQueueEditResult } from "../generated/PendingQueueEditResult.js";
 import type { GoalControlRequest } from "../generated/GoalControlRequest.js";
@@ -189,6 +191,9 @@ export type DesktopApiAdapter = {
   listMailbox: () => Promise<MailboxItemView[]>;
   startMailboxRequest: (itemId: string) => Promise<MailboxItemView>;
   dismissMailboxItem: (itemId: string) => Promise<void>;
+  forkSessionBeforeMessage: (
+    request: SessionForkBeforeRequest,
+  ) => Promise<SessionForkResult>;
   renameSession: (request: SessionRenameRequest) => Promise<void>;
   resendRequest: (
     requestId: string,

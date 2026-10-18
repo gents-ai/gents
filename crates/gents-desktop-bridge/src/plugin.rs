@@ -141,6 +141,7 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::chat::desktop_pending_queue_edit,
             tauri_commands::chat::desktop_session_goal,
             tauri_commands::chat::desktop_goal_control,
+            tauri_commands::chat::desktop_session_fork_before_message,
             tauri_commands::chat::desktop_session_rename,
             tauri_commands::chat::desktop_request_resend,
             tauri_commands::chat::desktop_request_retry,

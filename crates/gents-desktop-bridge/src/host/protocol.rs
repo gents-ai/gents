@@ -204,6 +204,10 @@ pub enum ClientCommand {
     Send { request: ChatSendRequest },
     #[serde(rename = "desktop_pending_queue_edit")]
     EditPending { request: PendingQueueEditRequest },
+    #[serde(rename = "desktop_session_fork_before_message")]
+    ForkBeforeMessage {
+        request: crate::types::SessionForkBeforeRequest,
+    },
     #[serde(rename = "desktop_session_rename")]
     Rename { request: SessionRenameRequest },
     #[serde(rename = "desktop_interrupt_request")]
@@ -251,6 +255,7 @@ impl ClientCommand {
         "desktop_goal_control",
         "desktop_chat_send",
         "desktop_pending_queue_edit",
+        "desktop_session_fork_before_message",
         "desktop_session_rename",
         "desktop_interrupt_request",
     ];

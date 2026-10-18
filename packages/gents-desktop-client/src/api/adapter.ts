@@ -97,6 +97,8 @@ export function createDesktopApiAdapter(
       invokeDesktop("desktop_mailbox_dismiss", {
         request: { itemId },
       }),
+    forkSessionBeforeMessage: (request) =>
+      invokeDesktop("desktop_session_fork_before_message", { request }),
     renameSession: (request) =>
       invokeDesktop("desktop_session_rename", { request }),
     resendRequest: (requestId, nodeDid) =>

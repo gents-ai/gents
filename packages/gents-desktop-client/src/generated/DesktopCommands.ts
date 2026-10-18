@@ -93,6 +93,8 @@ import type { RequestTimelineView } from "./RequestTimelineView.js";
 import type { ScheduleDeleteRequest } from "./ScheduleDeleteRequest.js";
 import type { ScheduleRunRequest } from "./ScheduleRunRequest.js";
 import type { ScheduleSaveRequest } from "./ScheduleSaveRequest.js";
+import type { SessionForkBeforeRequest } from "./SessionForkBeforeRequest.js";
+import type { SessionForkResult } from "./SessionForkResult.js";
 import type { SessionGoalView } from "./SessionGoalView.js";
 import type { SessionLiveDeltaView } from "./SessionLiveDeltaView.js";
 import type { SessionProvenanceView } from "./SessionProvenanceView.js";
@@ -205,6 +207,7 @@ export type DesktopCommands = {
   desktop_schedule_delete: { args: { request: ScheduleDeleteRequest }; result: DesktopClientSnapshot };
   desktop_schedule_run: { args: { request: ScheduleRunRequest }; result: TaskRunResult };
   desktop_schedule_save: { args: { request: ScheduleSaveRequest }; result: DesktopClientSnapshot };
+  desktop_session_fork_before_message: { args: { request: SessionForkBeforeRequest }; result: SessionForkResult };
   desktop_session_goal: { args: { nodeDid: string; sessionId: string }; result: SessionGoalView | null };
   desktop_session_hydration_retry: { args: { sessionId: string; nodeDid?: string | null }; result: void };
   desktop_session_live_delta: { args: { sessionId: string; nodeDid?: string | null; requestId: string; baseLiveCursor: string; baseContentByteLen: number; baseContentHash: string; baseReasoningByteLen: number; baseReasoningHash: string }; result: SessionLiveDeltaView | null };
