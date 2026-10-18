@@ -1986,6 +1986,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             && !sessions.projection.is_empty()
             && !sessions.retry.is_empty()
             && !sessions.fork.is_empty()
+            && !sessions.edit_anchors.is_empty()
     );
     emitted.insert((
         "session_document_cases".into(),
