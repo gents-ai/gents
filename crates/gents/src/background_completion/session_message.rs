@@ -766,4 +766,3 @@ async fn caused_session_id(
         .expect("the caused request names its session")
         .to_owned()
 }
-
