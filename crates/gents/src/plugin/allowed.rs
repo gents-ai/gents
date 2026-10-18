@@ -316,32 +316,8 @@ pub fn bind(
     }
 }
 
-static PROTECTED: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
-
-pub fn protect(home: &Path) {
-    let home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
-    let paths = [
-        file(&home),
-        lock_file(&home),
-        super::approval::lock_file(&home),
-        home.join(super::approval::workspace::FILE),
-        home.join(super::approval::workspace::LOCK),
-        home.join(crate::home::PLUGIN_APPROVALS_DIR_NAME),
-    ];
-    if let Ok(mut protected) = PROTECTED.lock() {
-        for path in paths {
-            if !protected.contains(&path) {
-                protected.push(path);
-            }
-        }
-    }
-}
-
-pub fn is_protected(path: &Path) -> bool {
-    PROTECTED
-        .lock()
-        .is_ok_and(|protected| protected.iter().any(|guarded| path.starts_with(guarded)))
-}
+mod protected;
+pub use protected::{is_protected, protect};
 
 #[cfg(test)]
 #[path = "allowed_tests.rs"]

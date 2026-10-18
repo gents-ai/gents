@@ -1847,6 +1847,12 @@ def caseCoverage : List CoverageEntry :=
       "Canonical host paths drive the production writable-root selection. A macOS execution regression checks real writes inside the project, rejection in its sibling and Full access restoring the configured root; other platforms retain the existing sandbox-unavailable barrier.")
       "tool-policy" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "operator_path_cases"
+      "OperatorPathCases"
+      "plugin::allowed::tests::generated_operator_path_cases_protect_names_and_file_aliases"
+      "Generated decisions drive the shared path guard with real files, hard links, nested approval queues, missing targets and failed filesystem inspection. File-tool regressions verify that both reads and writes reject operator aliases before touching contents. Filesystem handle identity and concurrent external namespace changes remain native premises.")
+      "tool-policy" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "workspace_permission_cases"
       "WorkspacePermissionCases"
       "tool_policy::workspace_permissions::tests::generated_workspace_permission_cases"

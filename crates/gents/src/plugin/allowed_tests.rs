@@ -1,5 +1,60 @@
 use super::*;
 
+#[test]
+fn generated_operator_path_cases_protect_names_and_file_aliases() {
+    #[derive(serde::Deserialize)]
+    struct Case {
+        kind: String,
+        expected: bool,
+    }
+
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().operator_path_cases;
+    assert_eq!(cases.len(), 9);
+    for value in cases {
+        let case: Case = serde_json::from_value(value.clone()).unwrap();
+        let world = world();
+        let guarded = file(&world.gents);
+        let queue = world.gents.join(crate::home::PLUGIN_APPROVALS_DIR_NAME);
+        std::fs::create_dir_all(queue.join("v3")).unwrap();
+        std::fs::write(&guarded, "operator state").unwrap();
+        let question = queue.join("v3/question.decision");
+        std::fs::write(&question, "operator answer").unwrap();
+        let mut paths = vec![guarded.clone(), queue];
+        let mut target = world.root.join("work/a.txt");
+        match case.kind.as_str() {
+            "ordinary" => {}
+            "ordinaryAlias" => {
+                let alias = world.root.join("work/alias.txt");
+                std::fs::hard_link(&target, &alias).unwrap();
+                target = alias;
+            }
+            "missing" => target = world.root.join("work/missing.txt"),
+            "named" => target = guarded,
+            "uncreatedNamed" => {
+                std::fs::remove_file(&guarded).unwrap();
+                target = guarded;
+            }
+            "alias" | "queueAlias" => {
+                target = world.root.join("work/operator-alias.txt");
+                let source = if case.kind == "alias" {
+                    &guarded
+                } else {
+                    &question
+                };
+                std::fs::hard_link(source, &target).unwrap();
+            }
+            "unavailable" => target = world.root.join("work/invalid\0path"),
+            "guardUnavailable" => paths.push(world.gents.join("invalid\0path")),
+            other => panic!("unknown operator path case: {other}"),
+        }
+        assert_eq!(
+            protected::inspect(&paths, &target).unwrap_or(true),
+            case.expected,
+            "{value}"
+        );
+    }
+}
+
 struct World {
     _root: tempfile::TempDir,
     root: PathBuf,

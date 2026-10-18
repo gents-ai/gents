@@ -4676,6 +4676,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rig-core",
  "rmcp",
+ "same-file",
  "schema",
  "schemars 1.2.1",
  "security-framework 3.7.0",

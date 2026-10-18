@@ -114,6 +114,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) workspace_permission_write_cases: Vec<serde_json::Value>,
     pub(crate) workspace_permission_cases: Vec<serde_json::Value>,
     pub(crate) workspace_command_root_cases: Vec<serde_json::Value>,
+    pub(crate) operator_path_cases: Vec<serde_json::Value>,
     pub(crate) access_review_cases: Vec<serde_json::Value>,
     pub(crate) access_review_task_cases: Vec<serde_json::Value>,
     pub(crate) plugin_approval_cases: Vec<serde_json::Value>,
