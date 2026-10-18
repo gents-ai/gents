@@ -209,7 +209,8 @@ mod tests {
             "create_goal budget help must say an omitted budget is uncapped with no default cap, got: {description}"
         );
         assert_eq!(
-            budget["required"], serde_json::Value::Null,
+            budget["required"],
+            serde_json::Value::Null,
             "token_budget must stay optional in the create_goal schema"
         );
         assert!(

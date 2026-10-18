@@ -96,12 +96,10 @@ fn goal_document_omitted_budget_deserializes_as_none_not_a_sentinel() {
     );
 
     // Explicit null is the same contract as omission: uncapped.
-    let explicit_null: GoalDocument = serde_json::from_str(
-        &UNCAPPED_GOAL_JSON.replace(
-            "\"status\": \"active\",",
-            "\"status\": \"active\",\n    \"token_budget\": null,",
-        ),
-    )
+    let explicit_null: GoalDocument = serde_json::from_str(&UNCAPPED_GOAL_JSON.replace(
+        "\"status\": \"active\",",
+        "\"status\": \"active\",\n    \"token_budget\": null,",
+    ))
     .expect("goal document with explicit null budget");
     assert_eq!(explicit_null.token_budget, None);
 }
@@ -186,7 +184,10 @@ fn task_document_round_trips_omitted_budget_as_none() {
     }))
     .expect("task document with explicit null budget");
     assert_eq!(task.goal_token_budget, None);
-    assert_eq!(task.goal_objective_template.as_deref(), Some("ship the capability contract"));
+    assert_eq!(
+        task.goal_objective_template.as_deref(),
+        Some("ship the capability contract")
+    );
 
     let omitted: Task = serde_json::from_value(serde_json::json!({
         "node_did": "did:key:zNODE",
