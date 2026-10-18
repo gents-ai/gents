@@ -28,7 +28,6 @@ struct RecordingP2P {
     connected_peers_error: StdRwLock<Option<String>>,
     connect_calls: StdRwLock<Vec<String>>,
     connect_error: StdRwLock<Option<String>>,
-    connect_gate: StdRwLock<Option<Arc<Notify>>>,
     add_replicator_calls: StdRwLock<Vec<String>>,
     cleanup_calls: StdRwLock<Vec<String>>,
     replicators: StdRwLock<Vec<ReplicatorInfo>>,
@@ -309,14 +308,6 @@ impl P2POps for RecordingP2P {
             .write()
             .expect("connect calls lock poisoned")
             .push(addr.to_string());
-        let gate = self
-            .connect_gate
-            .read()
-            .expect("connect gate lock poisoned")
-            .clone();
-        if let Some(gate) = gate {
-            gate.notified().await;
-        }
         if let Some(error) = self
             .connect_error
             .read()
@@ -722,6 +713,7 @@ async fn repair_saved_peer_refreshes_network_before_redial() {
     );
 
     let repaired = repair_saved_peer(
+        &events::ChannelBus::new(),
         &p2p,
         &record,
         Some(ClientPeerStatus {
@@ -758,6 +750,7 @@ async fn failed_redial_clears_stale_configured_peer_connectivity() {
     );
 
     let repaired = repair_saved_peer(
+        &events::ChannelBus::new(),
         &p2p,
         &record,
         Some(ClientPeerStatus {
@@ -796,6 +789,7 @@ async fn repair_saved_graphql_peer_leaves_replicator_installation_to_route_manag
     let p2p: Arc<dyn P2POps> = recording.clone();
 
     let repaired = repair_saved_peer(
+        &events::ChannelBus::new(),
         &p2p,
         &record,
         Some(ClientPeerStatus {
@@ -1349,4 +1343,37 @@ async fn the_client_store_is_encrypted_with_its_recorded_key() {
         !paths.store_key_path().exists(),
         "no replacement key is created"
     );
+}
+
+#[tokio::test]
+async fn bootstrap_connect_waits_for_the_peer_connection_event() {
+    use events::Bus;
+
+    const PEER_ID: &str = "6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb";
+    let p2p: Arc<dyn P2POps> = Arc::new(RecordingP2P::default());
+    let bus = Arc::new(events::ChannelBus::new());
+    let publisher = Arc::clone(&bus);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        publisher.publish(events::Message::peer_connection(
+            events::PeerConnectionData {
+                peer_id: PEER_ID.to_string(),
+                connected: true,
+            },
+        ));
+    });
+
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        super::bootstrap::connect_peer_with_retry_until(
+            bus.as_ref(),
+            &p2p,
+            &format!("127.0.0.1:56091/p2p/{PEER_ID}"),
+            "Workshop Bay",
+            Duration::from_secs(30),
+        ),
+    )
+    .await
+    .expect("the connection event ends the wait")
+    .expect("peer connected");
 }

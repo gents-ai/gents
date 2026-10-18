@@ -173,6 +173,17 @@ metadata.
   HTTP GraphQL from feature code, and never add another retry loop or access
   wrapper. `write_owner_structure.rs` is a syntactic ratchet over direct node
   access, not complete enforcement; its allowlist only shrinks.
+- Preserve DefraDB's execution boundaries when updating its adapter or dependency.
+  Autocommit prepares remote inputs on the caller and routes only prepared database
+  attempts; do not replace that sequence with a call that moves the whole request
+  onto a database worker. Worker-affine cache-only commits stay on their native I/O
+  queue through `commit_nowait`; never offload them to a pool's blocking executor
+  or add a Gents retry to hide `WouldBlock::Io`. Fix missing asynchronous transaction
+  mechanics in Regolith. Read the owning contracts before changing these paths:
+  [PooledExecutor](https://github.com/sourcenetwork/defradb.rs/blob/main/crates/query/src/pooled/mod.rs),
+  [embedded autocommit](https://github.com/sourcenetwork/defradb.rs/blob/main/crates/defra-node/src/lib.rs),
+  [WorkerIo](https://github.com/sourcenetwork/defradb.rs/blob/main/crates/storage/src/backends/regolith/worker_io/mod.rs),
+  and [Regolith commit tickets](https://github.com/sourcenetwork/regolith/blob/main/src/transaction/nowait.rs).
 - Use `tracing`, never `println!`.
 - Treat flaky tests as defects: reproduce, file, and fix them.
 - Create worktrees with `make worktree BRANCH=<branch>` so build artifacts are

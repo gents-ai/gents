@@ -8,9 +8,6 @@ use crate::toolset::{
 };
 use anyhow::Result;
 
-/// One field of a [`WriteToolDecl`]: a named slot the bound write tool exposes,
-/// and whether the agent must provide it.
-///
 /// `name` is trimmed at deserialization; the field name is interpolated verbatim
 /// as a GraphQL input key, so stray whitespace would otherwise corrupt the
 /// mutation.

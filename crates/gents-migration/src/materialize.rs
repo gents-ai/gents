@@ -36,7 +36,11 @@ pub async fn materialize_collections(
     let mut failures: Vec<String> = Vec::new();
 
     for name in collections {
-        match node.materialize_collection(name).await {
+        match node
+            .materialize_collection(name)
+            .await
+            .map_err(anyhow::Error::from)
+        {
             Ok(n) => {
                 stats.documents_materialized += n;
                 debug!(collection = %name, documents = n, "materialized collection");

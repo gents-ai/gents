@@ -7,7 +7,7 @@ pub(crate) async fn run_background_completion_observer(
     cancel: CancellationToken,
 ) -> Result<()> {
     let mut observer =
-        BackgroundCompletionObserver::new(node, local_did, background_executions, cancel);
+        BackgroundCompletionObserver::new(node, local_did, background_executions, cancel)?;
     observer.run().await
 }
 
@@ -16,8 +16,7 @@ struct BackgroundCompletionObserver {
     local_did: String,
     background_executions: crate::hook::BackgroundExecutionRegistry,
     cancel: CancellationToken,
-    subscription: events::Subscription,
-    collection_id_to_name: HashMap<String, String>,
+    subscription: events::DocumentChangeSubscription,
     mailbox_cursor: Option<String>,
 }
 
@@ -27,21 +26,16 @@ impl BackgroundCompletionObserver {
         local_did: String,
         background_executions: crate::hook::BackgroundExecutionRegistry,
         cancel: CancellationToken,
-    ) -> Self {
-        let subscription = node.subscribe(&[EventName::Update]);
-        tracing::debug!(
-            subscription_id = subscription.id(),
-            "background completion observer subscribed"
-        );
-        Self {
+    ) -> Result<Self> {
+        let subscription = crate::subscribe_collections(&node, [AGENT_REQUEST_COLLECTION])?;
+        Ok(Self {
             node,
             local_did,
             background_executions,
             cancel,
             subscription,
-            collection_id_to_name: HashMap::new(),
             mailbox_cursor: None,
-        }
+        })
     }
 
     async fn run(&mut self) -> Result<()> {
@@ -49,57 +43,48 @@ impl BackgroundCompletionObserver {
         let mut reconciler_tick = tokio::time::interval(Duration::from_secs(5));
         reconciler_tick.reset();
         loop {
-            let message = tokio::select! {
+            let batch = tokio::select! {
                 biased;
                 _ = self.cancel.cancelled() => return Ok(()),
                 _ = reconciler_tick.tick() => {
                     self.run_reconcilers().await?;
-                    // Slow sweeps must leave time to drain updates rather than
+                    // Slow sweeps must leave time to drain changes rather than
                     // repeatedly winning this biased select with overdue ticks.
                     reconciler_tick.reset();
                     continue;
                 }
-                msg = self.subscription.recv() => {
-                    match msg {
-                        Some(message) => message,
+                batch = self.subscription.recv() => {
+                    match batch {
+                        Some(batch) => batch,
                         None => anyhow::bail!("background completion subscription channel closed"),
                     }
                 }
             };
 
-            let dropped = self.subscription.check_and_reset_dropped();
-            if dropped > 0 {
+            if batch.resync_required {
                 tracing::warn!(
-                    dropped,
-                    "background completion observer dropped messages; running the recovery sweeps"
+                    updates = batch.updates,
+                    "background completion observer change capacity exceeded; running the recovery sweeps"
                 );
                 self.run_reconcilers().await?;
                 reconciler_tick.reset();
-            }
-
-            let Some(update) = message.as_update() else {
-                continue;
-            };
-            let Some(collection_name) = self.resolve_collection_name(&update.collection_id).await
-            else {
-                continue;
-            };
-            if collection_name != AGENT_REQUEST_COLLECTION {
                 continue;
             }
 
-            if let Err(error) = super::session_message::settle_rows_after_request_update(
-                &self.node,
-                &self.local_did,
-                &update.doc_id,
-            )
-            .await
-            {
-                tracing::warn!(
-                    request_doc_id = %update.doc_id,
-                    error = %format!("{error:#}"),
-                    "session-message settlement from a request update failed; the periodic scan retries"
-                );
+            for change in batch.changes {
+                if let Err(error) = super::session_message::settle_rows_after_request_update(
+                    &self.node,
+                    &self.local_did,
+                    &change.doc_id,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        request_doc_id = %change.doc_id,
+                        error = %format!("{error:#}"),
+                        "session-message settlement from a request update failed; the periodic scan retries"
+                    );
+                }
             }
         }
     }
@@ -161,54 +146,17 @@ impl BackgroundCompletionObserver {
                 "redrove failed background-completion wakes"
             );
         }
-        // Reassert terminal state so replicas that missed the one-shot push receive the delta.
         let redrive =
             crate::RequestLifecycle::redrive_terminal_convergence(&self.node, &self.local_did)
                 .await?;
         if !redrive.is_noop() {
             tracing::debug!(
                 reasserted = redrive.reasserted,
+                acknowledged = redrive.acknowledged,
                 scanned = redrive.scanned,
                 "re-drove terminal request convergence to replicas"
             );
         }
         Ok(())
-    }
-
-    async fn resolve_collection_name(&mut self, collection_id: &str) -> Option<String> {
-        if let Some(name) = self.collection_id_to_name.get(collection_id) {
-            return Some(name.clone());
-        }
-
-        let names = match self.node.list_collections() {
-            Ok(names) => names,
-            Err(error) => {
-                tracing::warn!(
-                    collection_id = %collection_id,
-                    %error,
-                    "background completion observer failed to list collections"
-                );
-                return None;
-            }
-        };
-
-        for name in names {
-            let def = match self.node.get_collection(&name) {
-                Ok(Some(def)) => def,
-                Ok(None) => continue,
-                Err(error) => {
-                    tracing::warn!(
-                        collection_name = %name,
-                        %error,
-                        "background completion observer failed to fetch collection definition",
-                    );
-                    continue;
-                }
-            };
-            self.collection_id_to_name
-                .insert(def.collection_id.clone(), def.name.clone());
-        }
-
-        self.collection_id_to_name.get(collection_id).cloned()
     }
 }

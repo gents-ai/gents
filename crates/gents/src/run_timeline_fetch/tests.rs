@@ -118,12 +118,12 @@ async fn timeline_batches_request_local_events_and_restores_request_sequence_ord
     let response = node
         .execute(
             r#"mutation {
-                create_InferenceCall(input: { call_id: "call-b-2", request_id: "req-b", request_doc_id: "doc-b", call_seq: 2, attempt: 0, call_state: "completed", call_kind: "chat" }) { _docID }
-                create_InferenceCall(input: { call_id: "call-b-1", request_id: "req-b", request_doc_id: "doc-b", call_seq: 1, attempt: 0, call_state: "completed", call_kind: "chat" }) { _docID }
-                create_InferenceCall(input: { call_id: "call-a-1", request_id: "req-a", request_doc_id: "doc-a", call_seq: 1, attempt: 0, call_state: "completed", call_kind: "chat" }) { _docID }
-                create_ProviderContextReduction(input: { reduction_key: "reduction-b-2", request_id: "req-b", request_doc_id: "doc-b", session_id: "s-1", reduction_index: 2, turn_index: 1, messages_compacted: 0, original_tokens: 0, compacted_tokens: 0 }) { _docID }
-                create_ProviderContextReduction(input: { reduction_key: "reduction-b-1", request_id: "req-b", request_doc_id: "doc-b", session_id: "s-1", reduction_index: 1, turn_index: 1, messages_compacted: 0, original_tokens: 0, compacted_tokens: 0 }) { _docID }
-                create_ProviderContextReduction(input: { reduction_key: "reduction-a-1", request_id: "req-a", request_doc_id: "doc-a", session_id: "s-1", reduction_index: 1, turn_index: 1, messages_compacted: 0, original_tokens: 0, compacted_tokens: 0 }) { _docID }
+                seed_InferenceCall_1: create_InferenceCall(input: { call_id: "call-b-2", request_id: "req-b", request_doc_id: "doc-b", call_seq: 2, attempt: 0, call_state: "completed", call_kind: "chat" }) { _docID }
+                seed_InferenceCall_2: create_InferenceCall(input: { call_id: "call-b-1", request_id: "req-b", request_doc_id: "doc-b", call_seq: 1, attempt: 0, call_state: "completed", call_kind: "chat" }) { _docID }
+                seed_InferenceCall_3: create_InferenceCall(input: { call_id: "call-a-1", request_id: "req-a", request_doc_id: "doc-a", call_seq: 1, attempt: 0, call_state: "completed", call_kind: "chat" }) { _docID }
+                seed_ProviderContextReduction_1: create_ProviderContextReduction(input: { reduction_key: "reduction-b-2", request_id: "req-b", request_doc_id: "doc-b", session_id: "s-1", reduction_index: 2, turn_index: 1, messages_compacted: 0, original_tokens: 0, compacted_tokens: 0 }) { _docID }
+                seed_ProviderContextReduction_2: create_ProviderContextReduction(input: { reduction_key: "reduction-b-1", request_id: "req-b", request_doc_id: "doc-b", session_id: "s-1", reduction_index: 1, turn_index: 1, messages_compacted: 0, original_tokens: 0, compacted_tokens: 0 }) { _docID }
+                seed_ProviderContextReduction_3: create_ProviderContextReduction(input: { reduction_key: "reduction-a-1", request_id: "req-a", request_doc_id: "doc-a", session_id: "s-1", reduction_index: 1, turn_index: 1, messages_compacted: 0, original_tokens: 0, compacted_tokens: 0 }) { _docID }
             }"#,
         )
         .await;

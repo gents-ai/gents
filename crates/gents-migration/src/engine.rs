@@ -119,7 +119,7 @@ async fn register_baseline(
     for entry in registry.baseline {
         if node
             .get_collection(entry.name)
-            .map_err(Error::Node)?
+            .map_err(|error| Error::Node(error.into()))?
             .is_some()
         {
             report.baseline_already_present += 1;
@@ -145,7 +145,7 @@ async fn register_baseline(
                 .map(|entry| entry.name)
                 .collect::<Vec<_>>()
                 .join(","),
-            source,
+            source: source.into(),
         })?;
     report.baseline_registered += missing.len();
     debug!(
@@ -167,7 +167,7 @@ async fn reconcile_ordinary_indexes(node: &EmbeddedNode, registry: &Registry<'_>
             .collect();
         node.ensure_ordinary_index(index.collection, index.name, fields)
             .await
-            .map_err(Error::Node)?;
+            .map_err(|error| Error::Node(error.into()))?;
     }
     Ok(())
 }
@@ -240,7 +240,7 @@ async fn apply_add_collection(
             return Err(Error::StepFailed {
                 step: id.to_string(),
                 collection: id.to_string(),
-                source: error,
+                source: error.into(),
             });
         }
     }
@@ -249,7 +249,7 @@ async fn apply_add_collection(
         let versions = node
             .get_all_collection_versions()
             .await
-            .map_err(Error::Node)?;
+            .map_err(|error| Error::Node(error.into()))?;
         let Some(active) = versions
             .iter()
             .find(|v| v.version_id == pin && !v.is_placeholder)
@@ -292,7 +292,7 @@ async fn apply_patch_versioned(
 
     let active = node
         .get_collection(collection)
-        .map_err(Error::Node)?
+        .map_err(|error| Error::Node(error.into()))?
         .ok_or_else(|| Error::CollectionMissing {
             collection: collection.to_string(),
         })?;
@@ -316,7 +316,7 @@ async fn apply_patch_versioned(
     let all = node
         .get_all_collection_versions()
         .await
-        .map_err(Error::Node)?;
+        .map_err(|error| Error::Node(error.into()))?;
     let dest = all.iter().find(|v| v.version_id == pin);
 
     // A later step in the same collection may already be active. In that
@@ -371,7 +371,7 @@ async fn apply_patch_versioned(
                     .map_err(|e| Error::StepFailed {
                         step: id.to_string(),
                         collection: collection.to_string(),
-                        source: e,
+                        source: e.into(),
                     })?;
             }
             let patched = node
@@ -380,7 +380,7 @@ async fn apply_patch_versioned(
                 .map_err(|e| Error::StepFailed {
                     step: id.to_string(),
                     collection: collection.to_string(),
-                    source: e,
+                    source: e.into(),
                 })?;
             if patched.version_id != pin {
                 return Err(Error::VersionPinMismatch {
@@ -401,7 +401,7 @@ async fn apply_patch_versioned(
                 .map_err(|e| Error::StepFailed {
                     step: id.to_string(),
                     collection: collection.to_string(),
-                    source: e,
+                    source: e.into(),
                 })?;
             report.steps_applied += 1;
         }
@@ -412,7 +412,7 @@ async fn apply_patch_versioned(
                 .map_err(|e| Error::StepFailed {
                     step: id.to_string(),
                     collection: collection.to_string(),
-                    source: e,
+                    source: e.into(),
                 })?;
             if patched.version_id != pin {
                 return Err(Error::VersionPinMismatch {
@@ -433,7 +433,7 @@ async fn apply_patch_versioned(
                 .map_err(|e| Error::StepFailed {
                     step: id.to_string(),
                     collection: collection.to_string(),
-                    source: e,
+                    source: e.into(),
                 })?;
             report.steps_applied += 1;
         }
@@ -464,7 +464,7 @@ async fn apply_patch_versioned(
                 .map_err(|e| Error::StepFailed {
                     step: id.to_string(),
                     collection: collection.to_string(),
-                    source: e,
+                    source: e.into(),
                 })?;
             report.steps_applied += 1;
         }
@@ -537,7 +537,7 @@ async fn verify_active_step(
 ) -> Result<()> {
     let active = node
         .get_collection(collection)
-        .map_err(Error::Node)?
+        .map_err(|error| Error::Node(error.into()))?
         .ok_or_else(|| Error::CollectionMissing {
             collection: collection.to_string(),
         })?;
@@ -610,7 +610,7 @@ async fn repair_transform_if_needed(
         .map_err(|e| Error::StepFailed {
             step: id.to_string(),
             collection: collection.to_string(),
-            source: e,
+            source: e.into(),
         })?;
     report.edges_repaired += 1;
     info!(
@@ -630,7 +630,7 @@ async fn apply_patch_in_place(
 ) -> Result<()> {
     let active = node
         .get_collection(collection)
-        .map_err(Error::Node)?
+        .map_err(|error| Error::Node(error.into()))?
         .ok_or_else(|| Error::CollectionMissing {
             collection: collection.to_string(),
         })?;
@@ -646,7 +646,7 @@ async fn apply_patch_in_place(
         .map_err(|e| Error::StepFailed {
             step: id.to_string(),
             collection: collection.to_string(),
-            source: e,
+            source: e.into(),
         })?;
     expected_state
         .verify(&patched)
@@ -678,7 +678,7 @@ async fn reject_unknown_lineage(node: &EmbeddedNode, registry: &Registry<'_>) ->
     let all_versions = node
         .get_all_collection_versions()
         .await
-        .map_err(Error::Node)?;
+        .map_err(|error| Error::Node(error.into()))?;
     let by_name = versions_by_name(&all_versions);
     let known_pins = known_pin_set(registry);
     for entry in registry.baseline {
@@ -697,7 +697,7 @@ async fn verify_managed_lineages(
     let all_versions = node
         .get_all_collection_versions()
         .await
-        .map_err(Error::Node)?;
+        .map_err(|error| Error::Node(error.into()))?;
     let by_name = versions_by_name(&all_versions);
 
     let known_pins = known_pin_set(registry);

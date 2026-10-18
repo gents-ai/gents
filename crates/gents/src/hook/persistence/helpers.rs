@@ -154,99 +154,6 @@ pub(super) fn bounded_tool_result_with_presentation(
     )
 }
 
-pub(super) fn model_observation_for_tool_result(tool_name: &str, raw_result: &str) -> String {
-    if !is_read_file_tool(tool_name) {
-        return raw_result.to_string();
-    }
-
-    project_read_file_observation(raw_result).unwrap_or_else(|| raw_result.to_string())
-}
-
-fn is_read_file_tool(tool_name: &str) -> bool {
-    matches!(tool_name, "read_file" | "read" | "cat")
-}
-
-fn project_read_file_observation(raw_result: &str) -> Option<String> {
-    project_read_file_json_observation(raw_result)
-        .or_else(|| project_read_file_compact_observation(raw_result))
-}
-
-fn project_read_file_compact_observation(raw_result: &str) -> Option<String> {
-    let (first_line, body) = raw_result.split_once('\n')?;
-    let metadata = first_line.strip_prefix("gents_fs: ")?;
-    let metadata: serde_json::Value = serde_json::from_str(metadata).ok()?;
-    if metadata.get("tool").and_then(|value| value.as_str()) != Some("read_file") {
-        return None;
-    }
-    let content = body.strip_prefix("content:\n").unwrap_or(body);
-    Some(render_read_file_observation(&metadata, content))
-}
-
-fn project_read_file_json_observation(raw_result: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(raw_result.trim()).ok()?;
-    let content = value.get("content").and_then(|value| value.as_str())?;
-    if !looks_like_read_file_wrapper(&value) {
-        return None;
-    }
-    Some(render_read_file_observation(&value, content))
-}
-
-fn looks_like_read_file_wrapper(value: &serde_json::Value) -> bool {
-    if value.get("tool").and_then(|value| value.as_str()) == Some("read_file") {
-        return true;
-    }
-
-    value.get("ok").is_some()
-        && value.get("status").is_some()
-        && value.get("path").is_some()
-        && value.get("start_line").is_some()
-        && value.get("end_line").is_some()
-}
-
-fn render_read_file_observation(metadata: &serde_json::Value, content: &str) -> String {
-    let path = metadata
-        .get("path")
-        .and_then(|value| value.as_str())
-        .filter(|path| !path.trim().is_empty())
-        .unwrap_or("file");
-    let truncated = metadata
-        .get("truncated")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false);
-
-    let mut provenance = format!("Read {path}");
-    if let (Some(start), Some(end)) = (
-        json_usize(metadata, "start_line"),
-        json_usize(metadata, "end_line"),
-    ) {
-        provenance.push_str(&format!(" (lines {start}-{end}"));
-        if let Some(total) = json_usize(metadata, "total_count") {
-            provenance.push_str(&format!(" of {total}"));
-        }
-        if truncated {
-            provenance.push_str(", truncated");
-        }
-        provenance.push(')');
-    } else if truncated {
-        provenance.push_str(" (truncated)");
-    }
-    provenance.push(':');
-
-    let content = content.trim_end();
-    if content.is_empty() {
-        provenance
-    } else {
-        format!("{provenance}\n{content}")
-    }
-}
-
-fn json_usize(value: &serde_json::Value, key: &str) -> Option<usize> {
-    value
-        .get(key)
-        .and_then(|value| value.as_u64())
-        .and_then(|value| usize::try_from(value).ok())
-}
-
 pub(super) fn json_string(value: serde_json::Value) -> String {
     crate::tool_output::render(
         &value,
@@ -502,36 +409,6 @@ mod tests {
                 .is_some_and(|s| s.contains("omitted")),
             "expected the stub fallback, got {parsed}"
         );
-    }
-
-    #[test]
-    fn read_file_compact_output_projects_to_model_observation() {
-        let raw = concat!(
-            r#"gents_fs: {"ok":true,"status":"success","tool":"read_file","path":"notes.txt","returned_count":2,"total_count":3,"truncated":false,"start_line":2,"end_line":3}"#,
-            "\ncontent:\nL2: beta\nL3: gamma\n"
-        );
-
-        assert_eq!(
-            model_observation_for_tool_result("read_file", raw),
-            "Read notes.txt (lines 2-3 of 3):\nL2: beta\nL3: gamma"
-        );
-    }
-
-    #[test]
-    fn read_file_raw_json_output_projects_to_model_observation() {
-        let raw = r#"{"ok":true,"status":"success","tool":"read_file","path":"src/main.rs","returned_count":1,"total_count":9,"truncated":true,"start_line":4,"end_line":4,"content":"L4: fn main() {}"}"#;
-
-        assert_eq!(
-            model_observation_for_tool_result("read_file", raw),
-            "Read src/main.rs (lines 4-4 of 9, truncated):\nL4: fn main() {}"
-        );
-    }
-
-    #[test]
-    fn read_file_projection_does_not_parse_plain_file_json() {
-        let raw = r#"{"path":"data.json","content":"not a wrapper"}"#;
-
-        assert_eq!(model_observation_for_tool_result("read_file", raw), raw);
     }
 
     #[test]

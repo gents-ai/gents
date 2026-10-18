@@ -1,10 +1,9 @@
 //! The per-store at-rest encryption key: creation, custody and loading.
 //!
 //! Every persistent Gents store (a gents home's data directory and the
-//! desktop client's store) is opened through DefraDB's `EncryptedStore`
-//! (AES-256-GCM over values; keys stay plaintext) with the 32-byte key this
-//! module owns. New stores start encrypted. An existing plaintext store is
-//! copied and verified before replacement; a recorded encrypted store is
+//! desktop client's store) uses DefraDB's engine file encryption with the
+//! 32-byte key this module owns. New stores start encrypted. An existing
+//! plaintext store is copied and verified before replacement; a recorded encrypted store is
 //! never reopened without its key.
 //!
 //! At-rest encryption protects the disk and its backups. The process that
@@ -39,8 +38,6 @@ pub const STORE_ENCRYPTION_VERSION: u32 = 1;
 
 const STORE_KEY_LEN: usize = 32;
 
-/// Where a new store key is kept. The default is the login keychain on
-/// macOS and a key file elsewhere.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoreKeyCustodyChoice {
     Keychain,
@@ -57,7 +54,6 @@ impl Default for StoreKeyCustodyChoice {
     }
 }
 
-/// A store's recorded encryption.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoreEncryption {
     pub version: u32,
@@ -164,9 +160,6 @@ impl StoreEncryption {
         Ok(key)
     }
 
-    /// Loads the recorded key for the store at `data_path`. A definitely
-    /// absent key is the typed [`IncompatibleStoreKind::MissingStoreKey`]
-    /// refusal; a Keychain that will not answer is [`StoreKeyUnavailable`].
     pub fn load(&self, key_file: &Path, data_path: &Path) -> Result<StoreKey> {
         if self.version != STORE_ENCRYPTION_VERSION {
             return Err(IncompatibleStore {
@@ -194,8 +187,6 @@ impl StoreEncryption {
         }
     }
 
-    /// Removes the recorded key, for a store that is being wiped. An already
-    /// absent key is not an error.
     pub fn delete_key(&self, key_file: &Path) -> Result<()> {
         match &self.custody {
             StoreKeyCustody::MacosKeychain { keychain_label } => keychain::delete(keychain_label),
@@ -209,8 +200,6 @@ impl StoreEncryption {
     }
 }
 
-/// Refuses a store that holds data but has no recorded key: it was written
-/// unencrypted by an earlier release, or by an interrupted initialization.
 pub fn reject_unrecorded_store(data_path: &Path) -> Result<()> {
     if data_path.join("MANIFEST").exists() {
         return Err(unencrypted(data_path));
@@ -227,7 +216,7 @@ fn require_unoccupied_key_file(key_file: &Path) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {
             return Err(error)
-                .with_context(|| format!("inspecting store key {}", key_file.display()))
+                .with_context(|| format!("inspecting store key {}", key_file.display()));
         }
     }
     Ok(())
@@ -247,8 +236,6 @@ pub async fn open_home_store_key(home_dir: &Path, data_path: &Path) -> Result<St
     open_home_store_key_with_custody(home_dir, data_path, StoreKeyCustodyChoice::default()).await
 }
 
-/// As [`open_home_store_key`], selecting custody only when the home has never
-/// recorded a store key. An interrupted upgrade keeps its recorded choice.
 pub async fn open_home_store_key_with_custody(
     home_dir: &Path,
     data_path: &Path,
@@ -297,8 +284,6 @@ pub async fn open_home_store_key_with_custody(
     Ok(key)
 }
 
-/// The DefraDB builder for a persistent store at `data_path` encrypted with
-/// `key`.
 pub fn persistent_builder(data_path: &Path, key: &StoreKey) -> Result<defra_node::NodeBuilder> {
     crate::storage_backend::reject_legacy_store(data_path)?;
     Ok(key.encrypt(

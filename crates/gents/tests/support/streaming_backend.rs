@@ -521,11 +521,11 @@ fn request_is_session_title(body: &str) -> bool {
             .and_then(|messages| messages.first())
             .is_some_and(|message| {
                 message.get("role").and_then(serde_json::Value::as_str) == Some("system")
-                    && message
-                        .get("content")
-                        .is_some_and(|content| content.to_string().contains(
-                            "Generate concise conversation titles. Return only a lowercase hyphenated 3-5 word title.",
-                        ))
+                    && message.get("content").is_some_and(|content| {
+                        content
+                            .to_string()
+                            .contains("Generate concise conversation titles.")
+                    })
             })
 }
 

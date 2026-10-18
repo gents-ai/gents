@@ -36,7 +36,6 @@ def countActive (ownerId invocationId : String) (invs : List CallbackInvocation)
         decide (inv.ownerNodeDid = ownerId) &&
         decide (inv.invocationId = invocationId)).length
 
-/-- Row-level invocation uniqueness. -/
 def ClaimUnique (invs : List CallbackInvocation) : Prop :=
   invs.all (fun inv => decide (countActive inv.ownerNodeDid inv.invocationId invs ≤ 1)) = true
 

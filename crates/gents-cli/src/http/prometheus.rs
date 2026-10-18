@@ -20,8 +20,6 @@ use gents::graphql::escape_graphql_string;
 const INFERENCE_METRICS_WINDOW_SECS: i64 = 5 * 60;
 const INFERENCE_METRICS_PAGE_SIZE: usize = 500;
 const LIVENESS_ACTIVITY_CHUNK: usize = 32;
-/// Well under the `/status` probe budget so a slow activity read never turns
-/// a healthy runtime not-ok or stalls `/healthz`.
 pub(crate) const LIVENESS_ACTIVITY_BUDGET: std::time::Duration =
     std::time::Duration::from_millis(500);
 
@@ -1311,8 +1309,6 @@ pub(crate) async fn load_metrics_core_data(
 }
 
 impl MetricsCoreData {
-    /// Adds the optional progress observation; activity reads stop at `deadline`
-    /// and a failed read never fails the endpoint.
     pub(crate) async fn with_liveness_activity(
         self,
         graphql: &GraphqlEndpoint,

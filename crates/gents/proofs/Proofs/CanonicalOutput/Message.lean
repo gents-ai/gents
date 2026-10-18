@@ -360,6 +360,9 @@ def declaredPayload (records : List Segment) (denied : List DocId)
     MessageError.reconstruction
   return (closing, declaration)
 
+/-- Publication source ownership follows the persisted header, not inferred
+provider provenance. Tool delivery may retain authored immediate receipts in
+the parent request and background notices in an authenticated wake request. -/
 def publicationAllowsSource (header : Header) (closing : Segment) : Bool :=
   match header.publication with
   | .requestExecution generation =>

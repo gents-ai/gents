@@ -1,4 +1,3 @@
-// Driven by direct style writes from the swipe hook; progress arrives at display rate.
 import { ArrowLeft, ArrowRight } from "lucide-react";
 
 export const SWIPE_HANDLE_ATTR = "data-swipe-handle";

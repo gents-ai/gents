@@ -10,7 +10,6 @@ use serde_json::Value;
 use super::fs::read_captured_log;
 use super::ports;
 
-/// Bound on replacement ports tried after a lost bind race.
 const MAX_STOLEN_PORT_ATTEMPTS: u32 = 3;
 
 /// Positive evidence that the child's preflight bind found `addr` taken; the
@@ -65,9 +64,6 @@ impl ServeProcess {
         ))
     }
 
-    /// Run a fallible future and, on failure, attach the server's captured
-    /// stdout/stderr to the error chain so mid-test connection failures are
-    /// diagnosable; capture-read failures are reported in place of the logs.
     pub async fn capturing<T>(
         &self,
         fut: impl std::future::Future<Output = Result<T>>,
@@ -164,7 +160,6 @@ pub fn spawn_server_with_ready_json(
     extra_args: &[&str],
     envs: &[(&str, &str)],
 ) -> Result<(ServeProcess, Value)> {
-    // Recovery is off, so the bound port is always the requested one.
     let (serve, _port, value) =
         spawn_server_with_ready_json_inner(home_dir, port, extra_args, envs, false, None)?;
     Ok((serve, value))

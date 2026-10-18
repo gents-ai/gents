@@ -85,15 +85,21 @@ fn checked_directory(path: &Path) -> Result<DirectoryIdentity> {
 }
 
 fn create_private_directory(path: &Path) -> Result<()> {
-    let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
+        let mut builder = std::fs::DirBuilder::new();
         builder.mode(0o700);
+        builder
+            .create(path)
+            .with_context(|| format!("creating private artifacts {}", path.display()))
     }
-    builder
-        .create(path)
-        .with_context(|| format!("creating private artifacts {}", path.display()))
+    #[cfg(not(unix))]
+    {
+        std::fs::DirBuilder::new()
+            .create(path)
+            .with_context(|| format!("creating private artifacts {}", path.display()))
+    }
 }
 
 fn checked_worktree_git_dir(source: &Path, workspace_id: &str) -> Result<PathBuf> {

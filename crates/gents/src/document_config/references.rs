@@ -198,7 +198,6 @@ impl ConfigReferences {
             .collect()
     }
 
-    /// Validate the full retained candidate, including unchanged inbound links.
     pub fn validate(&self) -> Result<()> {
         for ((collection, _), document) in &self.documents {
             self.validate_document(*collection, document)?;
@@ -206,8 +205,6 @@ impl ConfigReferences {
         Ok(())
     }
 
-    /// Prune check against every current referrer, sharing the canonical
-    /// reference definitions.
     pub fn validate_removal(&self, collection: Collection, id: &str) -> Result<()> {
         let mut candidate = self.clone();
         ensure!(
@@ -258,8 +255,6 @@ impl ConfigReferences {
             }
             Ok(())
         };
-        // Canonical-field reference table; Defra ACP and explicit foreign
-        // delegation keep their existing owners.
         match collection {
             Collection::Node => {
                 let doc: Node = decode(value)?;

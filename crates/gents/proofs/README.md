@@ -341,6 +341,7 @@ Historical bridge references below are not evidence that this target already run
 | Installation | `ApplyReconcile/Publication` validates same-owner reference closure and publishes atomically without altering observations. There is one publication model; reference cycles are supported. Document references carry their node once, so same-label documents from different nodes coexist. The runtime bridge requires successful complete configuration resolution and a separate availability observation; document presence does not imply readiness. Authored IDs use an injective mapping to lifecycle IDs. Candidate construction, ACP checks, and transaction implementation are refinement boundaries. `publishIf` adds an expected-field precondition on the same publication; a stale expectation leaves state unchanged and an empty scope is `publish`. |
 | Execution | Tool execution removes per-call approval states/transitions. Request terminalization, managed execution, foreground progress, and enrollment authorization retain their owners. `TaskHooks` command results are external observations; the hook contract covers sequencing and failure handling, not exactly-once host effects. |
 | Identity | `Identity` resolves agent labels with an explicit node; shared labels never determine permissions or imply a global ID-to-node mapping. Structural fixture results evaluate the actual well-formedness predicate. |
+| Session title text | `TitleText` owns generated phrases, bounds, provider instructions, and preservation of user-authored names. |
 | Durable sessions | `AgentSession` owns identity, provenance, title, and request observation. Session observation updates use exact requester scope; same-request refresh consumes a transactional reread of the current request, not an out-of-order notification payload. Head selection queries authoritative request rows; cached observations do not authorize retries or background wakes. Retry selection uses exact requester scope; background wake selection spans requester scopes. |
 | Forks | `SessionFork` copies native message headers for a transcript prefix, preserves origin payload references, detaches live request links, and requires compaction cursors to name retained messages. The adapter must supply an authorized, coherent snapshot and translate user cuts and cursor encodings; hydration retains authorized origin dependencies. |
 | Request inputs | `Enrollment/RequestInput` reuses title and queue types and admits selected skills within context authority. Goal continuations carry original sequence/wrapup facts verified by the existing receipt owner. Sampling and aggregate limits come from inference configuration. |
@@ -580,8 +581,9 @@ Currently:
 - `PairingTransport` — connection/install liveness for one directed pairing edge.
 - `P2PBackpressure` — bounded hub fan-in/fan-out admission and push-worker liveness obligations for issue #630 (obligation model; not a fleet stability proof).
 - `ReplicatedRequestConvergence` — replicated terminal-state convergence under
-  persisted bounded owner re-drive plus bounded full replay when a configured
-  peer reconnects after a longer partition.
+  persisted bounded owner re-drive of unacknowledged requests plus bounded
+  full replay when an unacknowledged configured peer reconnects after a longer
+  partition.
 
 ## Why This Matters
 

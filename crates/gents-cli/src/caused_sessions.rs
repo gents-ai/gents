@@ -31,6 +31,7 @@ fn access(node: &Arc<EmbeddedNode>) -> ConfigAccess {
     ConfigAccess::local(node.clone())
 }
 
+#[cfg(unix)]
 pub(crate) async fn load_direct_caused_sessions(
     node: &Arc<EmbeddedNode>,
     cause: &AgentRequestRow,

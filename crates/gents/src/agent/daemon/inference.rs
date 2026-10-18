@@ -629,7 +629,6 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                                         );
                                         return Err(error.context("persisting received provider audit during interrupt"));
                                     }
-                                    // Tool terminalization publishes its result atomically.
                                     return Err(anyhow!("request interrupted during inference"));
                                 }
                                 _ = lease_poll.tick() => {
@@ -1712,7 +1711,8 @@ pub(super) mod tests {
             "wake must complete through the daemon's owned request path"
         );
 
-        let mut watcher = crate::watcher::DefraWatcher::new(node.clone(), &admission.node_did);
+        let mut watcher = crate::watcher::DefraWatcher::new(node.clone(), &admission.node_did)
+            .expect("request watcher");
         let successor = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
                 let request = crate::watcher::Watcher::next_request(&mut watcher)

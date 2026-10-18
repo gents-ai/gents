@@ -115,11 +115,12 @@ async fn filesystem_notifications_cover_atomic_questions_and_decisions() {
 async fn a_partial_question_is_announced_when_its_write_finishes() {
     let home = tempfile::tempdir().unwrap();
     let (send, mut receive) = mpsc::channel(1);
-    let _watch = QueueWatch::start(home.path(), send).unwrap();
+    let mut watch = QueueWatch::start(home.path(), send).unwrap();
     let mut pending = PendingQueue::default();
     let path = approval::queue_dir(home.path()).join("q1.json");
     std::fs::write(&path, b"{").unwrap();
     signalled(&mut receive).await;
+    watch.reattach(home.path()).unwrap();
     assert!(!pending.refresh(home.path()).unwrap());
     std::fs::write(&path, serde_json::to_vec(&question("q1")).unwrap()).unwrap();
     loop {

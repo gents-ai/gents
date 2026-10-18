@@ -125,9 +125,7 @@ pub enum SlotClass {
     Fail,
     Unknown,
     NotEvidence,
-    /// Latest row with a null completion.
     Abandoned,
-    /// No row yet.
     Planned,
 }
 
@@ -206,9 +204,7 @@ impl SlotCounts {
     }
 }
 
-/// Build `run`'s report from its rows; refused for rows of another run, a
-/// trial naming a cell or case the run did not freeze, and a definition that
-/// no longer digests to what the run froze.
+/// Build `run`'s report from its rows.
 pub fn build(
     run: &RunRecord,
     trials: &[TrialRecord],
@@ -296,7 +292,6 @@ pub fn build(
     })
 }
 
-/// A slot's counted attempt: its score and verdicts.
 struct Counted<'a> {
     score: CaseTrialScore,
     all_pass: bool,
@@ -438,8 +433,6 @@ fn cell_report(
     report
 }
 
-/// No row is Planned, an open latest row is Abandoned, and otherwise the
-/// case-trial class of the latest completed attempt.
 fn slot_class(latest: Option<&TrialRecord>, counted: Option<&Counted<'_>>) -> SlotClass {
     let Some(latest) = latest else {
         return SlotClass::Planned;
@@ -474,7 +467,6 @@ fn attempt_summary(record: &TrialRecord) -> AttemptSummary {
     }
 }
 
-/// Absent only when both are.
 fn sum(total: Option<u64>, one: Option<u64>) -> Option<u64> {
     match (total, one) {
         (None, None) => None,

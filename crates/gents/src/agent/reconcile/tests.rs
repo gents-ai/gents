@@ -1064,6 +1064,23 @@ async fn fetch_runtime_status(
     serde_json::from_value(value).expect("decode NodeRuntime row")
 }
 
+async fn await_settled_runtime_status(
+    node: &Arc<defra_node::EmbeddedNode>,
+    node_did: &str,
+) -> RuntimeStatusRow {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let row = fetch_runtime_status(node, node_did).await;
+            if row.reconcile_phase == "idle" {
+                return row;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("supervisor publishes its terminal status after the active snapshot")
+}
+
 #[tokio::test]
 async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
     let publish = lean_runtime_reconcile_case("publish_changed_snapshot");
@@ -1181,7 +1198,7 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
             .system_prompt,
         "updated prompt"
     );
-    let status = fetch_runtime_status(&node, node_did).await;
+    let status = await_settled_runtime_status(&node, node_did).await;
     assert_eq!(status.reconcile_phase, publish.post_phase.as_str());
     assert_eq!(status.last_reconcile_result, "applied");
     assert!(status.last_reconcile_error.is_empty());
@@ -1317,7 +1334,7 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
         .expect("valid update should publish after failed apply")
         .unwrap();
     assert_eq!(active_rx.borrow().generation, 2);
-    let recovered_status = fetch_runtime_status(&node, node_did).await;
+    let recovered_status = await_settled_runtime_status(&node, node_did).await;
     assert_eq!(recovered_status.reconcile_phase, "idle");
     assert_eq!(recovered_status.last_reconcile_result, "applied");
     assert!(recovered_status.last_reconcile_error.is_empty());

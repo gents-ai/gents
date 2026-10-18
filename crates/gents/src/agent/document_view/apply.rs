@@ -1,10 +1,29 @@
 use super::{ControlUpdateOutcome, DocumentRuntimeView};
 use crate::collection::Collection;
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+
+/// Runtime-observed collections that are not themselves configuration.
+/// PackInstallation is not itself configuration: a pack install or remove
+/// writes or deletes only this record, and the plugin-store change it carries
+/// reaches change detection through the resolved plugin identities on the
+/// tool surface, so it must still wake the reconciler.
+const OBSERVED_NON_CONFIG_COLLECTIONS: [&str; 5] = [
+    "OAuthCredential",
+    "ToolServiceHealthState",
+    "GraphRevision",
+    "GraphRun",
+    "PackInstallation",
+];
+
+/// Every collection whose change can alter the runtime control snapshot.
+pub(crate) fn control_collection_names() -> impl Iterator<Item = &'static str> {
+    Collection::ALL
+        .iter()
+        .map(|collection| collection.graphql_type())
+        .chain(OBSERVED_NON_CONFIG_COLLECTIONS)
+}
 
 pub(crate) async fn apply_control_update(
-    node: &EmbeddedNode,
     node_did: &str,
     collection_name: &str,
     _doc_id: &str,
@@ -14,21 +33,7 @@ pub(crate) async fn apply_control_update(
         view.node.value.node_did == node_did,
         "runtime view owner mismatch"
     );
-    if Collection::ALL
-        .iter()
-        .any(|c| c.graphql_type() == collection_name)
-        || matches!(
-            collection_name,
-            "OAuthCredential"
-                | "ToolServiceHealthState"
-                | "GraphRevision"
-                | "GraphRun"
-                | "PackInstallation"
-        )
-    {
-        Ok(ControlUpdateOutcome::FullReload)
-    } else if node.get_collection(collection_name)?.is_none() {
-        // Watch events may arrive before a physical collection ID resolves to its name.
+    if control_collection_names().any(|name| name == collection_name) {
         Ok(ControlUpdateOutcome::FullReload)
     } else {
         Ok(ControlUpdateOutcome::Irrelevant)

@@ -1,5 +1,4 @@
-//! Node-scoped self-configuration through canonical context and inference
-//! documents. Raw API keys cannot be changed or returned.
+//! Raw API keys cannot be changed or returned.
 
 pub mod agent;
 mod agent_management;
@@ -613,7 +612,6 @@ pub struct ConfigureAgentParams {
     pub operation: Option<String>,
     #[serde(default)]
     pub display_name: StringUpdate,
-    /// User-facing summary for the working agent and its context.
     #[serde(default)]
     pub description: StringUpdate,
     #[serde(default)]
@@ -1825,8 +1823,6 @@ fn graph_access(node: &Arc<EmbeddedNode>) -> crate::config_client::ConfigAccess 
     crate::config_client::ConfigAccess::local(node.clone())
 }
 
-/// `run_tool` names the tool that starts a listed graph; `None` omits the
-/// reply's `run_with`.
 pub async fn list_graphs_value(
     access: &crate::config_client::ConfigAccess,
     owner_did: &str,

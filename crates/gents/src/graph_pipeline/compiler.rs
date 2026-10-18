@@ -273,8 +273,6 @@ fn validate_capability_ports(
     }
 }
 
-/// Capabilities must come from the caller-visible configured catalog; an empty
-/// `allowed_callers` list denies access.
 pub fn compile_graph(
     intent: &GraphIntent,
     capabilities: &[StageCapability],

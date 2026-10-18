@@ -11,7 +11,6 @@ use super::files::write_json_atomically;
 
 pub const PROGRESS_FILE: &str = "progress.json";
 
-/// Observational only; this data is never evidence, graded or digested.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LiveSnapshot {
     pub observed_at: String,
@@ -22,7 +21,6 @@ pub struct LiveSnapshot {
     pub model_turns: u64,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
-    /// Reported values are lower bounds while any call lacks usage; observers must label them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reported_input_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

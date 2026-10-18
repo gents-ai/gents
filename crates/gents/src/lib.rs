@@ -553,7 +553,9 @@ pub use toolset::{
 };
 pub use trigger_engine::event_source::EventSource;
 pub use trigger_engine::goal_source::GoalSource;
-pub use trigger_engine::subscription_source::UpdateSubscriptionSource;
+pub use trigger_engine::subscription_source::{
+    collection_ids, subscribe_collections, UpdateSubscriptionSource,
+};
 pub use trigger_engine::{FireIntent, FireResult, TriggerKind, TriggerSource};
 pub use truncation::{TruncationLimits, TruncationMode};
 pub use watcher::{AgentRequest, DefraWatcher, Watcher};

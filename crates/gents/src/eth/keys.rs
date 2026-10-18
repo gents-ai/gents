@@ -68,7 +68,6 @@ impl ChainKeyMaterialStore for MemoryChainKeyStore {
     }
 }
 
-/// OS keyring custody. Secret is stored as lowercase hex.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct KeyringChainKeyStore;
 

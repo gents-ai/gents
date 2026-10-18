@@ -304,7 +304,7 @@ pub(super) async fn single_claimer_watcher_never_claims_foreign_replica() {
     )
     .await;
 
-    let mut watcher = DefraWatcher::new(db.node.clone(), OWNER_DID);
+    let mut watcher = DefraWatcher::new(db.node.clone(), OWNER_DID).expect("request watcher");
 
     assert!(
         watcher

@@ -68,8 +68,11 @@ impl UpdateSubscriptionSource for MockUpdateSubscriptionSource {
         subscription
     }
 
-    fn subscribe_document_changes(&self) -> DocumentChangeSubscription {
-        let subscription = self.bus.subscribe_document_changes();
+    fn subscribe_collection_changes(
+        &self,
+        collection_ids: Vec<String>,
+    ) -> DocumentChangeSubscription {
+        let subscription = self.bus.subscribe_collection_changes(collection_ids);
         self.subscriber_count.fetch_add(1, Ordering::SeqCst);
         self.subscriber_notify.notify_waiters();
         subscription

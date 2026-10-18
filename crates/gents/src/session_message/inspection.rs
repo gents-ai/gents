@@ -98,9 +98,8 @@ fn bounded(text: &str, limit: usize) -> (String, bool) {
     (result, chars.next().is_some())
 }
 
-/// Only ordinary transcript text enters the body. Tool outputs have a
-/// separate short preview; arguments, reasoning and provider captures are
-/// never returned by this interface.
+/// Only ordinary transcript text enters the body; tool arguments, reasoning
+/// and provider captures are never returned by this interface.
 fn visible_text(message: &Message) -> String {
     let text_only = match message {
         Message::User { content } => Message::User {

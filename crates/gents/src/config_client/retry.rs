@@ -40,7 +40,6 @@ pub(super) fn transaction_conflict(source: ConflictSource) -> anyhow::Error {
     anyhow::Error::new(TransactionConflict { source })
 }
 
-/// Only errors explicitly wrapped by the transaction owner are replayable.
 pub(super) fn classified_transaction_conflict(error: &anyhow::Error) -> Option<ConflictSource> {
     error
         .downcast_ref::<TransactionConflict>()

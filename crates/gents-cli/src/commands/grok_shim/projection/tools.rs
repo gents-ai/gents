@@ -1731,10 +1731,9 @@ mod tests {
 
     async fn insert_segment(node: &EmbeddedNode, segment: &OutputSegment) -> String {
         let response = node
-            .execute_request_with_retry(
+            .execute_request(
                 gents::defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                     .with_variables(output_segment_create_variables(segment).unwrap()),
-                gents::defra_node::ExecuteRetryPolicy::default(),
             )
             .await;
         assert!(
@@ -1752,10 +1751,9 @@ mod tests {
 
     async fn insert_header(node: &EmbeddedNode, header: &TranscriptMessage) {
         let response = node
-            .execute_request_with_retry(
+            .execute_request(
                 gents::defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                     .with_variables(transcript_message_create_variables(header).unwrap()),
-                gents::defra_node::ExecuteRetryPolicy::default(),
             )
             .await;
         assert!(
@@ -1851,7 +1849,7 @@ mod tests {
     }
 
     async fn seed_canonical_tool_call(
-        node: &EmbeddedNode,
+        node: &Arc<EmbeddedNode>,
         request_doc_id: &str,
         request_id: &str,
         session_id: &str,

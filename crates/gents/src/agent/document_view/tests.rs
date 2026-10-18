@@ -163,24 +163,16 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
             .expect("agent record")
             .0;
 
-    assert!(apply_control_update(
-        node.as_ref(),
-        identity.did(),
-        "Tools",
-        &tools_doc_id,
-        &mut view,
-    )
-    .await
-    .is_ok_and(|outcome| outcome == ControlUpdateOutcome::FullReload));
-    assert!(apply_control_update(
-        node.as_ref(),
-        identity.did(),
-        "Agent",
-        &behavior_doc_id,
-        &mut view,
-    )
-    .await
-    .is_ok_and(|outcome| outcome == ControlUpdateOutcome::FullReload));
+    assert!(
+        apply_control_update(identity.did(), "Tools", &tools_doc_id, &mut view,)
+            .await
+            .is_ok_and(|outcome| outcome == ControlUpdateOutcome::FullReload)
+    );
+    assert!(
+        apply_control_update(identity.did(), "Agent", &behavior_doc_id, &mut view,)
+            .await
+            .is_ok_and(|outcome| outcome == ControlUpdateOutcome::FullReload)
+    );
 
     let reloaded = load_document_runtime_view(&node, identity.did())
         .await
@@ -385,7 +377,7 @@ async fn apply_control_update_hot_reloads_skill() {
     assert!(!resp.has_errors(), "create_Skill: {:?}", resp.errors);
     let doc_id = created_skill_doc_id(resp.data.as_ref()).expect("created Skill _docID");
 
-    let outcome = apply_control_update(node.as_ref(), identity.did(), "Skill", &doc_id, &mut view)
+    let outcome = apply_control_update(identity.did(), "Skill", &doc_id, &mut view)
         .await
         .expect("apply skill create");
     assert_eq!(outcome, ControlUpdateOutcome::FullReload);
@@ -397,15 +389,9 @@ async fn apply_control_update_hot_reloads_skill() {
     let foreign = "mutation { create_Skill(input: { skill_id: \"s-foreign\", node_did: \"did:key:zOther\",  name: \"F\", enabled: true }) { _docID } }";
     let resp = node.execute(foreign).await;
     let foreign_doc_id = created_skill_doc_id(resp.data.as_ref()).expect("foreign Skill _docID");
-    let outcome = apply_control_update(
-        node.as_ref(),
-        identity.did(),
-        "Skill",
-        &foreign_doc_id,
-        &mut view,
-    )
-    .await
-    .expect("apply foreign skill");
+    let outcome = apply_control_update(identity.did(), "Skill", &foreign_doc_id, &mut view)
+        .await
+        .expect("apply foreign skill");
     assert_eq!(outcome, ControlUpdateOutcome::FullReload);
     view = load_document_runtime_view(&node, identity.did())
         .await
@@ -415,7 +401,7 @@ async fn apply_control_update_hot_reloads_skill() {
     let delete =
         r#"mutation { delete_Skill(filter: { skill_id: { _eq: "s-reload" } }) { _docID } }"#;
     assert!(!node.execute(delete).await.has_errors());
-    let outcome = apply_control_update(node.as_ref(), identity.did(), "Skill", &doc_id, &mut view)
+    let outcome = apply_control_update(identity.did(), "Skill", &doc_id, &mut view)
         .await
         .expect("apply skill delete");
     assert_eq!(outcome, ControlUpdateOutcome::FullReload);
@@ -502,9 +488,6 @@ async fn resolve_quarantines_behavior_with_missing_local_agent_target() {
     let default_agent_id = crate::default_agent_id_for_node(node_did);
     bind_default_agent_backend(&node, node_did, &default_agent_id).await;
 
-    // A LOCAL target naming an agent_config that does not exist locally must be
-    // rejected; remote targets are exempt (delegation admission owns cross-node
-    // targets). Both rows are seeded raw to model peer-replicated documents.
     let tools_id = format!("{default_agent_id}:tools");
     seed_raw_tools(
         node.as_ref(),
@@ -555,8 +538,6 @@ async fn resolve_quarantines_behavior_with_missing_local_agent_target() {
     );
 }
 
-/// Model replicated automation rows, including deliberately invalid references.
-/// These loader tests bypass installer admission so they exercise quarantine.
 async fn seed_automation(
     node: &Arc<defra_node::EmbeddedNode>,
     documents: Vec<(crate::Collection, serde_json::Value)>,
@@ -691,21 +672,9 @@ async fn apply_control_update_full_reloads_reserved_graph_triggers() {
         .expect("initial document view");
 
     let outcome = apply_control_update(
-        node.as_ref(),
         identity.did(),
         "GraphRevision",
         "opaque-graph-revision-doc-id",
-        &mut view,
-    )
-    .await
-    .unwrap();
-    assert_eq!(outcome, ControlUpdateOutcome::FullReload);
-
-    let outcome = apply_control_update(
-        node.as_ref(),
-        identity.did(),
-        "opaque-physical-collection-id",
-        "opaque-doc-id",
         &mut view,
     )
     .await
@@ -731,7 +700,6 @@ async fn usage_collection_write_never_reloads_the_runtime_view() {
         .expect("initial document view");
 
     let outcome = apply_control_update(
-        node.as_ref(),
         identity.did(),
         "ProviderAccountUsage",
         "opaque-usage-doc-id",
@@ -1449,7 +1417,6 @@ async fn runtime_snapshot_skips_an_unknown_provider_kind_backend() {
     let did = identity.did();
     bind_default_agent_backend(&node, did, "known").await;
     crate::test_support::install_test_agent(&node, did, "future").await;
-    // A raw write bypasses validate(), like a row a newer peer wrote.
     let response = node
         .execute(&format!(
             r#"mutation {{ update_InferenceBackend(filter: {{node_did: {{_eq: "{}"}}, backend_id: {{_eq: "future:backend"}}}}, input: {{provider_kind: "FutureProviderKind"}}) {{ _docID }} }}"#,
@@ -1959,15 +1926,9 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
         .await
         .expect("upsert credential");
 
-    let outcome = apply_control_update(
-        node.as_ref(),
-        identity.did(),
-        "OAuthCredential",
-        &doc_id,
-        &mut view,
-    )
-    .await
-    .expect("apply control update");
+    let outcome = apply_control_update(identity.did(), "OAuthCredential", &doc_id, &mut view)
+        .await
+        .expect("apply control update");
     assert_eq!(
         outcome,
         ControlUpdateOutcome::FullReload,
@@ -2049,15 +2010,9 @@ async fn apply_control_update_evicts_surface_when_ownership_moves_away() {
     );
     let doc_id = created_skill_doc_id(resp.data.as_ref()).expect("created surface _docID");
 
-    let outcome = apply_control_update(
-        node.as_ref(),
-        node_did,
-        "DatastoreToolSurface",
-        &doc_id,
-        &mut view,
-    )
-    .await
-    .expect("apply surface create");
+    let outcome = apply_control_update(node_did, "DatastoreToolSurface", &doc_id, &mut view)
+        .await
+        .expect("apply surface create");
     assert_eq!(outcome, ControlUpdateOutcome::FullReload);
     let mut view = load_document_runtime_view(&node, node_did)
         .await
@@ -2079,15 +2034,9 @@ async fn apply_control_update_evicts_surface_when_ownership_moves_away() {
         resp.errors
     );
 
-    let outcome = apply_control_update(
-        node.as_ref(),
-        node_did,
-        "DatastoreToolSurface",
-        &doc_id,
-        &mut view,
-    )
-    .await
-    .expect("apply surface reassign");
+    let outcome = apply_control_update(node_did, "DatastoreToolSurface", &doc_id, &mut view)
+        .await
+        .expect("apply surface reassign");
     assert_eq!(outcome, ControlUpdateOutcome::FullReload);
     let view = load_document_runtime_view(&node, node_did)
         .await

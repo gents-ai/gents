@@ -59,12 +59,8 @@ const PRIVATE_FILE_MODE: u32 = 0o600;
 
 const STAGING_DIR_MODE: u32 = 0o700;
 
-/// Mode of every socket-parent directory the shim creates itself; existing
-/// directories are never chmodmed to this mode.
 const SOCKET_PARENT_DIR_MODE: u32 = 0o700;
 
-/// Name of the socket inside the staging directory: one character keeps the
-/// bind path short even when the published path is near the `sun_path` limit.
 const STAGED_SOCKET_NAME: &str = "s";
 
 const STAGING_DIR_PREFIX: &str = ".gents-grok-";
@@ -98,9 +94,8 @@ const LOCK_ACQUIRE_ATTEMPTS: usize = 8;
 #[cfg(test)]
 const NEAR_LIMIT_PATH_BYTES: usize = 100;
 
-/// `O_NOFOLLOW` for `OpenOptions::custom_flags`: the OS ABI constants that
-/// `libc` and `nix` define per target. Unsupported Unix targets fail the
-/// build rather than silently opening a lock path through a symlink.
+/// `O_NOFOLLOW` for `OpenOptions::custom_flags`. Unsupported Unix targets fail
+/// the build rather than silently opening a lock path through a symlink.
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios")))]
 compile_error!("the grok shim leader lock needs this target's O_NOFOLLOW value; add it here");
 #[cfg(target_os = "linux")]
@@ -108,8 +103,7 @@ const O_NOFOLLOW: i32 = 0x0000_8000;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 const O_NOFOLLOW: i32 = 0x0000_0040;
 
-/// Connection-scoped outbound handle for ACP payloads; sending after the
-/// connection closed is an error the caller may ignore.
+/// Connection-scoped outbound handle for ACP payloads.
 #[derive(Clone)]
 pub(crate) struct AcpOutbound {
     frames: FrameSender,
@@ -194,7 +188,8 @@ pub(crate) trait AcpDelegate: Send + Sync + 'static {
     ) -> BoxFuture<'a, Result<()>>;
 
     /// The connection went away (disconnect, EOF, protocol violation, or
-    /// leader shutdown).
+    /// leader shutdown). Runs on the connection's own delegate exactly once,
+    /// before any other delegate is torn down.
     fn on_disconnect(&self) -> BoxFuture<'_, ()> {
         Box::pin(async {})
     }
@@ -293,8 +288,7 @@ impl Drop for LeaderHandle {
     }
 }
 
-/// Must be called from within a Tokio runtime: the bound listener registers
-/// with the runtime reactor, and the accept loop is a spawned task.
+/// Must be called from within a Tokio runtime.
 pub(crate) fn spawn_leader(
     config: LeaderServerConfig,
     factory: Arc<dyn AcpDelegateFactory>,
@@ -1075,8 +1069,6 @@ fn path_identity(path: &Path) -> Option<(u64, u64)> {
     Some((metadata.dev(), metadata.ino()))
 }
 
-/// PID recorded in the lock file, for the "another leader holds the lock"
-/// diagnostic; path-based read is fine because it only feeds a log message.
 fn read_holder_pid(lock_path: &Path) -> Option<u32> {
     std::fs::read_to_string(lock_path).ok()?.trim().parse().ok()
 }
@@ -1214,10 +1206,8 @@ struct StagingDir {
 }
 
 impl StagingDir {
-    /// Create a fresh private staging directory for publishing a socket whose
-    /// parent is `final_parent`: candidates are the same-device ancestors,
-    /// shortest first, so the bind path stays short even near the `sun_path`
-    /// limit and the `rename(2)` stays on one filesystem.
+    /// Same-device ancestors, shortest first, so `rename(2)` stays on one
+    /// filesystem and the bind path stays short near the `sun_path` limit.
     fn create(final_parent: &Path) -> Result<Self> {
         let mut last_error: Option<std::io::Error> = None;
         let mut builder = std::fs::DirBuilder::new();

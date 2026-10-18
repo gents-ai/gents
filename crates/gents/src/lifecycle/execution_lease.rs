@@ -196,8 +196,6 @@ impl RequestLifecycle {
         Ok(())
     }
 
-    /// Cancelled when the lease owner observes this execution lost its
-    /// request; never cancelled for an execution without a renewal owner.
     pub(crate) fn ownership_lost(&self) -> tokio_util::sync::CancellationToken {
         self.renewal_task
             .as_ref()

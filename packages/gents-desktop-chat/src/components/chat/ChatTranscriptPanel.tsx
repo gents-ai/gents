@@ -8,6 +8,7 @@ import type {
 import { LIST_WINDOW_THRESHOLD } from "@source-inc/gents-desktop-ui";
 import { isTerminalTurnState } from "@source-inc/gents-desktop-client";
 import { MessageList } from "../Transcript.js";
+import { coalesceToolGroups } from "../transcript/CompactToolGroup.js";
 
 export type ChatTranscriptPanelProps = {
   selectedSessionId: string | null;
@@ -17,6 +18,7 @@ export type ChatTranscriptPanelProps = {
   retryUnavailableHint?: string | null;
   onLoadOlder?: () => Promise<boolean>;
   showGoal?: boolean;
+  compactTools?: boolean;
 };
 
 export const TRANSCRIPT_PAGE_SIZE = 40;
@@ -75,6 +77,7 @@ export function ChatTranscriptPanel({
   retryUnavailableHint,
   onLoadOlder,
   showGoal = true,
+  compactTools = false,
 }: ChatTranscriptPanelProps) {
   const [transcriptPanel, setTranscriptPanel] = useState<HTMLElement | null>(
     null,
@@ -95,7 +98,7 @@ export function ChatTranscriptPanel({
   );
   const [loadingOlder, setLoadingOlder] = useState(false);
 
-  const timelineItems = useMemo<RenderedTimelineItem[]>(() => {
+  const sourceTimelineItems = useMemo<RenderedTimelineItem[]>(() => {
     const durable = session?.timelineItems ?? [];
     if (
       !optimisticPendingTurn ||
@@ -128,6 +131,14 @@ export function ChatTranscriptPanel({
       },
     ];
   }, [optimisticPendingTurn, selectedSessionId, session?.timelineItems]);
+
+  const timelineItems = useMemo(
+    () =>
+      compactTools
+        ? coalesceToolGroups(sourceTimelineItems)
+        : sourceTimelineItems,
+    [compactTools, sourceTimelineItems],
+  );
 
   const baseVisibleCount =
     transcriptWindow.sessionId === selectedSessionId
@@ -422,6 +433,7 @@ export function ChatTranscriptPanel({
             </div>
           ) : null}
           <MessageList
+            compactTools={compactTools}
             timelineItems={visibleTimelineItems}
             timelineIdentity={selectedSessionId}
             scrollElement={transcriptPanel}

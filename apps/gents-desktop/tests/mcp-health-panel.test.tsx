@@ -27,8 +27,6 @@ const api = createDesktopApiAdapter(
   }),
 );
 
-// Mirrors ToolServiceHealthState::project (crates/gents-protocol/src/tool_service_health.rs)
-// so fixtures don't drift from the server's classification.
 function displayStateFor(status: string): "healthy" | "stale" | "unreachable" {
   switch (status) {
     case "healthy":

@@ -73,8 +73,6 @@ pub async fn stamp_workspace_lineage(
     else {
         return Ok(());
     };
-    // Bootstrap has an explicit caller-selected principal scope; inherited
-    // lineage already carries its authenticated owner and must retain it.
     let owner = lineage
         .workspace_owner_node_did
         .as_deref()
@@ -322,8 +320,6 @@ pub async fn cleanup_workspace(
     flush_cleanup_outcome(node, &docs, &outcome).await
 }
 
-/// Crash recovery: this writer already sealed (or left a Sealed workspace
-/// after a partial flush). Skip ReadWrite overlay/inference and only complete.
 pub async fn writer_request_already_sealed(
     node: &std::sync::Arc<EmbeddedNode>,
     request: &AgentRequest,

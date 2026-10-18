@@ -33,9 +33,9 @@ pub use gents_loop::claude_messages_body::{
     ADVERTISED_REASONING_EFFORTS_PARAM, CLAUDE_CODE_IDENTITY,
 };
 
-/// Fail-closed causes for a malformed native thinking block. These distinguish
-/// the model's indexed and block-shape errors without parsing display text.
 #[derive(Debug, Error, PartialEq, Eq)]
+/// Fail-closed causes for malformed native thinking blocks, distinguishing
+/// indexed and block-shape errors without parsing display text.
 pub enum ThinkingParseCause {
     #[error("wrong content block")]
     WrongBlock,
@@ -51,8 +51,8 @@ pub enum ThinkingParseCause {
     Malformed(&'static str),
 }
 
-/// Fail-closed outcomes of the Messages tool-block parser.
 #[derive(Debug, Error, PartialEq, Eq)]
+/// Fail-closed outcomes of the Messages tool-block parser.
 pub enum MessagesParseError {
     #[error("fail-closed: tool_use observed ({names})")]
     ToolUse { names: String },
@@ -109,7 +109,6 @@ fn take_messages_sse_fixture() -> Option<String> {
         .pop_front()
 }
 
-/// Test-only: serializes fixture-queue tests and clears the queue.
 #[cfg(test)]
 pub(crate) fn lock_fixtures_for_test() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: Mutex<()> = Mutex::new(());
@@ -166,8 +165,8 @@ impl MessagesSseState {
         std::mem::take(&mut self.audit_events)
     }
 
-    /// One SSE line without its trailing newline. `data:` lines accumulate;
-    /// a blank line dispatches the accumulated payload.
+    /// One SSE line without its trailing newline; a blank line dispatches the
+    /// accumulated payload.
     pub fn push_line(
         &mut self,
         line: &str,

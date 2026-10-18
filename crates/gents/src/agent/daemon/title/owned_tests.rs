@@ -777,15 +777,26 @@ async fn title_timeout_drains_each_received_reasoning_attempt_as_partial() {
     let (_shutdown, rx) = tokio::sync::watch::channel(false);
     let task = fixture.task(provider, true);
     let title = fixture.title.clone();
-    tokio::time::pause();
     let running = tokio::spawn(async move { task.run(title, rx).await });
-    entered.notified().await;
+    tokio::time::timeout(Duration::from_secs(15), entered.notified())
+        .await
+        .expect("first title provider attempt starts");
     wait_for_title_streams(&fixture, 1, fields.len()).await;
+    tokio::time::pause();
     tokio::time::advance(Duration::from_secs(10)).await;
-    entered.notified().await;
+    tokio::time::resume();
+    tokio::time::timeout(Duration::from_secs(15), entered.notified())
+        .await
+        .expect("second title provider attempt starts");
     wait_for_title_streams(&fixture, 2, fields.len()).await;
+    tokio::time::pause();
     tokio::time::advance(Duration::from_secs(10)).await;
-    running.await.unwrap().unwrap();
+    tokio::time::resume();
+    tokio::time::timeout(Duration::from_secs(15), running)
+        .await
+        .expect("timed out title attempts drain their output")
+        .unwrap()
+        .unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     assert_eq!(outcome, OutputOutcome::Partial);
     assert_title_audit(&fixture, &fields, outcome, 2, false).await;
@@ -1039,7 +1050,7 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
             run_router_with_watcher(
                 router_node.clone(),
                 router_did.clone(),
-                DefraWatcher::new(router_node, &router_did),
+                DefraWatcher::new(router_node, &router_did).expect("request watcher"),
                 snapshot_rx,
                 shutdown_rx,
                 router_gate,

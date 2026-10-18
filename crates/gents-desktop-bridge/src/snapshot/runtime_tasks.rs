@@ -175,7 +175,10 @@ pub(super) fn session_summaries(
                 closed_at: session.closed_at.clone(),
                 tags: session.tags.clone(),
                 provenance: session.provenance.clone(),
-                title: session.title.as_ref().map(|title| title.text.clone()),
+                title: session
+                    .title
+                    .as_ref()
+                    .map(gents::session::display_session_title),
                 preview_text: observation.and_then(|value| value.preview.clone()),
                 status: lifecycle.map(|state| state.as_str().to_owned()),
                 agent_id: Some(session.agent_id.clone()),

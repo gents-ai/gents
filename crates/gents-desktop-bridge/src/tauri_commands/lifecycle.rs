@@ -110,10 +110,9 @@ pub async fn desktop_client_start<R: Runtime>(
     }
     let grants = snapshot_grants(&state);
 
-    // Single-flight: return the live core, wait on an in-flight start, or become
-    // the starter. NodeBuilder runs on a detached task so cancelling this
-    // command cannot leave the store open while a second start races it.
-    // Never hold the std::sync::Mutex across an await (future must be Send).
+    // NodeBuilder runs on a detached task so cancelling this command cannot
+    // leave the store open while a second start races it. Never hold the
+    // std::sync::Mutex across an await (future must be Send).
     if let Some(core) = current_core(&state) {
         super::managed_server::start_running_managed_pairing(&state, Arc::clone(&core)).await;
         return build_client_snapshot_with_grants(Some(&core), Some(&state.policy), grants)
@@ -292,8 +291,8 @@ async fn run_detached_client_start<R: Runtime>(
                     }
                     None
                 } else {
-                    // Shutdown or another install won the slot. Drop our open
-                    // node so the store is not held by an untracked Arc.
+                    // Drop our open node so the store is not held by an
+                    // untracked Arc.
                     Some(core)
                 };
                 bridge.start_inflight = None;

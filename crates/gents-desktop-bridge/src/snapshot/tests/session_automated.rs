@@ -277,7 +277,7 @@ fn an_unexecuted_trigger_request_is_pending_with_its_origin() {
 }
 
 #[test]
-fn automated_inputs_carry_the_identity_of_the_request_they_publish() {
+fn visible_automated_inputs_keep_request_identity_and_hidden_controls_remain_durable() {
     let snapshot =
         build_session_snapshot_from_store(&automated_store(), "sess-1", None).expect("snapshot");
     let identities = snapshot
@@ -292,12 +292,16 @@ fn automated_inputs_carry_the_identity_of_the_request_they_publish() {
         .collect::<Vec<_>>();
     assert_eq!(
         identities,
-        [
-            Some("message".to_owned()),
-            Some("trigger".to_owned()),
-            None,
-            Some("wake".to_owned()),
-            Some("goal".to_owned()),
-        ]
+        [Some("message".to_owned()), Some("trigger".to_owned())]
+    );
+    let control_identities = snapshot
+        .messages
+        .iter()
+        .filter(|message| message.runtime_control && message.role.as_deref() == Some("user"))
+        .map(|message| message.input_request_id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        control_identities,
+        [None, Some("wake".to_owned()), Some("goal".to_owned())]
     );
 }

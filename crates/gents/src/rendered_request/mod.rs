@@ -49,7 +49,6 @@ pub(crate) fn admission_kind_matches_scope(
     )
 }
 
-/// `RenderedRequestContext` for a claimed durable request.
 pub(crate) fn context_for_claimed_request(
     request: &crate::watcher::AgentRequest,
     request_commit_cid: &str,
@@ -69,9 +68,6 @@ pub(crate) fn context_for_claimed_request(
     }
 }
 
-/// Build a capture scope from a context and an optional factory, with the
-/// native admission-join lookup installed. `None` when capture is not
-/// configured.
 pub(crate) fn scope_from_factory(
     context: RenderedRequestContext,
     factory: Option<&RenderedRequestCaptureFactory>,

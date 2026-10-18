@@ -17,6 +17,8 @@ mod query;
 mod request_output;
 mod rows;
 mod sessions;
+pub(crate) mod title_text;
+pub use title_text::display_session_title;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -88,9 +90,6 @@ pub(crate) use sessions::{
     ensure_session_in_txn, max_sequence, reopen_session_in_txn, touch_session_in_txn,
 };
 
-/// Render an immutable requester route key for a document create branch.
-/// Ordinary local lineage leaves the field null by omitting it; remote child
-/// lineage stamps the normalized coordinator DID exactly once.
 pub(crate) fn requester_did_create_field(requester_did: Option<&str>) -> String {
     requester_did
         .map(str::trim)

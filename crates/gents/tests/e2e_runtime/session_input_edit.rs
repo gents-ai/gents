@@ -454,6 +454,7 @@ impl RemoteEdit<'_> {
             .await;
         }
         let request = gents::DefraWatcher::new(self.runtime.node.clone(), did)
+            .expect("request watcher")
             .try_fetch_request(&active_doc)
             .await
             .unwrap()

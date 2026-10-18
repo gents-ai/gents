@@ -1,5 +1,4 @@
-//! Shared, read-only skill source loading. Publication and attachment belong to
-//! configuration owners; importing instructions never executes supporting files.
+//! Importing skill instructions never executes supporting files.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};

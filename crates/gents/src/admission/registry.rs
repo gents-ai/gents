@@ -52,9 +52,6 @@ impl AdmissionRegistry {
             .expect("AdmissionRegistry state lock poisoned")
     }
 
-    /// Installs admitting controllers in one step so new calls never observe
-    /// a gap; removed and unavailable backends close admission while their
-    /// held permits keep counting if the backend returns.
     pub(crate) fn reconcile(
         &self,
         generation: u64,

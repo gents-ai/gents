@@ -16,8 +16,6 @@ fi
 if git show-ref --verify --quiet "refs/heads/$branch"; then
     git worktree add "$dest" "$branch"
 elif git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
-    # Remote-only branches need an explicit local tracking branch.
-    # worktree add does not DWIM remote-only branches unless worktree.guessRemote is set
     git worktree add -b "$branch" "$dest" "origin/$branch"
 else
     git worktree add -b "$branch" "$dest" "$base"

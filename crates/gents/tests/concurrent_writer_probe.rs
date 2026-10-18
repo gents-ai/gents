@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
 use serde_json::{json, Value};
-use tokio::sync::Barrier;
+use tokio::sync::{Barrier, Semaphore};
 use tokio::task::JoinSet;
 
 const SCHEMA: &str = "type WriterCounter { key: String @index(unique: true) value: Int }
@@ -46,61 +46,81 @@ async fn shared_owner_hot_counter_has_no_lost_updates_at_c64() -> Result<()> {
         )
         .await?;
     let mut measurements = Vec::new();
+    let mut committed = BTreeSet::new();
+    let mut next_writer = 0i64;
     for width in [1, 2, 4, 8, 16, 32, 64] {
-        let before = access.execute("{ WriterCounter {value} }").await?["data"]["WriterCounter"][0]
-            ["value"]
-            .as_i64()
-            .unwrap();
         let barrier = Arc::new(Barrier::new(width));
         let mut workers = JoinSet::new();
         let started = Instant::now();
         for writer in 0..width {
-            let writer = before + writer as i64;
+            let writer = next_writer + writer as i64;
             let access = ConfigAccess::local(node.clone());
             let barrier = barrier.clone();
             workers.spawn(async move {
                 barrier.wait().await;
-                let mut latencies = Vec::new();
+                let mut observations = Vec::new();
                 for iteration in 0..8 {
                     let started = Instant::now();
-                    access.transact_write("writer_probe.increment", |txn| Box::pin(async move {
+                    let result = access.transact_write("writer_probe.increment", |txn| Box::pin(async move {
                         let row = txn.execute("{ WriterCounter {value} }").await?;
                         let value = row["data"]["WriterCounter"][0]["value"].as_i64().context("counter absent")?;
                         tokio::task::yield_now().await;
                         txn.execute(&format!(r#"mutation {{ update_WriterCounter(filter: {{key: {{_eq: "hot"}}}}, input: {{value: {}}}) {{_docID}} create_WriterReceipt(input: {{writer: {writer}, iteration: {iteration}}}) {{_docID}} }}"#, value + 1)).await?;
                         Ok(())
-                    })).await?;
-                    latencies.push(started.elapsed().as_secs_f64() * 1000.0);
+                    })).await;
+                    let accepted = match result {
+                        Ok(()) => true,
+                        Err(error) if error.to_string() == "DefraDB transaction conflict" => false,
+                        Err(error) => return Err(error),
+                    };
+                    observations.push(((writer, iteration), accepted, started.elapsed().as_secs_f64() * 1000.0));
                 }
-                Ok::<_, anyhow::Error>(latencies)
+                Ok::<_, anyhow::Error>(observations)
             });
         }
-        let mut latency = tokio::time::timeout(Duration::from_secs(60), async {
-            let mut latency = Vec::new();
+        next_writer += width as i64;
+        let observations = tokio::time::timeout(Duration::from_secs(60), async {
+            let mut observations = Vec::new();
             while let Some(worker) = workers.join_next().await {
-                latency.extend(worker??);
+                observations.extend(worker??);
             }
-            Ok::<_, anyhow::Error>(latency)
+            Ok::<_, anyhow::Error>(observations)
         })
         .await
         .context("shared owner writers stalled")??;
+        assert_eq!(observations.len(), width * 8);
+        let accepted = observations.iter().filter(|row| row.1).count();
+        assert!(accepted > 0, "at least one hot-counter update commits");
+        committed.extend(observations.iter().filter(|row| row.1).map(|row| row.0));
         let after = access
             .execute("{ WriterCounter {value} WriterReceipt {writer iteration} }")
             .await?;
         assert_eq!(
             after["data"]["WriterCounter"][0]["value"],
-            before + (width * 8) as i64
+            committed.len() as i64
         );
+        let rows = after["data"]["WriterReceipt"].as_array().unwrap();
+        let durable: BTreeSet<_> = rows
+            .iter()
+            .map(|row| {
+                (
+                    row["writer"].as_i64().unwrap(),
+                    row["iteration"].as_i64().unwrap(),
+                )
+            })
+            .collect();
         assert_eq!(
-            after["data"]["WriterReceipt"].as_array().unwrap().len(),
-            (before as usize) + width * 8
+            durable, committed,
+            "every accepted update has its atomic receipt"
         );
+        assert_eq!(rows.len(), committed.len(), "no duplicate receipts");
+        let mut latency: Vec<_> = observations.iter().map(|row| row.2).collect();
         latency.sort_by(f64::total_cmp);
-        measurements.push(json!({"concurrency": width, "transactions": width * 8, "elapsed_ms": started.elapsed().as_secs_f64()*1000.0, "p50_ms": latency[latency.len()/2], "p95_ms": latency[(latency.len()-1)*95/100], "max_ms":latency.last()}));
+        measurements.push(json!({"concurrency": width, "attempts": width * 8, "committed": accepted, "typed_conflicts": width * 8 - accepted, "elapsed_ms": started.elapsed().as_secs_f64()*1000.0, "p50_ms": latency[latency.len()/2], "p95_ms": latency[(latency.len()-1)*95/100], "max_ms":latency.last()}));
     }
     report(
         "shared-owner",
-        json!({"measurements": measurements, "counter":1016}),
+        json!({"measurements": measurements, "counter":committed.len()}),
     )?;
     node.shutdown().await;
     Ok(())
@@ -169,5 +189,162 @@ async fn native_c64_distinct_writers_expose_conflicts_without_partial_commits() 
         json!({"concurrency":64,"committed":committed.len(),"typed_conflicts":64-committed.len(),"max_open_transactions":maximum.load(Ordering::SeqCst),"elapsed_ms":started.elapsed().as_secs_f64()*1000.0}),
     )?;
     node.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "persistent encrypted admission experiment; emits optional JSON measurements"]
+async fn encrypted_branchable_writers_at_varying_admission_widths() -> Result<()> {
+    measure_encrypted_admission(64, &[1, 2, 4, 8, 16, 32, 64], "native-admission-sweep").await
+}
+
+async fn measure_encrypted_admission(
+    writers: usize,
+    capacities: &[usize],
+    report_name: &str,
+) -> Result<()> {
+    const ITERATIONS: usize = 4;
+    let mut measurements = Vec::new();
+    for &capacity in capacities {
+        let home = tempfile::tempdir()?;
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(home.path().join("db"))
+                .with_at_rest_encryption_key([0x29; 32])
+                .build()
+                .await?,
+        );
+        ConfigAccess::local(node.clone())
+            .add_schema("type AdmissionDocument @branchable { writer: Int @immutable iteration: Int @immutable body: String @immutable }")
+            .await?;
+        let admission = Arc::new(Semaphore::new(capacity));
+        let barrier = Arc::new(Barrier::new(writers));
+        let active = Arc::new(AtomicUsize::new(0));
+        let maximum = Arc::new(AtomicUsize::new(0));
+        let mut workers = JoinSet::new();
+        let started = Instant::now();
+        for writer in 0..writers {
+            let node = node.clone();
+            let admission = admission.clone();
+            let barrier = barrier.clone();
+            let active = active.clone();
+            let maximum = maximum.clone();
+            workers.spawn(async move {
+                barrier.wait().await;
+                let mut observations = Vec::new();
+                for iteration in 0..ITERATIONS {
+                    let requested = Instant::now();
+                    let permit = admission.acquire().await?;
+                    let admitted = Instant::now();
+                    let transaction = node.begin_transaction_guard(false).await?;
+                    let count = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    maximum.fetch_max(count, Ordering::SeqCst);
+                    tokio::task::yield_now().await;
+                    let body = gents::graphql::escape_graphql_string(&"x".repeat(1024));
+                    let response = transaction
+                        .execute(&format!(
+                            "mutation {{ create_AdmissionDocument(input: {{writer: {writer}, iteration: {iteration}, body: \"{body}\"}}) {{_docID}} }}"
+                        ))
+                        .await;
+                    let committed = if response.is_transaction_conflict() {
+                        drop(transaction);
+                        false
+                    } else {
+                        anyhow::ensure!(!response.has_errors(), "native execute: {:?}", response.errors);
+                        match transaction.commit().await {
+                            Ok(()) => true,
+                            Err(query::TransactionError::Conflict(_)) => false,
+                            Err(error) => return Err(error.into()),
+                        }
+                    };
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    let service_ms = admitted.elapsed().as_secs_f64() * 1000.0;
+                    drop(permit);
+                    observations.push((
+                        (writer as i64, iteration as i64),
+                        committed,
+                        requested.elapsed().as_secs_f64() * 1000.0,
+                        service_ms,
+                    ));
+                }
+                Ok::<_, anyhow::Error>(observations)
+            });
+        }
+        let observations = tokio::time::timeout(Duration::from_secs(120), async {
+            let mut all = Vec::new();
+            while let Some(worker) = workers.join_next().await {
+                all.extend(worker??);
+            }
+            Ok::<_, anyhow::Error>(all)
+        })
+        .await
+        .context("admitted native writers stalled")??;
+        let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let committed: BTreeSet<_> = observations
+            .iter()
+            .filter(|row| row.1)
+            .map(|row| row.0)
+            .collect();
+        let rows = ConfigAccess::local(node.clone())
+            .execute("{ AdmissionDocument {writer iteration} }")
+            .await?;
+        let rows = rows["data"]["AdmissionDocument"]
+            .as_array()
+            .context("documents missing")?;
+        let durable: BTreeSet<_> = rows
+            .iter()
+            .map(|row| {
+                Ok((
+                    row["writer"].as_i64().context("writer missing")?,
+                    row["iteration"].as_i64().context("iteration missing")?,
+                ))
+            })
+            .collect::<Result<_>>()?;
+        assert_eq!(observations.len(), writers * ITERATIONS);
+        assert_eq!(
+            durable, committed,
+            "durable identities at admission {capacity}"
+        );
+        assert_eq!(
+            rows.len(),
+            committed.len(),
+            "duplicate or partial commits at admission {capacity}"
+        );
+        assert!(!committed.is_empty(), "no commits at admission {capacity}");
+        let overlap = maximum.load(Ordering::SeqCst);
+        assert!(overlap <= capacity);
+        if capacity == 1 {
+            assert_eq!(overlap, 1);
+        } else {
+            assert!(
+                overlap > 1,
+                "admission {capacity} did not overlap transactions"
+            );
+        }
+        let mut latency: Vec<_> = observations.iter().map(|row| row.2).collect();
+        let mut service: Vec<_> = observations.iter().map(|row| row.3).collect();
+        latency.sort_by(f64::total_cmp);
+        service.sort_by(f64::total_cmp);
+        measurements.push(json!({
+            "admission": capacity,
+            "workers": writers,
+            "attempts": observations.len(),
+            "committed": committed.len(),
+            "typed_conflicts": observations.len() - committed.len(),
+            "elapsed_ms": elapsed_ms,
+            "commits_per_second": committed.len() as f64 * 1000.0 / elapsed_ms,
+            "p50_total_ms": latency[latency.len()/2],
+            "p95_total_ms": latency[(latency.len()-1)*95/100],
+            "p50_service_ms": service[service.len()/2],
+            "p95_service_ms": service[(service.len()-1)*95/100],
+            "max_open_transactions": overlap,
+            "durable_identity_set_matches_commits": true
+        }));
+        report(
+            report_name,
+            json!({"measurements": measurements, "retries": false}),
+        )?;
+        node.shutdown().await;
+    }
     Ok(())
 }

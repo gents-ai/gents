@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::templates::PairingFilters;
+use super::templates::{FilterPredicate, PairingFilters};
 
 #[derive(Debug, Error)]
 pub enum RemoteP2pAdminError {
@@ -93,4 +93,16 @@ pub trait RemoteP2pAdmin: Send + Sync {
         collection_id: &str,
         timeout: Option<std::time::Duration>,
     ) -> RemoteP2pAdminResult<()>;
+
+    /// Whether replicator `peer_id` acknowledged the current heads of every
+    /// `collection` document `filter` selects. `None` when this admin cannot
+    /// observe acknowledgement: DefraDB exposes it only on an embedded node.
+    async fn replication_acknowledged(
+        &self,
+        _peer_id: &str,
+        _collection: &str,
+        _filter: Option<&FilterPredicate>,
+    ) -> RemoteP2pAdminResult<Option<bool>> {
+        Ok(None)
+    }
 }

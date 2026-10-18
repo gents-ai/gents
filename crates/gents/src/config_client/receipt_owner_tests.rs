@@ -48,10 +48,10 @@ async fn scripted_graphql(
         match state.scenario {
             Scenario::CommitThenAmbiguous | Scenario::ReceiptTransientThenPresent => {
                 state.durable.store(true, Ordering::SeqCst);
-                Json(json!({"errors": [{"message": "database is locked"}]}))
+                Json(json!({"errors": [{"message": "transaction conflict. please retry"}]}))
             }
             Scenario::AbsentThenCommit if attempt == 1 => {
-                Json(json!({"errors": [{"message": "database is locked"}]}))
+                Json(json!({"errors": [{"message": "transaction conflict. please retry"}]}))
             }
             Scenario::AbsentThenCommit => {
                 state.durable.store(true, Ordering::SeqCst);
@@ -61,7 +61,7 @@ async fn scripted_graphql(
     } else {
         let attempt = state.receipt_count.fetch_add(1, Ordering::SeqCst) + 1;
         if matches!(state.scenario, Scenario::ReceiptTransientThenPresent) && attempt == 1 {
-            return Json(json!({"errors": [{"message": "database is locked"}]}));
+            return Json(json!({"errors": [{"message": "transaction conflict. please retry"}]}));
         }
         let rows = if state.durable.load(Ordering::SeqCst) {
             vec![json!({"stable_id": "stable-id"})]
