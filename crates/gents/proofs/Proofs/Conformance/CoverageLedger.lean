@@ -1828,6 +1828,12 @@ def caseCoverage : List CoverageEntry :=
       "Generated selection transitions cover stale revisions, missing reviewers, retained task references, no-op writes and exhausted revisions. Native filesystem locking, atomic replacement and canonical scope keys require adapter checks.")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "access_review_cases"
+      "AccessReviewCases"
+      "tool_policy::access_review::tests::generated_access_review_cases_drive_native_reply_and_routing"
+      "Generated JSON replies bind exact invocation IDs, complete decisions and UTF-8 byte limits. Traces bind denial windows and scoped routing. Signed review execution, physical request binding, cancellation, tool and hook exclusion, and reviewer accuracy require native adapter checks.")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "workspace_permission_cases"
       "WorkspacePermissionCases"
       "tool_policy::workspace_permissions::tests::generated_workspace_permission_cases"

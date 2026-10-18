@@ -245,6 +245,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_claude_wire_start_cases_drive_native_parser",
         },
         ConformanceConsumer::RustTest {
+            id: "tool_policy::access_review::tests::generated_access_review_cases_drive_native_reply_and_routing",
+            package: "gents-loop",
+            source_path: "crates/gents-loop/src/tool_policy/access_review.rs",
+            module_path: "tool_policy::access_review::tests",
+            function: "generated_access_review_cases_drive_native_reply_and_routing",
+        },
+        ConformanceConsumer::RustTest {
             id: "session::tests::editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_source",
             package: "gents",
             source_path: "crates/gents/src/session/tests.rs",

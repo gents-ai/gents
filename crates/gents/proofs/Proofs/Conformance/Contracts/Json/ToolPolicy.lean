@@ -29,24 +29,27 @@ def workspacePermissionWriteCasesJson : String :=
     ++ ",\"changed\":" ++ (if result.changed then "true" else "false")
     ++ ",\"next\":" ++ permissionOptionalPreferenceJson result.next ++ "}")
 
-private def permissionScopeJson (scope : ToolPolicy.WorkspacePermissions.Scope) : String :=
-  "{\"workspace\":" ++ toString scope.workspace ++ ",\"revision\":" ++ toString scope.revision ++ "}"
+def permissionScopeJson (scope : ToolPolicy.WorkspacePermissions.Scope) : Lean.Json :=
+  Lean.Json.mkObj [("workspace", Lean.toJson scope.workspace), ("revision", Lean.toJson scope.revision)]
 
-private def permissionGrantJson (grant : ToolPolicy.WorkspacePermissions.Grant) : String :=
-  "{\"scope\":" ++ permissionScopeJson grant.scope ++ ",\"action\":" ++ toString grant.action ++ "}"
+def permissionGrantJson (grant : ToolPolicy.WorkspacePermissions.Grant) : Lean.Json :=
+  Lean.Json.mkObj [("scope", permissionScopeJson grant.scope), ("action", Lean.toJson grant.action)]
+
+def permissionInputJson (input : ToolPolicy.WorkspacePermissions.Input) : Lean.Json :=
+  Lean.Json.mkObj [
+    ("current", permissionScopeJson input.current),
+    ("configuredWorkspace", Lean.toJson input.configuredWorkspace),
+    ("mode", Lean.toJson input.mode.wireName), ("action", Lean.toJson input.action),
+    ("ceilingAllows", Lean.toJson input.ceilingAllows),
+    ("crossesBoundary", Lean.toJson input.crossesBoundary),
+    ("grant", match input.grant with | none => .null | some grant => permissionGrantJson grant)]
 
 def workspacePermissionCasesJson : String :=
   jsonArray (ToolPolicy.WorkspacePermissions.cases.map fun witness =>
     let input := witness.input
-    "{\"input\":{\"current\":" ++ permissionScopeJson input.current
-    ++ ",\"configuredWorkspace\":" ++ toString input.configuredWorkspace
-    ++ ",\"mode\":" ++ jsonString input.mode.wireName
-    ++ ",\"action\":" ++ toString input.action
-    ++ ",\"ceilingAllows\":" ++ (if input.ceilingAllows then "true" else "false")
-    ++ ",\"crossesBoundary\":" ++ (if input.crossesBoundary then "true" else "false")
-    ++ ",\"grant\":" ++ (match input.grant with | none => "null" | some grant => permissionGrantJson grant) ++ "}"
+    "{\"input\":" ++ (permissionInputJson input).compress
     ++ ",\"review\":" ++ jsonString witness.review.wireName
-    ++ ",\"reviewedGrant\":" ++ permissionGrantJson witness.reviewedGrant
+    ++ ",\"reviewedGrant\":" ++ (permissionGrantJson witness.reviewedGrant).compress
     ++ ",\"expectedRoute\":" ++ jsonString (ToolPolicy.WorkspacePermissions.route input).wireName
     ++ ",\"expectedReviewedRoute\":" ++ jsonString (ToolPolicy.WorkspacePermissions.reviewedRoute input witness.review witness.reviewedGrant).wireName
     ++ ",\"expectedValidGrant\":" ++ (if ToolPolicy.WorkspacePermissions.validGrant input then "true" else "false") ++ "}")
