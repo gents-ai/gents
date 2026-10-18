@@ -220,6 +220,12 @@ fn the_file_tools_refuse_the_allowed_folders_file_and_the_approval_queue() {
     assert!(is_protected(
         &world.gents.join(crate::home::ALLOWED_DIRS_FILE_NAME)
     ));
+    for name in [
+        crate::plugin::approval::workspace::FILE,
+        crate::plugin::approval::workspace::LOCK,
+    ] {
+        assert!(is_protected(&world.gents.join(name)));
+    }
     assert!(is_protected(
         &world
             .gents

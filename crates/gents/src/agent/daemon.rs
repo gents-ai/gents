@@ -170,6 +170,7 @@ pub(super) struct AgentDaemon<M: ProviderModel> {
     runtime_status: crate::runtime_status::RuntimeStatusHandle,
     slot_generation: u64,
     operator_tool_root: Option<PathBuf>,
+    approval_home: Option<PathBuf>,
     request_admission: crate::request_admission::AgentRequestAdmissionVerifier,
     root_execution_guard: Option<crate::tool_surface::RootExecutionGuard>,
 }
@@ -268,6 +269,7 @@ impl<M: ProviderModel> AgentDaemon<M> {
             runtime_status,
             slot_generation,
             operator_tool_root: None,
+            approval_home: None,
             request_admission,
             root_execution_guard: None,
         })
@@ -294,6 +296,11 @@ impl<M: ProviderModel> AgentDaemon<M> {
     pub(super) fn with_operator_tool_root(mut self, root: Option<PathBuf>) -> Self {
         crate::workspace::install_process_operator_tool_root(root.clone());
         self.operator_tool_root = root;
+        self
+    }
+
+    pub(super) fn with_approval_home(mut self, home: Option<PathBuf>) -> Self {
+        self.approval_home = home;
         self
     }
 

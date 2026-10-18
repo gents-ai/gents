@@ -340,6 +340,106 @@ mod bound {
     }
 
     #[tokio::test]
+    async fn workspace_consent_uses_the_original_scope_and_reads_each_new_selection() {
+        use approval::workspace::{self, Mode, WorkspaceKey};
+
+        let fx = fixture(&open_and_copy_wat("in.json", 0), BindAccess::Read);
+        let work = fx.root.join("work");
+        let other = fx.root.join("docs");
+        let target = fx.root.join("outside/in.json");
+        let key = WorkspaceKey::canonical("node", "requester", "agent", &work).unwrap();
+        let full = workspace::save_mode(fx.home.path(), &key, 0, Mode::FullAccess, None).unwrap();
+        let context = workspace::for_request(
+            Some(fx.home.path()),
+            "node",
+            Some("requester"),
+            "agent",
+            Some(&work),
+        )
+        .unwrap();
+        let tool = tool_for(&fx.home, &fx.record);
+        workspace::scope(context, async {
+            let output = in_session(&tool, &target, &other, true).await.unwrap();
+            assert_eq!(output, r#"{"read":true}"#);
+            assert!(allowed::list(fx.home.path()).unwrap().is_empty());
+            assert!(approval::pending_requests(fx.home.path())
+                .unwrap()
+                .is_empty());
+
+            workspace::save_mode(
+                fx.home.path(),
+                &key,
+                full.selection.revision,
+                Mode::Ask,
+                None,
+            )
+            .unwrap();
+            let declined = answer(fx.home.path(), false, false);
+            let error = in_session(&tool, &target, &other, true).await.unwrap_err();
+            declined.await.unwrap();
+            assert!(error.contains("operator declined"), "{error}");
+        })
+        .await;
+        let ask = workspace::get(fx.home.path(), &key).unwrap().unwrap();
+        workspace::save_mode(
+            fx.home.path(),
+            &key,
+            ask.selection.revision,
+            Mode::FullAccess,
+            None,
+        )
+        .unwrap();
+        for (agent, folder) in [("other-agent", &work), ("agent", &other)] {
+            let other_context = workspace::for_request(
+                Some(fx.home.path()),
+                "node",
+                Some("requester"),
+                agent,
+                Some(folder),
+            )
+            .unwrap();
+            let error = workspace::scope(other_context, in_session(&tool, &target, folder, false))
+                .await
+                .unwrap_err();
+            assert!(error.contains("outside the folders"), "{error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn workspace_consent_without_a_reviewer_still_needs_a_person() {
+        use approval::workspace::{self, Mode, WorkspaceKey};
+
+        let fx = fixture(&open_and_copy_wat("in.json", 0), BindAccess::Read);
+        let work = fx.root.join("work");
+        let target = fx.root.join("outside/in.json");
+        let key = WorkspaceKey::canonical("node", "requester", "agent", &work).unwrap();
+        workspace::save_mode(
+            fx.home.path(),
+            &key,
+            0,
+            Mode::AutoReview,
+            Some("review-task"),
+        )
+        .unwrap();
+        let context = workspace::for_request(
+            Some(fx.home.path()),
+            "node",
+            Some("requester"),
+            "agent",
+            Some(&work),
+        )
+        .unwrap();
+        let tool = tool_for(&fx.home, &fx.record);
+        let declined = answer(fx.home.path(), false, false);
+        let error = workspace::scope(context, in_session(&tool, &target, &work, true))
+            .await
+            .unwrap_err();
+        declined.await.unwrap();
+        assert!(error.contains("operator declined"), "{error}");
+        assert!(allowed::list(fx.home.path()).unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn a_model_tool_reads_a_file_in_an_allowed_folder() {
         let fx = fixture(&open_and_copy_wat("in.json", 0), BindAccess::Read);
         allowed::add(fx.home.path(), &fx.root.join("docs"), BindAccess::Read).unwrap();
