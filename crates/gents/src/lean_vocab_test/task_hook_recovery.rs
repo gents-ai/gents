@@ -67,7 +67,7 @@ impl Fixture {
     }
 
     async fn abandoned_request(&self, interrupt_requested: bool) -> String {
-        let mut lifecycle = self.claimed(Duration::from_secs(1)).await;
+        let mut lifecycle = self.claimed(Duration::from_secs(60)).await;
         let writer =
             crate::streaming::DefraStreamWriter::new(self.node.clone(), self.did(), Duration::ZERO);
         lifecycle.begin_owned_execution(&writer).await.unwrap();
@@ -83,7 +83,23 @@ impl Fixture {
             .unwrap();
         }
         drop(lifecycle);
-        tokio::time::sleep(Duration::from_millis(1_200)).await;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let response = crate::graphql::graphql_with_transaction_retry(
+                    &self.node,
+                    &format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ execution_lease_expires_at }} }}"#,
+                        crate::graphql::escape_graphql_string(&doc_id)),
+                    "test.task_hook_relinquishment",
+                ).await.unwrap();
+                let row: serde_json::Value = crate::graphql::first_row(&response, "AgentRequest")
+                    .unwrap().expect("abandoned request");
+                let expiry = chrono::DateTime::parse_from_rfc3339(
+                    row["execution_lease_expires_at"].as_str().unwrap(),
+                ).unwrap();
+                if expiry < chrono::Utc::now() { break; }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.expect("dropping the owner must relinquish its execution lease");
         doc_id
     }
 
