@@ -189,6 +189,10 @@ async fn seed_goal_status(
 
 fn handoff_reason_for_case(name: &str) -> Option<&'static str> {
     match name {
+        "session_message_request_failed_to_failed" => Some("request_failed"),
+        "session_message_request_interrupted_to_cancelled" => Some("request_interrupted"),
+        "session_message_request_dead_to_failed" => Some("request_dead"),
+        "session_message_request_superseded_to_failed" => Some("request_superseded"),
         "session_message_request_completed_to_completed" => None,
         "session_message_request_completed_no_goal_to_completed" => Some("assignment_absent"),
         "session_message_request_completed_unknown_goal_to_completed" => {
@@ -198,7 +202,7 @@ fn handoff_reason_for_case(name: &str) -> Option<&'static str> {
         "session_message_request_completed_blocked_goal_to_completed" => {
             Some("assignment_blocked")
         }
-        other => panic!("{other}: unhandled completed session-message case"),
+        other => panic!("{other}: unhandled session-message case"),
     }
 }
 

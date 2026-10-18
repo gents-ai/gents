@@ -446,14 +446,16 @@ mod turn_assignment_tests {
 
         let settled = settle_running_session_message_rows(node, did).await.unwrap();
         assert_eq!(settled, 1, "the caused terminal settles the row");
+        // One settle call persists the suffix, publishes the notice and
+        // advances the row: the converged form is `completed` with the
+        // reason rendered. The durable pre-delivery suffix is pinned in the
+        // crash-before-notice regression, where the side effect is skipped.
         let row = tool_call_row(node, &tool_doc_id).await;
         assert_eq!(row["lifecycle_state"], "completed");
-        assert_eq!(
-            row["status"], "completionPending:assignment_active",
-            "the handoff reason persists in the row's durable settlement record"
-        );
+        assert_eq!(row["status"], "completed");
 
-        let notifications = session_message_notifications(node, did, &admission.tool.session_id()).await;
+        let notifications =
+            session_message_notifications(node, did, &admission.tool.session_id()).await;
         assert_eq!(notifications.len(), 1);
         assert!(
             notifications[0].contains("<reason>assignment_active</reason>"),
@@ -461,8 +463,8 @@ mod turn_assignment_tests {
             notifications[0]
         );
 
-        // Crash-before-notice replay: the row's persisted suffix is the
-        // authoritative snapshot; the redrive re-renders the same reason.
+        // Replay: the side effects already converged; the redrive republishes
+        // nothing and the notice stays byte-identical.
         let redrive =
             crate::tool_call_lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(
                 node, did,
@@ -507,12 +509,13 @@ mod turn_assignment_tests {
 
         let settled = settle_running_session_message_rows(node, did).await.unwrap();
         assert_eq!(settled, 1);
+        // One settle call persists the suffix, publishes the notice and
+        // advances the row; the notice is where the absent-assignment
+        // distinction lives (a no-goal session never reads as success).
         let row = tool_call_row(node, &tool_doc_id).await;
-        assert_eq!(
-            row["status"], "completionPending:assignment_absent",
-            "a no-goal session never reads as assignment success"
-        );
-        let notifications = session_message_notifications(node, did, &admission.tool.session_id()).await;
+        assert_eq!(row["status"], "completed");
+        let notifications =
+            session_message_notifications(node, did, &admission.tool.session_id()).await;
         assert_eq!(notifications.len(), 1);
         assert!(
             notifications[0].contains("<reason>assignment_absent</reason>"),
@@ -555,11 +558,9 @@ mod turn_assignment_tests {
         let settled = settle_running_session_message_rows(node, did).await.unwrap();
         assert_eq!(settled, 1);
         let row = tool_call_row(node, &tool_doc_id).await;
-        assert_eq!(
-            row["status"], "completionPending",
-            "assignment_complete is the reasonless success form"
-        );
-        let notifications = session_message_notifications(node, did, &admission.tool.session_id()).await;
+        assert_eq!(row["status"], "completed");
+        let notifications =
+            session_message_notifications(node, did, &admission.tool.session_id()).await;
         assert_eq!(notifications.len(), 1);
         assert!(
             !notifications[0].contains("<reason>"),
@@ -614,7 +615,7 @@ mod turn_assignment_tests {
             &tool_doc_id,
             did,
             &session_id,
-            None,
+            Some(did),
         )
         .await
         .unwrap()
