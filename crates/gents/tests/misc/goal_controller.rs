@@ -10,7 +10,7 @@ use gents::goal::{
     CreateGoalForSessionOutcome, GoalStatus,
 };
 use gents::{
-    ActiveRuntimeSnapshot, ConfigAccess, GoalSource, KeyIdentity, TriggerSource,
+    ActiveRuntimeSnapshot, ConfigAccess, GoalSource, NodeIdentity, TriggerSource,
     UpdateSubscriptionSource,
 };
 use serde::Deserialize;
@@ -1533,7 +1533,7 @@ async fn fresh_goal_baseline_snapshots_prior_session_usage_and_charges_only_new_
     let db = test_db("goal-baseline-prior-usage").await;
     seed_completed_request(&db, "parent-baseline").await;
     seed_usage(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         "parent-baseline",
         "baseline-call",
@@ -1562,7 +1562,7 @@ async fn fresh_goal_baseline_snapshots_prior_session_usage_and_charges_only_new_
 
     // Only spend arriving after creation is charged.
     seed_usage(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         "parent-baseline",
         "post-goal-call",
@@ -1593,7 +1593,7 @@ async fn idempotent_goal_recreate_preserves_the_existing_baseline() {
     let db = test_db("goal-baseline-idempotent").await;
     seed_completed_request(&db, "parent-idempotent").await;
     seed_usage(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         "parent-idempotent",
         "first-call",
@@ -1620,7 +1620,7 @@ async fn idempotent_goal_recreate_preserves_the_existing_baseline() {
     // must return the existing row untouched: baseline stays at the creation
     // snapshot even though session usage has moved on.
     seed_usage(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         "parent-idempotent",
         "second-call",
@@ -1687,7 +1687,7 @@ async fn fresh_goal_with_zero_prior_usage_starts_charging_from_zero() {
     assert_eq!(goal.token_usage_baseline, Some(0));
     assert_eq!(goal.tokens_used, Some(0));
     seed_usage(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         "parent-zero",
         "only-call",
@@ -1787,7 +1787,7 @@ async fn set_goal_over_http_transactions_computes_the_same_baseline() {
     assert_eq!(goal.tokens_used, Some(0));
 }
 
-async fn free_address() -> std::net::SocketAddr {
+fn free_address() -> std::net::SocketAddr {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
     listener.local_addr().expect("ephemeral address")
 }
