@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use gents::session::{fork, ForkError, ForkParams};
+use gents::session::{fork, ForkBoundary, ForkError, ForkParams};
 use gents_codex_protocol as codex;
 use serde_json::{json, Value};
 
@@ -47,7 +47,7 @@ pub(super) async fn fork_thread_response(
         &state.node,
         ForkParams {
             source_session_id: &params.thread_id,
-            fork_at_user_turn,
+            boundary: ForkBoundary::UserTurn(fork_at_user_turn),
             caller_node_did: state.node_did.as_ref(),
             caller_requester_did: Some(state.local_requester_did()),
             target_agent_id: None,
@@ -459,7 +459,8 @@ fn map_fork_error(err: ForkError) -> ThreadRouteError {
         | ForkError::ForkNotSameAgent
         | ForkError::ForkSourceBusy
         | ForkError::ForkAtUserTurnOutOfRange(_, _)
-        | ForkError::ForkAgentNotFound(_) => JSONRPC_INVALID_PARAMS,
+        | ForkError::ForkAgentNotFound(_)
+        | ForkError::ForkMessageNotEditable(_) => JSONRPC_INVALID_PARAMS,
     };
     ThreadRouteError {
         code,

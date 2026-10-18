@@ -216,6 +216,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         PendingQueueEntryView,
         MailboxItemRequest,
         gents_protocol::mailbox_question::MailboxQuestion,
+        SessionForkBeforeRequest,
+        SessionForkResult,
         SessionRenameRequest,
         NodeConfigSaveRequest,
         DefaultAgentSetRequest,

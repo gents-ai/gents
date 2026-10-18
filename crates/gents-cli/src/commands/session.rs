@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
-use gents::session::{fork, fork_via_http, ForkError, ForkOutcome, ForkParams};
+use gents::session::{fork, fork_via_http, ForkBoundary, ForkError, ForkOutcome, ForkParams};
 use serde_json::{json, Value};
 
 use crate::cli::args::{ConfigListArgs, ConfigShowArgs, SessionCommand, SessionForkArgs};
@@ -88,7 +88,7 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
             &endpoint,
             ForkParams {
                 source_session_id: &args.from,
-                fork_at_user_turn: args.at_user_turn,
+                boundary: ForkBoundary::UserTurn(args.at_user_turn),
                 caller_node_did: &node_did,
                 caller_requester_did: args.requester_did.as_deref(),
                 target_agent_id: args.agent.as_deref(),
@@ -117,7 +117,7 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
         node,
         ForkParams {
             source_session_id: &args.from,
-            fork_at_user_turn: args.at_user_turn,
+            boundary: ForkBoundary::UserTurn(args.at_user_turn),
             caller_node_did: &node_did,
             caller_requester_did: args.requester_did.as_deref(),
             target_agent_id: args.agent.as_deref(),
@@ -339,7 +339,8 @@ fn map_fork_error(error: ForkError) -> anyhow::Error {
         | ForkError::ForkAtUserTurnOutOfRange(_, _)
         | ForkError::ForkAgentNotFound(_)
         | ForkError::ForkNotSameAgent
-        | ForkError::ForkSourceBusy => anyhow::anyhow!("{error}"),
+        | ForkError::ForkSourceBusy
+        | ForkError::ForkMessageNotEditable(_) => anyhow::anyhow!("{error}"),
         ForkError::ForkCopyFailed(inner) => inner.context("fork copy step failed"),
     }
 }

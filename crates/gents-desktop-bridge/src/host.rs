@@ -545,6 +545,11 @@ impl ClientHost {
                     .await
                     .map_err(backend_error)?,
             ),
+            ClientCommand::ForkBeforeMessage { request } => encode(
+                crate::commands::fork_session_before_message(&self.core, request)
+                    .await
+                    .map_err(backend_error)?,
+            ),
             ClientCommand::Rename { request } => encode(
                 crate::commands::rename_session(&self.core, request)
                     .await

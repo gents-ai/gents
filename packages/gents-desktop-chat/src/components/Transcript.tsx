@@ -15,12 +15,16 @@ export const MessageList = memo(function MessageList({
   requestCancelCause,
   scrollElement,
   compactTools = false,
+  onEditUserMessage,
 }: {
   timelineItems: RenderedTimelineItem[];
   timelineIdentity?: string | null;
   requestCancelCause?: DerivedCancelCauseView | null;
   scrollElement?: HTMLElement | null;
   compactTools?: boolean;
+  onEditUserMessage?: (
+    item: Extract<RenderedTimelineItem, { kind: "userMessage" }>,
+  ) => void;
 }) {
   const displayItems = useMemo(() => {
     return compactTools ? coalesceToolGroups(timelineItems) : timelineItems;
@@ -70,6 +74,7 @@ export const MessageList = memo(function MessageList({
             <li key={timelineKey(item)} {...window.attributes(index, start)}>
               <TimelineItem
                 item={item}
+                onEditUserMessage={onEditUserMessage}
                 compactTools={compactTools}
                 animateAssistantReveal={item.itemKey === revealAssistantItemKey}
               />

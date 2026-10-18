@@ -431,6 +431,36 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
 }
 
 #[test]
+fn selected_request_lookup_distinguishes_arrival_from_a_missing_canonical_head() {
+    use crate::error::{BridgeError, BridgeErrorCode};
+
+    let data = serde_json::json!({ "AgentRequest": [] });
+    let lookup = super::super::SelectedRequestLookup {
+        query: String::new(),
+        expected_doc_id: None,
+        expected_request_id: None,
+    };
+    let error = lookup
+        .decode(&data, "did:test:agent", "session", None)
+        .expect_err("unobserved request is pending");
+    assert_eq!(
+        error.downcast_ref::<BridgeError>().map(|error| error.code),
+        Some(BridgeErrorCode::ProjectionPending)
+    );
+
+    let head = super::super::SelectedRequestLookup {
+        query: String::new(),
+        expected_doc_id: Some("canonical-doc".to_string()),
+        expected_request_id: Some("canonical-request".to_string()),
+    };
+    let error = head
+        .decode(&data, "did:test:agent", "session", None)
+        .expect_err("missing canonical head is invalid");
+    assert!(error.downcast_ref::<BridgeError>().is_none());
+    assert!(error.to_string().contains("exact physical request"));
+}
+
+#[test]
 fn selected_request_lookup_rejects_mixed_valid_and_malformed_rows() {
     let lookup = super::super::SelectedRequestLookup {
         query: String::new(),
@@ -456,9 +486,10 @@ fn selected_request_lookup_rejects_mixed_valid_and_malformed_rows() {
         ]
     });
 
-    assert!(lookup
+    let error = lookup
         .decode(&data, "did:test:agent", "session", None)
-        .is_err());
+        .expect_err("malformed rows are invalid rather than pending");
+    assert!(error.downcast_ref::<crate::error::BridgeError>().is_none());
 }
 
 #[tokio::test]
