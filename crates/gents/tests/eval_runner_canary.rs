@@ -1,7 +1,6 @@
 mod support;
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use gents::config_client::{
     apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
@@ -449,7 +448,6 @@ async fn a_seed_stage_whose_event_sources_do_not_reconcile_fails_at_once() {
     request.cells[0].agent_id = "seeded".into();
     let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), canary.runs_dir());
 
-    let started = Instant::now();
     let outcome = run(
         &canary.access,
         &request,
@@ -460,12 +458,30 @@ async fn a_seed_stage_whose_event_sources_do_not_reconcile_fails_at_once() {
     )
     .await
     .unwrap();
-    assert!(
-        started.elapsed() < Duration::from_secs(60),
-        "the stage waited {:?} instead of failing on the reconcile error",
-        started.elapsed()
-    );
     assert_eq!((outcome.completed, outcome.not_evidence), (1, 1));
+
+    let trials = load_trials(&canary.access, &request.owner, &request.run_id)
+        .await
+        .unwrap();
+    let trial = &trials[0];
+    let completion = trial.completion.as_ref().unwrap();
+    assert_eq!(completion.anchor.requests, 0);
+    assert_eq!(completion.anchor.inference_calls, 0);
+    assert_eq!(backend.observed_completion_bodies().len(), 0);
+    let home = EmbeddedHome::open_retained(
+        &canary
+            .runs_dir()
+            .join(trial.identity.home_hint.as_deref().unwrap())
+            .join("home"),
+    )
+    .await
+    .unwrap();
+    let seeds = ConfigAccess::local(home.node.clone())
+        .execute("{ QuietItem { _docID } }")
+        .await
+        .unwrap();
+    assert_eq!(seeds["data"]["QuietItem"], json!([]), "{seeds:#?}");
+    home.node.shutdown().await;
 
     let verdicts = load_verdicts(&canary.access, &request.owner, &request.run_id)
         .await

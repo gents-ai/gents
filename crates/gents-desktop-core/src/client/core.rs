@@ -68,6 +68,20 @@ pub struct ClientCoreOptions {
     pub max_pending_dags: usize,
     pub install_replicators_on_bootstrap: bool,
     pub store_key_custody: gents::store_key::StoreKeyCustodyChoice,
+    pub store_key_provider: Option<Arc<dyn ClientStoreKeyProvider>>,
+}
+
+/// Only a trusted native host may supply store keys. It must bind its lookup
+/// to this exact custody record. Native custody remains the durable owner;
+/// a host cache must never be the only copy. Keys never enter product messages or logs.
+#[async_trait::async_trait]
+pub trait ClientStoreKeyProvider: std::fmt::Debug + Send + Sync {
+    async fn load(
+        &self,
+        record: &gents::store_key::StoreEncryption,
+        key_file: &std::path::Path,
+        data_path: &std::path::Path,
+    ) -> Result<gents::store_key::StoreKey>;
 }
 
 impl Default for ClientCoreOptions {
@@ -86,6 +100,7 @@ impl Default for ClientCoreOptions {
             max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
             install_replicators_on_bootstrap: true,
             store_key_custody: gents::store_key::StoreKeyCustodyChoice::default(),
+            store_key_provider: None,
         }
     }
 }
