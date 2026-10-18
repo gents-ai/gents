@@ -56,6 +56,41 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "toolset::title_audit_usage::tests::generated_budget_recovery_cases_bind_signed_catalog_usage",
+            package: "gents",
+            source_path: "crates/gents/src/toolset/title_audit_usage.rs",
+            module_path: "toolset::title_audit_usage::tests",
+            function: "generated_budget_recovery_cases_bind_signed_catalog_usage",
+        },
+        ConformanceConsumer::RustTest {
+            id: "plugin::approval::workspace::tests::generated_workspace_permission_writes_preserve_selected_policy_versions",
+            package: "gents",
+            source_path: "crates/gents/src/plugin/approval/workspace.rs",
+            module_path: "plugin::approval::workspace::tests",
+            function: "generated_workspace_permission_writes_preserve_selected_policy_versions",
+        },
+        ConformanceConsumer::RustTest {
+            id: "agent::daemon::title::review::task::tests::generated_task_policies_bind_the_configured_task_fields",
+            package: "gents",
+            source_path: "crates/gents/src/agent/daemon/title/review/task.rs",
+            module_path: "agent::daemon::title::review::task::tests",
+            function: "generated_task_policies_bind_the_configured_task_fields",
+        },
+        ConformanceConsumer::RustTest {
+            id: "plugin::approval::workspace::command::tests::generated_workspace_command_roots_preserve_the_tool_ceiling",
+            package: "gents",
+            source_path: "crates/gents/src/plugin/approval/workspace/command.rs",
+            module_path: "plugin::approval::workspace::command::tests",
+            function: "generated_workspace_command_roots_preserve_the_tool_ceiling",
+        },
+        ConformanceConsumer::RustTest {
+            id: "plugin::allowed::tests::generated_operator_path_cases_protect_names_and_file_aliases",
+            package: "gents",
+            source_path: "crates/gents/src/plugin/allowed_tests.rs",
+            module_path: "plugin::allowed::tests",
+            function: "generated_operator_path_cases_protect_names_and_file_aliases",
+        },
+        ConformanceConsumer::RustTest {
             id: "session::title_text::tests::generated_title_text_cases_bind_native_presentation",
             package: "gents",
             source_path: "crates/gents/src/session/title_text.rs",
