@@ -8089,6 +8089,58 @@ async fn pack_documents_dependency_inference_bindings_respect_account_authority(
     .unwrap();
     let digest = get["artifact_digest"].as_str().unwrap().to_owned();
 
+    // Missing dependency slots must not let either a root binding or a
+    // dependency-only binding bypass account fencing in an incomplete preview.
+    for binding in ["worker=p-other", "verifier=p-other"] {
+        let refused = config_call(
+            &tools,
+            &[
+                "pack",
+                "preview",
+                "install",
+                "fixture/dependent_fixture",
+                "--inference-slot",
+                binding,
+            ],
+        )
+        .await
+        .unwrap_err();
+        assert!(refused.to_string().contains("selects another"), "{refused}");
+    }
+    // Allowed partial bindings retain the useful missing-slot response.
+    for profile in ["p-default", "setup:inference"] {
+        let binding = format!("worker={profile}");
+        let partial: Value = serde_json::from_str(
+            &config_call(
+                &tools,
+                &[
+                    "pack",
+                    "preview",
+                    "install",
+                    "fixture/dependent_fixture",
+                    "--inference-slot",
+                    &binding,
+                ],
+            )
+            .await
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(partial["ready"], false, "{partial}");
+        let missing = partial["missing_inference_slots"].as_array().unwrap();
+        assert!(missing.contains(&json!("coordinator")), "{partial}");
+        assert!(missing.contains(&json!("verifier")), "{partial}");
+    }
+    for coordinate in ["fixture/dependent_fixture", "fixture/review_graph"] {
+        assert!(
+            crate::pack::read_installed_pack(&access, &did, coordinate)
+                .await
+                .unwrap()
+                .is_none(),
+            "incomplete previews must not install {coordinate}"
+        );
+    }
+
     // The dependency's slot selects another account: preview and commit both
     // refuse while the root pack's own binding stays on the default account.
     let slots = [

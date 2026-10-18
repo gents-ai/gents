@@ -1213,6 +1213,11 @@ impl PackInstaller {
             inspected.push(preview);
         }
         if !commit && !missing_slots.is_empty() {
+            // Incomplete previews still must reject unauthorized supplied bindings.
+            // Complete previews and installs retain the prepared-binding fence below.
+            for preview in &inspected {
+                self.fence_bindings(&preview.bindings).await?;
+            }
             return Ok(serde_json::to_string_pretty(&json!({
                 "committed": false, "ready": false, "operation": operation,
                 "package": distribution.manifest().name, "version": distribution.manifest().version,
