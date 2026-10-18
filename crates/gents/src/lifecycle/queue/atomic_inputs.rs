@@ -490,13 +490,10 @@ async fn background_completion_transaction_attempt(
             let request_id = format!("background-completion-{queue_scope}-{next_generation:020}");
             let retry_key = format!("{retry_key_prefix}{next_generation:020}");
             let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-            let wake_input = RequestInput {
-                queue: Some(background_wake_queue(
-                    queue,
-                    queue.queued_after_request_id.clone(),
-                )),
-                ..Default::default()
-            };
+            let wake_input = parent.input.continuation(
+                background_wake_queue(queue, queue.queued_after_request_id.clone()),
+                None,
+            );
             let request_mutation = session_request_create_mutation_at_hop(
                 parent,
                 wake_hop,

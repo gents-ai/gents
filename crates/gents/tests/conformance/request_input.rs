@@ -2,6 +2,19 @@ use super::*;
 use gents_protocol::request_input::RequestInput;
 
 #[test]
+fn runtime_continuation_inputs_match_the_lean_owner() {
+    for case in &lean_contract_snapshot().request_input_cases {
+        let name = case["name"].as_str().unwrap();
+        let parent: RequestInput = serde_json::from_value(case["input"].clone()).unwrap();
+        let queue = serde_json::from_value(case["continuation_queue"].clone()).unwrap();
+        let goal = serde_json::from_value(case["continuation_goal"].clone()).unwrap();
+        let expected: RequestInput =
+            serde_json::from_value(case["expected_continuation"].clone()).unwrap();
+        assert_eq!(parent.continuation(queue, goal), expected, "{name}");
+    }
+}
+
+#[test]
 fn lean_request_inputs_decode_without_losing_explicit_issuance_facts() {
     let cases = &lean_contract_snapshot().request_input_cases;
     assert!(!cases.is_empty());

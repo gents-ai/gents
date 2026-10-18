@@ -32,6 +32,23 @@ pub struct RequestInput {
     pub goal_continuation: Option<GoalContinuationInput>,
 }
 
+impl RequestInput {
+    /// Runtime continuations retain the invocation directory; the host still
+    /// validates it against the current workspace and configured tool ceiling.
+    pub fn continuation(
+        &self,
+        queue: RequestQueue,
+        goal_continuation: Option<GoalContinuationInput>,
+    ) -> Self {
+        Self {
+            cwd: self.cwd.clone(),
+            queue: Some(queue),
+            goal_continuation,
+            ..Self::default()
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RequestQueue {

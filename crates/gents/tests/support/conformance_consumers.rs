@@ -434,6 +434,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "lean_request_inputs_decode_without_losing_explicit_issuance_facts",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::request_input::runtime_continuation_inputs_match_the_lean_owner",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/request_input.rs",
+            module_path: "conformance::request_input",
+            function: "runtime_continuation_inputs_match_the_lean_owner",
+        },
+        ConformanceConsumer::RustTest {
             id: "trigger_engine::tests::event_group_eligibility_matches_lean_generated_contract_cases",
             package: "gents",
             source_path: "crates/gents/src/trigger_engine/tests/mod.rs",
