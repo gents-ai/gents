@@ -19,7 +19,11 @@ mod job_object;
 mod process_group;
 mod registry;
 
-use capture::{join_capture_after_child_exit, spawn_optional_capped};
+use capture::join_capture_after_child_exit;
+#[cfg(unix)]
+use capture::spawn_native_capped as spawn_optional_capped;
+#[cfg(not(unix))]
+use capture::spawn_optional_capped;
 #[cfg(windows)]
 use job_object::{terminate_job, ManagedChildJob};
 #[cfg(unix)]
