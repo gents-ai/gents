@@ -421,6 +421,34 @@ async fn list_background_tools_reports_running_live_output_bytes() {
          persisted-row snapshot: {}",
         serde_json::to_string(&persisted_row_snapshot(&hook, tool_call_id).await).unwrap()
     );
+    // Failure-branch terminal inspection BEFORE mid-run asserts: if the
+    // child reached a terminal state without ever presenting the expected
+    // running/4-byte observation, capture its canonical terminal envelope
+    // via the model tools (wait_process bounded, then read_process) so the
+    // actual exit/error reason is visible. Sanitized in the panic message:
+    // status/error tokens only, no raw payload echo beyond the bounded
+    // read output.
+    if entry.is_null() {
+        let mut waited_failure = json!(null);
+        for attempt in 0..10 {
+            waited_failure =
+                wait_tool(&hook, &format!("wait-failure-{attempt}"), tool_call_id).await;
+            if waited_failure["status"].as_str().is_some_and(|status| {
+                status == "completed" || status == "failed" || status == "cancelled"
+            }) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+        let read_failure = read_tool(&hook, "read-failure", tool_call_id).await;
+        panic!(
+            "gate-window closed without the expected mid-run observation; \
+             terminal envelope: {}; \
+             bounded read (last 1024 bytes): {}",
+            serde_json::to_string(&waited_failure).unwrap(),
+            read_failure["output"].as_str().unwrap_or("<no output>")
+        );
+    }
     assert_eq!(entry["tool_name"].as_str(), Some("bash_unrestricted"),
         "no running observation with stdout_bytes==4 within the gate window; per-attempt status/bytes: {observations:?}; last response: {last_response}");
     assert_eq!(entry["status"].as_str(), Some("running"));
