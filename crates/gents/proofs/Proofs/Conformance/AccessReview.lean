@@ -1,5 +1,7 @@
 import Proofs.ToolPolicy.AccessReview
 import Proofs.Conformance.Contracts.Json.ToolPolicy
+import Proofs.CanonicalOutput.Execution.Examples
+import Proofs.CanonicalOutput.Execution.Gate
 
 namespace Conformance.AccessReview
 open Lean ToolPolicy ToolPolicy.WorkspacePermissions
@@ -65,6 +67,16 @@ private def routeCases : List Json :=
     ("expectedHistory", toJson ((ToolPolicy.AccessReview.apply
       case.input history case.review case.reviewedGrant).2.map Review.wireName))]
 
-def casesJson : Json := toJson (replyCases ++ traceCases ++ routeCases)
+private def completionCases : List Json :=
+  ([.normal, .titleAudit, .accessReview] : List RequestPurpose).flatMap fun purpose =>
+  [false, true].map fun hasTools =>
+    let world := { CanonicalOutput.Execution.Examples.world 5 with purpose }
+    let permitsIntent := CanonicalOutput.Execution.Gate.purposeAllows world
+      (.dispatch 7 ⟨1, true, true⟩)
+    Json.mkObj [
+      ("kind", toJson "completion"), ("purpose", toJson purpose.toWire),
+      ("hasTools", toJson hasTools), ("expected", toJson (!hasTools || permitsIntent))]
+
+def casesJson : Json := toJson (replyCases ++ traceCases ++ routeCases ++ completionCases)
 
 end Conformance.AccessReview
