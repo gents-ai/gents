@@ -78,7 +78,7 @@ async fn timeline_resolves_fork_origin_payloads_without_cross_request_membership
         &node,
         crate::session::ForkParams {
             source_session_id: "timeline-fork-source",
-            fork_at_user_turn: 3,
+            boundary: crate::session::ForkBoundary::UserTurn(3),
             caller_node_did: owner,
             caller_requester_did: None,
             target_agent_id: None,

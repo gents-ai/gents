@@ -8,6 +8,7 @@ pub(crate) struct LeanSessionDocumentCases {
     pub(crate) projection: Vec<serde_json::Value>,
     pub(crate) retry: Vec<serde_json::Value>,
     pub(crate) fork: Vec<serde_json::Value>,
+    pub(crate) edit_anchors: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
