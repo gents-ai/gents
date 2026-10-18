@@ -11,8 +11,13 @@ import { publishUxPlugin, uxPluginActive, uxPluginRecords } from "./plugins-stor
    narrows nothing further */
 export type { UxPluginListing, UxPluginSource };
 
-/* live runtime plugins by listing id -> loaded plugin id (null while broken) */
+/* live runtime plugins by listing id -> loaded plugin id (null while broken
+   or shadowed) */
 const known = new Map<string, string | null>();
+/* plugin id -> the listing that owns it. Two packs may ship a plugin of one
+   name; the first listing (scan order) owns the id whatever its state, and
+   the other is shown as shadowed until the owner leaves. */
+const owners = new Map<string, string>();
 /* the scan in flight; a scan asked for meanwhile runs after it */
 let inFlight: Promise<void> | null = null;
 
@@ -67,10 +72,64 @@ function enabledByListing(entry: UxPluginListing): boolean {
   return uxPluginActive(declaredPluginId(entry), entry.defaultEnabled ?? true);
 }
 
+/* who holds a plugin id: a listing, or the bundled copy the loader shadows
+   runtime copies behind */
+function ownerOf(id: string): string | undefined {
+  const bundled = uxPluginRecords()[id];
+  if (bundled?.door === "bundled") return "bundled";
+  return owners.get(id);
+}
+
+function claim(entry: UxPluginListing): string | null {
+  const id = declaredPluginId(entry);
+  const owner = ownerOf(id);
+  if (owner && owner !== entry.id) return owner;
+  owners.set(id, entry.id);
+  return null;
+}
+
+function release(listingId: string): void {
+  for (const [id, owner] of owners) {
+    if (owner === listingId) owners.delete(id);
+  }
+}
+
+const shadowedId = (entry: UxPluginListing) => `${entry.id}:shadowed`;
+
+/* the row of a listing whose plugin id another listing owns: visible,
+   off, and refusing to load until the owner is gone */
+function publishShadowed(entry: UxPluginListing, owner: string): void {
+  const id = declaredPluginId(entry);
+  const error = `duplicate id "${id}", owned by ${owner}; this copy is not used`;
+  const row = {
+    id: shadowedId(entry),
+    name: `${id} (shadowed)`,
+    description: error,
+    door: entry.door,
+    file: entry.file,
+    producer: entry.producer,
+    pack: entry.pack ?? undefined,
+    declared: entry.contributes ?? undefined,
+  };
+  publishUxPlugin(
+    { ...row, status: "disabled" },
+    {
+      activate: () => publishUxPlugin({ ...row, status: "error", error }),
+      deactivate: () => publishUxPlugin({ ...row, status: "disabled" }),
+    },
+  );
+  known.set(entry.id, null);
+}
+
 /* the inventory row of a plugin that is off: built from the listing alone,
    its producer never run and its module never evaluated; the switch loads it */
 function publishListed(entry: UxPluginListing): void {
   const id = declaredPluginId(entry);
+  const owner = claim(entry);
+  if (owner) {
+    publishShadowed(entry, owner);
+    return;
+  }
   publishUxPlugin(
     {
       id,
@@ -93,6 +152,12 @@ function publishListed(entry: UxPluginListing): void {
 
 async function loadListing(entry: UxPluginListing): Promise<void> {
   const previous = known.get(entry.id) ?? null;
+  const owner = claim(entry);
+  if (owner) {
+    if (previous) retireRuntimeUxPlugin(previous);
+    publishShadowed(entry, owner);
+    return;
+  }
   let module: UxPluginSource | null = null;
   let unreadable: unknown = null;
   try {
@@ -137,9 +202,21 @@ async function reconcile(reloadKnown: boolean): Promise<void> {
     /* no local agent home (mobile, or not started): nothing to scan */
     return;
   }
-  const seen = new Set<string>();
+  const seen = new Set(listings.map((entry) => entry.id));
+  /* what left the disk goes first, so an id it owned is free for a listing
+     that was shadowed behind it in this same scan */
+  for (const [id, loaded] of known) {
+    if (seen.has(id)) continue;
+    /* only the incarnation this listing owns leaves with it: a shadowed
+       copy's owner keeps running */
+    if (loaded && owners.get(loaded) === id) retireRuntimeUxPlugin(loaded);
+    for (const row of [id, `${id}:shadowed`]) {
+      if (uxPluginRecords()[row]) retireRuntimeUxPlugin(row);
+    }
+    release(id);
+    known.delete(id);
+  }
   for (const entry of listings.sort((a, b) => a.id.localeCompare(b.id))) {
-    seen.add(entry.id);
     if (known.get(entry.id) && !reloadKnown) continue;
     if (!enabledByListing(entry)) {
       /* off: the row says so from the manifest; nothing of it runs */
@@ -149,12 +226,6 @@ async function reconcile(reloadKnown: boolean): Promise<void> {
       continue;
     }
     await loadListing(entry);
-  }
-  for (const [id, loaded] of known) {
-    if (seen.has(id)) continue;
-    if (loaded) retireRuntimeUxPlugin(loaded);
-    else if (uxPluginRecords()[id]) retireRuntimeUxPlugin(id);
-    known.delete(id);
   }
 }
 
@@ -175,5 +246,6 @@ export const reloadRuntimeUxPlugins = (): Promise<void> => scanRuntimeUxPlugins(
 /** test seam */
 export function resetRuntimeDoor(): void {
   known.clear();
+  owners.clear();
   inFlight = null;
 }

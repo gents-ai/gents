@@ -242,3 +242,108 @@ describe("the runtime door", () => {
     expect(chips()).toEqual(["clock:chip"]);
   });
 });
+
+/* two packs shipping a plugin of one name: the first listing owns the id,
+   whatever its state; the other is shadowed, and leaving takes only your
+   own incarnation */
+describe("one owner per plugin id", () => {
+  const inPack = (
+    pack: string,
+    name: string,
+    defaultEnabled: boolean | null,
+  ): UxPluginListing => ({
+    id: `${pack}/${name}`,
+    door: "pack",
+    producer: "file",
+    file: `/home/packs/${pack}/ux/${name}/plugin.js`,
+    pack,
+    contributes: { areas: [SESSION_HEADER_ACTIONS_AREA], directives: [] },
+    defaultEnabled,
+  });
+
+  it("a disabled same-name listing from another pack does not overwrite the live one", async () => {
+    listings = [
+      inPack("acme/first", "widget", true),
+      inPack("zeta/second", "widget", false),
+    ];
+    sources.set("acme/first/widget", chipPlugin("widget"));
+    sources.set("zeta/second/widget", chipPlugin("widget"));
+    await scanRuntimeUxPlugins();
+    expect(uxPluginRecords().widget).toMatchObject({
+      status: "loaded",
+      pack: "acme/first",
+    });
+    expect(uxPluginRecords()["zeta/second/widget:shadowed"]).toMatchObject({
+      status: "disabled",
+      pack: "zeta/second",
+      description: expect.stringContaining("owned by acme/first/widget"),
+    });
+    expect(chips()).toEqual(["widget:chip"]);
+    expect(isUxPluginLive("widget")).toBe(true);
+    /* the switch on the shadowed row loads nothing */
+    await setUxPluginEnabled("zeta/second/widget:shadowed", true);
+    expect(uxPluginRecords()["zeta/second/widget:shadowed"]?.status).toBe("error");
+    expect(reads().map(([, args]) => (args as { id: string }).id)).toEqual([
+      "acme/first/widget",
+    ]);
+    expect(chips()).toEqual(["widget:chip"]);
+  });
+
+  it("removing the shadowed pack leaves the owner running; removing the owner lets the other claim", async () => {
+    listings = [
+      inPack("acme/first", "widget", true),
+      inPack("zeta/second", "widget", false),
+    ];
+    sources.set("acme/first/widget", chipPlugin("widget"));
+    sources.set("zeta/second/widget", chipPlugin("widget"));
+    await scanRuntimeUxPlugins();
+
+    listings = [inPack("acme/first", "widget", true)];
+    await scanRuntimeUxPlugins();
+    expect(uxPluginRecords().widget).toMatchObject({
+      status: "loaded",
+      pack: "acme/first",
+    });
+    expect(uxPluginRecords()["zeta/second/widget:shadowed"]).toBeUndefined();
+    expect(chips()).toEqual(["widget:chip"]);
+
+    listings = [inPack("zeta/second", "widget", false)];
+    await scanRuntimeUxPlugins();
+    expect(chips()).toEqual([]);
+    expect(uxPluginRecords().widget).toMatchObject({
+      status: "disabled",
+      pack: "zeta/second",
+    });
+    expect(uxPluginRecords()["zeta/second/widget:shadowed"]).toBeUndefined();
+    await setUxPluginEnabled("widget", true);
+    expect(uxPluginRecords().widget).toMatchObject({
+      status: "loaded",
+      pack: "zeta/second",
+    });
+    expect(chips()).toEqual(["widget:chip"]);
+  });
+
+  it("shadows the later listing whatever its state, and a disabled owner keeps its id", async () => {
+    listings = [
+      inPack("acme/first", "widget", false),
+      inPack("zeta/second", "widget", true),
+    ];
+    sources.set("acme/first/widget", chipPlugin("widget"));
+    sources.set("zeta/second/widget", chipPlugin("widget"));
+    await scanRuntimeUxPlugins();
+    expect(uxPluginRecords().widget).toMatchObject({
+      status: "disabled",
+      pack: "acme/first",
+    });
+    expect(uxPluginRecords()["zeta/second/widget:shadowed"]?.status).toBe("disabled");
+    expect(reads()).toHaveLength(0);
+    expect(chips()).toEqual([]);
+    /* a Reload keeps the same owner */
+    await reloadRuntimeUxPlugins();
+    expect(uxPluginRecords().widget).toMatchObject({
+      status: "disabled",
+      pack: "acme/first",
+    });
+    expect(uxPluginRecords()["zeta/second/widget:shadowed"]?.status).toBe("disabled");
+  });
+});
