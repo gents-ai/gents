@@ -1,3 +1,5 @@
+import Proofs.ToolPolicy.PluginApproval
+
 namespace ToolPolicy.WorkspacePermissions
 
 inductive Mode where
@@ -97,6 +99,71 @@ theorem review_cannot_authorize_another_action (input : Input) (grant : Grant)
     reviewedRoute input .allow grant = .deny := by
   simp [reviewedRoute, routed, different]
 
+/-- Workspace observations come from the host preference owner. That owner
+rejects duplicate workspace keys before supplying these facts. A question
+never selects a different workspace's settings as a fallback. -/
+def approvalScope (available : List Scope) (expected : Scope) : Option Scope :=
+  available.find? fun current => current.workspace == expected.workspace
+
+def approvalScopeMatches (available : List Scope) (expected : Scope) : Bool :=
+  approvalScope available expected == some expected
+
+/-- Scoped answers reuse the ordinary question's expiry, cancellation and
+single-answer rules. Native adapters persist remembered paths only under
+the question's exact workspace key and keep their queue format separate
+from unscoped questions that older responders can answer. -/
+def answerApproval (available : List Scope) (expected : Grant)
+    (state : ToolPolicy.PluginApproval.State) (id : String) (now : Nat)
+    (choice : ToolPolicy.PluginApproval.Answer) : ToolPolicy.PluginApproval.State × Bool :=
+  if approvalScopeMatches available expected.scope then
+    ToolPolicy.PluginApproval.answer state id now choice
+  else (state, false)
+
+/-- A delivered answer is checked again when the waiting call resumes.
+Changing workspace permissions after an answer was written invalidates
+that answer; an action cannot consume another action's delivery. Explicit
+remembered paths retain the ordinary approval owner's independent lifetime. -/
+def consumeApproval (available : List Scope) (expected received : Grant)
+    (allowed : Bool) : Option Bool :=
+  let input : Input := {
+    current := expected.scope
+    configuredWorkspace := expected.scope.workspace
+    mode := .ask
+    action := expected.action
+    ceilingAllows := true
+    crossesBoundary := true
+    grant := some received }
+  if approvalScopeMatches available expected.scope && validGrant input then some allowed else none
+
+theorem unavailable_workspace_cannot_receive_an_answer (expected : Grant)
+    (state : ToolPolicy.PluginApproval.State) (id : String) (now : Nat)
+    (choice : ToolPolicy.PluginApproval.Answer) :
+    answerApproval [] expected state id now choice = (state, false) := by
+  simp [answerApproval, approvalScopeMatches, approvalScope]
+
+theorem a_changed_selection_rejects_the_answer (available : List Scope) (expected : Grant)
+    (state : ToolPolicy.PluginApproval.State) (id : String) (now : Nat)
+    (choice : ToolPolicy.PluginApproval.Answer)
+    (changed : approvalScopeMatches available expected.scope = false) :
+    answerApproval available expected state id now choice = (state, false) := by
+  simp [answerApproval, changed]
+
+theorem a_changed_selection_rejects_delivery (available : List Scope)
+    (expected received : Grant) (allowed : Bool)
+    (changed : approvalScopeMatches available expected.scope = false) :
+    consumeApproval available expected received allowed = none := by
+  simp [consumeApproval, changed]
+
+theorem a_delivery_cannot_authorize_another_action (available : List Scope)
+    (expected received : Grant) (allowed : Bool) (different : received.action ≠ expected.action) :
+    consumeApproval available expected received allowed = none := by
+  simp [consumeApproval, validGrant, different]
+
+theorem a_delivery_cannot_authorize_another_workspace (available : List Scope)
+    (expected received : Grant) (allowed : Bool) (different : received.scope ≠ expected.scope) :
+    consumeApproval available expected received allowed = none := by
+  simp [consumeApproval, validGrant, different]
+
 def Mode.wireName : Mode → String
   | .ask => "ask"
   | .autoReview => "autoReview"
@@ -142,7 +209,7 @@ def cases : List Case := Id.run do
             if route input = .review then
               for review in [Review.allow, .ask, .deny, .unavailable] do
                 for reviewedGrant in [same, stale, otherWorkspace, otherAction] do
-                  cases := cases ++ [{ input, review, reviewedGrant }]
+                  cases := cases ++ [{ input := input, review := review, reviewedGrant := reviewedGrant }]
             else
               cases := cases ++ [{ input, review := .allow, reviewedGrant := same }]
   return cases
