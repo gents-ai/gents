@@ -190,3 +190,26 @@ async fn runtime_location_rejects_an_unconfigured_node() {
     assert_eq!(error.code, crate::BridgeErrorCode::InvalidArgument);
     core.shutdown().await.unwrap();
 }
+
+#[test]
+fn workspace_permissions_reads_cannot_supply_an_identity_or_mutate_the_selection() {
+    let mut request = json!({
+        "nodeDid": "did:key:runtime", "agentId": "engineer", "workspacePath": "/project"
+    });
+    let decode = |request: Value| {
+        serde_json::from_value::<protocol::ClientCommand>(json!({
+            "name": "client_workspace_permissions", "args": {"request": request}
+        }))
+    };
+    assert!(decode(request.clone()).unwrap().is_cancellable());
+    for field in ["requesterDid", "mode", "revision", "home", "endpoint"] {
+        request[field] = "untrusted".into();
+        assert!(decode(request.clone()).is_err(), "accepted {field}");
+        request.as_object_mut().unwrap().remove(field);
+    }
+    for field in ["nodeDid", "agentId", "workspacePath"] {
+        let mut incomplete = request.clone();
+        incomplete.as_object_mut().unwrap().remove(field);
+        assert!(decode(incomplete).is_err(), "missing {field}");
+    }
+}
