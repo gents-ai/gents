@@ -52,7 +52,7 @@ describe("compact action history", () => {
       createElement(MessageList, { timelineItems: items, compactTools: true }),
     );
     expect(html.match(/class="tool-activity-row/g)).toHaveLength(2);
-    expect(html).toContain("Explored 2 files");
+    expect(html).toContain("Explored files");
     expect(html).toContain("I found the cause.");
     expect(html).not.toContain("The complete file contents");
     expect(JSON.stringify(items)).toBe(original);
@@ -64,7 +64,7 @@ describe("compact action history", () => {
         createElement(CompactToolGroup, { tools: [tool("read", status)] }),
       );
     expect(html("running")).toContain("Reading README.md");
-    expect(html("success")).toContain("Explored 1 file");
+    expect(html("success")).toContain("Explored files");
     expect(html("error")).toContain("1 failed");
     expect(html("unknown")).toContain("Action status unavailable");
     expect(html("unknown")).not.toContain("Explored");
