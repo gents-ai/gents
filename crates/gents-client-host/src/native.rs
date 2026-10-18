@@ -84,6 +84,22 @@ pub async fn serve(paths: DesktopPaths, editor_store: bool, interactive: bool) -
 /// Windows named pipes cannot close only their write side. Stdio EOF must
 /// release both pipe handles so the installation can retire the attachment.
 pub async fn attach(paths: DesktopPaths, editor_store: bool, interactive: bool) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut terminate = signal(SignalKind::terminate())?;
+        let mut interrupt = signal(SignalKind::interrupt())?;
+        tokio::select! {
+            result = attach_inner(paths, editor_store, interactive) => result,
+            _ = terminate.recv() => Ok(()),
+            _ = interrupt.recv() => Ok(()),
+        }
+    }
+    #[cfg(windows)]
+    attach_inner(paths, editor_store, interactive).await
+}
+
+async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool) -> Result<()> {
     let mut bootstrap = editor_store.then(|| {
         crate::editor_store::frames(tokio::io::join(tokio::io::stdin(), tokio::io::stdout()))
     });

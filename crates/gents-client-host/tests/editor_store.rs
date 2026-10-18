@@ -107,3 +107,55 @@ async fn an_editor_cache_miss_stops_before_identity_or_store_startup() {
         original_record
     );
 }
+
+#[tokio::test]
+async fn terminating_an_editor_attachment_releases_its_unready_installation() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = DesktopPaths::from_root(directory.path().join("cancelled editor"));
+    let mut child = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
+        .args(["--stdio", "--editor-store", "--home"])
+        .arg(paths.root())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut output = FramedRead::new(child.stdout.take().unwrap(), LengthDelimitedCodec::new());
+    let first = tokio::time::timeout(Duration::from_secs(30), output.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let first: Value = serde_json::from_slice(&first).unwrap();
+    assert_eq!(first["kind"], "store");
+    // SAFETY: this is the live attachment created above; it installed its
+    // termination handler before requesting the private store exchange.
+    assert_eq!(
+        unsafe { libc::kill(child.id().unwrap() as libc::pid_t, libc::SIGTERM) },
+        0
+    );
+    assert!(tokio::time::timeout(Duration::from_secs(10), child.wait())
+        .await
+        .unwrap()
+        .unwrap()
+        .success());
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match gents::home::lock_store(paths.root(), paths.node_data_dir()) {
+                Ok(guard) => {
+                    drop(guard);
+                    break;
+                }
+                Err(error) if error.is::<gents::home::StoreLockHeld>() => {
+                    tokio::time::sleep(Duration::from_millis(10)).await
+                }
+                Err(error) => panic!("unexpected client lock error: {error}"),
+            }
+        }
+    })
+    .await
+    .expect("the cancelled startup retained its store lock");
+    assert!(!paths.identity_key_path().exists());
+    assert!(!paths.node_data_dir().join("MANIFEST").exists());
+}
