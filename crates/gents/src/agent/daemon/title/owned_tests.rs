@@ -17,10 +17,11 @@ use gents_protocol::request_admission::{
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
 use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
+use tokio::sync::watch;
 use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
 
-use super::{AgentDaemon, TitleTask};
+use super::{AgentDaemon, AuxiliaryTask};
 use crate::agent::completion_retry::CompletionRetryProfileFields;
 use crate::agent::runtime::{run_router_with_watcher, RuntimeAdmissionGate, StartupBarrier};
 use crate::backend_provider::BackendProviderKind;
@@ -32,12 +33,379 @@ use crate::lean_vocab_test::{
     LeanCanonicalExecutionCase, LeanCanonicalExecutionOperation, LeanCanonicalSource,
     LeanPayloadKind, LeanTerminalSelection,
 };
+use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::prompt::LayeredPromptBuilder;
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::runtime_status::RuntimeStatusHandle;
 use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 use crate::tool_surface::AgentToolSurfaceConfig;
 use crate::watcher::{AgentRequest, DefraWatcher};
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct ReviewUsage {
+    usage: rig::completion::Usage,
+}
+
+impl rig::completion::GetTokenUsage for ReviewUsage {
+    fn token_usage(&self) -> Option<rig::completion::Usage> {
+        Some(self.usage)
+    }
+}
+
+#[derive(Clone)]
+struct ReviewProvider {
+    reply: String,
+    requests: Arc<Mutex<Vec<CompletionRequest>>>,
+}
+
+impl CompletionModel for ReviewProvider {
+    type Response = ();
+    type StreamingResponse = ReviewUsage;
+    type Client = ();
+
+    fn make(_: &(), _: impl Into<String>) -> Self {
+        unreachable!("review tests construct the provider directly")
+    }
+
+    async fn completion(
+        &self,
+        _: CompletionRequest,
+    ) -> Result<CompletionResponse<()>, CompletionError> {
+        Err(CompletionError::ProviderError("stream only".into()))
+    }
+
+    async fn stream(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<StreamingCompletionResponse<ReviewUsage>, CompletionError> {
+        crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
+        self.requests.lock().unwrap().push(request);
+        let events = vec![
+            RawStreamingChoice::Message(self.reply.clone()),
+            RawStreamingChoice::FinalResponse(ReviewUsage {
+                usage: rig::completion::Usage {
+                    input_tokens: 3,
+                    output_tokens: 5,
+                    total_tokens: 8,
+                    cached_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                },
+            }),
+        ];
+        Ok(StreamingCompletionResponse::stream(Box::pin(stream::iter(
+            events.into_iter().map(Ok),
+        ))))
+    }
+}
+
+fn review_input(action_id: &str) -> String {
+    serde_json::to_string(&super::review::ReviewInput {
+        action_id: action_id.into(),
+        policy: "Allow routine project work. Ask about unrelated changes.".into(),
+        action: serde_json::json!({ "command": ["cargo", "test"] }),
+        conversation: vec!["Fix the failing project test.".into()],
+    })
+    .unwrap()
+}
+
+fn review_execution(
+    fixture: &TitleFixture,
+    action_id: &str,
+    budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
+) -> super::review::ReviewExecution {
+    super::review::ReviewExecution {
+        action_id: action_id.into(),
+        parent_request_doc_id: fixture.parent.doc_id.clone(),
+        aggregate_token_budget: budget,
+        cancellation: tokio_util::sync::CancellationToken::new(),
+    }
+}
+
+async fn drain_reviews(tasks: &super::super::auxiliary_tasks::AuxiliaryTasks, success: bool) {
+    tasks.close();
+    let result = tokio::time::timeout(Duration::from_secs(10), tasks.join_next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.is_ok(), success, "{result:?}");
+    assert!(tasks.join_next().await.is_none());
+}
+
+#[tokio::test]
+async fn access_review_uses_the_caller_ledger_without_tools_or_chat_publication() {
+    let action_id = uuid::Uuid::new_v4().to_string();
+    let fixture = TitleFixture::with_auxiliary(
+        RequestPurpose::AccessReview,
+        Some(review_input(&action_id)),
+        Some(10_000),
+    )
+    .await;
+    let reply = serde_json::json!({ "actionId": action_id, "decision": "allow", "reason": "The command checks the project." }).to_string();
+    let provider = ReviewProvider {
+        reply: reply.clone(),
+        requests: Arc::default(),
+    };
+    let observed = provider.requests.clone();
+    let budget = crate::agent::loop_stream::AggregateTokenBudget::new(10_000);
+    let tasks = super::super::auxiliary_tasks::AuxiliaryTasks::default();
+    let (_shutdown, shutdown_rx) = watch::channel(false);
+    let result = fixture
+        .task(provider, true)
+        .run_review(
+            fixture.title.clone(),
+            review_execution(&fixture, &action_id, Some(budget.clone())),
+            shutdown_rx,
+            &tasks,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.as_deref(), Some(reply.as_str()));
+    drain_reviews(&tasks, true).await;
+    assert_eq!(budget.snapshot().unwrap().used, 8);
+    let requests = observed.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].tools.is_empty());
+    assert_eq!(requests[0].chat_history.len(), 2);
+    assert_eq!(
+        requests[0]
+            .chat_history
+            .iter()
+            .filter(|message| matches!(message, rig::message::Message::User { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        requests[0]
+            .chat_history
+            .iter()
+            .filter(|message| matches!(message, rig::message::Message::System { .. }))
+            .count(),
+        1
+    );
+    drop(requests);
+    assert_eq!(fixture.session_message_count().await, 0);
+    assert_eq!(
+        fixture.terminal_row().await,
+        (
+            RequestLifecycleState::Completed,
+            Some(gents_protocol::output::TerminalOutput::NoMessage)
+        )
+    );
+    let (output, published) = fixture.output_rows().await;
+    assert_eq!(published, 0);
+    assert!(!output.is_empty());
+    for row in output {
+        assert!(
+            matches!(row.segment.source, OutputSource::ProviderTurn { scope, .. } if scope.kind == crate::rendered_request::CaptureScopeKind::AccessReview)
+        );
+    }
+    let session = crate::graphql::escape_graphql_string(&fixture.parent.session_id);
+    let response = ConfigAccess::local(fixture.node.clone()).execute(&format!("{{ AgentSession(filter: {{ session_id: {{ _eq: \"{session}\" }} }}) {{ title }} AgentToolCall {{ _docID }} }}")).await.unwrap();
+    assert!(response["data"]["AgentSession"][0]["title"].is_null());
+    assert!(response["data"]["AgentToolCall"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn access_review_cannot_replace_a_budgeted_callers_ledger_or_invocation() {
+    for wrong_invocation in [false, true] {
+        let action_id = uuid::Uuid::new_v4().to_string();
+        let fixture = TitleFixture::with_auxiliary(
+            RequestPurpose::AccessReview,
+            Some(review_input(&action_id)),
+            Some(10_000),
+        )
+        .await;
+        let provider = TitleProvider::new(
+            vec![
+                RawStreamingChoice::Message("not used".into()),
+                RawStreamingChoice::FinalResponse(()),
+            ],
+            false,
+        );
+        let calls = provider.calls.clone();
+        let tasks = super::super::auxiliary_tasks::AuxiliaryTasks::default();
+        let (_shutdown, shutdown_rx) = watch::channel(false);
+        let execution = review_execution(
+            &fixture,
+            if wrong_invocation {
+                "another-invocation"
+            } else {
+                &action_id
+            },
+            wrong_invocation.then(|| crate::agent::loop_stream::AggregateTokenBudget::new(10_000)),
+        );
+        let error = fixture
+            .task(provider, true)
+            .run_review(fixture.title.clone(), execution, shutdown_rx, &tasks)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains(if wrong_invocation {
+            "another invocation"
+        } else {
+            "caller's token ledger"
+        }));
+        drain_reviews(&tasks, false).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            fixture.terminal_row().await,
+            (
+                RequestLifecycleState::Failed,
+                Some(gents_protocol::output::TerminalOutput::NoMessage)
+            )
+        );
+    }
+}
+
+#[tokio::test]
+async fn dropping_an_access_review_caller_drains_received_output_before_join() {
+    let action_id = uuid::Uuid::new_v4().to_string();
+    let mut fixture = TitleFixture::with_auxiliary(
+        RequestPurpose::AccessReview,
+        Some(review_input(&action_id)),
+        None,
+    )
+    .await;
+    Arc::get_mut(&mut fixture.agent_config)
+        .unwrap()
+        .stream_batch_ms = 5_000;
+    let (provider, before_second, third_poll) = buffered_reasoning_title_provider();
+    let calls = provider.calls.clone();
+    let task = fixture.task(provider, true);
+    let request = fixture.title.clone();
+    let execution = review_execution(&fixture, &action_id, None);
+    let caller_token = execution.cancellation.clone();
+    let tasks = super::super::auxiliary_tasks::AuxiliaryTasks::default();
+    let (_shutdown, shutdown_rx) = watch::channel(false);
+    let caller = tokio::spawn({
+        let tasks = tasks.clone();
+        async move {
+            task.run_review(request, execution, shutdown_rx, &tasks)
+                .await
+        }
+    });
+    wait_for_first_title_reasoning(&fixture).await;
+    before_second.notify_one();
+    tokio::time::timeout(Duration::from_secs(10), third_poll.notified())
+        .await
+        .unwrap();
+    assert_eq!(open_title_reasoning(&fixture).await, ["first"]);
+    caller.abort();
+    assert!(caller.await.unwrap_err().is_cancelled());
+    drain_reviews(&tasks, true).await;
+    assert!(!caller_token.is_cancelled());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        fixture.terminal_row().await,
+        (
+            RequestLifecycleState::Interrupted,
+            Some(gents_protocol::output::TerminalOutput::NoMessage)
+        )
+    );
+    assert_eq!(
+        open_title_reasoning(&fixture).await.concat(),
+        "first second"
+    );
+    assert_eq!(fixture.session_message_count().await, 0);
+}
+
+#[tokio::test]
+async fn access_review_never_dispatches_a_requested_tool() {
+    let action_id = uuid::Uuid::new_v4().to_string();
+    let fixture = TitleFixture::with_auxiliary(
+        RequestPurpose::AccessReview,
+        Some(review_input(&action_id)),
+        None,
+    )
+    .await;
+    let provider = TitleProvider::new(
+        vec![
+            RawStreamingChoice::ToolCall(rig::streaming::RawStreamingToolCall::new(
+                "call-1".into(),
+                "write_file".into(),
+                serde_json::json!({ "path": "unexpected", "content": "changed" }),
+            )),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+        false,
+    );
+    let calls = provider.calls.clone();
+    let tasks = super::super::auxiliary_tasks::AuxiliaryTasks::default();
+    let (_shutdown, shutdown_rx) = watch::channel(false);
+    assert!(fixture
+        .task(provider, true)
+        .run_review(
+            fixture.title.clone(),
+            review_execution(&fixture, &action_id, None),
+            shutdown_rx,
+            &tasks
+        )
+        .await
+        .is_err());
+    drain_reviews(&tasks, false).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.session_message_count().await, 0);
+    let response = ConfigAccess::local(fixture.node.clone())
+        .execute("{ AgentToolCall { _docID } }")
+        .await
+        .unwrap();
+    assert!(response["data"]["AgentToolCall"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn access_review_preserves_a_fenced_output_failure_for_the_caller_and_daemon() {
+    let action_id = uuid::Uuid::new_v4().to_string();
+    let fixture = TitleFixture::with_auxiliary(
+        RequestPurpose::AccessReview,
+        Some(review_input(&action_id)),
+        None,
+    )
+    .await;
+    let (fields, _) = modeled_title_fields("title_reasoning_audit_complete_no_message");
+    let mut provider = TitleProvider::new(provider_events(&fields, true), false);
+    provider.fence_generation = Some((
+        fixture.node.clone(),
+        fixture.title.doc_id.clone(),
+        fixture.title.node_did.clone(),
+    ));
+    let tasks = super::super::auxiliary_tasks::AuxiliaryTasks::default();
+    let (_shutdown, shutdown_rx) = watch::channel(false);
+    let error = fixture
+        .task(provider, true)
+        .run_review(
+            fixture.title.clone(),
+            review_execution(&fixture, &action_id, None),
+            shutdown_rx,
+            &tasks,
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        super::super::ShutdownDrainFailure::occurs_in(&error),
+        "{error:#}"
+    );
+    tasks.close();
+    let joined = tokio::time::timeout(Duration::from_secs(10), tasks.join_next())
+        .await
+        .unwrap()
+        .unwrap();
+    let error = super::super::auxiliary_task_join_result(joined).unwrap_err();
+    assert!(
+        super::super::ShutdownDrainFailure::occurs_in(&error),
+        "{error:#}"
+    );
+    assert_eq!(
+        fixture.terminal_row().await,
+        (RequestLifecycleState::Processing, None)
+    );
+    assert_eq!(fixture.session_message_count().await, 0);
+}
 
 #[derive(Clone)]
 struct TitleProvider {
@@ -164,6 +532,14 @@ struct TitleFixture {
 
 impl TitleFixture {
     async fn new() -> Self {
+        Self::with_auxiliary(RequestPurpose::TitleAudit, None, None).await
+    }
+
+    async fn with_auxiliary(
+        purpose: RequestPurpose,
+        content: Option<String>,
+        parent_limit: Option<u64>,
+    ) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let node = Arc::new(
             EmbeddedNode::builder()
@@ -238,7 +614,7 @@ impl TitleFixture {
             .await
             .unwrap();
         let parent_doc_id = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
-        let parent =
+        let mut parent =
             crate::request_admission::load_request_for_admission_test(&node, &parent_doc_id)
                 .await
                 .unwrap();
@@ -264,10 +640,38 @@ impl TitleFixture {
             )
             .await
             .unwrap();
-        let title = crate::lifecycle::materialize::write_pending_title_request(
+        if purpose == RequestPurpose::AccessReview {
+            let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+                node.clone(),
+                &agent_config.agent_id,
+                &parent.node_did,
+                parent.clone(),
+                agent_config.deadline_duration.as_secs(),
+                crate::lifecycle::ExecutionOrigin::Interactive,
+                agent_config.backend_id.clone().unwrap_or_default(),
+            );
+            lifecycle.set_configured_max_total_tokens(parent_limit);
+            assert_eq!(
+                lifecycle.claim_with_identity().await.unwrap(),
+                ClaimOutcome::Claimed
+            );
+            let writer = crate::streaming::DefraStreamWriter::new(
+                node.clone(),
+                &parent.node_did,
+                Duration::ZERO,
+            );
+            lifecycle.begin_owned_execution(&writer).await.unwrap();
+            parent = lifecycle.request().clone();
+        }
+        let title = crate::lifecycle::materialize::write_pending_auxiliary_request(
             &node,
             &parent,
-            parent.content.clone(),
+            purpose,
+            content.unwrap_or_else(|| parent.content.clone()),
+            (purpose == RequestPurpose::AccessReview).then(|| {
+                (chrono::Utc::now() + chrono::Duration::seconds(60))
+                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            }),
         )
         .await
         .unwrap();
@@ -285,8 +689,8 @@ impl TitleFixture {
         &self,
         model: M,
         capture: bool,
-    ) -> TitleTask<M> {
-        TitleTask {
+    ) -> AuxiliaryTask<M> {
+        AuxiliaryTask {
             node: self.node.clone(),
             agent_config: self.agent_config.clone(),
             provider_family: None,
@@ -1274,7 +1678,7 @@ async fn open_title_reasoning(fixture: &TitleFixture) -> Vec<String> {
         .iter()
         .find_map(|row| match &row.segment.source {
             OutputSource::ProviderTurn { scope, .. }
-                if scope.kind == crate::rendered_request::CaptureScopeKind::Title =>
+                if scope.kind.request_purpose() == fixture.title.purpose =>
             {
                 Some(row.segment.source.clone())
             }
