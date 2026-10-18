@@ -149,25 +149,39 @@ export function PluginAccessPrompt() {
         <DialogHeader>
           <DialogTitle>{question?.prompt}</DialogTitle>
           <DialogDescription>
-            Always allow this folder remembers{" "}
-            <span title={question?.folder}>
-              {question?.folder ? shortPath(question.folder, { home }) : null}
-            </span>
-            .
+            {question?.subject.kind === "filesystem" ? (
+              <>
+                Always allow this folder remembers{" "}
+                <span title={question.subject.folder}>
+                  {shortPath(question.subject.folder, { home })}
+                </span>
+                .
+              </>
+            ) : question?.subject.kind === "command" ? (
+              <>
+                Allow once runs only this command in{" "}
+                <span title={question.subject.cwd}>
+                  {shortPath(question.subject.cwd, { home })}
+                </span>
+                .
+              </>
+            ) : null}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
           <Button variant="outline" onClick={() => void answer("deny")}>
             Deny
           </Button>
-          {question && !question.isDir && (
+          {question?.answers.includes("file") && (
             <Button variant="outline" onClick={() => void answer("file")}>
               Always allow this file
             </Button>
           )}
-          <Button variant="outline" onClick={() => void answer("always")}>
-            Always allow this folder
-          </Button>
+          {question?.answers.includes("always") && (
+            <Button variant="outline" onClick={() => void answer("always")}>
+              Always allow this folder
+            </Button>
+          )}
           <Button onClick={() => void answer("once")}>Allow once</Button>
         </DialogFooter>
       </DialogContent>
