@@ -10,6 +10,10 @@ import {
 import { ToolGroup } from "./ToolGroup.js";
 import { CompactToolGroup } from "./CompactToolGroup.js";
 
+export function timelineKey(item: RenderedTimelineItem) {
+  return `${item.kind}-${item.itemKey}`;
+}
+
 export const TimelineItem = memo(function TimelineItem({
   item,
   animateAssistantReveal,

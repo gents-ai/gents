@@ -4,8 +4,15 @@ import type {
   ToolPresentationView,
 } from "@source-inc/gents-desktop-client";
 import { CopyButton } from "@source-inc/gents-desktop-ui";
-import { memo, useContext } from "react";
+import { memo, useContext, useState } from "react";
 import { TranscriptNavigationContext } from "./TranscriptNavigation.js";
+import {
+  actionCommand,
+  actionEntries,
+  actionKind,
+  actionTitle,
+  type ActionEntry,
+} from "./actionPresentation.js";
 
 import { CancelCauseBadge, CancelCauseDetails } from "../cancelUx/index.js";
 import { CommandDenialToolItem } from "../commandDenial/index.js";
@@ -96,9 +103,16 @@ function ToolPayloadAvailability({ tool }: { tool: RenderedToolCallView }) {
     case "ready":
       return null;
     case "loading":
+      if (tool.partialOutputTail) return null;
       return (
-        <p role="status" data-testid={`tool-output-loading-${tool.itemKey}`}>
-          Loading tool output…
+        <p
+          className="tool-output-notice"
+          role="status"
+          data-testid={`tool-output-loading-${tool.itemKey}`}
+        >
+          {tool.statusKind.toLowerCase() === "running"
+            ? "Waiting for output"
+            : "Loading output"}
         </p>
       );
     case "denied":
@@ -282,6 +296,7 @@ function ExecutionDetails({ tool }: { tool: RenderedToolCallView }) {
       ? tool.presentation
       : null;
   const fields = [
+    ["Tool", tool.toolName],
     ["Status", statusLabel(tool)],
     [
       "Duration",
@@ -312,15 +327,22 @@ function ExecutionDetails({ tool }: { tool: RenderedToolCallView }) {
 function ToolBody({
   tool,
   compactDetails = false,
+  commandHint,
 }: {
   tool: RenderedToolCallView;
   compactDetails?: boolean;
+  commandHint?: string | null;
 }) {
   const navigation = useContext(TranscriptNavigationContext);
   const view = tool.presentation;
   const payloadReady = tool.reconstruction.state === "ready";
   return (
     <div className="tool-item-body">
+      {compactDetails &&
+      commandHint &&
+      (!payloadReady || view.kind !== "command") ? (
+        <Payload label="Command" value={commandHint} />
+      ) : null}
       {tool.cancelCause ? (
         <CancelCauseDetails cause={tool.cancelCause} />
       ) : null}
@@ -471,11 +493,16 @@ function ToolBody({
 
 function UnifiedToolItem({
   tool,
+  launcher,
   compactDetails = false,
+  initiallyExpanded = false,
 }: {
   tool: RenderedToolCallView;
+  launcher?: RenderedToolCallView;
   compactDetails?: boolean;
+  initiallyExpanded?: boolean;
 }) {
+  const [expanded, setExpanded] = useState(initiallyExpanded);
   const live =
     tool.statusKind.toLowerCase() === "running" &&
     Boolean(tool.partialOutputTail);
@@ -483,18 +510,41 @@ function UnifiedToolItem({
     <details
       className={`tool-item tool-item-${tool.presentation.kind}`}
       data-testid={`tool-${tool.itemKey}`}
-      open={live}
+      open={compactDetails ? expanded : live}
+      onToggle={
+        compactDetails
+          ? (event) => setExpanded(event.currentTarget.open)
+          : undefined
+      }
     >
       <summary className="tool-item-summary">
         <span className={statusClass(tool.statusKind)} aria-hidden="true" />
         <span className="tool-item-summary-content">
-          <ToolSummary tool={tool} />
+          {compactDetails ? (
+            <ActionSummary tool={tool} launcher={launcher} />
+          ) : (
+            <ToolSummary tool={tool} />
+          )}
         </span>
         <span aria-hidden="true" className="tool-item-action">
-          ▸
+          <svg viewBox="0 0 16 16">
+            <path d="m6 4 4 4-4 4" />
+          </svg>
         </span>
       </summary>
-      <ToolBody tool={tool} compactDetails={compactDetails} />
+      {!compactDetails || expanded ? (
+        <ToolBody
+          tool={tool}
+          compactDetails={compactDetails}
+          commandHint={actionCommand({ tool, launcher })}
+        />
+      ) : null}
+      {launcher && expanded ? (
+        <details className="tool-launch-details">
+          <summary>Launch details</summary>
+          <ToolBody tool={launcher} compactDetails />
+        </details>
+      ) : null}
     </details>
   );
 }
@@ -502,13 +552,18 @@ function UnifiedToolItem({
 export function ToolGroup({
   tools,
   compactDetails = false,
+  expandedItemKey,
 }: {
   tools: RenderedToolCallView[];
   compactDetails?: boolean;
+  expandedItemKey?: string;
 }) {
   return (
     <section className="tool-group">
-      {tools.map((tool) => {
+      {(compactDetails
+        ? actionEntries(tools)
+        : tools.map((tool) => ({ tool, launcher: undefined }))
+      ).map(({ tool, launcher }) => {
         const denial =
           tool.statusKind.toLowerCase() === "error" ? tool.denial : null;
         return denial ? (
@@ -521,11 +576,42 @@ export function ToolGroup({
           <UnifiedToolItem
             key={tool.itemKey}
             tool={tool}
+            launcher={launcher}
             compactDetails={compactDetails}
+            initiallyExpanded={tool.itemKey === expandedItemKey}
           />
         );
       })}
     </section>
+  );
+}
+
+function ActionSummary(entry: ActionEntry) {
+  const { tool } = entry;
+  const title = actionTitle(entry);
+  const kind = actionKind(entry);
+  const command = actionCommand(entry);
+  const status = tool.statusKind.toLowerCase();
+  return (
+    <>
+      {kind ? (
+        <span className="tool-kind">{kind === "command" ? "$" : kind}</span>
+      ) : null}
+      <span className={`tool-primary${command ? " mono" : ""}`} title={title}>
+        {title}
+      </span>
+      {status !== "success" ? (
+        <span className={`tool-action-status is-${status}`}>
+          {statusLabel(tool)}
+        </span>
+      ) : null}
+      {tool.cancelCause ? (
+        <CancelCauseBadge
+          cause={tool.cancelCause}
+          className="tool-item-cause-badge"
+        />
+      ) : null}
+    </>
   );
 }
 

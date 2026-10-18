@@ -209,9 +209,26 @@ export function LiveAssistantItem({ item }: { item: LiveAssistant }) {
 
 export function AssistantCancelCauseTurn({
   cause,
+  compact = false,
 }: {
   cause: DerivedCancelCauseView;
+  compact?: boolean;
 }) {
+  if (compact)
+    return (
+      <details className="turn-stop">
+        <summary>
+          {cause.cause === "userCancelled"
+            ? "Stopped by you"
+            : cause.cause === "deadline"
+              ? "Time limit reached"
+              : cause.cause === "interrupted"
+                ? "Interrupted"
+                : "Stopped"}
+        </summary>
+        <CancelCauseDetails cause={cause} />
+      </details>
+    );
   return (
     <div className="turn-block">
       <article className="message-card">

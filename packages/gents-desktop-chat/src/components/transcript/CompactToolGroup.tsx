@@ -6,6 +6,12 @@ import { useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { ToolGroup } from "./ToolGroup.js";
+import {
+  actionEntries,
+  actionKind,
+  runningAction,
+  type ActionEntry,
+} from "./actionPresentation.js";
 
 export function coalesceToolGroups(items: RenderedTimelineItem[]) {
   const result: RenderedTimelineItem[] = [];
@@ -23,41 +29,16 @@ export function coalesceToolGroups(items: RenderedTimelineItem[]) {
   return result;
 }
 
-function runningLabel(tool: RenderedToolCallView) {
-  if (tool.reconstruction.state !== "ready") return `Running ${tool.toolName}`;
-  const view = tool.presentation;
-  switch (view.kind) {
-    case "command":
-      return `Running ${view.command}`;
-    case "fileRead": {
-      const verb =
-        view.operation === "grep"
-          ? "Searching"
-          : view.operation === "list_files" || view.operation === "glob"
-            ? "Exploring"
-            : "Reading";
-      return `${verb} ${view.target ?? "files"}`;
-    }
-    case "fileEdit":
-      return `Editing ${view.path ?? "a file"}`;
-    case "agent":
-      return view.description ?? `Working with ${view.name ?? "an agent"}`;
-    case "process":
-      return view.description ?? `Running ${view.target ?? "a process"}`;
-    case "mcp":
-      return `Running ${view.selectedToolName ?? tool.toolName}`;
-    case "generic":
-      return view.summary ?? `Running ${tool.toolName}`;
-  }
-}
-
-function completedLabel(tools: RenderedToolCallView[]) {
+function completedLabel(entries: ActionEntry[]) {
   const counts = new Map<string, number>();
-  for (const tool of tools) {
+  for (const entry of entries) {
+    const { tool } = entry;
     const presentation =
-      tool.reconstruction.state === "ready"
-        ? tool.presentation.kind
-        : "generic";
+      actionKind(entry) === "command"
+        ? "command"
+        : tool.reconstruction.state === "ready"
+          ? tool.presentation.kind
+          : "generic";
     const kind = ["fileRead", "fileEdit", "command"].includes(presentation)
       ? presentation
       : "generic";
@@ -82,9 +63,11 @@ function completedLabel(tools: RenderedToolCallView[]) {
 
 function ActivityDetails({
   tools,
+  expandedItemKey,
   onClose,
 }: {
   tools: RenderedToolCallView[];
+  expandedItemKey?: string;
   onClose: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -92,6 +75,9 @@ function ActivityDetails({
   useLayoutEffect(() => {
     const element = dialog.current!;
     element.showModal();
+    element
+      .querySelector(".tool-item[open]")
+      ?.scrollIntoView({ block: "nearest" });
     return () => element.close();
   }, []);
   return createPortal(
@@ -115,7 +101,7 @@ function ActivityDetails({
     >
       <header className="tool-activity-header">
         <h2 id={title}>
-          Actions <span>{tools.length}</span>
+          Actions <span>{actionEntries(tools).length}</span>
         </h2>
         <button
           type="button"
@@ -128,7 +114,11 @@ function ActivityDetails({
         </button>
       </header>
       <div className="tool-activity-body">
-        <ToolGroup tools={tools} compactDetails />
+        <ToolGroup
+          tools={tools}
+          compactDetails
+          expandedItemKey={expandedItemKey}
+        />
       </div>
     </dialog>,
     document.body,
@@ -136,65 +126,98 @@ function ActivityDetails({
 }
 
 export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
-  const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState<ActionEntry | null>(null);
+  const buttons = useRef(new Map<string, HTMLButtonElement>());
+  const focusAfterClose = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (selected || !focusAfterClose.current) return;
+    buttons.current.get(focusAfterClose.current)?.focus();
+    focusAfterClose.current = null;
+  }, [selected]);
   if (tools.length === 0) return null;
-  const running = [...tools]
-    .reverse()
-    .find((tool) => tool.statusKind.toLowerCase() === "running");
-  const failed = tools.filter(
-    (tool) => tool.statusKind.toLowerCase() === "error",
-  ).length;
-  const unknown = tools.some(
-    (tool) =>
-      !["running", "success", "error"].includes(tool.statusKind.toLowerCase()),
-  );
-  const label = running
-    ? runningLabel(running)
-    : unknown
-      ? "Action status unavailable"
-      : failed
-        ? "Actions finished with errors"
-        : completedLabel(tools);
+  const sections: ActionEntry[][] = [];
+  for (const entry of actionEntries(tools)) {
+    const previous = sections.at(-1);
+    const status = entry.tool.statusKind.toLowerCase();
+    if (
+      status !== "running" &&
+      previous?.[0]?.tool.statusKind.toLowerCase() === status
+    )
+      previous.push(entry);
+    else sections.push([entry]);
+  }
   return (
     <>
-      <button
-        type="button"
-        className={`tool-activity-row${running ? " is-running" : ""}${failed ? " has-errors" : ""}`}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-label={`View actions: ${label}`}
-        onClick={() => setOpen(true)}
-      >
-        <svg
-          className="tool-activity-icon"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-        >
-          {running ? (
-            <circle cx="12" cy="12" r="8" />
-          ) : (
-            <path d="M4 4h6a3 3 0 0 1 3 3v14a4 4 0 0 0-4-2H4V4Zm16 0h-4a3 3 0 0 0-3 3m0 14a4 4 0 0 1 4-2h3V4Z" />
-          )}
-        </svg>
-        <span className="tool-activity-label" title={label}>
-          {label}
-        </span>
-        {running && tools.length > 1 ? (
-          <span className="tool-activity-count">{tools.length}</span>
-        ) : null}
-        {failed ? (
-          <span className="tool-activity-errors">{failed} failed</span>
-        ) : null}
-        <svg
-          className="tool-activity-chevron"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-        >
-          <path d="m9 5 7 7-7 7" />
-        </svg>
-      </button>
-      {open ? (
-        <ActivityDetails tools={tools} onClose={() => setOpen(false)} />
+      {sections.map((entries) => {
+        const entry = entries[0]!;
+        const status = entry.tool.statusKind.toLowerCase();
+        const running = status === "running";
+        const failed = status === "error";
+        const label = running
+          ? runningAction(entry)
+          : failed
+            ? `${entries.length} ${entries.length === 1 ? "action failed" : "actions failed"}`
+            : status === "success"
+              ? completedLabel(entries)
+              : "Action status unavailable";
+        return (
+          <button
+            key={entry.tool.itemKey}
+            ref={(element) => {
+              for (const item of entries) {
+                if (element) buttons.current.set(item.tool.itemKey, element);
+                else buttons.current.delete(item.tool.itemKey);
+              }
+            }}
+            type="button"
+            className={`tool-activity-row${running ? " is-running" : ""}${failed ? " has-errors" : ""}`}
+            aria-haspopup="dialog"
+            aria-expanded={
+              selected !== null &&
+              entries.some(
+                (item) => item.tool.itemKey === selected.tool.itemKey,
+              )
+            }
+            aria-label={`View actions: ${label}`}
+            onClick={() => setSelected(entry)}
+          >
+            <svg
+              className="tool-activity-icon"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              {running ? (
+                <circle cx="12" cy="12" r="8" />
+              ) : (
+                <path d="M4 4h6a3 3 0 0 1 3 3v14a4 4 0 0 0-4-2H4V4Zm16 0h-4a3 3 0 0 0-3 3m0 14a4 4 0 0 1 4-2h3V4Z" />
+              )}
+            </svg>
+            <span className="tool-activity-label" title={label}>
+              {label}
+            </span>
+            <svg
+              className="tool-activity-chevron"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path d="m9 5 7 7-7 7" />
+            </svg>
+          </button>
+        );
+      })}
+      {selected ? (
+        <ActivityDetails
+          tools={tools}
+          expandedItemKey={
+            selected.tool.statusKind.toLowerCase() === "success"
+              ? undefined
+              : selected.tool.itemKey
+          }
+          onClose={() => {
+            focusAfterClose.current = selected.tool.itemKey;
+            setSelected(null);
+          }}
+        />
       ) : null}
     </>
   );
