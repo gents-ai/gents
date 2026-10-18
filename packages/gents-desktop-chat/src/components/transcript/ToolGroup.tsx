@@ -11,6 +11,7 @@ import {
   actionEntries,
   actionKind,
   actionItemKeys,
+  actionStatus,
   actionTitle,
   type ActionEntry,
 } from "./actionPresentation.js";
@@ -30,17 +31,21 @@ function statusClass(statusKind: string) {
       return "tool-item-dot tool-item-dot-success";
     case "error":
       return "tool-item-dot tool-item-dot-error";
+    case "cancelled":
+      return "tool-item-dot tool-item-dot-cancelled";
     default:
       return "tool-item-dot tool-item-dot-running";
   }
 }
 
 function statusLabel(tool: RenderedToolCallView) {
-  switch (tool.statusKind.toLowerCase()) {
+  switch (actionStatus(tool)) {
     case "success":
       return "completed";
     case "error":
       return "failed";
+    case "cancelled":
+      return "stopped";
     case "unknown":
       return "unknown";
     default:
@@ -138,7 +143,7 @@ function commonBadges(tool: RenderedToolCallView) {
         <span className="tool-item-mode">{tool.awaitMode}</span>
       ) : null}
       <span
-        className={`tool-item-status tool-item-status-${tool.statusKind.toLowerCase()}`}
+        className={`tool-item-status tool-item-status-${actionStatus(tool)}`}
       >
         {statusLabel(tool)}
       </span>
@@ -184,7 +189,7 @@ function ToolSummary({ tool }: { tool: RenderedToolCallView }) {
   }
   const view = tool.presentation;
   if (view.kind === "command") {
-    const exit = commandExit(view);
+    const exit = actionStatus(tool) === "cancelled" ? null : commandExit(view);
     return (
       <>
         <span aria-hidden="true" className="tool-command-prompt mono">
@@ -519,7 +524,7 @@ function UnifiedToolItem({
       }
     >
       <summary className="tool-item-summary">
-        <span className={statusClass(tool.statusKind)} aria-hidden="true" />
+        <span className={statusClass(actionStatus(tool))} aria-hidden="true" />
         <span className="tool-item-summary-content">
           {compactDetails ? (
             <ActionSummary tool={tool} launcher={launcher} />
@@ -593,7 +598,7 @@ function ActionSummary(entry: ActionEntry) {
   const title = actionTitle(entry);
   const kind = actionKind(entry);
   const command = actionCommand(entry);
-  const status = tool.statusKind.toLowerCase();
+  const status = actionStatus(tool);
   return (
     <>
       {kind ? (

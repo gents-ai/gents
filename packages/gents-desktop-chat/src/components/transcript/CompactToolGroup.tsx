@@ -10,6 +10,7 @@ import {
   actionEntries,
   actionKind,
   actionItemKeys,
+  actionStatus,
   runningAction,
   type ActionEntry,
 } from "./actionPresentation.js";
@@ -142,10 +143,11 @@ export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
   const sections: ActionEntry[][] = [];
   for (const entry of actionEntries(tools)) {
     const previous = sections.at(-1);
-    const status = entry.tool.statusKind.toLowerCase();
+    const status = actionStatus(entry.tool);
     if (
       status !== "running" &&
-      previous?.[0]?.tool.statusKind.toLowerCase() === status
+      previous?.[0] &&
+      actionStatus(previous[0].tool) === status
     )
       previous.push(entry);
     else sections.push([entry]);
@@ -154,7 +156,7 @@ export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
     <>
       {sections.map((entries) => {
         const entry = entries[0]!;
-        const status = entry.tool.statusKind.toLowerCase();
+        const status = actionStatus(entry.tool);
         const running = status === "running";
         const failed = status === "error";
         const label = running
@@ -163,7 +165,9 @@ export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
             ? `${entries.length} ${entries.length === 1 ? "action failed" : "actions failed"}`
             : status === "success"
               ? completedLabel(entries)
-              : "Action status unavailable";
+              : status === "cancelled"
+                ? `${entries.length} ${entries.length === 1 ? "action stopped" : "actions stopped"}`
+                : "Action status unavailable";
         return (
           <button
             key={entry.tool.itemKey}
