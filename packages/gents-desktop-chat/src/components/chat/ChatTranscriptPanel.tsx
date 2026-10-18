@@ -288,13 +288,14 @@ export function ChatTranscriptPanel({
   useLayoutEffect(() => {
     const previousScrollHeight = prependScrollHeightRef.current;
     const panel = transcriptPanel;
-    if (previousScrollHeight == null || !panel) return;
+    if (previousScrollHeight == null || !panel || pageFlight.current) return;
 
     prependScrollHeightRef.current = null;
     if (!windowed) panel.scrollTop += panel.scrollHeight - previousScrollHeight;
     lastScrollTop.current = panel.scrollTop;
   }, [
     firstVisibleIndex,
+    loadingOlder,
     timelineItems.length,
     session?.timelinePage?.oldestItemKey,
     transcriptPanel,
