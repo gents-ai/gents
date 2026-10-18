@@ -92,7 +92,9 @@ describe("WorkerStep wait-status projection consumption", () => {
       />,
       { wrapper: withApp(fixtureApp([view])) },
     );
-    await waitFor(() => expect(screen.getAllByText(/running · 42s/).length).toBeGreaterThan(0));
+    await waitFor(() =>
+      expect(screen.getAllByText(/running · 42s/).length).toBeGreaterThan(0),
+    );
   });
 
   it("renders stable terminal elapsed anchored to completed_at", async () => {
@@ -142,9 +144,7 @@ describe("WorkerStep wait-status projection consumption", () => {
       expect(screen.getAllByText(/pending · 5s/).length).toBeGreaterThan(0),
     );
     // Pending must not render the hardcoded "running" label.
-    expect(
-      screen.queryByText(/^running · 5s$/),
-    ).toBeNull();
+    expect(screen.queryByText(/^running · 5s$/)).toBeNull();
   });
 
   it("renders unknown lifecycle without relabeling it running", async () => {
@@ -167,6 +167,8 @@ describe("WorkerStep wait-status projection consumption", () => {
       />,
       { wrapper: withApp(fixtureApp([view])) },
     );
-    await waitFor(() => expect(screen.getAllByText(/state unknown/).length).toBeGreaterThan(0));
+    await waitFor(() =>
+      expect(screen.getAllByText(/state unknown/).length).toBeGreaterThan(0),
+    );
   });
 });

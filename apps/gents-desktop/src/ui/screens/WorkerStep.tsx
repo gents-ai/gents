@@ -231,9 +231,7 @@ export function WorkerStep({
     const pending = ws?.lifecycle === "pending";
     const terminal = ws?.lifecycle ?? null;
     const stableElapsed =
-      ws?.terminalElapsedSeconds != null
-        ? `${ws.terminalElapsedSeconds}s`
-        : null;
+      ws?.terminalElapsedSeconds != null ? `${ws.terminalElapsedSeconds}s` : null;
     const runningAge =
       ws?.runningElapsedSeconds != null ? `${ws.runningElapsedSeconds}s` : null;
     const overdue = bg?.deadlineExpired
