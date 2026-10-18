@@ -224,6 +224,20 @@ export function ChatTranscriptPanel({
   }, [sendIdentity, transcriptPanel]);
 
   useLayoutEffect(() => {
+    if (
+      !transcriptPanel ||
+      !autoFollowTranscript ||
+      typeof ResizeObserver !== "function"
+    )
+      return;
+    const observer = new ResizeObserver(() =>
+      scrollPanelToTip(transcriptPanel),
+    );
+    observer.observe(transcriptPanel);
+    return () => observer.disconnect();
+  }, [transcriptPanel, autoFollowTranscript]);
+
+  useLayoutEffect(() => {
     if (!autoFollowTranscript) {
       return;
     }
