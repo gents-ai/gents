@@ -932,4 +932,75 @@ describe("ChatTranscriptPanel states", () => {
     expect(screen.getByText("remote-message-40")).toBe(retainedMessage);
     expect(screen.queryByTestId("transcript-older-status")).not.toBeInTheDocument();
   });
+  it("loads successive older pages when compact actions keep the same row count", async () => {
+    const onLoad = vi.fn();
+    const group = (index: number): RenderedTimelineItem => ({
+      kind: "toolGroup",
+      itemKey: `tools-${index}`,
+      messageSequence: index,
+      tools: [
+        {
+          itemKey: `action-${index}`,
+          toolName: "bash",
+          statusKind: "success",
+          reconstruction: { state: "ready" },
+          presentation: {
+            kind: "generic",
+            summary: "Ran a command",
+            input: null,
+            output: null,
+          },
+        },
+      ],
+    });
+    function CompactHistory() {
+      const [session, setSession] = useState(() =>
+        makeSession({
+          timelineItems: [group(3)],
+          timelinePage: {
+            totalItems: 4,
+            pageItems: 1,
+            hasOlder: true,
+            hasNewer: false,
+            oldestItemKey: "tools-3",
+            newestItemKey: "tools-3",
+          },
+        }),
+      );
+      return (
+        <ChatTranscriptPanel
+          selectedSessionId="s1"
+          session={session}
+          compactTools
+          onLoadOlder={async () => {
+            onLoad();
+            setSession((current) => {
+              const index = 3 - onLoad.mock.calls.length;
+              return {
+                ...current,
+                timelineItems: [group(index), ...current.timelineItems],
+                timelinePage: {
+                  ...current.timelinePage!,
+                  oldestItemKey: `tools-${index}`,
+                  hasOlder: index > 0,
+                },
+              };
+            });
+            return true;
+          }}
+        />
+      );
+    }
+    render(<CompactHistory />);
+    const older = screen.getByRole("button", { name: "Load older messages" });
+    fireEvent.click(older);
+    await waitFor(() => expect(older).not.toBeDisabled());
+    fireEvent.click(older);
+    await waitFor(() => expect(onLoad).toHaveBeenCalledTimes(2));
+    fireEvent.click(older);
+    await waitFor(() => expect(onLoad).toHaveBeenCalledTimes(3));
+    expect(
+      screen.queryByRole("button", { name: "Load older messages" }),
+    ).not.toBeInTheDocument();
+  });
 });
