@@ -439,6 +439,36 @@ mod bound {
         assert!(allowed::list(fx.home.path()).unwrap().is_empty());
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_workspace_mode_cannot_follow_a_redirected_working_folder() {
+        use approval::workspace::{self, Mode, WorkspaceKey};
+
+        let fx = fixture(&open_and_copy_wat("in.json", 0), BindAccess::Read);
+        let work = fx.root.join("work");
+        let key = WorkspaceKey::canonical("node", "requester", "agent", &work).unwrap();
+        workspace::save_mode(fx.home.path(), &key, 0, Mode::Ask, None).unwrap();
+        let context = workspace::for_request(
+            Some(fx.home.path()),
+            "node",
+            Some("requester"),
+            "agent",
+            Some(&work),
+        )
+        .unwrap();
+        std::fs::rename(&work, fx.root.join("original-work")).unwrap();
+        std::os::unix::fs::symlink(fx.root.join("docs"), &work).unwrap();
+        let tool = tool_for(&fx.home, &fx.record);
+        let error = workspace::scope(
+            context,
+            in_session(&tool, &work.join("in.json"), &work, false),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("path changed"), "{error}");
+        assert!(allowed::list(fx.home.path()).unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn a_model_tool_reads_a_file_in_an_allowed_folder() {
         let fx = fixture(&open_and_copy_wat("in.json", 0), BindAccess::Read);

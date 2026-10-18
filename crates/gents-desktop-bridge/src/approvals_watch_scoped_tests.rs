@@ -36,6 +36,7 @@ impl Workspace {
                 "artifactDigest": "artifact",
                 "inputDigest": "input",
                 "path": path,
+                "isDir": false,
                 "access": BindAccess::ReadWrite,
             },
         });
@@ -210,5 +211,76 @@ fn workspace_questions_cannot_be_answered_through_the_unscoped_queue() {
     assert!(approval::decide(&fixture.home, &fixture.request.id, Answer::AlwaysFolder).is_err());
     assert!(gents::plugin::allowed::list(&fixture.home)
         .unwrap()
+        .is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_changed_file_cannot_consume_an_approval_for_the_original_path() {
+    let fixture = Workspace::new();
+    fixture.file();
+    let other = fixture.root.path().join("other.txt");
+    std::fs::write(&other, b"other document").unwrap();
+    std::fs::remove_file(&fixture.request.path).unwrap();
+    std::os::unix::fs::symlink(&other, &fixture.request.path).unwrap();
+    assert!(approval::decide(&fixture.home, &fixture.request.id, Answer::Once).is_err());
+    file_question(&fixture.home, "unaffected");
+    let pending = approval::pending_requests(&fixture.home).unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].id, "unaffected");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_changed_folder_cannot_receive_a_remembered_workspace_grant() {
+    let fixture = Workspace::new();
+    fixture.file();
+    let other = fixture.root.path().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("document.txt"), b"other document").unwrap();
+    std::fs::rename(
+        &fixture.request.folder,
+        fixture.root.path().join("original"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(&other, &fixture.request.folder).unwrap();
+    assert!(approval::decide(&fixture.home, &fixture.request.id, Answer::AlwaysFolder).is_err());
+    assert!(workspace::get(&fixture.home, &fixture.settings.workspace)
+        .unwrap()
+        .unwrap()
+        .dirs
+        .is_empty());
+    assert!(gents::plugin::allowed::list(&fixture.home)
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn a_changed_path_retires_its_waiting_question() {
+    let fixture = Workspace::new();
+    let (send, mut receive) = mpsc::channel(1);
+    let _watch = QueueWatch::start(&fixture.home, send).unwrap();
+    let mut pending = PendingQueue::default();
+    let waiting = approval::ask(&fixture.home, &fixture.request, Duration::from_secs(10));
+    let remove = async {
+        until_pending_changes(&fixture.home, &mut pending, &mut receive).await;
+        std::fs::remove_file(&fixture.request.path).unwrap();
+    };
+    let (result, ()) = tokio::join!(waiting, remove);
+    assert!(result.unwrap_err().to_string().contains("path changed"));
+    assert!(!fixture.question_file().exists());
+}
+
+#[test]
+fn a_file_replaced_by_a_directory_cannot_receive_the_file_approval() {
+    let fixture = Workspace::new();
+    fixture.file();
+    std::fs::remove_file(&fixture.request.path).unwrap();
+    std::fs::create_dir(&fixture.request.path).unwrap();
+    assert!(approval::decide(&fixture.home, &fixture.request.id, Answer::AlwaysPath).is_err());
+    assert!(workspace::get(&fixture.home, &fixture.settings.workspace)
+        .unwrap()
+        .unwrap()
+        .dirs
         .is_empty());
 }

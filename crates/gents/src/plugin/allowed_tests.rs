@@ -103,6 +103,36 @@ fn dot_dot_and_symlinks_resolve_before_the_scope_check() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn a_remembered_path_cannot_follow_a_replacement_symlink() {
+    let world = world();
+    let docs = world.root.join("docs");
+    let outside = world.root.join("outside");
+    add(&world.gents, &docs, BindAccess::Read).unwrap();
+    let scope = Scope::load(&world.gents, None, Some(&world.root)).unwrap();
+    std::fs::rename(&docs, world.root.join("original-docs")).unwrap();
+    std::os::unix::fs::symlink(&outside, &docs).unwrap();
+    assert_eq!(scope.granted(&outside.join("o.txt")), None);
+    assert!(Scope::load(&world.gents, None, Some(&world.root)).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_queued_answer_cannot_remember_a_different_canonical_target() {
+    let world = world();
+    let docs = world.root.join("docs");
+    let outside = world.root.join("outside");
+    std::fs::rename(&docs, world.root.join("original-docs")).unwrap();
+    std::os::unix::fs::symlink(&outside, &docs).unwrap();
+    assert!(grant_at_least(&world.gents, &docs, BindAccess::ReadWrite).is_err());
+    assert!(list(&world.gents).unwrap().is_empty());
+    assert_eq!(
+        add(&world.gents, &docs, BindAccess::Read).unwrap().path,
+        outside
+    );
+}
+
 #[test]
 fn the_list_adds_replaces_and_removes_folders() {
     let world = world();
@@ -275,7 +305,7 @@ fn concurrent_grants_keep_other_paths_and_the_widest_approval() {
         .map(|index| {
             let path = outside.path().join(format!("document-{index}"));
             std::fs::write(&path, "document").unwrap();
-            path
+            path.canonicalize().unwrap()
         })
         .collect();
     std::thread::scope(|scope| {

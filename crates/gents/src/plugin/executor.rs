@@ -318,6 +318,7 @@ impl PluginExecutor {
                     artifact_digest: record.digest.clone(),
                     input_digest: json_digest(input),
                     path: resolved.target.clone(),
+                    is_dir: resolved.is_dir,
                     access,
                 },
                 covered,
