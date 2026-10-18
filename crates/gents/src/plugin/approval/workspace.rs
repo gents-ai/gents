@@ -15,8 +15,11 @@ use gents_loop::tool_policy::workspace_permissions::{self as policy, Grant, Inpu
 pub use gents_loop::tool_policy::workspace_permissions::{Mode, Preference, Scope};
 
 pub const CONTRACT_VERSION: u32 = 1;
+pub const STATUS_SUPPORT_FIELD: &str = "workspace_permissions";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(rename = "WorkspacePermissionSupport"))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Support {
     pub contract_version: u32,
