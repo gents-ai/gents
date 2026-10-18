@@ -67,9 +67,9 @@ function completedLabel(tools: RenderedToolCallView[]) {
     .map(([kind, count]) => {
       switch (kind) {
         case "fileRead":
-          return `explored ${count} ${count === 1 ? "file" : "files"}`;
+        return "explored files";
         case "fileEdit":
-          return `edited ${count} ${count === 1 ? "file" : "files"}`;
+        return "edited files";
         case "command":
           return `ran ${count} ${count === 1 ? "command" : "commands"}`;
         default:
