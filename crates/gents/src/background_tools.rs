@@ -116,7 +116,10 @@ pub(crate) async fn handle_list_background_tools(
     node: &std::sync::Arc<EmbeddedNode>,
     caller: &ProcessControlScope,
     local_deployment_id: &str,
-    live_outputs: &LiveToolOutputRegistry,
+    // Unused here by design: list rows project status from the persisted
+    // lifecycle and read output evidence from the canonical output owner,
+    // not the live-output registry.
+    _live_outputs: &LiveToolOutputRegistry,
     args: ListBackgroundToolsArgs,
 ) -> Result<ListBackgroundToolsResponse> {
     let limit = args.validated_limit() as usize;
