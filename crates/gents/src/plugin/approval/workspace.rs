@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+mod command;
 mod context;
+pub(crate) use command::authorize_command;
 pub(crate) use context::{carry, for_request, scope};
 
 use gents_loop::tool_policy::workspace_permissions::{self as policy, Grant, Input, Review, Route};

@@ -47,6 +47,13 @@ pub(crate) fn carry<F: Future>(future: F) -> impl Future<Output = F::Output> {
     scope(context, future)
 }
 
+pub(super) fn current_home() -> Option<PathBuf> {
+    CURRENT
+        .try_with(|context| context.as_ref().map(|context| context.home.clone()))
+        .ok()
+        .flatten()
+}
+
 pub(super) fn settings(home: &Path) -> Result<Option<super::Settings>> {
     let Some(context) = CURRENT.try_with(Clone::clone).ok().flatten() else {
         return Ok(None);
