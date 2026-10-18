@@ -682,10 +682,71 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
         "all nullable restart witnesses must be exercised"
     );
     for case in cases {
-        let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
+        let agent = agent_with_retry(CompletionRetryProfileFields::default());
+        crate::test_support::install_test_agent(&node, agent.node_did(), &agent.agent_id).await;
+        let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            "req-budget",
+            agent.node_did(),
+            agent.node_did(),
+            &agent.agent_id,
+            "session-budget",
+            "Resume the request",
+            "interactive",
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                agent.node_did(),
+            ),
+        );
+        crate::sign_agent_request_create(agent.node.identity.as_ref(), &mut create)
+            .await
+            .unwrap();
+        let response = crate::config_client::ConfigAccess::local(node.clone())
+            .write("test.budget_parent", &create.graphql_mutation().unwrap())
+            .await
+            .unwrap();
+        let doc_id = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+        let parent = crate::request_admission::load_request_for_admission_test(&node, &doc_id)
+            .await
+            .unwrap();
+        let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_execution_binding(
+            node.clone(),
+            &agent.agent_id,
+            agent.node_did(),
+            parent,
+            120,
+            crate::lifecycle::ExecutionOrigin::Interactive,
+            agent.backend_id.clone().unwrap(),
+        );
+        lifecycle.set_configured_max_total_tokens(case.pinned_limit.filter(|limit| *limit != 0));
+        assert_eq!(
+            lifecycle.claim_with_identity().await.unwrap(),
+            crate::lifecycle::ClaimOutcome::Claimed
+        );
+        let mut request = lifecycle.request().clone();
+        if case.pinned_limit == Some(0) {
+            let doc_id = escape_graphql_string(&request.doc_id);
+            crate::config_client::ConfigAccess::local(node.clone())
+                .write(
+                    "test.observed_zero_budget",
+                    &format!("mutation {{ update_AgentRequest(docID: \"{doc_id}\", input: {{ max_total_tokens: 0 }}) {{ _docID }} }}"),
+                )
+                .await
+                .unwrap();
+            request =
+                crate::request_admission::load_request_for_admission_test(&node, &request.doc_id)
+                    .await
+                    .unwrap();
+        }
+        let did = escape_graphql_string(agent.node_did());
         for (index, row) in case.rows.iter().enumerate() {
-            let doc_id = escape_graphql_string(&row.request_doc_id);
+            let doc_id = escape_graphql_string(if row.request_doc_id == case.request_doc_id {
+                &request.doc_id
+            } else {
+                &row.request_doc_id
+            });
             let call_id = escape_graphql_string(&format!("rehydrate-{index}"));
             let call_kind = escape_graphql_string(&row.kind);
             let prompt = row.prompt_tokens;
@@ -700,7 +761,7 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
                     call_seq: {index}
                     backend_id: "backend-rehydrate"
                     agent_id: "agent-rehydrate"
-                    node_did: "did:test:agent"
+                    node_did: "{did}"
                     call_kind: "{call_kind}"
                     attempt: 1
                     call_state: "completed"
@@ -712,18 +773,11 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
                 }}) {{ _docID }}
             }}"#
             );
-            let response = node.execute(&seed).await;
-            assert!(
-                !response.has_errors(),
-                "{}: {:?}",
-                case.name,
-                response.errors
-            );
+            crate::config_client::ConfigAccess::local(node.clone())
+                .write("test.budget_call", &seed)
+                .await
+                .unwrap_or_else(|error| panic!("{}: {error}", case.name));
         }
-        let mut request = request();
-        request.doc_id = case.request_doc_id.clone();
-        request.request_id = "req-budget".to_string();
-        request.max_total_tokens = case.pinned_limit.map(|limit| i64::try_from(limit).unwrap());
         let budget = aggregate_token_budget_for_request(&node, &request)
             .await
             .unwrap_or_else(|error| panic!("{}: rehydrate: {error}", case.name));

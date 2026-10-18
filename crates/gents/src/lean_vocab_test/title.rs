@@ -173,6 +173,8 @@ pub(crate) struct LeanTitleUsageCase {
     pub(crate) usage_action: Option<LeanTitleUsageAction>,
     pub(crate) expected_before: LeanTitleUsageResult,
     pub(crate) expected_after: LeanTitleUsageResult,
+    pub(crate) budget_before: LeanUsageBudgetResult,
+    pub(crate) budget_after: LeanUsageBudgetResult,
 }
 
 #[derive(Debug, Deserialize)]
@@ -251,6 +253,13 @@ pub(crate) enum LeanTitleUsageResult {
     Error {
         error: String,
     },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanUsageBudgetResult {
+    Ok { used: u64 },
+    Error { error: String },
 }
 
 #[derive(Debug, Deserialize)]

@@ -39,7 +39,8 @@ private structure Case where
 private def parent : ParentScope :=
   { physical := 10, logical := 20, node := 30, session := 40, state := .completed }
 
-private def mkRow (callId physical logical : Nat) (usage : Option Usage) : Nat × UsageRow :=
+private def mkRow (callId physical logical : Nat) (usage : Option Usage)
+    (state : InferenceCallState := .completed) : Nat × UsageRow :=
   (callId,
     { physicalRequest := physical
     , persisted :=
@@ -47,7 +48,7 @@ private def mkRow (callId physical logical : Nat) (usage : Option Usage) : Nat �
             { callId := callId
             , requestId := logical
             , backend := { val := "backend" }
-            , state := .completed }
+            , state }
         , terminalStamp := some 99
         , usage := usage } })
 
@@ -66,6 +67,23 @@ private def titlePurpose : SignedPurpose := ⟨11, .titleAudit⟩
 private def normalPurpose : SignedPurpose := ⟨10, .normal⟩
 
 private def titleUsageCases : List Case := [
+  { name := "empty_budget_has_no_spend", parent := parent,
+    rows := [], purposes := [normalPurpose], bindings := [] },
+  { name := "access_review_missing_usage_blocks_budget_restart", parent := parent,
+    rows := [mkRow 7 11 21 none], purposes := [⟨11, .accessReview⟩],
+    bindings := [bindingFact { binding with purpose := .accessReview }] },
+  { name := "access_review_zero_usage_blocks_budget_restart", parent := parent,
+    rows := [mkRow 7 11 21 (some ⟨0, 0⟩)], purposes := [⟨11, .accessReview⟩],
+    bindings := [bindingFact { binding with purpose := .accessReview }] },
+  { name := "access_review_late_usage_restores_budget_observation", parent := parent,
+    rows := [mkRow 7 11 21 none .cancelled], purposes := [⟨11, .accessReview⟩],
+    bindings := [bindingFact { binding with purpose := .accessReview }],
+    action := some ⟨7, usage⟩ },
+  { name := "failed_access_review_usage_still_reduces_budget", parent := parent,
+    rows := [mkRow 7 11 21 (some usage) .failed], purposes := [⟨11, .accessReview⟩],
+    bindings := [bindingFact { binding with purpose := .accessReview }] },
+  { name := "normal_missing_usage_blocks_budget_restart", parent := parent,
+    rows := [mkRow 1 10 20 none], purposes := [normalPurpose], bindings := [] },
   { name := "access_review_usage_is_parent_inclusive_audit_only", parent := parent,
     rows := [mkRow 7 11 21 (some usage)], purposes := [⟨11, .accessReview⟩],
     bindings := [bindingFact { binding with purpose := .accessReview }] },
@@ -198,6 +216,34 @@ private def resultJson : Except CatalogError Totals → Json
 private def evaluate (c : Case) (rows : RawRows) : Except CatalogError Totals :=
   validateAndProject rows (purposeLookup c.purposes) (bindingLookup c.bindings) c.parent
 
+private def evaluateBudget (c : Case) (rows : RawRows) : Except BudgetError Nat :=
+  recoverBudget rows (purposeLookup c.purposes) (bindingLookup c.bindings) c.parent
+
+private def budgetJson : Except BudgetError Nat → Json
+  | .ok used => Json.mkObj [("kind", toJson "ok"), ("used", toJson used)]
+  | .error (.catalog error) => resultJson (.error error)
+  | .error .unreportedUsage => Json.mkObj
+      [("kind", toJson "error"), ("error", toJson "unreported_usage")]
+
+private def evaluateNamedBudget (name : String) :
+    Option (Except BudgetError Nat × Except BudgetError Nat) :=
+  (titleUsageCases.find? (fun c => c.name == name)).map fun c =>
+    (evaluateBudget c c.rows, evaluateBudget c (applyAction c.rows c.action))
+
+theorem review_usage_cannot_become_a_fresh_allowance :
+    evaluateNamedBudget "access_review_usage_is_parent_inclusive_audit_only" =
+      some (.ok 8, .ok 8) ∧
+    evaluateNamedBudget "access_review_missing_usage_blocks_budget_restart" =
+      some (.error .unreportedUsage, .error .unreportedUsage) ∧
+    evaluateNamedBudget "access_review_zero_usage_blocks_budget_restart" =
+      some (.error .unreportedUsage, .error .unreportedUsage) := by
+  native_decide
+
+theorem late_report_restores_the_observed_allowance :
+    evaluateNamedBudget "access_review_late_usage_restores_budget_observation" =
+      some (.error .unreportedUsage, .ok 8) := by
+  native_decide
+
 private def evaluateNamed (name : String) :
     Option (Except CatalogError Totals × Except CatalogError Totals) :=
   (titleUsageCases.find? (fun c => c.name == name)).map fun c =>
@@ -260,7 +306,9 @@ private def caseJson (c : Case) : Json := Json.mkObj
       [("call_id", toJson action.callId), ("usage", usageJson action.usage)])
       |>.getD Json.null),
    ("expected_before", resultJson (evaluate c c.rows)),
-   ("expected_after", resultJson (evaluate c (applyAction c.rows c.action)))]
+   ("expected_after", resultJson (evaluate c (applyAction c.rows c.action))),
+   ("budget_before", budgetJson (evaluateBudget c c.rows)),
+   ("budget_after", budgetJson (evaluateBudget c (applyAction c.rows c.action)))]
 
 def casesJson : String := (toJson (titleUsageCases.map caseJson)).compress
 
