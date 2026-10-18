@@ -213,3 +213,20 @@ fn workspace_permissions_reads_cannot_supply_an_identity_or_mutate_the_selection
         assert!(decode(incomplete).is_err(), "missing {field}");
     }
 }
+
+#[test]
+fn workspace_permission_saves_are_strict_and_finish_submitted_mutations() {
+    let request = json!({
+        "scope":{"nodeDid":"runtime","agentId":"agent","workspacePath":"/project"},
+        "expectedRevision":"0","expectedWorkspacePath":"/project","mode":"autoReview"
+    });
+    let decode = |request: Value| {
+        serde_json::from_value::<protocol::ClientCommand>(json!({
+            "name":"client_workspace_permissions_save","args":{"request":request}
+        }))
+    };
+    assert!(!decode(request.clone()).unwrap().is_cancellable());
+    let mut invalid = request;
+    invalid["taskId"] = "another-task".into();
+    assert!(decode(invalid).is_err());
+}
