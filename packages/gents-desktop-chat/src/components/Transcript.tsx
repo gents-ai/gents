@@ -6,7 +6,7 @@ import { useListWindow } from "@source-inc/gents-desktop-ui";
 import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { AssistantCancelCauseTurn } from "./transcript/MessageItems.js";
-import { TimelineItem } from "./transcript/TimelineItem.js";
+import { TimelineItem, timelineKey } from "./transcript/TimelineItem.js";
 import { coalesceToolGroups } from "./transcript/CompactToolGroup.js";
 
 export const MessageList = memo(function MessageList({
@@ -91,10 +91,6 @@ export const MessageList = memo(function MessageList({
     </>
   );
 });
-
-function timelineKey(item: RenderedTimelineItem) {
-  return `${item.kind}-${item.itemKey}`;
-}
 
 function estimateItemSize() {
   return 120;
