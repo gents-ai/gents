@@ -836,6 +836,9 @@ export function createDesktopUiHarness(
     async editPendingQueue() {
       throw new Error("Pending queue edits are unavailable in this fixture.");
     },
+    async forkSessionBeforeMessage() {
+      throw new Error("Message editing is unavailable in this fixture.");
+    },
     async fetchDesktopSnapshot() {
       if (scenario === "bridge-unavailable") {
         throw new Error(
