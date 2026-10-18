@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
-use gents::store_key::{StoreEncryption, StoreKey, StoreKeyCustody};
+use gents::store_key::{StoreEncryption, StoreKey, StoreKeyCustody, StoreKeyUnavailable};
 use gents_desktop_core::client::ClientStoreKeyProvider;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -113,7 +113,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Provider<S> {
                 message:
                     "Local history could not be opened. Its store and encryption key are unchanged."
                         .into(),
-                requires_unlock: error.downcast_ref::<HistoryUnlockRequired>().is_some(),
+                requires_unlock: error.downcast_ref::<HistoryUnlockRequired>().is_some()
+                    || error.downcast_ref::<StoreKeyUnavailable>().is_some(),
             },
         )
         .await
