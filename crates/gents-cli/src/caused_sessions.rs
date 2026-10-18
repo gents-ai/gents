@@ -7,7 +7,7 @@ use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::session::{load_latest_request_in_txn, public_request_filter, session_scope_filter};
 pub(crate) use gents::session_origin::SessionScope;
-use gents::session_origin::{lineage, load_session, started_by, SessionLink};
+use gents::session_origin::{lineage, load_session, recorded_opening, started_by, SessionLink};
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
 
@@ -129,11 +129,13 @@ pub(crate) async fn load_caused_session(
     view(node, started, parent.scope, root, depth).await
 }
 
-/// The public request that started a linked session: the earliest request of
-/// `link.scope` that names the link's cause and a tool call, ordered by
-/// `(created_at, _docID)`. It is never found by tool name, so a call of any
-/// kind may open it, and a later message from the same cause into the same
-/// session does not displace it.
+/// The public request that started a linked session: among the requests of
+/// `link.scope` that name the link's cause and a tool call, the one the
+/// session's provenance recorded when it was created, else the earliest by
+/// `(created_at, _docID)` for a session created before that was recorded. It
+/// is never found by tool name, so a call of any kind may open it, and a later
+/// message from the same cause into the same session, even in the same second,
+/// does not displace a recorded opening request.
 pub(crate) async fn starting_request(
     access: &ConfigAccess,
     link: &SessionLink,
@@ -147,7 +149,7 @@ pub(crate) async fn starting_request(
         ),
         escape_graphql_string(&link.cause_request_doc_id)
     ));
-    let rows = access
+    let mut rows = access
         .execute(&format!(
             "{{AgentRequest(filter: {{{filter}}}) {{{REQUEST_FIELDS}}}}}"
         ))
@@ -156,18 +158,26 @@ pub(crate) async fn starting_request(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let opening = recorded_opening(access, &link.scope).await?;
+    for row in &mut rows {
+        row["opening_request_doc_id"] = opening.clone().map_or(Value::Null, Value::String);
+    }
     opening_request(&rows, link)
         .map(|row| serde_json::from_value(row).context("decoding AgentRequest row"))
         .transpose()
 }
 
 /// The opening request among request rows (`_docID`, `created_at`, the
-/// session scope and both causal edges): the earliest in `link.scope`, by
-/// `(created_at, _docID)`, whose `caused_by_parent_request_doc_id` is the
-/// link's cause and whose `caused_by_parent_tool_call_doc_id` is non-null.
+/// session scope, both causal edges and the session's recorded
+/// `opening_request_doc_id`), as Lean `DurableLineage.openingRequest` states
+/// it: among rows of `link.scope` whose `caused_by_parent_request_doc_id` is
+/// the link's cause and whose `caused_by_parent_tool_call_doc_id` is non-null,
+/// the recorded opening request, and none while it is not among them; without
+/// a recorded one, the earliest by `(created_at, _docID)`.
 pub(crate) fn opening_request(rows: &[Value], link: &SessionLink) -> Option<Value> {
     let text = |row: &Value, field: &str| row.get(field).and_then(Value::as_str).map(str::to_owned);
-    rows.iter()
+    let candidates: Vec<&Value> = rows
+        .iter()
         .filter(|row| {
             text(row, "caused_by_parent_request_doc_id").as_deref()
                 == Some(&link.cause_request_doc_id)
@@ -176,8 +186,20 @@ pub(crate) fn opening_request(rows: &[Value], link: &SessionLink) -> Option<Valu
                 && text(row, "session_id").as_deref() == Some(&link.scope.session_id)
                 && text(row, "requester_did") == link.scope.requester_did
         })
-        .min_by_key(|row| (text(row, "created_at"), text(row, "_docID")))
-        .cloned()
+        .collect();
+    match candidates
+        .iter()
+        .find_map(|row| text(row, "opening_request_doc_id"))
+    {
+        Some(opening) => candidates
+            .into_iter()
+            .find(|row| text(row, "_docID").as_deref() == Some(opening.as_str()))
+            .cloned(),
+        None => candidates
+            .into_iter()
+            .min_by_key(|row| (text(row, "created_at"), text(row, "_docID")))
+            .cloned(),
+    }
 }
 
 pub(crate) async fn started_by_request(
@@ -414,6 +436,53 @@ mod tests {
             other_session,
             row("bae-no-call", "2026-09-26T00:00:00Z", None),
         ];
+        assert_eq!(opening_request(&rows, &link()), None);
+    }
+
+    fn recording_opening(mut row: Value) -> Value {
+        row["opening_request_doc_id"] = json!("bae-b-new");
+        row
+    }
+
+    #[test]
+    fn opening_request_follows_the_recorded_opening_in_one_second() {
+        let rows = [
+            recording_opening(row(
+                "bae-a-message",
+                "2026-09-26T00:00:01Z",
+                Some("call-message"),
+            )),
+            recording_opening(row("bae-b-new", "2026-09-26T00:00:01Z", Some("call-new"))),
+        ];
+        assert_eq!(
+            doc_id(opening_request(&rows, &link())).as_deref(),
+            Some("bae-b-new")
+        );
+    }
+
+    #[test]
+    fn opening_request_follows_the_recorded_opening_over_an_earlier_clock() {
+        let rows = [
+            recording_opening(row(
+                "bae-a-message",
+                "2026-09-26T00:00:00Z",
+                Some("call-message"),
+            )),
+            recording_opening(row("bae-b-new", "2026-09-26T00:00:01Z", Some("call-new"))),
+        ];
+        assert_eq!(
+            doc_id(opening_request(&rows, &link())).as_deref(),
+            Some("bae-b-new")
+        );
+    }
+
+    #[test]
+    fn opening_request_is_none_while_the_recorded_opening_is_not_visible() {
+        let rows = [recording_opening(row(
+            "bae-a-message",
+            "2026-09-26T00:00:00Z",
+            Some("call-message"),
+        ))];
         assert_eq!(opening_request(&rows, &link()), None);
     }
 }

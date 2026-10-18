@@ -182,6 +182,28 @@ pub async fn started_by(
         }))
 }
 
+/// The opening request `scope`'s session recorded in its provenance when it
+/// was created (Lean `AgentSession.Provenance.openingRequestDoc`). It reads the
+/// session by its exact scope, as [`started_by`] does, so a session with the
+/// same label on another node is never read.
+pub async fn recorded_opening(
+    access: &ConfigAccess,
+    scope: &SessionScope,
+) -> Result<Option<String>> {
+    let own = sessions(
+        access,
+        &session_scope_filter(
+            &scope.node_did,
+            &scope.session_id,
+            scope.requester_did.as_deref(),
+        ),
+    )
+    .await?;
+    Ok(own
+        .first()
+        .and_then(|session| session.provenance.as_ref()?.opening_request_doc_id.clone()))
+}
+
 /// One public request a physical tool call caused.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CausedRequest {
@@ -463,6 +485,40 @@ mod tests {
         .await;
     }
 
+    async fn seed_opened_session(
+        node: &EmbeddedNode,
+        node_did: &str,
+        session_id: &str,
+        opening: &str,
+    ) {
+        let session = AgentSession {
+            session_id: session_id.into(),
+            node_did: node_did.into(),
+            requester_did: Some("did:test:node".into()),
+            agent_id: "worker".into(),
+            created_at: "2026-09-26T00:00:00Z".into(),
+            closed_at: None,
+            title: None,
+            tags: Vec::new(),
+            provenance: Some(SessionProvenance {
+                parent_request_doc_id: Some("bae-parent".into()),
+                opening_request_doc_id: Some(opening.into()),
+                ..Default::default()
+            }),
+            observation: None,
+        };
+        let input = gents_protocol::graphql::graphql_input_literal(
+            &serde_json::to_value(&session).unwrap(),
+        )
+        .unwrap();
+        create(
+            node,
+            format!("mutation {{ create_AgentSession(input: {input}) {{ _docID }} }}"),
+            "AgentSession",
+        )
+        .await;
+    }
+
     fn caused_row(doc_id: &str, request_id: &str, created_at: &str, call: &str) -> Value {
         serde_json::json!({
             "_docID": doc_id,
@@ -650,6 +706,43 @@ mod tests {
         let from_existing = lineage(&access, &scope("existing")).await.unwrap();
         assert_eq!(from_existing.started_by, None);
         assert_eq!(ids(&from_existing.received), ["parent"]);
+        node.shutdown().await;
+    }
+
+    /// The recorded opening request is read by the session's exact scope: a
+    /// session with the same label on another node is never read, and the
+    /// label-only read is ambiguous there.
+    #[tokio::test]
+    async fn recorded_opening_reads_the_exact_session_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let node = std::sync::Arc::new(
+            EmbeddedNode::builder()
+                .data_path(dir.path().join("node"))
+                .build()
+                .await
+                .unwrap(),
+        );
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+        seed_opened_session(&node, "did:test:node", "child", "bae-own-opening").await;
+        seed_opened_session(&node, "did:test:peer", "child", "bae-peer-opening").await;
+        seed_session(&node, "plain", None).await;
+        let access = ConfigAccess::local(node.clone());
+
+        assert_eq!(
+            recorded_opening(&access, &scope("child")).await.unwrap(),
+            Some("bae-own-opening".to_owned())
+        );
+        assert_eq!(
+            recorded_opening(&access, &scope("plain")).await.unwrap(),
+            None
+        );
+        assert_eq!(
+            recorded_opening(&access, &scope("missing")).await.unwrap(),
+            None
+        );
+        assert!(load_session(&access, "child", Some("did:test:node"))
+            .await
+            .is_err());
         node.shutdown().await;
     }
 }
