@@ -19,13 +19,16 @@ pub(crate) async fn authorize_command(
     };
     let Some(decision) = super::binding_route(
         &home,
-        BindingAction::Command {
-            argv: argv.to_vec(),
-            cwd: cwd.to_owned(),
-            root: root.to_owned(),
-            policy: policy.clone(),
+        || {
+            Ok(BindingAction::Command {
+                argv: argv.to_vec(),
+                cwd: cwd.to_owned(),
+                root: root.to_owned(),
+                policy: policy.clone(),
+            })
         },
         policy.mode == CommandExecutionMode::ReadOnly,
+        || Ok(serde_json::Value::Null),
     )?
     else {
         return Ok(());

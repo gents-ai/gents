@@ -31,14 +31,17 @@ pub(crate) async fn authorize_file_mutation(
     };
     let Some(decision) = super::binding_route(
         &home,
-        BindingAction::FileMutation {
-            tool: tool.to_owned(),
-            input_digest: format!("{:x}", Sha256::digest(serde_json::to_vec(input)?)),
-            path: path.to_owned(),
-            root: root.to_owned(),
-            existed: path.try_exists()?,
+        || {
+            Ok(BindingAction::FileMutation {
+                tool: tool.to_owned(),
+                input_digest: format!("{:x}", Sha256::digest(serde_json::to_vec(input)?)),
+                path: path.to_owned(),
+                root: root.to_owned(),
+                existed: path.try_exists()?,
+            })
         },
         context::within_workspace(path),
+        || serde_json::to_value(input).map_err(Into::into),
     )?
     else {
         return Ok(None);
