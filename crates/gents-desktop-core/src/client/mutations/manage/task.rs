@@ -3,7 +3,6 @@ use anyhow::{anyhow, bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
 use gents::collection::Collection;
-#[cfg(test)]
 use gents::config_client::{apply_desired_state_plan, read_desired_state_record_in_txn};
 use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::document_config::{EventSource, Schedule, Task, Trigger};
@@ -31,6 +30,44 @@ pub async fn upsert_task_on(access: &ConfigAccess, document: &Task) -> Result<()
         update: value,
     }])?;
     super::apply_plan(access, "desktop.task.save", plan).await
+}
+
+pub async fn prepare_access_review_task_on(
+    access: &ConfigAccess,
+    node: &str,
+    agent: &str,
+    preferred: Option<&str>,
+) -> Result<String> {
+    use gents::plugin::approval::workspace::{default_review_task, review_task_policy};
+
+    let default = default_review_task(node, agent);
+    let task_id = preferred.unwrap_or(&default.task_id);
+    access.transact_write("desktop.access_review.prepare", |txn| {
+        let default = &default;
+        Box::pin(async move {
+            anyhow::ensure!(
+                read_desired_state_record_in_txn(txn, Collection::Agent, node, agent).await?.is_some(),
+                "Choose an existing agent before setting workspace permissions."
+            );
+            let existing = read_desired_state_record_in_txn(txn, Collection::Task, node, task_id).await?;
+            let task = match existing {
+                Some((_, value)) => serde_json::from_value::<Task>(value)?,
+                None if preferred.is_none() => {
+                    let value = serde_json::to_value(default)?;
+                    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+                        collection: Collection::Task,
+                        add: value.clone(),
+                        update: value,
+                    }])?;
+                    apply_desired_state_plan(txn, &plan).await?;
+                    default.clone()
+                }
+                None => anyhow::bail!("The configured access reviewer is missing. Restore its Task in Runtime Settings."),
+            };
+            review_task_policy(&task, node, task_id, agent, "access-review")?;
+            Ok(task.task_id)
+        })
+    }).await
 }
 
 #[cfg(test)]
@@ -754,6 +791,67 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn access_reviewer_setup_preserves_policy_and_rejects_task_side_effects() -> Result<()> {
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        gents::ensure_runtime_schemas(&node).await?;
+        let owner = "did:test:access-review-setup";
+        let config: gents::document_config::PackConfig = serde_json::from_value(json!({
+            "node":{"node_did":owner},
+            "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Fixture","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
+            "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
+            "agents":[{"node_did":owner,"agent_id":"agent","inference_profile_id":"profile"}]
+        }))?;
+        let access = ConfigAccess::local(node.clone());
+        super::super::apply_plan(
+            &access,
+            "test.access_review.seed",
+            DesiredStateApplyPlan::from_pack_config(&config)?,
+        )
+        .await?;
+        let id = prepare_access_review_task_on(&access, owner, "agent", None).await?;
+        assert_eq!(
+            prepare_access_review_task_on(&access, owner, "agent", None).await?,
+            id
+        );
+        let mut task = gents::plugin::approval::workspace::default_review_task(owner, "agent");
+        assert_eq!(task.task_id, id);
+        task.prompt_template = "Ask about changes outside the requested project.".into();
+        upsert_task_on(&access, &task).await?;
+        prepare_access_review_task_on(&access, owner, "agent", None).await?;
+        let saved = access
+            .transact_readonly("test.access_review.read", |txn| {
+                let id = &id;
+                Box::pin(async move {
+                    read_desired_state_record_in_txn(txn, Collection::Task, owner, id).await
+                })
+            })
+            .await?
+            .unwrap()
+            .1;
+        assert_eq!(
+            serde_json::from_value::<Task>(saved)?.prompt_template,
+            task.prompt_template
+        );
+        task.emit_outcome = true;
+        upsert_task_on(&access, &task).await?;
+        assert!(prepare_access_review_task_on(&access, owner, "agent", None)
+            .await
+            .is_err());
+        assert!(
+            prepare_access_review_task_on(&access, owner, "agent", Some("missing"))
+                .await
+                .is_err()
+        );
+        assert!(
+            prepare_access_review_task_on(&access, owner, "missing-agent", None)
+                .await
+                .is_err()
+        );
+        node.shutdown().await;
+        Ok(())
+    }
 
     #[tokio::test]
     async fn canonical_task_resolution_ignores_stale_desktop_revision() -> Result<()> {

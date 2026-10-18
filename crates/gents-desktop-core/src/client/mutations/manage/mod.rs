@@ -113,9 +113,9 @@ pub use profile::{
 pub use skill::{delete_skill_on, upsert_skill_on};
 pub use task::{
     delete_event_source_on, delete_schedule_on, delete_task_on, delete_trigger_on,
-    fire_schedule_now, fire_task_now, resolve_schedule_now_on, resolve_task_now_on,
-    upsert_event_source_on, upsert_schedule_on, upsert_task_on, upsert_trigger_on,
-    ManualTaskInvocation,
+    fire_schedule_now, fire_task_now, prepare_access_review_task_on, resolve_schedule_now_on,
+    resolve_task_now_on, upsert_event_source_on, upsert_schedule_on, upsert_task_on,
+    upsert_trigger_on, ManualTaskInvocation,
 };
 pub use tools::{
     delete_tool_service_registry_on, delete_tools_on, upsert_tool_service_registry_on,
