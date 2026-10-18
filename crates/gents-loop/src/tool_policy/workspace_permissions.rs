@@ -52,6 +52,22 @@ pub fn valid_grant<W: PartialEq, A: PartialEq>(input: &Input<W, A>) -> bool {
         .is_some_and(|grant| grant.scope == input.current && grant.action == input.action)
 }
 
+pub fn approval_scope_matches<W: PartialEq>(available: &[Scope<W>], expected: &Scope<W>) -> bool {
+    available
+        .iter()
+        .find(|current| current.workspace == expected.workspace)
+        == Some(expected)
+}
+
+pub fn consume_approval<W: PartialEq, A: PartialEq>(
+    available: &[Scope<W>],
+    expected: &Grant<W, A>,
+    received: &Grant<W, A>,
+    allowed: bool,
+) -> Option<bool> {
+    (approval_scope_matches(available, &expected.scope) && expected == received).then_some(allowed)
+}
+
 pub fn route<W: PartialEq, A: PartialEq>(input: &Input<W, A>) -> Route {
     if !input.ceiling_allows {
         return Route::Deny;

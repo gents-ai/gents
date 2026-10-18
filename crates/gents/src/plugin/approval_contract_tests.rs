@@ -61,11 +61,11 @@ fn access(write: bool) -> BindAccess {
 
 fn assert_state(home: &Path, target: &Path, folder: &Path, expected: &State, context: &str) {
     assert_eq!(
-        request_file(home, "q1").exists(),
+        Queue::Unscoped.request_file(home, "q1").exists(),
         expected.present,
         "{context}"
     );
-    let decision = std::fs::read(decision_file(home, "q1"))
+    let decision = std::fs::read(Queue::Unscoped.decision_file(home, "q1"))
         .ok()
         .map(|bytes| serde_json::from_slice::<Decision>(&bytes).unwrap().allow);
     assert_eq!(decision, expected.decision, "{context}");
@@ -114,7 +114,7 @@ fn generated_approval_traces_drive_native_queue_and_grants() {
         request.created_at_ms = 10;
         request.expires_at_ms = 20;
         write_atomic(
-            &request_file(home.path(), "q1"),
+            &Queue::Unscoped.request_file(home.path(), "q1"),
             &serde_json::to_vec(&request).unwrap(),
         )
         .unwrap();
@@ -155,6 +155,7 @@ fn generated_approval_traces_drive_native_queue_and_grants() {
                     drop(Cleanup {
                         home: home.path(),
                         id: "q1",
+                        queue: Queue::Unscoped,
                     });
                     expected
                 }

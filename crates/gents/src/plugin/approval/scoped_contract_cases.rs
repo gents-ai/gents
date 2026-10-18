@@ -45,9 +45,12 @@ fn binding(
 fn entries(target: &Path, folder: &Path, state: &State) -> Vec<allowed::AllowedDir> {
     [(target, state.path_grant), (folder, state.folder_grant)]
         .into_iter()
-        .filter_map(|(path, grant)| grant.map(|write| allowed::AllowedDir {
-            path: path.to_owned(), access: access(write),
-        }))
+        .filter_map(|(path, grant)| {
+            grant.map(|write| allowed::AllowedDir {
+                path: path.to_owned(),
+                access: access(write),
+            })
+        })
         .collect()
 }
 
@@ -60,26 +63,70 @@ fn observe(
     folder: &Path,
     state: &State,
 ) {
-    let settings: Vec<_> = available.iter().map(|scope| workspace::Settings {
-        workspace: key(root, scope.workspace),
-        selection: policy::Preference::<String> {
-            revision: scope.revision, mode: policy::Mode::Ask, review_task: None,
-        },
-        dirs: if scope.workspace == expected.scope.workspace { entries(target, folder, state) } else { Vec::new() },
-    }).collect();
-    std::fs::write(home.join(workspace::FILE), serde_json::to_vec(&serde_json::json!({ "entries": settings })).unwrap()).unwrap();
+    let settings: Vec<_> = available
+        .iter()
+        .map(|scope| workspace::Settings {
+            workspace: key(root, scope.workspace),
+            selection: policy::Preference::<String> {
+                revision: scope.revision,
+                mode: policy::Mode::Ask,
+                review_task: None,
+            },
+            dirs: if scope.workspace == expected.scope.workspace {
+                entries(target, folder, state)
+            } else {
+                Vec::new()
+            },
+        })
+        .collect();
+    std::fs::write(
+        home.join(workspace::FILE),
+        serde_json::to_vec(&serde_json::json!({ "entries": settings })).unwrap(),
+    )
+    .unwrap();
 }
 
-fn assert_scoped_state(home: &Path, target: &Path, folder: &Path, expected: &State, binding: &workspace::Binding, context: &str) {
-    assert_eq!(Queue::Workspace.request_file(home, "q1").exists(), expected.present, "{context}");
-    let decision = std::fs::read(Queue::Workspace.decision_file(home, "q1")).ok()
+fn assert_scoped_state(
+    home: &Path,
+    target: &Path,
+    folder: &Path,
+    expected: &State,
+    binding: &workspace::Binding,
+    context: &str,
+) {
+    assert_eq!(
+        Queue::Workspace.request_file(home, "q1").exists(),
+        expected.present,
+        "{context}"
+    );
+    let decision = std::fs::read(Queue::Workspace.decision_file(home, "q1"))
+        .ok()
         .map(|bytes| serde_json::from_slice::<Decision>(&bytes).unwrap().allow);
     assert_eq!(decision, expected.decision, "{context}");
-    assert!(allowed::list(home).unwrap().is_empty(), "workspace answers must not widen global grants: {context}");
-    let dirs = workspace::get(home, &binding.scope.workspace).unwrap().map(|settings| settings.dirs).unwrap_or_default();
-    assert_eq!(dirs.len(), usize::from(expected.path_grant.is_some()) + usize::from(expected.folder_grant.is_some()), "{context}");
-    for (path, grant) in [(target, expected.path_grant), (folder, expected.folder_grant)] {
-        assert_eq!(dirs.iter().find(|entry| entry.path == path).map(|entry| entry.access), grant.map(access), "{context}");
+    assert!(
+        allowed::list(home).unwrap().is_empty(),
+        "workspace answers must not widen global grants: {context}"
+    );
+    let dirs = workspace::get(home, &binding.scope.workspace)
+        .unwrap()
+        .map(|settings| settings.dirs)
+        .unwrap_or_default();
+    assert_eq!(
+        dirs.len(),
+        usize::from(expected.path_grant.is_some()) + usize::from(expected.folder_grant.is_some()),
+        "{context}"
+    );
+    for (path, grant) in [
+        (target, expected.path_grant),
+        (folder, expected.folder_grant),
+    ] {
+        assert_eq!(
+            dirs.iter()
+                .find(|entry| entry.path == path)
+                .map(|entry| entry.access),
+            grant.map(access),
+            "{context}"
+        );
     }
 }
 
@@ -89,38 +136,95 @@ pub(super) fn run(index: usize, case: &super::Case, scoped: &Case) {
     let folder = outside.path().canonicalize().unwrap();
     let target = folder.join("document.txt");
     std::fs::write(&target, "operator document").unwrap();
-    let resolved = allowed::Resolved { target: if case.directory { folder.clone() } else { target.clone() }, is_dir: case.directory };
+    let resolved = allowed::Resolved {
+        target: if case.directory {
+            folder.clone()
+        } else {
+            target.clone()
+        },
+        is_dir: case.directory,
+    };
     let mut request = Request::new("team/files", &resolved, access(case.write), None);
     request.id = "q1".into();
     request.created_at_ms = 10;
     request.expires_at_ms = 20;
     let expected_binding = binding(&folder, &scoped.expected, &resolved, access(case.write));
     request.binding = Some(expected_binding.clone());
-    observe(home.path(), &folder, &scoped.available, &scoped.expected, &target, &folder, &case.initial);
-    write_atomic(&Queue::Workspace.request_file(home.path(), "q1"), &serde_json::to_vec(&request).unwrap()).unwrap();
+    observe(
+        home.path(),
+        &folder,
+        &scoped.available,
+        &scoped.expected,
+        &target,
+        &folder,
+        &case.initial,
+    );
+    write_atomic(
+        &Queue::Workspace.request_file(home.path(), "q1"),
+        &serde_json::to_vec(&request).unwrap(),
+    )
+    .unwrap();
     let mut state = &case.initial;
     for (step_index, step) in case.steps.iter().enumerate() {
         let context = format!("scoped case {index}, step {step_index}: {step:?}");
         state = match step {
-            Step::Decide { id, now, answer: choice, accepted, expected } => {
-                assert_eq!(decide_with_clock(home.path(), id, answer(choice), || *now).is_ok(), *accepted, "{context}");
+            Step::Decide {
+                id,
+                now,
+                answer: choice,
+                accepted,
+                expected,
+            } => {
+                assert_eq!(
+                    decide_with_clock(home.path(), id, answer(choice), || *now).is_ok(),
+                    *accepted,
+                    "{context}"
+                );
                 expected
             }
             Step::Cancel { accepted, expected } => {
                 assert!(*accepted, "{context}");
-                drop(Cleanup { home: home.path(), id: "q1", queue: Queue::Workspace });
+                drop(Cleanup {
+                    home: home.path(),
+                    id: "q1",
+                    queue: Queue::Workspace,
+                });
                 expected
             }
         };
-        assert_scoped_state(home.path(), &target, &folder, state, &expected_binding, &context);
+        assert_scoped_state(
+            home.path(),
+            &target,
+            &folder,
+            state,
+            &expected_binding,
+            &context,
+        );
     }
     let decision = std::fs::read(Queue::Workspace.decision_file(home.path(), "q1")).ok();
     for (delivery_index, delivery) in scoped.deliveries.iter().enumerate() {
-        observe(home.path(), &folder, &delivery.available, &scoped.expected, &target, &folder, state);
+        observe(
+            home.path(),
+            &folder,
+            &delivery.available,
+            &scoped.expected,
+            &target,
+            &folder,
+            state,
+        );
         if let Some(bytes) = &decision {
             let mut delivered: Decision = serde_json::from_slice(bytes).unwrap();
-            delivered.binding = Some(binding(&folder, &delivery.received, &resolved, access(case.write)));
-            write_atomic(&Queue::Workspace.decision_file(home.path(), "q1"), &serde_json::to_vec(&delivered).unwrap()).unwrap();
+            delivered.binding = Some(binding(
+                &folder,
+                &delivery.received,
+                &resolved,
+                access(case.write),
+            ));
+            write_atomic(
+                &Queue::Workspace.decision_file(home.path(), "q1"),
+                &serde_json::to_vec(&delivered).unwrap(),
+            )
+            .unwrap();
         }
         let actual = read_decision(home.path(), &request);
         let context = format!("scoped case {index}, delivery {delivery_index}");

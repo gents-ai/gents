@@ -73,6 +73,15 @@ pub(super) fn grant_at_least(home: &Path, path: &Path, access: BindAccess) -> Re
 }
 
 fn put(home: &Path, path: &Path, access: BindAccess, preserve_wider: bool) -> Result<AllowedDir> {
+    let entry = prepare_grant(home, path, access)?;
+    let _lock = lock(home)?;
+    let mut dirs = list(home)?;
+    let entry = put_entry(&mut dirs, entry, preserve_wider);
+    save(home, dirs)?;
+    Ok(entry)
+}
+
+pub(super) fn prepare_grant(home: &Path, path: &Path, access: BindAccess) -> Result<AllowedDir> {
     let path = path
         .canonicalize()
         .with_context(|| format!("{} does not exist or cannot be read", path.display()))?;
@@ -82,20 +91,23 @@ fn put(home: &Path, path: &Path, access: BindAccess, preserve_wider: bool) -> Re
         path.display()
     );
     ensure_scope_path(&path, user_home().as_deref(), home)?;
-    let _lock = lock(home)?;
-    let mut dirs = list(home)?;
-    let access = if preserve_wider {
-        dirs.iter()
-            .filter(|entry| entry.path == path)
-            .fold(access, |held, entry| held.max(entry.access))
-    } else {
-        access
-    };
-    let entry = AllowedDir { path, access };
+    Ok(AllowedDir { path, access })
+}
+
+pub(super) fn put_entry(
+    dirs: &mut Vec<AllowedDir>,
+    mut entry: AllowedDir,
+    preserve_wider: bool,
+) -> AllowedDir {
+    if preserve_wider {
+        entry.access = dirs
+            .iter()
+            .filter(|existing| existing.path == entry.path)
+            .fold(entry.access, |held, existing| held.max(existing.access));
+    }
     dirs.retain(|existing| existing.path != entry.path);
     dirs.push(entry.clone());
-    save(home, dirs)?;
-    Ok(entry)
+    entry
 }
 
 pub fn remove(home: &Path, path: &Path) -> Result<bool> {
@@ -193,7 +205,15 @@ impl Scope {
         workdir: Option<&Path>,
         user_home: Option<&Path>,
     ) -> Result<Self> {
-        let mut entries = list(gents_home)?;
+        Self::from_entries(gents_home, list(gents_home)?, workdir, user_home)
+    }
+
+    pub(super) fn from_entries(
+        gents_home: &Path,
+        mut entries: Vec<AllowedDir>,
+        workdir: Option<&Path>,
+        user_home: Option<&Path>,
+    ) -> Result<Self> {
         for entry in &entries {
             let path = entry
                 .path
