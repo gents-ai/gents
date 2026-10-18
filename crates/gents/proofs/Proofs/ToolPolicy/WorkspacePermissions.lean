@@ -109,12 +109,13 @@ def approvalScopeMatches (available : List Scope) (expected : Scope) : Bool :=
   approvalScope available expected == some expected
 
 inductive ApprovalKind where
-  | filesystem | command
+  | filesystem | command | fileMutation
   deriving DecidableEq, Repr
 
-/-- A command decision covers its complete argument vector, working directory
-and execution policy. Remembering a filesystem path cannot authorize later
-commands; command questions admit only an allow-once or deny answer. -/
+/-- Commands and native file mutations bind a complete immutable invocation.
+Remembering a path cannot authorize a different invocation, including a later
+creation at a currently absent target; these questions admit only an allow-once
+or deny answer. Pack filesystem grants retain their explicit path scope. -/
 def answerAllowed (kind : ApprovalKind) (remembered : Bool) : Bool :=
   kind == .filesystem || !remembered
 
@@ -174,6 +175,16 @@ theorem command_questions_cannot_remember_a_folder (available : List Scope) (exp
     answerApproval available expected state id now .folder .command = (state, false) := by
   simp [answerApproval, answerAllowed, rememberedAnswer]
 
+theorem file_mutations_cannot_remember_a_path (available : List Scope) (expected : Grant)
+    (state : ToolPolicy.PluginApproval.State) (id : String) (now : Nat) :
+    answerApproval available expected state id now .path .fileMutation = (state, false) := by
+  simp [answerApproval, answerAllowed, rememberedAnswer]
+
+theorem file_mutations_cannot_remember_a_folder (available : List Scope) (expected : Grant)
+    (state : ToolPolicy.PluginApproval.State) (id : String) (now : Nat) :
+    answerApproval available expected state id now .folder .fileMutation = (state, false) := by
+  simp [answerApproval, answerAllowed, rememberedAnswer]
+
 theorem transient_answers_use_the_same_admission (available : List Scope) (expected : Grant)
     (state : ToolPolicy.PluginApproval.State) (id : String) (now : Nat)
     (choice : ToolPolicy.PluginApproval.Answer) (transient : rememberedAnswer choice = false) :
@@ -217,6 +228,7 @@ def Review.wireName : Review → String
 def ApprovalKind.wireName : ApprovalKind → String
   | .filesystem => "filesystem"
   | .command => "command"
+  | .fileMutation => "fileMutation"
 
 structure Case where
   input : Input
