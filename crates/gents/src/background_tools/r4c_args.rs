@@ -77,24 +77,25 @@ pub(crate) struct ListBackgroundToolsEntry {
     /// Stable terminal duration; None unless both endpoints parse and are
     /// ordered.
     pub(crate) terminal_elapsed_seconds: Option<i64>,
-    /// Truthful total volume of the combined canonical output. The legacy
-    /// stdout/stderr fields were never channel-accounting: `stdout_bytes`
-    /// carried this combined volume and `stderr_bytes` was always 0. Both
-    /// are kept as deprecated wire-compat aliases with unchanged (combined /
-    /// zero) values; they do NOT become truthful stdout/stderr accounting,
-    /// and the channel defect remains open. New consumers must use
-    /// `available_bytes` plus `preview`.
+    /// Total volume of the combined canonical output. This is a truthful
+    /// count of combined bytes only; it is NOT stdout accounting.
     pub(crate) available_bytes: u64,
     /// Trailing preview of the combined canonical output, char-boundary
-    /// safe. NOTE: the preview is computed after the full canonical output
-    /// is retrieved; it bounds what is *embedded in the response*, not the
-    /// retrieval itself. Bounded retrieval drilldown remains read_process.
+    /// safe. Binds only what is embedded in this response: the full
+    /// canonical output is fetched server-side before truncation, so a
+    /// bounded preview does NOT imply a bounded fetch. Bounded retrieval
+    /// drilldown remains read_process.
     pub(crate) preview: Option<String>,
     pub(crate) preview_truncated: bool,
-    /// Deprecated compat alias: equals `available_bytes` (combined canonical
-    /// output volume), NOT stdout-only accounting.
+    /// DEPRECATED COMBINED LEGACY — KNOWN SEMANTIC BUG, PRE-EXISTING AND
+    /// UNFIXED HERE: this field has always carried the combined
+    /// stdout+stderr canonical volume (never stdout-only), and
+    /// `stderr_bytes` has always been hard-coded 0. Kept only for wire
+    /// compatibility, value unchanged (== available_bytes). It is not
+    /// truthful stdout accounting, and this commit does not fix the split.
     pub(crate) stdout_bytes: u64,
-    /// Deprecated: always 0; stderr was never separately tracked here.
+    /// DEPRECATED COMBINED LEGACY: always 0; stderr was never tracked. See
+    /// `stdout_bytes` for the open pre-existing semantic bug.
     pub(crate) stderr_bytes: u64,
 }
 
