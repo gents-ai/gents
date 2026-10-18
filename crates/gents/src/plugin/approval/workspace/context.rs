@@ -54,6 +54,16 @@ pub(super) fn current_home() -> Option<PathBuf> {
         .flatten()
 }
 
+pub(super) fn within_workspace(path: &Path) -> bool {
+    CURRENT
+        .try_with(|context| {
+            context
+                .as_ref()
+                .is_some_and(|context| path.starts_with(&context.workspace.path))
+        })
+        .unwrap_or(false)
+}
+
 pub(super) fn settings(home: &Path) -> Result<Option<super::Settings>> {
     let Some(context) = CURRENT.try_with(Clone::clone).ok().flatten() else {
         return Ok(None);
