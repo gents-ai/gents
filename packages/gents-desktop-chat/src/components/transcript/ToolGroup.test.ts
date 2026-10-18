@@ -22,6 +22,21 @@ const tool = (
 });
 
 describe("canonical tool payload availability", () => {
+  it("renders popup payloads only when their action is expanded", () => {
+    const row = tool("ready");
+    const collapsed = renderToStaticMarkup(
+      createElement(ToolGroup, { tools: [row], compactDetails: true }),
+    );
+    expect(collapsed).not.toContain("stale partial result");
+    const expanded = renderToStaticMarkup(
+      createElement(ToolGroup, {
+        tools: [row],
+        compactDetails: true,
+        expandedItemKey: row.itemKey,
+      }),
+    );
+    expect(expanded).toContain("stale partial result");
+  });
   it.each(["loading", "denied", "invalid"] as const)(
     "shows %s without presenting a partial result",
     (state) => {
