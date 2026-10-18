@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-/// Reusable schedule configuration; task selection and concurrency live on
-/// Trigger, each referencing trigger has its own scheduling cursor.
+/// Each referencing trigger keeps its own scheduling cursor against this
+/// shared cadence.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]

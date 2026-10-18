@@ -178,7 +178,6 @@ fn read_only_mount(_path: &Path) -> bool {
     false
 }
 
-/// Copies the packaged runtime to its durable path, keyed by content.
 fn install_packaged_executable(source: &Path, installed: &Path) -> std::io::Result<bool> {
     let _guard = INSTALL_LOCK
         .lock()
@@ -208,7 +207,6 @@ fn install_packaged_executable(source: &Path, installed: &Path) -> std::io::Resu
     Ok(true)
 }
 
-/// Whether the durable copy already holds the packaged bytes.
 fn already_installed(source: &Path, installed: &Path) -> std::io::Result<bool> {
     // A symlink is not the copy: following it would record the link target.
     if !regular_executable(installed) {

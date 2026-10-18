@@ -366,8 +366,6 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                     );
                     let provider_history = provider_view_tagged(tagged)?;
 
-                    // The query excludes the exact raw prefix named by the
-                    // required compaction cursor.
                     let prior_provider_prefix = 0;
                     let mut history = provider_history;
                     let mut summaries = compaction_state

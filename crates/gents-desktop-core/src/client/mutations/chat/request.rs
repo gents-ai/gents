@@ -793,9 +793,7 @@ fn build_add_agent_request_field(
     )
 }
 
-/// Resend a stale-terminal request by submitting a fresh row whose
-/// `retry_parent_request` points back at the stale one. Only
-/// `lifecycle_state=dead` with `failure_reason=Stale` is eligible — any
+/// Only `lifecycle_state=dead` with `failure_reason=Stale` is eligible — any
 /// other state would risk bypassing legitimate terminal classifications.
 pub async fn resend_request(
     node: &Arc<EmbeddedNode>,

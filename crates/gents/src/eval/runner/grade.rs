@@ -1,6 +1,3 @@
-//! One [`VerdictRow`] per (stage, check) of a case, pure over the case and
-//! the trial's evidence.
-
 use serde_json::{json, Value};
 
 use crate::document_config::{EvalCase, EvalCheckRef, EvalStage, EvalTier};
@@ -8,8 +5,6 @@ use crate::eval::checks::{failure_feedback, CheckRegistry};
 use crate::eval::runner::executor::{StageEvidence, TrialEvidence};
 use crate::eval::{classify, EvidenceClass, OutcomeKind, ProviderReason};
 
-/// One graded (stage, check) pair. `score_bp` is `None` when the row is not
-/// evidence about the subject.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerdictRow {
     pub stage_id: String,
@@ -24,9 +19,9 @@ pub struct VerdictRow {
     pub feedback: Option<String>,
 }
 
-/// One row per (stage, check) of `case`, in case order. Whether `feedback` may
-/// be written to a verdict is the caller's decision;
-/// `documents::append_verdict` refuses it off the train split.
+/// One row per (stage, check) of `case`, in case order; whether `feedback` may
+/// be written to a verdict is the caller's decision (`documents::append_verdict`
+/// refuses it off the train split).
 pub fn grade(
     case: &EvalCase,
     evidence: &TrialEvidence,
@@ -39,7 +34,6 @@ pub fn grade(
             .stages
             .iter()
             .find(|candidate| candidate.stage_id == stage.stage_id);
-        // The proposer reads acceptance rows only: a failure is named there, once.
         let feedback_row = stage
             .checks
             .iter()
@@ -72,10 +66,10 @@ pub fn grade(
     rows
 }
 
-/// A stage that ended in `kind`. A `Provider` failure without a reason, and a
-/// `failure_kind` that classifies as passing (malformed evidence), must not
-/// read as a pass: scoring would floor a passing class with no score at full
-/// credit, so both are recorded as [`OutcomeKind::Unknown`].
+/// A stage that ended in `kind` must not read as a pass: a passing class with
+/// no score is floored at full credit, so a `Provider` failure without a reason
+/// and a `failure_kind` that classifies as passing (malformed evidence) are
+/// recorded as [`OutcomeKind::Unknown`].
 fn failed(
     stage: &EvalStage,
     check: &EvalCheckRef,

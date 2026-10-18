@@ -639,7 +639,7 @@ pub async fn create_agent_message_in_scope(
     content: &str,
     timestamp: &str,
 ) {
-    use gents::defra_node::{ExecuteRetryPolicy, QueryRequest};
+    use gents::defra_node::QueryRequest;
     use gents::session::canonical_rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
@@ -700,10 +700,9 @@ pub async fn create_agent_message_in_scope(
         created_at: timestamp.into(),
     };
     let segment_response = node
-        .execute_request_with_retry(
+        .execute_request(
             QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                 .with_variables(output_segment_create_variables(&segment).unwrap()),
-            ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(
@@ -749,10 +748,9 @@ pub async fn create_agent_message_in_scope(
         created_at: timestamp.into(),
     };
     let response = node
-        .execute_request_with_retry(
+        .execute_request(
             QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                 .with_variables(transcript_message_create_variables(&message).unwrap()),
-            ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(

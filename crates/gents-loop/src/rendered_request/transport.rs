@@ -357,7 +357,6 @@ impl CountingInner {
     }
 }
 
-// Not `#[cfg(test)]`, for the same reason as `CountingInner`.
 mod counting_inner_impl {
     use std::sync::atomic::Ordering;
     use std::sync::Arc;

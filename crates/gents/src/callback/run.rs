@@ -726,8 +726,6 @@ pub async fn recover_local_invocations(
     retry_failed_plugin_invocations(node, node_did, ceiling, plugins, engine).await
 }
 
-/// Runs a failed plugin invocation again once its backoff has passed and its
-/// callback allows more attempts.
 async fn retry_failed_plugin_invocations(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,

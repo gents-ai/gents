@@ -229,7 +229,7 @@ async fn wait_for_activation(state: RuntimeHttpState) -> Response {
             }
             if current.successful_for(*generation, fingerprint) {
                 let readiness = match crate::commands::status::load_live_node_readiness(
-                    &state.graphql,
+                    &state.p2p_graphql,
                     &state.node_did,
                 )
                 .await
@@ -379,7 +379,7 @@ async fn metrics_handler(State(state): State<RuntimeHttpState>) -> Response {
     };
     let p2p_metrics = load_p2p_metrics_for_scrape(&state).await;
     match render_prometheus_metrics(
-        &state.graphql,
+        &state.p2p_graphql,
         &state.node_did,
         &measured_backend_health,
         Some(&p2p_metrics),
@@ -446,7 +446,7 @@ async fn version_handler() -> impl IntoResponse {
 }
 
 async fn healthz_handler(State(state): State<RuntimeHttpState>) -> Response {
-    match load_metrics_query_data(&state.graphql, &state.node_did).await {
+    match load_metrics_query_data(&state.p2p_graphql, &state.node_did).await {
         Ok(data) => {
             let data = with_local_native_executors(data);
             let health = render_healthz_payload(&state, Some(&data), None);
@@ -519,12 +519,12 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
     let probe_deadline = tokio::time::Instant::now() + STATUS_PROBE_BUDGET;
     let metrics = tokio::time::timeout_at(
         probe_deadline,
-        load_metrics_core_data(&state.graphql, &state.node_did),
+        load_metrics_core_data(&state.p2p_graphql, &state.node_did),
     )
     .await;
     let metrics = match metrics {
         Ok(Ok(core)) => Ok(Ok(core
-            .with_liveness_activity(&state.graphql, probe_deadline)
+            .with_liveness_activity(&state.p2p_graphql, probe_deadline)
             .await)),
         Ok(Err(error)) => Ok(Err(error)),
         Err(elapsed) => Err(elapsed),
@@ -606,7 +606,7 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
     if body.get("error").is_none() {
         if let Ok(Ok((agents, context_budget, context))) = tokio::time::timeout(
             STATUS_PROBE_BUDGET,
-            load_self_view(&state.graphql, &state.node_did),
+            load_self_view(&state.p2p_graphql, &state.node_did),
         )
         .await
         {
@@ -661,7 +661,7 @@ fn replicated_schema_status(
 
 async fn self_handler(State(state): State<RuntimeHttpState>) -> Response {
     let (health, runtime, readiness, status_code) =
-        match load_metrics_query_data(&state.graphql, &state.node_did).await {
+        match load_metrics_query_data(&state.p2p_graphql, &state.node_did).await {
             Ok(data) => {
                 let data = with_local_native_executors(data);
                 let health = render_healthz_payload(&state, Some(&data), None);
@@ -688,7 +688,7 @@ async fn self_handler(State(state): State<RuntimeHttpState>) -> Response {
             }
         };
 
-    match load_self_view(&state.graphql, &state.node_did).await {
+    match load_self_view(&state.p2p_graphql, &state.node_did).await {
         Ok((agents, context_budget, _context_indicator)) => {
             let body = render_self_payload(
                 &state,
@@ -731,7 +731,7 @@ async fn sessions_handler(
     State(state): State<RuntimeHttpState>,
     Query(query): Query<SessionHistoryParams>,
 ) -> Response {
-    match load_session_history_snapshot(&state.graphql, &state.node_did, query.limit).await {
+    match load_session_history_snapshot(&state.p2p_graphql, &state.node_did, query.limit).await {
         Ok(snapshot) => (StatusCode::OK, axum::Json(snapshot)).into_response(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -801,7 +801,7 @@ fn render_self_agent(agent_config: &SelfAgent) -> Value {
 }
 
 async fn fleet_handler(State(state): State<RuntimeHttpState>) -> Response {
-    match load_fleet_snapshot(&state.graphql).await {
+    match load_fleet_snapshot(&state.p2p_graphql).await {
         Ok(snapshot) => (StatusCode::OK, axum::Json(snapshot)).into_response(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -813,7 +813,7 @@ async fn fleet_handler(State(state): State<RuntimeHttpState>) -> Response {
 }
 
 async fn fleet_slots_handler(State(state): State<RuntimeHttpState>) -> Response {
-    match load_fleet_slot_snapshot(&state.graphql).await {
+    match load_fleet_slot_snapshot(&state.p2p_graphql).await {
         Ok(snapshot) => (StatusCode::OK, axum::Json(snapshot)).into_response(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -825,7 +825,7 @@ async fn fleet_slots_handler(State(state): State<RuntimeHttpState>) -> Response 
 }
 
 async fn mcp_pool_handler(State(state): State<RuntimeHttpState>) -> Response {
-    match load_mcp_pool_snapshot(&state.graphql, &state.node_did).await {
+    match load_mcp_pool_snapshot(&state.p2p_graphql, &state.node_did).await {
         Ok(snapshot) => (StatusCode::OK, axum::Json(snapshot)).into_response(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,

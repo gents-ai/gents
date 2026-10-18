@@ -1,5 +1,3 @@
-//! Embedded trial homes and runtime boot.
-
 pub mod executor;
 pub mod home;
 mod inspect;

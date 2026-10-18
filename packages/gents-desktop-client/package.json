@@ -1,6 +1,6 @@
 {
   "name": "@source-inc/gents-desktop-client",
-  "version": "0.20.0",
+  "version": "0.21.0-rc0",
   "license": "Apache-2.0",
   "description": "Transport, shared store, and view-model contract for Gents desktop packages",
   "type": "module",
@@ -30,7 +30,7 @@
     "test": "tsc -p tests/tsconfig.json && vitest run"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2"
+    "@tauri-apps/api": "2.10.1"
   },
   "devDependencies": {
     "typescript": "~5.8.3",

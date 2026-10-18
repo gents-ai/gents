@@ -6,7 +6,6 @@ export const HORIZONS = new Set([
   "roadmap: later",
   "roadmap: parked",
 ]);
-// Exempt by issue NUMBER, not by label.
 export const EXEMPT_ISSUES = new Set([839]);
 export const ROADMAP_ISSUE = 839;
 

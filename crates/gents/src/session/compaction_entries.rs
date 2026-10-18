@@ -299,8 +299,6 @@ pub async fn load_compaction_entries(
         None => Vec::new(),
     };
 
-    // Legacy arrays are self-contained snapshots. Once a row stores deltas,
-    // the public cumulative projection depends on every preceding chain row.
     validate_file_path_projection_chain(node_did, session_id, requester_did, &rows)?;
 
     let mut files_read = FilePathAccumulator::default();

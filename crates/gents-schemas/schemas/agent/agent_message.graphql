@@ -1,4 +1,4 @@
-type AgentMessage @branchable @index(fields: ["node_did", "session_id", "sequence"]) {
+type AgentMessage @branchable @index(fields: ["node_did", "session_id", "sequence"], unique: true) {
     message_key: String @index @immutable
     session_id: String @index @immutable
     node_did: String @index @immutable

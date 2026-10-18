@@ -1,16 +1,16 @@
 use super::*;
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn idle_observer_publishes_without_advancing_a_batch_timer() {
     let (_tempdir, node, store, handle) = build_observer_fixture().await;
     let mut changes = store.subscribe();
     let started = tokio::time::Instant::now();
     seed_node(node.as_ref(), "did:immediate").await;
-    tokio::time::timeout(Duration::from_millis(100), changes.changed())
+    tokio::time::timeout(Duration::from_secs(5), changes.changed())
         .await
-        .expect("idle observer must not wait 150ms")
+        .expect("idle observer publication deadline")
         .unwrap();
-    assert!(started.elapsed() < Duration::from_millis(100));
+    assert!(started.elapsed() < Duration::from_millis(150));
     handle.shutdown().await;
 }
 

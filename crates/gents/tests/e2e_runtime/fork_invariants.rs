@@ -86,10 +86,9 @@ async fn import_scoped_message(
             created_at: format!("2026-04-21T10:00:{sequence:02}Z"),
         };
         let response = node
-            .execute_request_with_retry(
+            .execute_request(
                 defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                     .with_variables(output_segment_create_variables(&segment).unwrap()),
-                defra_node::ExecuteRetryPolicy::default(),
             )
             .await;
         assert!(!response.has_errors(), "{:?}", response.errors);
@@ -122,10 +121,9 @@ async fn import_scoped_message(
         created_at: format!("2026-04-21T10:00:{sequence:02}Z"),
     };
     let response = node
-        .execute_request_with_retry(
+        .execute_request(
             defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                 .with_variables(transcript_message_create_variables(&message).unwrap()),
-            defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);

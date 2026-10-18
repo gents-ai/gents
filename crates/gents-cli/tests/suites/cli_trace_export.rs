@@ -1612,10 +1612,7 @@ async fn exec_variables_doc_id(
     collection: &str,
 ) -> Result<String> {
     let response = node
-        .execute_request_with_retry(
-            gents::defra_node::QueryRequest::new(query).with_variables(variables),
-            gents::defra_node::ExecuteRetryPolicy::default(),
-        )
+        .execute_request(gents::defra_node::QueryRequest::new(query).with_variables(variables))
         .await;
     anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
     gents::graphql::single_mutation_document(&response, &format!("create_{collection}"))?
@@ -1900,7 +1897,7 @@ async fn seed_canonical_terminal_text(
     )
     .await?;
     let terminal = serde_json::to_value(TerminalOutput::Message { message_doc_id })?;
-    let response = node.execute_request_with_retry(gents::defra_node::QueryRequest::new(r#"mutation($id: String!, $terminal: JSON!) { update_AgentRequest(filter: {_docID: {_eq: $id}}, input: {terminal_output: $terminal}) {_docID} }"#).with_variables(json!({"id": request_doc_id, "terminal": terminal})), gents::defra_node::ExecuteRetryPolicy::default()).await;
+    let response = node.execute_request(gents::defra_node::QueryRequest::new(r#"mutation($id: String!, $terminal: JSON!) { update_AgentRequest(filter: {_docID: {_eq: $id}}, input: {terminal_output: $terminal}) {_docID} }"#).with_variables(json!({"id": request_doc_id, "terminal": terminal}))).await;
     anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
     Ok(())
 }

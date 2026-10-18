@@ -10,10 +10,14 @@ use gents_desktop_bridge::contract::{
     MANAGED_SERVER_TRAY_RESTART_EVENT, MANAGED_SERVER_TRAY_START_EVENT,
     MANAGED_SERVER_TRAY_STOP_EVENT, MANAGED_SERVER_UPDATED_EVENT,
 };
+#[cfg(any(
+    all(feature = "native-e2e", debug_assertions, desktop),
+    all(desktop, any(target_os = "macos", target_os = "linux"))
+))]
+use gents_desktop_bridge::NodeHomePolicy;
 use gents_desktop_bridge::{
     init, init_tracing as install_tracing, install_runtime, prefer_host_tools, AppMeta,
-    BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, NodeHomePolicy, SnapshotGrants,
-    TracingConfig,
+    BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, SnapshotGrants, TracingConfig,
 };
 #[cfg(desktop)]
 use std::sync::atomic::{AtomicBool, Ordering};

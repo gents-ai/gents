@@ -101,6 +101,8 @@ structure PromptAssemblyItemCase where
   value : Nat
   deriving Repr
 
+/-- A grouped-wire turn persisted in native emission order: reasoning, then
+text, then a call, closed by its result and followed by a later wake. -/
 structure PromptAssemblyRowCase where
   role : String
   kind : String
@@ -108,6 +110,8 @@ structure PromptAssemblyRowCase where
   content : List PromptAssemblyItemCase
   deriving Repr
 
+/-- The same shape with an unpaired call between reasoning and text: pairing
+drops that block, so the retained persisted indices are not contiguous. -/
 structure PromptAssemblySplitCase where
   index : Nat
   expected : List PromptAssemblyRowCase
@@ -299,8 +303,6 @@ private def interleavedCoherentRows : List ProviderRow :=
   , toolResult 1 1
   , userText 2 6 ]
 
-/-- A grouped-wire turn persisted in native emission order: reasoning, then
-text, then a call, closed by its result and followed by a later wake. -/
 private def reasoningTextCallRows : List ProviderRow :=
   [ userText 0 3
   , mkRow 1 .assistant (.assistantToolCalls [1].toFinset)
@@ -308,8 +310,6 @@ private def reasoningTextCallRows : List ProviderRow :=
   , toolResult 2 1
   , userText 3 6 ]
 
-/-- The same shape with an unpaired call between reasoning and text: pairing
-drops that block, so the retained persisted indices are not contiguous. -/
 private def reasoningUnpairedCallTextRows : List ProviderRow :=
   [ userText 0 3
   , mkRow 1 .assistant (.assistantToolCalls [1, 2].toFinset)

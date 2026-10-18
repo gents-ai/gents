@@ -68,11 +68,6 @@ impl DefraQueryMcp {
         }
     }
 
-    /// One graph read for the caller this request authenticates, through the
-    /// owners and reply shapes of the in-session tools, under the caller's
-    /// forwarded bearer. A result document is rendered only when the MCP read
-    /// scope admits its collection; the listing is the in-session reply text,
-    /// returned as is so no re-serialization reorders it.
     async fn call_graph_read(
         &self,
         name: &str,
@@ -252,8 +247,6 @@ async fn caller_graph_access(
     ))
 }
 
-/// A result document is rendered only when the MCP read scope admits its
-/// collection.
 fn result_value_in_scope(
     scope: &CollectionScope,
     view: gents::graph_pipeline::GraphRunView,

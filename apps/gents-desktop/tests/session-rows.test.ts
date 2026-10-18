@@ -14,7 +14,6 @@ const session = (sessionId: string, turnState: string | null = "completed") =>
   }) as SessionSummary;
 const key = (s: SessionSummary) => sessionKeyOf(s);
 
-/* lead started worker; worker started helper; stray's starter is not listed */
 const lead = session("lead");
 const worker = session("worker", "running");
 const helper = session("helper", "failed");

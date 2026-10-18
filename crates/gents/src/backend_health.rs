@@ -861,8 +861,6 @@ mod tests {
         }
     }
 
-    /// Minimal /v1/models responder on a real socket, served on the ambient
-    /// Tokio runtime to avoid independently scheduled blocking threads.
     struct ModelsListener {
         port: u16,
         requests: Arc<AtomicUsize>,

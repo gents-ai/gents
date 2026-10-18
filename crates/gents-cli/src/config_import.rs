@@ -90,7 +90,6 @@ async fn apply_selected_plan(
             counts.add(*collection, 1);
         }
     }
-    // One retained-candidate validation and publication for the complete change.
     // Enumeration order is deterministic; it does not establish reference safety.
     let applied = apply_desired_state_plan(txn, plan).await?;
     for collection in Collection::ALL {

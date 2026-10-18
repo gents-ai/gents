@@ -86,6 +86,19 @@ async function loadEveryPage(page: Page) {
     await page.waitForTimeout(150);
   }
   await page.waitForTimeout(600);
+  await expect
+    .poll(() =>
+      scroller(page)
+        .locator("[data-transcript-content]")
+        .evaluate((content: HTMLElement) => content.style.marginTop),
+    )
+    .toBe("");
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  );
 }
 
 async function backToBottom(page: Page) {

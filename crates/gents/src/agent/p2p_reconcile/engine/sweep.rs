@@ -183,6 +183,7 @@ async fn sweep_pairings_logged(
     }
 }
 
+#[cfg(test)]
 pub(super) async fn sweep_pairings(
     admin: &dyn RemoteP2pAdmin,
     store: &dyn PairingStateStore,

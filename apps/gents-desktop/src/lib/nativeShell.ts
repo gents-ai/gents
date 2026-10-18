@@ -1,6 +1,5 @@
-/* The desktop shell's native side: this window, the folder dialog, the
-   opener and the shell's own commands. It is the only app module that
-   imports Tauri; the bridge's commands go through the client package. */
+/* The only app module that imports Tauri; the bridge's commands go through
+   the client package. */
 import { invoke } from "@tauri-apps/api/core";
 import { homeDir } from "@tauri-apps/api/path";
 import { getCurrentWindow } from "@tauri-apps/api/window";

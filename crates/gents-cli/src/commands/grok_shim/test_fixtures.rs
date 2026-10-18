@@ -1,5 +1,5 @@
 use defra_node::EmbeddedNode;
-use gents::defra_node::{ExecuteRetryPolicy, QueryRequest};
+use gents::defra_node::QueryRequest;
 use gents::graphql::single_mutation_document;
 use gents::session::canonical_rows::{
     output_segment_create_variables, transcript_message_create_variables,
@@ -13,6 +13,10 @@ use gents_protocol::output::{
 use std::sync::Arc;
 
 #[path = "../../../../gents/tests/support/streaming_backend.rs"]
+#[expect(
+    dead_code,
+    reason = "The shared backend also supports stream gates and counters used by other test binaries."
+)]
 pub(super) mod streaming_backend;
 
 pub(super) async fn configure_runtime_agent(
@@ -173,10 +177,9 @@ pub(super) async fn seed_canonical_assistant_message(
     };
     async fn insert_segment(node: &EmbeddedNode, value: &OutputSegment) -> String {
         let response = node
-            .execute_request_with_retry(
+            .execute_request(
                 QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                     .with_variables(output_segment_create_variables(value).unwrap()),
-                ExecuteRetryPolicy::default(),
             )
             .await;
         assert!(
@@ -231,10 +234,9 @@ pub(super) async fn seed_canonical_assistant_message(
         created_at,
     };
     let response = node
-        .execute_request_with_retry(
+        .execute_request(
             QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                 .with_variables(transcript_message_create_variables(&message).unwrap()),
-            ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(
@@ -252,10 +254,9 @@ pub(super) async fn seed_canonical_assistant_message(
 
 async fn insert_output_segment(node: &EmbeddedNode, segment: &OutputSegment) -> String {
     let response = node
-        .execute_request_with_retry(
+        .execute_request(
             QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                 .with_variables(output_segment_create_variables(segment).unwrap()),
-            ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(
@@ -273,10 +274,9 @@ async fn insert_output_segment(node: &EmbeddedNode, segment: &OutputSegment) -> 
 
 async fn insert_transcript_header(node: &EmbeddedNode, header: &TranscriptMessage) {
     let response = node
-        .execute_request_with_retry(
+        .execute_request(
             QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                 .with_variables(transcript_message_create_variables(header).unwrap()),
-            ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(
@@ -330,10 +330,9 @@ pub(super) async fn next_request_sequence(node: &EmbeddedNode, request_doc_id: &
 
 /// Seed one physical tool row through a matching canonical ToolCall admission
 /// and, for terminal lifecycle states, one exact ToolDelivery observation.
-/// The sole Grok-shim test encoding owner for tool arguments/results.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn seed_canonical_tool_call(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     request: &gents_protocol::row::AgentRequestRow,
     tool_call_id: &str,
     tool_name: &str,
@@ -350,8 +349,6 @@ pub(super) async fn seed_canonical_tool_call(
     let requester_did = request.requester_did.clone();
     let session_id = request.session_id.as_deref().expect("fixture session");
     let request_doc_id = request.doc_id.as_deref().expect("fixture request doc");
-    // Keep the provider source unique even when two calls share a visible
-    // message sequence (stable-identity tie break).
     let source_sequence = next_request_sequence(node, request_doc_id).await;
     let sequence = if let Some(sequence) = message_sequence {
         sequence
@@ -389,43 +386,30 @@ pub(super) async fn seed_canonical_tool_call(
     let spawned_by = spawned_by_tool_call_doc_id
         .map(|id| format!("\"{}\"", gents::graphql::escape_graphql_string(id)))
         .unwrap_or_else(|| "null".into());
-    let response = node
-        .execute(&format!(
-            r#"mutation {{ create_AgentToolCall(input: {{
+    let tool_mutation = format!(
+        r#"mutation {{ create_AgentToolCall(input: {{
         tool_call_key: "{}:{}", request_id: "{}", request_doc_id: "{}",
         node_did: "{}", requester_did: {requester}, session_id: "{}",
         tool_call_id: "{}", tool_name: "{}", message_sequence: {sequence},
         lifecycle_state: "{}", spawned_by_tool_call_doc_id: {spawned_by}, started_at: "{}"
     }}) {{_docID}} }}"#,
-            gents::graphql::escape_graphql_string(request_doc_id),
-            gents::graphql::escape_graphql_string(tool_call_id),
-            gents::graphql::escape_graphql_string(&request.request_id),
-            gents::graphql::escape_graphql_string(request_doc_id),
-            gents::graphql::escape_graphql_string(node_did),
-            gents::graphql::escape_graphql_string(session_id),
-            gents::graphql::escape_graphql_string(tool_call_id),
-            gents::graphql::escape_graphql_string(tool_name),
-            gents::graphql::escape_graphql_string(lifecycle_state),
-            gents::graphql::escape_graphql_string(&created_at),
-        ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "tool row seed: {:?}",
-        response.errors
+        gents::graphql::escape_graphql_string(request_doc_id),
+        gents::graphql::escape_graphql_string(tool_call_id),
+        gents::graphql::escape_graphql_string(&request.request_id),
+        gents::graphql::escape_graphql_string(request_doc_id),
+        gents::graphql::escape_graphql_string(node_did),
+        gents::graphql::escape_graphql_string(session_id),
+        gents::graphql::escape_graphql_string(tool_call_id),
+        gents::graphql::escape_graphql_string(tool_name),
+        gents::graphql::escape_graphql_string(lifecycle_state),
+        gents::graphql::escape_graphql_string(&created_at),
     );
-    let tool_doc_id = single_mutation_document(&response, "create_AgentToolCall")
-        .unwrap()
-        .unwrap()["_docID"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    if spawned_by_tool_call_doc_id.is_some() {
+    let is_spawned_child = spawned_by_tool_call_doc_id.is_some();
+    if is_spawned_child {
         assert!(
             result.is_none(),
             "spawned fixture results must be delivered by their lifecycle owner"
         );
-        return tool_doc_id;
     }
     let generation = format!("fixture:{request_doc_id}");
     let admitted = OutputSegment {
@@ -465,43 +449,91 @@ pub(super) async fn seed_canonical_tool_call(
         }),
         created_at: created_at.clone(),
     };
-    let admitted_doc = insert_output_segment(node, &admitted).await;
-    insert_transcript_header(
+    let admitted_variables = output_segment_create_variables(&admitted).unwrap();
+    let admitted_generation = generation.clone();
+    let requester_did_for_header = requester_did.clone();
+    let node_did_for_header = node_did.to_owned();
+    let session_id_for_header = session_id.to_owned();
+    let request_doc_id_for_header = request_doc_id.to_owned();
+    let tool_call_id_for_header = tool_call_id.to_owned();
+    let tool_name_for_header = tool_name.to_owned();
+    let created_at_for_header = created_at.clone();
+    let message_key = format!("accepted:{request_doc_id}:{sequence}");
+    let tool_doc_id = gents::config_client::ConfigAccess::transact_local_write(
         node,
-        &TranscriptMessage {
-            message_key: format!("accepted:{request_doc_id}:{sequence}"),
-            session_id: session_id.into(),
-            node_did: node_did.into(),
-            requester_did: requester_did.clone(),
-            request_doc_id: Some(request_doc_id.into()),
-            publication: MessagePublication::RequestExecution {
-                execution_generation: generation,
-            },
-            outcome: OutputOutcome::Complete,
-            sequence,
-            role: MessageRole::Assistant,
-            native_id: None,
-            blocks: vec![MessageBlock::ToolCall {
-                tool_call_doc_id: tool_doc_id.clone().into(),
-                id: tool_call_id.into(),
-                call_id: None,
-                name: tool_name.into(),
-                arguments: PayloadRef {
-                    close_doc_id: admitted_doc,
-                    stream: 0,
-                },
-                signature: None,
-                additional_params: None,
-            }],
-            created_at: created_at.clone(),
+        None,
+        "grok.seed_canonical_tool_call",
+        move |txn| {
+            let tool_mutation = tool_mutation.clone();
+            let admitted_variables = admitted_variables.clone();
+            let admitted_generation = admitted_generation.clone();
+            let requester_did_for_header = requester_did_for_header.clone();
+            let node_did_for_header = node_did_for_header.clone();
+            let session_id_for_header = session_id_for_header.clone();
+            let request_doc_id_for_header = request_doc_id_for_header.clone();
+            let tool_call_id_for_header = tool_call_id_for_header.clone();
+            let tool_name_for_header = tool_name_for_header.clone();
+            let created_at_for_header = created_at_for_header.clone();
+            let message_key = message_key.clone();
+            Box::pin(async move {
+                let tool_response = txn.execute(&tool_mutation).await?;
+                let tool_doc_id = gents_protocol::graphql::extract_mutation_doc_id(
+                    &tool_response,
+                    "AgentToolCall",
+                )?;
+                if is_spawned_child {
+                    return Ok(tool_doc_id);
+                }
+                let admitted_response = txn
+                    .execute_with_variables(
+                        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                        &admitted_variables,
+                    )
+                    .await?;
+                let admitted_doc = gents_protocol::graphql::extract_mutation_doc_id(
+                    &admitted_response,
+                    "AgentOutputSegment",
+                )?;
+                let header = TranscriptMessage {
+                    message_key,
+                    session_id: session_id_for_header,
+                    node_did: node_did_for_header,
+                    requester_did: requester_did_for_header,
+                    request_doc_id: Some(request_doc_id_for_header),
+                    publication: MessagePublication::RequestExecution {
+                        execution_generation: admitted_generation,
+                    },
+                    outcome: OutputOutcome::Complete,
+                    sequence,
+                    role: MessageRole::Assistant,
+                    native_id: None,
+                    blocks: vec![MessageBlock::ToolCall {
+                        tool_call_doc_id: tool_doc_id.clone().into(),
+                        id: tool_call_id_for_header,
+                        call_id: None,
+                        name: tool_name_for_header,
+                        arguments: PayloadRef {
+                            close_doc_id: admitted_doc,
+                            stream: 0,
+                        },
+                        signature: None,
+                        additional_params: None,
+                    }],
+                    created_at: created_at_for_header,
+                };
+                let header_variables = transcript_message_create_variables(&header)?;
+                txn.execute_with_variables(CREATE_AGENT_MESSAGE_MUTATION, &header_variables)
+                    .await?;
+                Ok(tool_doc_id)
+            })
         },
     )
-    .await;
+    .await
+    .expect("atomically seed canonical tool admission");
+    if spawned_by_tool_call_doc_id.is_some() {
+        return tool_doc_id;
+    }
     if let Some(result) = result {
-        // Tool-row and transcript publication chronology are separate
-        // coordinates; allocate the reply in the session's canonical sequence
-        // space instead of `admission + 1`, which would create an immutable
-        // header twin and make both publications conflicting.
         let delivery_sequence = next_request_sequence(node, request_doc_id).await;
         let delivered = OutputSegment {
             node_did: node_did.into(),
@@ -745,8 +777,6 @@ pub(super) async fn complete_canonical_spawned_process_output(
             writer: OutputWriter::ToolExecution {
                 tool_call_doc_id: tool_doc_id.into(),
             },
-            // The open output already supplied the only data flush; closing
-            // adds a closure fact, not a zero-byte flush.
             ordinal: None,
             runs: Vec::new(),
             payload: String::new(),

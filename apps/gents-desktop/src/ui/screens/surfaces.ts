@@ -1,5 +1,3 @@
-/* The surfaces this app registers. Importing this module once (App does)
-   fills the registry; a new surface is a file here and one entry. */
 import { ListTree, SquareStack } from "lucide-react";
 import { registerSurface } from "@/app/surfaces";
 import { workersOfId } from "@/hooks/useFleet";

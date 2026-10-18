@@ -1042,7 +1042,7 @@ async fn terminalization_with_principal_output(
             segment.request_doc_id = other_request.clone();
             segment.session_id = other_session.clone();
             let response = node
-                .execute_request_with_retry(
+                .execute_request(
                     defra_node::QueryRequest::new(
                         crate::session::canonical_rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
                     )
@@ -1050,7 +1050,6 @@ async fn terminalization_with_principal_output(
                         crate::session::canonical_rows::output_segment_create_variables(&segment)
                             .unwrap(),
                     ),
-                    defra_node::ExecuteRetryPolicy::default(),
                 )
                 .await;
             assert!(!response.has_errors(), "{:?}", response.errors);
@@ -1061,7 +1060,7 @@ async fn terminalization_with_principal_output(
             message.session_id = other_session.clone();
             message.message_key = format!("{}:{replica}", message.message_key);
             let response = node
-                .execute_request_with_retry(
+                .execute_request(
                     defra_node::QueryRequest::new(
                         crate::session::canonical_rows::CREATE_AGENT_MESSAGE_MUTATION,
                     )
@@ -1071,7 +1070,6 @@ async fn terminalization_with_principal_output(
                         )
                         .unwrap(),
                     ),
-                    defra_node::ExecuteRetryPolicy::default(),
                 )
                 .await;
             assert!(!response.has_errors(), "{:?}", response.errors);
@@ -1167,10 +1165,9 @@ async fn background_output_query_work_is_independent_of_principal_history() {
         segment: &gents_protocol::output::OutputSegment,
     ) {
         let response = node
-            .execute_request_with_retry(
+            .execute_request(
                 defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                     .with_variables(output_segment_create_variables(segment).unwrap()),
-                defra_node::ExecuteRetryPolicy::default(),
             )
             .await;
         assert!(!response.has_errors(), "{:?}", response.errors);

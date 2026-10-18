@@ -144,7 +144,7 @@ async fn seed_background_tool_calls(node: &EmbeddedNode) -> Result<()> {
     exec(
         node,
         r#"mutation {
-            create_AgentRequest(input: {purpose: "normal", 
+            background_request: create_AgentRequest(input: {purpose: "normal",
                 request_id: "req-background",
                 node_did: "did:test:test",
                 agent_id: "default",
@@ -157,7 +157,7 @@ async fn seed_background_tool_calls(node: &EmbeddedNode) -> Result<()> {
                 deadline: "2024-01-01T11:30:00Z",
                 retry_count: 0
             }) { _docID }
-            create_AgentRequest(input: {purpose: "normal", 
+            other_request: create_AgentRequest(input: {purpose: "normal",
                 request_id: "req-other",
                 node_did: "did:test:test",
                 agent_id: "default",
@@ -177,7 +177,7 @@ async fn seed_background_tool_calls(node: &EmbeddedNode) -> Result<()> {
     exec(
         node,
         r#"mutation {
-            create_AgentToolCall(input: {
+            background_running: create_AgentToolCall(input: {
                 tool_call_key: "session-background:call-background-running",
                 request_id: "req-background",
                 session_id: "session-background",
@@ -189,7 +189,7 @@ async fn seed_background_tool_calls(node: &EmbeddedNode) -> Result<()> {
                 started_at: "2024-01-01T11:00:05Z",
                 await_mode: "background"
             }) { _docID }
-            create_AgentToolCall(input: {
+            background_completed: create_AgentToolCall(input: {
                 tool_call_key: "session-background:call-background-completed",
                 request_id: "req-background",
                 session_id: "session-background",
@@ -202,7 +202,7 @@ async fn seed_background_tool_calls(node: &EmbeddedNode) -> Result<()> {
                 completed_at: "2024-01-01T11:00:11Z",
                 await_mode: "background"
             }) { _docID }
-            create_AgentToolCall(input: {
+            foreground_running: create_AgentToolCall(input: {
                 tool_call_key: "session-background:call-foreground-running",
                 request_id: "req-background",
                 session_id: "session-background",
@@ -214,7 +214,7 @@ async fn seed_background_tool_calls(node: &EmbeddedNode) -> Result<()> {
                 started_at: "2024-01-01T11:00:15Z",
                 await_mode: "foreground"
             }) { _docID }
-            create_AgentToolCall(input: {
+            background_status_only: create_AgentToolCall(input: {
                 tool_call_key: "session-background:call-background-status-only",
                 request_id: "req-background",
                 session_id: "session-background",
@@ -225,7 +225,7 @@ async fn seed_background_tool_calls(node: &EmbeddedNode) -> Result<()> {
                 started_at: "2024-01-01T11:00:20Z",
                 await_mode: "background"
             }) { _docID }
-            create_AgentToolCall(input: {
+            background_other: create_AgentToolCall(input: {
                 tool_call_key: "session-other:call-background-other",
                 request_id: "req-other",
                 session_id: "session-other",

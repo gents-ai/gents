@@ -179,7 +179,6 @@ test.describe("kit shell", () => {
     await gotoHarness(page);
     const filters = page.getByLabel("Session filters");
     const session = page.getByRole("link", { name: /introduction-and-greetings/ });
-    /* a narrowed list says so under the heading, with its Clear */
     const narrowed = page.getByTestId("sessions-narrowed");
     await expect(filters).toBeVisible();
     await expect(filters.getByRole("button", { name: "State" })).toBeVisible();

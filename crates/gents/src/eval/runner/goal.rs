@@ -1,5 +1,4 @@
-//! The goal is derived from the checks, and the checks remain the only
-//! verdicts.
+//! The goal is derived from the checks, and the checks remain the only verdicts.
 
 use serde::{Deserialize, Serialize};
 
@@ -64,7 +63,7 @@ pub fn case_goal(case: &EvalCase, fallback: &[Capture]) -> Vec<GoalEntry> {
             if case.goal.contains_key(&collection) {
                 continue;
             }
-            // A capture counted by several stages is measured against the last.
+            // A capture counted by several stages: the last one wins.
             goal.retain(|entry| entry.capture.as_deref() != Some(capture.as_str()));
             goal.push(GoalEntry {
                 collection,

@@ -59,7 +59,7 @@ export function createProjectionController({
   refreshSessionLiveDelta,
   onError = () => {},
 }: ProjectionControllerOptions): ProjectionController {
-  let active: Promise<Promise<void>[]> | null = null;
+  let active: Promise<void> | null = null;
   let snapshotActive: Promise<void> | null = null;
   let snapshotPending = false;
   let pending = 0;
@@ -141,11 +141,12 @@ export function createProjectionController({
           .then(drain)
           .finally(() => {
             active = null;
+          })
+          .then(async (snapshots) => {
+            await Promise.all(snapshots);
           });
       }
-      return active.then(async (snapshots) => {
-        await Promise.all(snapshots);
-      });
+      return active;
     },
     dispose() {
       disposed = true;

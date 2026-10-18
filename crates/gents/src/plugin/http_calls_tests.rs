@@ -403,7 +403,6 @@ async fn a_rebinding_name_is_checked_on_the_addresses_the_connection_uses() {
         refusal.contains("rebind.test resolves to the internal address 127.0.0.1"),
         "{refusal}"
     );
-    // One resolution, and it is the one that was checked.
     assert_eq!(lookups.load(Ordering::SeqCst), 1);
 
     let (mut mixed, _) = session_resolving(

@@ -301,10 +301,16 @@ fn link_roots(file: &Path) -> Vec<PathBuf> {
 
 fn private_folder(root: &Path) -> Result<tempfile::TempDir> {
     let shared = root.join(PRIVATE_ROOT);
-    let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
-    match builder.create(&shared) {
+    let create = {
+        use std::os::unix::fs::DirBuilderExt;
+        let mut builder = std::fs::DirBuilder::new();
+        builder.mode(0o700);
+        builder.create(&shared)
+    };
+    #[cfg(not(unix))]
+    let create = std::fs::DirBuilder::new().create(&shared);
+    match create {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(error) => {

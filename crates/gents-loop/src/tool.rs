@@ -508,7 +508,7 @@ mod tests {
             serde_json::json!("null"),
             serde_json::json!("\"any string\""),
             serde_json::json!("not json at all"),
-            serde_json::json!("{\"a\":"), // truncated
+            serde_json::json!("{\"a\":"),
             serde_json::json!([]),
             serde_json::json!([1, 2]),
             serde_json::json!(123),

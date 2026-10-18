@@ -106,7 +106,6 @@ fn a_home_lock_without_a_store_excludes_the_store_created_later() {
     lock_store(&home, &default_data_dir(&home)).unwrap();
 }
 
-/// A forked child blocked until its release pipe closes.
 #[cfg(unix)]
 struct BlockedChild {
     pid: libc::pid_t,

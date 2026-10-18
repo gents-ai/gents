@@ -164,8 +164,6 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
     if entries.is_empty() {
         anyhow::bail!("no capture rows matched");
     }
-    // Identity order: parsed numeric order key first, unparseable rows last by
-    // capture key — deterministic either way, never a lexical seq sort.
     entries.sort_by(|(left, _), (right, _)| {
         let left_key = capture_order_padded(left);
         let right_key = capture_order_padded(right);

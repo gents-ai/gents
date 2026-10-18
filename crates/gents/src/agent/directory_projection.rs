@@ -666,17 +666,17 @@ mod tests {
         let node = Arc::new(EmbeddedNode::builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         let seed = r#"mutation {
-            create_Node(input: { node_did: "did:key:local", display_name: "Local",
+            local_node: create_Node(input: { node_did: "did:key:local", display_name: "Local",
                 default_agent_id: "coder", enabled: true, created_at: "2026-07-23T00:00:00Z" }) { _docID }
-            create_Node(input: { node_did: "did:key:disabled", enabled: false,
+            disabled_node: create_Node(input: { node_did: "did:key:disabled", enabled: false,
                 created_at: "2026-07-23T00:00:00Z" }) { _docID }
-            create_Agent(input: { node_did: "did:key:local", agent_id: "coder",
+            coder_agent: create_Agent(input: { node_did: "did:key:local", agent_id: "coder",
                 display_name: "Coder", inference_profile_id: "profile", enabled: true }) { _docID }
-            create_Agent(input: { node_did: "did:key:local", agent_id: "artist",
+            artist_agent: create_Agent(input: { node_did: "did:key:local", agent_id: "artist",
                 display_name: "Artist", inference_profile_id: "profile", enabled: true }) { _docID }
-            create_Agent(input: { node_did: "did:key:local", agent_id: "disabled",
+            disabled_agent: create_Agent(input: { node_did: "did:key:local", agent_id: "disabled",
                 inference_profile_id: "profile", enabled: false }) { _docID }
-            create_Agent(input: { node_did: "did:key:foreign", agent_id: "coder",
+            foreign_agent: create_Agent(input: { node_did: "did:key:foreign", agent_id: "coder",
                 display_name: "Foreign", inference_profile_id: "profile", enabled: true }) { _docID }
         }"#;
         crate::config_client::ConfigAccess::write_local_response(
