@@ -3,6 +3,7 @@ use gents_loop::tool_policy::workspace_permissions as policy;
 
 #[derive(Debug, Deserialize)]
 pub(super) struct Case {
+    kind: policy::ApprovalKind,
     available: Vec<policy::Scope<u64>>,
     expected: policy::Grant<u64, u64>,
     deliveries: Vec<Delivery>,
@@ -26,19 +27,28 @@ fn binding(
     value: &policy::Grant<u64, u64>,
     resolved: &allowed::Resolved,
     access: BindAccess,
+    kind: policy::ApprovalKind,
 ) -> workspace::Binding {
     policy::Grant {
         scope: policy::Scope {
             workspace: key(root, value.scope.workspace),
             revision: value.scope.revision,
         },
-        action: workspace::BindingAction {
-            plugin: "team/files".into(),
-            artifact_digest: "artifact".into(),
-            input_digest: format!("input-{}", value.action),
-            path: resolved.target.clone(),
-            is_dir: resolved.is_dir,
-            access,
+        action: match kind {
+            policy::ApprovalKind::Filesystem => workspace::BindingAction::Plugin {
+                plugin: "team/files".into(),
+                artifact_digest: "artifact".into(),
+                input_digest: format!("input-{}", value.action),
+                path: resolved.target.clone(),
+                is_dir: resolved.is_dir,
+                access,
+            },
+            policy::ApprovalKind::Command => workspace::BindingAction::Command {
+                argv: vec!["fixture-command".into(), format!("action-{}", value.action)],
+                cwd: root.to_owned(),
+                root: root.to_owned(),
+                policy_digest: "policy".into(),
+            },
         },
     }
 }
@@ -145,12 +155,17 @@ pub(super) fn run(index: usize, case: &super::Case, scoped: &Case) {
         },
         is_dir: case.directory,
     };
-    let mut request = Request::new("team/files", &resolved, access(case.write), None);
+    let expected_binding = binding(
+        &folder,
+        &scoped.expected,
+        &resolved,
+        access(case.write),
+        scoped.kind,
+    );
+    let mut request = Request::for_binding(expected_binding.clone(), None);
     request.id = "q1".into();
     request.created_at_ms = 10;
     request.expires_at_ms = 20;
-    let expected_binding = binding(&folder, &scoped.expected, &resolved, access(case.write));
-    request.binding = Some(expected_binding.clone());
     observe(
         home.path(),
         &folder,
@@ -220,6 +235,7 @@ pub(super) fn run(index: usize, case: &super::Case, scoped: &Case) {
                 &delivery.received,
                 &resolved,
                 access(case.write),
+                scoped.kind,
             ));
             write_atomic(
                 &Queue::Workspace.decision_file(home.path(), "q1"),

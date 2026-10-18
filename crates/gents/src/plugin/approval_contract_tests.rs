@@ -90,7 +90,7 @@ fn assert_state(home: &Path, target: &Path, folder: &Path, expected: &State, con
 #[test]
 fn generated_approval_traces_drive_native_queue_and_grants() {
     let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.plugin_approval_cases.len(), 1848);
+    assert_eq!(contracts.plugin_approval_cases.len(), 2013);
     for (index, case) in contracts.plugin_approval_cases.into_iter().enumerate() {
         if let Some(scoped) = &case.scoped {
             scoped::run(index, &case, scoped);
