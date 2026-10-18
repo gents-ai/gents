@@ -510,6 +510,21 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             !snapshot.workspace_permission_write_cases.is_empty(),
         ),
         (
+            "access_review_task_cases",
+            "AccessReviewTaskCases",
+            !snapshot.access_review_task_cases.is_empty(),
+        ),
+        (
+            "workspace_command_root_cases",
+            "WorkspaceCommandRootCases",
+            !snapshot.workspace_command_root_cases.is_empty(),
+        ),
+        (
+            "operator_path_cases",
+            "OperatorPathCases",
+            !snapshot.operator_path_cases.is_empty(),
+        ),
+        (
             "prompt_assembly_service_tier_cases",
             "PromptAssemblyServiceTierCases",
             !snapshot.prompt_assembly_service_tier_cases.is_empty(),
