@@ -211,13 +211,11 @@ export function ChatTranscriptPanel({
       : null;
   const sendIdentity = optimisticSendIdentity
     ? optimisticSendIdentity
-    : session?.latestRequestId
-      ? `request:${session.latestRequestId}`
-      : latestUserTurn?.kind === "pendingUserTurn"
-        ? `request:${latestUserTurn.requestId}`
-        : latestUserTurn
-          ? `message:${latestUserTurn.itemKey}`
-          : null;
+    : latestUserTurn?.requestId
+      ? `request:${latestUserTurn.requestId}`
+      : latestUserTurn
+        ? `message:${latestUserTurn.itemKey}`
+        : null;
   useLayoutEffect(() => {
     setTranscriptWindow({
       sessionId: selectedSessionId,
