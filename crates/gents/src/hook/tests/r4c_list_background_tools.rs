@@ -181,10 +181,15 @@ async fn persisted_row_snapshot(hook: &DefraSessionHook, handle_tool_call_id: &s
         "persisted row snapshot query failed: {:?}",
         response.errors
     );
-    let rows = response.data["AgentToolCall"]
+    let rows = response
+        .data
+        .as_ref()
+        .expect("persisted row snapshot query returned no data")
+        .get("AgentToolCall")
+        .expect("AgentToolCall collection missing from snapshot response")
         .as_array()
-        .cloned()
-        .unwrap_or_default();
+        .expect("AgentToolCall snapshot is not an array")
+        .clone();
     let sanitized: Vec<Value> = rows
         .iter()
         .map(|row| {
