@@ -16,19 +16,8 @@ use super::snapshots::fetch_request_snapshot;
 
 const TEST_MUTATION_MAX_RETRIES: u32 = 3;
 const TEST_MUTATION_INITIAL_BACKOFF_MS: u64 = 100;
-// A full conformance run starts many embedded DefraDB nodes in parallel. On a
-// busy CI host, a healthy runtime can spend more than 60 seconds waiting for
-// startup and recovery I/O before it publishes its ready status row.
 pub const TEST_RUNTIME_READY_TIMEOUT: Duration = Duration::from_secs(120);
-// Shutdown also performs bounded watcher and subsystem cleanup. Keep this
-// comfortably above the 5-second control-settle windows exercised by the
-// runtime while preserving a hard failure for a genuinely stuck agent.
 const TEST_RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
-// Reaching a terminal lifecycle state is scheduler-bound on a host running the
-// full parallel suite: claim lag, the request's own deadline window, and the
-// terminal publication are each DB round trips a loaded host can lag by tens
-// of seconds. Callers wait for their request's own timing envelope plus this
-// margin, not a fixed short bound that only covers an unloaded run.
 pub const REQUEST_TERMINAL_PUBLICATION_MARGIN: Duration = Duration::from_secs(60);
 
 pub struct BootedAgent {
@@ -66,10 +55,9 @@ impl BootedAgent {
             .expect("agent run should return ok");
     }
 
-    /// Abort and join the runtime task without sending the graceful shutdown
-    /// signal. Recovery fixtures use this to establish a deterministic crash
-    /// boundary: no live observer may race the subsequent startup sweep, and
-    /// graceful shutdown must not author terminal lifecycle state first.
+    /// Establishes a deterministic crash boundary: no live observer may race
+    /// the subsequent startup sweep, and graceful shutdown must not author
+    /// terminal lifecycle state first.
     pub async fn crash(mut self) {
         self.signal_shutdown_on_drop = false;
         let Some(handle) = self.handle.take() else {
@@ -371,13 +359,10 @@ pub async fn wait_for_request_lifecycle_state(
     }
 }
 
-/// Wait for any terminal lifecycle state and report which one it reached.
-///
 /// `budget` must cover the request's own timing envelope plus
 /// [`REQUEST_TERMINAL_PUBLICATION_MARGIN`]; terminal publication is
 /// scheduler-bound on a loaded host, so a short fixed bound flakes under the
-/// full parallel suite. Terminal states absorb, so the predicate cannot fire
-/// early and cannot miss a later terminal publication.
+/// full parallel suite.
 pub async fn wait_for_request_terminal_state(
     node: &EmbeddedNode,
     request_doc_id: &str,
@@ -406,10 +391,8 @@ pub struct InferenceCallSnapshot {
     pub failure_reason: Option<String>,
 }
 
-/// Wait for the latest inference attempt for `request_id` to reach `expected`.
-///
 /// The daemon retries transient provider failures, so a historical failed
-/// attempt must not hide the current attempt's running or terminal state.
+/// attempt must not hide the current attempt's state.
 pub async fn wait_for_inference_call_state(
     node: &EmbeddedNode,
     request_id: &str,

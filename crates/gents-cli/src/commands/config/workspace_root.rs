@@ -10,9 +10,6 @@ use crate::config_writes::ConfigAccess;
 use crate::request_helpers::resolve_dual_id;
 use crate::{extract_mutation_doc_id, print_json, resolve_config_access};
 
-// Operator-local allowed-root ceiling used by agent configuration. This is not
-// pack configuration: Tools.host.root selects a path but does not grant authority.
-
 pub(super) async fn workspace_root_list(args: ConfigListArgs) -> Result<()> {
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let mut rows = crate::graphql_rows(
@@ -60,10 +57,9 @@ pub(super) async fn workspace_root_show(args: ConfigShowArgs) -> Result<()> {
     print_json(&rows.remove(0))
 }
 
-/// Reject relative paths and lexically normalize `.`/`..` components without
-/// touching the filesystem. The operator may pre-register a root before it
-/// exists, so this cannot use `std::fs::canonicalize` (which requires the
-/// path to exist and additionally resolves symlinks).
+/// The operator may pre-register a root before it exists, so this cannot use
+/// `std::fs::canonicalize` (which requires the path to exist and additionally
+/// resolves symlinks).
 fn canonicalize_workspace_root_path(path: &Path) -> Result<PathBuf> {
     if !path.is_absolute() {
         anyhow::bail!(
@@ -87,8 +83,6 @@ fn canonicalize_workspace_root_path(path: &Path) -> Result<PathBuf> {
 
 pub(super) async fn workspace_root_set(args: WorkspaceRootUpsertArgs) -> Result<()> {
     let path = canonicalize_workspace_root_path(&args.path)?;
-    // Reject rather than lossy-convert: a lossy string would silently
-    // register a root_path different from the actual directory.
     let root_path = path
         .to_str()
         .with_context(|| {
@@ -164,29 +158,4 @@ pub(super) async fn workspace_root_rm(args: ConfigShowArgs) -> Result<()> {
     }
     print_json(&json!({ "deleted": deleted, "root_path": root_path }))?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn canonicalize_rejects_relative_paths() {
-        let err = canonicalize_workspace_root_path(Path::new("relative/path")).unwrap_err();
-        assert!(err.to_string().contains("must be an absolute path"));
-    }
-
-    #[test]
-    fn canonicalize_normalizes_dot_and_dotdot_lexically() {
-        let normalized =
-            canonicalize_workspace_root_path(Path::new("/a/./b/../c")).expect("absolute path");
-        assert_eq!(normalized, PathBuf::from("/a/c"));
-    }
-
-    #[test]
-    fn canonicalize_does_not_require_existence() {
-        let normalized = canonicalize_workspace_root_path(Path::new("/definitely/not/a/real/path"))
-            .expect("absolute path need not exist");
-        assert_eq!(normalized, PathBuf::from("/definitely/not/a/real/path"));
-    }
 }

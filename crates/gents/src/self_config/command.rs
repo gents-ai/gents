@@ -1,5 +1,6 @@
 use super::*;
 
+mod authoring;
 mod crud;
 mod datastore;
 mod discovery;
@@ -7,8 +8,6 @@ pub(super) mod help;
 mod skill;
 mod validate;
 
-/// Resource index returned by `["help"]`: one line per resource, filtered to
-/// the granted ones. Fields, syntax and recipes live in `["help", RESOURCE]`.
 const HELP_INDEX: &[(&str, &str)] = &[
     (
         "agent",
@@ -38,13 +37,16 @@ const HELP_INDEX: &[(&str, &str)] = &[
         "connect sources, tasks and triggers; wiring recipes",
     ),
     ("pack", "pack and graph installation"),
+    (
+        "plugin",
+        "installed plugin inspection and explicit Tools selection",
+    ),
     ("discovery", "external configuration scan"),
     ("cleanup", "atomic multi-document deletion"),
     ("validate", "check saved configuration and references"),
     ("batch", "ordered config calls"),
 ];
 
-/// Where `preview` goes, and the help aliases, stated once in the index.
 const HELP_GRAMMAR: &str = "Documents: list, get, create, update, delete. target_id names the document; set writes fields, clear removes optional fields. list takes options.limit/cursor. create requires a new ID; update requires an existing ID. agent create takes options instead of set and allocates its ID and Context/Tools.
 Preview: [RESOURCE,preview,VERB]. Delete needs options.digest from preview. batch takes options.operations: ordered config calls; each commits separately, stopping on error. Packs use installation workflows. Collections and migrations use the separate schema tool; graph authoring is unavailable.";
 
@@ -70,11 +72,6 @@ pub struct ConfigCommandParams {
 }
 
 impl ConfigCommandParams {
-    #[cfg(test)]
-    pub(crate) fn into_argv_for_test(self) -> Result<Vec<String>> {
-        self.into_argv()
-    }
-
     fn into_argv(self) -> Result<Vec<String>> {
         anyhow::ensure!(!self.argv.is_empty(), "argv requires a config command");
         if config_help_resource(&self.argv).is_some() {
@@ -106,7 +103,8 @@ impl ConfigCommandParams {
                 | ["backend", "get" | "create" | "discover", ..]
                 | ["profile", "create", ..]
                 | ["skill", "get", ..]
-                | ["pack", "get" | "install" | "update" | "remove", ..] => 2,
+                | ["pack", "get" | "install" | "update" | "remove", ..]
+                | ["plugin", "get", ..] => 2,
                 ["automation", "get" | "preview" | "edit", _, ..] => 3,
                 ["get", ..] => return Err(CommandGuidance {
                     message: "Put the resource before the verb: use agent get to inspect an agent.".into(),
@@ -163,8 +161,6 @@ impl ConfigCommandParams {
                 !argv.contains(&flag),
                 "option {flag} supplied in both argv and options"
             );
-            // A list of strings is the repeated flag (cleanup targets, pack
-            // slots); any other structured value stays one JSON value.
             let values = match value {
                 Value::String(value) => vec![value],
                 Value::Array(items) if !items.is_empty() && items.iter().all(Value::is_string) => {
@@ -199,7 +195,6 @@ impl ConfigCommandParams {
     }
 }
 
-/// Recognize help before parsing command operands, never inside option values.
 fn config_help_resource(argv: &[String]) -> Option<Option<&str>> {
     let first = argv.first()?.as_str();
     if matches!(first, "help" | "--help" | "-h") {
@@ -219,7 +214,6 @@ fn config_help_resource(argv: &[String]) -> Option<Option<&str>> {
     None
 }
 
-/// Help bypasses dispatch and returns plain text, so it has no execution receipt.
 pub(crate) fn is_help_call(args: &Value) -> bool {
     serde_json::from_value::<ConfigCommandParams>(args.clone())
         .ok()
@@ -227,8 +221,6 @@ pub(crate) fn is_help_call(args: &Value) -> bool {
         .is_some_and(|argv| config_help_resource(&argv).is_some())
 }
 
-/// The command words a `RESOURCE ... --help` path names, so help can narrow
-/// to that command: operands after the resource, without `preview` or flags.
 fn help_verb(argv: &[String]) -> Vec<&str> {
     if argv
         .first()
@@ -243,7 +235,6 @@ fn help_verb(argv: &[String]) -> Vec<&str> {
         .filter(|word| !word.starts_with('-') && *word != "help")
         .take(3)
         .collect::<Vec<_>>();
-    // `preview create` narrows to create; a bare `preview` is the verb.
     if words.len() > 1 && words[0] == "preview" {
         words.remove(0);
     }
@@ -256,13 +247,6 @@ fn required_resource_id<'a>(value: Option<&'a String>, label: &str) -> Result<&'
         .with_context(|| format!("missing {label}: supply target_id, or a non-empty resource ID in argv before options or patch fields; see [\"help\"]"))
 }
 
-/// Native `config` tool. Its model-facing text is layered for progressive
-/// disclosure (#2088): the description is a small core (call shape, ID and
-/// write rules, how to get more); `["help"]` lists resources; `["help",
-/// RESOURCE]` gives that resource's commands, fields and one recipe; errors
-/// name the next call. Every layer is paid for in tokens on each turn or help
-/// call, so nothing is repeated across layers or responses, and concepts that
-/// explain how documents fit together belong to the Engineer prompt, not here.
 #[derive(Clone)]
 pub struct ConfigCommandTool {
     pub(super) node: Arc<EmbeddedNode>,
@@ -274,7 +258,6 @@ pub struct ConfigCommandTool {
     pub(super) preview: bool,
     pub(super) process_ceiling: crate::tool_surface::SelfConfigProcessCeiling,
     pub(super) execution: Arc<super::execution::ExecutionObservation>,
-    /// Whose home holds the pack store and the plugin store this tool installs into.
     pub(super) plugins: Arc<crate::plugin::executor::PluginExecutor>,
 }
 
@@ -332,8 +315,6 @@ Agent IDs are "<DID>:<slug>"; the slug alone works. ["help"] lists granted resou
         let receipt = call.execution.receipt();
         log_config_call(&words, &observed, help, previewing, &result);
         match result {
-            // Help is the page itself: plain text with no envelope. It is
-            // answered before any command parses, so it never mutates.
             Ok(text) if help => Ok(text),
             Ok(text) => append_receipt(&text, &receipt).map_err(Into::into),
             Err(error) => {
@@ -353,8 +334,6 @@ Agent IDs are "<DID>:<slug>"; the slug alone works. ["help"] lists granted resou
     }
 }
 
-/// The model's call as compact JSON for the call log, cut at about 2 KB.
-/// The config tool accepts no credential fields, so none can appear here.
 fn observed_call(args: &ConfigCommandParams) -> String {
     let call = json!({
         "argv": args.argv,
@@ -373,10 +352,6 @@ fn truncated(text: &str, max: usize) -> String {
     }
 }
 
-/// One `tool call` event per config call, and a `self-config write` event
-/// for each call that asks to change configuration, so a trial's
-/// exploration path and write counts can be followed from the log while its
-/// node is held.
 fn log_config_call(
     argv: &[String],
     call: &str,
@@ -399,7 +374,7 @@ fn log_config_call(
     let resource = argv.first().map(String::as_str).unwrap_or("");
     let verb = argv.get(1).map(String::as_str).unwrap_or("");
     let reads = [
-        "get", "list", "discover", "context", "help", "--help", "-h", "scan",
+        "get", "list", "discover", "context", "help", "--help", "-h", "scan", "verify",
     ];
     if help
         || previewing
@@ -441,8 +416,6 @@ fn log_config_call(
     );
 }
 
-/// A preview that references a document which does not exist yet names the
-/// call that can check it, or the order that makes the reference valid.
 fn missing_reference_next_step(
     missing: &crate::document_config::MissingReference,
     deleting: bool,
@@ -458,8 +431,6 @@ fn missing_reference_next_step(
     format!("{target} {id:?} does not exist yet; create it with its own resource command first, or reference an existing ID.")
 }
 
-/// Every non-help result ends with the execution receipt, after the answer
-/// and its next step, without re-serializing (and so re-sorting) the answer.
 fn append_receipt(
     text: &str,
     receipt: &super::execution::ConfigExecutionReceipt,
@@ -509,6 +480,9 @@ fn model_resources(categories: &BTreeSet<String>, pack: bool) -> Vec<&'static st
     }
     if pack {
         resources.push("pack");
+    }
+    if pack || categories.contains("tools") {
+        resources.push("plugin");
     }
     if !categories.is_empty() {
         resources.push("cleanup");
@@ -589,6 +563,16 @@ impl ConfigCommandTool {
                 message,
                 json!({"tool":"schema","next_call":{"argv":["help"]}}),
             );
+        }
+        if matches!(argv.first().map(String::as_str), Some("pack"))
+            && matches!(argv.get(1).map(String::as_str), Some("install" | "update"))
+        {
+            if let Some(package) = argv.get(2) {
+                return (
+                    message,
+                    json!({"next_call":{"argv":["pack","preview",argv[1],package]}}),
+                );
+            }
         }
         let resource = argv.first().map(String::as_str).unwrap_or("help");
         let next = if resources
@@ -696,6 +680,7 @@ impl ConfigCommandTool {
             "automation" => self.automation(&argv[1..]).await,
             "cleanup" => self.cleanup(&argv[1..]).await,
             "pack" => self.pack(&argv[1..]).await,
+            "plugin" => self.plugin(&argv[1..]),
             "skill" => self.skill(&argv[1..]).await,
             "discovery" => self.discovery(&argv[1..]).await,
             "validate" => self.validate_saved(&argv[1..]).await,
@@ -1038,8 +1023,6 @@ impl ConfigCommandTool {
                     crate::document_config::BackendAuth::Unauthenticated
                 )
             {
-                // Credentialed discovery stays with the operator paths and the
-                // runtime prober; the agent reads what they last published.
                 let observation = self
                     .backend_observation_view(backend_id, backend.provider_kind)
                     .await?;
@@ -1168,8 +1151,6 @@ impl ConfigCommandTool {
         }
     }
 
-    /// A local AgentTarget names its agent by the same short slug; a
-    /// foreign target_node_did keeps the ID exactly as given.
     async fn resolve_target_agent(
         &self,
         target_id: &str,
@@ -1187,7 +1168,7 @@ impl ConfigCommandTool {
             None => {
                 let owner = self.node_did.clone();
                 let target_id = target_id.to_owned();
-                crate::config_client::ConfigAccess::transact_local(
+                crate::config_client::ConfigAccess::transact_local_readonly(
                     &self.node,
                     Some(self.core.identity()?),
                     "self_config.agent_target_owner",
@@ -1399,76 +1380,47 @@ impl ConfigCommandTool {
         if !preview {
             self.execution.enter_mutation();
         }
-        let (receipt_targets, plan_digest) = crate::config_client::ConfigAccess::transact_local(
-            &self.node,
-            Some(self.core.identity()?),
-            if preview {
-                "self_config.cleanup_preview"
-            } else {
-                "self_config.cleanup_remove"
-            },
-            |txn| {
-                let owner = owner.clone();
-                let targets = targets.clone();
-                let expected_digest = expected_digest.clone();
-                let plan = &plan;
-                Box::pin(async move {
-                    let mut receipt = Vec::with_capacity(targets.len());
-                    for (resource, target, id) in &targets {
-                        let document = ops::read_owned_doc(txn, *target, &owner, id)
-                            .await?
-                            .map(|(_, document)| document)
-                            .with_context(|| {
-                                format!(
-                                    "no owned {} with ID {id:?}; list or inspect exact IDs before cleanup",
-                                    target.collection_name()
-                                )
-                            })?;
-                        if *target == SelfConfigTarget::Agent {
-                            let protected = document
-                                .get("tags")
-                                .and_then(Value::as_array)
-                                .is_some_and(|tags| {
-                                    tags.iter().any(|tag| {
-                                        tag.as_str()
-                                            == Some(super::ENGINEER_AGENT_TAG)
-                                    })
-                                });
-                            anyhow::ensure!(
-                                !protected,
-                                "target agent {id:?} is the protected Engineer configurator and cannot be removed"
-                            );
-                        }
-                        receipt.push(json!({
-                            "resource": resource,
-                            "collection": target.collection_name(),
-                            "id": id,
-                            "content_digest": crate::config_client::desired_state_document_digest(&Value::Object(document))?,
-                        }));
-                    }
-                    let plan_digest = cleanup_plan_digest(&owner, &receipt)?;
-                    if let Some(expected) = expected_digest.as_deref() {
-                        anyhow::ensure!(
-                            expected == plan_digest,
-                            "cleanup target content changed: preview authorized {expected:?}, current plan is {plan_digest:?}; preview again"
-                        );
-                    }
-                    crate::config_client::validate_desired_state_plan(txn, plan).await?;
-                    if !preview {
-                        crate::config_client::apply_desired_state_plan(txn, plan).await?;
-                        for (_, target, id) in &targets {
-                            anyhow::ensure!(
-                                ops::read_owned_doc(txn, *target, &owner, id).await?.is_none(),
-                                "cleanup did not remove {} {id:?}",
-                                target.collection_name()
-                            );
-                        }
-                    }
-                    Ok((receipt, plan_digest))
-                })
-            },
-        )
-        .await?;
+        let operation = if preview {
+            "self_config.cleanup_preview"
+        } else {
+            "self_config.cleanup_remove"
+        };
+        let identity = Some(self.core.identity()?);
+        let (receipt_targets, plan_digest) = if preview {
+            crate::config_client::ConfigAccess::transact_local_readonly(
+                &self.node,
+                identity,
+                operation,
+                |txn| {
+                    Box::pin(cleanup_in_txn(
+                        txn,
+                        &owner,
+                        &targets,
+                        expected_digest.as_deref(),
+                        &plan,
+                        preview,
+                    ))
+                },
+            )
+            .await?
+        } else {
+            crate::config_client::ConfigAccess::transact_local_write(
+                &self.node,
+                identity,
+                operation,
+                |txn| {
+                    Box::pin(cleanup_in_txn(
+                        txn,
+                        &owner,
+                        &targets,
+                        expected_digest.as_deref(),
+                        &plan,
+                        preview,
+                    ))
+                },
+            )
+            .await?
+        };
         ordered! {
             "committed": !preview,
             "operation": if preview { "preview cleanup" } else { "cleanup" },
@@ -1488,6 +1440,59 @@ impl ConfigCommandTool {
         .pretty()
     }
 
+    fn plugin(&self, argv: &[String]) -> Result<String> {
+        anyhow::ensure!(
+            self.core.held_grants().pack_install || self.categories.contains("tools"),
+            "plugin inspection requires the pack or tools grant"
+        );
+        let home = self
+            .plugins
+            .home()
+            .context("this runtime has no plugin home")?;
+        match argv.first().map(String::as_str) {
+            Some("list") => {
+                let parsed = ParsedArgs::parse(&argv[1..])?;
+                parsed.reject_mutation_flags()?;
+                anyhow::ensure!(
+                    parsed.positionals.is_empty()
+                        && parsed
+                            .options
+                            .keys()
+                            .all(|name| matches!(name.as_str(), "limit" | "cursor")),
+                    "plugin list accepts options.limit and options.cursor only"
+                );
+                let limit = parse_limit(&parsed)?;
+                let cursor = parsed.one("cursor")?;
+                let mut records = crate::plugin::store::list_records(home)?;
+                records.sort_by_key(|record| format!("{}/{}", record.namespace, record.name));
+                let mut items = records.into_iter().filter(|record| cursor.is_none_or(|cursor| format!("{}/{}", record.namespace, record.name).as_str() > cursor)).take(limit + 1).map(|record| json!({"plugin":format!("{}/{}",record.namespace,record.name),"version":record.version,"digest":record.digest,"owner_pack_coordinate":record.owner_pack_coordinate})).collect::<Vec<_>>();
+                let truncated = items.len() > limit;
+                items.truncate(limit);
+                let next_cursor = truncated
+                    .then(|| {
+                        items
+                            .last()
+                            .and_then(|item| item["plugin"].as_str())
+                            .map(ToOwned::to_owned)
+                    })
+                    .flatten();
+                ordered! {"items": items, "next_cursor": next_cursor, "next_call": json!({"argv":["plugin","get","<PLUGIN>"]})}.pretty()
+            }
+            Some("get") if argv.len() == 2 => {
+                let (namespace, name) = crate::plugin::store::parse_coordinate(&argv[1])?;
+                let record = crate::plugin::store::read_record(home, namespace, name)?;
+                ordered! {
+                    "plugin": argv[1],
+                    "selection": json!({"plugin":argv[1],"digest":record.digest}),
+                    "next_call": json!({"argv":["tools","get"]}),
+                    "guidance": "Read the target Tools document and preserve its other integration settings and plugin entries. Explicitly update integrations.plugins with the pinned selection, then read tools get and effective config get for resolved readback. Start a fresh request to call the tool; installation alone does not expose it to the current request.",
+                    "installed": record,
+                }.pretty()
+            }
+            _ => bail!("plugin supports list and get; call [\"help\",\"plugin\"]"),
+        }
+    }
+
     async fn pack(&self, argv: &[String]) -> Result<String> {
         anyhow::ensure!(
             self.core.held_grants().pack_install,
@@ -1502,6 +1507,9 @@ impl ConfigCommandTool {
             .first()
             .map(String::as_str)
             .context("pack command is required; see [\"help\",\"pack\"]")?;
+        if matches!(verb, "scaffold" | "check" | "verify" | "build" | "test") {
+            return self.authoring(verb, &argv[1..]).await;
+        }
         match verb {
             "search" => {
                 let parsed = ParsedArgs::parse(&argv[1..])?;
@@ -1624,16 +1632,9 @@ impl ConfigCommandTool {
         Ok(())
     }
 
-    /// Agent create stores `<node DID>:<slug>`
-    /// (`self_config::agent::derive_agent_id`) while every other configuration ID
-    /// is stored as given, so wherever config accepts an agent ID it also
-    /// accepts that node-local slug. An exact ID wins, and the slug only
-    /// resolves under this node's own DID.
     async fn resolve_agent_id(&self, id: &str) -> Result<String> {
         let current = self.core.agent_id();
         if !self.categories.contains("node") {
-            // Only the current agent is reachable; the catalog check names
-            // the missing grant for any other ID.
             let slug_of_current = format!("{}:{id}", self.node_did) == current;
             return Ok(if slug_of_current { current } else { id }.to_owned());
         }
@@ -1646,7 +1647,7 @@ impl ConfigCommandTool {
             "{{ Agent(filter: {{node_did: {{_eq: \"{}\"}}}}) {{agent_id display_name}} }}",
             escape_graphql_string(&owner)
         );
-        let found = crate::config_client::ConfigAccess::transact_local(
+        let found = crate::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.resolve_agent",
@@ -1694,15 +1695,10 @@ impl ConfigCommandTool {
         })
     }
 
-    /// A profile edit without options.agent changes the invoking
-    /// agent's own model and limits. Once the node has other
-    /// agents that default is the likely mistake (the call was meant for
-    /// a worker), and the tool keeps no memory of which agents a caller
-    /// just created, so any second agent makes the target explicit.
     async fn require_named_profile_owner(&self, verb: &str) -> Result<()> {
         let owner = escape_graphql_string(&self.node_did);
         let query = format!("{{ Agent(filter: {{node_did: {{_eq: \"{owner}\"}}}}) {{agent_id}} }}");
-        let response = crate::config_client::ConfigAccess::transact_local(
+        let response = crate::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.profile_owners",
@@ -1730,9 +1726,6 @@ impl ConfigCommandTool {
         Ok(())
     }
 
-    /// Create and clone derive the new ID from the display name, so an
-    /// explicit ID would be silently ignored; clone sources and disable
-    /// targets resolve like every other agent ID.
     async fn resolve_agent_ids(
         &self,
         operation: &str,
@@ -1779,8 +1772,6 @@ impl ConfigCommandTool {
         verb: &str,
         request: ApplyRequest<'static>,
     ) -> Result<String> {
-        // A JSON-stringified object where a native one belongs is the common
-        // model mistake; name the field instead of the decoder's complaint.
         let stringified = request
             .patch
             .iter()
@@ -1861,8 +1852,6 @@ impl ConfigCommandTool {
         ordered! {"resource": target.collection_name(), "document": value}.pretty()
     }
 
-    /// Credential-free observation of one owned backend in its own
-    /// authentication scope, read under the invoking node's identity.
     async fn backend_observation_view(
         &self,
         backend_id: &str,
@@ -1870,7 +1859,7 @@ impl ConfigCommandTool {
     ) -> Result<Value> {
         let owner = self.node_did.clone();
         let backend_id = backend_id.to_owned();
-        let observation = crate::config_client::ConfigAccess::transact_local(
+        let observation = crate::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.backend_observation",
@@ -1915,7 +1904,7 @@ impl ConfigCommandTool {
         let id = id.to_owned();
         let lookup_id = id.clone();
         let owner = self.node_did.clone();
-        let mut document = crate::config_client::ConfigAccess::transact_local(
+        let mut document = crate::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.command_read",
@@ -1974,18 +1963,16 @@ impl ConfigCommandTool {
         ordered! {"resource": target.collection_name(), "document": document}.pretty()
     }
 
-    /// Each account and account-free backend: provider, label, state, the
-    /// profiles that use it and its last stored usage. Store reads only: it
-    /// never contacts a provider or renews a sign-in, and shows no token,
-    /// sign-in identity, credential id or account reference.
+    /// Store reads only: never contacts a provider or renews a sign-in, and
+    /// shows no token, sign-in identity, credential id or account reference.
     async fn account_inventory(&self) -> Result<String> {
         use crate::backend_provider::BackendProviderOauthExt;
         use crate::oauth_credential::backend_account;
         use crate::usage_observation::{load_usage, usage_view, UsageAccount};
-        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let node_did = self.node_did.as_str();
         let accounts = crate::oauth_credential::list_accounts(&access, node_did).await?;
-        let (backends, profiles) = crate::config_client::ConfigAccess::transact_local(
+        let (backends, profiles) = crate::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.account_inventory",
@@ -2144,7 +2131,7 @@ impl ConfigCommandTool {
         let owner = escape_graphql_string(&self.node_did);
         let query =
             format!("{{ {collection}(filter: {{node_did: {{_eq: \"{owner}\"}}}}) {{{fields}}} }}");
-        let response = crate::config_client::ConfigAccess::transact_local(
+        let response = crate::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.inference_inventory",
@@ -2232,10 +2219,6 @@ impl ConfigCommandTool {
     }
 }
 
-/// Verbs a model reasonably guesses that mean an existing command: `preview
-/// edit` is `preview` where preview replaces edit, and automation `create` is
-/// its upsert through `edit`. Resources whose `preview edit ID` or `create`
-/// are distinct commands are left alone.
 fn normalize_verbs(argv: &mut Vec<String>) {
     let words = argv.iter().map(String::as_str).collect::<Vec<_>>();
     let drop = match words.as_slice() {
@@ -2251,7 +2234,6 @@ fn normalize_verbs(argv: &mut Vec<String>) {
     }
 }
 
-/// The exact call that applies a preview, for a model that guessed `apply`.
 fn apply_refusal(resource: &str) -> Option<String> {
     let form = match resource {
         "pack" => "[\"pack\",\"install\",PACKAGE] with options.digest from [\"pack\",\"preview\",\"install\",PACKAGE]".to_owned(),
@@ -2271,6 +2253,68 @@ fn cleanup_plan_digest(owner: &str, targets: &[Value]) -> Result<String> {
             "targets": targets,
         }))?)
     ))
+}
+
+async fn cleanup_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    owner: &str,
+    targets: &[(String, SelfConfigTarget, String)],
+    expected_digest: Option<&str>,
+    plan: &crate::config_client::DesiredStateApplyPlan,
+    preview: bool,
+) -> Result<(Vec<Value>, String)> {
+    let mut receipt = Vec::with_capacity(targets.len());
+    for (resource, target, id) in targets {
+        let document = ops::read_owned_doc(txn, *target, owner, id)
+            .await?
+            .map(|(_, document)| document)
+            .with_context(|| {
+                format!(
+                    "no owned {} with ID {id:?}; list or inspect exact IDs before cleanup",
+                    target.collection_name()
+                )
+            })?;
+        if *target == SelfConfigTarget::Agent {
+            let protected = document
+                .get("tags")
+                .and_then(Value::as_array)
+                .is_some_and(|tags| {
+                    tags.iter()
+                        .any(|tag| tag.as_str() == Some(super::ENGINEER_AGENT_TAG))
+                });
+            anyhow::ensure!(
+                !protected,
+                "target agent {id:?} is the protected Engineer configurator and cannot be removed"
+            );
+        }
+        receipt.push(json!({
+            "resource": resource,
+            "collection": target.collection_name(),
+            "id": id,
+            "content_digest": crate::config_client::desired_state_document_digest(&Value::Object(document))?,
+        }));
+    }
+    let plan_digest = cleanup_plan_digest(owner, &receipt)?;
+    if let Some(expected) = expected_digest {
+        anyhow::ensure!(
+            expected == plan_digest,
+            "cleanup target content changed: preview authorized {expected:?}, current plan is {plan_digest:?}; preview again"
+        );
+    }
+    crate::config_client::validate_desired_state_plan(txn, plan).await?;
+    if !preview {
+        crate::config_client::apply_desired_state_plan(txn, plan).await?;
+        for (_, target, id) in targets {
+            anyhow::ensure!(
+                ops::read_owned_doc(txn, *target, owner, id)
+                    .await?
+                    .is_none(),
+                "cleanup did not remove {} {id:?}",
+                target.collection_name()
+            );
+        }
+    }
+    Ok((receipt, plan_digest))
 }
 
 fn default_agent_params(action: &str, agent_id: &str) -> ConfigureAgentParams {
@@ -2362,8 +2406,6 @@ fn extract_agent_target(argv: &[String]) -> Result<(Option<String>, Vec<String>)
     Ok((agent_id, rest))
 }
 
-/// `--allow-drop GROUP[,GROUP]`, repeatable: the Tools groups whose omitted
-/// settings the caller means to drop.
 fn extract_allow_drop(argv: &[String]) -> Result<(BTreeSet<String>, Vec<String>)> {
     let mut groups = BTreeSet::new();
     let mut rest = Vec::with_capacity(argv.len());
@@ -2487,7 +2529,7 @@ pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
                 "display_name": "string|null",
                 "host": {"root":"string|null; absent uses runtime cwd", "files":{"mode":"Off|ReadOnly|ReadWrite (default Off)","max_read_chars":"integer 1..1000000|null; default 32000; read_file bytes, default and maximum","max_list_entries":"integer 1..5000|null; default 200","max_matches":"integer 1..5000|null; default 200; glob and grep"}, "bash":{"mode":"Off|ReadOnly|Unrestricted; default Off; ReadOnly still runs shell commands","execution_mode":"read_only|workspace_write|artifact_write|unrestricted|null","network_mode":"inherit|disabled|enabled|null","allowed_argv_prefixes":"array<array<string>>|null","forbidden_argv_prefixes":"array<array<string>>|null","read_only_commands":"array<string>|null","background_enabled":"boolean; default false","timeout_secs":"positive integer|null; default host --command-timeout-secs (120); clamped to the host maximum","max_timeout_secs":"positive integer|null; default timeout_secs if set, else host maximum; clamped to host --command-timeout-max-secs","background_timeout_secs":"positive integer|null; default 36000; clamped to 36000","wait_timeout_secs":"positive integer|null; default 30","max_wait_timeout_secs":"positive integer|null; default 600; clamped to 600","max_output_chars":"integer 1..1000000|null; default 16000; stdout and stderr each"}, "cli":[{"name":"string; host-registered CLI tool name (cli default [])","timeout_secs":"positive integer|null; default host registration (10); clamped to host --command-timeout-max-secs","max_output_chars":"integer 1..1000000|null; default host registration (16000); stdout and stderr each"}]},
                 "remote": {"services":"array<{mcp_service_id:string,tool_names:array<string>,style:flat|discovery(default),required:boolean(default false),background_tool_names:array<string>,connect_timeout_secs?:integer,discovery_timeout_secs?:integer,timeout_secs?:integer,stale_timeout_secs?:integer,background_timeout_secs?:integer (default 36000; clamped to 36000),wait_timeout_secs?:integer (default 30),max_wait_timeout_secs?:integer (default 600; clamped to 600)}>; default []"},
-                "agents": {"target_ids":"array<existing same-node AgentTarget ID>; default []; the agents agent_new may address (create them with agent-target)","enabled":"boolean|null; enables the agents tools: agent_message, agent_interrupt and agent_list, plus agent_new when target_ids selects a target"},
+                "agents": {"target_ids":"array<existing same-node AgentTarget ID>; default []; the agents agent_new may address (create them with agent-target)","enabled":"boolean|null; enables the agents tools: agent_message, agent_interrupt, agent_list, agent_session_list and agent_session_read, plus agent_new when target_ids selects a target"},
                 "built_ins": {"enable_graph_tools":"boolean|null","enable_goal_tools":"boolean|null","enable_goal_creation":"boolean|null","enable_memory":"boolean|null","enable_session_history_tool":"boolean|null","enable_schema_tool":"boolean|null","enable_p2p_tool":"boolean|null","enable_p2p_mutations":"boolean|null","p2p_collections":"array<string>|null","enable_context_budget":"boolean|null"},
                 "datastore": {"enable_defra_query":"boolean|null","defra_query_collections":"array<string>|null","write_collections":"array<exact application collection>|null (empty denies all)","datastore_tool_surface_ids":"array<existing same-node DatastoreToolSurface ID>|null"},
                 "integrations": {"lsp":{"config":"JSON encoded as a string|null","timeout_secs":"positive integer|null; default 20","max_timeout_secs":"positive integer|null; default 300; clamped to 300"},"eth_tool_ids":"array<existing same-node EthTool ID>|null","plugins":"array<{plugin: installed namespace/name, digest: sha256:<hex>|null}>|null"},
@@ -2555,7 +2597,7 @@ pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
             patch_contract(
                 SelfConfigTarget::Trigger,
                 json!({
-                    "display_name":"string|null","description":"string|null","task_id":"existing task ID owned by selected agent","source":"{kind:schedule,schedule_id:string}|{kind:event,event_source_id:string}","enabled":"boolean; default true","concurrency":"parallel|queued_serial|serial|latest_only|null; default parallel; controls overlap, not session destination; queued_serial needs an event source","session_id_template":"string|null; template rendering an existing session ID; event sources only. Null creates a session per fire. Independent of concurrency","tags":"array<string>; default []"
+                    "display_name":"string|null","description":"string|null","task_id":"existing task ID owned by selected agent","source":"{kind:schedule,schedule_id:string}|{kind:event,event_source_id:string}","enabled":"boolean; default true","concurrency":"parallel|queued_serial|serial|latest_only|null; default parallel; controls overlap, not session destination; queued_serial needs an event source or an explicit scheduled session destination","session_id_template":"string|null; template rendering an existing session ID; event or schedule sources; target must be open and use the Task agent. Null creates a session per fire. Independent of concurrency","tags":"array<string>; default []"
                 }),
             ),
             patch_contract(
@@ -2583,8 +2625,6 @@ pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
     Value::Array(contracts)
 }
 
-/// The advertised field shape at a decode error path (`host.cli[0].name`), so
-/// a type error names what the field takes instead of an internal Rust type.
 pub(super) fn field_shape(collection: &str, path: &str) -> Option<Value> {
     let contract = [
         "agent",
@@ -2869,265 +2909,4 @@ pub(super) fn agent_params(
         enable_graph_tools: None,
         network_mode: None,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn help_aliases_are_recognized_before_operands_but_not_in_values() {
-        for argv in [vec!["--help"], vec!["-h"], vec!["help"]] {
-            let argv = argv.into_iter().map(str::to_owned).collect::<Vec<_>>();
-            assert_eq!(config_help_resource(&argv), Some(None));
-        }
-        for argv in [
-            vec!["help", "datastore"],
-            vec!["datastore", "--help"],
-            vec!["datastore", "create", "-h"],
-            vec!["datastore", "preview", "create", "--help"],
-            vec!["datastore", "help", "create"],
-            vec![
-                "datastore",
-                "create",
-                "surface",
-                "--set",
-                "display_name=\"Test\"",
-                "--help",
-            ],
-        ] {
-            let argv = argv.into_iter().map(str::to_owned).collect::<Vec<_>>();
-            assert_eq!(config_help_resource(&argv), Some(Some("datastore")));
-        }
-        for argv in [
-            vec!["agent", "create", "--system-prompt", "--help"],
-            vec!["agent", "create", "--description", "help"],
-            vec!["datastore", "get", "help"],
-        ] {
-            let argv = argv.into_iter().map(str::to_owned).collect::<Vec<_>>();
-            assert_eq!(config_help_resource(&argv), None);
-        }
-    }
-
-    #[test]
-    fn required_ids_never_consume_patch_flags() {
-        for id in [None, Some(""), Some(" "), Some("--set"), Some("-h")] {
-            let id = id.map(str::to_owned);
-            assert!(required_resource_id(id.as_ref(), "SURFACE_ID")
-                .unwrap_err()
-                .to_string()
-                .contains("missing SURFACE_ID"));
-        }
-        let id = "monitor-notifications".to_owned();
-        assert_eq!(required_resource_id(Some(&id), "SURFACE_ID").unwrap(), &id);
-    }
-
-    #[test]
-    fn named_target_uses_the_existing_positional_command_path() {
-        for (argv, expected) in [
-            (
-                json!(["datastore", "preview", "create"]),
-                json!(["datastore", "preview", "create", "surface"]),
-            ),
-            (
-                json!(["automation", "preview", "task"]),
-                json!(["automation", "preview", "task", "surface"]),
-            ),
-            (
-                json!(["mcp-service", "get"]),
-                json!(["mcp-service", "get", "surface"]),
-            ),
-        ] {
-            let params: ConfigCommandParams =
-                serde_json::from_value(json!({"argv":argv,"target_id":"surface"})).unwrap();
-            assert_eq!(json!(params.into_argv().unwrap()), expected);
-        }
-        for input in [
-            json!({"argv":["datastore","create","one"],"target_id":"two"}),
-            json!({"argv":["datastore","create"],"target_id":"--set"}),
-            json!({"argv":["datastore","--help"],"target_id":"one"}),
-            json!({"argv":["agent","create"],"target_id":"one"}),
-        ] {
-            assert!(serde_json::from_value::<ConfigCommandParams>(input)
-                .unwrap()
-                .into_argv()
-                .is_err());
-        }
-    }
-
-    #[test]
-    fn structured_config_preserves_literal_values_and_uses_canonical_patch_validation() {
-        let prompt = "A \"quoted\" prompt\nActual newline; literal \\n; {{ doc.message }}; λ";
-        let params: ConfigCommandParams = serde_json::from_value(json!({
-            "argv":["agent","context","preview"],
-            "options":{"agent":"working"},
-            "set":{"system_prompt":prompt,"skill_ids":["one","two"]},
-            "clear":["description"]
-        }))
-        .unwrap();
-        let argv = params.into_argv().unwrap();
-        let (agent, rest) = extract_agent_target(&argv[3..]).unwrap();
-        assert_eq!(agent.as_deref(), Some("working"));
-        let patch = parse_patch(&rest, SelfConfigTarget::AgentContext).unwrap();
-        assert!(patch.contains(&("system_prompt".into(), Some(json!(prompt)))));
-        assert!(patch.contains(&("skill_ids".into(), Some(json!(["one", "two"])))));
-        assert!(patch.contains(&("description".into(), None)));
-        for input in [
-            json!({"argv":[],"set":{"description":"x"}}),
-            json!({"argv":["get","--agent","one"],"options":{"agent":"two"}}),
-            json!({"argv":["get"],"options":{"--agent":"two"}}),
-            json!({"argv":["get"],"set":{"description=enabled":"x"}}),
-        ] {
-            assert!(serde_json::from_value::<ConfigCommandParams>(input)
-                .unwrap()
-                .into_argv()
-                .is_err());
-        }
-    }
-
-    #[test]
-    fn misplaced_document_fields_are_reported_together() {
-        let mut input = json!({
-            "argv":["agent-target","create"],"target_id":"helper",
-            "options":{"agent":"engineer","agent_id":"analyst","name":"Analyst","description":"Analyze records"}
-        });
-        let error = serde_json::from_value::<ConfigCommandParams>(input.clone())
-            .unwrap()
-            .into_argv()
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.contains("set.agent_id, set.description, set.name"),
-            "{error}"
-        );
-        input["set"] = json!({});
-        for field in ["agent_id", "description", "name"] {
-            input["set"][field] = input["options"]
-                .as_object_mut()
-                .unwrap()
-                .remove(field)
-                .unwrap();
-        }
-        assert!(serde_json::from_value::<ConfigCommandParams>(input)
-            .unwrap()
-            .into_argv()
-            .is_ok());
-        let backend = json!({"argv":["backend","create"],"target_id":"local","options":{"endpoint":"http://localhost:8000/v1","name":"Local"}});
-        assert!(serde_json::from_value::<ConfigCommandParams>(backend)
-            .unwrap()
-            .into_argv()
-            .is_ok());
-    }
-
-    #[test]
-    fn native_agent_create_uses_options_and_never_a_positional_id_or_patch() {
-        let params: ConfigCommandParams = serde_json::from_value(json!({
-            "argv": ["agent", "create"],
-            "options": {
-                "id": "monitor",
-                "display-name": "Monitor",
-                "system-prompt": "Observe only",
-                "preset": "readonly",
-                "profile": "default-profile"
-            }
-        }))
-        .unwrap();
-        let argv = params.into_argv().unwrap();
-        let created = agent_params("create", None, &argv[2..]).unwrap();
-        assert_eq!(created.agent_id.as_deref(), Some("monitor"));
-        assert_eq!(created.display_name, StringUpdate::Set("Monitor".into()));
-
-        let invalid: ConfigCommandParams = serde_json::from_value(json!({
-            "argv": ["agent", "create", "monitor"],
-            "set": {"display_name": "Monitor"}
-        }))
-        .unwrap();
-        assert!(agent_params("create", None, &invalid.into_argv().unwrap()[2..]).is_err());
-    }
-
-    #[test]
-    fn native_datastore_create_adapts_mailbox_options_and_set_to_argv() {
-        let params: ConfigCommandParams = serde_json::from_value(json!({
-            "argv": ["datastore", "preview", "create"],
-            "target_id": "monitor-mailbox",
-            "options": {"mailbox": {"identity": {"mode": "event"}, "kind": "flag", "action": "ack"}},
-            "set": {"enabled": true}
-        }))
-        .unwrap();
-        let argv = params.into_argv().unwrap();
-        assert_eq!(
-            argv[..5],
-            [
-                "datastore",
-                "preview",
-                "create",
-                "monitor-mailbox",
-                "--mailbox"
-            ]
-        );
-        assert_eq!(
-            serde_json::from_str::<Value>(&argv[5]).unwrap(),
-            json!({"identity": {"mode": "event"}, "kind": "flag", "action": "ack"})
-        );
-        assert_eq!(&argv[6..], ["--set", "enabled=true"]);
-    }
-
-    #[test]
-    fn structured_config_rejects_conflicts_and_protected_fields() {
-        for input in [
-            json!({"argv":["--set","system_prompt=\"old\""],"set":{"system_prompt":"new"}}),
-            json!({"argv":["--clear","system_prompt"],"set":{"system_prompt":"new"}}),
-            json!({"argv":["--set","description=null"],"set":{"node_did":"foreign"}}),
-        ] {
-            let args = serde_json::from_value::<ConfigCommandParams>(input)
-                .unwrap()
-                .into_argv()
-                .unwrap();
-            assert!(parse_patch(&args, SelfConfigTarget::AgentContext).is_err());
-        }
-        let args = serde_json::from_value::<ConfigCommandParams>(json!({
-            "argv":["agent","preview","create"],
-            "options":{"display-name":"Writer", "system-prompt":"First\nSecond", "root":"/tmp/work"}
-        }))
-        .unwrap()
-        .into_argv()
-        .unwrap();
-        let params = agent_params("preview", Some("create".into()), &args[3..]).unwrap();
-        assert_eq!(
-            params.system_prompt,
-            StringUpdate::Set("First\nSecond".into())
-        );
-    }
-
-    #[test]
-    fn edit_argv_preserves_omitted_fields_and_marks_clear() {
-        let params = agent_params(
-            "edit",
-            None,
-            &[
-                "--id".into(),
-                "review".into(),
-                "--display-name".into(),
-                "Review".into(),
-                "--clear".into(),
-                "root".into(),
-            ],
-        )
-        .unwrap();
-        assert_eq!(params.display_name, StringUpdate::Set("Review".into()));
-        assert_eq!(params.root, StringUpdate::Clear);
-        assert_eq!(params.profile_id, StringUpdate::Omitted);
-        assert_eq!(agent_edit_fields(&params), vec!["display_name", "root"]);
-    }
-
-    #[test]
-    fn invalid_agent_argv_names_the_option_and_help() {
-        let error =
-            agent_params("edit", None, &["--agent-name".into(), "Review".into()]).unwrap_err();
-        assert!(error.to_string().contains("--agent-name"));
-        assert_eq!(
-            error.downcast_ref::<CommandGuidance>().unwrap().next_call,
-            json!({"argv":["agent","edit","--help"]})
-        );
-    }
 }

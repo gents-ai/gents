@@ -1,5 +1,3 @@
-//! The shared executor and the model-tool adapter over it.
-
 use std::sync::Arc;
 
 use super::{build_plugin_pack, ECHO_WAT};
@@ -9,13 +7,10 @@ use crate::plugin::executor::PluginExecutor;
 use crate::plugin::store::{self, InstalledPlugin};
 use crate::plugin::tool::PluginTool;
 
-/// Installs the echo plugin as `team/plugin` under a fresh home.
 pub(crate) fn installed_echo() -> (tempfile::TempDir, InstalledPlugin) {
     installed_plugin(ECHO_WAT, None)
 }
 
-/// Installs `wat` as `team/plugin` under a fresh home, declaring `bind_dir`
-/// on `path` with `access` when given.
 pub(crate) fn installed_plugin(
     wat: &str,
     access: Option<crate::pack::BindAccess>,
@@ -48,10 +43,6 @@ pub(crate) fn installed_plugin(
     (home, record)
 }
 
-/// A plugin that reads its input and, while it is offered `service`
-/// (`"<service>":true` in its input), writes `canned` instead of a result:
-/// once (until `results` arrives) or forever. Otherwise, or once satisfied, it
-/// echoes its input as the result.
 pub(crate) fn asking_plugin_wat(
     service: &str,
     results: &str,
@@ -193,8 +184,6 @@ async fn a_changed_grant_is_admitted_again() {
     );
 }
 
-/// A caller holds the record it resolved, and the artifact stays admitted in
-/// memory, yet a call after `gents plugin remove` fails closed.
 #[tokio::test]
 async fn a_removed_plugin_fails_closed_with_a_warm_cache() {
     let (home, record) = installed_echo();
@@ -283,7 +272,6 @@ mod bound {
         format!("{:#}", tool.call(args(path)).await.unwrap_err())
     }
 
-    /// Runs `tool` on `path` as a chat turn would, inside `workdir`.
     async fn in_session(
         tool: &PluginTool,
         path: &std::path::Path,
@@ -305,7 +293,6 @@ mod bound {
         .map_err(|error| format!("{error:#}"))
     }
 
-    /// Answers the next question the way the operator would.
     fn answer(
         home: &std::path::Path,
         allow: bool,
@@ -335,8 +322,6 @@ mod bound {
         _dir: tempfile::TempDir,
     }
 
-    /// A reader of `in.json` in a world of `work/` (the session folder),
-    /// `docs/` and `outside/`, each holding `in.json` and `sibling.json`.
     fn fixture(wat: &str, access: BindAccess) -> Fixture {
         let (home, record) = installed_plugin(wat, Some(access));
         let dir = tempfile::tempdir().unwrap();
@@ -421,10 +406,6 @@ mod bound {
         );
     }
 
-    /// One `read_write` plugin with a write field serves readers and writers
-    /// (#2301): a call that does not set `output` asks for `read`, so it binds
-    /// under a read-only folder and runs read-only even where writing is
-    /// allowed; a call that sets it asks for `read_write`.
     #[tokio::test]
     async fn one_plugin_writes_only_on_a_call_that_sets_its_write_field() {
         let mut fx = fixture(&create_file_wat("out.json"), BindAccess::ReadWrite);
@@ -564,7 +545,6 @@ mod bound {
                 access: BindAccess::Read
             }]
         );
-        // No answerer is running: a second question would hang until it timed out.
         let output = in_session(&tool, &fx.root.join("outside/in.json"), &work, true).await;
         assert_eq!(output.unwrap(), r#"{"read":true}"#);
     }
@@ -650,7 +630,7 @@ mod bound {
         let work = fx.root.join("work");
         let target = fx.root.join("outside/in.json");
         let home = fx.home.path().to_owned();
-        let queue = home.join(crate::home::PLUGIN_APPROVALS_DIR_NAME);
+        let queue = approval::queue_dir(&home);
         let call = scope_request_tool_execution_with_workspace_overlay(
             None,
             tokio_util::sync::CancellationToken::new(),
@@ -661,7 +641,6 @@ mod bound {
             Default::default(),
             false,
             approval::scope_interactive(true, async {
-                // The way a background tool call leaves the chat's task.
                 tokio::spawn(approval::carry_interactive(
                     scope_request_tool_execution_with_workspace_overlay(
                         None,
@@ -724,8 +703,6 @@ mod bound {
         );
     }
 
-    /// A directory authorized under one declaration is never handed to a
-    /// reinstall that declares the binding differently.
     #[tokio::test]
     async fn a_bound_call_fails_when_the_plugin_is_reinstalled_after_binding() {
         let fx = fixture(&open_and_copy_wat("in.json", 0), BindAccess::Read);

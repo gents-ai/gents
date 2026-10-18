@@ -2,7 +2,6 @@ use std::time::{Duration, Instant};
 
 use gents::defra_node::EmbeddedNode;
 
-/// The node's loopback direct address. Test peers run in this process, and
 /// iroh may also advertise a NAT-PMP mapping from the LAN router first
 /// (`<router ip>:<port>`), which a local dial through that router times out on.
 pub async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {

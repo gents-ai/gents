@@ -5,6 +5,7 @@ import type {
   DesktopSessionSnapshot,
   RenderedTimelineItem,
 } from "@source-inc/gents-desktop-client";
+import { LIST_WINDOW_THRESHOLD } from "@source-inc/gents-desktop-ui";
 import { isTerminalTurnState } from "@source-inc/gents-desktop-client";
 import { MessageList } from "../Transcript.js";
 
@@ -15,6 +16,7 @@ export type ChatTranscriptPanelProps = {
   onRetryMessage?: (requestId: string) => void | Promise<void>;
   retryUnavailableHint?: string | null;
   onLoadOlder?: () => Promise<boolean>;
+  showGoal?: boolean;
 };
 
 export const TRANSCRIPT_PAGE_SIZE = 40;
@@ -34,6 +36,7 @@ function timelineChangeSignal(items: RenderedTimelineItem[]) {
             item.reasoning?.length ?? 0,
           ];
         case "userMessage":
+        case "automatedInput":
           return [item.kind, item.itemKey, item.content?.length ?? 0];
         case "pendingUserTurn":
           return [
@@ -60,12 +63,10 @@ function timelineChangeSignal(items: RenderedTimelineItem[]) {
 }
 
 function scrollPanelToTip(panel: HTMLElement) {
-  // Instant, not smooth: the panel's CSS smooth-scroll otherwise animates the
-  // jump. A chunk landing mid-animation can leave the scroll short of the tip,
-  // which the scroll handler then misreads as the user disengaging follow.
   panel.scrollTo({ top: panel.scrollHeight, behavior: "instant" });
 }
 
+/** Viewport corrections must be immediate; a delayed correction can target a different row range. */
 export function ChatTranscriptPanel({
   selectedSessionId,
   session,
@@ -73,8 +74,11 @@ export function ChatTranscriptPanel({
   onRetryMessage,
   retryUnavailableHint,
   onLoadOlder,
+  showGoal = true,
 }: ChatTranscriptPanelProps) {
-  const transcriptPanelRef = useRef<HTMLElement | null>(null);
+  const [transcriptPanel, setTranscriptPanel] = useState<HTMLElement | null>(
+    null,
+  );
   const [autoFollowTranscript, setAutoFollowTranscript] = useState(true);
   const [transcriptWindow, setTranscriptWindow] = useState({
     sessionId: selectedSessionId,
@@ -129,9 +133,6 @@ export function ChatTranscriptPanel({
     transcriptWindow.sessionId === selectedSessionId
       ? transcriptWindow.visibleCount
       : TRANSCRIPT_PAGE_SIZE;
-  // Keep the leading edge stable while the reader is away from the tip. New
-  // streaming items should extend the mounted window, not evict the row they
-  // are currently reading.
   const visibleCount =
     !autoFollowTranscript && transcriptWindow.sessionId === selectedSessionId
       ? baseVisibleCount +
@@ -142,6 +143,8 @@ export function ChatTranscriptPanel({
     () => timelineItems.slice(firstVisibleIndex),
     [firstVisibleIndex, timelineItems],
   );
+  const windowed =
+    !!transcriptPanel && visibleTimelineItems.length > LIST_WINDOW_THRESHOLD;
   const hasLocalOlderItems = firstVisibleIndex > 0;
   const hasOlderItems =
     hasLocalOlderItems ||
@@ -152,9 +155,6 @@ export function ChatTranscriptPanel({
   );
 
   const lastItem = timelineItems[timelineItems.length - 1];
-  // A send may be observed as pending or already materialized. Prefer the
-  // request identity so that pending -> materialized does not look like a
-  // second send; fall back to the user row identity for partial snapshots.
   const latestUserTurn = useMemo(() => {
     const items = timelineItems;
     for (let index = items.length - 1; index >= 0; index -= 1) {
@@ -195,18 +195,18 @@ export function ChatTranscriptPanel({
     setLoadingOlder(false);
     lastScrollTop.current = 0;
     setAutoFollowTranscript(true);
-    const panel = transcriptPanelRef.current;
+    const panel = transcriptPanel;
     if (panel) scrollPanelToTip(panel);
-  }, [selectedSessionId]);
+  }, [selectedSessionId, transcriptPanel]);
 
   useLayoutEffect(() => {
     if (!sendIdentity) {
       return;
     }
     setAutoFollowTranscript(true);
-    const panel = transcriptPanelRef.current;
+    const panel = transcriptPanel;
     if (panel) scrollPanelToTip(panel);
-  }, [sendIdentity]);
+  }, [sendIdentity, transcriptPanel]);
 
   useLayoutEffect(() => {
     if (!autoFollowTranscript) {
@@ -226,10 +226,11 @@ export function ChatTranscriptPanel({
                 : TRANSCRIPT_PAGE_SIZE,
           },
     );
-    const panel = transcriptPanelRef.current;
+    const panel = transcriptPanel;
     if (panel) scrollPanelToTip(panel);
   }, [
     autoFollowTranscript,
+    transcriptPanel,
     selectedSessionId,
     transcriptChange,
     timelineItems.length,
@@ -238,16 +239,16 @@ export function ChatTranscriptPanel({
 
   useLayoutEffect(() => {
     const previousScrollHeight = prependScrollHeightRef.current;
-    const panel = transcriptPanelRef.current;
+    const panel = transcriptPanel;
     if (previousScrollHeight == null || !panel) return;
 
     prependScrollHeightRef.current = null;
-    panel.scrollTop += panel.scrollHeight - previousScrollHeight;
+    if (!windowed) panel.scrollTop += panel.scrollHeight - previousScrollHeight;
     lastScrollTop.current = panel.scrollTop;
-  }, [firstVisibleIndex, timelineItems.length]);
+  }, [firstVisibleIndex, timelineItems.length, transcriptPanel, windowed]);
 
   async function loadOlderItems() {
-    const panel = transcriptPanelRef.current;
+    const panel = transcriptPanel;
     if (
       !panel ||
       !hasOlderItems ||
@@ -263,7 +264,8 @@ export function ChatTranscriptPanel({
     setTranscriptWindow({
       sessionId: selectedSessionId,
       timelineLength: timelineItems.length,
-      visibleCount: visibleCount + TRANSCRIPT_PAGE_SIZE,
+      visibleCount:
+        visibleCount + (hasLocalOlderItems ? TRANSCRIPT_PAGE_SIZE : 0),
     });
     if (!hasLocalOlderItems && onLoadOlder) {
       pageFlight.current = true;
@@ -302,7 +304,7 @@ export function ChatTranscriptPanel({
   const retryEligible = session?.retryEligibility?.eligible ?? false;
 
   function handleTranscriptScroll() {
-    const panel = transcriptPanelRef.current;
+    const panel = transcriptPanel;
     if (!panel) {
       return;
     }
@@ -337,8 +339,6 @@ export function ChatTranscriptPanel({
     if (upward && panel.scrollTop <= 160) void loadOlderItems();
   }
 
-  // Animated placeholder between send and the assistant's first visible
-  // output — without it the transcript sits inert while the turn runs.
   const turnActive = Boolean(
     session?.turnState && !isTerminalTurnState(session.turnState),
   );
@@ -355,6 +355,8 @@ export function ChatTranscriptPanel({
       className="panel transcript-panel"
       data-scroll-owner="transcript"
       data-testid="transcript-panel"
+      aria-label="Conversation"
+      tabIndex={0}
       onScroll={handleTranscriptScroll}
       onWheel={(event) => {
         if (event.deltaY < 0 && event.currentTarget.scrollTop <= 160)
@@ -381,11 +383,11 @@ export function ChatTranscriptPanel({
         )
           void loadOlderItems();
       }}
-      ref={transcriptPanelRef}
+      ref={setTranscriptPanel}
     >
       {selectedSessionId && (session || timelineItems.length > 0) ? (
         <div className="message-list">
-          {session?.goal ? (
+          {showGoal && session?.goal ? (
             <article className="message-card" data-testid="durable-goal-card">
               <div className="message-role">
                 durable goal · {session.goal.status ?? "unknown"}
@@ -409,11 +411,20 @@ export function ChatTranscriptPanel({
               data-testid="transcript-older-status"
             >
               {loadingOlder ? "Loading older messages…" : null}
+              <button
+                className="transcript-load-older"
+                type="button"
+                disabled={loadingOlder}
+                onClick={() => void loadOlderItems()}
+              >
+                Load older messages
+              </button>
             </div>
           ) : null}
           <MessageList
             timelineItems={visibleTimelineItems}
             timelineIdentity={selectedSessionId}
+            scrollElement={transcriptPanel}
             requestCancelCause={requestOutcome?.cancelCause}
           />
           {showThinking ? (

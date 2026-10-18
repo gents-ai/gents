@@ -99,7 +99,6 @@ describe("FleetRow", () => {
       {},
       {
         ...deployment,
-        /* only the heartbeat is read here */
         runtime: {
           updatedAt: new Date(Date.now() - 5_000).toISOString(),
         } as DeploymentView["runtime"],

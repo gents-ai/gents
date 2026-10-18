@@ -1,9 +1,3 @@
-//! #657 — reconcile-driven app-collection replication fires an Trigger.
-//!
-//! Unlike `event_trigger_p2p_e2e` (manual `install_one_way_replicator`), this
-//! drives replication through `DataPlanePairingDesired` + the pairing
-//! reconciler. Both nodes run `Gents::run`.
-
 use std::time::{Duration, Instant};
 
 use gents::agent::p2p_reconcile::GraphqlEnrollmentStore;
@@ -143,7 +137,6 @@ where
     }
 }
 
-/// Write a DataPlanePairingDesired row via desired-state config (NOT add_replicator).
 async fn write_app_collection_pairing(
     node: &EmbeddedNode,
     peer_id: &str,
@@ -612,7 +605,6 @@ async fn query_change_proposed(node: &EmbeddedNode) -> Vec<Value> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
-    // Compress pairing sweeps for this process (read once at daemon start).
     std::env::set_var("GENTS_PAIRING_SWEEP_MS", "1000");
 
     let db_a = test_p2p_db("app-collection-pairing-a").await;
@@ -628,14 +620,14 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     let mock_a = MockModelEndpoint::start("default").unwrap();
     let mock_b = MockModelEndpoint::start("default").unwrap();
     bind_default_agent_backend(
-        db_a.node.as_ref(),
+        &db_a.node,
         &did_a,
         "backend-app-collection-a",
         mock_a.endpoint(),
     )
     .await;
     bind_default_agent_backend(
-        db_b.node.as_ref(),
+        &db_b.node,
         &did_b,
         "backend-app-collection-b",
         mock_b.endpoint(),
@@ -671,7 +663,6 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     let (peer_a, addr_a) = wait_for_peer_identity(db_a.node.as_ref()).await;
     let (peer_b, addr_b) = wait_for_peer_identity(db_b.node.as_ref()).await;
 
-    // Approve each live transport identity through authenticated enrollment.
     let enrollment_a_to_b = authorize_enrollment_peer(
         db_a.node.clone(),
         NETWORK_ID,
@@ -693,7 +684,6 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     )
     .await;
 
-    // B: document reconcile for Task + Trigger (ordering invariant).
     let startup =
         wait_for_runtime_snapshot(db_b.node.as_ref(), &did_b, |s| is_routed_ready_after(s, 0))
             .await;
@@ -722,7 +712,6 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     })
     .await;
 
-    // The enrollment owner materializes the base client routes.
     let control_a =
         wait_for_enrollment_route_applied(db_a.node.as_ref(), &peer_b, Duration::from_secs(60))
             .await;
@@ -738,7 +727,6 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
         wait_for_enrollment_route_applied(db_b.node.as_ref(), &peer_a, Duration::from_secs(60))
             .await;
 
-    // App-collections data-plane rows on both sides.
     write_app_collection_pairing(
         db_a.node.as_ref(),
         &peer_b,
@@ -770,9 +758,6 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     )
     .await;
 
-    // Control subscriptions still present after app-collections merge. The
-    // per-peer applied row is an ownership ledger, not the transport's global
-    // subscription inventory, so assert against the actual P2P state.
     wait_for_subscribed_collections(db_a.node.as_ref(), &control_a, Duration::from_secs(30)).await;
     wait_for_subscribed_collections(db_b.node.as_ref(), &control_b, Duration::from_secs(30)).await;
 
@@ -837,7 +822,6 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     assert_eq!(fired.enabled, Some(true));
     assert_eq!(fired.concurrency.as_deref(), Some("serial"));
 
-    // Idempotence: applied state stable across another sweep window.
     let post = fetch_pairing_applied(db_a.node.as_ref(), &peer_b)
         .await
         .expect("post applied");
@@ -884,20 +868,8 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
 
     let mock_a = MockModelEndpoint::start("default").unwrap();
     let mock_b = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend(
-        db_a.node.as_ref(),
-        &did_a,
-        "backend-soft-a",
-        mock_a.endpoint(),
-    )
-    .await;
-    bind_default_agent_backend(
-        db_b.node.as_ref(),
-        &did_b,
-        "backend-soft-b",
-        mock_b.endpoint(),
-    )
-    .await;
+    bind_default_agent_backend(&db_a.node, &did_a, "backend-soft-a", mock_a.endpoint()).await;
+    bind_default_agent_backend(&db_b.node, &did_b, "backend-soft-b", mock_b.endpoint()).await;
 
     let agent_a = Gents::from_default_agent_documents(
         db_a.node.clone(),
@@ -948,7 +920,6 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
     )
     .await;
 
-    // Enrollment reconciler installs the base client route.
     let control =
         wait_for_enrollment_route_applied(db_a.node.as_ref(), &peer_b, Duration::from_secs(60))
             .await;
@@ -956,7 +927,6 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
         .await
         .expect("control applied");
 
-    // Blank-only collections: schema allows [String!]!, resolver soft-skips.
     let peer = escape_graphql_string(&peer_b);
     let did = escape_graphql_string(&did_a);
     let addr = escape_graphql_string(&addr_b);
@@ -978,7 +948,6 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
         resp.errors
     );
 
-    // Wait at least one sweep for the soft-skip path to run.
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     let after = fetch_pairing_applied(db_a.node.as_ref(), &peer_b)
@@ -1042,12 +1011,7 @@ async fn seed_preexisting_hydration_history(
         response.errors
     );
 
-    // #1571: AgentMessage headers carry no content bytes. Author the
-    // pre-existing history through the canonical publication surface: a real
-    // AgentRequest base, an AgentOutputSegment payload, and a header whose
-    // blocks reference it — the closure the hydration reconciler validates and
-    // serves, and that shared reconstruction consumes for content.
-    use gents::defra_node::{ExecuteRetryPolicy, QueryRequest};
+    use gents::defra_node::QueryRequest;
     use gents::graphql::single_mutation_document;
     use gents::session::canonical_rows::{
         output_segment_create_variables, transcript_message_create_variables,
@@ -1135,10 +1099,9 @@ async fn seed_preexisting_hydration_history(
         created_at: now.clone(),
     };
     let segment_response = node
-        .execute_request_with_retry(
+        .execute_request(
             QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                 .with_variables(output_segment_create_variables(&segment).expect("segment vars")),
-            ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(
@@ -1178,11 +1141,10 @@ async fn seed_preexisting_hydration_history(
         created_at: now,
     };
     let message_response = node
-        .execute_request_with_retry(
+        .execute_request(
             QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION).with_variables(
                 transcript_message_create_variables(&message).expect("message vars"),
             ),
-            ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(
@@ -1251,11 +1213,6 @@ async fn wait_for_hydrated_history(
     node_did: &str,
     timeout: Duration,
 ) {
-    // #1571: AgentMessage headers carry no content bytes. Assert the exact
-    // expected content by reconstructing each hydrated header through the
-    // shared production boundary (`load_canonical_message_from_node`), which
-    // resolves hydrated AgentOutputSegment documents. A served status without
-    // the expected bytes is not hydration.
     let expected_content = "pre-existing authenticated hydration history";
     struct HydratedHeader {
         doc_id: String,
@@ -1310,8 +1267,6 @@ async fn wait_for_hydrated_history(
         let mut message_present = false;
         let mut unresolved = Vec::new();
         for header in &header_rows {
-            // P2P can deliver a header before its referenced segments. Keep
-            // polling the real reader; a header alone is not success.
             match gents::session::load_canonical_message_from_node(
                 node,
                 &header.doc_id,

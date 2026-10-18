@@ -5,7 +5,6 @@ use super::*;
 
 use std::sync::Arc;
 
-// Detects a deadlock; not a latency assertion.
 const READINESS_DEADLOCK_GUARD: Duration = Duration::from_secs(30);
 
 async fn wait_for_agent_state(
@@ -31,8 +30,6 @@ async fn wait_for_agent_state(
     }
 }
 
-/// Installs the fixture pack's `fixture/list_files` into the plugin store
-/// only, returning the identity an install records.
 fn install_fixture_plugin(plugin_home: &std::path::Path) -> crate::pack::PackIdentity {
     let (_pack_guard, pack_root) =
         crate::test_support::fixture_pack_copy("bind_plugin_fixture", &serde_json::json!({}));
@@ -59,10 +56,6 @@ fn install_fixture_plugin(plugin_home: &std::path::Path) -> crate::pack::PackIde
     )
 }
 
-/// #2338 end to end: a agent_config whose Tools document names a missing plugin
-/// burns its build budget and is demoted; installing that plugin mid-run —
-/// the plugin store, then the plugin-store record every install path writes
-/// — re-admits it on the next reconcile.
 #[tokio::test]
 async fn demoted_agent_is_readmitted_when_its_named_plugin_installs_midrun() {
     let node = test_node().await;
@@ -70,7 +63,7 @@ async fn demoted_agent_is_readmitted_when_its_named_plugin_installs_midrun() {
     let identity = Arc::new(test_identity("plugin-readmission"));
     let endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-plugin-readmit",
         endpoint.endpoint(),
@@ -106,7 +99,7 @@ async fn demoted_agent_is_readmitted_when_its_named_plugin_installs_midrun() {
     }))
     .unwrap();
     crate::config_client::write_tools_document(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &tools,
     )
     .await
@@ -127,7 +120,7 @@ async fn demoted_agent_is_readmitted_when_its_named_plugin_installs_midrun() {
 
     let pack = install_fixture_plugin(plugin_home.path());
     crate::pack::record_plugin_store_change(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &node_did,
         plugin_home.path(),
         &pack.coordinate,

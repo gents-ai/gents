@@ -1,9 +1,3 @@
-//! Header-only authorized session forks.
-//!
-//! Forking creates fresh child headers and child compaction metadata.  Payload
-//! segments and tool lifecycle documents stay at their origin: a header's
-//! immutable references are the dependency graph and never executable child
-//! state.
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
@@ -30,7 +24,6 @@ pub struct ForkParams<'a> {
     pub source_session_id: &'a str,
     pub fork_at_user_turn: u32,
     pub caller_node_did: &'a str,
-    /// Exact requester scope. None means absent, never every requester.
     pub caller_requester_did: Option<&'a str>,
     pub target_agent_id: Option<&'a str>,
 }
@@ -67,9 +60,12 @@ fn fork_error(error: anyhow::Error) -> ForkError {
     }
 }
 
-pub async fn fork(node: &EmbeddedNode, params: ForkParams<'_>) -> Result<ForkOutcome, ForkError> {
+pub async fn fork(
+    node: &std::sync::Arc<EmbeddedNode>,
+    params: ForkParams<'_>,
+) -> Result<ForkOutcome, ForkError> {
     let child = uuid::Uuid::new_v4().to_string();
-    ConfigAccess::transact_local(node, None, "session.fork", |txn| {
+    ConfigAccess::transact_local_write(node, None, "session.fork", |txn| {
         let child = child.clone();
         let params = params.clone();
         Box::pin(async move { fork_in_txn(txn, &params, &child).await })
@@ -84,7 +80,7 @@ pub async fn fork_via_http(
 ) -> Result<ForkOutcome, ForkError> {
     let child = uuid::Uuid::new_v4().to_string();
     ConfigAccess::Graphql(endpoint.clone())
-        .transact("session.fork", |txn| {
+        .transact_write("session.fork", |txn| {
             let child = child.clone();
             let params = params.clone();
             Box::pin(async move { fork_in_txn(txn, &params, &child).await })
@@ -125,7 +121,6 @@ fn ordinal(row: &Value, field: &str) -> Result<u32> {
     .with_context(|| format!("fork {field} exceeds supported sequence range"))
 }
 
-/// User headers that only deliver a tool result do not consume a fork turn.
 pub fn is_user_turn(row: &Value) -> Result<bool> {
     let message = decode_transcript_message_row(row)?.message;
     Ok(message.role == MessageRole::User

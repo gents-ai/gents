@@ -56,9 +56,8 @@ pub(super) async fn flush_received_preparation_partial(context: &str) -> Result<
 
 impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
     /// Size the exact first-turn provider request for session-compaction
-    /// admission through the owned loop's assembly owner, including its
-    /// reasoning replay selection. The loop rebuilds the request at dispatch
-    /// and remains the sole final legality authority.
+    /// admission through the owned loop's assembly owner. The loop remains the
+    /// sole final legality authority.
     #[allow(clippy::too_many_arguments)]
     async fn estimate_initial_provider_input(
         &self,
@@ -71,6 +70,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
         aggregate_token_budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
         replay: &gents_loop::loop_stream::LoopReplayInput,
         resume_from_history: bool,
+        wake_notifications: &[TaggedMessage],
     ) -> Result<usize> {
         let config = crate::completion_factory::loop_config_for_request(
             &self.agent_config,
@@ -90,6 +90,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
             &request.content,
             resume_from_history,
             request_context_message,
+            wake_notifications,
         )?;
         let mut new_messages = gents_loop::loop_stream::assemble_new_messages(
             if resume_from_history {
@@ -104,10 +105,6 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                 .iter()
                 .map(|folded| TaggedMessage::unassociated(folded.message.clone())),
         );
-        // The estimate resolves the same canonical evidence the first dispatch
-        // resolves again; record it so that dispatch serves this pass. The
-        // guard's scope ends the bracket before the token estimate so nothing
-        // later records.
         let assembled = {
             let _estimate_seed = replay.arm_estimate_seed();
             gents_loop::loop_stream::assemble_provider_request(
@@ -171,24 +168,13 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
             lifecycle.agent_id(),
             lifecycle.backend_id(),
         );
-        // One capture scope for the whole request, installed here rather than
-        // around `run_inference`.
-        //
-        // `run_inference` is not the only completion loop a request contains.
-        // The pre-request compaction summarizer below runs ~90 lines earlier —
-        // it is the *default* path for any session over its threshold
-        // (`CompactionStrategy::StripThenSummarize`) — and issues one or two
-        // real provider calls whose input is the entire pre-truncated
-        // transcript. Scoping only the inference block left those calls with no
-        // ambient scope, so their arming sink no-opped, the transport found
-        // nothing pending, and the bodies went to the provider with no durable
-        // row and no diagnostic. Spanning the whole request body is what makes
-        // "no provider call without its fact record" true rather than aspired
-        // to.
-        //
-        // It must stay a single scope instance: the per-kind sequence that
-        // keeps the inference loop, the summarizer, and the summarizer's JSON
-        // fallback from colliding on `(turn 0, attempt 0)` lives in the scope.
+        // One capture scope for the whole request: the pre-request compaction
+        // summarizer issues real provider calls whose input is the entire
+        // pre-truncated transcript, so scoping only the inference block left
+        // those calls with no ambient scope and no durable record. It must
+        // stay a single scope instance: the per-kind sequence keeping the
+        // inference loop, the summarizer, and its JSON fallback from colliding
+        // on `(turn 0, attempt 0)` lives in the scope.
         let request_commit_cid = lifecycle
             .request_commit_cid()
             .ok_or_else(|| {
@@ -224,8 +210,6 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
             ));
         }
         let handled = admission::scope_request(admission_context, async {
-            // Prompt preparation may call a compaction provider; its output
-            // requires the same Processing fence as the main inference turn.
             let response_agent_id = lifecycle.agent_id().to_string();
             lifecycle
                 .begin_owned_execution(stream_writer)
@@ -253,7 +237,6 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                     self.operator_tool_root.as_deref(),
                 )
                 .await?;
-                // Some even when empty: bound requests must not fall through to a live walk.
                 let frozen_instruction_manifest =
                     crate::workspace::frozen_instruction_manifest_from_overlay(overlay.as_ref())
                         .map(str::to_owned);
@@ -275,9 +258,6 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                         .into_iter()
                         .map(prompt)
                         .collect::<Vec<_>>();
-                // A retry resuming its parent's published progress sends that
-                // history as its input and publishes nothing, so it answers no
-                // newly selected message; the selection waits for the next turn.
                 let selection = if resume_from_history {
                     &[][..]
                 } else {
@@ -298,6 +278,16 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                     None => crate::tool_call_lifecycle::runtime::ToolWorkspaceScope::cwd_only(
                         crate::workspace::request_workspace_cwd(&request),
                     ),
+                };
+                let wake_notifications = if resume_from_history {
+                    Vec::new()
+                } else {
+                    super::wake_input::load(
+                        &self.node,
+                        &request,
+                        lifecycle.background_completion_input_through_sequence(),
+                    )
+                    .await?
                 };
                 let (mut built, replay) = async {
                 for assembly_attempt in 0..=1 {
@@ -351,14 +341,11 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                         .iter()
                         .map(|row| row.message.clone())
                         .collect::<Vec<_>>();
-                    // Check the exact reconstructed canonical rows before the
-                    // provider projection is allowed to remove an unfinished
-                    // tail. The projected view is intentionally a fixpoint;
-                    // checking only that view would make this gate vacuous.
+                    // The projected provider view is a fixpoint; the gate checks
+                    // the exact reconstructed canonical rows instead, so it is
+                    // not vacuous when the projection strips an unfinished tail.
                     let canonical_prefix_is_stable =
                         compaction::safe_to_reduce(&durable_history);
-                    // The sourced projection below performs this same file
-                    // activity extraction before stripping tool results.
                     let file_activity = compaction::history::extract_file_activity(&durable_history);
                     if !file_activity.is_empty() {
                         tracing::debug!(
@@ -369,9 +356,6 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                             "files referenced in stripped history"
                         );
                     }
-                    // One canonical reduction, shared with the compaction writer:
-                    // `messages_compacted` is measured against this list, so the
-                    // prefix drop below must index the same one (#993).
                     let replay = crate::provider_input::replay::owned_replay_input(
                         self.node.clone(), request.clone(), request_commit_cid.clone(),
                         gents_protocol::rendered_request::CaptureScopeKind::Inference,
@@ -382,8 +366,6 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                     );
                     let provider_history = provider_view_tagged(tagged)?;
 
-                    // The database query already excludes the exact raw prefix
-                    // named by the required compaction cursor.
                     let prior_provider_prefix = 0;
                     let mut history = provider_history;
                     let mut summaries = compaction_state
@@ -415,6 +397,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                             aggregate_token_budget.clone(),
                             &replay,
                             resume_from_history,
+                            &wake_notifications,
                         )
                         .await?;
                     let reduction_admission = compaction::ReductionAdmission::for_input(
@@ -468,8 +451,6 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                         )
                         .await?;
 
-                        // The reducer exposes an exact split of its input; use
-                        // that split to carry associations, never a byte search.
                         history = if let Some(exact) = result.exact_reduction() {
                             anyhow::ensure!(projected_native == exact.compacted_prefix.iter().chain(exact.retained_suffix).cloned().collect::<Vec<_>>(),
                                 "session reduction changed its exact provider source");
@@ -551,12 +532,6 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                                     Err(error) => return Err(error),
                                 }
                             } else if compacted_through_sequence.is_none() {
-                                // A session checkpoint and its raw transcript
-                                // cursor are one atomic durable fact. If the
-                                // exact provider prefix cannot be denoted in
-                                // raw sequence space, use the reduction only
-                                // for this request and leave the generation
-                                // untouched so a later request can retry.
                                 tracing::warn!(
                                     request_id = %request.request_id,
                                     session_id = %request.session_id,
@@ -566,10 +541,6 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                                 );
                                 summaries.push(compaction::bounded_summary(summary.to_string()));
                             } else {
-                                // A background request may be bound to an older
-                                // compatible transcript/compaction generation. Its
-                                // reduction is valid for this request's provider
-                                // input but must not mutate the live session chain.
                                 tracing::info!(
                                     request_id = %request.request_id,
                                     session_id = %request.session_id,
@@ -628,6 +599,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                     replay,
                     consumed_prompts,
                     folded_prompts,
+                    wake_notifications,
                 ))
             };
             let Some(prepared) = prepare_unless_interrupted(&mut interrupt_rx, preparation).await
@@ -644,6 +616,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                 replay,
                 consumed_prompts,
                 folded_prompts,
+                wake_notifications,
             ) = prepared?;
 
             let doc_id = lifecycle.request().doc_id.clone();
@@ -655,6 +628,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                     &request,
                     &doc_id,
                     &built.messages,
+                    &wake_notifications,
                     replay,
                     lifecycle,
                     stream_writer,
@@ -685,8 +659,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                 .await;
 
             // A failed or timed-out graceful drain has an uncertain durable
-            // extent. Do not query interruption state or let its ordinary
-            // terminal path claim that the received bytes were saved.
+            // extent: do not claim the received bytes were saved.
             if result
                 .as_ref()
                 .err()

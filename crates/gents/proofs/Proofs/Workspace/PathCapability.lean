@@ -1,10 +1,5 @@
 import Proofs.Workspace.Properties
 
-/-! Host operation refinement of the existing workspace/receipt/journal owners.
-Canonicalization and exact Git delta capture are observed host predicates; this
-model does not prove OS path alias, filesystem isolation or hash collision facts.
-The coarse Workspace lifecycle is necessary but not sufficient for host effects.
--/
 namespace Workspace.PathCapability
 open WorkspacePathCapability
 
@@ -17,9 +12,6 @@ structure Change where
   canonical : Bool := true
   deriving DecidableEq, Repr
 
-/-- Host supplies literal component prefixes and their compatibility alias keys.
-Only prefixes of changed paths must be unambiguous against both full trees;
-unchanged entries are observations, never newly admitted capability paths. -/
 def changedAliasesCanonical (changed tree : List (String × String)) : Bool :=
   changed.all fun wanted => tree.all fun existing =>
     wanted.2 != existing.2 || wanted.1 == existing.1

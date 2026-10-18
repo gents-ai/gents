@@ -18,11 +18,6 @@ pub fn turn_state_label(state: ClientTurnState) -> &'static str {
     }
 }
 
-/// True for the two non-terminal turn states (`WaitingForClaim`,
-/// `Running`) that still have a live tail worth overlaying onto a
-/// snapshot. Single owner for the `Some(WaitingForClaim) | Some(Running)`
-/// check shared by `snapshot::session::projection` and
-/// `snapshot::session::live_delta`.
 pub(crate) fn is_live_turn_state(state: Option<ClientTurnState>) -> bool {
     state.is_some_and(|state| !state.is_terminal())
 }

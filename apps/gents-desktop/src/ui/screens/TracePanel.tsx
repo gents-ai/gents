@@ -1,7 +1,3 @@
-/* The trace: every tool call of the current request, in order, beside the
-   conversation. A call folds to a row (icon, what it did, status) and
-   opens to its body: outputs, contents, the diff, a live tail while it
-   runs. Nothing opens on its own. */
 import { useState } from "react";
 import { ChevronDown, ListTree, X } from "lucide-react";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
@@ -66,8 +62,6 @@ function Entry({
   );
 }
 
-/* the trace as a registered surface, closed through the workspace, so the
-   dock and the phone sheet mount the same thing */
 export function TraceSurface({ sessionId }: SurfaceContext) {
   const { closeTab: closeTraceTab } = useDockFor(dockScopeOf("session", sessionId));
   return <TracePanel onClose={() => closeTraceTab("trace")} chrome={false} />;
@@ -78,15 +72,11 @@ export function TracePanel({
   chrome = true,
 }: {
   onClose: () => void;
-  /** the card and its header; off when the dock draws them */
   chrome?: boolean;
 }) {
   const trackedRequestId = useView((view) => view.trackedRequestId);
-  /* the tool list is kept when the session is written, so a streamed chunk
-     does not rebuild it */
   const tools = useSessionFacts()?.tools ?? NO_TOOLS;
   const running = trackedRequestId !== null;
-  /* every entry starts collapsed; only the reader opens one */
   const [openKey, setOpenKey] = useState<string | null>(null);
 
   return (
@@ -98,8 +88,6 @@ export function TracePanel({
     >
       {chrome && (
         <div className="flex h-12 items-center gap-2.5 border-b border-border/60 px-3">
-          {/* the calls of a request, in order: not a setting, which is what
-            the sliders mean in the shell and in the config's profiles */}
           <ListTree className="size-4 text-muted-foreground" />
           <span className="font-heading text-sm font-medium text-heading">Trace</span>
           {running && <Spinner className="ml-1 text-foreground" />}
@@ -135,8 +123,6 @@ export function TracePanel({
   );
 }
 
-/* how long a call took, or has been running: from its own timestamps,
-   or the command's measured duration when the bridge reports one */
 function Took({ tool }: { tool: RenderedToolCallView }) {
   const running = tool.statusKind === "running";
   const now = useNow(running);

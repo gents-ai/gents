@@ -57,8 +57,10 @@ export default defineConfig({
       /* the desktop app draws in WebKit, which has no scroll anchoring and
          handles wheels its own way */
       name: "webkit-desktop",
+      /* matched against the whole path: anchored to the file name, so a
+         checkout folder named transcript-… does not match every spec */
       testMatch:
-        /(transcript-.*|editor-sheet-wheel|sessions-window|ux-sandbox)\.spec\.ts/,
+        /(?:^|[\\/])(?:transcript-[^\\/]*|editor-sheet-wheel|sessions-window|ux-sandbox)\.spec\.ts$/,
       use: {
         ...devices["Desktop Safari"],
         viewport: { width: 1280, height: 900 },

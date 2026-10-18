@@ -179,15 +179,13 @@ test.describe("kit shell", () => {
     await gotoHarness(page);
     const filters = page.getByLabel("Session filters");
     const session = page.getByRole("link", { name: /introduction-and-greetings/ });
+    const narrowed = page.getByTestId("sessions-narrowed");
     await expect(filters).toBeVisible();
     await expect(filters.getByRole("button", { name: "State" })).toBeVisible();
     await expect(filters.getByRole("button", { name: "Started by" })).toBeVisible();
-    await expect(filters.getByRole("button", { name: "Clear filters" })).toHaveCount(0);
+    await expect(narrowed).toHaveCount(0);
 
-    /* the agent filter counts what each choice would leave: Ops has no
-       session here, so it is offered with its zero and cannot be picked */
     await filters.getByRole("combobox", { name: "Agent" }).click();
-    /* the popup is a dialog with a search field; it carries its own name */
     await expect(page.getByRole("dialog", { name: "Filter by agent" })).toBeVisible();
     const ops = page.getByRole("option", { name: /Ops\s*0$/ });
     await expect(ops).toBeVisible();
@@ -195,17 +193,16 @@ test.describe("kit shell", () => {
     const withSession = page.getByRole("option", { name: /Default\s*1$/ });
     await withSession.click();
     await page.keyboard.press("Escape");
-    await expect(filters.getByRole("button", { name: "Clear filters" })).toBeVisible();
+    await expect(narrowed).toHaveText(/1 of 1 session/);
     await expect(session).toBeVisible();
 
-    /* narrowing to nothing says so, and Clear filters brings the list back */
     await filters.getByRole("button", { name: "State" }).click();
     await expect(
       page.getByRole("menuitemcheckbox", { name: /Failed\s*0$/ }),
     ).toHaveAttribute("aria-disabled", "true");
     await page.keyboard.press("Escape");
-    await filters.getByRole("button", { name: "Clear filters" }).click();
-    await expect(filters.getByRole("button", { name: "Clear filters" })).toHaveCount(0);
+    await narrowed.getByRole("button", { name: "Clear filters" }).click();
+    await expect(narrowed).toHaveCount(0);
     await expect(session).toBeVisible();
   });
 
@@ -221,7 +218,7 @@ test.describe("kit shell", () => {
     await expect(page.getByText("Network", { exact: true })).toHaveCount(0);
 
     await openConfig(page);
-    await expect(page.getByText("Agent details")).toBeVisible();
+    await expect(page.getByText("Node details")).toBeVisible();
   });
 
   test("closing sync diagnostics does not stack with the add agent dialog", async ({
@@ -245,8 +242,6 @@ test.describe("kit shell", () => {
   });
 
   test("the agent filter and sync health never stack as dialogs", async ({ page }) => {
-    /* Bombadil (run 35946895240): Agent filter, then Sync healthy, left
-       both popups open. Both are dialogs; the shell keeps one at a time. */
     await gotoHarness(page);
     const filters = page.getByLabel("Session filters");
     const agent = page.getByRole("dialog", { name: "Filter by agent" });
@@ -334,11 +329,13 @@ test.describe("kit shell", () => {
     await expect(sendButton(page)).toBeEnabled();
     await composer(page).press("Enter");
 
-    const queued = page.getByTestId("queued-input");
+    const queued = page.getByTestId("queued-inputs").getByTestId("queued-input");
     await expect(queued).toHaveCount(2);
     await expect(queued.nth(0)).toContainText("first queued thought");
-    await expect(queued.nth(0)).toContainText("Pending");
     await expect(queued.nth(1)).toContainText("second queued thought");
+    await expect(
+      page.getByTestId("transcript-panel").getByTestId("queued-input"),
+    ).toHaveCount(0);
     await expect(composer(page)).toBeEnabled();
   });
 
@@ -518,8 +515,6 @@ test.describe("kit shell", () => {
     await sendButton(page).click();
     await expect(page.getByText(/received "inspect the runtime"/)).toBeVisible();
 
-    /* the list, not the previous screen: the rail's own link, which the
-       menu sheet holds below md */
     const toSessions = async () => {
       const menu = page.getByRole("button", { name: "Menu" });
       if (await menu.isVisible()) await menu.click();
@@ -567,7 +562,6 @@ test.describe("each session's dock", () => {
     const resize = page.getByRole("separator", { name: "Resize panel" });
     await expect(resize).toBeVisible();
     const cell = page.getByTestId("dock-cell");
-    /* settled: the opening spring has stopped moving */
     let restingWidth = 0;
     await expect
       .poll(async () => {
@@ -579,12 +573,10 @@ test.describe("each session's dock", () => {
       })
       .toBe(true);
 
-    /* away from the session: its dock is not this screen's */
     await page.getByRole("link", { name: "Sessions" }).first().click();
     await expect(page.getByTestId("sessions-screen")).toBeVisible();
     await expect(resize).toHaveCount(0);
 
-    /* back: open as it stood, at its width in the first frame, no spring */
     await page.getByTestId("window-bar").getByRole("button", { name: "Back" }).click();
     const firstFrameWidth = await page.evaluate(
       () =>
@@ -601,7 +593,6 @@ test.describe("each session's dock", () => {
     expect(Math.abs(firstFrameWidth - restingWidth)).toBeLessThan(2);
     await expect(resize).toBeVisible();
 
-    /* and the screens outside a session still have no dock open */
     await page.getByRole("link", { name: "Sessions" }).first().click();
     await expect(resize).toHaveCount(0);
   });

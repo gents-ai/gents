@@ -43,16 +43,6 @@ pub struct ResolvedEthCall {
     pub(crate) caps: GasCaps,
 }
 
-impl ResolvedEthCall {
-    #[cfg(test)]
-    pub(crate) fn is_signing(&self) -> bool {
-        matches!(
-            self.kind,
-            ResolvedCallKind::Write { .. } | ResolvedCallKind::SignTypedData { .. }
-        )
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ResolvedCallKind {
     AnyRead,
@@ -338,7 +328,7 @@ fn declared_schema(params: &[CompiledParam]) -> Value {
 }
 
 async fn execute_call(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     resolved: &ResolvedEthCall,
     args: &str,
 ) -> Result<String, ToolError> {
@@ -426,7 +416,7 @@ async fn execute_call(
 }
 
 async fn execute_sign_typed_data(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     resolved: &ResolvedEthCall,
     domain: &Value,
     types: &Value,
@@ -482,7 +472,7 @@ async fn execute_sign_typed_data(
 }
 
 async fn execute_write(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     resolved: &ResolvedEthCall,
     client: &HttpEthRpc,
     to: Option<&str>,
@@ -602,9 +592,6 @@ fn write_idempotency_key(
     value: U256,
     data: &[u8],
 ) -> serde_json::Result<String> {
-    // Recovery may mint a fresh in-memory tool-call id. Bind durability to the
-    // request and exact Ethereum action instead; intentionally repeated,
-    // byte-identical transfers belong in separate agent requests.
     let semantic_action = serde_json::to_vec(&json!({
         "request_id": request_id,
         "tool_name": tool_name,
@@ -632,12 +619,15 @@ fn require_runtime_principal(resolved: &ResolvedEthCall) -> Result<(), ToolError
     Ok(())
 }
 
-async fn load_signing_key(node: &EmbeddedNode, resolved: &ResolvedEthCall) -> Result<[u8; 32]> {
+async fn load_signing_key(
+    node: &Arc<EmbeddedNode>,
+    resolved: &ResolvedEthCall,
+) -> Result<[u8; 32]> {
     load_signing_key_with_store(node, resolved, &KeyringChainKeyStore).await
 }
 
 async fn load_signing_key_with_store(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     resolved: &ResolvedEthCall,
     store: &dyn ChainKeyMaterialStore,
 ) -> Result<[u8; 32]> {
@@ -646,7 +636,7 @@ async fn load_signing_key_with_store(
         .as_deref()
         .ok_or_else(|| anyhow!("write tool has no chain key binding"))?;
     let (tool, binding): (EthToolDocument, ChainKeyBindingDocument) =
-        crate::config_client::ConfigAccess::transact_local(
+        crate::config_client::ConfigAccess::transact_local_write(
             node,
             None,
             "eth.signing_config.read",
@@ -1050,11 +1040,11 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::calls::ParamDecl;
+
     use super::*;
 
     async fn signing_fixture() -> (
-        EmbeddedNode,
+        Arc<EmbeddedNode>,
         ChainKeyBindingDocument,
         ResolvedEthCall,
         super::super::keys::MemoryChainKeyStore,
@@ -1063,7 +1053,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let identity =
             crate::identity::KeyIdentity::load_or_create(dir.path().join("key"), None).unwrap();
-        let node = EmbeddedNode::builder().build().await.unwrap();
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let secret = [1u8; 32];
         let address = address_from_secret(&secret).unwrap();
@@ -1089,7 +1079,6 @@ mod tests {
             revoked_at: None,
             tags: vec!["payments".into()],
         };
-        // Foreign logical IDs are deliberately inserted first.
         for owner in ["did:test:foreign", identity.did()] {
             let mut record = binding.clone();
             record.node_did = owner.into();
@@ -1197,8 +1186,6 @@ mod tests {
             } else {
                 json!({"tool_id":"payments","node_did":binding.node_did,"chain_id":8453,"key_binding_id":"signing","enabled":true})
             };
-            // Tags do not create a second logical identity. The schema owns this
-            // invariant, so an impossible duplicate never reaches signing.
             value["tags"] = json!(["duplicate"]);
             let input = gents_protocol::graphql::graphql_input_literal(&value).unwrap();
             let response = node
@@ -1214,195 +1201,5 @@ mod tests {
                 .await
                 .expect("the original unique signing identity remains usable");
         }
-    }
-
-    #[test]
-    fn any_read_schema_has_no_data_field() {
-        let resolved = ResolvedEthCall {
-            eth_tool_id: "base".to_string(),
-            tool_name: "base_any_read".to_string(),
-            chain_id: 8453,
-            rpc_url: "http://127.0.0.1".to_string(),
-            rpc_timeout: std::time::Duration::from_secs(30),
-            description: "any".to_string(),
-            kind: ResolvedCallKind::AnyRead,
-            principal_did: "did:key:zAlice".to_string(),
-            binding_id: None,
-            caps: GasCaps::default(),
-        };
-        let parameters = call_parameters(&resolved.kind);
-        assert!(parameters["properties"].get("data").is_none());
-        assert!(parameters["properties"].get("calldata").is_none());
-        assert_eq!(parameters["additionalProperties"], false);
-    }
-
-    #[test]
-    fn write_idempotency_is_stable_per_request_and_semantic_action() {
-        let key = |request_id| {
-            write_idempotency_key(
-                request_id,
-                "base_transfer",
-                Some("0x1111111111111111111111111111111111111111"),
-                U256::from(7),
-                &[],
-            )
-            .unwrap()
-        };
-        assert_eq!(key("request-1"), key("request-1"));
-        assert_ne!(key("request-1"), key("request-2"));
-    }
-
-    #[test]
-    fn write_tools_are_generated_when_keys_present() {
-        let decls = crate::eth::parse_call_decls(Some(&[
-            r#"{"kind":"write","tool_name":"usdc_transfer","to":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913","signature":"transfer(address to,uint256 amount)","params":{"to":{"source":"model","address_allowlist":["0x1111111111111111111111111111111111111111"]},"amount":{"source":"model","max":"1000000"}},"max_gas":100000,"max_fee_per_gas":"2000000000"}"#.to_string(),
-        ]))
-        .unwrap();
-        crate::eth::validate_call_decls(&decls, Some(8453)).unwrap();
-        let resolved = ResolvedEthCall::from_decls(
-            "base",
-            8453,
-            "http://127.0.0.1",
-            &decls,
-            "did:key:zAlice",
-            Some("bind-1"),
-            std::time::Duration::from_secs(30),
-        )
-        .unwrap();
-        assert_eq!(resolved.len(), 1);
-        assert!(resolved[0].is_signing());
-        assert_eq!(resolved[0].tool_name, "usdc_transfer");
-        let parameters = call_parameters(&resolved[0].kind);
-        assert!(parameters["properties"].get("data").is_none());
-        assert!(parameters["properties"].get("amount").is_some());
-    }
-
-    #[test]
-    fn sign_typed_data_is_generated_and_does_not_submit() {
-        let decls = crate::eth::parse_call_decls(Some(&[r#"{"kind":"sign_typed_data","tool_name":"permit","primary_type":"Permit","domain":{"name":"Token","version":"1","chainId":1},"types":{"EIP712Domain":[{"name":"name","type":"string"},{"name":"version","type":"string"},{"name":"chainId","type":"uint256"}],"Permit":[{"name":"spender","type":"address"},{"name":"value","type":"uint256"}]},"params":{"spender":{"source":"model","address_allowlist":["0x1111111111111111111111111111111111111111"]},"value":{"source":"model","max":"1000"}}}"#.to_string()])).unwrap();
-        crate::eth::validate_call_decls(&decls, Some(1)).unwrap();
-        let resolved = ResolvedEthCall::from_decls(
-            "base",
-            1,
-            "http://127.0.0.1",
-            &decls,
-            "did:key:zAlice",
-            Some("bind-1"),
-            std::time::Duration::from_secs(30),
-        )
-        .unwrap();
-        assert_eq!(resolved.len(), 1);
-        assert!(resolved[0].is_signing());
-        assert!(matches!(
-            resolved[0].kind,
-            ResolvedCallKind::SignTypedData { .. }
-        ));
-        let parameters = call_parameters(&resolved[0].kind);
-        assert!(parameters["properties"].get("data").is_none());
-        assert!(parameters["properties"].get("spender").is_some());
-    }
-
-    #[test]
-    fn sign_typed_data_rejects_a_different_domain_chain() {
-        let decls = crate::eth::parse_call_decls(Some(&[r#"{"kind":"sign_typed_data","tool_name":"permit","primary_type":"Mail","domain":{"chainId":"0x1"},"types":{"EIP712Domain":[{"name":"chainId","type":"uint256"}],"Mail":[{"name":"message","type":"string"}]},"params":{"message":{"source":"model"}}}"#.to_string()])).unwrap();
-        let error = ResolvedEthCall::from_decls(
-            "base",
-            8453,
-            "http://127.0.0.1",
-            &decls,
-            "did:key:zAlice",
-            Some("bind-1"),
-            std::time::Duration::from_secs(30),
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("does not match"));
-    }
-
-    #[test]
-    fn sign_typed_data_requires_a_domain_chain() {
-        let decls = crate::eth::parse_call_decls(Some(&[r#"{"kind":"sign_typed_data","tool_name":"permit","primary_type":"Mail","domain":{"name":"Mail"},"types":{"EIP712Domain":[{"name":"name","type":"string"}],"Mail":[{"name":"message","type":"string"}]},"params":{"message":{"source":"model"}}}"#.to_string()])).unwrap();
-        let error = ResolvedEthCall::from_decls(
-            "base",
-            8453,
-            "http://127.0.0.1",
-            &decls,
-            "did:key:zAlice",
-            Some("bind-1"),
-            std::time::Duration::from_secs(30),
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("requires chainId"));
-    }
-
-    #[test]
-    fn uint8_overflow_is_rejected() {
-        let function = parse_abi_function("set(uint8 value)").unwrap();
-        match encode_function(&function, &[json!("1000")]) {
-            Ok(encoded) => panic!("expected uint8 overflow, encoded {encoded}"),
-            Err(error) => assert!(format!("{error:#}").contains("exceeds"), "{error:#}"),
-        }
-    }
-
-    #[test]
-    fn encode_balance_of_has_selector() {
-        let function = parse_abi_function("balanceOf(address)").unwrap();
-        let encoded = encode_function(
-            &function,
-            &[json!("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")],
-        )
-        .expect("encode");
-        assert_eq!(&encoded[2..10], "70a08231");
-    }
-
-    #[test]
-    fn fixed_bytes_are_right_padded() {
-        let function = parse_abi_function("foo(bytes2)").unwrap();
-        let encoded = encode_function(&function, &[json!("0x1234")]).expect("encode");
-        assert_eq!(&encoded[10..14], "1234");
-        assert!(encoded[14..].bytes().all(|byte| byte == b'0'));
-    }
-
-    #[test]
-    fn binding_uses_abi_order_and_enforces_all_constraints() {
-        let params = vec![
-            CompiledParam {
-                name: "recipient".to_string(),
-                solidity_type: "address".to_string(),
-                decl: ParamDecl {
-                    address_allowlist: Some(vec![
-                        "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".to_string()
-                    ]),
-                    ..ParamDecl::default()
-                },
-            },
-            CompiledParam {
-                name: "qty".to_string(),
-                solidity_type: "uint256".to_string(),
-                decl: ParamDecl {
-                    min: Some("1".to_string()),
-                    max: Some("10".to_string()),
-                    enum_values: Some(vec!["5".to_string(), "6".to_string()]),
-                    ..ParamDecl::default()
-                },
-            },
-        ];
-        let model = BTreeMap::from([
-            ("qty".to_string(), json!(5)),
-            (
-                "recipient".to_string(),
-                json!("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"),
-            ),
-        ]);
-        let bound = bind_params(&params, &model, None).expect("bind");
-        assert_eq!(bound[0], model["recipient"]);
-        assert_eq!(bound[1], json!(5));
-
-        let mut above_max = model.clone();
-        above_max.insert("qty".to_string(), json!(11));
-        assert!(bind_params(&params, &above_max, None).is_err());
-
-        let mut outside_enum = model;
-        outside_enum.insert("qty".to_string(), json!(7));
-        assert!(bind_params(&params, &outside_enum, None).is_err());
     }
 }

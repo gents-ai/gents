@@ -1,9 +1,3 @@
-//! Declarative, schema-bounded single-collection query tool.
-//!
-//! Sibling of [`crate::defra_write::BoundedWriteTool`]: each instance is locked
-//! to one [`QueryToolDecl`] — one collection, a fixed projection, optional
-//! runtime-filled filters. The model never names the collection.
-
 use anyhow::{anyhow, bail, ensure, Result};
 use serde_json::{json, Map, Value};
 
@@ -72,7 +66,6 @@ impl BoundedQueryTool {
         self
     }
 
-    /// The DatastoreToolSurface that declared this tool, named by refusals.
     pub fn declared_by(mut self, surface_id: Option<String>) -> Self {
         self.surface_id = surface_id;
         self
@@ -102,10 +95,6 @@ impl BoundedQueryTool {
         Ok(())
     }
 
-    /// Mirrors [`crate::defra_write::BoundedWriteTool::ensure_well_formed`]:
-    /// the protected-collection rule holds at use as well as at configuration
-    /// validation, so a persisted surface that somehow names one is refused
-    /// here instead of reaching the datastore.
     fn ensure_well_formed(&self) -> Result<()> {
         if !self.decl.is_well_formed() {
             bail!(
@@ -503,9 +492,9 @@ impl Tool for BoundedQueryTool {
             }
         }
         let result = match (&self.access, &self.actor) {
-            (ConfigAccess::Local(node), Some(actor)) => {
+            (ConfigAccess::Local(local), Some(actor)) => {
                 ConfigAccess::transact_local_readonly(
-                    node,
+                    local.node(),
                     Some(actor.clone()),
                     "bounded_application_query",
                     |txn| Box::pin(super::execute_command(txn, &command, &scope)),
@@ -597,7 +586,7 @@ mod tests {
                 other => panic!("unknown kind {other:?}"),
             };
             let tool = BoundedQueryTool::new(
-                ConfigAccess::Local(node.clone()),
+                ConfigAccess::local(node.clone()),
                 QueryToolDecl {
                     tool_name: "read_scalar".into(),
                     collection: "ScalarRecord".into(),
@@ -689,7 +678,7 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned();
-        let tool = BoundedQueryTool::new(ConfigAccess::Local(node.clone()), decl());
+        let tool = BoundedQueryTool::new(ConfigAccess::local(node.clone()), decl());
         crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
             None, tokio_util::sync::CancellationToken::new(), None, None, None,
             Some("run-42".into()), Default::default(), false, async {
@@ -715,7 +704,7 @@ mod tests {
                 for page in [json!({"doc_id":doc,"field":"run_id"}),json!({"doc_id":doc,"field":"title","offset_bytes":1}),json!({"doc_id":doc,"field":"title","offset_bytes":2}),json!({"doc_id":doc,"field":"title","expected_hash":"changed"})] {
                     assert!(Tool::call(&tool,BoundedQueryParams(json!({"fields":["title"],"field_page":page}).as_object().unwrap().clone())).await.is_err());
                 }
-                let other = crate::config_client::ConfigAccess::Local(node.clone()).execute("{ CandidateFinding(filter: {finding_id: {_eq: \"f2\"}}) {_docID} }").await.unwrap();
+                let other = crate::config_client::ConfigAccess::local(node.clone()).execute("{ CandidateFinding(filter: {finding_id: {_eq: \"f2\"}}) {_docID} }").await.unwrap();
                 let other_doc=&other["data"]["CandidateFinding"][0]["_docID"];
                 assert!(Tool::call(&tool,BoundedQueryParams(json!({"fields":["title"],"field_page":{"doc_id":other_doc,"field":"title"}}).as_object().unwrap().clone())).await.is_err());
                 crate::config_client::ConfigAccess::write_local(&node,"test.field_recovery.change",&format!("mutation {{update_CandidateFinding(docID: \"{}\", input: {{title: \"changed\"}}) {{_docID}}}}",crate::graphql::escape_graphql_string(&doc))).await.unwrap();
@@ -731,7 +720,7 @@ mod tests {
             .unwrap();
         let mut declaration = decl();
         declaration.filter_fields.clear();
-        let tool = BoundedQueryTool::new(ConfigAccess::Local(Arc::clone(&node)), declaration)
+        let tool = BoundedQueryTool::new(ConfigAccess::local(Arc::clone(&node)), declaration)
             .with_actor(
                 ::identity::Did::new("did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR")
                     .unwrap(),
@@ -752,7 +741,7 @@ mod tests {
     #[tokio::test]
     async fn queries_only_the_correlated_run() {
         let node = node_with_findings().await;
-        let tool = BoundedQueryTool::new(ConfigAccess::Local(Arc::clone(&node)), decl());
+        let tool = BoundedQueryTool::new(ConfigAccess::local(Arc::clone(&node)), decl());
         let out =
             crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
                 None,
@@ -778,7 +767,7 @@ mod tests {
     #[tokio::test]
     async fn hides_filled_filter_and_rejects_model_override() {
         let node = node_with_findings().await;
-        let tool = BoundedQueryTool::new(ConfigAccess::Local(node), decl());
+        let tool = BoundedQueryTool::new(ConfigAccess::local(node), decl());
         let definition = Tool::definition(&tool, String::new()).await;
         let properties = definition.parameters["properties"].as_object().unwrap();
         assert!(properties.contains_key("fields"));
@@ -796,7 +785,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_fields_outside_the_allowlist() {
         let node = node_with_findings().await;
-        let tool = BoundedQueryTool::new(ConfigAccess::Local(node), decl());
+        let tool = BoundedQueryTool::new(ConfigAccess::local(node), decl());
         let mut args = Map::new();
         args.insert("fields".into(), json!(["_docID"]));
         crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
@@ -823,7 +812,7 @@ mod tests {
         let node = node_with_findings().await;
         let mut protected = decl();
         protected.collection = gents_protocol::schemas::EVAL_VERDICT_NAME.into();
-        let tool = BoundedQueryTool::new(ConfigAccess::Local(node), protected);
+        let tool = BoundedQueryTool::new(ConfigAccess::local(node), protected);
         assert!(!tool.is_well_formed());
         let err = Tool::call(&tool, BoundedQueryParams(Map::new()))
             .await
@@ -834,7 +823,7 @@ mod tests {
     #[tokio::test]
     async fn projection_fields_do_not_grant_filter_arguments() {
         let node = node_with_findings().await;
-        let tool = BoundedQueryTool::new(ConfigAccess::Local(node), decl())
+        let tool = BoundedQueryTool::new(ConfigAccess::local(node), decl())
             .declared_by(Some("findings".into()));
         let args = serde_json::from_value(json!({"title":"graphql"})).unwrap();
         let error = Tool::call(&tool, BoundedQueryParams(args))
@@ -855,7 +844,7 @@ mod tests {
     async fn rejects_number_for_native_string_filter() {
         let node = node_with_findings().await;
         let tool = BoundedQueryTool::new(
-            ConfigAccess::Local(node),
+            ConfigAccess::local(node),
             QueryToolDecl {
                 tool_name: "query_candidate_finding".into(),
                 collection: "CandidateFinding".into(),
@@ -919,7 +908,7 @@ mod tests {
     #[tokio::test]
     async fn pages_through_the_cap_with_offset_and_a_stable_order() {
         let node = node_with_many_findings(7).await;
-        let tool = BoundedQueryTool::new(ConfigAccess::Local(node), plain_decl());
+        let tool = BoundedQueryTool::new(ConfigAccess::local(node), plain_decl());
         let first = call_unscoped(
             &tool,
             json!({"fields":["finding_id"],"limit":3,"order":{"finding_id":"ASC"}}),
@@ -968,7 +957,7 @@ mod tests {
     #[tokio::test]
     async fn refuses_an_order_outside_the_allowlist_and_a_bad_offset() {
         let node = node_with_many_findings(1).await;
-        let tool = BoundedQueryTool::new(ConfigAccess::Local(node), plain_decl());
+        let tool = BoundedQueryTool::new(ConfigAccess::local(node), plain_decl());
         let hidden = call_unscoped(&tool, json!({"order":{"_version":"ASC"}}))
             .await
             .unwrap_err()
@@ -1007,7 +996,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_zero_limit() {
         let node = node_with_findings().await;
-        let tool = BoundedQueryTool::new(ConfigAccess::Local(node), decl());
+        let tool = BoundedQueryTool::new(ConfigAccess::local(node), decl());
         let mut args = Map::new();
         args.insert("limit".into(), json!(0));
         let err =

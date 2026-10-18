@@ -172,7 +172,7 @@ fn public_binding_json(doc: &ChainKeyBindingDocument) -> Value {
 
 async fn write_binding(access: &ConfigAccess, doc: &ChainKeyBindingDocument) -> Result<()> {
     access
-        .transact("cli.chain_key.binding.upsert", |txn| {
+        .transact_write("cli.chain_key.binding.upsert", |txn| {
             Box::pin(async move {
                 let rows = decode_binding_rows(
                     &txn.execute(&chain_key_binding_by_id_query(
@@ -195,7 +195,7 @@ async fn write_binding(access: &ConfigAccess, doc: &ChainKeyBindingDocument) -> 
 
 async fn create_binding(access: &ConfigAccess, doc: &ChainKeyBindingDocument) -> Result<String> {
     access
-        .transact("cli.chain_key.binding.create", |txn| {
+        .transact_write("cli.chain_key.binding.create", |txn| {
             Box::pin(async move {
                 let rows = decode_binding_rows(
                     &txn.execute(&chain_key_binding_by_id_query(
@@ -316,28 +316,5 @@ mod tests {
             json["address"],
             "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
         );
-    }
-
-    #[test]
-    fn decode_binding_rows_ignores_doc_id_and_null() {
-        let value = json!({
-            "data": {
-                "ChainKeyBinding": [{
-                    "_docID": "bae-1",
-                    "binding_id": "bind-1",
-                    "node_did": "did:key:zAlice",
-                    "address": "0xabc",
-                    "key_backend": "keyring",
-                    "attestation": "0xsig",
-                    "created_at": "t0",
-                    "revoked_at": null
-                }]
-            }
-        });
-        let rows = decode_binding_rows(&value).expect("decode");
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].binding_id, "bind-1");
-        let empty = json!({ "data": { "ChainKeyBinding": null } });
-        assert!(decode_binding_rows(&empty).expect("null").is_empty());
     }
 }

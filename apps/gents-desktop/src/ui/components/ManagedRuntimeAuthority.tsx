@@ -12,8 +12,18 @@ import {
 import type { ManagedServerAuthorityInput } from "@source-inc/gents-desktop-client";
 import { authoritySummary } from "@/lib/managedRuntimeAuthority";
 import { pickDirectory } from "../../lib/nativeShell";
+import { errorText } from "../../lib/errorText";
+import { InfoTip } from "@/screens/InfoTip";
 
 type ToolCeiling = ManagedServerAuthorityInput["toolCeiling"];
+
+const CEILING_MEANS: Record<ToolCeiling, string> = {
+  readwrite:
+    "Read and change files; run commands as you. The tool root is not a shell sandbox.",
+  readonly: "Read files and run restricted read-only commands.",
+  "meta-only":
+    "No host files or commands. Configuration and separately enabled remote tools remain available.",
+};
 
 const CEILINGS: { value: ToolCeiling; label: string }[] = [
   { value: "readwrite", label: "Read / write" },
@@ -42,8 +52,6 @@ export function ManagedRuntimeAuthorityPicker({
 }) {
   const [validating, setValidating] = useState(false);
   const [directoryDraft, setDirectoryDraft] = useState(toolRoot ?? home);
-  /* a committed folder becomes the draft; while one is being validated
-     (null) the draft stays as typed */
   const [committedRoot, setCommittedRoot] = useState(toolRoot);
   if (toolRoot !== committedRoot) {
     setCommittedRoot(toolRoot);
@@ -75,7 +83,7 @@ export function ManagedRuntimeAuthorityPicker({
       onRootChange(canonical);
     } catch (cause) {
       if (generation !== validationGeneration.current) return;
-      onError(cause instanceof Error ? cause.message : String(cause));
+      onError(errorText(cause));
     } finally {
       if (generation === validationGeneration.current) setValidating(false);
     }
@@ -92,15 +100,21 @@ export function ManagedRuntimeAuthorityPicker({
       else input.current?.focus();
     } catch (cause) {
       if (generation === validationGeneration.current) {
-        onError(cause instanceof Error ? cause.message : String(cause));
+        onError(errorText(cause));
       }
     }
   };
   return (
     <div className="grid gap-3">
       <div className="grid gap-1">
-        <span id="managed-tool-ceiling" className="text-xs text-muted-foreground">
-          Tool ceiling
+        <span className="flex items-center gap-1.5">
+          <span id="managed-tool-ceiling" className="text-xs text-muted-foreground">
+            Tool ceiling
+          </span>
+          <InfoTip about="tool ceiling">
+            {CEILING_MEANS[toolCeiling]} Individual agents can use less access, never
+            more.
+          </InfoTip>
         </span>
         <Select
           items={CEILINGS}
@@ -158,14 +172,11 @@ export function ManagedRuntimeAuthorityPicker({
           </Button>
         </div>
       </div>
-      <p className="text-xs text-muted-foreground">
-        {toolCeiling === "readwrite"
-          ? "Read and change files; run commands as you. The tool root is not a shell sandbox."
-          : toolCeiling === "readonly"
-            ? "Read files and run restricted read-only commands."
-            : "No host files or commands. Configuration and separately enabled remote tools remain available."}{" "}
-        Individual agents can use less access, never more.
-      </p>
+      {toolCeiling === "readwrite" ? (
+        <p className="text-xs text-muted-foreground">
+          Commands run as you; the tool root is not a sandbox.
+        </p>
+      ) : null}
       {validating && toolCeiling !== "meta-only" ? (
         <p className="text-xs text-muted-foreground">Checking…</p>
       ) : null}

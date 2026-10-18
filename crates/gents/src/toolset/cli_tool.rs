@@ -162,8 +162,6 @@ async fn run_cli_command(
         stdin: Vec::new(),
         environment: Some(cli_tool_environment(config)),
         tool_name: Some(config.name.clone()),
-        // Committed as captured, so a request deadline that stops this call
-        // presents the output so far instead of only its cause.
         live_output: bounds.live_output.clone(),
     })
     .await;
@@ -240,8 +238,6 @@ async fn render_cli_outcome(
             &stderr.content
         },
     );
-    // A completed call's text is the JSON string `call` returns; a stopped
-    // call's is the reported failure text itself.
     let expected = match terminal_cause {
         Some(_) => rendered.clone(),
         None => serde_json::to_string(&rendered).context("encoding CLI tool output")?,
@@ -260,7 +256,6 @@ async fn render_cli_outcome(
             .await?;
     }
     if let Some(cause) = terminal_cause {
-        // Captured command text must not reclassify the terminal cause.
         return Err(LocalToolError::reported_failure(
             gents_loop::tool_call_lifecycle::runtime::classify_error_text(&cause),
             rendered,
@@ -465,7 +460,7 @@ mod tests {
         tool: &crate::tool_call_lifecycle::ToolCallLifecycle,
     ) -> String {
         crate::tool_call_lifecycle::load_tool_call_presentation(
-            &crate::config_client::ConfigAccess::Local(node.clone()),
+            &crate::config_client::ConfigAccess::local(node.clone()),
             tool.doc_id().unwrap(),
             tool.node_did(),
             tool.session_id(),
@@ -545,15 +540,11 @@ mod tests {
                 "printf 'out \"q\"\\n'; printf 'err\\t' >&2; exit 4",
             ),
             (
-                // Output ending mid-sequence, and an invalid byte beside a
-                // complete scalar.
                 "cli-invalid-utf8",
                 30,
                 "printf 'ok\\303'; printf '\\377\\303\\251' >&2; exit 4",
             ),
             (
-                // CRLF lines past the head budget: the head cut must stay a
-                // byte prefix of the committed output.
                 "cli-crlf-head",
                 30,
                 "i=0; while [ $i -lt 3000 ]; do printf 'line %d\\r\\n' $i; i=$((i+1)); done; exit 4",
@@ -589,7 +580,6 @@ mod tests {
                 ToolOutcome::Completed(_) => {
                     assert!(text.contains("exit_code: 4"), "{text}");
                     if name == "cli-crlf-head" {
-                        // JSON-encoded: the shown prefix keeps its final `\r`.
                         assert!(text.contains(r"\r\n\n[Showing lines 1-"), "CRLF head kept");
                     }
                     tool.complete_with_presentation(&text, Some(presentation))

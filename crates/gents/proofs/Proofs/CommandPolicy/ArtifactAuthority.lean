@@ -7,7 +7,6 @@ namespace CommandPolicy
 
 namespace ExecutionMode
 
--- This is a coarse effect classification, not a proof of OS enforcement.
 def sourceWrites : ExecutionMode → Bool
   | .workspaceWrite | .unrestricted => true
   | _ => false
@@ -51,12 +50,6 @@ theorem incomparable : meet .artifactWrite .workspaceWrite = .readOnly ∧
 
 end ExecutionMode
 
-/-- Verified observations from the existing workspace/execution/host owners.
-Construction requires an active workspace binding and a current live execution
-that has not been canceled. incarnationMatches includes that live-owner check,
-not merely equality of an old generation value. These facts must be revalidated
-at launch where revocation can race preparation.
-No predicate here proves path canonicalization, kernel policy, or host isolation. -/
 structure ArtifactBinding where
   authority : BindingAuthority
   state : WorkspaceState
@@ -71,10 +64,6 @@ def ArtifactBinding.eligible (c : ArtifactBinding) : Bool :=
   c.authority == .readOnly && c.state == .sealed && c.sealMatches &&
   c.ownerMatches && c.incarnationMatches && c.privateRootEligible && c.sandboxEnforced
 
-/-- Deliberately separate from ordinary attenuation: an explicit artifact selection
-can obtain this contextual grant; no WorkspaceWrite-to-artifact conversion exists.
-`requested` is the result AFTER agent/selection/operator-ceiling meet, never a
-raw model or tool-selection request that bypasses a restrictive ceiling. -/
 def admitArtifact (requested : ExecutionMode) (binding : Option ArtifactBinding) : Bool :=
   requested == .artifactWrite && binding.any ArtifactBinding.eligible
 
@@ -86,7 +75,6 @@ theorem admitted_explicit {m : ExecutionMode} {c : Option ArtifactBinding}
 theorem missing_binding_denied (m : ExecutionMode) : admitArtifact m none = false := by
   simp [admitArtifact]
 
-/-- Host eligibility is an admission premise, not merely a later spawn check. -/
 theorem unsupported_host_denied (m : ExecutionMode) (c : ArtifactBinding)
     (h : c.sandboxEnforced = false) : admitArtifact m (some c) = false := by
   simp [admitArtifact, ArtifactBinding.eligible, h]
@@ -100,8 +88,6 @@ theorem admitted_checks {m : ExecutionMode} {c : ArtifactBinding}
     Bool.and_eq_true, beq_iff_eq, and_assoc] at h
   exact h.2
 
-/-- Initial implementation may deny persistent LSP rather than introduce another
-artifact lifetime owner. Both allowed dispatch and denial preserve the bound mode. -/
 inductive SpawnKind where
   | foreground | background | persistentLsp
   deriving DecidableEq, Repr
@@ -111,8 +97,6 @@ def artifactSpawn (kind : SpawnKind) (m : ExecutionMode)
   if kind == .persistentLsp then none
   else if admitArtifact m binding then some .artifactWrite else none
 
-/-- A successful spawn preserves the admitted mode; it cannot manufacture an
-artifact grant from a different request or bypass binding validation. -/
 theorem spawned_never_escalates {k : SpawnKind} {m out : ExecutionMode}
     {c : Option ArtifactBinding} (h : artifactSpawn k m c = some out) :
     out = m ∧ m = .artifactWrite ∧ admitArtifact m c = true := by
@@ -134,9 +118,6 @@ theorem artifact_requires_sandbox (support : RuntimeSupport) (sandbox : SandboxK
     cases enforced <;> simp [selectSandbox] at h ⊢
     exact h.symm
 
-/-- This theorem proves only the argv-policy validation result. It does not
-establish that sandbox selection or dispatch happened. A composed runtime launch
-consumer must separately fence context, enforcing sandbox, and disabled network. -/
 theorem artifact_disabled_network_validation (request : CommandRequest) :
     validateNetworkMode .artifactWrite .disabled request = .allow := rfl
 

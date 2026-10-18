@@ -1,5 +1,3 @@
-//! Physical request-scope checks that require the private accepted-call seam.
-
 use super::AwaitMode;
 use crate::identity::NodeIdentity;
 use crate::tool_call_lifecycle::admission_fixture::{
@@ -83,7 +81,7 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
             .unwrap(),
     );
     crate::schema::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_agent(node.as_ref(), node_did, "general").await;
+    crate::test_support::install_test_agent(&node, node_did, "general").await;
     let parent_id = format!("queue-deadline-coalesce-parent-{}", uuid::Uuid::new_v4());
     let session_id = case.session_id.to_string();
     let mut parent = claimed_signed_request(&node, &parent_id, &session_id, &identity, None).await;
@@ -131,8 +129,6 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
         assert_eq!(persisted["lifecycle_state"], "running");
         children.push(receipt.request_id);
     }
-    // Both provider turns must be accepted while the parent still owns its
-    // execution. The settlement premise observes it as terminal afterwards.
     let escaped_parent_doc = crate::graphql::escape_graphql_string(&parent_doc_id);
     exec(node.as_ref(), &format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_parent_doc}" }} }}, input: {{ lifecycle_state: "completed" }}) {{ _docID }} }}"#)).await;
     for (index, caused_request_id) in children.iter().enumerate() {

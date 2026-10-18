@@ -30,9 +30,6 @@ pub(super) async fn session_request_create_mutation(
     .await
 }
 
-/// A control continuation of `parent` written at `hop` (Lean
-/// `CausalHop.nextHop`): the session's current hop for a same-session
-/// continuation, higher for a wake caused by another session.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn session_request_create_mutation_at_hop(
     parent: &AgentRequest,
@@ -54,8 +51,6 @@ pub(super) async fn session_request_create_mutation_at_hop(
             &parent.node_did,
             &parent.request_id,
         );
-    // A continuation stays in its parent's session under the requester that
-    // owns it (Lean `Enrollment.runtimeRequesterScope`).
     let identity = RequestIdentity {
         requester_did: parent.requester_did.clone(),
         request_id: request_id.to_string(),

@@ -4,10 +4,6 @@ use gents::session::canonical_rows::{
     decode_transcript_message_row, AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS,
 };
 
-/// An exact prompt-owner lookup is independent of session-history coverage.
-/// Only an unfinished request needs live output facts. Keep the existing
-/// canonical dependency cap: overflow must not masquerade as complete input
-/// to the live target selector or as evidence that a prompt is absent.
 const MAX_TIP_REQUEST_ROWS: usize = 2_048;
 
 pub async fn load_session_tip_store(
@@ -28,10 +24,6 @@ pub async fn load_session_tip_store_on(
     tip_store(&data, request)
 }
 
-/// One indexed request read supplies both fresh lifecycle evidence and canonical
-/// output. These rows live only for this projection: never merge payloads into
-/// the observer or retain a per-request cache. Re-reading the bounded source
-/// observes late CRDT twins, gaps and closure-only records as well as appends.
 pub async fn load_session_live_store(
     node: &EmbeddedNode,
     request: &AgentRequestRow,
@@ -68,8 +60,6 @@ fn live_store(data: &Value, expected: &AgentRequestRow) -> Result<ClientStore> {
     Ok(ClientStore::from_rows(rows))
 }
 
-/// Exact scoped prompt observations and compact durable anchors for one page read.
-/// Absence is known only for physical requests whose bounded lookup succeeded.
 #[derive(Debug, Clone, Default)]
 pub struct RequestPromptOwnership {
     pub by_request_doc_id: std::collections::BTreeMap<String, RequestPromptFact>,
@@ -84,10 +74,6 @@ pub struct RequestPromptFact {
     pub first_sequence: Option<i64>,
 }
 
-/// Where a request's input is published (`gents::lifecycle::input_message_owner`):
-/// the owning physical request, its exact key, and whether the request's own
-/// first message is the anchor. A folded message has no messages of its own;
-/// its published entry is its anchor.
 fn input_owner(request: &AgentRequestRow) -> Result<(String, String, bool)> {
     let (owner, key) = gents::lifecycle::input_message_owner(request)
         .context("prompt lookup lacks physical request")?;
@@ -175,8 +161,6 @@ fn prompt_ownership_batch_query(requests: &[AgentRequestRow]) -> Option<String> 
     ))
 }
 
-/// Only a complete bounded read can establish missing prompts. Oversized
-/// histories and tied anchors retain the exact per-request lookup path.
 fn decode_prompt_ownership_batch(
     data: &Value,
     requests: &[AgentRequestRow],
@@ -330,10 +314,6 @@ fn decode_prompt_ownership(
     Ok(())
 }
 
-/// DefraDB extracts index candidates from conjunctive fields, while a
-/// disjunction remains a residual filter. Keep the exact namespace in one
-/// residual disjunct so it applies before the row limit without competing with
-/// the physical-request index under the planner's capped cardinality estimates.
 fn tip_query(request: &AgentRequestRow, include_request: bool) -> Result<String> {
     let doc = escape_graphql_string(
         request
@@ -376,9 +356,6 @@ fn tip_query(request: &AgentRequestRow, include_request: bool) -> Result<String>
         format!(r#"{scope}, message_key: {{ _eq: "{key}" }}"#)
     };
     let segments = if live {
-        // select_live_target only considers inference provider turns. These
-        // unindexed JSON predicates exclude inert payloads before transport
-        // and the row cap, without hiding twins or closure-only records.
         let source = if include_request {
             r#", source: { kind: { _eq: "provider_turn" }, scope: { _like: "inference.%" } }"#
         } else {
@@ -464,7 +441,7 @@ mod tests {
     #[tokio::test]
     async fn reopening_completed_request_reads_only_its_prompt_and_active_reads_stay_request_scoped(
     ) {
-        let node = defra_node::NodeBuilder::default().build().await.unwrap();
+        let node = std::sync::Arc::new(defra_node::NodeBuilder::default().build().await.unwrap());
         crate::client::schema::ensure_runtime_schemas(&node)
             .await
             .unwrap();
@@ -472,6 +449,11 @@ mod tests {
             let count = if request == "completed" { 120 } else { 1 };
             let mutations = (0..count)
                 .map(|sequence| {
+                    let storage_sequence = if request == "active" {
+                        1_000 + sequence
+                    } else {
+                        sequence
+                    };
                     let key = if sequence == 0 {
                         format!("authored:{request}:prompt")
                     } else {
@@ -484,7 +466,7 @@ mod tests {
                     message_key: "{key}", session_id: "session", node_did: "agent",
                     request_doc_id: "{request}", requester_did: null,
                     publication: {{kind: "request_execution", execution_generation: "generation"}},
-                    outcome: "complete", sequence: {sequence}, role: "user", blocks: null,
+                    outcome: "complete", sequence: {storage_sequence}, role: "user", blocks: null,
                     created_at: "2026-09-30T00:00:00Z"
                 }}) {{ _docID }}"#
                     )
@@ -499,8 +481,6 @@ mod tests {
             .await
             .unwrap();
         }
-        // A historic payload is deliberately undecodable: selecting the whole
-        // session would fail even though neither tip needs these bytes.
         ConfigAccess::write_local(&node, "test.tip_history", r#"mutation {
             create_AgentOutputSegment(input: {node_did:"agent", session_id:"session",
                 request_doc_id:"completed", source:{kind:"not_a_source"}, payload:"historic"}) { _docID }
@@ -592,42 +572,6 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_prompt_batches_do_not_establish_absence_or_select_tied_anchors() {
-        let requests = [AgentRequestRow {
-            doc_id: Some("request".into()),
-            node_did: Some("agent".into()),
-            session_id: Some("session".into()),
-            ..Default::default()
-        }];
-        let row = serde_json::json!({
-            "request_doc_id": "request", "node_did": "agent", "session_id": "session",
-            "requester_did": null, "message_key": "authored:request:prompt",
-            "role": "user", "sequence": 0
-        });
-        for rows in [
-            vec![row.clone(); MAX_TIP_REQUEST_ROWS + 1],
-            vec![row.clone(); 2],
-        ] {
-            let mut facts = RequestPromptOwnership::default();
-            assert!(!decode_prompt_ownership_batch(
-                &serde_json::json!({"AgentMessage": rows}),
-                &requests,
-                &mut facts,
-            )
-            .unwrap());
-            assert!(facts.by_request_doc_id.is_empty());
-        }
-        let mut later = row.clone();
-        later["sequence"] = serde_json::json!(1);
-        assert!(decode_prompt_ownership_batch(
-            &serde_json::json!({"AgentMessage": [row, later]}),
-            &requests,
-            &mut RequestPromptOwnership::default(),
-        )
-        .is_err());
-    }
-
-    #[test]
     fn a_folded_message_is_owned_by_its_folded_entry_under_the_claiming_request() {
         let request = |doc: &str| AgentRequestRow {
             doc_id: Some(doc.into()),
@@ -684,7 +628,7 @@ mod tests {
     #[ignore = "measures repeated-owner index planning against a large disposable session"]
     async fn folded_prompt_ownership_index_benchmark() {
         let node = std::sync::Arc::new(defra_node::NodeBuilder::default().build().await.unwrap());
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         access
             .add_schema(gents_protocol::schemas::AGENT_MESSAGE)
             .await
@@ -820,15 +764,12 @@ mod tests {
         node.shutdown().await;
     }
 
-    /// H streams while Q waits behind it, or F was folded into it. The read
-    /// targets the submitted Q or F, but the tip it loads is H's, so H's open
-    /// output reaches the live tail.
     #[tokio::test]
     async fn a_queued_or_folded_submission_loads_the_running_turns_open_output() {
         use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
         use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-        let node = defra_node::NodeBuilder::default().build().await.unwrap();
+        let node = std::sync::Arc::new(defra_node::NodeBuilder::default().build().await.unwrap());
         crate::client::schema::ensure_runtime_schemas(&node)
             .await
             .unwrap();

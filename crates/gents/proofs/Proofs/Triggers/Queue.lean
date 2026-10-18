@@ -2,11 +2,6 @@ import Proofs.Triggers.Types
 
 namespace Triggers.Durable
 
-/-- Native creation-arrival positions are authoritative after journal activation.
-A request with neither a position nor a fire receipt belongs to the pre-journal
-ordinary cohort. Such documents existed before every journaled arrival; their
-relative order is unavailable and retains ordinary running-session exclusion.
-Receipt-backed documents never qualify for this historical exception. -/
 structure ClaimObservation where
   document : String
   owner : String

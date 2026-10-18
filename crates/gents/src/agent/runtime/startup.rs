@@ -33,7 +33,7 @@ enum BackgroundTaskResult {
     RegistryHeartbeat(Result<()>),
     EndpointHeartbeat(Result<()>),
     SessionHydrationReconcile(Result<()>),
-    SessionInputEditReconcile(Result<()>),
+    SessionCommandReconcile(Result<()>),
     DirectoryProjection(Result<()>),
 }
 
@@ -53,8 +53,8 @@ impl BackgroundTaskResult {
             Self::SessionHydrationReconcile(result) => {
                 result.context("session hydration reconcile task")
             }
-            Self::SessionInputEditReconcile(result) => {
-                result.context("session input edit reconcile task")
+            Self::SessionCommandReconcile(result) => {
+                result.context("session command reconcile task")
             }
             Self::DirectoryProjection(result) => result.context("directory projection task"),
         }
@@ -121,11 +121,6 @@ impl crate::agent::reconcile::SlotFailurePolicy for StartupSlotFailurePolicy {
         {
             Ok(applied) => applied,
             Err(error) => {
-                // The executor has exhausted its restart budget and is about
-                // to park. If that veto cannot become durable, close routing
-                // before returning so the last Ready observation can never
-                // admit another request into its dead queue. Runtime teardown
-                // will then publish a terminal state or fail boundedly.
                 self.admission_gate.close().await;
                 let rendered = format!("{error:#}");
                 if self.fatal_error.send(error).is_err() {
@@ -170,11 +165,8 @@ impl crate::agent::reconcile::SlotFailurePolicy for StartupSlotFailurePolicy {
     }
 }
 
-/// Sole owner of the process-state/admission ordering boundary.
-///
-/// Ready is persisted before the gate opens. Beginning shutdown marks the
-/// lifecycle terminal under the same mutex, closes the gate (waiting for any
-/// in-progress routing admission), and only then publishes ShuttingDown.
+/// Sole owner of the process-state/admission ordering boundary: Ready is
+/// persisted before the gate opens; shutdown closes the gate first.
 struct RuntimeLifecycleCoordinator {
     closing: Mutex<bool>,
     admission_gate: super::router::RuntimeAdmissionGate,
@@ -394,14 +386,8 @@ async fn run_agent_owned(
     #[cfg(test)] slot_runner: Option<TestSlotRunner>,
 ) -> Result<()> {
     let cancel = CancellationToken::new();
-    // Ask cooperative children to stop if the coordinator future itself is
-    // dropped. Abort-on-drop handles below provide the hard ownership boundary
-    // for tasks which could otherwise remain between cancellation checkpoints.
     let _cancel_on_drop = cancel.clone().drop_guard();
     let (fatal_error_tx, mut fatal_error_rx) = mpsc::unbounded_channel();
-    // Every owned runtime task listens to this internal signal. If any one
-    // background task exits unexpectedly, the coordinator closes admission,
-    // broadcasts shutdown to the remaining tasks and awaits their joins.
     let (runtime_shutdown_tx, shutdown) = watch::channel(false);
     runtime_status
         .set_reconcile_phase(ReconcilePhase::Resolving)
@@ -420,8 +406,20 @@ async fn run_agent_owned(
         Some(agent.runtime_node_arc().identity.clone()),
     )
     .with_plugins(agent.plugins().clone());
-    backend_registry::probe_and_promote_enabled_backends(agent.node.as_ref()).await;
+    backend_registry::probe_and_promote_enabled_backends(&agent.node).await;
 
+    // Subscribe before reading startup configuration so racing commits remain pending.
+    let control_subscription = match agent
+        .document_runtime_context()
+        .map(|_| super::control_watcher::subscribe_control_changes(&agent.node))
+        .transpose()
+    {
+        Ok(subscription) => subscription,
+        Err(error) => {
+            runtime_status.publish_error(&format!("{error:#}")).await;
+            return Err(error);
+        }
+    };
     let resolved_snapshot = match resolve_startup_snapshot(&agent).await {
         Ok(snapshot) => snapshot,
         Err(error) => {
@@ -433,13 +431,6 @@ async fn run_agent_owned(
         runtime_status.publish_error(&format!("{error:#}")).await;
         return Err(error);
     }
-    // DefraDB's event bus is live-only. Subscribe before the MCP health
-    // checker's first cycle can persist a transition that makes a required
-    // service (and therefore its dependent agent) runnable.
-    let control_subscription = agent
-        .document_runtime_context()
-        .is_some()
-        .then(|| agent.node.subscribe_document_changes());
     log_recovery(
         &agent.node,
         agent.node_did(),
@@ -533,10 +524,6 @@ async fn run_agent_owned(
         .publish_startup_snapshot(initial_active_snapshot.as_ref())
         .await
     {
-        // Bootstrap owns live generation-one slots before the initial source is
-        // durable. Transfer them through the same ordered shutdown boundary as
-        // the steady-state supervisor; dropping JoinHandles here would detach
-        // executors that can outlive the readiness owner.
         runtime_shutdown_tx.send_replace(true);
         cancel.cancel();
         let shutdown_result = generation_supervisor.shutdown_slots().await;
@@ -610,11 +597,6 @@ async fn run_agent_owned(
     let trigger_engine_materializer_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_cancel = cancel.child_token();
     let trigger_engine_startup_barrier = startup_barrier.clone();
-    // Construct the `ManualSource` up-front so the `ManualTriggerHandle` can
-    // be published to in-process callers (via the `OnceCell` on
-    // `Gents`) before `run()` awaits shutdown. Deferring construction
-    // into the spawned task would race the callers that cloned `Gents`
-    // and are polling for the handle.
     let (manual_source, manual_trigger_handle) =
         crate::trigger_engine::manual_source::ManualSource::new(trigger_engine_cancel.clone());
     let _ = agent.manual_trigger_handle.set(manual_trigger_handle);
@@ -626,7 +608,7 @@ async fn run_agent_owned(
             _ = trigger_engine_startup_barrier.wait_ready() => {}
         }
         match crate::trigger_engine::production_materializer::recover_workspace_binding_pending_requests(
-            trigger_engine_node.as_ref(),
+            &trigger_engine_node,
             &trigger_engine_node_did,
         )
         .await
@@ -870,15 +852,15 @@ async fn run_agent_owned(
         )
     });
 
-    let input_edit_node = agent.node.clone();
-    let input_edit_identity = agent.runtime_node_arc().identity.clone();
-    let input_edit_cancel = cancel.child_token();
+    let session_command_node = agent.node.clone();
+    let session_command_identity = agent.runtime_node_arc().identity.clone();
+    let session_command_cancel = cancel.child_token();
     background_tasks.spawn(async move {
-        BackgroundTaskResult::SessionInputEditReconcile(
-            crate::agent::p2p_reconcile::session_input_edit::run_session_input_edit_reconciler(
-                input_edit_node,
-                input_edit_identity,
-                input_edit_cancel,
+        BackgroundTaskResult::SessionCommandReconcile(
+            crate::agent::p2p_reconcile::session_commands::run_session_command_reconciler(
+                session_command_node,
+                session_command_identity,
+                session_command_cancel,
             )
             .await,
         )
@@ -1066,8 +1048,7 @@ async fn log_recovery(
     default_agent_id: &str,
     executions: &crate::hook::BackgroundExecutionRegistry,
 ) {
-    // Sweep order lives in `startup_recovery`, not here: the inference-call
-    // sweep is parent-gated and must run after request repair (#1001).
+    // The inference-call sweep is parent-gated and must run after request repair.
     let outcome =
         crate::startup_recovery::run_startup_recovery_with_executions(node, node_did, executions)
             .await;
@@ -1217,11 +1198,7 @@ async fn validate_startup_snapshot(
             .filter(|(_, reason)| !is_degraded_startup_unavailable_reason(reason.public_reason))
             .collect::<Vec<_>>();
         if !blocking.is_empty() {
-            // The bail and the persisted runtime status carry only the
-            // presentation-safe reason; the diagnostic is operator-local and
-            // must not leak into either, so it is only logged here (and, in
-            // service mode, mirrored to the stderr sink the service manager
-            // captures).
+            // Only the presentation-safe reason leaves this boundary.
             for (agent_id, reason) in &blocking {
                 tracing::error!(
                     agent_id = %agent_id,
@@ -1266,7 +1243,7 @@ async fn validate_startup_snapshot(
 }
 
 async fn resolve_tool_surfaces(
-    node: &defra_node::EmbeddedNode,
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
     agents: &[Arc<crate::config::ResolvedAgent>],
     plugins: &crate::plugin::executor::PluginExecutor,
 ) -> Result<HashMap<String, Arc<ToolSurface>>> {
@@ -1281,13 +1258,13 @@ async fn resolve_tool_surfaces(
 async fn resolve_startup_snapshot(agent: &Gents) -> Result<ResolvedRuntimeSnapshot> {
     match agent.document_runtime_context() {
         Some(resolve_context) => {
-            resolve_document_snapshot_with_tools(agent.node.as_ref(), resolve_context).await
+            resolve_document_snapshot_with_tools(&agent.node, resolve_context).await
         }
         None => {
             let tool_surfaces =
-                resolve_tool_surfaces(agent.node.as_ref(), &agent.agents, agent.plugins()).await?;
+                resolve_tool_surfaces(&agent.node, &agent.agents, agent.plugins()).await?;
             let backend_admission_configs =
-                resolve_backend_admission_configs(agent.node.as_ref(), &agent.agents).await?;
+                resolve_backend_admission_configs(&agent.node, &agent.agents).await?;
             Ok(ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
                 agent.default_agent_id().to_string(),
                 agent.agents.clone(),
@@ -1305,7 +1282,7 @@ async fn resolve_startup_snapshot(agent: &Gents) -> Result<ResolvedRuntimeSnapsh
 }
 
 async fn resolve_backend_admission_configs(
-    node: &defra_node::EmbeddedNode,
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
     agents: &[Arc<crate::config::ResolvedAgent>],
 ) -> Result<HashMap<String, BackendAdmissionConfig>> {
     let mut configs = HashMap::new();
@@ -1363,7 +1340,7 @@ async fn resolve_backend_admission_configs(
 }
 
 async fn resolve_document_snapshot_with_tools(
-    node: &defra_node::EmbeddedNode,
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
     resolve_context: &DocumentResolveContext,
 ) -> Result<ResolvedRuntimeSnapshot> {
     crate::agent::resolve_document_runtime_snapshot(node, resolve_context).await

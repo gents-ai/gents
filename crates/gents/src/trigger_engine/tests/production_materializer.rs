@@ -190,7 +190,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
     );
 
     assert_eq!(
-        crate::goal::delete_goals_for_session(node.as_ref(), &node_did, &identity.session_id)
+        crate::goal::delete_goals_for_session(&node, &node_did, &identity.session_id)
             .await
             .expect("clear Goal and creation claim before source checkpoint"),
         1
@@ -390,8 +390,6 @@ async fn create_request(
     );
 }
 
-/// All lifecycle states are durable markers, and the full delivery key keeps
-/// membership generations separate without adding a second persisted marker.
 #[tokio::test]
 async fn durable_group_marker_preserves_generation_owner_and_goal_mode() {
     let (node, materializer) = materializer_with_node().await;
@@ -494,8 +492,6 @@ async fn materializer_rejects_workspace_from_different_explicit_owner() {
     );
 }
 
-/// Canonical per-document gates survive source-kind edits. Correlation is
-/// lineage here; only owner and logical Trigger ID define the concurrency scope.
 #[tokio::test]
 async fn trigger_wide_gate_and_supersede_survive_kind_change_and_preserve_exclusion() {
     let (node, materializer) = materializer_with_node().await;
@@ -693,8 +689,6 @@ async fn materializer_resolves_missing_workspace_owner_from_canonical_workspace(
     ensure_runtime_schemas(&node).await.unwrap();
     let behavior = integration_test_agent("general");
     let owner = behavior.node_did().to_string();
-    // The event-source document carries the workspace id and authority but
-    // not its owner. The canonical workspace owner supplies that binding.
     insert_ready_workspace(&node, "ws-incomplete", &owner, &owner).await;
     let snapshot = snapshot_with_agent_and_schedules(behavior, HashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
@@ -1166,7 +1160,7 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
         attempt: None,
         created_at: "2030-01-01T00:00:00Z".into(),
     };
-    crate::config_client::ConfigAccess::transact_local(node.as_ref(), None, "test.seed_committed_replay", |txn| {
+    crate::config_client::ConfigAccess::transact_local_write(&node, None, "test.seed_committed_replay", |txn| {
         let fire = fire.clone();
         Box::pin(async move {
             assert!(crate::trigger_engine::durable::stage_fire_receipt(txn, &fire).await?);
@@ -1209,4 +1203,264 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
         response.data.unwrap()["AgentRequest"][0]["lifecycle_state"],
         "processing"
     );
+}
+
+#[tokio::test]
+async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let snapshot =
+        snapshot_with_agent_and_schedules(integration_test_agent("general"), HashMap::new());
+    let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot.clone());
+    let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
+    let identity = gents_protocol::trigger_delivery::FireIdentity {
+        owner_did: snapshot.local_did.clone(),
+        trigger_id: "replay-trigger".into(),
+        source_collection: "Schedule".into(),
+        source_doc_id: "persisted-due-occurrence".into(),
+    };
+    let key = crate::trigger_engine::durable::fire_key(&identity);
+    let fire = gents_protocol::trigger_delivery::TriggerFire {
+        fire_key: key.clone(),
+        request_id: identity.request_id(),
+        identity,
+        task_id: "replay-task".into(),
+        session_id: "original-session".into(),
+        goal_id: None,
+        goal_objective: None,
+        goal_token_budget: None,
+        goal_assignment_applied: false,
+        emit_outcome: false,
+        queued_serial: false,
+        source_handoff_id: None,
+        reply_session_id: None,
+        shard_id: None,
+        attempt: None,
+        created_at: "2030-01-01T00:00:00Z".into(),
+    };
+    crate::config_client::ConfigAccess::transact_local_write(&node, None, "test.seed_committed_replay", |txn| {
+        let fire = fire.clone();
+        Box::pin(async move {
+            assert!(crate::trigger_engine::durable::stage_fire_receipt(txn, &fire).await?);
+            txn.execute_with_variables("mutation($input: AgentRequestMutationInputArg!) {create_AgentRequest(input: $input) {_docID}}", &serde_json::json!({"input": {
+                "request_id": fire.request_id, "node_did": fire.identity.owner_did,
+                "session_id": fire.session_id, "agent_id": "general", "purpose": "normal",
+                "lifecycle_state": "processing", "caused_by_trigger_id": "replay-trigger",
+                "created_at": fire.created_at
+            }})).await?;
+            Ok(())
+        })
+    }).await.unwrap();
+    let (_, rx) = watch::channel(snapshot);
+    let engine = TriggerEngine::new(rx, Arc::new(materializer));
+    let mut task = resolved_task("{{ doc.field_added_after_admission }}");
+    task.task_id = "replay-task".into();
+    task.agent_id = "general".into();
+    let result = engine.dispatch(FireIntent {
+        trigger_id: Some("replay-trigger".into()), trigger_kind: TriggerKind::Schedule,
+        task, concurrency: ConcurrencyMode::LatestOnly,
+        event_vars: serde_json::json!({"source_collection":"ReplayWork", "source_doc_id":"physical-source"}),
+        doc_vars: None, correlation: None, group_vars: None, trigger_context: None, args_vars: None,
+        durable_fire_key: "persisted-due-occurrence".into(), pre_materialized_request_id: None,
+        on_result: Box::new(|_| {}),
+    }).await;
+    assert!(
+        matches!(result, FireResult::Duplicate { request_id } if request_id == fire.request_id)
+    );
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node.as_ref(),
+        &format!(
+            "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{lifecycle_state}} }}",
+            escape_graphql_string(&fire.request_id)
+        ),
+        "check replay did not supersede",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        response.data.unwrap()["AgentRequest"][0]["lifecycle_state"],
+        "processing"
+    );
+}
+
+#[tokio::test]
+async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let behavior = integration_test_agent("general");
+    let owner = behavior.node_did().to_string();
+    for (target, agent, closed) in [
+        ("captain", "general", false),
+        ("wrong-agent", "other", false),
+        ("closed", "general", true),
+        ("foreign-owner", "general", false),
+    ] {
+        crate::session::ensure_session_with_agent_id_and_requester_did(
+            &node,
+            target,
+            if target == "foreign-owner" {
+                "did:key:foreign"
+            } else {
+                &owner
+            },
+            agent,
+            Some(&owner),
+        )
+        .await
+        .unwrap();
+        if closed {
+            crate::session::close_session(&node, &owner, target, Some(&owner))
+                .await
+                .unwrap();
+        }
+    }
+    let task = resolved_task("wake {{ session.session_id }}");
+    for target in [
+        "captain",
+        "wrong-agent",
+        "closed",
+        "missing",
+        "foreign-owner",
+    ] {
+        let trigger = format!("wake-{target}");
+        let mut schedule = resolved_schedule(&trigger, task.clone());
+        schedule.session_id_template = Some(target.into());
+        schedule.concurrency = ConcurrencyMode::QueuedSerial;
+        let snapshot = snapshot_with_agent_and_schedules(
+            behavior.clone(),
+            HashMap::from([(trigger.clone(), schedule)]),
+        );
+        let (tx, rx) = watch::channel(snapshot);
+        let materializer = Arc::new(ProductionMaterializer::new(node.clone(), rx.clone()));
+        let engine = TriggerEngine::new(rx, materializer.clone());
+        let identity = gents_protocol::trigger_delivery::FireIdentity {
+            owner_did: owner.clone(),
+            trigger_id: trigger.clone(),
+            source_collection: "Schedule".into(),
+            source_doc_id: "due-2030-01-01".into(),
+        };
+        let intent = || FireIntent {
+            trigger_id: Some(trigger.clone()),
+            trigger_kind: TriggerKind::Schedule,
+            task: task.clone(),
+            concurrency: ConcurrencyMode::QueuedSerial,
+            event_vars: serde_json::json!({}),
+            doc_vars: None,
+            correlation: None,
+            group_vars: None,
+            trigger_context: None,
+            args_vars: None,
+            durable_fire_key: "due-2030-01-01".into(),
+            pre_materialized_request_id: None,
+            on_result: Box::new(|_| {}),
+        };
+        let first = engine.dispatch(intent()).await;
+        if target == "captain" {
+            assert!(
+                matches!(first, FireResult::Fired { ref request_id } if request_id == &identity.request_id()),
+                "{first:?}"
+            );
+            let mut queued = intent();
+            queued.durable_fire_key = "due-2030-01-01-second".into();
+            let queued_id = gents_protocol::trigger_delivery::FireIdentity {
+                source_doc_id: queued.durable_fire_key.clone(),
+                ..identity.clone()
+            }
+            .request_id();
+            assert!(matches!(
+                engine.dispatch(queued).await,
+                FireResult::Fired { .. }
+            ));
+            let response = crate::graphql::graphql_with_transaction_retry(
+                &node,
+                &format!(
+                    "{{ AgentRequest {{ {} }} }}",
+                    crate::watcher::AGENT_REQUEST_FIELDS
+                ),
+                "test.scheduled_claim_rows",
+            )
+            .await
+            .unwrap();
+            let rows: Vec<gents_protocol::row::AgentRequestRow> =
+                serde_json::from_value(response.data.unwrap()["AgentRequest"].clone()).unwrap();
+            let cases = gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap();
+            let mut claim_owners = Vec::new();
+            for (request_id, case_name) in [
+                (identity.request_id(), "serial_first_claims"),
+                (queued_id, "serial_second_waits"),
+            ] {
+                let row = rows
+                    .iter()
+                    .find(|row| row.request_id == request_id)
+                    .unwrap()
+                    .clone();
+                let request = crate::watcher::AgentRequest::try_from(row).unwrap();
+                let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
+                    node.clone(),
+                    "general",
+                    &owner,
+                    request,
+                    60,
+                    crate::lifecycle::ExecutionOrigin::Scheduled,
+                    "test-backend",
+                );
+                let now = chrono::Utc::now();
+                let claimed = lifecycle
+                    .claim_pending_durable_with_inputs(
+                        || now,
+                        || (now, uuid::Uuid::new_v4().to_string()),
+                    )
+                    .await
+                    .unwrap()
+                    .was_claimed();
+                let expected = cases["trigger_delivery"]["queues"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|case| case["name"] == case_name)
+                    .unwrap()["can_claim"]
+                    .as_bool()
+                    .unwrap();
+                assert_eq!(
+                    claimed, expected,
+                    "scheduled delivery uses the canonical claim queue: {case_name}"
+                );
+                if claimed {
+                    claim_owners.push(lifecycle);
+                }
+            }
+            tx.send(snapshot_with_agent_and_schedules(
+                behavior.clone(),
+                HashMap::new(),
+            ))
+            .unwrap();
+            let replay = engine.dispatch(intent()).await;
+            assert!(
+                matches!(&replay, FireResult::Duplicate { request_id } if request_id == &identity.request_id()),
+                "{replay:?}"
+            );
+        } else {
+            assert!(
+                matches!(
+                    first,
+                    FireResult::Errored { .. } | FireResult::Rejected { .. }
+                ),
+                "{first:?}"
+            );
+        }
+        let response = node.execute(&format!(r#"{{ TriggerFire(filter: {{fire_key: {{_eq: "{}"}}}}) {{ request_id queued_serial }} AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{ session_id caused_by_trigger_kind content }} }}"#,
+            escape_graphql_string(&identity.fire_key()), escape_graphql_string(&identity.request_id()))).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let data = response.data.unwrap();
+        let expected = usize::from(target == "captain");
+        assert_eq!(data["TriggerFire"].as_array().unwrap().len(), expected);
+        assert_eq!(data["AgentRequest"].as_array().unwrap().len(), expected);
+        if expected == 1 {
+            let request = &data["AgentRequest"][0];
+            assert_eq!(request["session_id"], "captain");
+            assert_eq!(request["caused_by_trigger_kind"], "schedule");
+            assert_eq!(data["TriggerFire"][0]["queued_serial"], true);
+            assert_eq!(request["content"], "wake captain");
+        }
+    }
 }

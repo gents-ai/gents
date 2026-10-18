@@ -149,7 +149,6 @@ async fn document_create_cannot_write_to_a_home_it_does_not_own() -> Result<()> 
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
-    // The other home's principal is not the served home's, so the write is refused.
     let goal_id = format!("goal-{}", Uuid::new_v4().simple());
     let fields = serde_json::json!({
         "goal_id": goal_id,

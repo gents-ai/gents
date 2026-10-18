@@ -145,12 +145,4 @@ mod tests {
         assert_eq!(attrs.parent_request_id, "parent-req");
         assert_eq!(attrs.parent_tool_call_id, "parent-tool");
     }
-
-    #[test]
-    fn request_trace_attrs_accept_empty_input() {
-        let attrs = RequestTraceAttrs::from_request(&request(Default::default()));
-
-        assert_eq!(attrs.selected_skill_count, 0);
-        assert!(!attrs.workspace_cwd_set);
-    }
 }

@@ -1,4 +1,3 @@
-//! Run the built e2e_live executable directly, with no parent Cargo process.
 use crate::support::live_inference::wait_for_request_terminal;
 use crate::support::snapshots::fetch_tool_call_payloads_for_request;
 use crate::support::{
@@ -276,8 +275,6 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
                 .and_then(|payload| payload.result.as_deref())
                 .and_then(|text| serde_json::from_str::<Value>(text).ok())
                 .unwrap_or(Value::Null);
-            // UnrestrictedBashTool::NAME identifies shell-tool access; the
-            // separate execution_mode below must still be ArtifactWrite.
             call["tool_name"] == "bash_unrestricted"
                 && call["request_doc_id"] == row["_docID"]
                 && call["lifecycle_state"] == "completed"

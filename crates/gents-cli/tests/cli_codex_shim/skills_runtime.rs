@@ -145,8 +145,6 @@ async fn codex_shim_live_skill_add_reaches_model_in_conversation() -> Result<()>
     Ok(())
 }
 
-/// A committed `skills/config/write` toggle wakes reconciliation so the next
-/// turn uses the updated skill catalog without a restart.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;

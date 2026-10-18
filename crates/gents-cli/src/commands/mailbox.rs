@@ -66,10 +66,9 @@ async fn reply(args: MailboxReplyArgs) -> Result<()> {
     }))
 }
 
-async fn access_and_principal(args: &MailboxAccessArgs) -> Result<(crate::CommandAccess, String)> {
-    // The principal comes from the local identity, never a caller-supplied
-    // requester flag. Remote storage enforcement remains the paired-client
-    // trust boundary documented by the mailbox design.
+async fn access_and_principal(
+    args: &MailboxAccessArgs,
+) -> Result<(gents::config_client::ConfigAccess, String)> {
     let principal =
         resolve_node_did(args.home.as_deref(), None).context("resolving mailbox node DID")?;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
@@ -80,28 +79,25 @@ async fn list(args: MailboxListArgs) -> Result<()> {
     args.output
         .ensure_supported("mailbox list", &[OutputFormat::Json])?;
     let (access, principal) = access_and_principal(&args.access).await?;
-    let items = match &*access {
-        ConfigAccess::Local(node) => {
-            gents::mailbox::list_mailbox_items(
-                node,
-                &principal,
-                (!args.all).then_some(MailboxStatus::Open),
-            )
-            .await?
-        }
-        ConfigAccess::Graphql(_) => {
-            let status = (!args.all)
-                .then_some(r#", status: { _eq: "open" }"#)
-                .unwrap_or_default();
-            decode_rows(
-                access
-                    .execute(&format!(
-                        r#"{{ MailboxItem(filter: {{ requester_did: {{ _eq: "{}" }}{status} }}, order: {{ created_at: DESC }}) {{ {MAILBOX_FIELDS} }} }}"#,
-                        escape_graphql_string(&principal)
-                    ))
-                    .await?,
-            )?
-        }
+    let items = if let Some(node) = access.local_node() {
+        gents::mailbox::list_mailbox_items(
+            node,
+            &principal,
+            (!args.all).then_some(MailboxStatus::Open),
+        )
+        .await?
+    } else {
+        let status = (!args.all)
+            .then_some(r#", status: { _eq: "open" }"#)
+            .unwrap_or_default();
+        decode_rows(
+            access
+                .execute(&format!(
+                    r#"{{ MailboxItem(filter: {{ requester_did: {{ _eq: "{}" }}{status} }}, order: {{ created_at: DESC }}) {{ {MAILBOX_FIELDS} }} }}"#,
+                    escape_graphql_string(&principal)
+                ))
+                .await?,
+        )?
     };
     print_json(&serde_json::to_value(items)?)
 }
@@ -123,40 +119,37 @@ async fn dismiss(args: MailboxItemArgs) -> Result<()> {
     args.output
         .ensure_supported("mailbox dismiss", &[OutputFormat::Json])?;
     let (access, principal) = access_and_principal(&args.access).await?;
-    let item = match &*access {
-        ConfigAccess::Local(node) => {
-            gents::mailbox::dismiss_mailbox_item(node, &args.doc_id, &principal).await?
+    let item = if let Some(node) = access.local_node() {
+        gents::mailbox::dismiss_mailbox_item(node, &args.doc_id, &principal).await?
+    } else {
+        let before = load_item(&access, &args.doc_id)
+            .await?
+            .context("MailboxItem not found")?;
+        if before.requester_did != principal {
+            bail!("only requester_did may dismiss a MailboxItem");
         }
-        ConfigAccess::Graphql(_) => {
-            let before = load_item(&access, &args.doc_id)
-                .await?
-                .context("MailboxItem not found")?;
-            if before.requester_did != principal {
-                bail!("only requester_did may dismiss a MailboxItem");
+        match before.parsed_status() {
+            Some(MailboxStatus::Open) => {
+                let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+                let mutation = format!(
+                    r#"mutation {{ update_MailboxItem(filter: {{ _docID: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }}, status: {{ _eq: "open" }} }}, input: {{ status: "dismissed", updated_at: "{now}", resolved_at: "{now}", resolved_doc_id: null }}) {{ _docID }} }}"#,
+                    escape_graphql_string(&args.doc_id),
+                    escape_graphql_string(&principal),
+                );
+                access.write("cli.mailbox.dismiss", &mutation).await?;
             }
-            match before.parsed_status() {
-                Some(MailboxStatus::Open) => {
-                    let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-                    let mutation = format!(
-                        r#"mutation {{ update_MailboxItem(filter: {{ _docID: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }}, status: {{ _eq: "open" }} }}, input: {{ status: "dismissed", updated_at: "{now}", resolved_at: "{now}", resolved_doc_id: null }}) {{ _docID }} }}"#,
-                        escape_graphql_string(&args.doc_id),
-                        escape_graphql_string(&principal),
-                    );
-                    access.write("cli.mailbox.dismiss", &mutation).await?;
-                }
-                Some(_) => {}
-                None => bail!("MailboxItem has unknown status {:?}", before.status),
-            }
-            load_item(&access, &args.doc_id)
-                .await?
-                .context("dismissed MailboxItem disappeared")?
+            Some(_) => {}
+            None => bail!("MailboxItem has unknown status {:?}", before.status),
         }
+        load_item(&access, &args.doc_id)
+            .await?
+            .context("dismissed MailboxItem disappeared")?
     };
     print_json(&serde_json::to_value(item)?)
 }
 
 async fn load_item(access: &ConfigAccess, doc_id: &str) -> Result<Option<MailboxItem>> {
-    if let ConfigAccess::Local(node) = access {
+    if let Some(node) = access.local_node() {
         return gents::mailbox::load_mailbox_item(node, doc_id).await;
     }
     let response = access

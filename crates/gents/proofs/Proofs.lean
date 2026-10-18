@@ -3,6 +3,8 @@ import Proofs.Process
 import Proofs.Persistence
 import Proofs.StorageObservation
 import Proofs.StorageWriteGate
+import Proofs.NativeCompletion
+import Proofs.NativeClaimLifetime
 import Proofs.Scheduling
 import Proofs.Request
 import Proofs.RequestExecutionLease
@@ -36,6 +38,7 @@ import Proofs.ScopeTemplates
 import Proofs.Triggers
 import Proofs.Goals
 import Proofs.GoalAutomation
+import Proofs.GoalAutomation.Edit
 import Proofs.GoalAutomation.OperatorResume
 import Proofs.GoalAutomation.ClaimedPublication
 import Proofs.GoalAutomation.ResetResume
@@ -44,6 +47,8 @@ import Proofs.GoalAutomation.ReadinessGate
 import Proofs.Mailbox
 import Proofs.Client
 import Proofs.ClientShell
+import Proofs.ClientShell.FreshPromptCompletion
+import Proofs.ClientShell.RequestPatchPublication
 import Proofs.CommandPolicy
 import Proofs.ToolPolicy
 import Proofs.Lsp

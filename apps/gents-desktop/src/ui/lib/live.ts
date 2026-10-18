@@ -2,21 +2,36 @@ import { isLive } from "../../lib/turnState";
 
 export { isLive };
 
-/* what to say next to a session: nothing for a finished one, and working
-   for a live state this build does not name, as its spinner says */
+export type SessionState = "working" | "waiting" | "failed" | "stopped" | "finished";
+
+export function stateOf(turnState: string | null | undefined): SessionState {
+  if (turnState === "waitingForClaim") return "waiting";
+  if (isLive(turnState)) return "working";
+  switch (turnState?.toLowerCase()) {
+    case "failed":
+    case "error":
+    case "dead":
+      return "failed";
+    case "interrupted":
+    case "superseded":
+    case "cancelled":
+      return "stopped";
+    default:
+      return "finished";
+  }
+}
+
 export const turnLabel = (turnState: string | null | undefined): string | null => {
-  switch (turnState) {
-    case "waitingForClaim":
+  switch (stateOf(turnState)) {
+    case "waiting":
       return "Waiting for node";
-    case "running":
+    case "working":
       return "Working";
     case "failed":
       return "Failed";
-    case "interrupted":
-      return "Stopped";
-    case "superseded":
-      return "Superseded";
+    case "stopped":
+      return turnState?.toLowerCase() === "superseded" ? "Superseded" : "Stopped";
     default:
-      return isLive(turnState) ? "Working" : null;
+      return null;
   }
 };

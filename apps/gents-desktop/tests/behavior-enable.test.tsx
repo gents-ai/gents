@@ -9,7 +9,6 @@ import { renderIn, testApp } from "./app-fixture";
 const toast = vi.hoisted(() => vi.fn());
 vi.mock("sonner", () => ({ toast }));
 
-/* the panel under an app whose failed actions are toasted, as the root's */
 function renderPanel(patch: ReturnType<typeof vi.fn>, node: typeof deployment) {
   const api = { patchConfigComponents: patch };
   return renderIn(
@@ -27,8 +26,6 @@ const withOps = (changes: Partial<(typeof deployment.agents)[number]>) => ({
 
 beforeEach(() => vi.clearAllMocks());
 
-/* Publication decides whether an agent can run; the switch does not
-   second-guess it. An absent context is allowed, a dangling one refused. */
 describe("enabling an agent", () => {
   it("enables an agent with no context directly", async () => {
     const patch = vi.fn().mockResolvedValue({});
@@ -56,7 +53,6 @@ describe("enabling an agent", () => {
     await waitFor(() =>
       expect(toast).toHaveBeenCalledWith(`Couldn’t turn it on: ${refusal}`),
     );
-    /* the action reports it; the switch's own catch does not again (#2043) */
     expect(toast).toHaveBeenCalledTimes(1);
   });
 });

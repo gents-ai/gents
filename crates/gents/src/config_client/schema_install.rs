@@ -1,6 +1,3 @@
-//! Additive schema publication shared by package installation and configuration.
-//! Schema contracts are node-wide; this does not grant document read/write ACP.
-
 use std::collections::BTreeMap;
 
 use anyhow::{ensure, Context, Result};
@@ -16,6 +13,7 @@ pub(crate) struct SchemaInstallMismatch {
     pub collection: String,
 }
 
+/// Schema publication is node-wide and does not grant document read/write ACP.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SchemaInstallPlan {
     pub artifact_digest: String,
@@ -25,8 +23,6 @@ pub struct SchemaInstallPlan {
 }
 
 impl SchemaInstallPlan {
-    /// An SDL-plus-patch series may retain extra fields, but must supply every
-    /// declared field before reporting successful convergence.
     pub fn require_satisfied(&self) -> Result<()> {
         ensure!(
             !self.requires_publication,
@@ -43,14 +39,10 @@ impl SchemaInstallPlan {
     }
 }
 
-/// Read-only compatibility check. Existing collections must match exactly;
-/// one SDL must not mix existing and missing collections.
 pub async fn preview_schema_install(access: &ConfigAccess, sdl: &str) -> Result<SchemaInstallPlan> {
     preview_schema(access, sdl, false).await
 }
 
-/// Plan an SDL phase of an additive patch series. The caller must finish its
-/// patches and re-preview with `require_satisfied` before claiming convergence.
 pub async fn preview_additive_schema_install(
     access: &ConfigAccess,
     sdl: &str,
@@ -109,9 +101,9 @@ async fn preview_schema(
     })
 }
 
-/// Recheck contracts and the exact previewed bytes before additive publication.
-/// DefraDB owns schema registration; this is not a document transaction and
-/// callers must not promise atomic publication with subsequent document writes.
+/// Recheck contracts and the exact previewed bytes before additive publication;
+/// this is not a document transaction and must not be promised atomic with
+/// subsequent document writes.
 pub async fn apply_schema_install(
     access: &ConfigAccess,
     sdl: &str,
@@ -165,7 +157,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let base = "type EvalPatch { message: String }";
         let extended = "type EvalPatch { message: String owned_files: String @immutable }";
         let plan = preview_schema_install(&access, base).await.unwrap();
@@ -230,7 +222,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let sdl = "type EvalInput { message: String }";
         let plan = preview_schema_install(&access, sdl).await.unwrap();
         assert!(plan.requires_publication);

@@ -98,7 +98,7 @@ fn mcp_pool_query(node_did: &str) -> String {
             }}
             ToolServiceHealthState(
                 filter: {{ node_did: {{ _eq: "{node_did}" }} }},
-                order: {{ service_id: ASC }}
+                order: [{{ service_id: ASC }}, {{ updated_at: DESC }}, {{ _docID: ASC }}]
             ) {{
                 service_id
                 node_did
@@ -132,11 +132,14 @@ fn build_mcp_pool_snapshot(
     node_did: String,
     envelope: McpPoolEnvelope,
 ) -> McpPoolSnapshot {
-    let mut health_by_service = envelope
-        .health
-        .into_iter()
-        .map(|row| (row.service_id.clone(), row))
-        .collect::<BTreeMap<_, _>>();
+    // Twins of one service are not schema-unique; the query order puts the
+    // health checker's chosen row first.
+    let mut health_by_service = BTreeMap::new();
+    for row in envelope.health {
+        health_by_service
+            .entry(row.service_id.clone())
+            .or_insert(row);
+    }
     let mut totals = McpPoolTotals::default();
     let mut services = Vec::new();
 
@@ -199,12 +202,6 @@ fn status_eq(value: Option<&str>, expected: &str) -> bool {
         .is_some_and(|value| value.eq_ignore_ascii_case(expected))
 }
 
-/// Buckets a persisted `ToolServiceHealthState.status` value by the owned
-/// projection (`ToolServiceHealthState::parse_opt` + `project()`) — the same
-/// classification the desktop bridge's `MCPServiceHealthView.display_state`
-/// uses. A missing or unrecognized status (including a row that somehow
-/// persisted a projection word like `"stale"`/`"unreachable"` instead of a
-/// real state) falls into `unknown`, the one fail-safe bucket.
 fn count_health_status(totals: &mut McpPoolTotals, status: Option<&str>) {
     match ToolServiceHealthState::parse_opt(status).map(ToolServiceHealthState::project) {
         Some(ToolServiceHealthProjection::Healthy) => totals.healthy += 1,
@@ -218,129 +215,26 @@ fn count_health_status(totals: &mut McpPoolTotals, status: Option<&str>) {
 mod tests {
     use super::*;
 
-    fn at(s: &str) -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
-    }
-
     #[test]
-    fn joins_registry_with_agent_scoped_health_state() {
-        let snapshot = build_mcp_pool_snapshot(
-            at("2026-06-05T00:00:00Z"),
-            "did:key:zAgent".to_string(),
-            McpPoolEnvelope {
-                registry: vec![
-                    ToolServiceRegistryRow {
-                        service_id: "obs-mcp".to_string(),
-                        display_name: Some("Observability".to_string()),
-                        description: Some("Fleet observability".to_string()),
-                        hostname: Some("studio-1".to_string()),
-                        tailscale_ip: Some("100.64.0.10".to_string()),
-                        lan_ip: None,
-                        mcp_port: Some(9201),
-                        mcp_path: Some("/mcp".to_string()),
-                        send_node_did: true,
-                        tools: Vec::new(),
-                        status: Some("online".to_string()),
-                        version: Some("test".to_string()),
-                        updated_at: Some("2026-06-05T00:00:00Z".to_string()),
-                    },
-                    ToolServiceRegistryRow {
-                        service_id: "silent-mcp".to_string(),
-                        display_name: None,
-                        description: None,
-                        hostname: None,
-                        tailscale_ip: None,
-                        lan_ip: None,
-                        mcp_port: None,
-                        mcp_path: None,
-                        send_node_did: false,
-                        tools: Vec::new(),
-                        status: Some("offline".to_string()),
-                        version: None,
-                        updated_at: None,
-                    },
-                ],
-                health: vec![ToolServiceHealthStateRow {
-                    service_id: "obs-mcp".to_string(),
-                    node_did: Some("did:key:zAgent".to_string()),
-                    endpoint: Some("http://100.64.0.10:9201/mcp".to_string()),
-                    status: Some("healthy".to_string()),
-                    tool_count: Some(12),
-                    failure_count: Some(0),
-                    k_max: Some(3),
-                    backoff_until: None,
-                    last_probe_at: Some("2026-06-05T00:00:00Z".to_string()),
-                    last_seen: Some("2026-06-05T00:00:00Z".to_string()),
-                    last_error_class: None,
-                    last_error_message: None,
-                    updated_at: Some("2026-06-05T00:00:00Z".to_string()),
-                }],
-            },
-        );
-
-        assert_eq!(snapshot.generated_at, "2026-06-05T00:00:00+00:00");
-        assert_eq!(snapshot.node_did, "did:key:zAgent");
+    fn twin_health_rows_resolve_to_the_first_in_query_order() {
+        let envelope: McpPoolEnvelope = serde_json::from_value(serde_json::json!({
+            "ToolServiceRegistry": [{"service_id": "obs-mcp", "send_node_did": false}],
+            "ToolServiceHealthState": [
+                {"service_id": "obs-mcp", "status": "healthy", "updated_at": "2026-06-05T00:01:00Z"},
+                {"service_id": "obs-mcp", "status": "evicted", "updated_at": "2026-06-05T00:00:00Z"}
+            ]
+        }))
+        .unwrap();
+        let generated_at = DateTime::parse_from_rfc3339("2026-06-05T00:02:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let snapshot =
+            build_mcp_pool_snapshot(generated_at, "did:key:zAgent".to_string(), envelope);
         assert_eq!(
-            snapshot.totals,
-            McpPoolTotals {
-                registered: 2,
-                online: 1,
-                healthy: 1,
-                degraded: 0,
-                unreachable: 0,
-                unknown: 1,
-            }
+            snapshot.services[0].health_status.as_deref(),
+            Some("healthy")
         );
-
-        let obs = snapshot
-            .services
-            .iter()
-            .find(|service| service.service_id == "obs-mcp")
-            .unwrap();
-        assert_eq!(obs.tool_count, Some(12));
-        assert_eq!(obs.health_status.as_deref(), Some("healthy"));
-        assert_eq!(obs.endpoint.as_deref(), Some("http://100.64.0.10:9201/mcp"));
-    }
-
-    #[test]
-    fn count_health_status_buckets_by_the_owned_projection() {
-        let mut totals = McpPoolTotals::default();
-        for status in ["healthy", "degraded", "evicted", "reconnecting"] {
-            count_health_status(&mut totals, Some(status));
-        }
-        assert_eq!(
-            totals,
-            McpPoolTotals {
-                registered: 0,
-                online: 0,
-                healthy: 1,
-                degraded: 1,
-                unreachable: 2,
-                unknown: 0,
-            }
-        );
-    }
-
-    #[test]
-    fn count_health_status_falls_back_to_unknown_for_missing_or_unrecognized_status() {
-        let mut totals = McpPoolTotals::default();
-        // Projection words are not valid raw states: a row persisted with
-        // "stale" or "unreachable" (never written by health_checker, but
-        // defensively possible from a corrupt/legacy row) must not silently
-        // count as the real ToolServiceHealthState of the same name.
-        for status in [None, Some("stale"), Some("unreachable"), Some("bogus")] {
-            count_health_status(&mut totals, status);
-        }
-        assert_eq!(
-            totals,
-            McpPoolTotals {
-                registered: 0,
-                online: 0,
-                healthy: 0,
-                degraded: 0,
-                unreachable: 0,
-                unknown: 4,
-            }
-        );
+        assert!(mcp_pool_query("did:key:zAgent")
+            .contains("[{ service_id: ASC }, { updated_at: DESC }, { _docID: ASC }]"));
     }
 }

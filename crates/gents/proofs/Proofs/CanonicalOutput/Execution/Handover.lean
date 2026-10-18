@@ -53,9 +53,6 @@ def freshRequestWorld (old : World) (physical : DocId) (now : Time) : World :=
     lease := { RequestExecutionLease.initial Generation with now := now }
     terminalSelection := none }
 
-/-- Claim-owner kernel, not a complete application step. `SessionComposition`
-initializes the new request's retry state in the same atomic activation; its
-trace never admits this intermediate result on its own. -/
 def claimAndActivate (state : World) (actor : Gate.Actor) (now : Time)
     (activation : Activation) : Option World :=
   let old := state
@@ -91,9 +88,6 @@ def claimAndActivate (state : World) (actor : Gate.Actor) (now : Time)
                 , logicalRequest := activation.request.entry.requestId
                 , session := activation.request.session, evidence := activation.evidence } }
 
-/-- A title's own pending request is claimed under its own lease. The signed
-parent binding is authenticated before this gate and is retained as provenance;
-the parent's lifecycle and the session queue do not authorize this claim. -/
 def claimTitle (state : World) (actor : Gate.Actor) (now : Time)
     (activation : TitleActivation) : Option World :=
   let binding := activation.binding
@@ -165,9 +159,6 @@ theorem successful_claim_has_exact_binding
   all_goals simp [freshRequestWorld] at *
   all_goals aesop
 
-/-- A successful claim changes exactly the physical-request and claim-control
-fields named here.  In particular, the durable session facts and retry owner
-are framed as one equation rather than independently reconstructed projections. -/
 theorem successful_claim_frame
     (before after : World) (actor : Gate.Actor) (now : Time) (activation : Activation)
     (h : claimAndActivate before actor now activation = some after) :
@@ -234,7 +225,6 @@ def beginProcessing (state : World) (actor : Gate.Actor) (now : Time)
       some { world with lease := lease, gateSchedule :=
         { state.gateSchedule with phase := .releasable } }
 
-/-- Beginning processing writes only the execution lease and gate schedule. -/
 theorem successful_begin_frame
     (before after : World) (actor : Gate.Actor) (now : Time) (generation : Generation)
     (h : beginProcessing before actor now generation = some after) :
@@ -297,8 +287,6 @@ def finishAndAcknowledge (state : World) (actor : Gate.Actor) : Option FinishRes
             claimed := none },
           acknowledged, claimed.evidence, outcome ⟩
 
-/-- Finishing frames the full world outside gate scheduling and queue/claim
-control.  Acknowledgement, claim evidence, and outcome remain in `FinishResult`. -/
 theorem successful_finish_frame
     (before : World) (after : FinishResult) (actor : Gate.Actor)
     (h : finishAndAcknowledge before actor = some after) :

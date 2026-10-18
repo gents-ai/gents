@@ -1,6 +1,5 @@
 use super::*;
 use gents::lifecycle::RequestTerminalOutcome;
-use gents::StreamWriter;
 use gents_protocol::output::TerminalOutput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
@@ -736,12 +735,6 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
     );
 }
 
-/// On the first `interrupt_requested_at` latch, `interrupt_request` drains
-/// already-pending automated wake-ups in the same transaction. The query is
-/// scoped to the interrupted row's own `node_did` (#664), and its predicate
-/// selects only scheduled coalesced background-completion wake-ups. A replay
-/// does not drain wakes queued after the latch. This test observes which rows
-/// the first latch terminalizes, including the foreign replica that survives.
 #[tokio::test]
 async fn interrupt_request_drains_automated_wakeups_in_owner_scope() {
     let db = test_db("interrupt-drain-wakeups").await;
@@ -761,8 +754,6 @@ async fn interrupt_request_drains_automated_wakeups_in_owner_scope() {
     )
     .await;
 
-    // Owner-scope scheduled automated wake-up: the drain owner must
-    // terminalize exactly this row.
     create_pending_queue_row(
         &db.node,
         "drain-wakeup-owner",
@@ -772,8 +763,6 @@ async fn interrupt_request_drains_automated_wakeups_in_owner_scope() {
         &wakeup_input,
     )
     .await;
-    // Same session, same row shape, foreign node: the drain's
-    // node_did-scoped query must never surface it (#664).
     create_pending_queue_row(
         &db.node,
         "drain-wakeup-foreign",
@@ -783,8 +772,6 @@ async fn interrupt_request_drains_automated_wakeups_in_owner_scope() {
         &wakeup_input,
     )
     .await;
-    // Owner node but interactive origin: a user-turn queue row is not an
-    // automated wake-up and must survive its session's interrupt.
     create_pending_queue_row(
         &db.node,
         "drain-wakeup-interactive",
@@ -794,8 +781,6 @@ async fn interrupt_request_drains_automated_wakeups_in_owner_scope() {
         &wakeup_input,
     )
     .await;
-    // Scheduled origin but user/append queue input: the wakeup predicate
-    // (background_completion + coalesce + non-empty key) must reject it.
     create_pending_queue_row(
         &db.node,
         "drain-scheduled-user",

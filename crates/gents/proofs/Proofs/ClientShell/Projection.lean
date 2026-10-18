@@ -77,8 +77,6 @@ def projectTransportRecovery (connected : Bool) : RecoveryStatus :=
 def projectRouteRecovery (routeReady : Bool) (_pairingPending : Bool) : RecoveryStatus :=
   { kind := if routeReady then .ready else .waiting, action := none }
 
-/-- Failed P2P observations remain visible blockers. Recovery is automatic;
-operator remediation for credentials or configuration belongs to its own action. -/
 def projectConnectionFailure : RecoveryStatus :=
   { kind := .blocked, action := none }
 
@@ -148,9 +146,16 @@ theorem projectRequestProgress_active_animated (state : RequestState)
 
 /-- The request document owns the pending user projection until the durable
 user message for that exact request arrives. Unrelated messages and their
-relative replication order are deliberately irrelevant. -/
-def projectPendingUserTurn (hasDurableUserOwner : Bool) : Bool :=
-  !hasDurableUserOwner
+relative replication order are deliberately irrelevant.
+
+A request its author retired from the queue (`Session.replacePendingGroup?`:
+removed, or replaced by an edit or a move) is never shown. It was never
+delivered, so no durable message will ever own it, and what the author meant
+is its replacement or nothing; showing it would put text in the transcript
+that the agent never read. -/
+def projectPendingUserTurn (hasDurableUserOwner : Bool) (retiredByAuthor : Bool := false) :
+    Bool :=
+  !hasDurableUserOwner && !retiredByAuthor
 
 theorem projectPendingUserTurn_without_owner_visible :
     projectPendingUserTurn false = true := by
@@ -159,6 +164,10 @@ theorem projectPendingUserTurn_without_owner_visible :
 theorem projectPendingUserTurn_with_owner_hidden :
     projectPendingUserTurn true = false := by
   rfl
+
+theorem projectPendingUserTurn_retired_hidden (hasDurableUserOwner : Bool) :
+    projectPendingUserTurn hasDurableUserOwner true = false := by
+  cases hasDurableUserOwner <;> rfl
 
 structure OverlayBlock where
   hasContent   : Bool
@@ -206,8 +215,6 @@ theorem projectActiveOverlay_terminal_hides
   cases liveOutputAvailable <;> cases hasDurableOwner <;>
     simp [projectActiveOverlay, h]
 
-/-- A live preview is hidden once the same request already has a durable
-assistant turn owning that content. -/
 theorem projectActiveOverlay_durable_owner_hides
     (liveOutputAvailable : Bool)
     (turn : Option ClientTurnState)

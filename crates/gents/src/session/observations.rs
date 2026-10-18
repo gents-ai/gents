@@ -5,9 +5,11 @@ use super::sessions::{
 };
 use super::*;
 use anyhow::Context;
+use std::collections::BTreeMap;
 
-/// Authoritative request fact read from `AgentRequest` rows for observation
-/// advancement. The pure mirror of Lean `AgentSession.RequestFact`.
+const REQUEST_FACT_SESSION_BATCH_SIZE: usize =
+    crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionRequestFact {
     pub node_did: String,
@@ -16,14 +18,10 @@ pub struct SessionRequestFact {
     pub requester_did: Option<String>,
     pub agent_id: String,
     pub created_at: String,
-    /// The signed causal hop (`request_hop`).
     pub hop: u32,
     pub observed: gents_protocol::session::SessionRequestObservation,
 }
 
-/// Canonical newest ordering: `created_at` then logical `request_id`, both
-/// descending. The physical `_docID` is exact identity for refresh/retry and
-/// is never an extra sort key.
 fn request_fact_newer(a: &SessionRequestFact, b: &SessionRequestFact) -> bool {
     let (a_created, b_created) = match (
         chrono::DateTime::parse_from_rfc3339(&a.created_at),
@@ -36,9 +34,6 @@ fn request_fact_newer(a: &SessionRequestFact, b: &SessionRequestFact) -> bool {
         || (a_created == b_created && a.observed.request_id > b.observed.request_id)
 }
 
-/// Whether `incoming` is the canonical latest request across `rows` under the
-/// session's exact requester scope, including the currently observed row.
-/// Duplicate logical roots fail instead of a limit-1 silent pick.
 fn incoming_is_canonical_latest(
     session: &gents_protocol::session::AgentSession,
     rows: &[SessionRequestFact],
@@ -71,6 +66,27 @@ fn scoped_request_filter(
 ) -> String {
     let node_did = escape_graphql_string(node_did);
     let session_id = escape_graphql_string(session_id);
+    let requester_filter = requester_filter(requester_scope);
+    format!(
+        r#"filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }}, purpose: {{ _eq: "normal" }}{requester_filter} }}"#
+    )
+}
+
+fn scoped_request_sessions_filter(
+    node_did: &str,
+    session_ids: &[String],
+    requester_scope: Option<Option<&str>>,
+) -> String {
+    let node_did = escape_graphql_string(node_did);
+    let session_ids =
+        crate::graphql::graphql_string_list_literal(session_ids.iter().map(String::as_str));
+    let requester_filter = requester_filter(requester_scope);
+    format!(
+        r#"filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _in: {session_ids} }}, purpose: {{ _eq: "normal" }}{requester_filter} }}"#
+    )
+}
+
+fn requester_filter(requester_scope: Option<Option<&str>>) -> String {
     let requester_filter = if requester_scope.is_none() {
         String::new()
     } else if let Some(Some(requester_did)) = requester_scope {
@@ -79,17 +95,11 @@ fn scoped_request_filter(
             escape_graphql_string(requester_did)
         )
     } else {
-        // Exact absent scope: requester_did must be null.
         r#", requester_did: { _eq: null }"#.to_string()
     };
-    format!(
-        r#"filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }}, purpose: {{ _eq: "normal" }}{requester_filter} }}"#
-    )
+    requester_filter
 }
 
-/// Read the complete scoped request facts (created_at + identity + state)
-/// inside the caller's transaction. `all_requesters` selects the explicit
-/// background/all-requester scope; the ordinary route never widens.
 pub(crate) async fn load_scoped_request_facts_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     session: &gents_protocol::session::AgentSession,
@@ -114,16 +124,27 @@ async fn load_request_facts_in_txn(
     session_id: &str,
     requester_scope: Option<Option<&str>>,
 ) -> Result<Vec<SessionRequestFact>> {
-    let query = format!(
+    let query = request_fact_query(&scoped_request_filter(
+        node_did,
+        session_id,
+        requester_scope,
+    ));
+    let response = txn.execute(&query).await?;
+    decode_request_facts(&response)
+}
+
+fn request_fact_query(filter: &str) -> String {
+    format!(
         r#"{{
-            AgentRequest({}) {{
+            AgentRequest({filter}) {{
                 _docID request_id node_did session_id requester_did agent_id created_at lifecycle_state
                 request_hop
             }}
-        }}"#,
-        scoped_request_filter(node_did, session_id, requester_scope)
-    );
-    let response = txn.execute(&query).await?;
+        }}"#
+    )
+}
+
+fn decode_request_facts(response: &serde_json::Value) -> Result<Vec<SessionRequestFact>> {
     let rows = response
         .get("data")
         .and_then(|data| data.get("AgentRequest"))
@@ -208,9 +229,6 @@ pub(crate) fn session_current_hop(facts: &[SessionRequestFact]) -> u32 {
         .unwrap_or(0)
 }
 
-/// [`session_current_hop`] over every requester of a session, in a caller's
-/// transaction. Every same-session continuation copies it and every
-/// cross-session cause climbs past it.
 pub(crate) async fn load_session_current_hop_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -221,23 +239,26 @@ pub(crate) async fn load_session_current_hop_in_txn(
     ))
 }
 
-/// [`load_session_current_hop_in_txn`] in its own read transaction.
 pub(crate) async fn load_session_current_hop(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     session_id: &str,
 ) -> Result<u32> {
     let (node_did, session_id) = (node_did.to_owned(), session_id.to_owned());
-    crate::config_client::ConfigAccess::transact_local(node, None, "session.current_hop", |txn| {
-        let (node_did, session_id) = (node_did.clone(), session_id.clone());
-        Box::pin(async move { load_session_current_hop_in_txn(txn, &node_did, &session_id).await })
-    })
+    crate::config_client::ConfigAccess::transact_local_readonly(
+        node,
+        None,
+        "session.current_hop",
+        |txn| {
+            let (node_did, session_id) = (node_did.clone(), session_id.clone());
+            Box::pin(
+                async move { load_session_current_hop_in_txn(txn, &node_did, &session_id).await },
+            )
+        },
+    )
     .await
 }
 
-/// Read the actual request head, never the session's presentation cache.
-/// Outer `None` explicitly selects all requesters; `Some(None)` is the exact
-/// absent requester scope. Ordering uses parsed time then logical request ID.
 pub async fn load_latest_request_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -245,6 +266,42 @@ pub async fn load_latest_request_in_txn(
     requester_scope: Option<Option<&str>>,
 ) -> Result<Option<SessionRequestFact>> {
     let rows = load_request_facts_in_txn(txn, node_did, session_id, requester_scope).await?;
+    latest_request_fact(rows)
+}
+
+pub(crate) async fn load_latest_requests_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_ids: &[String],
+    requester_scope: Option<Option<&str>>,
+) -> Result<BTreeMap<String, SessionRequestFact>> {
+    let mut latest_by_session = BTreeMap::new();
+    for batch in session_ids.chunks(REQUEST_FACT_SESSION_BATCH_SIZE) {
+        let query = request_fact_query(&scoped_request_sessions_filter(
+            node_did,
+            batch,
+            requester_scope,
+        ));
+        #[cfg(test)]
+        record_request_fact_batch_query();
+        let rows = decode_request_facts(&txn.execute(&query).await?)?;
+        let mut rows_by_session = BTreeMap::<String, Vec<SessionRequestFact>>::new();
+        for row in rows {
+            rows_by_session
+                .entry(row.session_id.clone())
+                .or_default()
+                .push(row);
+        }
+        for (session_id, rows) in rows_by_session {
+            if let Some(latest) = latest_request_fact(rows)? {
+                latest_by_session.insert(session_id, latest);
+            }
+        }
+    }
+    Ok(latest_by_session)
+}
+
+fn latest_request_fact(rows: Vec<SessionRequestFact>) -> Result<Option<SessionRequestFact>> {
     let mut identities = std::collections::BTreeSet::new();
     let mut latest = None;
     for row in rows {
@@ -262,8 +319,26 @@ pub async fn load_latest_request_in_txn(
     Ok(latest)
 }
 
-/// Validate that `incoming` matches the session owner's scope and agent,
-/// mirroring the Lean `advance` guard.
+#[cfg(test)]
+tokio::task_local! {
+    static REQUEST_FACT_BATCH_QUERIES: std::sync::Arc<std::sync::atomic::AtomicUsize>;
+}
+
+#[cfg(test)]
+fn record_request_fact_batch_query() {
+    let _ = REQUEST_FACT_BATCH_QUERIES
+        .try_with(|queries| queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+}
+
+#[cfg(test)]
+async fn count_request_fact_batch_queries<F: std::future::Future>(future: F) -> (F::Output, usize) {
+    let queries = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let output = REQUEST_FACT_BATCH_QUERIES
+        .scope(queries.clone(), future)
+        .await;
+    (output, queries.load(std::sync::atomic::Ordering::Relaxed))
+}
+
 fn validate_incoming_scope(
     session: &gents_protocol::session::AgentSession,
     incoming: &SessionRequestFact,
@@ -288,12 +363,6 @@ fn normalize_preview(content: &str) -> String {
         .join(" ")
 }
 
-/// Publish the physical `_docID`, logical `request_id`, observed state and
-/// normalized preview as one atomic observation patch inside the caller's
-/// transaction. The incoming request must match the session owner's exact
-/// scope, be present in the complete scoped request facts (including the
-/// currently observed row), and be the canonical latest by
-/// (created_at DESC, request_id DESC); anything else is a no-op rejection.
 pub(crate) async fn advance_session_request_observation_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     incoming: &SessionRequestFact,
@@ -337,10 +406,6 @@ pub(crate) async fn advance_refused_request_observation_in_txn(
     .await
 }
 
-/// Which boundary the observation owner serves: read-side ambiguity errors on
-/// `Claim` (an ambiguous session refuses the claim) and no-ops on `Refusal`
-/// (Lean `AgentSession.advance` leaves the session untouched unless the
-/// incoming row is provably its canonical latest).
 #[derive(Clone, Copy)]
 enum ObservationBoundary {
     Claim,
@@ -408,12 +473,6 @@ async fn advance_observation_in_txn(
     Ok(true)
 }
 
-/// Lifecycle/preview refresh inside the caller's transaction: reread the
-/// authoritative row by its exact physical `_docID` **and** logical
-/// `request_id`, validate the session scope/agent and stored-observation
-/// identity, and copy the observed state from the authoritative row. Event
-/// lifecycle payloads have no influence; a missing or mismatched row is a
-/// no-op, never an older-local-request fallback.
 pub(crate) async fn refresh_session_request_observation_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -461,8 +520,6 @@ pub(crate) async fn refresh_session_request_observation_in_txn(
         "session observation refresh found duplicate authoritative request rows"
     );
     let Some(row) = rows.first() else {
-        // Missing exact rows remain unknown; never fall back to an older
-        // local request.
         return Ok(false);
     };
     let current = gents_protocol::session::SessionRequestObservation {
@@ -508,7 +565,7 @@ pub(crate) async fn refresh_session_request_observation_in_txn(
 }
 
 pub(crate) async fn update_session_title_with_source(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
@@ -517,7 +574,7 @@ pub(crate) async fn update_session_title_with_source(
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     chrono::DateTime::parse_from_rfc3339(&now).context("invalid title update timestamp")?;
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "session.update_title",
@@ -542,11 +599,6 @@ pub(crate) async fn update_session_title_with_source(
     .await
 }
 
-/// In-transaction title replacement: generated titles replace only an absent
-/// or placeholder title; an explicit user rename (including clear) always applies.
-/// Automatic task/placeholder titles never overwrite an existing title. Identity, creation
-/// time, closure, provenance, tags, preview and the latest request identity
-/// are preserved; activity advances monotonically.
 pub async fn apply_title_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -619,14 +671,12 @@ pub(crate) async fn load_recent_titles_for_agent(
         }}"#
     );
 
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!(
-            "loading recent titles for node_did={}: {:?}",
-            node_did,
-            resp.errors
-        );
-    }
+    let resp = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "load_recent_titles_for_agent",
+    )
+    .await?;
 
     let rows = crate::graphql::rows::<serde_json::Value>(&resp, "AgentSession")?;
     let mut sessions: Vec<gents_protocol::session::AgentSession> = rows
@@ -707,11 +757,13 @@ mod observation_refresh_tests {
     #[tokio::test]
     async fn request_head_uses_exact_scope_and_timestamp_then_logical_id() {
         let temp = tempfile::tempdir().unwrap();
-        let node = defra_node::EmbeddedNode::builder()
-            .data_path(temp.path())
-            .build()
-            .await
-            .unwrap();
+        let node = std::sync::Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .data_path(temp.path())
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(&node).await.unwrap();
         ConfigAccess::transact_local_idempotent(
             &node, None, IdempotentTransactionRetry::Standard, "test.session.request_head",
@@ -742,13 +794,116 @@ mod observation_refresh_tests {
     }
 
     #[tokio::test]
+    async fn batched_request_heads_preserve_scope_order_and_bound_query_count() {
+        let temp = tempfile::tempdir().unwrap();
+        let node = std::sync::Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .data_path(temp.path())
+                .build()
+                .await
+                .unwrap(),
+        );
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+        let session_ids = (0..REQUEST_FACT_SESSION_BATCH_SIZE + 1)
+            .map(|index| format!("batch-session-{index:02}"))
+            .collect::<Vec<_>>();
+
+        ConfigAccess::transact_local_idempotent(
+            &node,
+            None,
+            IdempotentTransactionRetry::Standard,
+            "test.session.batched_request_heads",
+            |txn| {
+                let session_ids = session_ids.clone();
+                Box::pin(async move {
+                    for (index, session_id) in session_ids.iter().enumerate() {
+                        let request_id = format!("request-{index:02}");
+                        txn.execute_with_variables(
+                            "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
+                            &serde_json::json!({"input": {
+                                "request_id": request_id,
+                                "purpose": "normal",
+                                "node_did": "did:test:batch-heads",
+                                "session_id": session_id,
+                                "agent_id": "batch-agent",
+                                "content": "prompt",
+                                "created_at": "2030-01-01T00:00:00Z",
+                                "lifecycle_state": "pending"
+                            }}),
+                        ).await?;
+                    }
+                    for (request_id, purpose, node_did, requester_did, created_at) in [
+                        ("a-tie", "normal", "did:test:batch-heads", None, "2030-01-01T01:00:00+01:00"),
+                        ("z-tie", "normal", "did:test:batch-heads", None, "2030-01-01T00:00:00Z"),
+                        ("remote-head", "normal", "did:test:batch-heads", Some("did:test:requester"), "2030-01-01T00:00:01Z"),
+                        ("foreign-node", "normal", "did:test:other-node", None, "2040-01-01T00:00:00Z"),
+                        ("title-audit", "title-audit", "did:test:batch-heads", None, "2050-01-01T00:00:00Z"),
+                    ] {
+                        txn.execute_with_variables(
+                            "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
+                            &serde_json::json!({"input": {
+                                "request_id": request_id,
+                                "purpose": purpose,
+                                "node_did": node_did,
+                                "requester_did": requester_did,
+                                "session_id": session_ids[0],
+                                "agent_id": "batch-agent",
+                                "content": "prompt",
+                                "created_at": created_at,
+                                "lifecycle_state": "pending"
+                            }}),
+                        ).await?;
+                    }
+
+                    let (heads, batch_queries) = count_request_fact_batch_queries(
+                        load_latest_requests_in_txn(
+                            &txn,
+                            "did:test:batch-heads",
+                            &session_ids,
+                            None,
+                        ),
+                    )
+                    .await;
+                    let heads = heads?;
+                    assert_eq!(batch_queries, 2);
+                    assert_eq!(heads.len(), session_ids.len());
+                    assert_eq!(heads[&session_ids[0]].observed.request_id, "remote-head");
+                    assert_eq!(heads[&session_ids[1]].observed.request_id, "request-01");
+
+                    let absent_requester = load_latest_requests_in_txn(
+                        &txn,
+                        "did:test:batch-heads",
+                        &session_ids[..1],
+                        Some(None),
+                    )
+                    .await?;
+                    assert_eq!(absent_requester[&session_ids[0]].observed.request_id, "z-tie");
+                    let exact_requester = load_latest_requests_in_txn(
+                        &txn,
+                        "did:test:batch-heads",
+                        &session_ids[..1],
+                        Some(Some("did:test:requester")),
+                    )
+                    .await?;
+                    assert_eq!(exact_requester[&session_ids[0]].observed.request_id, "remote-head");
+                    Ok(())
+                })
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
     async fn refresh_accepts_null_requester_and_rejects_changed_session_scope() {
         let temp = tempfile::tempdir().unwrap();
-        let node = defra_node::EmbeddedNode::builder()
-            .data_path(temp.path())
-            .build()
-            .await
-            .unwrap();
+        let node = std::sync::Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .data_path(temp.path())
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let response = node
             .execute(

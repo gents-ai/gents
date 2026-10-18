@@ -148,7 +148,7 @@ pub async fn install_prepared_document_pack(
         ));
     }
     for (package, bindings) in &prepared.dependencies {
-        let (plugins, rollback) = install_plugins(
+        let plugins = install_plugins(
             owner,
             plugin_home,
             &package.manifest,
@@ -161,15 +161,11 @@ pub async fn install_prepared_document_pack(
             plugins,
             explicit: false,
         };
-        let installed = crate::graph_package::install_loaded_graph_package(
+        let receipt = crate::graph_package::install_loaded_graph_package(
             access, owner, package, bindings, None, &record,
         )
-        .await;
-        let receipt = installed.inspect_err(|_| {
-            if let Some(home) = plugin_home {
-                crate::plugin::install::rollback_pack_plugin_records(home, &rollback);
-            }
-        })?;
+        .await
+        .context("graph installation failed after local pack plugins were published; the plugins remain installed")?;
         crate::graph_pipeline::activate_graph_revision_with_access(
             access,
             owner,
@@ -177,7 +173,8 @@ pub async fn install_prepared_document_pack(
             &receipt.revision_digest,
             receipt.predecessor_revision_digest.as_deref(),
         )
-        .await?;
+        .await
+        .context("graph activation failed after local pack plugins were published; the plugins remain installed")?;
     }
     for (path, plan) in schemas {
         crate::config_client::apply_schema_install(
@@ -187,7 +184,7 @@ pub async fn install_prepared_document_pack(
         )
         .await?;
     }
-    let (plugins, rollback) = install_plugins(
+    let plugins = install_plugins(
         owner,
         plugin_home,
         archive.manifest(),
@@ -204,18 +201,8 @@ pub async fn install_prepared_document_pack(
         .collect();
     super::super::install_pack_documents(access, owner, &identity, &prepared.config, policy)
         .await
-        .inspect_err(|_| {
-            if let Some(home) = plugin_home {
-                crate::plugin::install::rollback_pack_plugin_records(home, &rollback);
-            }
-        })
+        .context("document pack installation failed after local pack plugins were published; the plugins remain installed")
 }
-
-type PluginRollback = Vec<(
-    String,
-    String,
-    Option<crate::plugin::store::InstalledPlugin>,
-)>;
 
 fn install_plugins<'a>(
     owner: &str,
@@ -225,30 +212,26 @@ fn install_plugins<'a>(
     bindings: &PackInferenceBindings,
     asset: &dyn Fn(&str) -> Result<&'a [u8]>,
     grant_authority: bool,
-) -> Result<(Vec<InstalledPackPlugin>, PluginRollback)> {
+) -> Result<Vec<InstalledPackPlugin>> {
     if manifest.metadata.plugins.is_empty() {
-        return Ok((Vec::new(), Vec::new()));
+        return Ok(Vec::new());
     }
     let home = home.context("pack plugins require the node's local plugin home")?;
-    let rollback = crate::plugin::install::snapshot_pack_plugin_records(home, manifest);
-    let plugins = crate::plugin::install::install_pack_plugins(
+    let plugins = crate::plugin::install::install_pack_plugins_with_bindings(
         home,
         manifest,
         digest,
         asset,
         grant_authority,
-    )
-    .inspect_err(|_| crate::plugin::install::rollback_pack_plugin_records(home, &rollback))?;
-    crate::plugin::install::bind_plugin_slots(home, manifest, owner, bindings)
-        .inspect_err(|_| crate::plugin::install::rollback_pack_plugin_records(home, &rollback))?;
-    Ok((
-        plugins
-            .iter()
-            .map(|p| InstalledPackPlugin {
-                name: p.name.clone(),
-                digest: p.digest.clone(),
-            })
-            .collect(),
-        rollback,
-    ))
+        Some(owner),
+        bindings,
+        |_| Ok(()),
+    )?;
+    Ok(plugins
+        .iter()
+        .map(|p| InstalledPackPlugin {
+            name: p.name.clone(),
+            digest: p.digest.clone(),
+        })
+        .collect())
 }

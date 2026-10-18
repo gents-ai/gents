@@ -14,12 +14,10 @@ test.describe("first-run install", () => {
   }) => {
     await gotoHarness(page, "empty-fleet");
     await page.getByTestId("setup-next").click();
-    // Choosing a subscription provider starts its sign-in.
     await page.getByTestId("setup-provider-anthropic").click();
     await expect(page.getByText("Account connected", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Find models", exact: true }).click();
     await page.getByRole("option", { name: "claude-sonnet-5", exact: true }).click();
-    // Effort is a recommended default, changeable later, not an up-front choice.
     await expect(page.getByTestId("inference-settings-later")).toContainText(
       "Reasoning effort high",
     );
@@ -50,7 +48,6 @@ test.describe("first-run install", () => {
     await page.getByTestId("setup-save-inference").click();
     await expect(page.getByTestId("session-screen")).toBeVisible();
     await openConfig(page);
-    // Leave the hover-expanded app rail before using the configuration sidebar.
     await page.mouse.move(page.viewportSize()!.width - 30, 100);
     const section = page.getByRole("combobox", { name: "Section", exact: true });
     if (await section.isVisible()) {

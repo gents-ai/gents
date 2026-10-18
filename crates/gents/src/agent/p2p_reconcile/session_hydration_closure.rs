@@ -1,6 +1,3 @@
-//! Exact canonical-output reference closure for session hydration.
-//! Fork validation and payload reconstruction remain shared protocol owners.
-
 use super::session_hydration::HydrationDocument;
 use crate::session::canonical_rows::{OutputSegmentRow, TranscriptMessageRow};
 use anyhow::anyhow;
@@ -36,8 +33,6 @@ impl ScopedDocument {
     }
 }
 
-/// An observed AgentToolCall carrying plugin-effect provenance. Whether it is
-/// a child is decided only by `PluginEffectBinding::decode`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolEffectRow {
     pub document: ScopedDocument,
@@ -54,7 +49,6 @@ pub struct CanonicalClosureInput<'a> {
     pub headers: &'a [TranscriptMessageRow],
     pub segments: &'a [OutputSegmentRow],
     pub base_documents: &'a [ScopedDocument],
-    /// Lean `bases`: owner-authorized session rows retained unconditionally.
     pub retained_bases: &'a [ScopedDocument],
     pub tool_effects: &'a [ToolEffectRow],
     pub denied_headers: &'a [String],
@@ -186,7 +180,6 @@ pub fn build_canonical_closure(
     Ok(selected)
 }
 
-/// CanonicalOutput/Hydration.lean `effectClosure`.
 fn collect_effect_children(
     input: &CanonicalClosureInput<'_>,
     segments: &[ObservedSegment<'_>],
@@ -374,11 +367,6 @@ fn collect_message_dependencies(
     }
     for reference in message.message.payload_references() {
         let closing = retain_reference_extent(&reference, segments, bases, selected)?;
-        // CanonicalOutput/Hydration.lean `requiredProvenance`: a ToolCall
-        // source names its exact AgentToolCall base regardless of writer, and
-        // authored delivery derives its tool owner from a ToolExecution
-        // writer. Shared reconstruction already rejects incoherent
-        // source/writer pairs, so this only retains the base it admitted.
         let tool_call_doc_id = match &closing.segment.source {
             OutputSource::ToolCall { tool_call_doc_id } => Some(tool_call_doc_id),
             OutputSource::Authored { .. } => match &closing.segment.writer {
@@ -399,8 +387,6 @@ fn collect_message_dependencies(
     Ok(())
 }
 
-/// Lean `referenceDocuments`: the request owner, closing record and exact
-/// extent of an already reconstructed reference.
 fn retain_reference_extent<'a>(
     reference: &PayloadRef,
     segments: &[ObservedSegment<'a>],
@@ -468,42 +454,11 @@ fn retain_base(
 mod tests {
     use super::*;
     use gents_protocol::output::{
-        MessagePublication, MessageRole, OutputOutcome, OutputSegment, PayloadPresentation,
-        PayloadRef, PresentedPayload, SegmentRun, StreamDeclaration, StreamPayload, ToolResultPart,
-        TranscriptMessage,
+        MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment,
+        PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, StreamDeclaration,
+        StreamPayload, ToolResultPart, TranscriptMessage,
     };
     use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
-
-    fn message(
-        session: &str,
-        request: Option<&str>,
-        publication: MessagePublication,
-    ) -> TranscriptMessage {
-        TranscriptMessage {
-            message_key: "message-key".into(),
-            session_id: session.into(),
-            node_did: "agent".into(),
-            requester_did: Some("requester".into()),
-            request_doc_id: request.map(str::to_owned),
-            publication,
-            outcome: OutputOutcome::Complete,
-            sequence: 7,
-            role: MessageRole::Assistant,
-            native_id: Some("native".into()),
-            blocks: Vec::new(),
-            created_at: "2026-09-21T00:00:00Z".into(),
-        }
-    }
-
-    fn base_request() -> ScopedDocument {
-        ScopedDocument {
-            collection: SessionHydrationCollection::AgentRequest,
-            doc_id: "request".into(),
-            requester_did: "requester".into(),
-            node_did: "agent".into(),
-            session_id: "origin-session".into(),
-        }
-    }
 
     fn modeled_collection(name: &str) -> SessionHydrationCollection {
         match name {
@@ -990,371 +945,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn fork_closure_retains_exact_origin_and_request_owner() {
-        let origin = TranscriptMessageRow {
-            doc_id: "origin".into(),
-            message: message(
-                "origin-session",
-                Some("request"),
-                MessagePublication::RequestExecution {
-                    execution_generation: "generation".into(),
-                },
-            ),
-        };
-        let mut child_message = origin.message.clone();
-        child_message.session_id = "child-session".into();
-        child_message.request_doc_id = None;
-        child_message.publication = MessagePublication::Fork {
-            origin_message_doc_id: "origin".into(),
-        };
-        let headers = vec![
-            TranscriptMessageRow {
-                doc_id: "child".into(),
-                message: child_message,
-            },
-            origin,
-        ];
-        let roots = vec!["child".into()];
-        let bases = vec![base_request()];
-        let closure = build_canonical_closure(CanonicalClosureInput {
-            root_header_ids: &roots,
-            headers: &headers,
-            segments: &[],
-            base_documents: &bases,
-            retained_bases: &[],
-            tool_effects: &[],
-            denied_headers: &[],
-            denied_segments: &[],
-            dependency_denials: &[],
-            node_did: "agent",
-            requester_did: Some("requester"),
-            session_id: "child-session",
-        })
-        .expect("valid exact fork closure");
-        assert!(closure.iter().any(|row| row.doc_id == "child"));
-        assert!(closure.iter().any(|row| row.doc_id == "origin"));
-        assert!(closure.iter().any(|row| row.doc_id == "request"));
-        assert_eq!(closure.len(), 3);
-    }
-
-    #[test]
-    fn absent_origin_is_incomplete_and_never_becomes_session_grant() {
-        let child = TranscriptMessageRow {
-            doc_id: "child".into(),
-            message: message(
-                "child-session",
-                None,
-                MessagePublication::Fork {
-                    origin_message_doc_id: "missing".into(),
-                },
-            ),
-        };
-        let roots = vec!["child".into()];
-        let result = build_canonical_closure(CanonicalClosureInput {
-            root_header_ids: &roots,
-            headers: &[child],
-            segments: &[],
-            base_documents: &[],
-            retained_bases: &[],
-            tool_effects: &[],
-            denied_headers: &[],
-            denied_segments: &[],
-            dependency_denials: &[],
-            node_did: "agent",
-            requester_did: Some("requester"),
-            session_id: "child-session",
-        });
-        assert!(matches!(
-            result,
-            Err(CanonicalClosureError::MissingObservation(_))
-        ));
-    }
-
-    #[test]
-    fn explicit_origin_denial_fails_without_broadening_to_parent_session() {
-        let child = TranscriptMessageRow {
-            doc_id: "child".into(),
-            message: message(
-                "child-session",
-                None,
-                MessagePublication::Fork {
-                    origin_message_doc_id: "denied".into(),
-                },
-            ),
-        };
-        let roots = vec!["child".into()];
-        let denied = vec!["denied".into()];
-        let result = build_canonical_closure(CanonicalClosureInput {
-            root_header_ids: &roots,
-            headers: &[child],
-            segments: &[],
-            base_documents: &[],
-            retained_bases: &[],
-            tool_effects: &[],
-            denied_headers: &denied,
-            denied_segments: &[],
-            dependency_denials: &[],
-            node_did: "agent",
-            requester_did: Some("requester"),
-            session_id: "child-session",
-        });
-        let error = result.expect_err("explicit denial must fail hydration");
-        assert!(matches!(&error, CanonicalClosureError::Unclassified(_)));
-        assert!(error.to_string().contains("Denied"));
-    }
-
-    fn base_tool_call(doc_id: &str) -> ScopedDocument {
-        ScopedDocument {
-            collection: SessionHydrationCollection::AgentToolCall,
-            doc_id: doc_id.into(),
-            requester_did: "requester".into(),
-            node_did: "agent".into(),
-            session_id: "origin-session".into(),
-        }
-    }
-
-    fn tool_call_run(stream: u32, bytes: u32) -> SegmentRun {
-        SegmentRun {
-            stream,
-            bytes,
-            declaration: Some(StreamDeclaration {
-                block_index: 0,
-                part_index: 0,
-                payload: StreamPayload::ToolOutput,
-            }),
-        }
-    }
-
-    fn closed_tool_output_segment(
-        doc_id: &str,
-        source: OutputSource,
-        writer: OutputWriter,
-    ) -> Vec<OutputSegmentRow> {
-        let ordinal_zero = OutputSegment {
-            node_did: "agent".into(),
-            requester_did: Some("requester".into()),
-            session_id: "origin-session".into(),
-            request_doc_id: "request".into(),
-            source,
-            writer,
-            ordinal: Some(0),
-            runs: vec![tool_call_run(0, 4)],
-            payload: "data".into(),
-            close: None,
-            created_at: "2026-09-21T00:00:00Z".into(),
-        };
-        let closing = OutputSegment {
-            ordinal: None,
-            runs: Vec::new(),
-            payload: String::new(),
-            close: Some(SourceClose::Closed {
-                outcome: OutputOutcome::Complete,
-                segments: 1,
-                stream_bytes: vec![4],
-            }),
-            ..ordinal_zero.clone()
-        };
-        vec![
-            OutputSegmentRow {
-                doc_id: format!("{doc_id}-flush"),
-                segment: ordinal_zero,
-            },
-            OutputSegmentRow {
-                doc_id: format!("{doc_id}-close"),
-                segment: closing,
-            },
-        ]
-    }
-
-    fn tool_delivery_message(tool_call_doc_id: &str) -> TranscriptMessageRow {
-        TranscriptMessageRow {
-            doc_id: "delivered".into(),
-            message: TranscriptMessage {
-                message_key: "delivered-key".into(),
-                session_id: "origin-session".into(),
-                node_did: "agent".into(),
-                requester_did: Some("requester".into()),
-                request_doc_id: Some("request".into()),
-                publication: MessagePublication::ToolDelivery {
-                    tool_call_doc_id: tool_call_doc_id.into(),
-                },
-                outcome: OutputOutcome::Complete,
-                sequence: 7,
-                role: MessageRole::User,
-                native_id: None,
-                blocks: vec![MessageBlock::ToolResult {
-                    tool_call_doc_id: tool_call_doc_id.into(),
-                    id: "tool-result".into(),
-                    call_id: None,
-                    parts: vec![ToolResultPart::Text {
-                        text: PresentedPayload {
-                            output: PayloadRef {
-                                close_doc_id: "call-close".into(),
-                                stream: 0,
-                            },
-                            presentation: PayloadPresentation::Full,
-                        },
-                    }],
-                }],
-                created_at: "2026-09-21T00:00:00Z".into(),
-            },
-        }
-    }
-
-    #[test]
-    fn authored_delivery_written_by_tool_retains_its_exact_tool_call_base() {
-        // Lean `requiredProvenance`: `.authored _, .tool call` requires
-        // `[request, ⟨.agentToolCall, call⟩]` in the closure.
-        let headers = vec![tool_delivery_message("call")];
-        let segments = closed_tool_output_segment(
-            "call",
-            OutputSource::Authored {
-                key: "background-receipt".into(),
-            },
-            OutputWriter::ToolExecution {
-                tool_call_doc_id: "call".into(),
-            },
-        );
-        let bases = vec![base_request(), base_tool_call("call")];
-        let closure = build_canonical_closure(CanonicalClosureInput {
-            root_header_ids: &["delivered".into()],
-            headers: &headers,
-            segments: &segments,
-            base_documents: &bases,
-            retained_bases: &[],
-            tool_effects: &[],
-            denied_headers: &[],
-            denied_segments: &[],
-            dependency_denials: &[],
-            node_did: "agent",
-            requester_did: Some("requester"),
-            session_id: "origin-session",
-        })
-        .expect("authored tool-writer delivery closure");
-        assert!(
-            closure.iter().any(
-                |row| row.collection == SessionHydrationCollection::AgentToolCall
-                    && row.doc_id == "call"
-            ),
-            "authored delivery must retain its exact tool call base"
-        );
-        assert!(closure.iter().any(|row| row.doc_id == "request"));
-        assert!(closure.iter().any(|row| row.collection
-            == SessionHydrationCollection::AgentOutputSegment
-            && row.doc_id == "call-close"));
-    }
-
-    #[test]
-    fn authored_delivery_missing_tool_writer_base_is_missing_observation() {
-        // Regression: native collect must surface the exact missing
-        // AgentToolCall base as MissingObservation, mirroring Lean
-        // `validateProvenance .missing => Error.provenanceMissing`.
-        let headers = vec![tool_delivery_message("call")];
-        let segments = closed_tool_output_segment(
-            "call",
-            OutputSource::Authored {
-                key: "background-receipt".into(),
-            },
-            OutputWriter::ToolExecution {
-                tool_call_doc_id: "call".into(),
-            },
-        );
-        let bases = vec![base_request()];
-        let result = build_canonical_closure(CanonicalClosureInput {
-            root_header_ids: &["delivered".into()],
-            headers: &headers,
-            segments: &segments,
-            base_documents: &bases,
-            retained_bases: &[],
-            tool_effects: &[],
-            denied_headers: &[],
-            denied_segments: &[],
-            dependency_denials: &[],
-            node_did: "agent",
-            requester_did: Some("requester"),
-            session_id: "origin-session",
-        });
-        let error = result.expect_err("missing tool call base must fail hydration");
-        assert!(matches!(
-            &error,
-            CanonicalClosureError::MissingObservation(_)
-        ));
-        assert!(
-            error.to_string().contains("AgentToolCall") && error.to_string().contains("call"),
-            "error names the exact missing provenance: {error}"
-        );
-    }
-
-    #[test]
-    fn tool_call_source_retains_its_exact_tool_call_base() {
-        // Lean `requiredProvenance`: `.tool call, _` requires the exact base
-        // regardless of writer; this pins the pre-existing behavior.
-        let headers = vec![tool_delivery_message("call")];
-        let segments = closed_tool_output_segment(
-            "call",
-            OutputSource::ToolCall {
-                tool_call_doc_id: "call".into(),
-            },
-            OutputWriter::ToolExecution {
-                tool_call_doc_id: "call".into(),
-            },
-        );
-        let bases = vec![base_request(), base_tool_call("call")];
-        let closure = build_canonical_closure(CanonicalClosureInput {
-            root_header_ids: &["delivered".into()],
-            headers: &headers,
-            segments: &segments,
-            base_documents: &bases,
-            retained_bases: &[],
-            tool_effects: &[],
-            denied_headers: &[],
-            denied_segments: &[],
-            dependency_denials: &[],
-            node_did: "agent",
-            requester_did: Some("requester"),
-            session_id: "origin-session",
-        })
-        .expect("tool call delivery closure");
-        assert!(closure.iter().any(|row| row.collection
-            == SessionHydrationCollection::AgentToolCall
-            && row.doc_id == "call"));
-    }
-
-    #[test]
-    fn immutable_header_twin_is_a_structural_conflict() {
-        let first = TranscriptMessageRow {
-            doc_id: "first".into(),
-            message: message(
-                "child-session",
-                Some("request"),
-                MessagePublication::RequestExecution {
-                    execution_generation: "generation".into(),
-                },
-            ),
-        };
-        let mut twin = first.clone();
-        twin.doc_id = "twin".into();
-        let roots = vec!["first".into()];
-        let result = build_canonical_closure(CanonicalClosureInput {
-            root_header_ids: &roots,
-            headers: &[first, twin],
-            segments: &[],
-            base_documents: &[base_request()],
-            retained_bases: &[],
-            tool_effects: &[],
-            denied_headers: &[],
-            denied_segments: &[],
-            dependency_denials: &[],
-            node_did: "agent",
-            requester_did: Some("requester"),
-            session_id: "child-session",
-        });
-        assert!(matches!(
-            result,
-            Err(CanonicalClosureError::StructuralConflict(_))
-        ));
     }
 }

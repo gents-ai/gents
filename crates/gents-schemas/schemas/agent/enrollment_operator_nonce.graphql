@@ -1,6 +1,3 @@
-# Runtime-local replay fence for authenticated enrollment operator commands.
-# The nonce itself is never stored: nonce_key is a domain-separated digest of
-# the admin DID and signed nonce. Expired rows are deleted opportunistically.
 type EnrollmentOperatorNonce {
     nonce_key: String @index(unique: true) @immutable
     admin_did: String @index @immutable

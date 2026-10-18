@@ -1,38 +1,18 @@
-//! Guard for #1123/#1125: client-authored collections
-//! MUST remain fresh-apply compatible. A paired client mints its store from
-//! a collection's *current* SDL with no server history — one `add_schema`
-//! call producing a genesis version — while the server arrives at its active
-//! version through the `ensure_migrations` chain replay. Why those can only
-//! match while the collection carries no chained steps (the
-//! genesis-vs-chain-tip CID mechanism) is documented once, on
-//! `CLIENT_AUTHORED_COLLECTIONS` in `src/registry.rs`.
-//!
-//! The client model: `EmbeddedNode::add_schema` here and a paired client's
-//! FFI both ingest SDL into an empty store and converge on the same
-//! collection-creation path in the pinned defradb
-//! (`create_collections_atomic_with_acp_registration`), so the genesis CIDs
-//! minted here stand in for what a phone mints. The two apply paths seed
-//! their SDL parsers with different known-type sets, which is only
-//! guaranteed equivalent while every client-authored SDL is single-type and
-//! relation-free — a relation field's CID embeds the target collection's
-//! identity, making genesis CIDs depend on the co-registered set.
-//! `client_authored_sdls_are_relation_free` pins that precondition.
-//!
-//! Limitation: the parity comparison is by version CID, so it cannot detect
-//! server-side `PatchInPlace` divergence (index/policy/embedding patches
-//! keep the CID). The static step guard in `baseline_ensure.rs`
-//! (`default_baseline_matches_ordered_protocol_catalog`) closes that gap by
-//! rejecting DEFAULT_STEPS entries of any kind for these collections.
+//! Guard for #1123/#1125: client-authored collections MUST remain fresh-apply
+//! compatible. `EmbeddedNode::add_schema` here and a paired client's FFI both
+//! ingest SDL into an empty store and converge on the same collection-creation
+//! path in the pinned defradb, so the genesis CIDs minted here stand in for
+//! what a phone mints. The two apply paths seed their SDL parsers with
+//! different known-type sets, which is only guaranteed equivalent while every
+//! client-authored SDL is single-type and relation-free — a relation field's
+//! CID embeds the target collection's identity, making genesis CIDs depend on
+//! the co-registered set.
 
 use gents_migration::{ensure_migrations, CLIENT_AUTHORED_COLLECTIONS};
 
 mod common;
 use common::fresh_node;
 
-/// The live SDL a fresh client mints its store from, looked up by position
-/// in the protocol catalog (the same order-aligned name/SDL arrays
-/// `baseline_ensure.rs` reconciles) so that a collection added to
-/// `CLIENT_AUTHORED_COLLECTIONS` is covered here automatically.
 fn current_sdl(name: &str) -> &'static str {
     gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
         .iter()
@@ -49,18 +29,15 @@ fn current_sdl(name: &str) -> &'static str {
 }
 
 /// Precondition of the client model (see module doc): every client-authored
-/// SDL uses only scalar field types. A relation field would make the genesis
-/// CID depend on which other types are co-registered, and the per-collection
-/// apply below would no longer model a client's batch apply.
+/// SDL uses only scalar field types.
 #[test]
 fn client_authored_sdls_are_relation_free() {
     const SCALAR_KINDS: &[&str] = &["String", "Int", "Float", "Boolean", "DateTime", "JSON"];
     for &name in CLIENT_AUTHORED_COLLECTIONS {
         for line in current_sdl(name).lines() {
-            // GraphQL SDL comments run from `#` to end of line; a colon
-            // inside one is not a field type. The `type` header is skipped
-            // entirely: its directives may embed `fields: [...]` arguments
-            // that are not field declarations.
+            // GraphQL SDL comments run from `#` to end of line; the `type`
+            // header is skipped: its directives may embed `fields: [...]`
+            // arguments that are not field declarations.
             let code = line.split('#').next().unwrap_or_default();
             let trimmed = code.trim();
             if trimmed.is_empty() || trimmed.starts_with("type ") {
@@ -87,11 +64,7 @@ fn client_authored_sdls_are_relation_free() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn client_authored_collections_stay_fresh_apply_compatible() {
-    // The two arms are independent until the comparison; run them
-    // concurrently — this is the crate's most expensive test.
     let server_arm = async {
-        // Node A: the real server boot path — full ensure_migrations chain
-        // replay (baseline registration + every DEFAULT_STEPS entry).
         let server = fresh_node().await;
         ensure_migrations(server.as_ref())
             .await
@@ -99,9 +72,6 @@ async fn client_authored_collections_stay_fresh_apply_compatible() {
         server
     };
     let client_arm = async {
-        // Node B: a fresh node standing in for a paired client, applying each
-        // client-authored collection's CURRENT SDL directly — the single-call
-        // add_schema genesis path a paired client takes (see module doc).
         let client = fresh_node().await;
         for &name in CLIENT_AUTHORED_COLLECTIONS {
             client

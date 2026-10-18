@@ -253,7 +253,7 @@ fn interrupt_mid_stream_preserves_partial_and_cancels_inference_call() {
         backend.wait_for_chunks(TARGET_MARKER, 1).await;
         wait_for_provider_output_contains(db.node.as_ref(), &request_doc_id, TARGET_PARTIAL).await;
 
-        interrupt_request(db.node.as_ref(), request_id)
+        interrupt_request(&db.node, request_id)
             .await
             .expect("interrupt_request should latch interrupt_requested_at");
 
@@ -363,7 +363,7 @@ fn interrupting_one_request_does_not_affect_another() {
         wait_for_provider_output_contains(db.node.as_ref(), &survivor_doc_id, SURVIVOR_PARTIAL)
             .await;
 
-        interrupt_request(db.node.as_ref(), target_request_id)
+        interrupt_request(&db.node, target_request_id)
             .await
             .expect("interrupt_request should latch interrupt_requested_at");
 
@@ -423,7 +423,7 @@ async fn boot_streaming_agent(
 ) -> BootedAgent {
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity(test_name));
     bind_streaming_backend(
-        db.node.as_ref(),
+        &db.node,
         identity.did(),
         STREAM_BACKEND_ID,
         endpoint,
@@ -456,7 +456,7 @@ async fn boot_streaming_agent(
 }
 
 async fn bind_streaming_backend(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &Arc<gents::defra_node::EmbeddedNode>,
     node_did: &str,
     backend_id: &str,
     endpoint: &str,

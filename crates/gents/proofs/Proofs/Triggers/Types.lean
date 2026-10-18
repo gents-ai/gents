@@ -36,6 +36,22 @@ inductive ConcurrencyMode where
 
 namespace Triggers
 
+/-- Explicit CLI/desktop Task admission has its own authenticated destination
+contract. These options govern unmaterialized trigger-source deliveries. -/
+def deliveryOptionsAllowed (kind : TriggerKind) (emitOutcome : Bool)
+    (concurrency : ConcurrencyMode) (targetExisting : Bool) : Bool :=
+  match kind with
+  | .event => true
+  | .schedule => !emitOutcome && (targetExisting || concurrency != .queuedSerial)
+  | .manual => !emitOutcome && concurrency != .queuedSerial && !targetExisting
+
+theorem scheduled_queue_requires_destination (emit : Bool) (target : Bool)
+    (h : deliveryOptionsAllowed .schedule emit .queuedSerial target = true) : target = true := by
+  cases emit <;> cases target <;> simp_all [deliveryOptionsAllowed]
+
+theorem targeted_schedule_queue_allowed :
+    deliveryOptionsAllowed .schedule false .queuedSerial true = true := rfl
+
 /-- An outcome consumer cannot opt into publishing another outcome, even when
 its Task is also referenced by another source. Both configuration admission
 and request admission enforce this rule. -/
@@ -52,7 +68,6 @@ theorem ordinary_source_allows_outcome (source : String) (emit : Bool)
 
 end Triggers
 
-/-- Omission uses one source-independent default, including graph delivery. -/
 def resolveConcurrency (_source : TriggerKind) (configured : Option ConcurrencyMode) :
     ConcurrencyMode := configured.getD .parallel
 
@@ -66,7 +81,6 @@ theorem concurrency_source_independent (a b : TriggerKind) (c : Option Concurren
 
 theorem event_kind_default_created : resolveEventKind none = "created" := rfl
 
-/-- Resolved runtime projections, not authored schedule/event configuration. -/
 structure ActiveSchedule where
   triggerId : String
   taskId : String
@@ -131,15 +145,12 @@ theorem wellFormed_manual_triggerId_none
 
 end FireIntent
 
-/-- Selected task and lineage; execution resolves the task under the runtime node. -/
 structure RequestSeed where
   taskId : String
   causedByTriggerId : Option String
   causedByTriggerKind : TriggerKind
   deriving Repr
 
-/-- Logical trigger identity within one runtime node. Source kind selects a
-source, not a concurrency namespace; TriggerWideKey models explicit owner scoping. -/
 abbrev TriggerKey := String
 
 namespace FireIntent

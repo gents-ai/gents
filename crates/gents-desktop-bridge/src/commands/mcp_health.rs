@@ -13,19 +13,6 @@ use gents_protocol::tool_service_health::ToolServiceHealthState;
 
 use super::super::types::{MCPServiceHealthView, McpServiceProbeResult};
 
-/// Read every persisted `ToolServiceHealthState` row scoped to the
-/// desktop's currently selected node. Bridges directly to the GraphQL
-/// store rather than the in-memory `ServiceHealthMap` because the node
-/// runtime (and therefore the in-memory state) lives in a separate
-/// process — the persisted collection is the only path the desktop has
-/// to the K-model state.
-///
-/// Rows are written by a `node_did`; on a replicated desktop node the local
-/// DefraDB sees rows from every replicated node. The selected-node
-/// filter keeps the rail's view consistent with the rest of the desktop
-/// (the same `selected_node_did` scopes config, transcripts, and
-/// triggers). Returns an empty Vec when no node is selected — the rail
-/// renders the existing empty state.
 pub async fn load_mcp_services_with_health(core: &ClientCore) -> Result<Vec<MCPServiceHealthView>> {
     let Some(node_did) = core.selected_node_did() else {
         return Ok(Vec::new());
@@ -42,7 +29,7 @@ pub(crate) async fn load_mcp_services_with_health_for_node(
         r#"{{
             ToolServiceHealthState(
                 filter: {{ node_did: {{ _eq: "{escaped_node}" }} }},
-                order: {{ service_id: ASC }}
+                order: [{{ service_id: ASC }}, {{ updated_at: DESC }}, {{ _docID: ASC }}]
             ) {{
                 service_id
                 node_did
@@ -73,21 +60,18 @@ pub(crate) async fn load_mcp_services_with_health_for_node(
         .cloned()
         .unwrap_or_default();
 
-    let rows: Vec<ToolServiceHealthStateRow> = raw
+    let mut rows: Vec<ToolServiceHealthStateRow> = raw
         .into_iter()
         .map(serde_json::from_value)
         .collect::<std::result::Result<_, _>>()
         .map_err(|error| anyhow!("parsing ToolServiceHealthState rows: {error}"))?;
+    // Twins of one service are not schema-unique; the order puts the
+    // health checker's chosen row first.
+    rows.dedup_by(|later, first| later.service_id == first.service_id);
 
     rows.into_iter().map(view_from_row).collect()
 }
 
-/// `display_state` is the collapsed three-state projection
-/// (`ToolServiceHealthState::project`) of the persisted `status` column.
-/// A row with a missing or unrecognized `status` is a data error — this
-/// command surfaces it as `Err` rather than inventing a synthetic
-/// classification, so a corrupt/legacy row fails loudly instead of
-/// silently rendering as healthy.
 pub(crate) fn view_from_row(row: ToolServiceHealthStateRow) -> Result<MCPServiceHealthView> {
     let display_state = ToolServiceHealthState::parse_opt(row.status.as_deref())
         .ok_or_else(|| {
@@ -257,13 +241,13 @@ mod probe_scope_tests {
     async fn registry_probe_resolves_the_node_and_service_compound_key() -> Result<()> {
         let (core, _tempdir) = crate::tests::support::boot_core().await;
         gents::config_client::ConfigAccess::write_local(
-            &core.node(),
+            &core.node_arc(),
             "test.mcp_probe_scope",
             r#"mutation {
-                create_ToolServiceRegistry(input: {
+                first: create_ToolServiceRegistry(input: {
                     node_did: "did:test:first", service_id: "shared", hostname: "first", enabled: true
                 }) { _docID }
-                create_ToolServiceRegistry(input: {
+                second: create_ToolServiceRegistry(input: {
                     node_did: "did:test:second", service_id: "shared", hostname: "second", enabled: true
                 }) { _docID }
             }"#,

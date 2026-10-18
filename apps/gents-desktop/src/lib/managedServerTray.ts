@@ -9,6 +9,7 @@ import {
   type ManagedServerWait,
 } from "./managedServerStartup";
 import { DEFAULT_NODE_NAME } from "@source-inc/gents-desktop-fleet";
+import { errorText } from "./errorText";
 
 type Unlisten = () => void;
 type Listen = (event: string, handler: () => void) => Promise<Unlisten>;
@@ -18,9 +19,7 @@ export const MANAGED_SERVER_TRAY_STOP_EVENT = "desktop://managed-server-tray-sto
 export const MANAGED_SERVER_TRAY_RESTART_EVENT =
   "desktop://managed-server-tray-restart";
 
-/** What the menu bar commands do to the local server, through its owner. */
 export type TrayServer = {
-  /** the status now, or a rejection saying why it could not be read */
   readStatus: () => Promise<ManagedServerStatus>;
   start: (nodeName: string) => Promise<ManagedServerStatus>;
   stop: () => Promise<ManagedServerStatus>;
@@ -28,10 +27,8 @@ export type TrayServer = {
     nodeName: string,
     authority: ManagedServerAuthorityInput,
   ) => Promise<ManagedServerStatus>;
-  /** waits while the service boots, updates or awaits approval */
   settle: (status: ManagedServerStatus) => Promise<ManagedServerStatus>;
   offers: { start: boolean; stop: boolean; restart: boolean };
-  /** calls back with each wait the owner publishes; returns the end of it */
   watchWait: (listener: (wait: ManagedServerWait | null) => void) => Unlisten;
 };
 
@@ -45,13 +42,12 @@ export function installManagedServerTrayListeners(
   let cancelled = false;
   const cleanups: Unlisten[] = [];
 
-  /* a command's progress is shown while it runs, not another screen's */
   const register = (event: string, action: () => Promise<unknown>) => {
     void listen(event, () => {
       const unwatch = server.watchWait(onWait);
       void action()
         .catch((cause) => {
-          reportError(cause instanceof Error ? cause.message : String(cause));
+          reportError(errorText(cause));
         })
         .finally(() => {
           unwatch();
@@ -63,9 +59,7 @@ export function installManagedServerTrayListeners(
         else cleanups.push(cleanup);
       })
       .catch((cause) => {
-        reportError(
-          `Could not register the node menu command: ${cause instanceof Error ? cause.message : String(cause)}`,
-        );
+        reportError(`Could not register the node menu command: ${errorText(cause)}`);
       });
   };
 
@@ -98,8 +92,6 @@ export function installManagedServerTrayListeners(
         "This node was started outside the managed service. Stop that gents server process directly before restarting the managed node.",
       );
     }
-    // Restarting a runtime that is migrating its data would interrupt the
-    // migration; the command waits for it to finish instead.
     if (managedServerWaitKind(current) === "updating") {
       const settled = await server.settle(current);
       const unsettled = unsettledManagedServerError(settled);

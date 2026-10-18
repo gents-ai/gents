@@ -62,11 +62,11 @@ pub use gents_protocol::request_input::{
 pub(crate) use goal_continuation::{
     goal_continuation_agent, goal_continuation_identity, prepare_goal_continuation,
 };
+#[cfg(test)]
+use input::queue_is_automated_wakeup;
 pub(crate) use input::{
     background_wake_queue, is_automated_wakeup, row_is_automated_wakeup, row_queue,
 };
-#[cfg(test)]
-use input::{queue_is_automated_wakeup, BACKGROUND_COMPLETION_WAKE_VERSION};
 pub(crate) use intake::{pending_ids_in_txn, steering_inputs, steering_snapshot};
 #[cfg(test)]
 use management::replace_pending_user_messages;
@@ -75,7 +75,8 @@ pub(crate) use management::{
     validate_pending_user_edit_in_txn, PersistedReplacements,
 };
 pub use management::{
-    pending_user_queue, prepare_pending_user_edit, PendingQueueEntry, PendingQueueSnapshot,
+    pending_user_queue, pending_user_queue_projection, prepare_pending_user_edit,
+    PendingQueueEntry, PendingQueueProjection, PendingQueueSnapshot, REMOVED_REASON,
     REPLACED_REASON,
 };
 pub use management::{PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt};
@@ -88,7 +89,6 @@ pub use submission::prepare_user_message_input;
 
 #[derive(Debug)]
 pub(crate) struct EnqueuedBackgroundCompletionInput {
-    /// None is a durable notification without a background wake request.
     pub(crate) request: Option<EnqueuedAgentRequest>,
     pub(crate) message_sequence: u32,
     pub(crate) created_request: bool,

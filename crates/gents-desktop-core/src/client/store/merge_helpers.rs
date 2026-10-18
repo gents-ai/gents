@@ -4,15 +4,12 @@ pub(super) fn row_node_matches(row_node_did: Option<&str>, node_did: &str) -> bo
     row_node_did.map_or(true, |row_node_did| row_node_did == node_did)
 }
 
-pub(super) fn source_node_matches(
-    sources: &[Option<String>],
-    row_index: usize,
+pub(super) fn row_is_in_node_scope(
+    row_node_did: Option<&str>,
+    source_node_did: Option<&str>,
     node_did: &str,
 ) -> bool {
-    sources
-        .get(row_index)
-        .and_then(|source| source.as_deref())
-        .map_or(true, |source_node_did| source_node_did == node_did)
+    row_node_did.or(source_node_did) == Some(node_did)
 }
 
 pub(super) fn upsert_rows_by_key<T>(
@@ -58,9 +55,8 @@ pub(super) fn retain_rows_and_sources<T>(
     *sources = kept_sources;
 }
 
-/// Merge durable goals without allowing a later-created replicated twin to
-/// replace the canonical row selected by the runtime. A row with the same
-/// creation time and goal ID is treated as an update and replaces in place.
+// A later-created replicated twin must not replace the canonical runtime
+// selection; same creation time and goal ID is an update and replaces in place.
 pub(super) fn upsert_goal_rows(target: &mut Vec<GoalRow>, incoming: Vec<GoalRow>) {
     let mut indexes = target
         .iter()
@@ -128,16 +124,50 @@ pub(super) fn agent_merge_key(row: &Agent) -> String {
 }
 
 pub(super) fn request_merge_key(row: &AgentRequestRow) -> String {
-    format!(
-        "{}\0{}",
-        row.node_did.as_deref().unwrap_or_default(),
-        row.request_id
-    )
+    if let Some(doc_id) = row.doc_id.as_deref() {
+        format!("document\0{doc_id}")
+    } else {
+        format!(
+            "optimistic\0{}\0{}\0{}",
+            row.node_did.as_deref().unwrap_or_default(),
+            row.requester_did.as_deref().unwrap_or_default(),
+            row.request_id
+        )
+    }
 }
 
-/// Immutable canonical facts are set-unioned. A duplicated physical identity
-/// with different bytes is retained for reconstruction to classify as an
-/// integrity conflict; it must never be turned into a last-writer-wins row.
+pub(super) fn retire_request_placeholders(
+    existing: &mut Vec<AgentRequestRow>,
+    incoming: &[AgentRequestRow],
+) {
+    let mut replacements = HashSet::with_capacity(incoming.len().saturating_mul(4));
+    for replacement in incoming
+        .iter()
+        .filter(|row| row.doc_id.is_some() || row.node_did.is_some())
+    {
+        let request_id = replacement.request_id.as_str();
+        let node_did = replacement.node_did.as_deref();
+        let requester_did = replacement.requester_did.as_deref();
+        for current_node in [None, node_did] {
+            for current_requester in [None, requester_did] {
+                replacements.insert((request_id, current_node, current_requester));
+            }
+        }
+    }
+
+    existing.retain(|row| {
+        row.doc_id.is_some()
+            || !replacements.contains(&(
+                row.request_id.as_str(),
+                row.node_did.as_deref(),
+                row.requester_did.as_deref(),
+            ))
+    });
+}
+
+// Immutable canonical facts are set-unioned; a duplicated physical identity
+// with different bytes is retained so reconstruction can classify the
+// integrity conflict, never last-writer-wins.
 pub(super) fn union_immutable_rows<T: std::fmt::Debug>(
     target: &mut Vec<T>,
     incoming: Vec<T>,
@@ -166,7 +196,10 @@ pub(super) fn goal_merge_key(row: &GoalRow) -> String {
 pub(super) fn tool_call_merge_key(row: &AgentToolCallRow, source_node_did: Option<&str>) -> String {
     format!(
         "{}\0{}",
-        source_node_did.unwrap_or_default(),
+        row.node_did
+            .as_deref()
+            .or(source_node_did)
+            .unwrap_or_default(),
         row.tool_call_key
     )
 }

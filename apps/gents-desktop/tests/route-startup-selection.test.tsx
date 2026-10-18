@@ -25,7 +25,6 @@ describe("startup under a route", () => {
     expect(app.stores.selection.getState()).toMatchObject({
       nodeDid: "did:key:b",
       sessionId: "b-1",
-      /* the fixture node's default is "default"; the session was held under "ops" */
       agentId: "ops",
     });
   });

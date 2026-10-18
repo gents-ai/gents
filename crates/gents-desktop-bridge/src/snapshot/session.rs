@@ -65,9 +65,6 @@ pub(super) fn message_is_runtime_control(
     gents::lifecycle::is_runtime_control_message(&request_input, &message.message.message_key)
 }
 
-/// Who put `request` into its session, when not the person. A session
-/// message names its sender's session only when this replica holds the exact
-/// causing request.
 pub(super) fn request_origin_view(
     store: &ClientStore,
     request: &AgentRequestRow,
@@ -112,8 +109,6 @@ pub(super) fn request_origin_view(
     })
 }
 
-/// The origin of a user-role transcript entry: that of the request it was
-/// published under, or a background completion for a delivered notification.
 pub(super) fn message_origin(
     store: &ClientStore,
     message: &TranscriptMessageRow,
@@ -142,10 +137,6 @@ pub(super) fn request_is_background_completion(request: &AgentRequestRow) -> boo
         .is_some_and(gents::lifecycle::is_background_completion_request)
 }
 
-/// `canonical_rows::authored_message_key` is `pub(crate)` in gents, so its
-/// prompt shape is repeated here; the two reconciliations that compare keys
-/// (the pending turn's owner and the message projection's owns-turn marker)
-/// must not drift apart.
 pub(super) fn authored_prompt_message_key(request_doc_id: &str) -> String {
     format!("authored:{request_doc_id}:prompt")
 }
@@ -186,13 +177,10 @@ pub fn build_session_snapshot_from_store_for_node(
         node_did,
         session_id,
         preferred_request_id,
+        None,
     )
 }
 
-/// Build the shared session snapshot and attach the newest durable accounting
-/// row for any request in the session. This deliberately does not key the meter
-/// off `latest_request_id`: a newly submitted request has no accounting until
-/// its first provider dispatch, so the previous measured request remains visible.
 #[cfg(test)]
 pub async fn build_session_snapshot_for_node(
     core: &ClientCore,
@@ -209,8 +197,10 @@ pub async fn build_session_snapshot_for_node(
         None,
         None,
         None,
+        None,
         true,
         true,
+        None,
     )
     .await
 }
@@ -224,8 +214,13 @@ pub async fn build_session_snapshot_for_node_with_transcript(
     canonical_dependencies: Option<&CanonicalTranscriptDependencies>,
     context_store: Option<&ClientStore>,
     prompt_ownership: Option<&gents_desktop_core::client::RequestPromptOwnership>,
+    hydration_observation: Option<(
+        gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
+        Option<String>,
+    )>,
     context_totals_exact: bool,
     include_live_tail: bool,
+    request_projection: Option<&[AgentRequestRow]>,
 ) -> Option<DesktopSessionSnapshot> {
     let (store, projection_revision) = core.store().snapshot_with_revision();
     let unreadable = node_did.and_then(|node_did| {
@@ -234,20 +229,44 @@ pub async fn build_session_snapshot_for_node_with_transcript(
     });
     let hydration = match node_did {
         Some(_) if unreadable.is_some() => unreadable,
-        Some(node_did) => match core.session_hydration_status(session_id, node_did).await {
-            Ok((progress, detail)) => Some(super::to_hydration_view(&progress, detail)),
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    session_id,
-                    node_did,
-                    "loading session-keyed hydration progress failed"
-                );
-                None
-            }
+        Some(node_did) => match super::scoped_hydration_observation_view(
+            hydration_observation,
+            session_id,
+            node_did,
+        ) {
+            Some(view) => Some(view),
+            None => match core.session_hydration_status(session_id, node_did).await {
+                Ok((progress, detail)) => Some(super::to_hydration_view(&progress, detail)),
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        session_id,
+                        node_did,
+                        "loading session-keyed hydration progress failed"
+                    );
+                    None
+                }
+            },
         },
         None => None,
     };
+    let observed_queue_ids = store
+        .requests
+        .iter()
+        .filter(|row| {
+            row.node_did.as_deref() == node_did
+                && row.session_id.as_deref() == Some(session_id)
+                && matches!(
+                    row.lifecycle_state,
+                    Some(
+                        RequestLifecycleState::Pending
+                            | RequestLifecycleState::WorkspaceBindingPending
+                    )
+                )
+        })
+        .filter_map(|row| row.doc_id.clone())
+        .collect::<Vec<_>>();
+    let mut arrival_order = None;
     let pending_queue = match node_did {
         Some(node_did)
             if include_live_tail
@@ -255,20 +274,27 @@ pub async fn build_session_snapshot_for_node_with_transcript(
                     .session_unreadable_reason(session_id, node_did)
                     .is_none() =>
         {
-            match core.pending_user_queue(node_did, session_id).await {
-                Ok(queue) => Some(
-                    queue
-                        .entries
-                        .into_iter()
-                        .map(|entry| crate::types::PendingQueueEntryView {
-                            request_doc_id: entry.request_doc_id,
-                            request_id: entry.request_id,
-                            content: entry.content,
-                            editable: entry.editable,
-                            edit_group: entry.edit_group,
-                        })
-                        .collect(),
-                ),
+            match core
+                .pending_user_queue_projection(node_did, session_id, &observed_queue_ids)
+                .await
+            {
+                Ok(projection) => {
+                    arrival_order = Some(projection.arrival_order);
+                    Some(
+                        projection
+                            .pending
+                            .entries
+                            .into_iter()
+                            .map(|entry| crate::types::PendingQueueEntryView {
+                                request_doc_id: entry.request_doc_id,
+                                request_id: entry.request_id,
+                                content: entry.content,
+                                editable: entry.editable,
+                                edit_group: entry.edit_group,
+                            })
+                            .collect(),
+                    )
+                }
                 Err(error) => {
                     tracing::warn!(session_id, node_did, error = %error, "pending queue unavailable");
                     None
@@ -277,17 +303,23 @@ pub async fn build_session_snapshot_for_node_with_transcript(
         }
         _ => None,
     };
-    let request_ids = node_did.map_or_else(
-        || store.requests_for_session(session_id),
-        |node_did| store.requests_for_session_for_node(session_id, node_did),
-    );
-    let request_ids = request_ids
-        .into_iter()
-        .map(|request| request.request_id.clone())
-        .collect::<Vec<_>>();
-    let loaded_context = match node_did {
-        Some(node_did) => {
-            match load_latest_session_request_context(core.node(), node_did, &request_ids).await {
+    let session_requester = node_did.and_then(|node_did| {
+        store
+            .sessions
+            .iter()
+            .find(|session| session.node_did == node_did && session.session_id == session_id)
+            .map(|session| session.requester_did.as_deref())
+    });
+    let loaded_context = match (node_did, session_requester) {
+        (Some(node_did), Some(requester_did)) => {
+            match load_latest_session_request_context(
+                core.node(),
+                node_did,
+                requester_did,
+                session_id,
+            )
+            .await
+            {
                 Ok(context) => context,
                 Err(error) => {
                     tracing::warn!(
@@ -301,7 +333,7 @@ pub async fn build_session_snapshot_for_node_with_transcript(
                 }
             }
         }
-        None => None,
+        _ => None,
     };
     let mut snapshot = build_session_snapshot_from_store_for_node_with_transcript(
         store.as_ref(),
@@ -316,6 +348,7 @@ pub async fn build_session_snapshot_for_node_with_transcript(
         node_did,
         session_id,
         preferred_request_id,
+        request_projection,
     );
     if snapshot.is_none() {
         snapshot = hydration
@@ -348,8 +381,22 @@ pub async fn build_session_snapshot_for_node_with_transcript(
         });
         snapshot.hydration = hydration;
         snapshot.pending_queue = pending_queue;
+        if let Some(arrivals) = arrival_order {
+            order_queued_turns(snapshot, &arrivals);
+        }
     }
     snapshot
+}
+
+pub(super) fn order_queued_turns(snapshot: &mut DesktopSessionSnapshot, arrivals: &[String]) {
+    let queued = std::mem::take(&mut snapshot.queued_turns)
+        .into_iter()
+        .filter_map(|turn| Some((turn.request_doc_id.clone()?, turn)))
+        .collect::<HashMap<_, _>>();
+    snapshot.queued_turns = arrivals
+        .iter()
+        .filter_map(|id| queued.get(id).cloned())
+        .collect();
 }
 
 fn build_hydration_only_session_snapshot(
@@ -512,6 +559,7 @@ mod paging_coverage_tests {
                 Some("node"),
                 "session",
                 Some("request"),
+                None,
             )
             .unwrap();
             assert_eq!(

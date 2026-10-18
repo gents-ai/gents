@@ -36,8 +36,6 @@ pub(crate) struct ManagedExecRequest {
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) max_output_bytes: usize,
     pub(crate) stdin: Vec<u8>,
-    /// `None` inherits the daemon environment. `Some` replaces it wholesale
-    /// with the supplied, already-filtered environment.
     pub(crate) environment: Option<HashMap<String, String>>,
     pub(crate) tool_name: Option<String>,
     pub(crate) live_output: Option<LiveToolOutputWriter>,
@@ -368,21 +366,29 @@ pub(crate) struct ManagedProcess {
 }
 
 impl ManagedProcess {
+    pub(crate) fn has_exited(&mut self) -> std::io::Result<bool> {
+        #[cfg(unix)]
+        {
+            self.child.has_exited()
+        }
+        #[cfg(windows)]
+        {
+            self.child.inner.try_wait().map(|status| status.is_some())
+        }
+    }
+
     pub(crate) async fn terminate(&mut self) {
         #[cfg(unix)]
         {
-            let pgid = self.child.pgid();
-            {
-                let mut wait = Box::pin(self.child.inner.wait());
-                let _ = terminate_process_group(pgid, &mut wait).await;
-            }
-            self.child.mark_finished(true);
+            self.child.terminate_service().await;
         }
         #[cfg(windows)]
         {
             let job = self.child.job();
-            let mut wait = Box::pin(self.child.inner.wait());
-            let _ = terminate_job(job, &mut wait).await;
+            {
+                let mut wait = Box::pin(self.child.inner.wait());
+                let _ = terminate_job(job, &mut wait).await;
+            }
             self.child.mark_finished(true);
         }
     }

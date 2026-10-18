@@ -898,7 +898,7 @@ fn selection_mcp_service_allowlist_is_deduped() {
 
 #[tokio::test]
 async fn required_mcp_service_needs_agent_scoped_measured_availability() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let node_did = "did:key:required-mcp-test";
     let registry = r#"mutation {
@@ -1161,7 +1161,7 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
 
 #[tokio::test]
 async fn defra_query_tool_gated_by_selection() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
     let enabled = AgentToolSurfaceConfig::from_selection(
@@ -1197,7 +1197,7 @@ async fn defra_query_tool_gated_by_selection() {
 
 #[tokio::test]
 async fn context_budget_tool_gated_by_selection() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
     let enabled = AgentToolSurfaceConfig::from_selection(
@@ -1232,7 +1232,7 @@ async fn context_budget_tool_gated_by_selection() {
         .tool_names()
         .contains(&"context_budget".to_string()));
 
-    let runtime = ToolRuntimeContext::oneshot(std::sync::Arc::new(node));
+    let runtime = ToolRuntimeContext::oneshot(node);
     let built = disabled.build_tools(&runtime).await.unwrap();
     assert!(!built.iter().any(|tool| tool.name() == "context_budget"));
 }
@@ -1241,7 +1241,7 @@ async fn context_budget_tool_gated_by_selection() {
 async fn write_tools_register_under_declared_names() {
     use crate::document_config::{WriteToolDecl, WriteToolField};
 
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     node.add_schema("type ActionRequest { summary: String }")
         .await
@@ -1279,8 +1279,7 @@ async fn write_tools_register_under_declared_names() {
         "declared write tool should be advertised under its tool_name; got {names:?}"
     );
 
-    // The built dynamic tools must carry the per-decl name too.
-    let runtime = ToolRuntimeContext::oneshot(std::sync::Arc::new(node));
+    let runtime = ToolRuntimeContext::oneshot(node);
     let built = surface.build_tools(&runtime).await.unwrap();
     assert!(
         built.iter().any(|tool| tool.name() == "request_action"),
@@ -1288,16 +1287,13 @@ async fn write_tools_register_under_declared_names() {
     );
 }
 
-/// A count field whose type resolves no argument schema reaches registration
-/// only when it was never published through the refusing rule; `build_tools`
-/// then declines the tool, so no write of it can complete.
 #[tokio::test]
 async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registration() {
     use crate::document_config::{
         WriteToolDecl, WriteToolField, WriteToolOutputObligation, WriteToolOutputObligationScope,
     };
 
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     node.add_schema(
         "type TallyOwner { label: String tallies: [Tally] } type Tally { label: String owner: TallyOwner @primary }",
@@ -1336,7 +1332,7 @@ async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registrat
     .unwrap();
 
     let error = match surface
-        .build_tools(&ToolRuntimeContext::oneshot(std::sync::Arc::new(node)))
+        .build_tools(&ToolRuntimeContext::oneshot(node))
         .await
     {
         Ok(_) => panic!("a relation-typed count field must not reach a registered tool"),
@@ -1352,7 +1348,7 @@ async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registrat
 async fn plugin_only_bindings_are_captured_for_trigger_execution() {
     use crate::document_config::{PluginToolRef, WriteToolField, WriteToolFieldFill};
 
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let selected = AgentToolSurfaceConfig::from_selection(
         "evidence",
@@ -1398,7 +1394,7 @@ async fn plugin_only_bindings_are_captured_for_trigger_execution() {
 
 #[tokio::test]
 async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
     let granted = AgentToolSurfaceConfig::from_selection(
@@ -1419,21 +1415,14 @@ async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
         .tool_names()
         .contains(&crate::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME.to_string()));
     assert!(granted.source_fill_fields().contains("requester_did"));
-    let runtime = ToolRuntimeContext::oneshot_with_node_did(
-        std::sync::Arc::new(node),
-        "did:key:z-test-agent",
-    );
+    let runtime = ToolRuntimeContext::oneshot_with_node_did(node, "did:key:z-test-agent");
     let built = granted.build_tools(&runtime).await.unwrap();
     assert!(built
         .iter()
         .any(|tool| tool.name() == crate::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME));
 
     let without_grant = AgentToolSurfaceConfig::meta_only()
-        .resolve(
-            runtime.node.as_ref(),
-            &runtime.node_did,
-            &Default::default(),
-        )
+        .resolve(&runtime.node, &runtime.node_did, &Default::default())
         .await
         .unwrap();
     assert!(!without_grant
@@ -1451,7 +1440,7 @@ async fn query_tool_is_advertised_and_registered() {
         crate::identity::KeyIdentity::load_or_create(keys.path().join("query.key"), None).unwrap(),
     );
     let node_did = crate::identity::NodeIdentity::did(&*identity).to_owned();
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
     let surface = AgentToolSurfaceConfig::from_selection(
@@ -1489,8 +1478,7 @@ async fn query_tool_is_advertised_and_registered() {
         "bound query tools must not imply the generic defra_query console"
     );
 
-    let mut runtime =
-        ToolRuntimeContext::oneshot_with_node_did(std::sync::Arc::new(node), node_did);
+    let mut runtime = ToolRuntimeContext::oneshot_with_node_did(node, node_did);
     let error = match surface.build_tools(&runtime).await {
         Ok(_) => panic!("query requires its node identity"),
         Err(error) => error,
@@ -1623,7 +1611,7 @@ fn memory_tool_defaults_disabled() {
 
 #[tokio::test]
 async fn explicitly_disabling_goal_tools_removes_them_from_names_and_runtime() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let surface = AgentToolSurfaceConfig::from_selection(
         "benchmark",
@@ -1646,7 +1634,7 @@ async fn explicitly_disabling_goal_tools_removes_them_from_names_and_runtime() {
     assert!(!names.contains(&crate::goal::GET_GOAL_TOOL_NAME.to_string()));
     assert!(!names.contains(&crate::goal::UPDATE_GOAL_TOOL_NAME.to_string()));
 
-    let runtime = ToolRuntimeContext::oneshot(std::sync::Arc::new(node));
+    let runtime = ToolRuntimeContext::oneshot(node);
     let built_names = surface
         .build_tools(&runtime)
         .await
@@ -1660,7 +1648,7 @@ async fn explicitly_disabling_goal_tools_removes_them_from_names_and_runtime() {
 
 #[tokio::test]
 async fn goal_tools_are_independent_from_generic_meta_tools() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let surface = AgentToolSurfaceConfig::from_selection(
         "durable",
@@ -1738,7 +1726,7 @@ async fn goal_creation_requires_its_separate_capability() {
 
 #[tokio::test]
 async fn operator_ceiling_can_deny_goal_creation_only() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let mut ceiling_policy = ToolPolicySurface::runtime_all();
     ceiling_policy.goal_create = false;
@@ -1767,7 +1755,7 @@ async fn operator_ceiling_can_deny_goal_creation_only() {
 
 #[tokio::test]
 async fn operator_ceiling_denies_all_goal_mutation_when_base_capability_is_off() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let mut ceiling_policy = ToolPolicySurface::runtime_all();
     ceiling_policy.goal_tools = false;
@@ -1801,9 +1789,6 @@ async fn operator_ceiling_denies_all_goal_mutation_when_base_capability_is_off()
 fn defra_query_deny_all_collection_scope_gates_tool_off() {
     use super::policy::{EndpointScope, ToolPolicySurface};
 
-    // Agent permits collection `a`; ceiling permits only `b`. The disjoint
-    // `Only ∩ Only` meet yields `Only(∅)` — a deny-all the projection must not
-    // collapse into allow-all (the `Only(∅) ≠ All` trap).
     let mut agent = ToolPolicySurface::runtime_all();
     agent.defra_collections = EndpointScope::<String, ()>::only_units(["a".to_string()]);
     let mut ceiling = ToolPolicySurface::runtime_all();
@@ -1814,7 +1799,6 @@ fn defra_query_deny_all_collection_scope_gates_tool_off() {
         effective.defra_collections.is_deny_all(),
         "disjoint collection scopes must meet to Only(empty) = deny-all"
     );
-    // The capability bit alone is still on; only the keyed scope is empty.
     assert!(effective.defra_query);
     assert!(
         !effective.include_defra_query(),
@@ -1825,8 +1809,6 @@ fn defra_query_deny_all_collection_scope_gates_tool_off() {
         "deny-all and all both project to an empty list; the gate is what distinguishes them"
     );
 
-    // Sanity: an All ceiling leaves the agent's own allowlist intact and the
-    // tool surfaced.
     let mut all_ceiling = ToolPolicySurface::runtime_all();
     all_ceiling.defra_collections = EndpointScope::all();
     let permissive = agent.meet(&all_ceiling);
@@ -1900,10 +1882,6 @@ fn query_decls_for_runtime_drops_tool_when_filled_filter_would_be_stripped() {
 
 #[test]
 fn from_document_read_only_allowlist_override_and_fallback() {
-    // (a) A doc that sets ONLY read_only_command_allowlist (no other command_*
-    // field) with enable_bash + ReadOnly must materialize a Some(command_policy)
-    // whose read_only_allowlist is the custom list — proving the has_policy gate
-    // fires and the override applies.
     let mut doc = preset_tools_document("readonly-custom", "Off", "ReadOnly", false, false);
     doc.host
         .as_mut()
@@ -1918,9 +1896,6 @@ fn from_document_read_only_allowlist_override_and_fallback() {
         .expect("custom read-only allowlist must produce Some(command_policy)");
     assert_eq!(policy.read_only_allowlist(), ["cat".to_string()]);
 
-    // (b) The same doc with an absent / empty allowlist yields the historical
-    // default: command_policy resolves to None (builder applies the hardcoded
-    // default_read_only_command_policy).
     let mut absent = doc.clone();
     absent
         .host
@@ -1975,7 +1950,7 @@ fn absent_groups_grant_nothing_and_goal_controls_are_independent() {
 
 #[tokio::test]
 async fn session_history_tool_follows_selection() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
     let disabled = AgentToolSurfaceConfig::from_selection(
@@ -2214,9 +2189,6 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
             expected_warnings: vec!["host_ceiling_not_global", "defra_query_empty_scope_all"],
             host_ceiling_warning: true,
         },
-        // readonly/write mirror the init packages, which no longer enable
-        // defra_query (#592: opt-in only; introspection is the package that
-        // turns it on).
         Case {
             name: "readonly-online",
             selection: preset_tools_document("readonly", "ReadOnly", "ReadOnly", false, false),
@@ -2390,6 +2362,8 @@ fn explain_complex_document_combination_filters_agents_and_groups_surface() {
         "agent_message",
         "agent_interrupt",
         "agent_list",
+        "agent_session_list",
+        "agent_session_read",
         "query",
     ] {
         assert!(
@@ -2456,8 +2430,6 @@ fn explain_default_surface_calls_out_builtin_reads_and_defra_query_scope() {
     assert!(explanation
         .tool_names
         .contains(&crate::toolset::SESSION_HISTORY_TOOL_NAME.to_string()));
-    // defra_query is opt-in (#592): the default surface excludes it, and with
-    // the tool off the empty-scope warning has nothing to warn about.
     assert!(!explanation
         .tool_names
         .contains(&crate::defra_query::DEFRA_QUERY_TOOL_NAME.to_string()));
@@ -2546,7 +2518,7 @@ fn explain_mcp_empty_allowlist_denies_all_services_when_online() {
 #[cfg(feature = "agent-memory")]
 #[tokio::test]
 async fn memory_tool_requires_selection_opt_in() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
     let disabled = AgentToolSurfaceConfig::from_selection(
@@ -2584,15 +2556,11 @@ async fn memory_tool_requires_selection_opt_in() {
         .contains(&crate::toolset::MEMORY_TOOL_NAME.to_string()));
 }
 
-/// #592: `defra_query` must be OFF unless explicitly enabled. The programmatic
-/// default and the meta-only baseline exclude it; only an explicit
-/// `enable_defra_query: true` (or the wide-open preset) surfaces the tool.
 #[tokio::test]
 async fn defra_query_is_off_by_default() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
-    // Programmatic default surface.
     let default_surface = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection::default(),
@@ -2609,7 +2577,6 @@ async fn defra_query_is_off_by_default() {
         default_surface.tool_names()
     );
 
-    // Explicit opt-in still decodes to enabled.
     let explicit = tools_document(serde_json::json!({"datastore":{"enable_defra_query":true}}));
     assert!(
         ResolvedToolSelection::from_document(&explicit)
@@ -2617,7 +2584,6 @@ async fn defra_query_is_off_by_default() {
             .enable_defra_query
     );
 
-    // The meta-only baseline excludes it too.
     let meta_only = AgentToolSurfaceConfig::meta_only()
         .resolve(&node, "did:key:z-test-agent", &Default::default())
         .await
@@ -2629,13 +2595,9 @@ async fn defra_query_is_off_by_default() {
     );
 }
 
-/// The `agent-config` alias in `defra_query_collections` expands to the
-/// configuration read surface: config collections are allowed, conversation
-/// content stays denied, and the alias itself is never treated as a literal
-/// collection name.
 #[tokio::test]
 async fn agent_config_alias_expands_to_config_scope() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
     let surface = AgentToolSurfaceConfig::from_selection(
@@ -3010,7 +2972,6 @@ fn configured_tool_timeouts_reach_built_tools_within_host_ceilings() {
     )
     .unwrap();
 
-    // Authored bash values take effect; the maximum is clamped to the host's 900s.
     let bash = config
         .host_tools()
         .native_tools()
@@ -3025,7 +2986,6 @@ fn configured_tool_timeouts_reach_built_tools_within_host_ceilings() {
         });
     assert_eq!(bash, Some((30, 900)));
 
-    // An authored CLI timeout replaces the registration's 10s, clamped to 900s.
     let cli = config
         .host_tools()
         .native_tools()

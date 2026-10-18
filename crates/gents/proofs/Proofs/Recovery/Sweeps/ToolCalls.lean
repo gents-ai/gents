@@ -6,8 +6,6 @@ namespace Recovery
 
 open ToolExecution
 
-/-- An `agent_new`/`agent_message` row: no host process backs it; its
-terminal is the caused request's terminal output. -/
 def isSessionMessageCall (call : ToolCallContext) : Prop :=
   call.operation = .sessionMessage
 
@@ -20,17 +18,9 @@ inductive ToolRecoveryCause where
   | parentInterrupted
   | parentTerminal
   | terminalizeBackgroundedAsInterrupted
-  /-- The host owner could not prove the process stopped: it was unrecorded,
-      its pid was reused, or it exited while no owner observed its result. -/
   | processLost
-  /-- The task whose trigger started the owning request was deleted. -/
   | taskDeleted
-  /-- An `agent_new`/`agent_message` row whose receipt is missing or names a
-      request that fails the row's lineage. The row turns running in the same
-      transaction that writes its caused request and the receipt naming it, so
-      such a row can never settle from a terminal: it fails closed once. -/
   | causedRequestUnbound
-  /-- The request a session-message row caused reached this terminal. -/
   | requestCompleted
   | requestFailed
   | requestDead
@@ -68,8 +58,7 @@ def terminalState : ToolRecoveryCause → ToolCallState
   | .requestInterrupted => .cancelled
   | .requestSuperseded => .failed
 
-/-- The `<reason>` of the completion notification the recovering owner
-    appends; a completed caused request delivers its output without one. -/
+/-- The `<reason>` of the completion notification the recovering owner appends. -/
 def notificationReason : ToolRecoveryCause → Option String
   | .deadlineExceeded => some "deadline_exceeded"
   | .parentInterrupted => some "parent_interrupted"
@@ -107,9 +96,6 @@ structure ToolCallRecoveryRow where
   cause : ToolRecoveryCause
   deriving Repr
 
-/-- The row carries the cause its recovering owner observed; recovery never
-    invents one. Session-message rows and every other running row are
-    recovered by separate sweeps, selected by `sessionMessage`. -/
 def toolCallRecoveryStale (sessionMessage : Bool) (row : ToolCallRecoveryRow) : Prop :=
   row.call.state = .running ∧ decide (isSessionMessageCall row.call) = sessionMessage
 
@@ -149,7 +135,6 @@ theorem toolCallRecover_zero (sessionMessage : Bool) :
     exact h_terminal_not_running h_running
   simp [toolCallRecoveryMeasure, h_not]
 
-/-- The recovery sweep over one class of running rows. -/
 def toolCallRecoverySweepFor (sessionMessage : Bool)
     (sweepId rustFunction : String) (cadence : RecoveryCadence) : RecoverySweep :=
   { Row := ToolCallRecoveryRow
@@ -171,14 +156,6 @@ def toolCallRecoverySweep : RecoverySweep :=
   toolCallRecoverySweepFor false
     "tool_call_lifecycle_recover_all_running_calls" "ToolCallLifecycle::recover_all" .startup
 
-/-! ## Periodic native-background ownership repair
-
-A native background row is backed by volatile process state while its worker
-is alive. If the durable row is still running but the process registry no
-longer owns its id, the row is orphaned and the startup classifier must be
-re-applied on the periodic recovery tick. This makes startup recovery retryable
-and closes the panic path without touching live registered workers. -/
-
 structure OrphanedBackgroundToolRow where
   call : ToolCallContext
   deadlineExpired : Bool
@@ -186,31 +163,20 @@ structure OrphanedBackgroundToolRow where
   parentInterrupted : Bool
   parentTerminal : Bool
   executionRegistered : Bool
-  /-- The host owner's verdict after it stopped a proven-owned process
-      (`ManagedExec.stopOutcome`). -/
   process : ManagedExec.StopOutcome
-  /-- The trigger or task that started the owning request is observed
-      deleted. Absence without a deletion record is not deletion. -/
   ownerTaskDeleted : Bool
   deriving Repr
 
-/-- A missing exact physical parent is an incomplete owner observation. The
-    booleans come from the scoped request lookup, not a caller-selected cause. -/
 def OrphanedBackgroundToolRow.parentResolvable
     (row : OrphanedBackgroundToolRow) : Bool :=
   row.parentLive || row.parentInterrupted || row.parentTerminal
 
-/-- The periodic orphan sweep uses the same precedence as startup recovery.
-    Owner resolution precedes expiry, since a deadline does not license a
-    write to a tool whose parent scope is unavailable.
-    A live registered worker owns its row unless its task was deleted; that
-    worker is proven ownership, and like an explicit cancellation its terminal
-    cause is persisted before the worker is signalled, so the worker cannot
-    replace it. Without a live worker, a process the owner still observes
-    running keeps its row running, and one whose stop the owner could not
-    observe settles as lost, never as a stop. A stopped process is never
-    attributed to its parent's interrupt or terminal state: that state does not
-    stop background work. -/
+/-! The periodic orphan sweep uses the same precedence as startup recovery.
+A live registered worker is proven ownership: its terminal cause is persisted
+before the worker is signalled, so the worker cannot replace it. A stopped
+process is never attributed to its parent's interrupt or terminal state: that
+state does not stop background work. -/
+
 def orphanedBackgroundToolCause
     (row : OrphanedBackgroundToolRow) : Option ToolRecoveryCause :=
   if !row.parentResolvable then
@@ -236,8 +202,6 @@ theorem orphanedBackgroundTool_no_parent_no_cause
     orphanedBackgroundToolCause row = none := by
   simp [orphanedBackgroundToolCause, h]
 
-/-- Without a live worker, a settled row never claims a stop the owner did
-    not observe. -/
 theorem orphanedBackgroundTool_unstopped_settles_lost
     (row : OrphanedBackgroundToolRow) (cause : ToolRecoveryCause)
     (h_cause : orphanedBackgroundToolCause row = some cause)
@@ -251,7 +215,6 @@ theorem orphanedBackgroundTool_unstopped_settles_lost
     cases h_p : row.process <;>
     simp_all
 
-/-- A live registered worker is never taken over unless its task was deleted. -/
 theorem orphanedBackgroundTool_registered_live_worker_untouched
     (row : OrphanedBackgroundToolRow)
     (h_registered : row.executionRegistered = true)
@@ -339,12 +302,9 @@ def orphanedBackgroundToolSweep : RecoverySweep :=
   , h_recover_zero := orphanedBackgroundToolRecover_zero
   }
 
-/-! ## Retryable native-background completion side effects
-
-The terminal tool row is durable before its completion notification and wake.
-The persisted `status = completionPending` cursor therefore remains outstanding
-until both idempotent side effects converge, making a transient write failure
-periodically discoverable after the lifecycle row is already terminal. -/
+/-! The persisted `completionPending` cursor stays outstanding until both
+idempotent side effects converge, keeping transient write failures discoverable
+after the lifecycle row is terminal. -/
 
 structure BackgroundCompletionSideEffectRow where
   call : ToolCallContext
@@ -355,8 +315,6 @@ structure BackgroundCompletionSideEffectRow where
 def isNativeBackgroundCall (call : ToolCallContext) : Prop :=
   call.awaitMode = .background ∧ ¬ isSessionMessageCall call
 
-/-- Every background row, native or session-message, delivers its terminal
-through the same completion notification and coalesced wake. -/
 def isBackgroundCall (call : ToolCallContext) : Prop :=
   call.awaitMode = .background
 
@@ -428,18 +386,14 @@ def backgroundCompletionSideEffectSweep : RecoverySweep :=
   , h_recover_zero := backgroundCompletionSideEffectRecover_zero
   }
 
-/- Background calls are disjoint from this sweep: the orphan sweep owns native
-   rows' volatile-registration gate and deadline precedence, and a
-   session-message row is never terminalized by its parent's fate. -/
 structure TerminalParentToolRow where
   call : ToolCallContext
   parentTerminal : Bool
   parentInterrupted : Bool
   deriving Repr
 
-/-- No terminal parent is a cancel signal for background work: a started
-    session keeps running and a native background process keeps its own
-    owner. Only foreground rows are terminalized by this sweep. -/
+/-- No terminal parent cancels background work; only foreground rows are
+terminalized by this sweep. -/
 def terminalParentToolStale (row : TerminalParentToolRow) : Prop :=
   row.call.state = .running ∧
   (row.parentInterrupted = true ∨ row.parentTerminal = true) ∧

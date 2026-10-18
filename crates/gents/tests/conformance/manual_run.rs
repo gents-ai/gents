@@ -1,8 +1,3 @@
-//! Observe the shared manual-request writer's persisted lineage, argument
-//! rendering, and independent submissions. ManualTriggerHandle task admission
-//! is covered in trigger_engine/tests/manual_source.rs; CLI integration lives
-//! in gents-cli/tests/suites/cli_config_task_run.rs.
-
 use gents::graphql::escape_graphql_string;
 use gents::write_manual_agent_request;
 use serde_json::Value;
@@ -66,7 +61,7 @@ async fn manual_run_materializes_agent_request_with_lineage() {
     let db = test_db("manual-run-lineage").await;
 
     let doc_id = write_manual_agent_request(
-        db.node.as_ref(),
+        &db.node,
         actor(db.node_identity.did()),
         db.node_identity.did(),
         AGENT_NAME,
@@ -112,7 +107,7 @@ async fn manual_run_renders_args_scope() {
     let db = test_db("manual-run-args-scope").await;
 
     let doc_id = write_manual_agent_request(
-        db.node.as_ref(),
+        &db.node,
         actor(db.node_identity.did()),
         db.node_identity.did(),
         AGENT_NAME,
@@ -136,7 +131,7 @@ async fn manual_submissions_materialize_distinct_requests() {
     let db = test_db("manual-run-parallel").await;
 
     let first = write_manual_agent_request(
-        db.node.as_ref(),
+        &db.node,
         actor(db.node_identity.did()),
         db.node_identity.did(),
         AGENT_NAME,
@@ -153,7 +148,7 @@ async fn manual_submissions_materialize_distinct_requests() {
     );
 
     let second = write_manual_agent_request(
-        db.node.as_ref(),
+        &db.node,
         actor(db.node_identity.did()),
         db.node_identity.did(),
         AGENT_NAME,
@@ -187,19 +182,12 @@ async fn manual_submissions_materialize_distinct_requests() {
     }
 }
 
-/// The manual writer renders with the manual `event` scope (`fired_at`,
-/// `trigger_id: null`, `trigger_kind: "manual"`) plus the `node`/`ctx` scopes
-/// from `task_node_ctx` — the same scope shape `TriggerEngine::dispatch`
-/// renders with, just without `doc`/`group`/`args` values. A template
-/// referencing those scopes must resolve rather than error, and
-/// `event.trigger_id` must render as minijinja's `none`, proving the writer
-/// owns that event envelope shape and consumers branch on it.
 #[tokio::test]
 async fn manual_run_exposes_manual_event_and_node_scope() {
     let db = test_db("manual-run-event-scope").await;
 
     let doc_id = write_manual_agent_request(
-        db.node.as_ref(),
+        &db.node,
         actor(db.node_identity.did()),
         db.node_identity.did(),
         AGENT_NAME,
@@ -226,17 +214,12 @@ async fn manual_run_exposes_manual_event_and_node_scope() {
     );
 }
 
-/// A manual template whose reference cannot be resolved (strict-undefined
-/// rendering, shared with `TriggerEngine::dispatch`) must fail the whole
-/// write: no partial `AgentRequest` may be left behind, because the manual
-/// writer is a synchronous boundary and a half-written pending row would be
-/// claimable by the watcher without its intended content.
 #[tokio::test]
 async fn manual_run_render_failure_materializes_no_request() {
     let db = test_db("manual-run-render-err").await;
 
     let error = write_manual_agent_request(
-        db.node.as_ref(),
+        &db.node,
         actor(db.node_identity.did()),
         db.node_identity.did(),
         AGENT_NAME,
@@ -258,7 +241,7 @@ async fn manual_run_render_failure_materializes_no_request() {
     );
 
     let doc_id = write_manual_agent_request(
-        db.node.as_ref(),
+        &db.node,
         actor(db.node_identity.did()),
         db.node_identity.did(),
         AGENT_NAME,

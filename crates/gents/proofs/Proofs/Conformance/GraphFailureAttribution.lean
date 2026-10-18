@@ -23,16 +23,12 @@ structure TraceCase where
   expected : List Observation
   deriving DecidableEq, Repr
 
-/-- Explicit expected rows, independent of replay. Cause IDs are identities,
-not priority ranks. Rust must map actions to the existing GraphRun owner and
-read the persisted row after each action; this is not a Rust reference machine. -/
 def traceCases : List TraceCase :=
   [ { name := "earlier_interrupted_sibling_does_not_replace_cause"
       events := [.capture 0 (some 90), .capture 1 (some 10), .finish 1 true (some 10)]
       expected := [⟨.running, false, 1, some 90, true⟩,
                    ⟨.running, false, 1, some 90, true⟩, ⟨.failed, false, 2, some 90, false⟩] }
   , { name := "reversed_lexical_order_keeps_cause"
-      -- Explicitly introduce the second physical failure before recapture.
       events := [.capture 0 (some 10), .observedFailure 90,
                  .capture 1 (some 10), .finish 1 true (some 10)]
       expected := [⟨.running, false, 1, some 10, true⟩,

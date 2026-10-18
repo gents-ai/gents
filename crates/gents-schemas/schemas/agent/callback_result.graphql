@@ -1,4 +1,3 @@
-# Created only after the succeeded invocation's required result docs are durable.
 type CallbackResult @branchable
     @index(fields: ["owner_node_did", "result_id"], unique: true)
     @index(fields: ["owner_node_did", "invocation_id"], unique: true) {

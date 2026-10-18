@@ -16,20 +16,11 @@ const RIG_429: &str = "HttpError: Invalid status code 429 Too Many Requests with
 
 const RIG_402: &str = "HttpError: Invalid status code 402 Payment Required with message: ";
 
-/// OpenRouter's documented credits message (errors page; SDK
-/// `PaymentRequiredResponseError`).
 pub(crate) const OPENROUTER_INSUFFICIENT_CREDITS: &str = r#"{"error":{"code":402,"message":"Insufficient credits. Add more using https://openrouter.ai/credits"}}"#;
-/// OpenRouter's documented in-flight budget 402 (limits page, "In-flight
-/// spending budget").
 pub(crate) const OPENROUTER_IN_FLIGHT: &str = r#"{"error":{"code":402,"message":"This request would exceed your available credits given your current in-flight requests. Retry after in-flight requests settle, or add credits.","metadata":{"reason":"in_flight_budget_exhausted","limit_source":"openrouter_in_flight_budget","remedy_hint":"Retry after your in-flight requests settle (see the Retry-After header). Adding credits at https://openrouter.ai/settings/credits raises your in-flight budget, up to a capped ceiling."}}}"#;
-/// `limit_source` documented (limits page, "Handling 402 errors"); the
-/// message and hint are illustrative.
 pub(crate) const OPENROUTER_KEY_LIMIT: &str = r#"{"error":{"code":402,"message":"Key limit exceeded.","metadata":{"limit_source":"openrouter_key_limit","remedy_hint":"Raise this key's credit limit."}}}"#;
-/// `reason` and `limit_source` documented (limits page); the message and hint
-/// are illustrative.
 pub(crate) const OPENROUTER_WEIGHT_EXCEEDS_BUDGET: &str = r#"{"error":{"code":402,"message":"This request costs more than your in-flight budget.","metadata":{"reason":"weight_exceeds_budget","limit_source":"openrouter_credits","remedy_hint":"Lower max_tokens or add credits."}}}"#;
 
-/// #1422 live repro: Claude subscription seat capped until 11:40 local.
 const ANTHROPIC_ACCOUNT_BODY: &str = r#"{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."},"request_id":"req_011CeoNrgs1EJvDwA2YxXE7R"}"#;
 
 #[test]

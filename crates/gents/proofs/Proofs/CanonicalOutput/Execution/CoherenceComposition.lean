@@ -138,9 +138,6 @@ private theorem goal_coherent (goal : GoalAutomation.OperatorResume.Snapshot)
   repeat' split at h <;> try contradiction
   all_goals rcases h with ⟨_, ⟨_, rfl⟩⟩; exact coherent
 
-/-- The full tool projection remains coherent across the one application trace,
-including request handover, recovery, background delivery and gated restart.
-No constructor assumes the invariant it is meant to preserve. -/
 theorem Trace.toolProjectionCoherent {before after : World} (trace : Trace before after)
     (coherent : Execution.toolProjectionCoherent before = true) :
     Execution.toolProjectionCoherent after = true := by

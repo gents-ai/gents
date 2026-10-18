@@ -1,26 +1,12 @@
-//! Transport liveness of one armed provider attempt.
-//!
-//! The capturing transport stamps this when it starts the send, when response
-//! headers arrive, and on every received body chunk; it settles it once the
-//! provider's protocol terminal event or end of body is seen. The owned loop
-//! reads it to decide provider idleness. Bytes rather than decoded items are
-//! the signal because healthy providers stream long runs that decode to no
-//! loop item (Anthropic thinking/signature/ping/input-JSON deltas, silent
-//! Responses reasoning). Admission waits happen before the send stamp, and
-//! durable finalization after the settle, so neither counts as idleness.
-
 use std::sync::Mutex;
 
 use tokio::time::Instant;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ActivityPhase {
-    /// Armed, but the transport has not started sending.
     #[default]
     AwaitingSend,
-    /// The send is in flight; the instant of the last transport activity.
     Active(Instant),
-    /// The provider response is complete at the transport.
     Settled,
 }
 
@@ -28,6 +14,7 @@ pub enum ActivityPhase {
 struct ActivityState {
     phase: ActivityPhase,
     stall_reason: Option<String>,
+    token_limit_reached: bool,
 }
 
 #[derive(Debug, Default)]
@@ -54,9 +41,16 @@ impl ProviderActivity {
         self.lock().phase
     }
 
-    /// Recorded before the stalled attempt's stream is dropped, so the
-    /// admission permit's drop path can report why the call ended.
+    pub(crate) fn observe_token_limit(&self) {
+        self.lock().token_limit_reached = true;
+    }
+
+    pub(crate) fn token_limit_reached(&self) -> bool {
+        self.lock().token_limit_reached
+    }
+
     pub fn mark_stalled(&self, reason: String) {
+        // The permit drop path reads this after the stalled stream is dropped.
         self.lock().stall_reason = Some(reason);
     }
 

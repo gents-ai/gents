@@ -48,7 +48,7 @@ describe("managed runtime restart settings", () => {
     } as unknown as DesktopApiAdapter;
     renderIn(testApp({ api }), <LocalServer />);
     await screen.findByText("running");
-    await user.click(screen.getByRole("switch", { name: "Start at login" }));
+    await user.click(screen.getByRole("switch", { name: "Keep running after quit" }));
     expect(api.setManagedServerAutoStart).toHaveBeenCalledWith(false);
     expect(api.startManagedServer).not.toHaveBeenCalled();
     expect(api.stopManagedServer).not.toHaveBeenCalled();
@@ -69,6 +69,10 @@ describe("managed runtime restart settings", () => {
       "user service manager unavailable",
     );
     expect(screen.queryByText("stopped")).not.toBeInTheDocument();
+    /* a message wraps under the description, not beside the state */
+    expect(
+      screen.getByRole("alert").closest("[data-slot=field-content]"),
+    ).not.toBeNull();
   });
 
   it("shows the runtime-confirmed authority even when later pairing polling fails", async () => {
@@ -87,10 +91,12 @@ describe("managed runtime restart settings", () => {
 
     renderIn(testApp({ api }), <LocalServer />);
     expect(
-      screen.getByText(/Quit Desktop closes only this frontend/),
+      screen.getByText(
+        /Quitting stops the local node unless background running is enabled/,
+      ),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/operating system—not the desktop app—start the node/),
+      screen.getByText(/Keep triggers, schedules and sync running after quitting/),
     ).toBeInTheDocument();
     expect(screen.queryByText(/Start with the app/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Supervised by the desktop/i)).not.toBeInTheDocument();

@@ -20,7 +20,6 @@ const session = (over: Partial<SessionSummary>) =>
     ...over,
   }) as SessionSummary;
 
-/* two nodes; the list shows a session on the second, which runs the reviewer */
 const app = () =>
   testApp({
     deployments: [
@@ -52,7 +51,6 @@ describe("the sessions agent filter", () => {
     );
     await userEvent.click(screen.getByLabelText("Agent"));
     expect(await screen.findByText("Code Reviewer")).toBeInTheDocument();
-    /* the selected node's agent runs no listed session; it is offered at zero */
     expect(screen.getByRole("option", { name: /Default\s*0$/ })).toBeInTheDocument();
   });
 

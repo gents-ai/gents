@@ -28,16 +28,8 @@ enum RedriveOutcome {
 }
 
 impl RequestLifecycle {
-    /// Create bounded retry successors for failed canonical background wakes.
-    ///
-    /// This is deliberately narrower than interactive request retry: the
-    /// source must be a failed scheduled request carrying the versioned,
-    /// coalesced `background_completion` queue input. The source must also
-    /// remain the latest request across session requesters and have retry budget left.
-    /// A unique per-source `retry_key` plus a private transaction makes the
-    /// sweep idempotent across concurrent ticks and process restarts.
     pub async fn redrive_failed_background_wakeups(
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
     ) -> Result<BackgroundWakeRedriveReport> {
         let (candidates, successors, pending) = load_candidates(node, node_did).await?;
@@ -124,8 +116,9 @@ async fn load_candidates(
     Vec<AgentRequestRow>,
 )> {
     let node_did = escape_graphql_string(node_did);
-    let response = node
-        .execute(&format!(
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &format!(
             r#"{{
                 failed: AgentRequest(filter: {{
                     node_did: {{ _eq: "{node_did}" }},
@@ -146,11 +139,10 @@ async fn load_candidates(
                     lifecycle_state: {{ _eq: "pending" }}
                 }}) {{ request_id session_id requester_did input }}
             }}"#
-        ))
-        .await;
-    if response.has_errors() {
-        anyhow::bail!("querying failed background wakes: {:?}", response.errors);
-    }
+        ),
+        "load_candidates",
+    )
+    .await?;
     let data = response.data.context("background wake query has no data")?;
     let failed: Vec<AgentRequestRow> =
         serde_json::from_value(data["failed"].clone()).context("decoding failed wakes")?;
@@ -241,7 +233,10 @@ fn retry_is_due(candidate: &AgentRequestRow, now: chrono::DateTime<chrono::Utc>)
     .is_none_or(|next_retry_at| next_retry_at <= now))
 }
 
-async fn redrive_one(node: &EmbeddedNode, candidate: &AgentRequestRow) -> Result<RedriveOutcome> {
+async fn redrive_one(
+    node: &std::sync::Arc<EmbeddedNode>,
+    candidate: &AgentRequestRow,
+) -> Result<RedriveOutcome> {
     let request_id = uuid::Uuid::new_v4().to_string();
     let request_id = &request_id;
     crate::config_client::ConfigAccess::transact_local_idempotent(
@@ -317,7 +312,7 @@ async fn redrive_in_transaction(
         return Ok(RedriveOutcome::Ineligible);
     };
     // Lean `CausalHop.continuation_preserves_hop`: the retried wake copies
-    // the session's current hop, like every same-session continuation.
+    // the session's current hop.
     let hop = crate::session::load_session_current_hop_in_txn(txn, node_did, session_id).await?;
     let response = txn
         .execute_local_response(&redrive_mutation(candidate, request_id, &retry_key, hop).await?)
@@ -332,8 +327,8 @@ async fn redrive_in_transaction(
             && successor.observed.request_id == created.request_id,
         "background wake successor is not the canonical request head"
     );
-    // Only advance the observation here. Reopening remains the claim owner's
-    // responsibility, and the observation never supplies retry authority.
+    // The observation never supplies retry authority; reopening remains the
+    // claim owner's responsibility.
     anyhow::ensure!(
         crate::session::advance_session_request_observation_in_txn(
             txn,

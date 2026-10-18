@@ -1,9 +1,3 @@
-//! Managed subprocess execution for native tools.
-//!
-//! The first production consumer is the native filesystem runner. The module
-//! owns process-group termination and output caps so request deadline/cancel
-//! handling can stop native traversal work instead of only dropping an awaiter.
-
 mod output;
 pub(crate) mod ownership;
 mod process;

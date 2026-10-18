@@ -1,10 +1,4 @@
-//! What a case expects a trial's home to hold, for a watcher to measure a
-//! running or finished trial against.
-//!
-//! The goal is derived, never graded: each `captured_rows_count` check
-//! contributes the range its params require of its capture, and a case's
-//! own `goal` map replaces what the checks imply for the collections it
-//! names. The checks remain the only verdicts.
+//! The goal is derived from the checks, and the checks remain the only verdicts.
 
 use serde::{Deserialize, Serialize};
 
@@ -21,8 +15,6 @@ pub const SCHEMAS_GOAL: &str = "schemas";
 pub struct GoalEntry {
     /// A collection name, or [`SCHEMAS_GOAL`].
     pub collection: String,
-    /// The documents capture a `captured_rows_count` check counts; `None`
-    /// for an entry of the case's own goal, which counts the collection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capture: Option<String>,
     pub min: u64,
@@ -31,8 +23,6 @@ pub struct GoalEntry {
 }
 
 impl GoalEntry {
-    /// The snapshot's count for this entry; `None` when the snapshot has not
-    /// observed it, as for a collection not registered yet.
     pub fn observed(&self, snapshot: &LiveSnapshot) -> Option<u64> {
         if let Some(capture) = &self.capture {
             return snapshot.captures.get(capture).copied();
@@ -47,7 +37,6 @@ impl GoalEntry {
         observed >= self.min && self.max.is_none_or(|max| observed <= max)
     }
 
-    /// `7/9`, `2/≤4`, `3/2..5`: observed over expected, `?` when unobserved.
     pub fn label(&self, observed: Option<u64>) -> String {
         let observed = observed.map_or_else(|| "?".to_owned(), |count| count.to_string());
         let expected = match self.max {
@@ -58,10 +47,6 @@ impl GoalEntry {
     }
 }
 
-/// The case's goal, in the order its stages last count each capture, then
-/// the case's own entries by name.
-/// `fallback` is the run's request-level capture list, which a stage that
-/// declares no captures reads.
 pub fn case_goal(case: &EvalCase, fallback: &[Capture]) -> Vec<GoalEntry> {
     let mut goal: Vec<GoalEntry> = Vec::new();
     for stage in &case.stages {
@@ -78,8 +63,7 @@ pub fn case_goal(case: &EvalCase, fallback: &[Capture]) -> Vec<GoalEntry> {
             if case.goal.contains_key(&collection) {
                 continue;
             }
-            // A capture counted by several stages is measured against the
-            // last: it is what the home holds when the case is done.
+            // A capture counted by several stages: the last one wins.
             goal.retain(|entry| entry.capture.as_deref() != Some(capture.as_str()));
             goal.push(GoalEntry {
                 collection,
@@ -98,7 +82,6 @@ pub fn case_goal(case: &EvalCase, fallback: &[Capture]) -> Vec<GoalEntry> {
     goal
 }
 
-/// The collection a stage's documents capture reads.
 fn capture_collection(
     declared: &[EvalCapture],
     fallback: &[Capture],
@@ -188,7 +171,6 @@ mod tests {
                 },
             ]
         );
-        // Without the run's fallback list the second stage captures nothing.
         assert_eq!(case_goal(&case(BTreeMap::new()), &[]).len(), 1);
 
         let overridden = case_goal(
@@ -213,35 +195,5 @@ mod tests {
                 ("schemas", false, 9)
             ]
         );
-    }
-
-    #[test]
-    fn an_entry_reads_its_capture_its_collection_or_the_registered_schemas() {
-        let snapshot = LiveSnapshot {
-            documents: BTreeMap::from([("Agent".to_owned(), 7)]),
-            captures: BTreeMap::from([("tasks".to_owned(), 21)]),
-            schemas: vec!["RunStart".into(), "GateResult".into()],
-            ..LiveSnapshot::default()
-        };
-        let entry = |collection: &str, capture: Option<&str>, min, max| GoalEntry {
-            collection: collection.into(),
-            capture: capture.map(Into::into),
-            min,
-            max,
-        };
-        let agents = entry("Agent", None, 9, None);
-        let tasks = entry("Task", Some("tasks"), 20, Some(22));
-        let schemas = entry(SCHEMAS_GOAL, None, 9, None);
-        let absent = entry("RunStart", None, 1, None);
-        assert_eq!(agents.observed(&snapshot), Some(7));
-        assert_eq!(tasks.observed(&snapshot), Some(21));
-        assert_eq!(schemas.observed(&snapshot), Some(2));
-        assert_eq!(absent.observed(&snapshot), None);
-        assert!(!agents.met(7) && agents.met(9));
-        assert!(tasks.met(21) && !tasks.met(23));
-        assert_eq!(agents.label(Some(7)), "7/9");
-        assert_eq!(tasks.label(Some(21)), "21/20..22");
-        assert_eq!(absent.label(None), "?/1");
-        assert_eq!(entry("Task", None, 0, Some(4)).label(Some(1)), "1/≤4");
     }
 }

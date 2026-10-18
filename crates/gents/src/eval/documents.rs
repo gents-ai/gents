@@ -1,11 +1,3 @@
-//! The fact-only eval documents and the few writes they admit.
-//!
-//! A run is frozen at creation and admits exactly one mutation: invalidation,
-//! itself written once. A trial's identity is written at provisioning and its
-//! completion exactly once. Verdicts are append-only; a re-grade appends a row
-//! naming the verdict it supersedes. Nothing here stores progress: it derives
-//! from the trials and the requests they reference.
-
 use anyhow::{Context, Result};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
@@ -34,24 +26,17 @@ pub struct SubjectRef {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CellSpec {
     pub cell_id: String,
-    /// Operator authored, like [`Invalidation::reason`]: the display name of the
-    /// cell, never model output.
+    /// Operator-authored display name, never model output.
     pub label: String,
     pub subject: SubjectRef,
     pub inference_profile_id: String,
 }
 
-/// Frozen at creation and never rewritten.
-///
-/// `EvalRun` carries no message bodies and is therefore eligible to replicate, so
-/// this value holds only ids, enum wire strings, counts, digests and timestamps.
-/// Model output, provider errors, transcripts, prompts and check detail never
-/// appear here; they belong to the local-audit `EvalVerdict` collection. The one
-/// enum is [`EvalSplit`]; every other non-numeric field is an id, a digest, an
-/// RFC 3339 timestamp, or the machine-authored [`RunOrigin::purpose`] — except
-/// [`CellSpec::label`], which is operator-authored free text, the same class as
-/// [`Invalidation::reason`]. Neither is model output, and nothing else in this
-/// value is free text.
+/// Replication safety: `EvalRun` carries no message bodies, only ids, enum wire
+/// strings, counts, digests and timestamps; model output, transcripts, prompts
+/// and check detail belong to the local-audit `EvalVerdict` collection. The
+/// only free-text fields are operator-authored: [`CellSpec::label`] and
+/// [`Invalidation::reason`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunOrigin {
     pub definition: DefinitionRef,
@@ -59,7 +44,7 @@ pub struct RunOrigin {
     pub case_ids: Vec<String>,
     pub cells: Vec<CellSpec>,
     pub trials_per_case: u32,
-    /// A trial's seed is `seed_base + trial_index`, shared by every cell.
+    /// A trial's seed is `seed_base + trial_index`.
     pub seed_base: i64,
     pub deadline_secs: Option<u64>,
     pub concurrency: u32,
@@ -69,17 +54,14 @@ pub struct RunOrigin {
     pub check_registry_version: String,
     pub source_commit: String,
     pub source_dirty: bool,
-    /// `"eval"`, `"pilot"` or `"optimization:<job_id>"`. Machine authored and constrained
-    /// by that convention: never operator prose and never model output.
+    /// Machine-authored (`"eval"`, `"pilot"` or `"optimization:<job_id>"`),
+    /// never operator prose or model output.
     pub purpose: String,
-    /// Consecutive infrastructure failures that stop the run. The runner
-    /// previously carried this in `run.json`; a row written before it existed
-    /// reads [`default_breaker_threshold`].
+    /// Consecutive infrastructure failures that stop the run.
     #[serde(default = "default_breaker_threshold")]
     pub breaker_threshold: u32,
 }
 
-/// The documented breaker threshold: five consecutive infrastructure failures.
 pub fn default_breaker_threshold() -> u32 {
     5
 }
@@ -88,7 +70,7 @@ pub fn default_breaker_threshold() -> u32 {
 pub struct Invalidation {
     pub at: String,
     pub by: String,
-    /// Operator authored. The one free-text value an eval run may replicate.
+    /// One free-text value an eval run may replicate.
     pub reason: String,
 }
 
@@ -109,29 +91,24 @@ pub struct TrialIdentity {
     pub cell_id: String,
     pub case_id: String,
     pub trial_index: u32,
-    /// A resumed trial is a new row with `attempt + 1`.
     pub attempt: u32,
     pub trial_node_did: String,
     /// With `trial_node_did`, the durable evidence reference.
     pub session_id: String,
     pub seed: i64,
-    /// A locator only. Never identity.
     pub home_hint: Option<String>,
 }
 
-/// How one stage of a case ended. Every field but the ids is a closed
-/// vocabulary, so no provider, tool or model text can reach a replicating row.
+/// Every field but the ids is a closed vocabulary, so no provider, tool or model
+/// text can reach a replicating row.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StageCompletion {
     pub stage_id: String,
     pub request_id: Option<String>,
-    /// The request's own lifecycle owner, not a restatement of it.
     pub terminal_state: Option<RequestLifecycleState>,
-    /// Why the stage failed, in the eval outcome vocabulary. A closed enum, so
-    /// a provider or tool error message cannot be smuggled in here.
     pub failure_kind: Option<OutcomeKind>,
-    /// Required alongside a `Provider` [`Self::failure_kind`], because a
-    /// candidate prompt can cause a rejection but not an outage.
+    /// Required alongside a `Provider` [`Self::failure_kind`]; a candidate
+    /// prompt can cause a rejection but not an outage.
     pub provider_reason: Option<ProviderReason>,
 }
 
@@ -150,23 +127,12 @@ pub struct TrialUsage {
     pub output_tokens: Option<u64>,
 }
 
-/// Written once, when the runner finishes a trial.
-///
-/// `EvalTrial` replicates to paired desktop clients, so this value carries only
-/// ids, enum wire strings, counts and timestamps. Model output, provider error
-/// text, transcripts, prompts and check detail never appear here; they belong
-/// to the local-audit `EvalVerdict` collection. The enums are all closed:
-/// [`RequestLifecycleState`] for terminal states, [`OutcomeKind`] and
-/// [`ProviderReason`] for a stage failure. There is no free-text field, so the
-/// rule is enforced by the types rather than by convention.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrialCompletion {
     pub ended_at: String,
     pub stages: Vec<StageCompletion>,
     pub usage: TrialUsage,
     pub anchor: Anchor,
-    /// Digest of the trial's captured evidence. The runner previously carried
-    /// this in `evidence.json`; absent when nothing was captured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_digest: Option<String>,
 }
@@ -241,8 +207,6 @@ fn now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
-/// Create one row. Every value travels as a GraphQL variable, so JSON payloads
-/// keep arbitrary keys and no value is ever interpolated into the document.
 async fn create(
     access: &ConfigAccess,
     operation: &'static str,
@@ -254,7 +218,7 @@ async fn create(
         "mutation($input: {name}MutationInputArg!) {{ create_{name}(input: $input) {{ _docID }} }}"
     );
     access
-        .transact(operation, |txn| {
+        .transact_write(operation, |txn| {
             let (variables, mutation) = (&variables, &mutation);
             Box::pin(async move {
                 txn.execute_with_variables(mutation, variables)
@@ -273,7 +237,7 @@ async fn rows(
     name: &'static str,
 ) -> Result<Vec<Value>> {
     let response = access
-        .transact(operation, |txn| {
+        .transact_readonly(operation, |txn| {
             let query = &query;
             Box::pin(async move { txn.execute(query).await })
         })
@@ -359,10 +323,8 @@ pub async fn load_run(
         .transpose()
 }
 
-/// The only mutation a run admits, and itself write-once: the read and the
-/// write share one transaction, so a second invalidation loses to
-/// [`AlreadyInvalidated`] and the first `{at, by, reason}` stands. Who
-/// invalidated a run first, and why, is the fact worth keeping.
+/// Write-once: read and write share one transaction, so a second invalidation
+/// loses to [`AlreadyInvalidated`] and the first `{at, by, reason}` stands.
 pub async fn invalidate_run(
     access: &ConfigAccess,
     owner: &str,
@@ -380,7 +342,7 @@ pub async fn invalidate_run(
     });
     let run_id_owned = run_id.to_owned();
     access
-        .transact("eval.invalidate_run", |txn| {
+        .transact_write("eval.invalidate_run", |txn| {
             let (filter, variables, run_id) = (&filter, &variables, &run_id_owned);
             Box::pin(async move {
                 let current = txn
@@ -437,8 +399,8 @@ pub async fn create_trial(
     .await
 }
 
-/// Write-once. The read and the write share one transaction, so a second
-/// completion loses to [`AlreadyCompleted`] rather than overwriting a fact.
+/// Write-once: read and write share one transaction, so a second completion
+/// loses to [`AlreadyCompleted`] rather than overwriting a fact.
 pub async fn complete_trial(
     access: &ConfigAccess,
     owner: &str,
@@ -453,7 +415,7 @@ pub async fn complete_trial(
     let variables = json!({ "input": { "completion": serde_json::to_value(completion)? } });
     let trial_id = trial_id.to_owned();
     access
-        .transact("eval.complete_trial", |txn| {
+        .transact_write("eval.complete_trial", |txn| {
             let (filter, variables, trial_id) = (&filter, &variables, &trial_id);
             Box::pin(async move {
                 let current = txn
@@ -527,9 +489,8 @@ pub async fn load_trials(
         .collect()
 }
 
-/// Append-only. `split` is the run's split: the runner, not the check, enforces
-/// that feedback exists only on train. A non-evidence verdict stores a null
-/// score, because nobody can average a fabricated number.
+/// Append-only. The runner, not the check, enforces that feedback exists only
+/// on train.
 pub async fn append_verdict(
     access: &ConfigAccess,
     owner: &str,
@@ -539,8 +500,6 @@ pub async fn append_verdict(
     if draft.feedback.is_some() && split != EvalSplit::Train {
         return Err(anyhow::Error::new(FeedbackOffTrain));
     }
-    // A grader that emits more than a perfect score is a bug. Clamping it would
-    // silently promote that bug to a perfect score, so refuse the row instead.
     if let Some(bp) = draft.score_bp {
         anyhow::ensure!(
             bp <= super::scoring::SCORE_BP_MAX,
@@ -609,9 +568,6 @@ pub async fn load_verdicts(
                 tier: serde_json::from_value(row["tier"].clone())
                     .context("decoding verdict tier")?,
                 kind: OutcomeKind::parse(&text("outcome_kind")).context("unknown outcome_kind")?,
-                // An unrecognized reason is a corrupt or future row, not an
-                // absent one. Failing loudly beats silently reclassifying a
-                // provider outage as evidence against the subject.
                 provider_reason: row["provider_reason"]
                     .as_str()
                     .map(|value| {
@@ -647,7 +603,7 @@ mod tests {
         ] {
             node.add_schema(sdl).await.unwrap();
         }
-        ConfigAccess::Local(node)
+        ConfigAccess::local(node)
     }
 
     fn origin(split: EvalSplit) -> RunOrigin {
@@ -721,8 +677,6 @@ mod tests {
         }
     }
 
-    /// Different from [`completion`] in every field, so a test that asserts the
-    /// first completion survived cannot pass by accident.
     fn rival_completion() -> TrialCompletion {
         TrialCompletion {
             ended_at: "2026-09-22T11:22:33Z".into(),
@@ -840,10 +794,6 @@ mod tests {
         );
     }
 
-    /// Empty lists and absent values are facts in their own right: a run that
-    /// selected no case, a trial that ended before any stage ran, a provider
-    /// that reported no token totals. They must survive the round trip as
-    /// themselves rather than arriving back as zero or as a missing row.
     #[tokio::test]
     async fn empty_lists_and_absent_values_round_trip() {
         let access = access().await;
@@ -978,8 +928,6 @@ mod tests {
         );
     }
 
-    /// Clamping would turn a grader bug into a perfect score, which is the one
-    /// number nobody may fabricate. The row is refused instead.
     #[tokio::test]
     async fn a_score_above_the_maximum_is_refused_and_writes_nothing() {
         let access = access().await;
@@ -1005,9 +953,6 @@ mod tests {
             .expect("a perfect score is still allowed");
     }
 
-    /// A reader that cannot name a persisted reason must not guess. Silently
-    /// reading `None` would reclassify a provider outage as evidence against
-    /// the subject, which is exactly the mistake the taxonomy exists to prevent.
     #[tokio::test]
     async fn an_unknown_persisted_provider_reason_fails_the_read() {
         let access = access().await;

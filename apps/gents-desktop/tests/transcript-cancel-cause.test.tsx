@@ -32,10 +32,6 @@ describe("Transcript cancel cause surfacing", () => {
     ];
     render(<MessageList timelineItems={items} />);
     expect(screen.getByText(/user cancelled/i)).toBeInTheDocument();
-    // Open the disclosure to verify CancelCauseDetails is mounted inside the body.
-    // Note: the badge is in summary which is always visible; details are in the body
-    // and only rendered when <details> is open. Native <details> defaults to closed,
-    // so details content is still in the DOM in jsdom — assert against it directly.
     expect(screen.getByText(/AgentRequest.interrupt_requested_at/)).toBeInTheDocument();
   });
 

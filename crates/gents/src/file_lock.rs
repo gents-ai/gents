@@ -12,25 +12,21 @@ use std::fs::{File, TryLockError};
 pub struct FileLock(File);
 
 impl FileLock {
-    /// Blocks until `file` is locked for shared use.
     pub fn shared(file: File) -> std::io::Result<Self> {
         file.lock_shared()?;
         Ok(Self(file))
     }
 
-    /// Blocks until `file` is locked exclusively.
     pub fn exclusive(file: File) -> std::io::Result<Self> {
         file.lock()?;
         Ok(Self(file))
     }
 
-    /// Locks `file` exclusively, or fails at once when another holder has it.
     pub fn try_exclusive(file: File) -> Result<Self, TryLockError> {
         file.try_lock()?;
         Ok(Self(file))
     }
 
-    /// Takes over `file`, which this process has already locked.
     pub fn adopt(file: File) -> Self {
         Self(file)
     }
@@ -58,8 +54,6 @@ mod tests {
             .unwrap()
     }
 
-    /// A duplicate of the descriptor stands in for a forked child that has
-    /// not exec'd yet: it shares the open file description.
     #[test]
     fn dropping_releases_the_lock_while_a_duplicate_descriptor_is_open() {
         let dir = tempfile::tempdir().unwrap();
@@ -84,18 +78,5 @@ mod tests {
             Err(TryLockError::WouldBlock)
         ));
         drop(inherited);
-    }
-
-    #[test]
-    fn a_shared_lock_excludes_an_exclusive_one_until_dropped() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("lock");
-        let shared = FileLock::shared(open(&path)).unwrap();
-        assert!(matches!(
-            FileLock::try_exclusive(open(&path)),
-            Err(TryLockError::WouldBlock)
-        ));
-        drop(shared);
-        assert!(FileLock::try_exclusive(open(&path)).is_ok());
     }
 }

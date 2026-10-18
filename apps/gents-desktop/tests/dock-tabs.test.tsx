@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { DockTabs } from "@/app/Dock";
 import { clearSurfaces, registerSurface } from "@/app/surfaces";
@@ -85,5 +85,111 @@ describe("the dock's tab strip", () => {
     fireEvent.pointerDown(tab("Started sessions"), { button: 0, pointerId: 1 });
     expect(tab("Started sessions")).toHaveFocus();
     expect(workspace.dock(SCOPE).active).toBe("workers");
+  });
+});
+
+describe("dragging a dock tab", () => {
+  const rect = Element.prototype.getBoundingClientRect;
+  beforeAll(() => {
+    Element.prototype.setPointerCapture = () => {};
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      const strip = this.parentElement
+        ? [...this.parentElement.querySelectorAll("[data-reorder-key]")]
+        : [];
+      const at = Math.max(0, strip.indexOf(this));
+      return {
+        left: at * 100,
+        top: 0,
+        width: 100,
+        height: 30,
+        right: at * 100 + 100,
+        bottom: 30,
+        x: at * 100,
+        y: 0,
+        toJSON: () => ({}),
+      } as DOMRect;
+    };
+  });
+  afterAll(() => {
+    Element.prototype.setPointerCapture = capture;
+    Element.prototype.getBoundingClientRect = rect;
+  });
+  beforeEach(() => {
+    clearSurfaces();
+    workspace.reset();
+    for (const [id, title] of [
+      ["trace", "Trace"],
+      ["workers", "Started sessions"],
+      ["diagnostics", "Diagnostics"],
+      ["notes", "Notes"],
+    ]) {
+      registerSurface({
+        id,
+        title,
+        icon: Nothing,
+        placements: ["dock"],
+        render: Nothing,
+      });
+      workspace.openSurface(SCOPE, id);
+    }
+    workspace.activate(SCOPE, "workers");
+  });
+
+  it("keeps the held tab when another closes, and drops it where it is let go", () => {
+    renderTabs();
+    const held = tab("Started sessions");
+    fireEvent.pointerDown(held, { button: 0, pointerId: 1, clientX: 150 });
+    fireEvent.pointerMove(held, { pointerId: 1, clientX: 250 });
+    act(() => workspace.closeTab(SCOPE, "trace"));
+    fireEvent.pointerMove(held, { pointerId: 1, clientX: 150 });
+    fireEvent.pointerUp(held, { pointerId: 1, clientX: 150 });
+    expect(workspace.dock(SCOPE).tabs).toEqual(["diagnostics", "workers", "notes"]);
+  });
+
+  it("moves nothing when the held tab itself closes", () => {
+    renderTabs();
+    const held = tab("Started sessions");
+    fireEvent.pointerDown(held, { button: 0, pointerId: 1, clientX: 150 });
+    fireEvent.pointerMove(held, { pointerId: 1, clientX: 250 });
+    act(() => workspace.closeTab(SCOPE, "workers"));
+    fireEvent.pointerUp(held, { pointerId: 1, clientX: 250 });
+    expect(workspace.dock(SCOPE).tabs).toEqual(["trace", "diagnostics", "notes"]);
+  });
+
+  it("goes on with the drag when a tab opens while one is held", () => {
+    registerSurface({
+      id: "extra",
+      title: "Extra",
+      icon: Nothing,
+      placements: ["dock"],
+      render: Nothing,
+    });
+    renderTabs();
+    const held = tab("Started sessions");
+    fireEvent.pointerDown(held, { button: 0, pointerId: 1, clientX: 150 });
+    fireEvent.pointerMove(held, { pointerId: 1, clientX: 250 });
+    act(() => workspace.openSurface(SCOPE, "extra"));
+    fireEvent.pointerUp(held, { pointerId: 1, clientX: 250 });
+    expect(workspace.dock(SCOPE).tabs).toEqual([
+      "trace",
+      "diagnostics",
+      "workers",
+      "notes",
+      "extra",
+    ]);
+  });
+
+  it("still moves the held tab when nothing else changed", () => {
+    renderTabs();
+    const held = tab("Started sessions");
+    fireEvent.pointerDown(held, { button: 0, pointerId: 1, clientX: 150 });
+    fireEvent.pointerMove(held, { pointerId: 1, clientX: 250 });
+    fireEvent.pointerUp(held, { pointerId: 1, clientX: 250 });
+    expect(workspace.dock(SCOPE).tabs).toEqual([
+      "trace",
+      "diagnostics",
+      "workers",
+      "notes",
+    ]);
   });
 });

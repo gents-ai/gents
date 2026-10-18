@@ -1,5 +1,3 @@
-//! Invocation-scoped access to the owned tool dispatch boundary.
-
 use std::sync::Arc;
 
 use crate::tool::BoxFuture;

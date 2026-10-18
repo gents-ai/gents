@@ -5,13 +5,9 @@ type Frame = {
   boxesInView: number;
   rows: number;
   height: number;
-  /** how far the content is pulled up over older rows kept out of sight */
   hidden: number;
 };
 
-/* A long transcript draws only the rows near the view; the rest are boxes
-   of their own height. A reader scrolling through it never sees a box:
-   each row is drawn again while it is still well off screen. */
 test("a long transcript shows no undrawn row while the reader scrolls up", async ({
   page,
 }, testInfo) => {
@@ -19,8 +15,6 @@ test("a long transcript shows no undrawn row while the reader scrolls up", async
     !["webkit-desktop", "chromium-desktop"].includes(testInfo.project.name),
     "one layout per engine",
   );
-  /* scrolls through every page of the session; WebKit on Linux animates
-     each wheel's scroll, so this outlasts the default limit there */
   test.slow();
   await page.setViewportSize({ width: 1500, height: 900 });
   await gotoHarness(page, "mobile-performance");
@@ -28,7 +22,6 @@ test("a long transcript shows no undrawn row while the reader scrolls up", async
   const panel = page.getByTestId("transcript-panel");
   await panel.getByText("stream-start").last().waitFor();
 
-  /* every frame: how many boxes there are, and whether any is in view */
   await page.evaluate(() => {
     const scroller = document
       .querySelector('[data-testid="transcript-panel"]')!
@@ -55,12 +48,10 @@ test("a long transcript shows no undrawn row while the reader scrolls up", async
   });
 
   await panel.hover();
-  /* up through every page of the session, as a reader with a wheel */
   for (let i = 0; i < 40; i += 1) {
     await page.mouse.wheel(0, -1500);
     await page.waitForTimeout(150);
   }
-  /* and back down to the foot */
   for (let i = 0; i < 40; i += 1) {
     await page.mouse.wheel(0, 1500);
     await page.waitForTimeout(100);
@@ -72,8 +63,6 @@ test("a long transcript shows no undrawn row while the reader scrolls up", async
   );
   expect(Math.max(...frames.map((f) => f.boxes))).toBeGreaterThan(50);
   expect(frames.filter((f) => f.boxesInView > 0)).toEqual([]);
-  /* a box is its row's height, so swapping rows never changes the page's
-     height; only a page of older rows landing, or coming out of hiding, does */
   const resized = frames.filter(
     (f, i) =>
       i > 0 &&
@@ -84,8 +73,6 @@ test("a long transcript shows no undrawn row while the reader scrolls up", async
   expect(resized).toEqual([]);
 });
 
-/* A jump straight to a far part of the session (the scrollbar dragged or
-   clicked, Home, End) lands on rows drawn in the same frame, not boxes. */
 test("a jump to a far part of a long transcript shows no undrawn row", async ({
   page,
 }, testInfo) => {
@@ -93,8 +80,6 @@ test("a jump to a far part of a long transcript shows no undrawn row", async ({
     !["webkit-desktop", "chromium-desktop"].includes(testInfo.project.name),
     "one layout per engine",
   );
-  /* scrolls through every page of the session; WebKit on Linux animates
-     each wheel's scroll, so this outlasts the default limit there */
   test.slow();
   await page.setViewportSize({ width: 1500, height: 900 });
   await gotoHarness(page, "mobile-performance");
@@ -102,7 +87,6 @@ test("a jump to a far part of a long transcript shows no undrawn row", async ({
   const panel = page.getByTestId("transcript-panel");
   await panel.getByText("stream-start").last().waitFor();
   await panel.hover();
-  /* older pages first, so most of the session is boxes */
   for (let i = 0; i < 40; i += 1) {
     await page.mouse.wheel(0, -1500);
     await page.waitForTimeout(150);

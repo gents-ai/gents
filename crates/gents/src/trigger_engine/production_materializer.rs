@@ -1,22 +1,3 @@
-//! Production `MaterializerHandle` used by the `TriggerEngine` at runtime.
-//!
-//! Bridges the engine's trigger-neutral materialize/concurrency API to the
-//! concrete lifecycle + DefraDB surface:
-//!
-//! * `materialize` enqueues a pending `AgentRequest` with populated
-//!   `TriggerLineage` so the normal watcher/router/daemon path claims and
-//!   executes it while preserving `caused_by_trigger_id` /
-//!   `caused_by_trigger_kind`.
-//! * `has_active_runtime_request_for_trigger` performs a GraphQL query against
-//!   `AgentRequest`, filtering on the owner-scoped logical trigger and
-//!   the active runtime lifecycle states (`pending`, `claimed`, `processing`).
-//! * `supersede_active_runtime_requests_for_trigger` transitions every matching
-//!   active runtime request to `lifecycle_state = superseded`.
-//!
-//! Agent lookup happens against a `watch::Receiver<Arc<ActiveRuntimeSnapshot>>`
-//! so the materializer always sees the latest resolved snapshot without
-//! needing to re-query the DB at fire time.
-
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -89,7 +70,7 @@ impl ProductionMaterializer {
 }
 
 pub(crate) async fn recover_workspace_binding_pending_requests(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
 ) -> Result<usize> {
     let query = format!(
@@ -268,8 +249,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 None => None,
             };
             let mut workspace = graph.map(|resolved| resolved.lineage).unwrap_or(explicit);
-            crate::workspace::stamp_workspace_lineage(node.as_ref(), &node_did, &mut workspace)
-                .await?;
+            crate::workspace::stamp_workspace_lineage(&node, &node_did, &mut workspace).await?;
             workspace.require_authority_if_workspace_id()?;
             let lineage = TriggerLineage {
                 trigger_id: trigger_id.clone(),
@@ -283,8 +263,8 @@ impl MaterializerHandle for ProductionMaterializer {
             let (enqueued, conversation_title) = if let Some(prepared) = &delivery {
                 let fire = &prepared.receipt;
                 let title = task_session_title(&task_label);
-                // A fire into an existing session is written under the
-                // requester that owns it (Lean `Enrollment.runtimeRequesterScope`).
+                // Written under the requester that owns the session
+                // (Lean `Enrollment.runtimeRequesterScope`).
                 let session_scope = if prepared.target_existing
                     && matches!(trigger_kind, TriggerKind::Event | TriggerKind::Schedule)
                 {
@@ -308,7 +288,7 @@ impl MaterializerHandle for ProductionMaterializer {
                     Some(retry_key), session_scope.as_deref(), trigger_doc_id.as_deref(),
                 ).await?;
                 let admission = crate::lifecycle::write_trigger_delivery(
-                    node.as_ref(),
+                    &node,
                     runtime_actor,
                     prepared,
                     &create,
@@ -336,7 +316,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 )
                 .await?;
                 let enqueued = crate::goal::submit_goal_backed_request_local(
-                    node.as_ref(),
+                    &node,
                     runtime_actor,
                     &node_did,
                     &identity.session_id,
@@ -364,7 +344,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 let conversation_title = task_session_title(&task_label);
                 let enqueued =
                     write_pending_agent_request_with_lineage_workspace_and_conversation_title(
-                        node.as_ref(),
+                        &node,
                         runtime_actor,
                         &node_did,
                         &agent_id,
@@ -383,15 +363,14 @@ impl MaterializerHandle for ProductionMaterializer {
             };
             if workspace_ref.is_some() {
                 crate::workspace::materialize_workspace_binding(
-                    node.as_ref(),
+                    &node,
                     &enqueued.request_id,
                     &enqueued.doc_id,
                     &node_did,
                     &workspace,
                 )
                 .await?;
-                crate::lifecycle::activate_workspace_bound_request(node.as_ref(), &enqueued.doc_id)
-                    .await?;
+                crate::lifecycle::activate_workspace_bound_request(&node, &enqueued.doc_id).await?;
             }
             tracing::info!(
                 task_id = %task_id,
@@ -449,22 +428,13 @@ impl MaterializerHandle for ProductionMaterializer {
             .unwrap_or_default();
         let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
         Box::pin(async move {
-            // Canonical owner/trigger match plus active runtime lifecycle state.
-            // The DID scope is load-bearing (#605): the replicated store also
-            // holds other agents' requests for the same human-chosen trigger
-            // id, and those must never gate this agent's fires.
-            //
-            // Rows are fetched (not just existence-checked) because a claimed
-            // or processing row past its persisted claim deadline is
-            // terminal-in-effect and must not gate: the owning loop enforces
-            // the same deadline in-memory (`await_with_request_deadline`
-            // aborts the attempt), so only a wedged orphan — e.g. an owner
-            // whose store was rebuilt — can sit past-deadline in an active
-            // state, and such a row would otherwise gate forever. Expiry is
-            // evaluated here rather than in the filter to avoid relying on
-            // lexicographic string comparison over RFC3339 in the store. Do
-            // not cap this result: a pile-up of expired orphan rows must not
-            // hide a later live row and let Serial double-fire.
+            // The DID scope is load-bearing (#605): the store also holds
+            // other agents' requests for the same trigger id. Rows are
+            // fetched (not existence-checked) because a claimed/processing
+            // row past its persisted deadline must not gate; expiry is
+            // evaluated here, not via lexicographic RFC3339 in the filter,
+            // and the result is never capped (a pile-up of expired rows
+            // must not hide a later live row and let Serial double-fire).
             let query = format!(
                 r#"query {{
                     AgentRequest(
@@ -500,161 +470,54 @@ impl MaterializerHandle for ProductionMaterializer {
     ) -> Pin<Box<dyn std::future::Future<Output = Result<usize>> + Send + '_>> {
         let node = self.node.clone();
         let owner = node_did.to_owned();
-        let escaped_node_did = escape_graphql_string(node_did);
-        let escaped_trigger_id = escape_graphql_string(trigger_id);
-        let request_exclusion_filter = excluded_request_id
-            .map(escape_graphql_string)
-            .map(|value| format!(r#", request_id: {{ _neq: "{value}" }}"#))
-            .unwrap_or_default();
+        let trigger_id = trigger_id.to_owned();
+        let excluded = excluded_request_id.map(str::to_owned);
         Box::pin(async move {
-            let now = chrono::Utc::now().to_rfc3339();
-            let terminalized_at = escape_graphql_string(&now);
-            let mutation = format!(
-                r#"mutation {{
-                    update_AgentRequest(
-                        filter: {{
-                            node_did: {{ _eq: "{node_did}" }},
-                            caused_by_trigger_id: {{ _eq: "{trigger_id}" }}{request_exclusion_filter},
-                            lifecycle_state: {{ _eq: "pending" }}
-                        }},
-                        input: {{
-                            lifecycle_state: "superseded",
-                            terminalized_at: "{terminalized_at}",
-                            terminal_redrive_attempts: 0
-                        }}
-                    ) {{ _docID request_id }}
-                }}"#,
-                node_did = escaped_node_did,
-                trigger_id = escaped_trigger_id,
-                request_exclusion_filter = request_exclusion_filter,
-            );
-            let resp = crate::config_client::ConfigAccess::transact_local(
-                node.as_ref(),
+            crate::config_client::ConfigAccess::transact_local_write(
+                &node,
                 None,
-                "supersede_active_runtime_requests_for_trigger",
+                "trigger.supersede_requests",
                 |txn| {
-                    let mutation = &mutation;
                     let owner = &owner;
-                    let now = &now;
+                    let trigger_id = &trigger_id;
+                    let excluded = excluded.as_deref();
                     Box::pin(async move {
-                        let response = txn.execute_local_response(mutation).await?;
-                        if let Some(rows) = response
-                            .data
-                            .as_ref()
-                            .and_then(|data| data["update_AgentRequest"].as_array())
-                        {
-                            for row in rows {
-                                if let Some(request_id) = row["request_id"].as_str() {
-                                    crate::trigger_engine::durable::publish_request_outcome(
-                                        txn,
-                                        owner,
-                                        request_id,
-                                        "superseded",
-                                        "newer trigger fire",
-                                        now,
-                                    )
-                                    .await?;
-                                }
-                            }
-                        }
-                        Ok(response)
+                        crate::lifecycle::materialize::supersede_trigger_requests_in_txn(
+                            txn, owner, trigger_id, excluded,
+                        )
+                        .await
                     })
                 },
             )
-            .await?;
-            let mut count = resp
-                .data
-                .as_ref()
-                .and_then(|data| data.get("update_AgentRequest"))
-                .and_then(|rows| rows.as_array())
-                .map(|rows| rows.len())
-                .unwrap_or(0);
-            // Claims racing the pending CAS above are observed here. Every
-            // post-claim cancellation belongs to the execution lease owner.
-            let active = RequestLifecycleState::graphql_list([
-                RequestLifecycleState::Claimed,
-                RequestLifecycleState::Processing,
-            ]);
-            let query = format!(
-                r#"{{ AgentRequest(filter: {{
-                node_did: {{ _eq: "{escaped_node_did}" }},
-                caused_by_trigger_id: {{ _eq: "{escaped_trigger_id}" }}{request_exclusion_filter},
-                lifecycle_state: {{ _in: {active} }}
-            }}) {{ _docID request_id node_did requester_did agent_id session_id lifecycle_state
-                execution_generation execution_lease_expires_at
-            }} }}"#
-            );
-            // A lease renewal may invalidate the observed tuple. Read
-            // again before allowing LatestOnly to dispatch its replacement.
-            let mut converged = false;
-            const EXECUTION_REVOCATION_ATTEMPTS: usize = 4;
-            for _ in 0..EXECUTION_REVOCATION_ATTEMPTS {
-                let result = graphql_with_transaction_retry(
-                    &node,
-                    &query,
-                    "loading executions to supersede",
-                )
-                .await?;
-                let active_rows = rows::<AgentRequestRow>(&result, "AgentRequest")?;
-                if active_rows.is_empty() {
-                    converged = true;
-                    break;
-                }
-                for row in active_rows {
-                    if crate::lifecycle::revoke_execution_preserving_output(
-                        node.as_ref(),
-                        &row,
-                        crate::lifecycle::RequestTerminalOutcome::Superseded,
-                        "superseded by a newer trigger fire",
-                    )
-                    .await?
-                        == crate::lifecycle::TerminalizeResult::Won
-                    {
-                        count += 1;
-                    }
-                }
-            }
-            anyhow::ensure!(
-                converged,
-                "execution renewal raced LatestOnly revocation; retry trigger dispatch"
-            );
-            if count > 0 {
-                tracing::info!(
-                    node_did = %escaped_node_did,
-                    trigger_id = %escaped_trigger_id,
-                    count,
-                    "superseded active runtime AgentRequests for trigger"
-                );
-            }
-            Ok(count)
+            .await
         })
     }
 
-    fn recover_event_fire(
+    fn recover_admitted_fire(
         &self,
         identity: &gents_protocol::trigger_delivery::FireIdentity,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + '_>> {
         let identity = identity.clone();
         Box::pin(async move {
             let key = crate::trigger_engine::durable::fire_key(&identity);
-            crate::config_client::ConfigAccess::transact_local(
-                self.node.as_ref(), Some(self.runtime_actor()?), "trigger.recover_admitted_fire",
+            crate::config_client::ConfigAccess::transact_local_readonly(
+                &self.node, Some(self.runtime_actor()?), "trigger.recover_admitted_fire",
                 |txn| { let key = key.clone(); let identity = identity.clone(); Box::pin(async move {
                     let result = txn.execute(&format!(
                         "{{ TriggerFire(filter: {{fire_key: {{_eq: \"{}\"}}}}, limit: 2) {{request_id}} }}",
                         escape_graphql_string(&key),
                     )).await?;
                     let receipts = result["data"]["TriggerFire"].as_array()
-                        .context("event recovery omitted receipt rows")?;
-                    anyhow::ensure!(receipts.len() <= 1, "event fire receipt is not unique");
+                        .context("fire recovery omitted receipt rows")?;
+                    anyhow::ensure!(receipts.len() <= 1, "fire receipt is not unique");
                     let Some(receipt) = receipts.first() else { return Ok(None); };
                     let request_id = identity.request_id();
-                    anyhow::ensure!(receipt["request_id"].as_str() == Some(request_id.as_str()), "event receipt request identity mismatch");
+                    anyhow::ensure!(receipt["request_id"].as_str() == Some(request_id.as_str()), "fire receipt request identity mismatch");
                     let result = txn.execute(&format!(
                         "{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}, limit: 2) {{_docID}} }}",
                         escape_graphql_string(&identity.owner_did), escape_graphql_string(&request_id),
                     )).await?;
-                    anyhow::ensure!(result["data"]["AgentRequest"].as_array().is_some_and(|rows| rows.len() == 1), "event receipt has no unique admitted request");
+                    anyhow::ensure!(result["data"]["AgentRequest"].as_array().is_some_and(|rows| rows.len() == 1), "fire receipt has no unique admitted request");
                     Ok(Some(request_id))
                 }) },
             ).await

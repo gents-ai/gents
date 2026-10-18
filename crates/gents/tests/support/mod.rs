@@ -295,8 +295,6 @@ pub async fn create_request_for_agent_with_signed_fields(
     first_row::<DocIdRow>(&resp, "AgentRequest").doc_id
 }
 
-/// Resolve a logical request id only at test setup boundaries, rejecting
-/// ambiguous fixtures instead of silently selecting an arbitrary document.
 pub async fn exact_request_doc_id(node: &EmbeddedNode, request_id: &str) -> String {
     let request_id = escape_graphql_string(request_id);
     let query = format!(
@@ -484,8 +482,6 @@ pub fn build_request(
     }
 }
 
-/// Canonical target SDL fixture. This specifies the nested schema needed by the
-/// runtime layer; it does not implement or claim to test a storage conversion.
 pub async fn create_session_document(
     node: &EmbeddedNode,
     session: &gents_protocol::session::AgentSession,
@@ -506,8 +502,6 @@ pub async fn create_session_document(
     );
 }
 
-/// Seed an observation from a real authoritative request row; this does not run
-/// a transition or stand in for the runtime observation owner.
 pub async fn seed_session_observation_from_request(
     node: &EmbeddedNode,
     session_id: &str,
@@ -645,7 +639,7 @@ pub async fn create_agent_message_in_scope(
     content: &str,
     timestamp: &str,
 ) {
-    use gents::defra_node::{ExecuteRetryPolicy, QueryRequest};
+    use gents::defra_node::QueryRequest;
     use gents::session::canonical_rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
@@ -706,10 +700,9 @@ pub async fn create_agent_message_in_scope(
         created_at: timestamp.into(),
     };
     let segment_response = node
-        .execute_request_with_retry(
+        .execute_request(
             QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                 .with_variables(output_segment_create_variables(&segment).unwrap()),
-            ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(
@@ -755,10 +748,9 @@ pub async fn create_agent_message_in_scope(
         created_at: timestamp.into(),
     };
     let response = node
-        .execute_request_with_retry(
+        .execute_request(
             QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                 .with_variables(transcript_message_create_variables(&message).unwrap()),
-            ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(
@@ -865,8 +857,6 @@ pub async fn create_compaction_entry(
 }
 
 pub async fn create_agent(node: &EmbeddedNode, agent_id: &str, node_did: &str) {
-    // No context means literal-empty instructions/tools and default compaction.
-    // Provider/model selection has one owner: the referenced inference profile.
     let profile_id = format!("{agent_id}-inference");
     let profile: gents::document_config::InferenceProfile = serde_json::from_value(
         serde_json::json!({"node_did": node_did, "profile_id": profile_id,
@@ -933,8 +923,6 @@ where
         })
 }
 
-/// Drive fixture requests through the production atomic begin transition.
-/// Fixtures that write streamed content must retain their own writer instead.
 pub async fn begin_owned_execution(
     lifecycle: &mut gents::RequestLifecycle,
     node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
@@ -948,10 +936,6 @@ pub async fn begin_owned_execution(
     Ok(lifecycle.request().doc_id.clone())
 }
 
-/// Complete one already-admitted pending request through the real execution,
-/// provider-publication, and terminal-selection owners. Integration fixtures
-/// use this instead of writing canonical segment/header rows or guessing an
-/// execution generation.
 pub async fn complete_pending_request_with_canonical_output(
     db: &TestDb,
     row: gents_protocol::row::AgentRequestRow,
@@ -986,7 +970,7 @@ pub async fn complete_pending_request_with_canonical_output(
         )],
     )?;
     fixtures::bind_agent_backend(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         &agent_id,
         &backend_id,

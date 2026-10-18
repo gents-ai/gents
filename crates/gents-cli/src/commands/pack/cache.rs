@@ -1,9 +1,3 @@
-//! The asset-cache directory tree, `<home>/packs/.materialized/<namespace>/<name>/<digest>/`, and its
-//! lock and prune/release rules. `gents pack prune` and `gents pack remove`
-//! share [`release_cache_root`] for the marker/`runs/` retention rule, and
-//! [`lock_exclusive`] for the per-pack cache lock, so the two cannot diverge
-//! on when a cache version is safe to touch or delete.
-
 use std::fs::File;
 use std::path::Path;
 
@@ -18,6 +12,7 @@ use crate::cli::PackPruneArgs;
 const CACHE_MARKER: &str = ".gents-pack-cache-v1";
 const CACHE_LOCK: &str = ".cache.lock";
 
+#[cfg(test)]
 pub(super) fn write_cache_marker(root: &Path) -> Result<()> {
     let marker = root.join(CACHE_MARKER);
     if marker.exists() {
@@ -56,10 +51,9 @@ fn prune_stale_asset_cache(parent: &Path, current: &Path) -> Result<Vec<String>>
         if name.len() != 64 || !name.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             continue;
         }
-        // The caller holds the exclusive per-pack lock, so no Gents scenario
-        // can acquire or use any sibling cache root while the probe and
-        // removal occur. Shares `release_cache_root`'s marker/`runs/` rule so
-        // the two cannot diverge on when a cache version is safe to delete.
+        // The caller holds the exclusive per-pack lock, so no scenario can
+        // acquire or use any sibling cache root while the probe and removal
+        // occur.
         if let CacheRelease::Removed = release_cache_root(&root, || Ok(()))? {
             removed.push(name.to_owned());
         }
@@ -68,36 +62,39 @@ fn prune_stale_asset_cache(parent: &Path, current: &Path) -> Result<Vec<String>>
     Ok(removed)
 }
 
-/// [`super::asset_cache_root`] from a pack's coordinate and digest directly, for a
-/// caller (`gents pack remove`) that only has a [`gents::pack::HomePackInstall`]
-/// record, not a resolved [`PackSource`].
 pub(super) fn asset_cache_root_for(
     home: &Path,
     namespace: &str,
     name: &str,
     digest: &str,
 ) -> Result<std::path::PathBuf> {
-    anyhow::ensure!(
-        gents::pack::is_valid_pack_name(namespace) && gents::pack::is_valid_pack_name(name),
-        "invalid pack coordinate {namespace}/{name}"
-    );
-    let hash = gents::pack_archive::digest_hex(digest)?;
-    Ok(home
-        .join(gents::home::PACKS_DIR_NAME)
-        .join(".materialized")
-        .join(namespace)
-        .join(name)
-        .join(hash))
+    gents::pack::materialize::cache_root(home, namespace, name, digest)
 }
 
-/// A receipt whose path omits the namespace needs its verified pack contents
-/// to establish ownership. Its recorded parent remains the lock owner; those
-/// paths are never included in namespace-scoped pruning.
-pub(super) fn release_recorded_cache(
+pub(super) struct PreparedCacheRelease {
+    root: std::path::PathBuf,
+    disposition: CacheRelease,
+    _lock: Option<FileLock>,
+}
+
+impl PreparedCacheRelease {
+    pub(super) fn finish(self) -> Result<CacheRelease> {
+        match self.disposition {
+            CacheRelease::Removed => {
+                std::fs::remove_dir_all(&self.root)
+                    .with_context(|| format!("removing {}", self.root.display()))?;
+                Ok(CacheRelease::Removed)
+            }
+            CacheRelease::Retained(reason) => Ok(CacheRelease::Retained(reason)),
+        }
+    }
+}
+
+pub(super) fn prepare_recorded_cache(
     home: &Path,
     coordinate: &str,
     record: &HomePackInstall,
-) -> Result<CacheRelease> {
+) -> Result<PreparedCacheRelease> {
     anyhow::ensure!(
         record.coordinate == coordinate,
         "pack receipt coordinate mismatch"
@@ -116,10 +113,14 @@ pub(super) fn release_recorded_cache(
     );
     let root = home.join(recorded);
     let Some(parent) = root.parent().filter(|parent| parent.is_dir()) else {
-        return Ok(CacheRelease::Retained("already absent"));
+        return Ok(PreparedCacheRelease {
+            root,
+            disposition: CacheRelease::Retained("already absent"),
+            _lock: None,
+        });
     };
-    let _lock = lock_exclusive(parent)?;
-    release_cache_root(&root, || {
+    let lock = lock_exclusive(parent)?;
+    let disposition = cache_root_disposition(&root, || {
         if recorded == unscoped {
             let archive = gents::pack_store::PackStore::new(home).open(&record.digest)?;
             anyhow::ensure!(
@@ -136,12 +137,14 @@ pub(super) fn release_recorded_cache(
             }
         }
         Ok(())
+    })?;
+    Ok(PreparedCacheRelease {
+        root,
+        disposition,
+        _lock: Some(lock),
     })
 }
 
-/// Takes the exclusive lock on a pack's cache parent directory, the same
-/// lock [`prune`] takes, failing loudly rather than blocking when another
-/// pack operation already holds it.
 pub(super) fn lock_exclusive(parent: &Path) -> Result<FileLock> {
     match FileLock::try_exclusive(cache_lock(parent)?) {
         Ok(lock) => Ok(lock),
@@ -152,19 +155,26 @@ pub(super) fn lock_exclusive(parent: &Path) -> Result<FileLock> {
     }
 }
 
-/// What [`release_cache_root`] did with one cache version directory.
 pub(super) enum CacheRelease {
     Removed,
     Retained(&'static str),
 }
 
-/// Removes `root` when it exists, carries gents' own cache marker, and holds
-/// no `runs/` (operator-owned run history). [`prune_stale_asset_cache`] calls
-/// this directly so the two cannot diverge on when a cache version is safe to
-/// delete. A digest directory that is already gone (for example `gents pack
-/// prune` removed it after a newer version became current) is reported as
-/// already absent, never as "not created by gents".
 fn release_cache_root(
+    root: &Path,
+    check_owner: impl FnOnce() -> Result<()>,
+) -> Result<CacheRelease> {
+    match cache_root_disposition(root, check_owner)? {
+        CacheRelease::Removed => {
+            std::fs::remove_dir_all(root)
+                .with_context(|| format!("removing {}", root.display()))?;
+            Ok(CacheRelease::Removed)
+        }
+        retained => Ok(retained),
+    }
+}
+
+fn cache_root_disposition(
     root: &Path,
     check_owner: impl FnOnce() -> Result<()>,
 ) -> Result<CacheRelease> {
@@ -178,13 +188,9 @@ fn release_cache_root(
         return Ok(CacheRelease::Retained("holds run history"));
     }
     check_owner()?;
-    std::fs::remove_dir_all(root).with_context(|| format!("removing {}", root.display()))?;
     Ok(CacheRelease::Removed)
 }
 
-/// Resolves through the same path `install` does: an explicit local pack,
-/// else an installed record's digest if the store still holds it, else the
-/// store's name index, else the registry. No bundled fallback.
 pub(super) async fn prune(args: PackPruneArgs) -> Result<()> {
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let pack = super::resolve_pack_source(&args.package, None, &home).await?;
@@ -229,9 +235,7 @@ mod tests {
         for (namespace, version) in [("acme", "1.0.0"), ("acme", "2.0.0"), ("zeta", "1.0.0")] {
             let dir = assets_pack_dir(namespace, "tools", version);
             let pack = local_pack_source(dir.path(), home.path());
-            let root = super::super::asset_cache_root(home.path(), &pack).unwrap();
-            super::super::materialize(&pack, &root).unwrap();
-            write_cache_marker(&root).unwrap();
+            let (root, _lease) = super::super::materialize_cached_pack(home.path(), &pack).unwrap();
             sources.push((pack, root));
         }
         let unscoped = home.path().join("packs/tools").join("a".repeat(64));
@@ -304,7 +308,6 @@ mod tests {
     #[tokio::test]
     async fn graph_pack_prune_rejects_without_creating_a_cache_tree() {
         let home = tempfile::tempdir().unwrap();
-        // Store the fixture first, the way an install would have.
         let _ = super::super::test_support::fixture_pack_source("review_graph", home.path());
         let error = prune(PackPruneArgs {
             package: "fixture/review_graph".to_owned(),

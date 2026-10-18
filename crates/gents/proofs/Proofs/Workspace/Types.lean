@@ -146,14 +146,11 @@ theorem fromDefraDB_toDefraDB (p : CreationPolicy) :
 
 end CreationPolicy
 
-/-- Exact canonical repository-relative paths. Compatibility is only authored by
-an explicit predecessor-schema migration, never fresh request admission. -/
 inductive WorkspacePathCapability where
   | exactPaths (paths : List String)
   | unrestrictedCompatibility
   deriving DecidableEq, Repr
 
-/-- Logical workspace identity. Replicated rows never carry a host path. -/
 structure IsolatedWorkspace where
   workspaceId : String
   workUnitId : String

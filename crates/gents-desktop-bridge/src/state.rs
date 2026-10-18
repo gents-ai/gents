@@ -8,27 +8,12 @@ use tauri::async_runtime::{spawn, JoinHandle};
 use tauri::{AppHandle, Emitter, Runtime, State};
 use tokio::sync::watch;
 
-use crate::config::{
-    AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, NodeHomePolicy,
-};
+use crate::config::{BootstrapPolicy, BridgeConfig, HomePolicy, NodeHomePolicy};
 use crate::snapshot::projection::SnapshotGrants;
 use crate::types::ClientUpdateEvent;
 
-#[derive(Debug, Clone)]
-pub struct ResolvedBridgePolicy {
-    pub desktop_paths: DesktopPaths,
-    pub node_home: Option<PathBuf>,
-    pub bootstrap: BootstrapPolicy,
-    pub app_meta: AppMeta,
-    pub snapshot_grants: SnapshotGrants,
-    pub managed_server: ManagedServerPolicy,
-    pub store_key_custody: gents::store_key::StoreKeyCustodyChoice,
-}
+pub use crate::config::ResolvedBridgePolicy;
 
-/// Outcome of a single-flight `desktop_client_start`.
-///
-/// Concurrent start callers share one in-flight open of the embedded node so a
-/// second `NodeBuilder` cannot race the first for the persistent store.
 #[derive(Debug, Clone)]
 pub enum ClientStartProgress {
     Pending,
@@ -37,243 +22,53 @@ pub enum ClientStartProgress {
 }
 
 pub struct DesktopAppState {
+    pub(crate) app_exit: Arc<crate::app_exit::AppExitState>,
     pub bridge: Mutex<DesktopBridge>,
-    /// Owns the desktop store for install, shutdown, init and reset. The
-    /// detached starter holds it from before the store opens until the core is
-    /// installed, or, after a start that stalled past its bound, until that
-    /// late core is closed.
     pub client_lifecycle: Arc<tokio::sync::Mutex<()>>,
-    /// Serializes managed server start/stop operations. Startup intentionally
-    /// spans provisioning and server readiness, so the state flag alone is
-    /// not sufficient to prevent two callers from racing the port bind.
     pub managed_server_lifecycle: tokio::sync::Mutex<()>,
     pub policy: ResolvedBridgePolicy,
     pub managed_server: tokio::sync::Mutex<ManagedServerState>,
-    /// OAuth credentials issued by a completed provider sign-in whose save to
-    /// the node's canonical configuration failed. Held only in memory so the
-    /// user can retry the save without repeating the browser login.
-    pub pending_oauth_credentials: PendingOAuthCredentials,
+    pub pending_oauth_credentials: Arc<PendingOAuthCredentials>,
 }
 
-/// Node DID, credential provider and the sign-in's account identity.
-type CredentialKey = (String, String, String);
-
-/// A credential issued by a completed sign-in, ordered by issuance for its
-/// (node DID, credential provider) key.
-pub struct IssuedOAuthCredential {
-    sequence: u64,
-    credential: gents::oauth_credential::OAuthCredential,
-}
-
-impl IssuedOAuthCredential {
-    pub fn credential(&self) -> &gents::oauth_credential::OAuthCredential {
-        &self.credential
-    }
-
-    /// Sign-ins of different accounts are ordered and held apart. The account
-    /// is the one `store_sign_in` matches on: the key, else `account_id`.
-    fn key(&self) -> CredentialKey {
-        let identity = [
-            &self.credential.provider_account_key,
-            &self.credential.account_id,
-        ]
-        .into_iter()
-        .flatten()
-        .map(|value| value.trim())
-        .find(|value| !value.is_empty())
-        .unwrap_or_default();
-        (
-            self.credential.node_did.clone(),
-            self.credential.provider.clone(),
-            identity.to_owned(),
-        )
-    }
-}
-
-pub enum CredentialSave<T> {
-    Saved(T),
-    /// A newer sign-in for the same key was already saved or held.
-    Superseded,
-    Failed(anyhow::Error),
-}
-
-#[derive(Default)]
-struct CredentialSlot {
-    write_gate: Arc<tokio::sync::Mutex<()>>,
-    newest: u64,
-    held: Option<IssuedOAuthCredential>,
-}
-
-/// Issued-but-unsaved OAuth credentials, keyed by node DID and credential
-/// provider. Never serialized, never written to disk, and never returned to
-/// the webview; the process exit discards them. Saves and retries for one key
-/// run one at a time in issuance order, so an older credential can neither
-/// overwrite a newer one in the store nor discard a newer held one.
-#[derive(Default)]
-pub struct PendingOAuthCredentials {
-    issued: std::sync::atomic::AtomicU64,
-    slots: Mutex<std::collections::HashMap<CredentialKey, CredentialSlot>>,
-}
-
-impl PendingOAuthCredentials {
-    pub fn issue(
-        &self,
-        credential: gents::oauth_credential::OAuthCredential,
-    ) -> IssuedOAuthCredential {
-        IssuedOAuthCredential {
-            sequence: self
-                .issued
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-                + 1,
-            credential,
-        }
-    }
-
-    fn slots(
-        &self,
-    ) -> std::sync::MutexGuard<'_, std::collections::HashMap<CredentialKey, CredentialSlot>> {
-        self.slots
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    fn write_gate(&self, key: &CredentialKey) -> Arc<tokio::sync::Mutex<()>> {
-        self.slots()
-            .entry(key.clone())
-            .or_default()
-            .write_gate
-            .clone()
-    }
-
-    /// Writes `issued` unless a newer credential for its key was already saved
-    /// or held. A failed write holds it for retry; a successful one releases
-    /// any older held credential.
-    pub async fn save<T, F, Fut>(
-        &self,
-        issued: IssuedOAuthCredential,
-        write: F,
-    ) -> CredentialSave<T>
-    where
-        F: FnOnce(gents::oauth_credential::OAuthCredential) -> Fut,
-        Fut: std::future::Future<Output = anyhow::Result<T>>,
-    {
-        let key = issued.key();
-        let gate = self.write_gate(&key);
-        let _ordered = gate.lock().await;
-        {
-            let mut slots = self.slots();
-            let slot = slots.entry(key.clone()).or_default();
-            if issued.sequence < slot.newest {
-                return CredentialSave::Superseded;
-            }
-            slot.newest = issued.sequence;
-        }
-        let written = write(issued.credential.clone()).await;
-        let mut slots = self.slots();
-        let slot = slots.entry(key).or_default();
-        match written {
-            Ok(value) => {
-                slot.held = None;
-                CredentialSave::Saved(value)
-            }
-            Err(error) => {
-                slot.held = Some(issued);
-                CredentialSave::Failed(error)
-            }
-        }
-    }
-
-    /// Writes the newest credential held for this node and provider, if any,
-    /// and releases it once stored; other accounts' held sign-ins stay held.
-    /// Returns `None` when nothing is held.
-    pub async fn retry<T, F, Fut>(
-        &self,
-        node_did: &str,
-        provider: &str,
-        write: F,
-    ) -> Option<(gents::oauth_credential::OAuthCredential, anyhow::Result<T>)>
-    where
-        F: FnOnce(gents::oauth_credential::OAuthCredential) -> Fut,
-        Fut: std::future::Future<Output = anyhow::Result<T>>,
-    {
-        let key = self
-            .slots()
-            .iter()
-            .filter(|((node, held_provider, _), slot)| {
-                node == node_did && held_provider == provider && slot.held.is_some()
-            })
-            .max_by_key(|(_, slot)| slot.held.as_ref().map(|held| held.sequence))
-            .map(|(key, _)| key.clone())?;
-        let gate = self.write_gate(&key);
-        let _ordered = gate.lock().await;
-        let credential = self
-            .slots()
-            .get(&key)?
-            .held
-            .as_ref()
-            .map(|held| held.credential.clone())?;
-        let written = write(credential.clone()).await;
-        if written.is_ok() {
-            if let Some(slot) = self.slots().get_mut(&key) {
-                slot.held = None;
-            }
-        }
-        Some((credential, written))
-    }
-
-    pub fn held_for(&self, node_did: &str) -> Vec<gents::oauth_credential::OAuthCredential> {
-        let mut held: Vec<_> = self
-            .slots()
-            .iter()
-            .filter(|((node, _, _), _)| node == node_did)
-            .filter_map(|(_, slot)| slot.held.as_ref().map(|held| held.credential.clone()))
-            .collect();
-        held.sort_by(|left, right| left.provider.cmp(&right.provider));
-        held
-    }
-}
+pub use crate::accounts::{CredentialSave, IssuedOAuthCredential, PendingOAuthCredentials};
 
 #[derive(Default)]
 pub struct ManagedServerState {
     pub pairing_task: Option<JoinHandle<()>>,
-    /// Cancels `pairing_task` while it still waits for the runtime's status,
-    /// before any enrollment document is authored.
+    /// Cancels `pairing_task` before any enrollment document is authored.
     pub pairing_cancel: Option<tokio_util::sync::CancellationToken>,
-    /// The single in-flight replicated-schema observation of the managed runtime.
     pub schema_observation_task: Option<JoinHandle<()>>,
     pub starting: bool,
     pub last_error: Option<String>,
     /// Cancels a start that is waiting outside the lifecycle lock.
     pub start_wait: Option<crate::tauri_commands::managed_server::StartWait>,
-    /// Crash-loop evidence carried across status reads.
     pub crash_loop: crate::tauri_commands::managed_server::CrashLoopWatch,
-    /// launchd refused this start because macOS has not approved a
-    /// background item it has not registered yet.
     pub approval_refused: bool,
-    /// The managed runtime refused its store as incompatible, as observed by
-    /// the last failed start or status read. Scopes a home reset.
     pub incompatible_store: Option<gents::storage_backend::IncompatibleStore>,
+}
+
+pub struct ProviderLoginWait {
+    pub(crate) window: String,
+    pub(crate) cancel: tokio_util::sync::CancellationToken,
 }
 
 pub struct DesktopBridge {
     pub core: Option<Arc<ClientCore>>,
-    /// Hidden views and prevented closes still own their selections. Only
-    /// native destruction retires a view; late IPC cannot register it again.
+    #[cfg(any(unix, windows))]
+    pub(crate) client_host: Option<crate::host::ClientHostService>,
+    /// Only native destruction retires a window selection; late IPC cannot
+    /// register it again.
     selected_nodes_by_window: BTreeMap<String, Option<String>>,
     pub updates_task: Option<JoinHandle<()>>,
-    /// Cancel handle for an in-flight ChatGPT/Codex login server, so a closed
-    /// browser can be aborted instead of hanging the callback wait.
-    pub codex_login_cancel: Option<gents_chatgpt_login::ShutdownHandle>,
-    /// Cancel handle for an in-flight Claude subscription login server.
-    pub claude_login_cancel: Option<gents_claude_login::ShutdownHandle>,
-    /// Cancel flag for an in-flight Grok device-code login poll.
-    pub grok_login_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    /// Shared progress for an in-flight client start. The sender is owned by
-    /// the detached starter task; waiters hold receivers and do not open a
+    pub approvals_watch_task: Option<JoinHandle<()>>,
+    pub(crate) approvals_prompt_subscriptions: crate::approvals_watch::PromptSubscriptions,
+    pub codex_login_cancel: Option<ProviderLoginWait>,
+    pub claude_login_cancel: Option<ProviderLoginWait>,
+    pub grok_login_cancel: Option<ProviderLoginWait>,
+    /// Shared progress for an in-flight client start; waiters must not open a
     /// second node.
     pub start_inflight: Option<watch::Sender<ClientStartProgress>>,
-    /// The last client start refused the client store as incompatible.
-    /// Scopes a home reset.
     pub incompatible_client_store: Option<gents::storage_backend::IncompatibleStore>,
 }
 
@@ -293,9 +88,7 @@ impl DesktopBridge {
     fn apply_window_selection(&self) {
         if let Some(core) = &self.core {
             let selected = self.selected_node_did();
-            if core.selected_node_did() != selected {
-                core.set_selected_node_did(selected);
-            }
+            core.set_selected_node_did(selected);
         }
     }
 
@@ -322,8 +115,12 @@ impl DesktopAppState {
         Self {
             bridge: Mutex::new(DesktopBridge {
                 core: None,
+                #[cfg(any(unix, windows))]
+                client_host: None,
                 selected_nodes_by_window: BTreeMap::new(),
                 updates_task: None,
+                approvals_watch_task: None,
+                approvals_prompt_subscriptions: Default::default(),
                 codex_login_cancel: None,
                 claude_login_cancel: None,
                 grok_login_cancel: None,
@@ -331,10 +128,11 @@ impl DesktopAppState {
                 incompatible_client_store: None,
             }),
             client_lifecycle: Arc::new(tokio::sync::Mutex::new(())),
+            app_exit: Arc::new(crate::app_exit::AppExitState::default()),
             managed_server_lifecycle: tokio::sync::Mutex::new(()),
             policy,
             managed_server: tokio::sync::Mutex::new(ManagedServerState::default()),
-            pending_oauth_credentials: PendingOAuthCredentials::default(),
+            pending_oauth_credentials: Arc::default(),
         }
     }
 
@@ -347,11 +145,32 @@ impl DesktopAppState {
         bridge.apply_window_selection();
     }
 
+    pub(crate) fn clear_plugin_approval_subscriptions(&self, label: &str) {
+        self.bridge
+            .lock()
+            .expect("desktop bridge lock poisoned")
+            .approvals_prompt_subscriptions
+            .remove_window(label);
+    }
+
     pub(crate) fn window_event(&self, label: &str, event: &tauri::WindowEvent) {
         if !matches!(event, tauri::WindowEvent::Destroyed) {
             return;
         }
         let mut bridge = self.bridge.lock().expect("desktop bridge lock poisoned");
+        bridge.approvals_prompt_subscriptions.remove_window(label);
+        for wait in [
+            &bridge.codex_login_cancel,
+            &bridge.claude_login_cancel,
+            &bridge.grok_login_cancel,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if wait.window == label {
+                wait.cancel.cancel();
+            }
+        }
         if bridge.selected_nodes_by_window.remove(label).is_some() {
             bridge.apply_window_selection();
         }
@@ -431,6 +250,7 @@ pub fn resolve_policy(
         app_meta: config.app_meta.clone(),
         snapshot_grants: config.snapshot_grants,
         managed_server: config.managed_server,
+        client_host: config.client_host,
         store_key_custody: config.store_key_custody,
     })
 }

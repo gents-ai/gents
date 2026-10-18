@@ -1,7 +1,3 @@
-//! `compare`: the paired statistics between two cells, of one run or two,
-//! and a policy verdict only when `--policy` asks for one; `--by` adds a
-//! breakdown by check or stage and `--case` one case's trials side by side.
-
 use std::io::Write;
 
 use anyhow::Result;
@@ -77,8 +73,6 @@ pub(super) async fn compare(
     }
 }
 
-/// A breakdown's or a case's JSON with the comparison's `"policy"` outcome
-/// beside it: the `PolicyOutcome` under `--policy`, else null.
 #[derive(Serialize)]
 struct WithPolicy<'a, T: Serialize> {
     #[serde(flatten)]
@@ -96,7 +90,6 @@ fn with_policy<'a, T: Serialize>(
     }
 }
 
-/// The named cell, or the run's only one.
 fn pick_cell(report: &EvalReport, named: Option<&str>, flag: &str) -> Result<String> {
     match (named, report.cells.as_slice()) {
         (Some(cell), _) => Ok(cell.to_owned()),
@@ -201,8 +194,6 @@ mod tests {
         assert!(decided.contains("calibrated yes"), "{decided}");
     }
 
-    /// `comparison_table` reads each gate from its own field: an
-    /// undetermined `min_effect` and a skipped `cost_ok` print their own words.
     #[tokio::test]
     async fn the_gates_line_prints_an_undetermined_min_effect_and_a_skipped_cost_gate() {
         let fixture = Fixture::new().await;
@@ -291,7 +282,6 @@ mod tests {
         assert_eq!(json["rows"][0]["mean_diff_bp"], 5_000);
         assert!(json["policy"].is_null(), "{json}");
 
-        // With --policy, the breakdown and the case carry its outcome.
         for extra in [
             &["--by", "stage", "--json", "--policy", "defaults"][..],
             &["--case", "val-a", "--json", "--policy", "defaults"],
@@ -326,7 +316,6 @@ mod tests {
             );
         }
 
-        // A breakdown with no row says so instead of printing a bare header.
         for (breakdown, expected) in [
             (
                 super::super::render::Breakdown::Check(Vec::new()),

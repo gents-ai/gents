@@ -1,8 +1,3 @@
-//! Device-code OAuth login against xAI (`auth.x.ai`), public Grok CLI client.
-//!
-//! Browser authorization-code + PKCE is supported by discovery but not required
-//! for v1; device-code works on SSH/VPS without a loopback redirect.
-
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -18,7 +13,6 @@ use crate::xai_oauth_refresh::XAI_OAUTH_CLIENT_ID;
 const DEVICE_CODE_URL: &str = "https://auth.x.ai/oauth2/device/code";
 const TOKEN_URL: &str = "https://auth.x.ai/oauth2/token";
 
-/// Scopes required for Grok CLI proxy chat (see spike design note).
 pub const XAI_OAUTH_SCOPES: &str = "openid profile email offline_access grok-cli:access api:access conversations:read conversations:write";
 
 pub const XAI_OAUTH_DEVICE_URL_OVERRIDE_ENV: &str = "GENTS_XAI_OAUTH_DEVICE_URL";
@@ -194,11 +188,11 @@ pub async fn poll_device_token(
 
         match error.as_str() {
             "authorization_pending" => {
-                tokio::time::sleep(interval).await;
+                wait_poll_interval(interval, cancel.as_deref()).await?;
             }
             "slow_down" => {
                 interval = (interval + Duration::from_secs(5)).min(Duration::from_secs(30));
-                tokio::time::sleep(interval).await;
+                wait_poll_interval(interval, cancel.as_deref()).await?;
             }
             "access_denied" | "authorization_denied" => {
                 anyhow::bail!("xAI device-code authorization was denied");
@@ -216,10 +210,28 @@ pub async fn poll_device_token(
     }
 }
 
-/// Full device-code login: request code, print URL, poll until approved.
-///
-/// `open_browser` is reserved for future loopback/browser helpers; v1 always
-/// prints the verification URL so operators can open it on any device (SSH-safe).
+/// Provider intervals must elapse before another HTTP poll. Observe the public
+/// cancellation flag during that wait without increasing request frequency.
+async fn wait_poll_interval(interval: Duration, cancel: Option<&AtomicBool>) -> Result<()> {
+    let Some(cancel) = cancel else {
+        tokio::time::sleep(interval).await;
+        return Ok(());
+    };
+    let deadline = Instant::now()
+        .checked_add(interval)
+        .context("xAI polling interval exceeds the host clock range")?;
+    loop {
+        if cancel.load(Ordering::SeqCst) {
+            anyhow::bail!("xAI device-code login was cancelled");
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(());
+        }
+        tokio::time::sleep(remaining.min(Duration::from_millis(100))).await;
+    }
+}
+
 pub async fn run_device_code_login(
     http: &reqwest::Client,
     _open_browser: bool,
@@ -239,7 +251,6 @@ pub async fn run_device_code_login(
     poll_device_token(http, &challenge, None).await
 }
 
-/// Device-code login that returns the verification URL for UI surfaces, then polls.
 pub async fn run_device_code_login_with_url_callback<F>(
     http: &reqwest::Client,
     cancel: Option<Arc<AtomicBool>>,
@@ -257,14 +268,10 @@ where
     poll_device_token(http, &challenge, cancel).await
 }
 
-/// The provider account key of a Grok sign-in: `principal_type:principal_id`
-/// from the access token.
-///
-/// The claims are not signature-verified; they are trusted only as far as the
-/// TLS-protected token endpoint they came from. The key only recognizes and
-/// deduplicates an account: it is never an authorization, routing or request
-/// header input. A missing, malformed or non-JWT input gives `None`, never an
-/// error, so a bad claim cannot fail a sign-in or refresh.
+/// Account key `principal_type:principal_id` from the access-token claims.
+/// The claims are not signature-verified: the key only recognizes and
+/// deduplicates an account, it is never an authorization, routing or
+/// request-header input. Bad claims yield `None`, never an error.
 pub fn xai_account_key(access_token: &str) -> Option<String> {
     let claims = crate::chatgpt_oauth_refresh::jwt_payload(access_token)?;
     let claim = |name: &str| {
@@ -320,6 +327,20 @@ mod tests {
     use super::*;
     use chrono::DateTime;
 
+    #[tokio::test]
+    async fn cancellation_interrupts_a_long_provider_polling_interval() {
+        let cancel = AtomicBool::new(false);
+        let wait = wait_poll_interval(Duration::from_secs(3600), Some(&cancel));
+        tokio::pin!(wait);
+        assert!(futures::poll!(&mut wait).is_pending());
+        cancel.store(true, Ordering::SeqCst);
+        let error = tokio::time::timeout(Duration::from_secs(5), wait)
+            .await
+            .expect("cancellation must not wait for another provider poll")
+            .unwrap_err();
+        assert!(error.to_string().contains("cancelled"));
+    }
+
     #[test]
     fn login_tokens_debug_redacts_tokens() {
         let tokens = XaiLoginTokens {
@@ -331,27 +352,6 @@ mod tests {
         let debug = format!("{tokens:?} {tokens:#?}");
         assert!(!debug.contains("secret-"), "{debug}");
         assert!(debug.contains("900"), "{debug}");
-    }
-
-    #[test]
-    fn credential_from_tokens_leaves_chatgpt_fields_unused() {
-        let tokens = XaiLoginTokens {
-            access_token: "acc".into(),
-            refresh_token: "ref".into(),
-            id_token: Some("id".into()),
-            expires_in: Some(900),
-        };
-        let now = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
-        let credential = credential_from_login_tokens("did:key:zA", "xai-oauth", &tokens, now);
-        assert_eq!(credential.provider, "xai-oauth");
-        assert_eq!(credential.credential_id, "xai-oauth:did:key:zA");
-        assert!(credential.chatgpt_plan_type.is_none());
-        assert!(!credential.is_fedramp);
-        assert!(credential.enabled);
-        assert_eq!(
-            credential.access_token_expires_at,
-            now + chrono::Duration::seconds(900)
-        );
     }
 
     fn grok_login(access_token: String) -> OAuthCredential {

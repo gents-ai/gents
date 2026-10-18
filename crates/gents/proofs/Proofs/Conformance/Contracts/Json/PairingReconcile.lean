@@ -5,9 +5,6 @@ namespace Conformance.Contracts
 
 open PairingReconcile
 
-/-- Typed sample operations compute their post-state from the same constructor
-that supplies the wire label. The premises are exactly those required by the
-corresponding modeled `Transition` constructor. -/
 private inductive PairingSample where
   | dial (name : String) (before : ReconcileState) (desired : PairingDesired)
       (desiredMatches : before.desired = some desired)

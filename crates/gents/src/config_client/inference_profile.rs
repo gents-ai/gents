@@ -6,7 +6,6 @@ use crate::oauth_credential::ServingAccount;
 
 use super::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 
-/// Every profile of `node_did` in this transaction's snapshot.
 pub async fn list_inference_profiles_in_txn(
     txn: &super::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -26,16 +25,13 @@ pub async fn list_inference_profiles_in_txn(
         .collect()
 }
 
-/// Replace a complete inference profile through the common configuration writer.
-/// Sampling and execution settings are references, never a second set of profile
-/// fields. Explicit sparse patches remain owned by the patch API.
 pub async fn write_inference_profile_document(
     access: &ConfigAccess,
     profile: &InferenceProfile,
 ) -> Result<String> {
     profile.validate()?;
     access
-        .transact("config.inference_profile.write", |txn| {
+        .transact_write("config.inference_profile.write", |txn| {
             Box::pin(async move {
                 let value = serde_json::to_value(profile)?;
                 let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -58,16 +54,13 @@ pub async fn write_inference_profile_document(
         .await
 }
 
-/// The accounts a agent's turns need: its profile's, then its context's
-/// compaction profile's, the chain readiness walks. A profile or backend
-/// that is not stored is left out.
 pub async fn agent_accounts(
     access: &ConfigAccess,
     node_did: &str,
     agent_id: &str,
 ) -> Result<Vec<(String, ServingAccount)>> {
     let profile_backends = access
-        .transact("config.agent_accounts", |txn| {
+        .transact_readonly("config.agent_accounts", |txn| {
             Box::pin(async move {
                 let agent: crate::document_config::Agent =
                     read(txn, Collection::Agent, node_did, agent_id)
@@ -138,7 +131,7 @@ mod tests {
     async fn replacement_preserves_other_owner_and_clears_optional_selection() -> Result<()> {
         let node = Arc::new(EmbeddedNode::builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::local(node);
         for owner in ["did:key:owner", "did:key:other"] {
             let backend = json!({"node_did":owner,"backend_id":"local","name":"Local",
                 "provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1",
@@ -149,7 +142,7 @@ mod tests {
                 update: backend,
             }])?;
             access
-                .transact("test.profile.seed", |txn| {
+                .transact_write("test.profile.seed", |txn| {
                     let plan = &plan;
                     Box::pin(async move {
                         super::super::apply_desired_state_plan(txn, plan)
@@ -178,7 +171,7 @@ mod tests {
             first_id
         );
         access
-            .transact("test.profile.read", |txn| {
+            .transact_write("test.profile.read", |txn| {
                 let initial = &initial;
                 let foreign = &foreign;
                 Box::pin(async move {
@@ -228,7 +221,7 @@ mod tests {
         let node = Arc::new(EmbeddedNode::builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         crate::ensure_node(&node, did).await?;
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::local(node);
         let spec = crate::inference_setup::connection_spec(
             crate::inference_setup::InferenceProviderId::Anthropic,
             crate::inference_setup::InferenceAuthMethod::ClaudeOauth,
@@ -270,7 +263,7 @@ mod tests {
         }
         let profiles = || async {
             access
-                .transact("test.profiles", |txn| {
+                .transact_write("test.profiles", |txn| {
                     Box::pin(async move {
                         let mut records = Vec::new();
                         for id in ["on-a", "on-b", "compaction"] {
@@ -296,7 +289,7 @@ mod tests {
             let access = &access;
             async move {
                 access
-                    .transact("test.remove", |txn| {
+                    .transact_write("test.remove", |txn| {
                         let credential_id = credential_id.clone();
                         Box::pin(
                             async move { remove_account_in_txn(txn, did, &credential_id).await },
@@ -342,7 +335,7 @@ mod tests {
         assert_eq!(resolved.doc_id.as_deref(), Some(reused.doc_id.as_str()));
 
         let backends = access
-            .transact("test.backends", |txn| {
+            .transact_write("test.backends", |txn| {
                 Box::pin(
                     async move { super::super::list_inference_backends_in_txn(txn, did).await },
                 )
@@ -353,9 +346,10 @@ mod tests {
                 .await?;
         }
         assert_eq!(profiles().await, before, "catalog refresh");
-        let ConfigAccess::Local(node) = &access else {
+        let ConfigAccess::Local(local) = &access else {
             unreachable!()
         };
+        let node = local.node();
         crate::agent::document_view::load_document_runtime_view(node, did).await?;
         assert_eq!(profiles().await, before, "view load");
         Ok(())
@@ -368,7 +362,7 @@ mod tests {
         let node = Arc::new(EmbeddedNode::builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         crate::ensure_node(&node, did).await?;
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::local(node);
         let spec = crate::inference_setup::connection_spec(
             crate::inference_setup::InferenceProviderId::Anthropic,
             crate::inference_setup::InferenceAuthMethod::ClaudeOauth,
@@ -405,7 +399,7 @@ mod tests {
         .collect();
         let plan = DesiredStateApplyPlan::new(documents)?;
         access
-            .transact("test.agent_accounts", |txn| {
+            .transact_write("test.agent_accounts", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
                     super::super::apply_desired_state_plan(txn, plan)

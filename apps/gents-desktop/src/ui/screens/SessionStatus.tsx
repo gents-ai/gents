@@ -1,11 +1,7 @@
-/* A session's state as a 16px glyph in front of its title: a hollow dot
-   for a finished one, the braille spinner while it streams, and a clock
-   while it waits for an agent. Failures and interruptions get their own
-   Lucide mark. */
 import { CircleMinus, CircleX, Clock } from "lucide-react";
 import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
-import { isLive, turnLabel } from "@/lib/live";
+import { stateOf, turnLabel } from "@/lib/live";
 
 export function SessionStatus({
   turnState,
@@ -15,17 +11,15 @@ export function SessionStatus({
   className?: string;
 }) {
   const label = turnLabel(turnState) ?? "Finished";
+  const state = stateOf(turnState);
   const glyph =
-    turnState === "waitingForClaim" ? (
+    state === "waiting" ? (
       <Clock className="size-3.5 text-muted-foreground" />
-    ) : /* anything the runtime has not settled is working, whatever it calls
-       it: isLive knows every name for done, so a state this build has not
-       met still reads as working */
-    isLive(turnState) ? (
+    ) : state === "working" ? (
       <Spinner className="text-foreground" />
-    ) : turnState === "failed" ? (
+    ) : state === "failed" ? (
       <CircleX className="size-3.5 text-destructive" />
-    ) : turnState === "interrupted" || turnState === "superseded" ? (
+    ) : state === "stopped" ? (
       <CircleMinus className="size-3.5 text-muted-foreground" />
     ) : (
       <span className="size-2 rounded-full border border-muted-foreground/60" />

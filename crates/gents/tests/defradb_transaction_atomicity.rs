@@ -1,17 +1,8 @@
 //! Bounded native external-premise experiment: real multi-document
-//! transaction atomicity against the pinned embedded DefraDB node.
-//!
-//! These tests drive `ConfigAccess::transact_local` — the existing Gents
-//! gated transaction adapter (`crates/gents/src/config_client/txn.rs`) —
-//! over a disposable embedded DefraDB node with a minimal two-collection
-//! schema. They provide commit/rollback evidence for DefraDB transactions
-//! only: a committed transaction persists every write in the callback, an
-//! injected error after the first write persists neither, and a failed
-//! second mutation persists neither when the caller propagates the error.
-//! An independent normal read is also sampled while the first write remains
-//! uncommitted; a blocked read is permitted, but a partial pair is not.
-//! No claim is made about host crash durability or remote P2P merge, and
-//! the retired AgentResponse surface is not involved.
+//! transaction atomicity against the pinned embedded DefraDB node, through
+//! `ConfigAccess::transact_local_write`. Commit/rollback evidence only:
+//! no claim about host crash durability or remote P2P merge. A blocked
+//! outside read is permitted; a partial pair is not.
 
 use anyhow::{bail, Context, Result};
 use gents::config_client::{ConfigAccess, ConfigApplyTxn};
@@ -20,6 +11,7 @@ use gents::graphql::escape_graphql_string;
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -29,14 +21,12 @@ type TxnAtomicityLeft { label: String amount: Int }
 type TxnAtomicityRight { label: String amount: Int }
 ";
 
-/// Disposable node with only the minimal two-collection schema installed.
-async fn disposable_node() -> Result<EmbeddedNode> {
-    let node = EmbeddedNode::builder().build().await?;
+async fn disposable_node() -> Result<Arc<EmbeddedNode>> {
+    let node = Arc::new(EmbeddedNode::builder().build().await?);
     node.add_schema(ATOMICITY_SCHEMA).await?;
     Ok(node)
 }
 
-/// Surface DefraDB-level errors even when the adapter returns `Ok`.
 fn ensure_no_errors(value: Value) -> Result<Value> {
     if value
         .get("errors")
@@ -121,12 +111,11 @@ fn write_right(label: &str, amount: i64) -> String {
     )
 }
 
-/// Case 1: a successful transaction persists both writes.
 #[tokio::test]
 async fn committed_transaction_persists_both_writes() -> Result<()> {
     let node = disposable_node().await?;
 
-    let (left, right) = ConfigAccess::transact_local(
+    let (left, right) = ConfigAccess::transact_local_write(
         &node,
         None,
         "txn_atomicity_commit",
@@ -150,13 +139,11 @@ async fn committed_transaction_persists_both_writes() -> Result<()> {
     Ok(())
 }
 
-/// Case 2: an injected error after the first write leaves neither write,
-/// because the caller returns the error out of the transaction callback.
 #[tokio::test]
 async fn injected_error_after_first_write_persists_neither() -> Result<()> {
     let node = disposable_node().await?;
 
-    let outcome: Result<()> = ConfigAccess::transact_local(
+    let outcome: Result<()> = ConfigAccess::transact_local_write(
         &node,
         None,
         "txn_atomicity_injected_rollback",
@@ -186,13 +173,11 @@ async fn injected_error_after_first_write_persists_neither() -> Result<()> {
     Ok(())
 }
 
-/// Case 3: the second mutation fails inside the transaction and the caller
-/// propagates its error, so neither write is persisted.
 #[tokio::test]
 async fn failed_second_mutation_persists_neither_when_propagated() -> Result<()> {
     let node = disposable_node().await?;
 
-    let outcome: Result<()> = ConfigAccess::transact_local(
+    let outcome: Result<()> = ConfigAccess::transact_local_write(
         &node,
         None,
         "txn_atomicity_second_failure",
@@ -200,10 +185,6 @@ async fn failed_second_mutation_persists_neither_when_propagated() -> Result<()>
             Box::pin(async move {
                 let first = ensure_no_errors(txn.execute(&write_left("second-failure", 5)).await?)?;
                 assert_acknowledged(&first, "TxnAtomicityLeft")?;
-                // The second mutation targets an absent collection. Unknown
-                // input fields are not a reliable failure injection in the
-                // pinned node: it accepts them rather than rejecting a write.
-                // Propagate the actual database error with `?`.
                 ensure_no_errors(
                     txn.execute(
                         r#"mutation { create_TxnAtomicityMissing(input: { label: "x", amount: 1 }) { _docID } }"#,
@@ -233,8 +214,6 @@ async fn failed_second_mutation_persists_neither_when_propagated() -> Result<()>
     Ok(())
 }
 
-/// A reader outside the open writer transaction may see the pre-commit pair
-/// or wait for the committed pair; it must never observe only the first write.
 #[tokio::test]
 async fn independent_reader_never_observes_half_of_a_two_document_commit() -> Result<()> {
     let node = disposable_node().await?;
@@ -242,7 +221,7 @@ async fn independent_reader_never_observes_half_of_a_two_document_commit() -> Re
     let (release_tx, release_rx) = watch::channel(false);
     let release_on_timeout = release_tx.clone();
 
-    let writer = ConfigAccess::transact_local(
+    let writer = ConfigAccess::transact_local_write(
         &node,
         None,
         "txn_atomicity_reader_visibility",
@@ -268,8 +247,6 @@ async fn independent_reader_never_observes_half_of_a_two_document_commit() -> Re
         }
         let read = pair_counts(&node);
         tokio::pin!(read);
-        // Poll the actual normal-read future while the writer is held; a
-        // timeout without this poll would not establish that a read started.
         let first_poll =
             std::future::poll_fn(|cx| Poll::Ready(Pin::as_mut(&mut read).poll(cx))).await;
         let before_release = match first_poll {

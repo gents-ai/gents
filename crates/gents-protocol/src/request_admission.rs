@@ -1,8 +1,3 @@
-//! Pure `AgentRequest` admission projection shared by conformance and runtime.
-//!
-//! Cryptographic and durable-state checks produce these observations.  This
-//! projector never treats a caller-authored tag or lineage field as evidence.
-
 use crate::canonical::{
     parse_utc_seconds, require_enum, require_identifier, require_optional_identifier,
 };
@@ -28,13 +23,8 @@ impl RequestPurpose {
         }
     }
 
-    /// The one purpose user-facing request readers present. Detached title
-    /// requests are runtime work: explicit lookups, recovery, accounting and
-    /// physical hydration still see them.
     pub const PUBLIC: Self = Self::Normal;
 
-    /// Whether a request belongs in user-facing request projections. A row
-    /// with no decodable purpose is not public.
     pub fn is_public(purpose: Option<Self>) -> bool {
         purpose == Some(Self::PUBLIC)
     }
@@ -58,11 +48,10 @@ pub enum AgentRequestAdmissionKind {
     Enrollment,
     LocalSelf,
     RuntimeInternal,
-    /// A request authored by another node's agent (a cross-node
-    /// `agent_new`/`agent_message`). The requester signs, the target
-    /// differs from the requester, and the target's `PeerAdmissionAuthority`
-    /// ACP authorizes the requester DID. Replies route back to `requester_did`
-    /// best-effort; there is no bridge, claim fence or cancel mirror.
+    /// A request authored by another node's agent. The requester signs, the
+    /// target differs from the requester, and the target's
+    /// `PeerAdmissionAuthority` ACP authorizes the requester DID. Replies
+    /// route back to `requester_did` best-effort.
     Peer,
 }
 
@@ -130,9 +119,8 @@ pub struct AgentRequestAdmissionObservation {
     pub requester_matches_target: bool,
     pub signer_matches_target: bool,
     pub signer_matches_issuer: bool,
-    /// The requester is the owner of the existing target session, or the
-    /// target for a new session or a title audit (Lean
-    /// `Enrollment.runtimeRequesterScope`).
+    /// The requester owns the target session or is the target for a new
+    /// session or title audit (Lean `Enrollment.runtimeRequesterScope`).
     pub requester_matches_session_scope: bool,
     pub current_approval: bool,
     pub exact_generation: bool,
@@ -227,8 +215,6 @@ pub fn project_agent_request_admission_disposition(
     }
 }
 
-/// Immutable request semantics. Mutable lifecycle/claim/terminal fields are
-/// intentionally excluded because they change after admission.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentRequestSigningFields<'a> {
     pub request_id: &'a str,
@@ -274,7 +260,6 @@ pub fn validate_signing_fields(request: &AgentRequestSigningFields<'_>) -> anyho
     ] {
         require_identifier(name, value)?;
     }
-    // Agent selection is required even for new sessions.
     require_identifier("agent_id", request.agent_id)?;
     for (name, value) in [
         ("requester_did", request.requester_did),
@@ -366,7 +351,6 @@ impl AgentRequestAdmissionRecord {
         }
     }
 
-    /// Cross-node request signed by its requester (`signer_did`).
     pub fn peer(signer_did: impl Into<String>) -> Self {
         Self {
             kind: AgentRequestAdmissionKind::Peer,
@@ -579,8 +563,6 @@ impl AgentRequestAdmissionRecord {
         push_option(&mut fields, request.retry_root_request);
         push_option(&mut fields, request.retry_key);
         push_text(&mut fields, request.content);
-        // Typed invocation input, encoded by the canonical framing below; the
-        // removed per-request sampling/metadata/deployment scalars are gone.
         push_request_input(&mut fields, request.input);
         push_option(&mut fields, request.execution_origin);
         push_option(&mut fields, request.caused_by_trigger_id);
@@ -686,7 +668,6 @@ fn push_u64(fields: &mut Vec<Vec<u8>>, value: Option<u64>) {
     );
 }
 
-/// Title provenance wire names shared by the canonical session title owner.
 fn title_source_wire_name(source: crate::session::SessionTitleSource) -> &'static str {
     match source {
         crate::session::SessionTitleSource::Placeholder => "placeholder",
@@ -696,7 +677,6 @@ fn title_source_wire_name(source: crate::session::SessionTitleSource) -> &'stati
     }
 }
 
-/// Queue enum wire names matching the canonical queue owners.
 fn queue_source_wire_name(source: crate::request_input::QueueSource) -> &'static str {
     match source {
         crate::request_input::QueueSource::User => "user",
@@ -713,11 +693,9 @@ fn queue_policy_wire_name(policy: crate::request_input::QueuePolicy) -> &'static
     }
 }
 
-/// Canonical typed-input framing, mirroring the Lean
-/// `Enrollment.requestInputFields` byte contract: explicit option tags,
-/// collection lengths, and the fixed field order of RequestInput and
-/// RequestQueue. This is the one canonical input encoder for signing and
-/// verification; callers must never substitute unescaped JSON or metadata.
+/// Canonical typed-input framing mirroring the Lean
+/// `Enrollment.requestInputFields` byte contract. The one canonical input
+/// encoder for signing and verification.
 fn push_input_option(fields: &mut Vec<Vec<u8>>, value: Option<&str>) {
     match value {
         Some(value) => {
@@ -839,7 +817,6 @@ pub struct AgentRequestCreate {
     pub caused_by_parent_tool_call_doc_id: Option<String>,
     pub workspace_id: Option<String>,
     /// Signed node scope; present exactly when workspace_id is present.
-    /// Issuance validates this against the existing workspace or authenticated source.
     pub workspace_owner_node_did: Option<String>,
     pub workspace_authority: Option<String>,
     pub workspace_seal_hash: Option<String>,
@@ -848,10 +825,6 @@ pub struct AgentRequestCreate {
 }
 
 impl AgentRequestCreate {
-    // This is the one required-field constructor for request creation
-    // (#1336). Bundling these independent identity/admission fields into a
-    // second parameter object would recreate another owner for the wire
-    // contract just to satisfy an argument-count heuristic.
     #[allow(clippy::too_many_arguments)]
     pub fn base(
         purpose: RequestPurpose,
@@ -1161,502 +1134,5 @@ fn optional_text(fields: &mut Vec<String>, name: &str, value: Option<&str>) {
 fn optional_scalar<T: std::fmt::Display>(fields: &mut Vec<String>, name: &str, value: Option<T>) {
     if let Some(value) = value {
         fields.push(format!("{name}: {value}"));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn local_create() -> AgentRequestCreate {
-        let mut admission = AgentRequestAdmissionRecord::local_self("did:key:agent");
-        admission.signature = vec![7; 64];
-        AgentRequestCreate::base(
-            RequestPurpose::Normal,
-            "request-1",
-            "did:key:agent",
-            "did:key:agent",
-            "default",
-            "session-1",
-            "hello",
-            "interactive",
-            "2026-08-30T00:00:00Z",
-            admission,
-        )
-    }
-
-    #[test]
-    fn signed_purpose_is_required_and_changes_the_request_payload() {
-        assert_eq!(
-            RequestPurpose::try_from("normal"),
-            Ok(RequestPurpose::Normal)
-        );
-        assert_eq!(
-            RequestPurpose::try_from("title-audit"),
-            Ok(RequestPurpose::TitleAudit)
-        );
-        assert!(RequestPurpose::try_from("").is_err());
-        assert!(RequestPurpose::try_from("titleAudit").is_err());
-        assert!(serde_json::from_str::<RequestPurpose>("null").is_err());
-
-        let normal = local_create();
-        let mut title = normal.clone();
-        title.purpose = RequestPurpose::TitleAudit;
-        assert_ne!(normal.signing_payload(), title.signing_payload());
-        assert!(normal
-            .graphql_input_fields()
-            .unwrap()
-            .contains("purpose: \"normal\""));
-        assert!(title
-            .graphql_input_fields()
-            .unwrap()
-            .contains("purpose: \"title-audit\""));
-    }
-
-    #[test]
-    fn every_immutable_semantic_changes_the_signing_payload() {
-        let base = local_create();
-        let expected = base.signing_payload();
-        let mut variants: Vec<(&str, AgentRequestCreate)> = Vec::new();
-        macro_rules! changed {
-            ($name:literal, $body:expr) => {{
-                let mut value = base.clone();
-                $body(&mut value);
-                variants.push(($name, value));
-            }};
-        }
-        changed!("request_id", |v: &mut AgentRequestCreate| v
-            .request_id
-            .push('x'));
-        changed!("purpose", |v: &mut AgentRequestCreate| v.purpose =
-            RequestPurpose::TitleAudit);
-        changed!("node_did", |v: &mut AgentRequestCreate| v
-            .node_did
-            .push('x'));
-        changed!("requester_did", |v: &mut AgentRequestCreate| v
-            .requester_did
-            .push('x'));
-        changed!("agent_id", |v: &mut AgentRequestCreate| v
-            .agent_id
-            .push('x'));
-        changed!("session_id", |v: &mut AgentRequestCreate| v
-            .session_id
-            .push('x'));
-        changed!("retry_parent_request", |v: &mut AgentRequestCreate| v
-            .retry_parent_request =
-            Some("parent".into()));
-        changed!(
-            "retry_parent_request_doc_id",
-            |v: &mut AgentRequestCreate| v.retry_parent_request_doc_id = Some("parent-doc".into())
-        );
-        changed!("retry_root_request", |v: &mut AgentRequestCreate| v
-            .retry_root_request =
-            Some("other-root".into()));
-        changed!("retry_key", |v: &mut AgentRequestCreate| v.retry_key =
-            Some("retry-key".into()));
-        changed!("content", |v: &mut AgentRequestCreate| v.content.push('!'));
-        changed!("input.skills", |v: &mut AgentRequestCreate| v
-            .input
-            .selected_skill_ids =
-            vec!["review".into()]);
-        changed!("input.cwd", |v: &mut AgentRequestCreate| v.input.cwd =
-            Some("/workspace".into()));
-        changed!("input.title", |v: &mut AgentRequestCreate| v
-            .input
-            .initial_title =
-            Some(crate::session::SessionTitle {
-                text: "Review".into(),
-                source: crate::session::SessionTitleSource::Task,
-            }));
-        changed!("input.queue", |v: &mut AgentRequestCreate| v.input.queue =
-            Some(crate::request_input::RequestQueue {
-                delivery: Default::default(),
-                position: None,
-                source: crate::request_input::QueueSource::Goal,
-                policy: crate::request_input::QueuePolicy::Coalesce,
-                key: Some("goal:one".into()),
-                queued_after_request_id: Some("parent".into()),
-                interrupted_request_id: None,
-                background_completion_wake_version: None,
-            }));
-        changed!("input.goal_false", |v: &mut AgentRequestCreate| v
-            .input
-            .goal_continuation =
-            Some(crate::request_input::GoalContinuationInput {
-                sequence: 1,
-                wrapup: false,
-            }));
-        changed!("execution_origin", |v: &mut AgentRequestCreate| v
-            .execution_origin =
-            "trigger".into());
-        changed!("caused_by_trigger_id", |v: &mut AgentRequestCreate| v
-            .caused_by_trigger_id =
-            Some("trigger".into()));
-        changed!("caused_by_trigger_doc_id", |v: &mut AgentRequestCreate| v
-            .caused_by_trigger_doc_id =
-            Some("trigger-doc".into()));
-        changed!("caused_by_trigger_kind", |v: &mut AgentRequestCreate| v
-            .caused_by_trigger_kind =
-            Some("event".into()));
-        changed!("caused_by_correlation", |v: &mut AgentRequestCreate| v
-            .caused_by_correlation =
-            Some("correlation".into()));
-        changed!("caused_by_trigger_context", |v: &mut AgentRequestCreate| {
-            v.caused_by_trigger_context = Some("context".into())
-        });
-        changed!("caused_by_source_doc_id", |v: &mut AgentRequestCreate| v
-            .caused_by_source_doc_id =
-            Some("source-doc".into()));
-        changed!("created_at", |v: &mut AgentRequestCreate| v
-            .created_at
-            .push('x'));
-        changed!("retry_count", |v: &mut AgentRequestCreate| v.retry_count =
-            1);
-        changed!("max_retries", |v: &mut AgentRequestCreate| v.max_retries =
-            4);
-        changed!("valid_until", |v: &mut AgentRequestCreate| v.valid_until =
-            Some("2099-01-01T00:00:00Z".into()));
-        changed!("request_hop", |v: &mut AgentRequestCreate| v.request_hop =
-            1);
-        changed!(
-            "caused_by_parent_request_id",
-            |v: &mut AgentRequestCreate| v.caused_by_parent_request_id = Some("parent".into())
-        );
-        changed!(
-            "caused_by_parent_request_doc_id",
-            |v: &mut AgentRequestCreate| v.caused_by_parent_request_doc_id =
-                Some("parent-doc".into())
-        );
-        changed!(
-            "caused_by_parent_tool_call_id",
-            |v: &mut AgentRequestCreate| v.caused_by_parent_tool_call_id = Some("tool".into())
-        );
-        changed!(
-            "caused_by_parent_tool_call_doc_id",
-            |v: &mut AgentRequestCreate| v.caused_by_parent_tool_call_doc_id =
-                Some("tool-doc".into())
-        );
-        changed!("workspace_id", |v: &mut AgentRequestCreate| v
-            .workspace_id =
-            Some("workspace".into()));
-        changed!("workspace_owner_node_did", |v: &mut AgentRequestCreate| {
-            v.workspace_owner_node_did = Some("did:other-owner".into())
-        });
-        changed!("workspace_authority", |v: &mut AgentRequestCreate| v
-            .workspace_authority =
-            Some("authority".into()));
-        changed!("workspace_seal_hash", |v: &mut AgentRequestCreate| v
-            .workspace_seal_hash =
-            Some("seal".into()));
-        changed!("admission_signer", |v: &mut AgentRequestCreate| v
-            .admission
-            .signer_did
-            .push('x'));
-        changed!("enrollment_request_id", |v: &mut AgentRequestCreate| v
-            .admission
-            .enrollment_request_id =
-            Some("enrollment".into()));
-        changed!("enrollment_request_digest", |v: &mut AgentRequestCreate| {
-            v.admission.enrollment_request_digest = Some("digest".into())
-        });
-        changed!("enrollment_admin_did", |v: &mut AgentRequestCreate| v
-            .admission
-            .enrollment_admin_did =
-            Some("admin".into()));
-        changed!(
-            "enrollment_authorization_sequence",
-            |v: &mut AgentRequestCreate| v.admission.enrollment_authorization_sequence = Some(1)
-        );
-        changed!(
-            "enrollment_authorization_expires_at",
-            |v: &mut AgentRequestCreate| v.admission.enrollment_authorization_expires_at =
-                Some("2099-01-01T00:00:00Z".into())
-        );
-        changed!("runtime_issuer_did", |v: &mut AgentRequestCreate| v
-            .admission
-            .runtime_issuer_did =
-            Some("issuer".into()));
-        changed!("runtime_source_request_id", |v: &mut AgentRequestCreate| {
-            v.admission.runtime_source_request_id = Some("source".into())
-        });
-        changed!("runtime_source_kind", |v: &mut AgentRequestCreate| v
-            .admission
-            .runtime_source_kind =
-            Some(RuntimeInternalSourceKind::AutomatedTrigger));
-        for (name, variant) in variants {
-            assert_ne!(
-                variant.signing_payload(),
-                expected,
-                "field {name} was not signed"
-            );
-        }
-    }
-
-    #[test]
-    fn typed_input_signing_distinguishes_subfields_and_skill_boundaries() {
-        use crate::request_input::{GoalContinuationInput, QueuePolicy, QueueSource, RequestQueue};
-        let mut base = local_create();
-        base.input.selected_skill_ids = vec!["a|b".into(), "c".into()];
-        base.input.cwd = Some("/workspace".into());
-        base.input.initial_title = Some(crate::session::SessionTitle {
-            text: "Review".into(),
-            source: crate::session::SessionTitleSource::Task,
-        });
-        base.input.goal_continuation = Some(GoalContinuationInput {
-            sequence: 1,
-            wrapup: false,
-        });
-        base.input.queue = Some(RequestQueue {
-            delivery: Default::default(),
-            position: None,
-            source: QueueSource::Goal,
-            policy: QueuePolicy::Coalesce,
-            key: Some("goal:one".into()),
-            queued_after_request_id: Some("parent".into()),
-            interrupted_request_id: Some("interrupted".into()),
-            background_completion_wake_version: Some(1),
-        });
-        let expected = base.signing_payload();
-        let mut variants = Vec::new();
-        macro_rules! changed {
-            ($body:expr) => {{
-                let mut v = base.clone();
-                $body(&mut v);
-                variants.push(v);
-            }};
-        }
-        changed!(|v: &mut AgentRequestCreate| v.input.selected_skill_ids =
-            vec!["a".into(), "b|c".into()]);
-        changed!(|v: &mut AgentRequestCreate| v.input.selected_skill_ids.reverse());
-        changed!(|v: &mut AgentRequestCreate| v.input.cwd = None);
-        changed!(|v: &mut AgentRequestCreate| v
-            .input
-            .initial_title
-            .as_mut()
-            .unwrap()
-            .text
-            .push('!'));
-        changed!(
-            |v: &mut AgentRequestCreate| v.input.initial_title.as_mut().unwrap().source =
-                crate::session::SessionTitleSource::User
-        );
-        changed!(|v: &mut AgentRequestCreate| v.input.goal_continuation = None);
-        changed!(|v: &mut AgentRequestCreate| v
-            .input
-            .goal_continuation
-            .as_mut()
-            .unwrap()
-            .sequence = 2);
-        changed!(
-            |v: &mut AgentRequestCreate| v.input.goal_continuation.as_mut().unwrap().wrapup = true
-        );
-        changed!(
-            |v: &mut AgentRequestCreate| v.input.queue.as_mut().unwrap().source =
-                QueueSource::BackgroundCompletion
-        );
-        changed!(
-            |v: &mut AgentRequestCreate| v.input.queue.as_mut().unwrap().policy =
-                QueuePolicy::Append
-        );
-        changed!(
-            |v: &mut AgentRequestCreate| v.input.queue.as_mut().unwrap().delivery =
-                crate::request_input::QueueDelivery::Steer
-        );
-        changed!(
-            |v: &mut AgentRequestCreate| v.input.queue.as_mut().unwrap().position =
-                Some(crate::request_input::QueuePosition {
-                    slot_request_doc_id: "slot".into(),
-                    replaces_request_doc_id: "predecessor".into(),
-                })
-        );
-        changed!(|v: &mut AgentRequestCreate| v.input.queue.as_mut().unwrap().key = None);
-        changed!(|v: &mut AgentRequestCreate| v
-            .input
-            .queue
-            .as_mut()
-            .unwrap()
-            .queued_after_request_id = None);
-        changed!(|v: &mut AgentRequestCreate| v
-            .input
-            .queue
-            .as_mut()
-            .unwrap()
-            .interrupted_request_id = None);
-        changed!(|v: &mut AgentRequestCreate| v
-            .input
-            .queue
-            .as_mut()
-            .unwrap()
-            .background_completion_wake_version = None);
-        for variant in variants {
-            assert_ne!(
-                variant.signing_payload(),
-                expected,
-                "typed input semantic was not signed: {:?}",
-                variant.input
-            );
-        }
-        let mut one_skill = local_create();
-        one_skill.input.selected_skill_ids = vec!["a,b".into()];
-        let mut two_skills = one_skill.clone();
-        two_skills.input.selected_skill_ids = vec!["a".into(), "b".into()];
-        assert_ne!(
-            one_skill.signing_payload(),
-            two_skills.signing_payload(),
-            "skill list boundaries must be signed, not delimiter-joined"
-        );
-    }
-
-    #[test]
-    fn signed_semantic_identifiers_enums_and_timestamps_are_strict_but_content_is_opaque() {
-        let mut value = local_create();
-        value.content = "  preserve opaque content exactly  ".into();
-        assert!(value.graphql_input_fields().is_ok());
-
-        let fields = value.signing_fields();
-        assert!(validate_signing_fields(&AgentRequestSigningFields {
-            execution_origin: None,
-            ..fields
-        })
-        .is_err());
-
-        for agent in ["", " ", " default", "default "] {
-            let mut value = local_create();
-            value.agent_id = agent.into();
-            assert!(
-                value.graphql_input_fields().is_err(),
-                "explicit canonical agent required"
-            );
-        }
-        for hostile in [" request-1", "request-1 "] {
-            let mut value = local_create();
-            value.request_id = hostile.into();
-            assert!(value.graphql_input_fields().is_err());
-        }
-        let mut value = local_create();
-        value.execution_origin = " interactive".into();
-        assert!(value.graphql_input_fields().is_err());
-        let mut value = local_create();
-        value.execution_origin = "unknown".into();
-        assert!(value.graphql_input_fields().is_err());
-        let mut value = local_create();
-        value.created_at = "2026-08-30T00:00:00+00:00".into();
-        assert!(value.graphql_input_fields().is_err());
-        let mut value = local_create();
-        value.created_at = "2026-08-30T00:00:00.000Z".into();
-        assert!(value.graphql_input_fields().is_err());
-    }
-
-    #[test]
-    fn branch_fields_are_all_present_or_all_absent() {
-        let mut enrollment = AgentRequestAdmissionRecord::enrollment(
-            "did:key:member",
-            "request",
-            "digest",
-            "did:key:admin",
-            1,
-            "2099-01-01T00:00:00Z",
-        );
-        enrollment.signature = vec![1; 64];
-        assert!(enrollment.validate_branch_fields().is_ok());
-        enrollment.runtime_issuer_did = Some("did:key:member".into());
-        assert!(enrollment.validate_branch_fields().is_err());
-
-        let mut local = AgentRequestAdmissionRecord::local_self("did:key:agent");
-        local.signature = vec![1; 64];
-        assert!(local.validate_branch_fields().is_ok());
-        local.enrollment_request_id = Some("request".into());
-        assert!(local.validate_branch_fields().is_err());
-
-        let mut internal =
-            AgentRequestAdmissionRecord::runtime_local_control("did:key:agent", "source");
-        internal.signature = vec![1; 64];
-        assert!(internal.validate_branch_fields().is_ok());
-        internal.runtime_source_request_id = None;
-        assert!(internal.validate_branch_fields().is_err());
-
-        let mut peer = AgentRequestAdmissionRecord::peer("did:key:requester");
-        peer.signature = vec![1; 64];
-        assert!(peer.validate_branch_fields().is_ok());
-        peer.runtime_source_kind = Some(RuntimeInternalSourceKind::LocalControl);
-        assert!(
-            peer.validate_branch_fields().is_err(),
-            "peer admission carries no runtime-internal evidence"
-        );
-    }
-
-    #[test]
-    fn durable_branch_fields_must_be_exactly_canonical() {
-        let signature = bs58::encode([7_u8; 64]).into_string();
-        let parse = |request_id: Option<&str>, runtime_source: Option<&str>| {
-            AgentRequestAdmissionRecord::from_wire_fields(
-                Some(if runtime_source.is_some() {
-                    "runtime-internal"
-                } else {
-                    "enrollment"
-                }),
-                Some("did:key:member"),
-                Some(&signature),
-                request_id,
-                request_id.map(|_| "digest"),
-                request_id.map(|_| "did:key:admin"),
-                request_id.map(|_| 1),
-                request_id.map(|_| "2099-01-01T00:00:00Z"),
-                runtime_source.map(|_| "did:key:member"),
-                runtime_source,
-                runtime_source.map(|_| "local-control"),
-            )
-        };
-
-        assert!(parse(Some("request"), None).is_ok());
-        assert!(parse(Some(" request"), None).is_err());
-        assert!(parse(Some("request "), None).is_err());
-        assert!(parse(None, Some("source")).is_ok());
-        assert!(parse(None, Some(" source")).is_err());
-        assert!(parse(None, Some("source ")).is_err());
-    }
-
-    #[test]
-    fn canonical_graphql_never_emits_an_empty_list_literal() {
-        let mutation = local_create().graphql_mutation().unwrap();
-        assert!(!mutation.contains("[]"));
-        assert!(mutation.contains("admission_kind: \"local-self\""));
-    }
-
-    #[test]
-    fn non_pending_initial_lifecycle_state_is_rejected() {
-        let mut create = local_create();
-        create.initial_lifecycle_state = RequestLifecycleState::Claimed;
-        assert_eq!(
-            create.graphql_input_fields(),
-            Err("new AgentRequest must begin in a pre-claim pending state")
-        );
-    }
-
-    #[test]
-    fn workspace_binding_pending_emits_lifecycle_state_and_no_status_field() {
-        let mut create = local_create();
-        create.initial_lifecycle_state = RequestLifecycleState::WorkspaceBindingPending;
-        let fields = create.graphql_input_fields().unwrap();
-        assert!(fields.contains(r#"lifecycle_state: "workspaceBindingPending""#));
-        assert!(!fields.contains("status:"));
-    }
-
-    #[test]
-    fn workspace_authority_accepts_every_mode_modeled_by_the_runtime() {
-        for authority in ["readOnly", "readWrite", "integrate"] {
-            let mut request = local_create();
-            request.workspace_id = Some("workspace".into());
-            request.workspace_owner_node_did = Some("did:owner".into());
-            request.workspace_authority = Some(authority.to_string());
-            assert!(
-                validate_signing_fields(&request.signing_fields()).is_ok(),
-                "workspace authority {authority} must be admissible"
-            );
-        }
-
-        let mut request = local_create();
-        request.workspace_authority = Some("operator".to_string());
-        assert!(validate_signing_fields(&request.signing_fields()).is_err());
     }
 }

@@ -184,28 +184,22 @@ fn session_context_window_follows_the_runtime_resolution_of_the_profile() {
         .context
     };
     let snapshot_for = |context_window: Option<i64>| snapshot_with(&observation, context_window);
-    // An unset profile window is the advertised model's default window.
     let unset = snapshot_for(None);
     assert_eq!(
         (unset.context_window, unset.context_window_error),
         (272_000, None)
     );
-    // An edited window within the advertised maximum is the configured window.
     let edited = snapshot_for(Some(500_000));
     assert_eq!(
         (edited.context_window, edited.context_window_error),
         (500_000, None)
     );
-    // Past the advertised maximum the runtime's capability check rejects the
-    // profile, so it is reported as an error, never as the window in use.
     let rejected = snapshot_for(Some(900_000));
     assert_ne!(rejected.context_window, 900_000);
     assert!(rejected
         .context_window_error
         .as_deref()
         .is_some_and(|error| error.contains("exceeds model model advertised maximum 872000")));
-    // A model that advertises only its maximum: the maximum still bounds the
-    // profile, and an unset window is the runtime default.
     let max_only = advertised(None, Some(200_000));
     let unset = snapshot_with(&max_only, None);
     assert_eq!(

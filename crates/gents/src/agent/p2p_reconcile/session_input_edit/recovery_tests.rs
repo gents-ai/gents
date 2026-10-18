@@ -5,6 +5,7 @@ use gents_protocol::request_admission::{
 };
 use gents_protocol::request_input::{QueueDelivery, QueuePolicy, QueueSource, RequestQueue};
 use gents_protocol::session_input_edit::{PendingMessageEdit, PendingQueueEdit};
+use tokio_util::sync::CancellationToken;
 
 async fn temp_home(p2p: bool) -> EmbeddedHome {
     let tempdir = tempfile::tempdir().unwrap();
@@ -32,10 +33,9 @@ async fn temp_home(p2p: bool) -> EmbeddedHome {
     home
 }
 
-/// Seeds one editable pending message and signs a command replacing it.
 async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionInputEdit {
     let did = home.identity.did();
-    let access = ConfigAccess::Local(home.node.clone());
+    let access = ConfigAccess::local(home.node.clone());
     access.write("test.edit.session", &format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "edit-session", node_did: "{did}", requester_did: "{did}", agent_id: "general", created_at: "2026-10-10T00:00:00Z" }}) {{ _docID }} }}"#,
         did = escape_graphql_string(did))).await.unwrap();
     let mut create = AgentRequestCreate::base(
@@ -109,20 +109,20 @@ async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionI
 }
 
 async fn submit(node: &Arc<EmbeddedNode>, command: &SessionInputEdit) -> String {
-    let response = ConfigAccess::Local(node.clone()).write("test.edit.intent", &format!(r#"mutation {{ create_AgentSessionInputEdit(input: {{ command_id: "{}", requester_did: "{}", node_did: "{}", session_id: "{}", intent_json: "{}" }}) {{ _docID }} }}"#,
+    let response = ConfigAccess::local(node.clone()).write("test.edit.intent", &format!(r#"mutation {{ create_AgentSessionInputEdit(input: {{ command_id: "{}", requester_did: "{}", node_did: "{}", session_id: "{}", intent_json: "{}" }}) {{ _docID }} }}"#,
         escape_graphql_string(&command.command_id), escape_graphql_string(&command.requester_did), escape_graphql_string(&command.node_did), escape_graphql_string(&command.session_id), escape_graphql_string(&serde_json::to_string(command).unwrap()))).await.unwrap();
     crate::graphql::created_doc_id(&response, "AgentSessionInputEdit").unwrap()
 }
 
 async fn raw_receipt(node: &Arc<EmbeddedNode>, id: &str) -> Option<String> {
-    let value = ConfigAccess::Local(node.clone()).execute(&format!(r#"{{ AgentSessionInputEdit(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ receipt_json }} }}"#, escape_graphql_string(id))).await.unwrap();
+    let value = ConfigAccess::local(node.clone()).execute(&format!(r#"{{ AgentSessionInputEdit(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ receipt_json }} }}"#, escape_graphql_string(id))).await.unwrap();
     value["data"]["AgentSessionInputEdit"][0]["receipt_json"]
         .as_str()
         .map(str::to_owned)
 }
 
 async fn requests(node: &Arc<EmbeddedNode>) -> serde_json::Value {
-    ConfigAccess::Local(node.clone()).execute("{ AgentRequest { _docID request_id content lifecycle_state superseded_by_request_doc_id } }").await.unwrap()["data"]["AgentRequest"].clone()
+    ConfigAccess::local(node.clone()).execute("{ AgentRequest { _docID request_id content lifecycle_state superseded_by_request_doc_id } }").await.unwrap()["data"]["AgentRequest"].clone()
 }
 
 #[tokio::test]
@@ -143,7 +143,7 @@ async fn future_issued_command_defers_without_receipt_then_applies() {
     assert_eq!(requests(&home.node).await, before);
 
     let cancel = CancellationToken::new();
-    let worker = tokio::spawn(run_session_input_edit_reconciler(
+    let worker = tokio::spawn(run_session_command_reconciler(
         home.node.clone(),
         home.identity.clone(),
         cancel.clone(),
@@ -179,7 +179,7 @@ async fn overwritten_receipt_after_apply_is_reissued_as_applied() {
     assert_eq!(applied.outcome, SessionInputEditOutcome::Applied);
     let effects = requests(&home.node).await;
     for overwrite in ["{}".to_owned(), String::new()] {
-        ConfigAccess::Local(home.node.clone()).write("test.overwrite.receipt", &format!(r#"mutation {{ update_AgentSessionInputEdit(docID: "{}", input: {{ receipt_json: "{}" }}) {{ _docID }} }}"#,
+        ConfigAccess::local(home.node.clone()).write("test.overwrite.receipt", &format!(r#"mutation {{ update_AgentSessionInputEdit(docID: "{}", input: {{ receipt_json: "{}" }}) {{ _docID }} }}"#,
             escape_graphql_string(&id), escape_graphql_string(&overwrite))).await.unwrap();
         process_command(&home.node, &home.identity, &id)
             .await
@@ -235,7 +235,7 @@ async fn late_twin_of_an_applied_command_is_left_unanswered_without_error() {
         .unwrap();
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
-        let rows = ConfigAccess::Local(owner.node.clone())
+        let rows = ConfigAccess::local(owner.node.clone())
             .execute("{ AgentSessionInputEdit { _docID } }")
             .await
             .unwrap();
@@ -268,18 +268,17 @@ async fn late_twin_of_an_applied_command_is_left_unanswered_without_error() {
 }
 
 async fn overwrite_receipt(node: &Arc<EmbeddedNode>, id: &str, raw: &str) {
-    ConfigAccess::Local(node.clone()).write("test.overwrite.receipt", &format!(r#"mutation {{ update_AgentSessionInputEdit(docID: "{}", input: {{ receipt_json: "{}" }}) {{ _docID }} }}"#,
+    ConfigAccess::local(node.clone()).write("test.overwrite.receipt", &format!(r#"mutation {{ update_AgentSessionInputEdit(docID: "{}", input: {{ receipt_json: "{}" }}) {{ _docID }} }}"#,
         escape_graphql_string(id), escape_graphql_string(raw))).await.unwrap();
 }
 
-/// Runs the reconciler until the command carries a receipt that verifies.
 async fn reconcile_until_verified(
     home: &EmbeddedHome,
     command: &SessionInputEdit,
     id: &str,
 ) -> SessionInputEditReceipt {
     let cancel = CancellationToken::new();
-    let worker = tokio::spawn(run_session_input_edit_reconciler(
+    let worker = tokio::spawn(run_session_command_reconciler(
         home.node.clone(),
         home.identity.clone(),
         cancel.clone(),

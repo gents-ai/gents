@@ -37,18 +37,15 @@ use actions::ActionRequest;
 use config::apply_overrides;
 
 pub const LSP_TOOL_NAME: &str = "lsp";
-/// Action timeout, including indexing retries, when neither the call nor
-/// `integrations.lsp.timeout_secs` sets one.
 pub const DEFAULT_ACTION_TIMEOUT_SECS: u64 = 20;
-/// Ceiling on any action timeout, configured or requested. Language servers
-/// that need longer are indexing, not answering; the call should fail and retry.
+/// Ceiling on any action timeout: servers needing longer are indexing, not
+/// answering; the call should fail and retry.
 pub const MAX_ACTION_TIMEOUT_SECS: u64 = 300;
-/// A model-requested action shorter than this cannot finish indexing retries.
+/// Below this a model-requested action cannot finish indexing retries.
 pub const MIN_REQUESTED_ACTION_TIMEOUT_SECS: u64 = 5;
 
-/// Shared acceptance semantics for persisted LSP results. Keep demo-pack and
-/// live-test qualification on the same definition so ordinary hover text such
-/// as `Result<T, ToolError>` is not mistaken for a failed tool call.
+/// Shared acceptance semantics for persisted LSP results; keep demo-pack and
+/// live-test qualification on the same definition.
 pub fn result_looks_failed(result: &str) -> bool {
     let trimmed = result.trim();
     let lower = trimmed.to_ascii_lowercase();
@@ -110,10 +107,9 @@ pub fn constraints_from_effective_bash(
         crate::tool_surface::EndpointScope::Only(_) => (bash.allowed_argv_prefixes.keys(), false),
     };
     let sandbox = crate::toolset::lsp_sandbox_for_effective(bash.execution_mode);
-    // The platform default disables network only when the effective LSP
-    // sandbox can enforce that promise. In particular, a macOS behavior whose
-    // effective execution mode is Unrestricted must inherit network rather
-    // than constructing the rejected Disabled + Unrestricted combination.
+    // A macOS behavior whose effective execution mode is Unrestricted must
+    // inherit network rather than construct the rejected Disabled +
+    // Unrestricted combination.
     let desired = lsp_network_overlay.unwrap_or_else(|| {
         if matches!(
             sandbox,

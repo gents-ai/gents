@@ -1,7 +1,5 @@
-/* Shared configuration editor rows plus explicit Save/Cancel actions.
-   Fields only update their local draft; persistence is user-controlled. */
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { ExternalLink, FolderOpen, Plus, XIcon } from "lucide-react";
 import { canPickDirectory, pickDirectory } from "../../../lib/nativeShell";
 import { Input } from "@gents/ui/components/input";
@@ -38,12 +36,10 @@ type Common = {
   id: string;
   label: ReactNode;
   description?: ReactNode;
-  /* shown at the field, under its description */
   error?: string;
   disabled?: boolean;
 };
 
-/** What DraftActions reads of a draft (useDraft). */
 type DraftLike = {
   dirty: boolean;
   saving: boolean;
@@ -53,8 +49,6 @@ type DraftLike = {
   reset: () => void;
 };
 
-/** A draft's Save and Cancel, and its error. Each field comes from the
-    draft unless the editor says otherwise. */
 export function DraftActions({
   draft,
   fields,
@@ -66,10 +60,7 @@ export function DraftActions({
   saveLabel = "Save",
 }: {
   draft: DraftLike;
-  /** each field with a problem's element, in the order they are drawn: Save
-      goes to the first instead of saving */
   fields?: Partial<Record<string, string>>;
-  /** the draft's problems, where the editor works them out itself */
   problems?: Partial<Record<string, string>>;
   dirty?: boolean;
   error?: string | null;
@@ -103,8 +94,6 @@ export function DraftActions({
   );
 }
 
-/* Enter leaves a one-line field, as a form would; nothing is saved until
-   the draft's own Save */
 const blurOnEnter = (e: React.KeyboardEvent<HTMLElement>) => {
   if (e.key === "Enter" && !e.shiftKey) (e.target as HTMLElement).blur();
 };
@@ -146,7 +135,6 @@ export function TextRow({
   );
 }
 
-/* a number kept as text while editing; empty means null */
 export function NumberRow({
   id,
   label,
@@ -178,6 +166,25 @@ export function NumberRow({
   );
 }
 
+function useOverflowing(
+  ref: RefObject<HTMLElement | null>,
+  watching: boolean,
+  content: unknown,
+  expanded: boolean,
+) {
+  const [overflowing, setOverflowing] = useState(false);
+  useEffect(() => {
+    const element = ref.current;
+    if (!watching || !element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() =>
+      setOverflowing(element.scrollHeight > element.clientHeight + 1),
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [ref, watching, content, expanded]);
+  return overflowing;
+}
+
 export function AreaRow({
   id,
   label,
@@ -198,22 +205,11 @@ export function AreaRow({
   rows?: number;
   mono?: boolean;
   stacked?: boolean;
-  /* a stacked area that opens showing all of its text */
   expandedByDefault?: boolean;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const [expanded, setExpanded] = useState(expandedByDefault);
-  const [overflowing, setOverflowing] = useState(false);
-  useEffect(() => {
-    const element = ref.current;
-    if (!stacked || !element) return;
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() =>
-      setOverflowing(element.scrollHeight > element.clientHeight + 1),
-    );
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [stacked, value, expanded]);
+  const overflowing = useOverflowing(ref, stacked === true, value, expanded);
   const clipped = stacked && !expanded;
   const Wrap = stacked ? StackedRow : Row;
   return (
@@ -228,7 +224,9 @@ export function AreaRow({
         placeholder={placeholder}
         rows={rows}
         style={clipped ? { maxHeight: `calc(${rows}lh + 1rem + 2px)` } : undefined}
-        className={`${stacked ? "w-full" : "w-96 max-md:w-full"} ${mono ? "font-mono text-xs" : ""}`}
+        /* the kit's textarea grows with its text; beside a label it stops
+           at a height and scrolls, as a stacked one does behind Show all */
+        className={`${stacked ? "w-full" : "max-h-48 w-96 max-md:w-full"} ${mono ? "font-mono text-xs" : ""}`}
       />
       {stacked && (overflowing || expanded) && (
         <div className="-mt-1 flex justify-end">
@@ -289,8 +287,6 @@ export function ChoiceRow({
   );
 }
 
-/* a directory: typed, or chosen with the OS picker where
-   the app has one (the desktop shell). The button appears only then. */
 export function PathRow({
   id,
   label,
@@ -347,10 +343,6 @@ export function PathRow({
   );
 }
 
-/* a field that points at another document. Three affordances, always: pick
-   one, create a new one without leaving the page, open the chosen one.
-   `onCreate` makes the document (a dialog or a direct save) and resolves
-   with its id, or null if the user backed out. */
 export function RefRow({
   id,
   label,
@@ -373,19 +365,13 @@ export function RefRow({
   createLabel: string;
   onCreate?: () => Promise<string | null>;
   openRoute?: (id: string) => Route;
-  /* opens the chosen document beside the page instead of navigating to it */
   onOpen?: (id: string) => void;
 }) {
   const all = none ? [{ value: "", label: none }, ...items] : items;
-  /* the select renders whatever value it is given; the New item is never it */
   const known = all.some((i) => i.value === value);
-  /* a reference to a document that no longer exists: shown as such, and the
-     field is invalid until another is picked (the desktop's DocumentSelection rule) */
   const shown = known ? all : [...all, { value, label: `${value} (unavailable)` }];
   const invalid = error ? true : !known && value ? true : undefined;
-  /* a searchable popup is a dialog: one at a time with the shell's others */
   const popover = useExclusivePopover();
-  /* a label reads "Name · summary"; the summary sits beside the name in the list */
   const labelOf = (v: string) => {
     const full = shown.find((i) => i.value === v)?.label ?? v;
     const at = full.indexOf(" · ");
@@ -435,7 +421,6 @@ export function RefRow({
               {value ? labelOf(value).name : (none ?? "Choose")}
             </span>
           </ComboboxTrigger>
-          {/* wide, so the summary beside each name has room; searchable past a few */}
           <ComboboxContent
             ref={popover.popupRef}
             aria-label={`Choose ${String(label).toLowerCase()}`}
@@ -512,7 +497,6 @@ export function RefRow({
   );
 }
 
-/* several picks from a known list, shown as chips; typing filters the list */
 export function ChipsRow({
   id,
   label,
@@ -532,7 +516,6 @@ export function ChipsRow({
   items: Choice[];
   placeholder?: string;
   empty?: string;
-  /* a last item that makes a new document and adds it to the chips */
   createLabel?: string;
   onCreate?: () => Promise<string | null>;
 }) {
@@ -553,12 +536,14 @@ export function ChipsRow({
           }
           onValueChange={(v) => onChange(v ?? [])}
         >
-          <ComboboxChips className="min-w-0 flex-1">
+          <ComboboxChips className="max-h-24 min-w-0 flex-1 overflow-y-auto">
             <ComboboxValue>
               {(values: string[]) =>
                 values.map((selected) => (
-                  <ComboboxChip key={selected} showRemove={false}>
-                    {name(selected)}
+                  <ComboboxChip key={selected} showRemove={false} className="max-w-48">
+                    <span className="min-w-0 truncate" title={name(selected)}>
+                      {name(selected)}
+                    </span>
                     <Button
                       variant="ghost"
                       size="icon-xs"
@@ -639,7 +624,7 @@ export function TagsRow({
   return (
     <Row label={label} description={description} htmlFor={id}>
       <div
-        className="flex min-h-8 w-96 flex-wrap items-center gap-1 rounded-2xl border border-transparent bg-input/50 bg-clip-padding px-2.5 py-1 text-sm focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/30 max-md:w-full"
+        className="flex max-h-24 min-h-8 w-96 flex-wrap items-center gap-1 overflow-y-auto rounded-2xl border border-transparent bg-input/50 bg-clip-padding px-2.5 py-1 text-sm focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/30 max-md:w-full"
         onClick={(event) =>
           (
             event.currentTarget.querySelector("input") as HTMLInputElement | null
@@ -649,9 +634,11 @@ export function TagsRow({
         {value.map((tag) => (
           <span
             key={tag}
-            className="flex h-[calc(--spacing(5.25))] items-center gap-1 rounded-2xl bg-input px-1.5 pr-0.5 text-xs font-medium whitespace-nowrap dark:bg-input/60"
+            className="flex h-[calc(--spacing(5.25))] max-w-48 items-center gap-1 rounded-2xl bg-input px-1.5 pr-0.5 text-xs font-medium whitespace-nowrap dark:bg-input/60"
           >
-            {tag}
+            <span className="min-w-0 truncate" title={tag}>
+              {tag}
+            </span>
             <Button
               variant="ghost"
               size="icon-xs"
@@ -712,5 +699,35 @@ export function FactRow({
     <Row label={label} description={description}>
       <Fact mono={mono}>{children}</Fact>
     </Row>
+  );
+}
+
+export function LongFactRow({
+  label,
+  description,
+  children,
+}: Omit<Common, "id"> & { children: string }) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const overflowing = useOverflowing(ref, true, children, expanded);
+  return (
+    <StackedRow label={label} description={description}>
+      <p
+        ref={ref}
+        className={`text-sm wrap-break-word whitespace-pre-wrap text-muted-foreground ${expanded ? "" : "line-clamp-3"}`}
+      >
+        {children}
+      </p>
+      {(overflowing || expanded) && (
+        <Button
+          variant="quiet"
+          size="sm"
+          className="-mt-1 -ml-3 self-start"
+          onClick={() => setExpanded((open) => !open)}
+        >
+          {expanded ? "Show less" : "Show all"}
+        </Button>
+      )}
+    </StackedRow>
   );
 }

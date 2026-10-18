@@ -1,8 +1,5 @@
-/* The provider accounts a subscription backend runs on: which account a
-   backend references, what is wrong with it, and the rows and dialogs that
-   manage it. */
 import type { NodeView } from "../../../hooks/fleetStore";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import type {
   InferenceBackendView,
@@ -14,6 +11,7 @@ import { setupErrorMessage } from "../../../lib/setupErrors";
 import { FactRow } from "./editors";
 import { ConfirmDelete } from "./ListDetail";
 import { Row } from "./rows";
+import { someNames } from "./behaviorDraft";
 import {
   Dialog,
   DialogContent,
@@ -25,9 +23,8 @@ import {
 import { RenameDialog } from "../AgentsScreen";
 import { useApp } from "@/app/AppContext";
 import { SUBSCRIPTION } from "./inferenceKinds";
+import { useSetupCatalog } from "@/hooks/useProviders";
 
-/* the stored account a subscription backend runs on: the one with the
-   backend's reference; no reference is the provider's original account */
 function referencedAccount(
   accounts: readonly ProviderAccountView[],
   provider: string,
@@ -41,7 +38,6 @@ function referencedAccount(
   );
 }
 
-/* the account a subscription backend runs on, if it is stored here */
 export function backendAccount(
   accounts: readonly ProviderAccountView[],
   b: InferenceBackendView,
@@ -50,8 +46,6 @@ export function backendAccount(
   return sub ? referencedAccount(accounts, sub.provider, b.accountRef) : undefined;
 }
 
-/* a backend as a profile sees it: a subscription backend serves only on its
-   enabled account and is named "<label> · <provider>"; others always serve */
 export function profileBackend(
   accounts: readonly ProviderAccountView[],
   b: InferenceBackendView,
@@ -66,9 +60,6 @@ export function profileBackend(
   };
 }
 
-/* what an account action leaves behind: the profiles that fail their next
-   turn, in the CLI's words, and for remove which backends go with it (an
-   added account's backends that no profile uses, as the CLI's remove) */
 export function accountWarnings(
   deployment: NodeView,
   accounts: readonly ProviderAccountView[],
@@ -81,11 +72,11 @@ export function accountWarnings(
     deployment.inferenceProfiles.filter((p) => p.backend_id === b.backendId);
   const profiles = backends.flatMap(usedBy).map((p) => p.display_name ?? p.profile_id);
   const names = (list: InferenceBackendView[]) =>
-    list.map((b) => b.name ?? b.backendId).join(", ");
+    someNames(list.map((b) => b.name ?? b.backendId));
   const gone = account.accountRef ? backends.filter((b) => !usedBy(b).length) : [];
   const kept = backends.filter((b) => !gone.includes(b));
   const disconnect = profiles.length
-    ? `These profiles use this account and fail their next turn until moved to another backend: ${profiles.join(", ")}.`
+    ? `These profiles use this account and fail their next turn until moved to another backend: ${someNames(profiles)}.`
     : "";
   const remove = [
     disconnect,
@@ -104,8 +95,6 @@ export type AccountAction = {
   account: ProviderAccountView;
 };
 
-/* rename, disconnect and remove for an account, opened from its row's menu;
-   none of them edits a profile or a backend */
 export function AccountDialogs({
   deployment,
   accounts,
@@ -202,7 +191,6 @@ export function AccountDialogs({
   );
 }
 
-/* the account card for a subscription backend */
 export function AccountRows({
   deployment,
   kind,
@@ -216,23 +204,39 @@ export function AccountRows({
 }) {
   const { actions } = useApp();
   const sub = SUBSCRIPTION[kind]!;
+  const { catalog } = useSetupCatalog();
+  const signInSupported =
+    !catalog ||
+    catalog.providers.some(
+      (provider) =>
+        provider.id === sub.providerId && provider.authMethods.includes(sub.authMethod),
+    );
   const stored = referencedAccount(accounts, sub.provider, accountRef);
   const account = stored?.enabled ? stored : undefined;
-  /* signing in here would add a new account, never this one */
   const elsewhere = accountRef !== null && !stored;
   const unsaved = accounts.some((a) => a.provider === sub.provider && a.pendingSave);
   const [busy, setBusy] = useState(false);
-  const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
+  const [acting, setActing] = useState<AccountAction | null>(null);
+  /* a sign-in the person stopped ends as a failed login; it is not an error */
+  const cancelled = useRef(false);
   const signIn = async () => {
+    cancelled.current = false;
     setBusy(true);
+    setSigningIn(true);
     try {
       await actions.signInToProvider(deployment.nodeDid, sub.login);
       toast("Signed in");
     } catch (error) {
-      toast(`Sign in failed: ${setupErrorMessage(error)}`);
+      if (!cancelled.current) toast(`Sign in failed: ${setupErrorMessage(error)}`);
     } finally {
       setBusy(false);
+      setSigningIn(false);
     }
+  };
+  const cancelSignIn = () => {
+    cancelled.current = true;
+    void actions.cancelProviderSignIn(sub.login);
   };
   const retrySave = async () => {
     setBusy(true);
@@ -241,21 +245,6 @@ export function AccountRows({
       toast("Signed in");
     } catch (error) {
       toast(`Save failed: ${setupErrorMessage(error)}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-  const disconnect = async () => {
-    if (!account) return;
-    setBusy(true);
-    try {
-      await actions.disconnectProviderAccount(deployment.nodeDid, account.credentialId);
-      toast("Disconnected");
-      setConfirmingDisconnect(false);
-    } catch (error) {
-      toast(
-        `Disconnect failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
     } finally {
       setBusy(false);
     }
@@ -273,52 +262,40 @@ export function AccountRows({
           {stored && (
             <Badge variant="secondary">{account ? "Connected" : "Disabled"}</Badge>
           )}
-          {account && !confirmingDisconnect && (
+          {account && (
             <Button
               size="sm"
               variant="quiet"
               disabled={busy}
-              onClick={() => setConfirmingDisconnect(true)}
+              onClick={() => setActing({ action: "disconnect", account })}
             >
               Disconnect
             </Button>
-          )}
-          {account && confirmingDisconnect && (
-            <>
-              <span className="text-xs text-muted-foreground">
-                Disconnect {sub.title}?
-              </span>
-              <Button
-                size="sm"
-                variant="quiet"
-                disabled={busy}
-                onClick={() => setConfirmingDisconnect(false)}
-              >
-                Keep connected
-              </Button>
-              <Button
-                size="sm"
-                variant="destructive"
-                disabled={busy}
-                onClick={disconnect}
-              >
-                {busy ? "Disconnecting…" : "Disconnect now"}
-              </Button>
-            </>
           )}
           {unsaved && actions.canRetryProviderSave ? (
             <Button size="sm" variant="brand" disabled={busy} onClick={retrySave}>
               Retry save
             </Button>
           ) : null}
-          <Button
-            size="sm"
-            variant={stored || unsaved ? "outline" : "brand"}
-            disabled={busy}
-            onClick={signIn}
-          >
-            {busy ? "Signing in…" : stored ? "Reconnect" : "Connect"}
-          </Button>
+          {signingIn && (
+            <Button size="sm" variant="quiet" onClick={cancelSignIn}>
+              Cancel
+            </Button>
+          )}
+          {signInSupported ? (
+            <Button
+              size="sm"
+              variant={stored || unsaved ? "outline" : "brand"}
+              disabled={busy}
+              onClick={signIn}
+            >
+              {signingIn ? "Signing in…" : stored ? "Reconnect" : "Connect"}
+            </Button>
+          ) : (
+            <span className="text-xs text-muted-foreground">
+              Sign in from the desktop app.
+            </span>
+          )}
         </span>
       </Row>
       {stored && (
@@ -330,6 +307,12 @@ export function AccountRows({
           <FactRow label="Label">{stored.label}</FactRow>
         </>
       )}
+      <AccountDialogs
+        deployment={deployment}
+        accounts={accounts}
+        acting={acting}
+        onClose={() => setActing(null)}
+      />
     </>
   );
 }

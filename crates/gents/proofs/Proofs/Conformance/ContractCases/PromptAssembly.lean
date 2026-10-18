@@ -1,32 +1,11 @@
 import Proofs.Conformance.ContractCases.Types
 import Proofs.PromptAssembly
 
-/-!
-# PromptAssembly contract cases
-
-Witness rows for the provider-input sanitizer, the assembled layer order, and
-tool-argument repair.
-
-**Every expected value in this file is computed by running the Lean model**, not
-written by hand. `expected` is literally `Provider.sanitizeForProviderGlobal input`;
-`expectedTwice` is the model applied twice; `splits` are the model applied to
-each suffix. That is what makes the Rust fence mechanical rather than social: a
-change to either the model or the Rust sanitizer breaks the equality, and no
-human transcription sits in between.
-
-Provider-validity of each expected output is *not* emitted as data, because it
-is a theorem — `Provider.sanitizeForProviderGlobal_sound`. If production reproduces
-the emitted output exactly, it inherits that validity. This is why the Rust
-fence needs no hand-rolled pairing oracle.
--/
-
 namespace Conformance.ContractCases
 
 open PromptAssembly.Content (Item)
 open PromptAssembly.Provider (ProviderRow)
 
-/-- Native header ownership and authored-key class at the history boundary.
-The class is representation input, not a second filtering policy. -/
 structure CurrentInputHeaderCase where
   request : String
   kind : String
@@ -65,6 +44,56 @@ def CurrentInputCase.retainedIndices (witness : CurrentInputCase) : List Nat :=
 example : currentInputCases[0]?.map CurrentInputCase.retainedIndices = some [0, 3, 4, 5] := by
   native_decide
 
+structure WakeInputRow where
+  header : String
+  notificationKey : Option String
+  deriving Repr
+
+structure WakeInputCase where
+  name : String
+  claimed : List String
+  acknowledged : List String
+  rows : List WakeInputRow
+  retainedHeaders : Option (List String) := none
+  deriving Repr
+
+def WakeInputCase.currentKeys (witness : WakeInputCase) : List String :=
+  PromptAssembly.CurrentInput.wakeNotificationKeys witness.claimed witness.acknowledged
+
+def WakeInputCase.history (witness : WakeInputCase) : List WakeInputRow :=
+  witness.rows.filter fun row => witness.retainedHeaders.all (·.contains row.header)
+
+def WakeInputCase.notifications (witness : WakeInputCase) : List WakeInputRow :=
+  witness.rows.filter fun row => row.notificationKey.any witness.currentKeys.contains
+
+def WakeInputCase.expectedOrder (witness : WakeInputCase) : List String :=
+  (PromptAssembly.CurrentInput.wakeEntry
+    (fun row => row.notificationKey.any witness.currentKeys.contains)
+    witness.history witness.notifications).map (·.header)
+
+def wakeInputCases : List WakeInputCase :=
+  [ ⟨"successor_wake_moves_only_new_notification", ["a", "b"], ["a"],
+      [⟨"notification-a", some "a"⟩, ⟨"review-0", none⟩,
+       ⟨"notification-b", some "b"⟩, ⟨"answer-0", none⟩], none⟩
+  , ⟨"first_wake_keeps_notifications_together", ["a", "b"], [],
+      [⟨"notification-a", some "a"⟩, ⟨"answer-before", none⟩,
+       ⟨"notification-b", some "b"⟩], none⟩
+  , ⟨"unclaimed_notification_stays_in_history", ["a"], ["a"],
+      [⟨"notification-a", some "a"⟩, ⟨"notification-b", some "b"⟩,
+       ⟨"answer", none⟩], none⟩
+  , ⟨"empty_claim_does_not_reorder", [], [],
+      [⟨"prompt", none⟩, ⟨"answer", none⟩], none⟩
+  , ⟨"several_new_notifications_keep_append_order", ["a", "b", "c"], ["a"],
+      [⟨"notification-a", some "a"⟩, ⟨"notification-b", some "b"⟩,
+       ⟨"notification-c", some "c"⟩, ⟨"answer", none⟩], none⟩
+  , ⟨"compacted_notification_remains_current_input", ["a", "b"], ["a"],
+      [⟨"notification-a", some "a"⟩, ⟨"notification-b", some "b"⟩,
+       ⟨"answer", none⟩], some ["answer"]⟩
+  , ⟨"imported_notification_stays_in_history", ["a"], [],
+      [⟨"imported-notification", some "imported"⟩, ⟨"notification-a", some "a"⟩,
+       ⟨"answer", none⟩], none⟩
+  ]
+
 /-- A content item, flattened for emission. `value` is the text/reasoning index
 for `text`/`other`, and the tool-call id for `call`. -/
 structure PromptAssemblyItemCase where
@@ -72,6 +101,8 @@ structure PromptAssemblyItemCase where
   value : Nat
   deriving Repr
 
+/-- A grouped-wire turn persisted in native emission order: reasoning, then
+text, then a call, closed by its result and followed by a later wake. -/
 structure PromptAssemblyRowCase where
   role : String
   kind : String
@@ -79,6 +110,8 @@ structure PromptAssemblyRowCase where
   content : List PromptAssemblyItemCase
   deriving Repr
 
+/-- The same shape with an unpaired call between reasoning and text: pairing
+drops that block, so the retained persisted indices are not contiguous. -/
 structure PromptAssemblySplitCase where
   index : Nat
   expected : List PromptAssemblyRowCase
@@ -148,15 +181,11 @@ structure PromptAssemblyRetentionCase where
   rollingSummaryInputBudget : Nat
   deriving Repr
 
-/-! ## Building witness rows -/
-
 private def itemCase : Item → PromptAssemblyItemCase
   | .text index => { item := "text", value := index }
   | .other index => { item := "other", value := index }
   | .call callId => { item := "call", value := callId }
 
-/-- Provider-specific intra-assistant order. `other` can represent reasoning,
-but this abstract case does not carry signatures or claim Claude acceptance. -/
 structure PromptAssemblyAssistantOrderCase where
   name : String
   orderMode : String
@@ -188,14 +217,6 @@ def promptAssemblyAssistantOrderCases : List PromptAssemblyAssistantOrderCase :=
       [.text 4, .other 5, .call 13, .other 6]
   ]
 
-/-- The announced call ids, read off the content in content order.
-
-`Finset` has no computable ordered projection here (`Finset.toList` is
-noncomputable and the contract generator must actually run), so the emitted list
-comes from the content instead. Coherence makes that the same set: for an
-assistant row, `Content.callsOf content = callIds` by `Coherent`, which
-`witnessesAreCoherent` below discharges for every input witness and
-`Provider.allCoherent_sanitizeForProvider` propagates to every output. -/
 private def announcedIds (content : List Item) : List Nat :=
   content.filterMap Item.callId?
 
@@ -224,54 +245,34 @@ private def rowCase (pr : ProviderRow) : PromptAssemblyRowCase :=
 private def rowCases (rows : List ProviderRow) : List PromptAssemblyRowCase :=
   rows.map rowCase
 
-/-! ## The witness transcripts
-
-Constructed so that every row is `Coherent`: an assistant row's announced call
-set is exactly the set of `call` items in its content. -/
-
 private def mkRow (sequence : Nat) (role : Transcript.MessageRole)
     (kind : Transcript.MessageKind) (content : List Item) : ProviderRow :=
   { row := ⟨sequence, 0, sequence, role, kind⟩, content := content }
 
-/-- An assistant turn announcing `ids`, optionally carrying prose first. -/
 private def assistantCalls (sequence : Nat) (ids : List Nat)
     (prose : List Item := []) : ProviderRow :=
   mkRow sequence .assistant (.assistantToolCalls ids.toFinset)
     (prose ++ ids.map Item.call)
 
-/-- A tool result closing `callId`. Production threads exactly one result per
-user message (`loop_stream.rs`), so one row is one result. -/
 private def toolResult (sequence : Nat) (callId : Nat) : ProviderRow :=
   mkRow sequence .user (.toolResult callId ⟨0, callId, 0⟩) []
 
-/-- Ordinary user prose. -/
 private def userText (sequence : Nat) (index : Nat) : ProviderRow :=
   mkRow sequence .user .ordinary [Item.text index]
 
-/-- Assistant prose with no tool calls. -/
 private def assistantText (sequence : Nat) (index : Nat) : ProviderRow :=
   mkRow sequence .assistant .ordinary [Item.text index]
 
-/-- Same coherent, paired transcript under both provider order modes. The
-expected rows come from the complete sanitizer, not a copied ordering policy;
-its soundness still requires the Provider owner's UniqueCallIds premise. -/
 structure PromptAssemblyModeSanitizeCase where
   name : String
   orderMode : String
   input : List PromptAssemblyRowCase
   expected : List PromptAssemblyRowCase
   expectedTwice : List PromptAssemblyRowCase
-  /-- The native-order view replay association is carried on; `expected` is
-  its provider ordering (`Provider.sanitizeForProviderGlobalFor_orders_association_view`). -/
   association : List PromptAssemblyRowCase
-  /-- Per `association` row, each retained block's position in its input row:
-  the persisted block indices a physical assistant row carries through every
-  tagged projection pass. Empty for user rows, which carry no association. -/
   associationIndices : List (List Nat)
   deriving Repr
 
-/-- Position of each retained block within the input row of the same sequence.
-Witness items are distinct within a row, so the position is unambiguous. -/
 private def retainedBlockIndices (input : List ProviderRow) (out : ProviderRow) :
     List Nat :=
   match out.row.role, input.find? (fun pr => pr.row.sequence == out.row.sequence) with
@@ -302,8 +303,6 @@ private def interleavedCoherentRows : List ProviderRow :=
   , toolResult 1 1
   , userText 2 6 ]
 
-/-- A grouped-wire turn persisted in native emission order: reasoning, then
-text, then a call, closed by its result and followed by a later wake. -/
 private def reasoningTextCallRows : List ProviderRow :=
   [ userText 0 3
   , mkRow 1 .assistant (.assistantToolCalls [1].toFinset)
@@ -311,8 +310,6 @@ private def reasoningTextCallRows : List ProviderRow :=
   , toolResult 2 1
   , userText 3 6 ]
 
-/-- The same shape with an unpaired call between reasoning and text: pairing
-drops that block, so the retained persisted indices are not contiguous. -/
 private def reasoningUnpairedCallTextRows : List ProviderRow :=
   [ userText 0 3
   , mkRow 1 .assistant (.assistantToolCalls [1, 2].toFinset)
@@ -356,32 +353,22 @@ private def witnessTranscripts : List (String × List ProviderRow) :=
       [ assistantCalls 0 [1, 2]
       , toolResult 1 1
       , toolResult 2 2 ])
-  , -- The case the row-only model cannot express: assistant prose rides along
-    -- with a call that never resolved. Production keeps the message and its
-    -- prose; the row is demoted to `.ordinary`.
-    ("assistant-prose-survives-its-unpaired-call",
+  , ("assistant-prose-survives-its-unpaired-call",
       [ userText 0 0
       , assistantCalls 1 [1] [Item.text 7]
       , userText 2 1 ])
   , ("assistant-prose-with-mixed-paired-and-unpaired-calls",
       [ assistantCalls 0 [1, 2] [Item.text 7, Item.other 8]
       , toolResult 1 1 ])
-  , -- Content arriving out of canonical order: text after the calls. Stage 3
-    -- reorders it; the announced call set is unchanged.
-    ("content-order-is-normalized",
+  , ("content-order-is-normalized",
       [ mkRow 0 .assistant (.assistantToolCalls [1].toFinset)
           [Item.call 1, Item.other 5, Item.text 6]
       , toolResult 1 1 ])
-  , -- Empty messages: Rust drops them, asymmetrically across the two stages
-    -- (an empty user message goes in stage 1, an empty assistant message is
-    -- carried through and pruned in stage 2). The row-only model kept both.
-    ("empty-messages-are-dropped",
+  , ("empty-messages-are-dropped",
       [ mkRow 0 .assistant .ordinary []
       , mkRow 1 .user .ordinary []
       , userText 2 0 ])
-  , -- An empty message does *not* end the active turn: Rust clears pending
-    -- calls only on plain content. The pair must survive it intact.
-    ("empty-message-does-not-break-an-open-turn",
+  , ("empty-message-does-not-break-an-open-turn",
       [ assistantCalls 0 [1]
       , mkRow 1 .user .ordinary []
       , toolResult 2 1 ])
@@ -400,29 +387,16 @@ private def witnessTranscripts : List (String × List ProviderRow) :=
       , userText 6 9 ])
   ]
 
-/-- Every witness row is `Coherent` — its announced call set is exactly the
-`call` items in its content. This is what licenses `announcedIds` to read the
-emitted call ids off the content, and it is the hypothesis
-`Provider.sanitizeForProviderGlobal_sound` and `_idempotent` need. Checked by
-`decide`, so a witness that drifts out of coherence fails the build. -/
 theorem witnessesAreCoherent :
     ∀ witness ∈ witnessTranscripts, PromptAssembly.Provider.AllCoherent witness.2 := by
   decide
 
-/-- The *other* premise of `Provider.sanitizeForProviderGlobal_sound` and
-`_idempotent`. Without this the contract's claim — that production reproducing
-an emitted output thereby inherits provider-validity — does not actually follow,
-because the theorem would be quantified over inputs the witnesses need not
-satisfy. Checked by `decide`, so a witness that reuses a call id across rows
-fails the build. -/
 theorem witnessesHaveUniqueCallIds :
     ∀ witness ∈ witnessTranscripts,
       PromptAssembly.UniqueCallIds
         (PromptAssembly.Provider.project witness.2) := by
   decide
 
-/-- Both premises together, so the soundness the emitted rows rest on is
-discharged for every witness rather than asserted in a comment. -/
 theorem witnessOutputsAreProviderValid :
     ∀ witness ∈ witnessTranscripts,
       PromptAssembly.ProviderValid
@@ -451,11 +425,6 @@ private def sanitizeCase (witness : String × List ProviderRow) :
 def promptAssemblySanitizeCases : List PromptAssemblySanitizeCase :=
   witnessTranscripts.map sanitizeCase
 
-/-! ## Layer order
-
-Emitted from `PromptAssembly.assemble`, whose
-existing layer-order theorems put the task prompt last. -/
-
 private def slotName : PromptAssembly.Slot → String
   | .preamble _ => "preamble"
   | .summaryReminder => "summaryReminder"
@@ -481,14 +450,6 @@ def promptAssemblyLayerCases : List PromptAssemblyLayerCase :=
         (PromptAssembly.assemble
           shape.2.1 shape.2.2.1 shape.2.2.2).map slotName }
 
-/-! ## Tool-argument repair
-
-Emitted from `PromptAssembly.ToolArgs.repairArgs`, fencing
-`repair_is_payload_only` (repair rewrites argument payloads only) and
-`repair_idempotent` (a second pass is a no-op). -/
-
-/-- A stand-in payload type whose leaf sanitizer is idempotent, matching the
-shape of the Rust repair: normalize to an object, then sanitize leaves. -/
 private inductive Payload where
   | empty
   | raw
@@ -526,9 +487,6 @@ private def repairVectors : List (String × PromptAssembly.ToolArgs Payload) :=
   , ("null-collapses", .null)
   ]
 
-/-- Whether the repair rewrote only the payload — i.e. the result is an object
-whose payload is the leaf-sanitized original. True exactly on object inputs,
-which is what `repair_is_payload_only` states. -/
 private def isPayloadOnly : PromptAssembly.ToolArgs Payload → Bool
   | .object _ => true
   | _ => false
@@ -542,15 +500,6 @@ def promptAssemblyRepairCases : List PromptAssemblyRepairCase :=
     , expectedTwice := argsName (PromptAssembly.repairArgs Payload.empty once)
     , payloadOnly := isPayloadOnly vector.2 }
 
-/-! ## Provider input and dynamic output budgets
-
-The old daemon trigger reserved the full configured output ceiling on every
-turn, which reduced the 512K DeepSeek V4 Flash deployment's effective input to
-65,536 tokens. These cases are computed from `PromptAssembly.Budget`; the
-observed 118,785 + 393,216 = 512,001 provider rejection now demonstrates why
-the output ceiling must be clamped to the remaining context on each dispatch.
--/
-
 private structure BudgetWitness where
   name : String
   contextWindow : Nat
@@ -560,9 +509,7 @@ private structure BudgetWitness where
   requestTokens : Nat
 
 private def budgetWitnesses : List BudgetWitness :=
-  [ -- Degenerate and one-token contexts pin saturating subtraction and the
-    -- strict positive-output dispatch boundary.
-    { name := "zero-context-zero-output"
+  [ { name := "zero-context-zero-output"
     , contextWindow := 0, maxOutputTokens := 0, thresholdBasisPoints := 10000
     , promptTokens := 0, requestTokens := 0 }
   , { name := "zero-context-positive-output"
@@ -619,10 +566,6 @@ private def budgetWitnesses : List BudgetWitness :=
   , { name := "validated-summary-output-maximum"
     , contextWindow := 65536, maxOutputTokens := 32768, thresholdBasisPoints := 7500
     , promptTokens := 32768, requestTokens := 0 }
-    -- Thresholds that are *not* exactly representable in binary. Computing the
-    -- budget as `contextWindow × threshold` in floating point and truncating
-    -- lands one token low on each of these, so before #1008 they would have
-    -- failed the contract. Both sides now divide basis points as integers.
   , { name := "non-dyadic-threshold-57pct-boundary"
     , contextWindow := 10000, maxOutputTokens := 1000, thresholdBasisPoints := 5700
     , promptTokens := 5700, requestTokens := 0 }
@@ -669,10 +612,6 @@ private def budgetCase (witness : BudgetWitness) : PromptAssemblyBudgetCase :=
 
 def promptAssemblyBudgetCases : List PromptAssemblyBudgetCase :=
   budgetWitnesses.map budgetCase
-
-/-! The owned loop must apply the same gate to every provider completion, not
-only to the entry turn. These traces cross the boundary after one or more safe
-turns so a first-turn-only implementation cannot satisfy the generated fence. -/
 
 private structure TurnBudgetWitness where
   name : String
@@ -730,11 +669,6 @@ private def turnBudgetCase
 def promptAssemblyTurnBudgetCases : List PromptAssemblyTurnBudgetCase :=
   turnBudgetWitnesses.map turnBudgetCase
 
-/-! ## Static-overhead-aware compaction retention
-
-These rows keep the configured cap, saturating fixed-layer subtraction, and
-exact three-quarter reservation under one Lean-owned calculation. -/
-
 private structure RetentionWitness where
   name : String
   configuredKeepRecent : Nat
@@ -790,11 +724,6 @@ private def retentionCase (witness : RetentionWitness) : PromptAssemblyRetention
 def promptAssemblyRetentionCases : List PromptAssemblyRetentionCase :=
   retentionWitnesses.map retentionCase
 
-/-! ## Claude content-block map (Track B / B2)
-
-Every `outcome` / `ids` field is `mapTurn` (or its error), not a hand oracle.
-The Completer parser must reproduce these results. -/
-
 structure PromptAssemblyClaudeMapCase where
   name : String
   surface : List String
@@ -831,11 +760,6 @@ def promptAssemblyClaudeMapCases : List PromptAssemblyClaudeMapCase :=
   , claudeMapCase "duplicate-id" ["echo"]
       [.toolUse 1 "echo", .toolUse 1 "echo"]
   ]
-
-/-! ## Claude Messages body (single wire)
-
-`system` is `systemBlocks preamble (splitSystem rows).1`; `toolsPresent` is
-`(toolsField tools).isSome`. Rows are tagged `system:<text>` / `other:<tag>`. -/
 
 structure PromptAssemblyClaudeBodyCase where
   name : String
@@ -884,11 +808,6 @@ def promptAssemblyClaudeBodyCases : List PromptAssemblyClaudeBodyCase :=
         effort := some "high"
         selectedEffort := PromptAssembly.ClaudeMap.selectedEffort none (some "high") }]
 
-/-! ## Claude Messages SSE stream (single wire)
-
-`outcome` / `calls` are `runStream`, not a hand oracle. Event tags:
-`text:<t>`, `start:<id>:<name>:<input>` (empty input = none), `delta:<partial>`, `stop`. -/
-
 structure PromptAssemblyClaudeStreamCase where
   name : String
   surface : List String
@@ -935,10 +854,6 @@ def promptAssemblyClaudeStreamCases : List PromptAssemblyClaudeStreamCase :=
   , claudeStreamCase "two-blocks-in-order" ["echo", "list_files"]
       [.start 1 "echo" none, .delta "{}", .stop, .text "then", .start 2 "list_files" none, .delta "{\"path\":\".\"}", .stop]
   ]
-
-/-! The two follow-up groups below retain the typed modeled inputs and derive
-their expectations through ClaudeMap's existing stream fold and replay owner.
-The legacy tool-call group above deliberately keeps its current native consumer. -/
 
 structure PromptAssemblyClaudeThinkingStreamCase where
   name : String
@@ -1015,6 +930,10 @@ def promptAssemblyClaudeReplayCases : List PromptAssemblyClaudeReplayCase :=
       [.reasoning none [.text (utf8Bytes "考慮") (some "署名"),
                         .redacted (utf8Bytes "opaque")],
        .toolCall 1 "call-1" none "echo" (utf8Bytes "{}") none none]
+  , claudeReplayCase "streamed-signed-redacted-tool"
+      [.reasoning none [.text (utf8Bytes "考慮") (some "署名")],
+       .reasoning none [.redacted (utf8Bytes "opaque")],
+       .toolCall 1 "call-1" none "echo" (utf8Bytes "{}") none none]
   , claudeReplayCase "empty-text-with-signature"
       [.reasoning none [.text [] (some "signature")]]
   , claudeReplayCase "empty-ordinary-text-omitted"
@@ -1056,10 +975,6 @@ private def ordinaryBlock : CanonicalOutput.MessageBlock (List UInt8) → List U
   | .toolResult _ id _ _ => labeled "tool_result" (utf8Bytes id)
   | .media _ => labeled "media" []
 
-/-- A representation of one provider request: the context item, then per row a
-message header (Claude only) and its blocks. Like the Claude encoder, a message
-with no rendered block is omitted. It has the structure of the native
-flattening, so the selection owner runs on it unchanged. -/
 def replayCaseAssemble (wire : PromptAssembly.ClaudeMap.ReplayWire) (context : List UInt8)
     (rows : List PromptAssembly.ClaudeMap.TaggedReplayRow) :
     List PromptAssembly.ClaudeMap.ReplayFlatItem :=
@@ -1078,9 +993,6 @@ def replayCaseAssemble (wire : PromptAssembly.ClaudeMap.ReplayWire) (context : L
         .ordinary (labeled "message" (utf8Bytes (row.physicalHeader.getD "user"))) :: blocks
     | .responses, _ => blocks
 
-/-! The checkpoint cases carry canonical coordinates independently of the
-surviving rows. `carrierIds` are observations only, deliberately duplicated in
-the positive case; neither construction nor replay reads them. -/
 structure PromptAssemblyClaudeCheckpointResolution where
   tag : PromptAssembly.ClaudeMap.ReplayTag
   evidence : PromptAssembly.ClaudeMap.ResolvedReplayEvidence
@@ -1210,14 +1122,6 @@ def promptAssemblyClaudeCheckpointCases : List PromptAssemblyClaudeCheckpointCas
   ]
 
 
-/-! ## Replay selection cases
-
-Every case carries the durable inputs of one selection (rows, resolved accepted
-evidence with its flattened capture, issuer and wire), the stage rows the owned
-loop must assemble, the assembled body, and the selected rows. Each case is a
-fresh evaluation over durable facts, so it is also the post-restart case: no
-in-memory frontier exists. -/
-
 structure PromptAssemblyReasoningSuffixCase where
   name : String
   issuer : PromptAssembly.ClaudeMap.ReplayIssuer
@@ -1256,9 +1160,6 @@ private def turnStartsFrom (offset : Nat) (positions : List Nat) :
       let tail ← turnStartsFrom offset positions (seen + count) rest
       some ((position - offset) :: tail)
 
-/-- The literal provider acceptance rule on a sent body: the prefix before each
-replayed turn equals its accepted producing request with a leading run of
-reasoning removed. -/
 def replaySentAccepted (wire : PromptAssembly.ClaudeMap.ReplayWire)
     (resolve : PromptAssembly.ClaudeMap.ReplayTag →
       List PromptAssembly.ClaudeMap.ResolvedReplayEvidence)
@@ -1304,7 +1205,6 @@ structure ReplaySim where
   stripNext : Bool
   cases : List PromptAssemblyReasoningSuffixCase
   accepted : Bool
-  /-- Turn numbers replayed in the last selection. -/
   lastReplayed : List Nat
 
 private def simTag (turn : Nat) : PromptAssembly.ClaudeMap.ReplayTag :=
@@ -1439,11 +1339,8 @@ def replayScenarios : List ReplaySim :=
        u "d", r 4 []]
   ]
 
-/-- Every body the scenarios send satisfies the provider acceptance rule. -/
 example : replayScenarios.all (·.accepted) = true := by native_decide
 
-/-- Expected replayed turns in each scenario's final request, checked against
-model execution. -/
 example : replayScenarios.map (fun sim => (sim.name, sim.lastReplayed)) =
     [ ("append-only", [1, 2, 3])
     , ("interleaved-blocks", [1, 2])
@@ -1555,7 +1452,6 @@ def promptAssemblyReplayShapeCases : List PromptAssemblyReplayShapeCase :=
       { shapeTwoBlockRow with blockIndices := [1, 0] } [1]
   ]
 
-/-- Flat prefix cases for the acceptance checks themselves. -/
 structure PromptAssemblyReplayPrefixCase where
   name : String
   captured : List PromptAssembly.ClaudeMap.ReplayFlatItem

@@ -1,7 +1,3 @@
-//! Fences for #732: glob understands brace alternation (globset) and
-//! grep understands real regex (Rust regex syntax, linear-time) with a
-//! literal fallback — both were silent zero-match traps for agents.
-
 mod support;
 use support::{run_glob, run_grep, unique_root};
 
@@ -50,8 +46,6 @@ fn grep_invalid_regex_falls_back_to_literal() {
 
 #[test]
 fn grep_case_insensitive_folds_unicode_for_ascii_needles() {
-    // Case-insensitive matching must use Unicode simple case folding, not
-    // ASCII-only folding (the Kelvin sign U+212A folds to 'k').
     let root = unique_root("kelvin");
     std::fs::write(root.join("units.txt"), "\u{212A}elvin scale\n").unwrap();
 

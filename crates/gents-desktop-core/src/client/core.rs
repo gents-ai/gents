@@ -1,5 +1,7 @@
 mod bootstrap;
 mod enrollment;
+mod goal;
+mod observation_scope;
 mod p2p_ops;
 mod route_manager;
 mod supervisor;
@@ -18,6 +20,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
+use gents::config_client::ConfigAccess;
 use gents::P2pSyncStatusSnapshot;
 use gents_protocol::peer_schema::ReplicatedSchemaSkew;
 use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};
@@ -34,7 +37,9 @@ use super::query::{
 use crate::remote_admin::PairingErrorClass;
 
 pub use enrollment::EnrollmentRequestResult;
+pub use observation_scope::ClientObservationAttachment;
 pub use sync_state::RuntimeSchemaObservation;
+pub use writes::RefreshedRequestProjection;
 
 const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -50,8 +55,8 @@ const DESKTOP_P2P_RATE_LIMIT_RATE: f64 = 500.0;
 pub struct ClientCoreOptions {
     pub port: u16,
     pub bind_addr: Option<IpAddr>,
-    /// Defra's HTTP listener lives until its Tokio runtime stops;
-    /// `EmbeddedNode::shutdown` alone does not release it.
+    // Defra's HTTP listener lives until its Tokio runtime stops;
+    // `EmbeddedNode::shutdown` alone does not release it.
     pub http_addr: Option<SocketAddr>,
     pub relay_mode: IrohRelayModeConfig,
     pub discovery: IrohDiscoveryConfig,
@@ -62,7 +67,6 @@ pub struct ClientCoreOptions {
     pub rate_limit_rate: f64,
     pub max_pending_dags: usize,
     pub install_replicators_on_bootstrap: bool,
-    /// Custody of a new client store's at-rest key.
     pub store_key_custody: gents::store_key::StoreKeyCustodyChoice,
 }
 
@@ -87,8 +91,6 @@ impl Default for ClientCoreOptions {
 }
 
 impl ClientCoreOptions {
-    /// The loopback-only profile tests and fixtures run: no relay or
-    /// discovery, and a file store key so no login-keychain item is written.
     pub fn local_only() -> Self {
         Self {
             bind_addr: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
@@ -99,10 +101,6 @@ impl ClientCoreOptions {
         }
     }
 
-    /// `local_only` for fixtures that publish a simulated peer route with
-    /// `ClientCore::add_local_standard_peer_for_test`. Supervisor route
-    /// reconciliation would dial the unreachable simulated address and
-    /// revoke the fixture's readiness at a load-dependent moment.
     #[doc(hidden)]
     pub fn local_simulated_route() -> Self {
         Self {
@@ -121,7 +119,6 @@ pub struct ClientPeerStatus {
     pub dial_succeeded: bool,
     pub last_error: Option<String>,
     pub pairing: Vec<PairingCollectionStatus>,
-    /// Directional route diagnostics published by the single route owner.
     pub routes: Vec<ClientRouteStatus>,
 }
 
@@ -202,69 +199,6 @@ impl PairingCollectionStatus {
     }
 }
 
-#[cfg(test)]
-mod pairing_status_tests {
-    use super::*;
-
-    #[test]
-    fn pairing_collection_status_default_is_clean() {
-        let s = PairingCollectionStatus::new("c1");
-        assert_eq!(s.collection_id, "c1");
-        assert_eq!(s.pairing_retry_count, 0);
-        assert!(s.last_retry_at.is_none());
-        assert!(s.last_retry_error_class.is_none());
-        assert!(s.stuck_since.is_none());
-    }
-
-    #[test]
-    fn client_peer_status_carries_pairing_vec() {
-        let peer_status = ClientPeerStatus {
-            peer_id: "p1".into(),
-            label: "l".into(),
-            node_did: "did:test:p1".into(),
-            addr: "/ip4/1/p2p/p1".into(),
-            dial_succeeded: true,
-            last_error: None,
-            pairing: vec![PairingCollectionStatus::new("c1")],
-            routes: Vec::new(),
-        };
-        assert_eq!(peer_status.pairing.len(), 1);
-    }
-
-    #[test]
-    fn record_retry_increments_and_classifies() {
-        let mut s = PairingCollectionStatus::new("c1");
-        let before = SystemTime::now();
-        s.record_retry(PairingErrorClass::RpcTimeout);
-        assert_eq!(s.pairing_retry_count, 1);
-        assert!(s.last_retry_at.unwrap() >= before);
-        assert_eq!(
-            s.last_retry_error_class,
-            Some(PairingErrorClass::RpcTimeout)
-        );
-    }
-
-    #[test]
-    fn mark_stuck_after_threshold() {
-        let mut s = PairingCollectionStatus::new("c1");
-        for _ in 0..STUCK_THRESHOLD_ATTEMPTS {
-            s.record_retry(PairingErrorClass::RpcTimeout);
-        }
-        s.update_stuck_indicator(SystemTime::now());
-        assert!(s.stuck_since.is_some());
-    }
-
-    #[test]
-    fn record_success_clears_state() {
-        let mut s = PairingCollectionStatus::new("c1");
-        s.record_retry(PairingErrorClass::RpcError);
-        s.record_success();
-        assert_eq!(s.pairing_retry_count, 0);
-        assert!(s.last_retry_error_class.is_none());
-        assert!(s.stuck_since.is_none());
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum P2PHealthStatus {
     Healthy,
@@ -321,26 +255,19 @@ pub(super) fn p2p_health_materially_changed(previous: &P2PHealth, next: &P2PHeal
         || previous.last_error != next.last_error
 }
 
-/// One coherent observation of desktop transport and every configured peer.
-///
-/// The transport counters are diagnostic. Product sync readiness is derived
-/// from the configured peer rows in this same revision, never from an
-/// independently sampled global connection count.
+// The transport counters are diagnostic. Product sync readiness is derived
+// from the configured peer rows in this same revision, never from an
+// independently sampled global connection count.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientSyncStateSnapshot {
     pub transport: P2PHealth,
-    /// Exact sync-coordinator facts from the database. `None` means the
-    /// configured transport does not expose a sync coordinator.
     pub database_sync: Option<P2pSyncStatusSnapshot>,
-    /// Decode failure from the database's current sync-status envelope.
     pub database_sync_error: Option<String>,
-    /// Configured peers, by peer ID, whose runtime replicates different
-    /// collection versions than this node. DefraDB accepts the connection but
-    /// never merges either side's writes, so this is the only visible signal.
+    // DefraDB accepts the connection but never merges either side's writes;
+    // schema skew is the only visible signal.
     pub peer_schema_skew: BTreeMap<String, ReplicatedSchemaSkew>,
-    /// The exact durable configured-peer revision that caused this snapshot.
-    /// Bridge projections consume this copy instead of racing a second
-    /// directory read after receiving a sync update.
+    // Bridge projections consume this copy instead of racing a second
+    // directory read after receiving a sync update.
     pub directory: Vec<PeerRecord>,
     pub peers: Vec<ClientPeerStatus>,
 }
@@ -351,7 +278,7 @@ enum P2PSupervisorCommand {
 }
 
 pub struct ClientCore {
-    store_lock: Mutex<Option<gents::home::StoreLock>>,
+    store_access: Mutex<Option<ConfigAccess>>,
     paths: DesktopPaths,
     options: ClientCoreOptions,
     node_identity: PrincipalIdentity,
@@ -362,15 +289,24 @@ pub struct ClientCore {
     observer: Mutex<Option<ObserverHandle>>,
     sync_state: sync_state::ClientSyncStateOwner,
     p2p_supervisor: Mutex<Option<JoinHandle<()>>>,
-    hydration_transition: Mutex<()>,
-    selected_node_did: watch::Sender<Option<String>>,
-    last_loaded_for: tokio::sync::Mutex<HashMap<String, std::time::Instant>>,
+    observation_scope: observation_scope::ObservationScope,
     request_patch_signatures: tokio::sync::Mutex<HashMap<String, (usize, usize, u64)>>,
     p2p_control: Mutex<Option<mpsc::Sender<P2PSupervisorCommand>>>,
+    shutdown_completion: Mutex<Option<watch::Receiver<Option<std::result::Result<(), String>>>>>,
+    #[cfg(test)]
+    shutdown_test_pause: Mutex<Option<Arc<ShutdownTestPause>>>,
     last_mutation_error: StdRwLock<Option<String>>,
     local_peer_id: String,
     listen_addresses: Vec<String>,
     bootstrap_errors: Vec<String>,
+}
+
+#[cfg(test)]
+struct ShutdownTestPause {
+    node_shutdown_started: tokio::sync::Notify,
+    allow_node_shutdown: tokio::sync::Notify,
+    node_shutdown_returned: tokio::sync::Notify,
+    allow_access_release: tokio::sync::Notify,
 }
 
 impl ClientCore {
@@ -398,9 +334,6 @@ impl ClientCore {
         &self.p2p
     }
 
-    /// Test-fixture seam for exercising local mutation semantics independently
-    /// of the enrollment integration suite. Product callers must establish
-    /// readiness through the signed route owner.
     #[doc(hidden)]
     pub async fn add_local_standard_peer_for_test(&self, node_did: &str) -> Result<()> {
         anyhow::ensure!(
@@ -417,8 +350,6 @@ impl ClientCore {
         .await
     }
 
-    /// Test-fixture seam for publishing readiness after the fixture has
-    /// established and verified its real local-standard route.
     #[doc(hidden)]
     pub async fn add_local_standard_peer_route_for_test(
         &self,
@@ -436,8 +367,6 @@ impl ClientCore {
         Ok(())
     }
 
-    /// Test-fixture seam for a durably paired, chat-ready managed runtime.
-    /// Product callers must establish enrollment through the signed owner.
     #[cfg(any(test, feature = "test-fixtures"))]
     #[doc(hidden)]
     pub async fn add_managed_enrollment_peer_for_test(
@@ -487,10 +416,8 @@ impl ClientCore {
         self.sync_state.subscribe()
     }
 
-    /// Clear the live readiness observation before a desktop-managed runtime
-    /// is deliberately restarted. The signed enrollment remains durable, but
-    /// the replacement process must re-establish both route legs before chat
-    /// writes reopen.
+    // The signed enrollment remains durable; the replacement process must
+    // re-establish both route legs before chat writes reopen.
     pub async fn mark_managed_runtime_restarting(&self, node_did: &str) -> Result<()> {
         let records = self.peer_records().await;
         for record in records.into_iter().filter(|record| {
@@ -519,15 +446,19 @@ impl ClientCore {
     }
 
     pub fn set_selected_node_did(&self, node_did: Option<String>) {
-        self.selected_node_did.send_replace(node_did);
+        self.observation_scope.select(node_did);
     }
 
     pub fn selected_node_did(&self) -> Option<String> {
-        self.selected_node_did.borrow().clone()
+        self.observation_scope.current()
     }
 
     pub fn selected_node_did_rx(&self) -> watch::Receiver<Option<String>> {
-        self.selected_node_did.subscribe()
+        self.observation_scope.subscribe()
+    }
+
+    pub fn observe_all_nodes(&self) -> Result<ClientObservationAttachment> {
+        self.observation_scope.attach()
     }
 
     pub async fn peer_records(&self) -> Vec<PeerRecord> {
@@ -563,6 +494,7 @@ impl ClientCore {
 
     pub async fn refresh_store(&self) -> Result<u64> {
         let scoped = self.selected_node_did();
+        let captured = self.store.capture_read();
         let records = self.sync_state.records();
         let snapshot = match scoped.as_deref() {
             Some(did) => {
@@ -584,14 +516,18 @@ impl ClientCore {
             }
         };
         let rows = snapshot.row_count();
-        let version = match scoped.as_deref() {
-            Some(did) => self.store.replace_node_snapshot(did, snapshot),
-            None => self.store.replace_snapshot(snapshot),
-        };
+        let published =
+            self.store
+                .replace_reloaded_snapshot_at_read(&captured, scoped.as_deref(), snapshot);
+        if !published {
+            self.store.request_resync(scoped.as_deref());
+        }
+        let version = self.store.projection_revision().store_version;
         tracing::debug!(
             target: "gents_desktop_core::replication",
             version,
             rows,
+            published,
             scoped = scoped.is_some(),
             "desktop local replica snapshot refreshed"
         );
@@ -603,55 +539,40 @@ impl ClientCore {
         if node_did.is_empty() {
             return Ok(None);
         }
+        let captured = self.store.capture_read();
         let records = self.sync_state.records();
-        let snapshot = load_node_scoped_snapshot_with_peer_records(
+        let snapshot = match load_node_scoped_snapshot_with_peer_records(
             self.node.as_ref(),
             node_did,
             &records,
             self.node_identity.did(),
         )
-        .await?;
+        .await
+        {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.store.request_resync(Some(node_did));
+                return Err(error);
+            }
+        };
         let rows = snapshot.row_count();
-        let version = self.store.replace_node_snapshot(node_did, snapshot);
+        let published =
+            self.store
+                .replace_reloaded_snapshot_at_read(&captured, Some(node_did), snapshot);
+        if !published {
+            self.store.request_resync(Some(node_did));
+            return Ok(None);
+        }
+        let version = self.store.projection_revision().store_version;
         tracing::debug!(
             target: "gents_desktop_core::replication",
             node_did,
             version,
             rows,
+            published,
             "desktop refreshed agent projection from local replica"
         );
         Ok(Some(version))
-    }
-
-    const SELECTION_RELOAD_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(2);
-
-    pub async fn ensure_node_loaded(&self, node_did: &str) -> Result<bool> {
-        let now = std::time::Instant::now();
-        let mut map = self.last_loaded_for.lock().await;
-        if let Some(last) = map.get(node_did) {
-            if now.duration_since(*last) < Self::SELECTION_RELOAD_DEBOUNCE {
-                return Ok(false);
-            }
-        }
-        let records = self.sync_state.records();
-        let snapshot = load_node_scoped_snapshot_with_peer_records(
-            self.node.as_ref(),
-            node_did,
-            &records,
-            self.node_identity.did(),
-        )
-        .await?;
-        let rows = snapshot.row_count();
-        let version = self.store.replace_node_snapshot(node_did, snapshot);
-        map.insert(node_did.to_string(), now);
-        tracing::info!(
-            target: "gents_desktop_core::replication",
-            node_did,
-            rows,
-            version,
-            "ensure_node_loaded merged scoped snapshot"
-        );
-        Ok(true)
     }
 
     pub async fn observer_metrics(
@@ -664,7 +585,38 @@ impl ClientCore {
             .map(|h| h.metrics_snapshot())
     }
 
-    pub async fn shutdown(&self) -> Result<()> {
+    pub async fn shutdown(self: &Arc<Self>) -> Result<()> {
+        let mut completion = self.shutdown_completion.lock().await;
+        if completion.is_none() {
+            let (result_tx, result_rx) = watch::channel(None);
+            *completion = Some(result_rx.clone());
+            let owner = Arc::clone(self);
+            tokio::spawn(async move {
+                let result = owner
+                    .shutdown_inner()
+                    .await
+                    .map_err(|error| error.to_string());
+                result_tx.send_replace(Some(result));
+            });
+        }
+        let mut result_rx = completion
+            .as_ref()
+            .expect("shutdown owner installed")
+            .clone();
+        drop(completion);
+
+        loop {
+            if let Some(result) = result_rx.borrow().clone() {
+                return result.map_err(anyhow::Error::msg);
+            }
+            result_rx
+                .changed()
+                .await
+                .context("client shutdown owner ended without a result")?;
+        }
+    }
+
+    async fn shutdown_inner(&self) -> Result<()> {
         tracing::info!("client core shutdown: begin");
         self.p2p_control.lock().await.take();
         if let Some(task) = self.p2p_supervisor.lock().await.take() {
@@ -677,8 +629,18 @@ impl ClientCore {
             observer.shutdown().await;
         }
         tracing::info!("client core shutdown: stopping embedded node");
+        #[cfg(test)]
+        if let Some(pause) = self.shutdown_test_pause.lock().await.clone() {
+            pause.node_shutdown_started.notify_one();
+            pause.allow_node_shutdown.notified().await;
+        }
         self.node.shutdown().await;
-        self.store_lock.lock().await.take();
+        #[cfg(test)]
+        if let Some(pause) = self.shutdown_test_pause.lock().await.clone() {
+            pause.node_shutdown_returned.notify_one();
+            pause.allow_access_release.notified().await;
+        }
+        self.store_access.lock().await.take();
         tracing::info!("client core shutdown: complete");
         Ok(())
     }

@@ -1,14 +1,29 @@
 use super::{ControlUpdateOutcome, DocumentRuntimeView};
 use crate::collection::Collection;
 use anyhow::Result;
-use defra_node::EmbeddedNode;
 
-/// Configuration is one candidate snapshot, not a sequence of per-row grants.
-/// Reload through the shared owner on any canonical config change; the watcher
-/// resolves and publishes the complete candidate through its existing gate.
-/// This also handles deletes and ownership moves without retaining a stale row.
+/// Runtime-observed collections that are not themselves configuration.
+/// PackInstallation is not itself configuration: a pack install or remove
+/// writes or deletes only this record, and the plugin-store change it carries
+/// reaches change detection through the resolved plugin identities on the
+/// tool surface, so it must still wake the reconciler.
+const OBSERVED_NON_CONFIG_COLLECTIONS: [&str; 5] = [
+    "OAuthCredential",
+    "ToolServiceHealthState",
+    "GraphRevision",
+    "GraphRun",
+    "PackInstallation",
+];
+
+/// Every collection whose change can alter the runtime control snapshot.
+pub(crate) fn control_collection_names() -> impl Iterator<Item = &'static str> {
+    Collection::ALL
+        .iter()
+        .map(|collection| collection.graphql_type())
+        .chain(OBSERVED_NON_CONFIG_COLLECTIONS)
+}
+
 pub(crate) async fn apply_control_update(
-    node: &EmbeddedNode,
     node_did: &str,
     collection_name: &str,
     _doc_id: &str,
@@ -18,24 +33,7 @@ pub(crate) async fn apply_control_update(
         view.node.value.node_did == node_did,
         "runtime view owner mismatch"
     );
-    if Collection::ALL
-        .iter()
-        .any(|c| c.graphql_type() == collection_name)
-        // PackInstallation is not itself configuration: a pack install or
-        // remove writes or deletes only this record, and the plugin-store
-        // change it carries reaches change detection through the resolved
-        // plugin identities on the tool surface, so it must still wake the
-        // reconciler.
-        || matches!(
-            collection_name,
-            "OAuthCredential" | "ToolServiceHealthState" | "GraphRevision" | "GraphRun"
-                | "PackInstallation"
-        )
-    {
-        Ok(ControlUpdateOutcome::FullReload)
-    } else if node.get_collection(collection_name)?.is_none() {
-        // Watchers may carry a physical collection ID before name resolution.
-        // An unresolved identifier cannot justify dropping the notification.
+    if control_collection_names().any(|name| name == collection_name) {
         Ok(ControlUpdateOutcome::FullReload)
     } else {
         Ok(ControlUpdateOutcome::Irrelevant)

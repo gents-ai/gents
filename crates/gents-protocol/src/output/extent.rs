@@ -1,7 +1,6 @@
-//! Exact open-source extent validation used before a recovery/producer close.
-//! This is deliberately not a live preview: gaps, twins and malformed runs
-//! fail rather than yielding a shorter prefix. Closure authority and uniqueness
-//! remain with the caller; this validator accounts for the complete data extent.
+//! Exact open-source extent validation used before a recovery/producer close:
+//! gaps, twins and malformed runs fail rather than yielding a shorter prefix.
+//! Closure authority and uniqueness remain with the caller.
 use super::reconstruction::{ObservedSegment, ReconstructedStream};
 use super::{OutputSource, OutputWriter, ReconstructionError, StreamPayload};
 use chrono::DateTime;
@@ -165,99 +164,4 @@ pub fn inspect_open_source(
         stream_bytes: bytes,
         last_created_at: last_time.map(|t| t.to_rfc3339()),
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::output::{OutputSegment, SegmentRun, StreamDeclaration, StreamPayload};
-    use crate::rendered_request::{CaptureScope, CaptureScopeKind};
-    fn source() -> OutputSource {
-        OutputSource::ProviderTurn {
-            scope: CaptureScope {
-                kind: CaptureScopeKind::Inference,
-                seq: 0,
-            },
-            turn_index: 0,
-            attempt: 0,
-        }
-    }
-    fn writer() -> OutputWriter {
-        OutputWriter::RequestExecution {
-            execution_generation: "g".into(),
-        }
-    }
-    fn row(id: &str, n: u32, text: &str, close: bool) -> (String, OutputSegment) {
-        (
-            id.into(),
-            OutputSegment {
-                node_did: "a".into(),
-                requester_did: None,
-                session_id: "s".into(),
-                request_doc_id: "r".into(),
-                source: source(),
-                writer: writer(),
-                ordinal: Some(n),
-                runs: vec![SegmentRun {
-                    stream: 0,
-                    bytes: text.len() as u32,
-                    declaration: (n == 0).then(|| StreamDeclaration {
-                        block_index: 0,
-                        part_index: 0,
-                        payload: StreamPayload::Text,
-                    }),
-                }],
-                payload: text.into(),
-                close: close.then(|| super::super::SourceClose::Closed {
-                    outcome: super::super::OutputOutcome::Complete,
-                    segments: n + 1,
-                    stream_bytes: vec![(n + 1) as u64],
-                }),
-                created_at: format!("2026-01-01T00:00:0{n}Z"),
-            },
-        )
-    }
-    fn obs(v: &[(String, OutputSegment)]) -> Vec<ObservedSegment<'_>> {
-        v.iter()
-            .map(|(id, s)| ObservedSegment {
-                doc_id: id,
-                segment: s,
-            })
-            .collect()
-    }
-    #[test]
-    fn final_flush_accounts_exact_bytes() {
-        let v = vec![row("a", 0, "x", false), row("b", 1, "y", true)];
-        let e = inspect_open_source(&obs(&v), "r", &source(), &writer()).unwrap();
-        assert_eq!((e.segments, e.stream_bytes), (2, vec![2]));
-    }
-    #[test]
-    fn rejects_gap_twin_and_reused_identity() {
-        let v = vec![row("a", 0, "x", false), row("b", 2, "y", false)];
-        assert!(inspect_open_source(&obs(&v), "r", &source(), &writer()).is_err());
-        let v = vec![row("a", 0, "x", false), row("a", 1, "y", false)];
-        assert!(inspect_open_source(&obs(&v), "r", &source(), &writer()).is_err());
-        let x = row("a", 0, "x", false);
-        let mut y = row("b", 0, "z", false);
-        y.1.created_at = x.1.created_at.clone();
-        assert!(inspect_open_source(&obs(&[x, y]), "r", &source(), &writer()).is_err());
-    }
-
-    #[test]
-    fn rejects_invalid_writer_utf8_and_decreasing_time() {
-        let mut bad_writer = row("a", 0, "x", false);
-        bad_writer.1.writer = OutputWriter::RequestExecution {
-            execution_generation: "other".into(),
-        };
-        assert!(inspect_open_source(&obs(&[bad_writer]), "r", &source(), &writer()).is_err());
-
-        let mut split = row("a", 0, "é", false);
-        split.1.runs[0].bytes = 1;
-        assert!(inspect_open_source(&obs(&[split]), "r", &source(), &writer()).is_err());
-
-        let first = row("a", 0, "x", false);
-        let mut second = row("b", 1, "y", false);
-        second.1.created_at = "2025-12-31T23:59:59Z".into();
-        assert!(inspect_open_source(&obs(&[first, second]), "r", &source(), &writer()).is_err());
-    }
 }

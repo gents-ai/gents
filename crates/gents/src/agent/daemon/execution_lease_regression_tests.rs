@@ -1,4 +1,3 @@
-// Included in inference.rs's test module to reuse its real daemon harness.
 use std::sync::atomic::AtomicBool;
 
 #[derive(Clone)]
@@ -184,7 +183,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
             }
             _ => panic!("unsupported ownership-loss fixture"),
         };
-        let access = crate::config_client::ConfigAccess::Local(node.clone());
+        let access = crate::config_client::ConfigAccess::local(node.clone());
         access
             .write(
                 "test.shutdown_prior_ownership_loss",
@@ -717,9 +716,6 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     for _ in 0..8 {
         let request = create_routed_request(&node, &agent_config, &node_did).await;
-        // This test counts request inference attempts exactly. A supplied title
-        // prevents optional background title generation from sharing the same
-        // deliberately nonterminal provider and inflating calls/captures.
         let session = gents_protocol::session::AgentSession {
             session_id: request.session_id.clone(),
             node_did: node_did.clone(),
@@ -759,8 +755,6 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
             tokio::pin!(process);
             let mut observed_renewal = false;
             {
-                // Recovery and observation remain independently pollable while
-                // the owning process waits for provider input.
                 let maintenance = async {
                     let mut initial_owner: Option<(String, chrono::DateTime<chrono::FixedOffset>)> =
                         None;
@@ -847,9 +841,6 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
                         .contains("durable partial incident text"));
                 }
                 gents_protocol::output::TerminalOutput::NoMessage => {
-                    // Closed unaccepted bytes may remain diagnostics without
-                    // becoming a published answer. Verify that distinction
-                    // through the shared projection, not a raw payload search.
                     use gents_protocol::output::live::{project_live, LiveObservation, LiveTarget, LiveView, OwnerLiveness};
                     use gents_protocol::output::reconstruction::ObservedSegment;
                     use crate::session::canonical_rows::{AGENT_OUTPUT_SEGMENT_FIELDS, decode_output_segment_row};
@@ -922,7 +913,7 @@ async fn eight_silent_provider_streams_renew_until_explicitly_interrupted_withou
 async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let agent_config = test_agent();
     let node_did = agent_config.node_did().to_owned();
     let identity = agent_config.node_identity().clone();
@@ -981,7 +972,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session).unwrap())
             .unwrap();
     access
-        .transact("test.daemon_post_latch_session", |txn| {
+        .transact_write("test.daemon_post_latch_session", |txn| {
             let session_input = &session_input;
             Box::pin(async move {
                 txn.execute(&format!(
@@ -1057,7 +1048,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         }},
         "created_at": chrono::Utc::now().to_rfc3339(),
     });
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "test.daemon_post_latch_wake",

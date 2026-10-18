@@ -1,20 +1,3 @@
-//! Lens-first schema migration for Gents.
-//!
-//! The DefraDB version DAG is the only source of truth. This crate adds a
-//! declarative step registry, an engine that derives crash position from
-//! observable database state, and a thin materialization driver.
-//!
-//! # Entry point
-//!
-//! ```ignore
-//! gents_migration::ensure_migrations(&node).await?;
-//! ```
-//!
-//! That single call registers the canonical pinned baseline SDL, replays pending steps,
-//! verifies every managed collection's lineage, and (when upstream supports
-//! it) eagerly materializes documents. There is no public "register schemas
-//! only" path — any bypass forks the version lineage.
-
 mod engine;
 mod error;
 mod expectation;
@@ -32,7 +15,8 @@ pub use expectation::CollectionExpectation;
 pub use lens::{lens_config, predict_transform_id};
 pub use registry::{
     fixture_lens_wasm, BaselineCollection, BaselineCollectionOwned, DynamicRegistry, LensSpec,
-    LensSpecOwned, MigrationStep, MigrationStepOwned, Registry, CLIENT_AUTHORED_COLLECTIONS,
-    DEFAULT_BASELINE, DEFAULT_REGISTRY, DEFAULT_STEPS,
+    LensSpecOwned, MigrationStep, MigrationStepOwned, OrdinaryIndex, OrdinaryIndexField, Registry,
+    CLIENT_AUTHORED_COLLECTIONS, DEFAULT_BASELINE, DEFAULT_ORDINARY_INDEXES, DEFAULT_REGISTRY,
+    DEFAULT_STEPS,
 };
 pub use report::{MaterializationStats, MigrationReport};

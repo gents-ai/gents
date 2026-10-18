@@ -1,7 +1,7 @@
 use crate::commands::mcp_health::load_mcp_services_with_health_for_node;
 use crate::error::BridgeError;
+use crate::types::ToolSurfaceExplanationView;
 use gents::AgentToolSurfaceConfig;
-use serde_json::{json, Value};
 use std::collections::HashSet;
 use tauri::State;
 
@@ -12,7 +12,7 @@ pub async fn desktop_tool_surface_explain(
     node_did: String,
     agent_id: String,
     state: State<'_, DesktopAppState>,
-) -> Result<Value, BridgeError> {
+) -> Result<ToolSurfaceExplanationView, BridgeError> {
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -40,7 +40,7 @@ pub async fn desktop_tool_surface_explain(
         .map(|row| row.agent_id.clone())
         .collect::<HashSet<_>>();
     let datastore_tool_surfaces = gents::list_datastore_tool_surfaces(
-        &gents::ConfigAccess::Local(core.node_arc()),
+        &gents::ConfigAccess::local(core.node_arc()),
         &node_did,
     )
     .await
@@ -102,14 +102,14 @@ pub async fn desktop_tool_surface_explain(
 
     let explanation =
         config.explain_with_runtime(mcp_services_online, &node_did, &active_agent_ids);
-    Ok(json!({
-        "agentId": agent.agent_id,
-        "enabled": agent.enabled,
-        "contextId": context_id,
-        "toolsId": tools_id,
-        "toolsSource": tools_source,
-        "ceilingSource": ceiling_source,
-        "mcpServicesOnline": mcp_services_online,
-        "surface": serde_json::to_value(&explanation).map_err(|error| BridgeError::untyped(error.to_string()))?,
-    }))
+    Ok(ToolSurfaceExplanationView {
+        agent_id: agent.agent_id.clone(),
+        enabled: agent.enabled,
+        context_id,
+        tools_id,
+        tools_source: tools_source.into(),
+        ceiling_source: ceiling_source.into(),
+        mcp_services_online,
+        surface: explanation,
+    })
 }

@@ -1,5 +1,3 @@
-//! Native `{tool_id}_query` tool. Allowlisted JSON-RPC reads only.
-
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -10,7 +8,6 @@ use crate::tool_call_lifecycle::FailureClass;
 use super::methods::validate_query_methods;
 use super::rpc::HttpEthRpc;
 
-/// Expanded, runtime-ready query surface for one EthTool document.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedEthQuery {
     pub tool_id: String,

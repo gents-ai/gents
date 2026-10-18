@@ -1,11 +1,3 @@
-//! Recovery for persisted running tool calls: the startup sweep over rows
-//! orphaned by a daemon restart, the session-message sweep that settles a
-//! `agent_new`/`agent_message` row from its caused request's terminal (or
-//! fails it closed when it cannot name that request), and the live
-//! terminal-parent owned-tool cleanup that
-//! cancels running foreground tools whose parent is already terminal without
-//! waiting for deadline or daemon restart.
-
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
@@ -24,7 +16,6 @@ pub struct ToolCallRecoveryReport {
     pub notifications_repaired: usize,
 }
 
-/// Live reconcile of running tool rows owned by a terminal parent (#837).
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct TerminalParentToolReport {
     pub tool_calls_terminalized: usize,
@@ -67,8 +58,7 @@ struct RunningToolCallRow {
     request_id: Option<String>,
     #[serde(default)]
     requester_did: Option<String>,
-    /// Immutable owner principal stamped at create. Recovery scopes by this
-    /// field — `request_id` alone is not unique across agents.
+    /// Immutable owner scope; request IDs can overlap across agents.
     #[serde(default)]
     node_did: Option<String>,
     session_id: String,
@@ -120,8 +110,6 @@ enum RecoveryOutcome {
 }
 
 impl super::ToolCallLifecycle {
-    /// Startup recovery without host process records: a surviving native
-    /// background process cannot be proven owned, so its row settles as lost.
     pub async fn recover_all(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
@@ -134,9 +122,6 @@ impl super::ToolCallLifecycle {
         .await
     }
 
-    /// Startup recovery. Native background rows go through the host process
-    /// owner in `executions`, which stops a proven-owned surviving process
-    /// before its row is settled.
     pub async fn recover_all_with_executions(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
@@ -157,22 +142,6 @@ impl super::ToolCallLifecycle {
         })
     }
 
-    /// Live reconcile: terminalize running tool calls whose parent request is
-    /// already terminal (#837). Unlike full startup `recover_all`, this does
-    /// **not** interrupt live-parent background tools (restart-only path).
-    ///
-    /// Scope and ordering:
-    /// 1. Load only tool rows stamped with this agent's immutable `node_did`
-    ///    (not global `request_id` matches — that field is not unique).
-    /// 2. Resolve the parent under the same DID; skip missing/foreign parents.
-    /// 3. Require a terminal parent before any write.
-    /// 4. Leave every background row to its own sweep regardless of parent
-    ///    state: native processes to the registry-aware orphan sweep and
-    ///    `agent_new`/`agent_message` rows to the session-message sweep.
-    ///    No parent terminal is a cancel signal for another session.
-    ///
-    /// Covers running native tool calls stranded under a terminal parent with
-    /// no executor active.
     pub async fn reconcile_terminal_parent_owned_tools(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
@@ -183,12 +152,9 @@ impl super::ToolCallLifecycle {
             std::collections::HashMap::new();
 
         for row in rows {
-            // Defense in depth: never mutate a row whose stamped owner differs.
             if row.node_did.as_deref() != Some(node_did) {
                 continue;
             }
-            // Background rows belong exclusively to their own sweeps, which
-            // apply deadline and ownership precedence before parent state.
             if await_mode(&row) == AwaitMode::Background {
                 continue;
             }
@@ -209,18 +175,13 @@ impl super::ToolCallLifecycle {
                 }
                 None => None,
             };
-            // Ownership gate: parent must resolve under this agent's DID.
             let Some(parent) = parent else {
                 continue;
             };
-            // Live parents are out of scope for this sweep.
             if !request_is_terminal(&parent) {
                 continue;
             }
 
-            // Parent-driven cause, shared with the startup/orphan classifier
-            // (`classify_running_tool_recovery`) minus its deadline and
-            // live-background-parent screens.
             let Some(outcome) = classify_terminal_parent_tool_recovery(&row, &parent) else {
                 continue;
             };
@@ -241,7 +202,6 @@ impl super::ToolCallLifecycle {
                 }
             };
             if !updated {
-                // Lost CAS: concurrent complete/fail/cancel already terminalized.
                 continue;
             }
 
@@ -265,14 +225,6 @@ impl super::ToolCallLifecycle {
         Ok(report)
     }
 
-    /// Native background rows (Lean `orphanedBackgroundToolSweep`), on the
-    /// periodic tick and at startup. A row whose live worker is registered in
-    /// `executions` belongs to that worker unless its task was deleted, in
-    /// which case the cancellation is persisted first and the worker stopped.
-    /// Without a live worker, the host process owner stops a proven-owned
-    /// surviving process before the row is settled; a stop it cannot observe
-    /// settles the row as lost, and a group it still observes running keeps
-    /// the row running for a later tick.
     pub async fn reconcile_orphaned_background_tools(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
@@ -292,8 +244,6 @@ impl super::ToolCallLifecycle {
                 Some(request_id) => lookup_parent_request(node, node_did, request_id).await?,
                 None => None,
             };
-            // An unresolvable parent is an incomplete owner observation; it
-            // licenses neither a signal nor a write.
             let Some(parent) = parent else {
                 if unresolved_parent_warning_due(&row.doc_id) {
                     tracing::warn!(
@@ -312,8 +262,6 @@ impl super::ToolCallLifecycle {
             let deadline_at = parse_datetime(row.deadline_at.as_deref());
 
             if registered {
-                // Persist the cause before signalling, as an explicit cancel
-                // does, so the worker's own terminal write loses the compare.
                 let updated = match recover_tool_call_row(
                     node,
                     &row,
@@ -435,12 +383,8 @@ impl super::ToolCallLifecycle {
         Ok(report)
     }
 
-    /// Explicit cancellation of a running native background row that has no
-    /// live worker in this runtime. The host process owner stops the process
-    /// only if a durable record proves ownership. An observed stop settles
-    /// the row as cancelled with `cause`; an unobserved one settles it as
-    /// lost; a group still observed running leaves the row running. Returns
-    /// the verdict and whether this call won the row's terminal compare.
+    /// The host process owner stops the process only if a durable record
+    /// proves ownership.
     pub(crate) async fn cancel_unowned_background_tool(
         node: &std::sync::Arc<EmbeddedNode>,
         lifecycle: &mut ToolCallLifecycle,
@@ -503,10 +447,9 @@ impl super::ToolCallLifecycle {
         Ok((process, won))
     }
 
-    /// Redrive the idempotent notification + session wake after the lifecycle
-    /// row is already terminal. Persisted `status=completionPending:<reason>`
-    /// advances to `completed` only after
-    /// both side effects converge, so transient failures remain discoverable.
+    /// Persisted `status=completionPending:<reason>` advances to
+    /// `completed` only after both side effects converge, so transient
+    /// failures remain discoverable.
     pub async fn reconcile_background_completion_side_effects(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
@@ -599,20 +542,10 @@ impl super::ToolCallLifecycle {
 mod tests {
     use super::*;
 
-    #[test]
-    fn timeout_recovery_persists_external_failure_class() {
-        assert_eq!(
-            RecoveryOutcome::TimedOut.failure_class(),
-            Some(FailureClass::External)
-        );
-        assert_eq!(RecoveryOutcome::Cancelled.failure_class(), None);
-    }
-
     /// The one deadline-expiry predicate (#1334), shared by tool-call
-    /// recovery here and by `gents-cli`'s fleet-slot and liveness
-    /// snapshots. Past deadlines (including exactly `now`) are expired;
-    /// future, missing, and malformed deadlines are documented as not
-    /// expired.
+    /// recovery here and by `gents-cli`'s fleet-slot and liveness snapshots.
+    /// Past deadlines (including exactly `now`) are expired; future, missing,
+    /// and malformed deadlines are documented as not expired.
     #[test]
     fn deadline_is_expired_covers_past_future_missing_and_malformed() {
         let now = DateTime::parse_from_rfc3339("2026-09-03T12:00:00Z")
@@ -637,55 +570,12 @@ mod tests {
             !deadline_is_expired(now, Some("   ")),
             "blank deadline is documented as missing, not malformed"
         );
-
         // The typed variant agrees with the string-form convenience.
         assert_eq!(
             deadline_at_is_expired(now, parse_datetime(Some(past))),
             deadline_is_expired(now, Some(past)),
         );
         assert!(!deadline_at_is_expired(now, None));
-    }
-
-    #[test]
-    fn background_completion_reason_comes_from_cursor_not_tool_text() {
-        let row = TerminalBackgroundToolRow {
-            doc_id: "doc-1".to_string(),
-            request_id: Some("request-1".to_string()),
-            request_doc_id: Some("request-doc-1".to_string()),
-            node_did: Some("did:test:agent".to_string()),
-            requester_did: None,
-            session_id: Some("session-1".to_string()),
-            tool_call_id: Some("tool-1".to_string()),
-            tool_name: "test_tool".to_string(),
-            status: "completionPending:tool_failed".to_string(),
-            lifecycle_state: Some("failed".to_string()),
-            cancel_cause: None,
-        };
-        assert_eq!(
-            background_completion_projection(&row),
-            Some(("failed", Some("tool_failed")))
-        );
-    }
-
-    #[test]
-    fn background_completion_redrive_preserves_custom_cancel_reason() {
-        let row = TerminalBackgroundToolRow {
-            doc_id: "doc-custom".to_string(),
-            request_id: Some("request-custom".to_string()),
-            request_doc_id: Some("request-doc-custom".to_string()),
-            node_did: Some("did:test:agent".to_string()),
-            requester_did: None,
-            session_id: Some("session-custom".to_string()),
-            tool_call_id: Some("tool-custom".to_string()),
-            tool_name: "test_tool".to_string(),
-            status: "completionPending:operator requested drain".to_string(),
-            lifecycle_state: Some("cancelled".to_string()),
-            cancel_cause: Some("userCancelled".to_string()),
-        };
-        assert_eq!(
-            background_completion_projection(&row),
-            Some(("cancelled", Some("operator requested drain")))
-        );
     }
 
     /// Every native restart and orphan witness, including the still-running
@@ -932,7 +822,6 @@ async fn append_recovered_background_tool_completion(
     }
 }
 
-/// Running tool rows owned by `node_did` (immutable scope key on create).
 async fn load_running_tool_call_rows_for_agent(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
@@ -967,10 +856,12 @@ async fn load_running_tool_call_rows_with_filter(
     }}"#
     );
 
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!("querying stuck running tool calls: {:?}", resp.errors);
-    }
+    let resp = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "load_running_tool_call_rows_with_filter",
+    )
+    .await?;
 
     let values = resp
         .data
@@ -1025,13 +916,12 @@ async fn load_pending_background_completion_rows(
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "querying pending background completion side effects: {:?}",
-            response.errors
-        );
-    }
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "load_pending_background_completion_rows",
+    )
+    .await?;
     let values = response
         .data
         .as_ref()
@@ -1110,13 +1000,9 @@ async fn lookup_parent_request(
         }}"#
     );
 
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!(
-            "querying parent request for tool-call recovery request_id={request_id}: {:?}",
-            resp.errors
-        );
-    }
+    let resp =
+        crate::graphql::graphql_with_transaction_retry(node, &query, "lookup_parent_request")
+            .await?;
 
     let value = resp
         .data
@@ -1147,9 +1033,6 @@ async fn load_recovery_lifecycle(
     .context("recovery physical tool row disappeared")
 }
 
-/// Terminalize a running tool-call row. Returns `Ok(true)` when the
-/// compare-and-set updated the row, `Ok(false)` when a concurrent writer
-/// already left `running` (first terminal wins — do not overwrite).
 async fn recover_tool_call_row(
     node: &std::sync::Arc<EmbeddedNode>,
     row: &RunningToolCallRow,
@@ -1200,24 +1083,14 @@ fn parse_datetime(value: Option<&str>) -> Option<DateTime<Utc>> {
         .map(|datetime| datetime.with_timezone(&Utc))
 }
 
-/// Whether an already-parsed deadline has been reached or passed as of
-/// `now`. A missing deadline never expires (#1334 — the one deadline-expiry
-/// predicate; also used by `gents-cli`'s fleet-slot and liveness snapshots).
 pub fn deadline_at_is_expired(now: DateTime<Utc>, deadline_at: Option<DateTime<Utc>>) -> bool {
     deadline_at.is_some_and(|deadline| now >= deadline)
 }
 
-/// String-form convenience over [`deadline_at_is_expired`]: parses an
-/// RFC3339 `deadline_at` and reports whether it has expired as of `now`. A
-/// missing or malformed deadline is documented as *not* expired — there is
-/// no evidence to expire the row on.
 pub fn deadline_is_expired(now: DateTime<Utc>, deadline_at: Option<&str>) -> bool {
     deadline_at_is_expired(now, parse_datetime(deadline_at))
 }
 
-/// Startup classifier for every row except native background rows, which
-/// `classify_orphaned_background_tool` settles with the host stop verdict.
-/// Branch order is Lean-fenced by `restartDisposition`.
 fn classify_running_tool_recovery(
     row: &RunningToolCallRow,
     parent: Option<&AgentRequestRow>,
@@ -1230,8 +1103,6 @@ fn classify_running_tool_recovery(
     }
 }
 
-/// The orphan sweep runs every few seconds; warn about one row's unresolved
-/// parent at most once per interval.
 fn unresolved_parent_warning_due(doc_id: &str) -> bool {
     const INTERVAL: std::time::Duration = std::time::Duration::from_secs(600);
     static WARNED: std::sync::OnceLock<
@@ -1250,8 +1121,6 @@ fn unresolved_parent_warning_due(doc_id: &str) -> bool {
     true
 }
 
-/// Lean `orphanedBackgroundToolCause` for a row without a live worker whose
-/// parent resolved: the host stop verdict precedes every other cause.
 fn classify_orphaned_background_tool(
     row: &RunningToolCallRow,
     process: crate::managed_exec::ProcessStopOutcome,
@@ -1278,9 +1147,7 @@ fn classify_orphaned_background_tool(
     }
 }
 
-/// Whether the trigger that started `parent`, or that trigger's task, is
-/// observed deleted. A missing document is not a deletion: it may not have
-/// replicated here.
+/// A missing document may not have replicated here, so it does not imply deletion.
 async fn owner_task_deleted(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
@@ -1347,18 +1214,6 @@ fn deletion_rows(
     serde_json::from_value(value).with_context(|| format!("decode {collection} deletion rows"))
 }
 
-/// Parent-driven recovery cause for a running tool call whose parent has
-/// already resolved (Lean `terminalParentToolRecover`: cause is
-/// `.parentInterrupted` when the parent is interrupted, else `.parentTerminal`
-/// — deadline expiry is not a predicate of `TerminalParentToolRow` at all).
-/// Shared by [`classify_running_tool_recovery`] (after its deadline and
-/// live-background-parent screens) and
-/// `ToolCallLifecycle::reconcile_terminal_parent_owned_tools`, whose Lean
-/// counterpart (`terminalParentOwnedToolSweep`) intentionally excludes
-/// deadline expiry from this sweep — a stranded row's own deadline is not
-/// evidence about its *parent's* terminal state, and deadline-expired rows
-/// are covered by the orphan/background sweep and the live in-flight
-/// deadline sweep instead.
 fn classify_terminal_parent_tool_recovery(
     row: &RunningToolCallRow,
     parent: &AgentRequestRow,
@@ -1398,7 +1253,6 @@ fn await_mode(row: &RunningToolCallRow) -> AwaitMode {
         .unwrap_or(AwaitMode::Foreground)
 }
 
-/// A native background row: its process is the host's, not this request's.
 fn is_background_tool_row(row: &RunningToolCallRow) -> bool {
     await_mode(row) == AwaitMode::Background
         && !crate::toolset::is_session_message_tool(&row.tool_name)

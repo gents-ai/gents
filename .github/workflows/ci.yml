@@ -156,12 +156,12 @@ jobs:
       # gents-migration's build script compiles the fixture lens for WASM and
       # is in the dependency graph of every heavy suite. Install the target
       # explicitly instead of relying on mutable host toolchain state.
-      # The callback fixture's build script compiles its own WASI command; only
-      # its package tests and gents' tests (dev-dependency) build it.
+      # Runtime/support build the WASI callback fixture; CLI pack tests compile
+      # Rust plugins. Install their target rather than relying on host state.
       - name: Install pinned Rust toolchain and WASM targets
         run: >-
           .github/scripts/setup-rust.sh
-          ${{ (matrix.suite == 'runtime' || matrix.suite == 'support') && 'wasm32-wasip1' || '' }}
+          ${{ matrix.suite != 'desktop' && 'wasm32-wasip1' || '' }}
 
       - name: Install elan
         # Runtime conformance, desktop-bridge, and support migration tests load
@@ -338,6 +338,7 @@ jobs:
           # The client-authored list-sync fence (#1123/#1125) must fail the
           # PR that drifts the surface, not the post-merge main run.
           cargo test -p gents --test misc client_authored_collections_fence::
+          cargo test -p gents --test misc ordered_read_plans::
           # DefraDB-free; the extraction's wasm claim is otherwise unenforced
           # on PRs (full -p gents-loop is main-only below).
           cargo test -p gents-loop --lib
@@ -368,9 +369,20 @@ jobs:
             -p gents-desktop-core \
             -p gents-desktop \
             -p gents-desktop-bridge \
+            -p gents-client-host \
+            -p gents-media-host \
             -p fixture-domain-plugin \
             -p gents-fixture-host
           cargo test --no-fail-fast -p gents-desktop-tauri --lib
+          cargo test -p gents-desktop-bridge --lib --features notify/macos_kqueue approvals_watch::tests::
+
+      - name: Run native client runtime journey
+        if: matrix.suite == 'desktop'
+        env:
+          RUST_MIN_STACK: 16777216
+        run: |
+          cargo build --profile test -p gents-cli -p gents-client-host -p gents-media-host --bins
+          cargo test -p gents-client-host --features runtime-e2e --test runtime
 
       - name: Run full CLI test suite
         if: matrix.suite == 'cli' && github.event_name != 'pull_request'
@@ -461,8 +473,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: package-lock.json
+          package-manager-cache: false
 
       - name: Install workspace frontend dependencies
         run: npm ci
@@ -627,8 +638,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: package-lock.json
+          package-manager-cache: false
 
       - name: Install workspace frontend dependencies
         run: npm ci

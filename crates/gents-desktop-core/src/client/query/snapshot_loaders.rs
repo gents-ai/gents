@@ -1,9 +1,25 @@
 use super::*;
+use std::collections::HashSet;
 
-pub(crate) fn snapshot_query(filter: Option<&str>) -> Result<String> {
-    let args = filter
-        .map(|filter| format!("({filter})"))
+fn node_filter(node_did: Option<&str>) -> String {
+    node_did
+        .map(|did| format!("node_did: {{ _eq: \"{}\" }}", escape_graphql_string(did)))
+        .unwrap_or_default()
+}
+
+fn snapshot_request_args(node_did: Option<&str>) -> String {
+    let node = node_filter(node_did);
+    let live = gents_protocol::request_lifecycle::RequestLifecycleState::nonterminal_graphql_list();
+    format!("(filter: {{ {node} lifecycle_state: {{ _in: {live} }} }})")
+}
+
+pub(crate) fn snapshot_query(node_did: Option<&str>) -> Result<String> {
+    let args = node_did
+        .map(|_| format!("(filter: {{ {} }})", node_filter(node_did)))
         .unwrap_or_default();
+    let request_args = snapshot_request_args(node_did);
+    let mailbox_node = node_filter(node_did);
+    let mailbox_args = format!("(filter: {{ {mailbox_node} status: {{ _eq: \"open\" }} }})");
     let trigger_fields = gents::config_client::config_projection(gents::Collection::Trigger, None)?
         .0
         .join(" ");
@@ -16,8 +32,8 @@ pub(crate) fn snapshot_query(filter: Option<&str>) -> Result<String> {
       agents: {AGENT_NAME}{args} {{ {AGENT_FIELDS} }}
       runtimes: {NODE_RUNTIME_NAME}{args} {{ {NODE_RUNTIME_FIELDS} }}
       node_readiness: {NODE_READINESS_NAME}{args} {{ {NODE_READINESS_FIELDS} }}
-      requests: {AGENT_REQUEST_NAME}{args} {{ {AGENT_REQUEST_FIELDS} }}
-      mailbox_items: {MAILBOX_ITEM_NAME}{args} {{ {MAILBOX_ITEM_FIELDS} }}
+      requests: {AGENT_REQUEST_NAME}{request_args} {{ {AGENT_REQUEST_FIELDS} }}
+      mailbox_items: {MAILBOX_ITEM_NAME}{mailbox_args} {{ {MAILBOX_ITEM_FIELDS} }}
       goals: {GOAL_NAME}{args} {{ {GOAL_FIELDS} }}
       sessions: {AGENT_SESSION_NAME}{args} {{ {AGENT_SESSION_FIELDS} }}
       tools: {TOOLS_NAME}{args} {{ {TOOLS_FIELDS} }}
@@ -39,15 +55,42 @@ pub(crate) fn snapshot_query(filter: Option<&str>) -> Result<String> {
     }}"))
 }
 
+#[cfg(test)]
 pub(crate) fn snapshot_rows(data: &Value, source_node_did: Option<&str>) -> Result<ClientStore> {
-    let trigger_observations: Vec<TriggerObservation> =
-        parse_observation_query_rows(data, "triggers", TRIGGER_OBSERVATION_FIELDS)?;
-    let schedule_observations: Vec<ScheduleObservation> =
-        parse_observation_query_rows(data, "triggers", SCHEDULE_OBSERVATION_FIELDS)?;
-    let backend_observations: Vec<InferenceBackendObservation> = parse_observation_query_rows(
+    snapshot_rows_with_requests(data, source_node_did, snapshot_request_rows(data)?)
+}
+
+pub(super) fn snapshot_rows_with_requests(
+    data: &Value,
+    source_node_did: Option<&str>,
+    requests: Vec<AgentRequestRow>,
+) -> Result<ClientStore> {
+    let (trigger_observations, trigger_observation_source_node_dids): (
+        Vec<TriggerObservation>,
+        Vec<Option<String>>,
+    ) = parse_observation_query_rows_with_source(
+        data,
+        "triggers",
+        TRIGGER_OBSERVATION_FIELDS,
+        Some("node_did"),
+    )?;
+    let (schedule_observations, schedule_observation_source_node_dids): (
+        Vec<ScheduleObservation>,
+        Vec<Option<String>>,
+    ) = parse_observation_query_rows_with_source(
+        data,
+        "triggers",
+        SCHEDULE_OBSERVATION_FIELDS,
+        Some("node_did"),
+    )?;
+    let (backend_observations, backend_observation_source_node_dids): (
+        Vec<InferenceBackendObservation>,
+        Vec<Option<String>>,
+    ) = parse_observation_query_rows_with_source(
         data,
         "inference_backends",
         INFERENCE_BACKEND_OBSERVATION_FIELDS,
+        Some("node_did"),
     )?;
     let triggers: Vec<Trigger> = parse_projected_query_rows(
         data,
@@ -67,10 +110,7 @@ pub(crate) fn snapshot_rows(data: &Value, source_node_did: Option<&str>) -> Resu
             .unwrap_or_default()
     };
     let trigger_source_node_dids = scope(triggers.len());
-    let trigger_observation_source_node_dids = scope(trigger_observations.len());
-    let schedule_observation_source_node_dids = scope(schedule_observations.len());
     let inference_backend_source_node_dids = scope(inference_backends.len());
-    let backend_observation_source_node_dids = scope(backend_observations.len());
     macro_rules! rows {
         ($ty:ty, $key:literal) => {
             parse_query_rows::<$ty>(data, $key)?
@@ -116,7 +156,7 @@ pub(crate) fn snapshot_rows(data: &Value, source_node_did: Option<&str>) -> Resu
         agents: rows!(Agent, "agents"),
         runtimes: rows!(NodeRuntimeRow, "runtimes"),
         node_readiness: rows!(NodeReadinessRow, "node_readiness"),
-        requests: rows!(AgentRequestRow, "requests"),
+        requests,
         mailbox_items: rows!(MailboxItemRow, "mailbox_items"),
         goals: rows!(GoalRow, "goals"),
         sessions,
@@ -163,6 +203,311 @@ pub(crate) fn snapshot_rows(data: &Value, source_node_did: Option<&str>) -> Resu
     }))
 }
 
+const TASK_REQUEST_FIELDS: &str = AGENT_REQUEST_FIELDS;
+
+fn request_head_scopes(
+    data: &Value,
+) -> Result<Vec<(String, String, String, Option<String>, String)>> {
+    let sessions: Vec<AgentSession> = parse_query_rows(data, "sessions")?;
+    let mut scopes = Vec::new();
+    for session in sessions {
+        let Some(head) = session
+            .observation
+            .as_ref()
+            .and_then(|observation| observation.latest_request.as_ref())
+        else {
+            continue;
+        };
+        scopes.push((
+            head.request_doc_id.clone(),
+            session.node_did,
+            session.session_id,
+            session.requester_did,
+            head.request_id.clone(),
+        ));
+    }
+    scopes.sort();
+    scopes.dedup();
+    Ok(scopes)
+}
+
+pub(super) fn session_head_queries(
+    scopes: &[(String, String, String, Option<String>, String)],
+) -> Vec<String> {
+    let mut docs = scopes
+        .iter()
+        .map(|(doc_id, _, _, _, _)| doc_id.as_str())
+        .collect::<Vec<_>>();
+    docs.sort_unstable();
+    docs.dedup();
+    docs.chunks(128)
+        .map(|chunk| {
+            let docs = chunk
+                .iter()
+                .map(|doc| format!("\"{}\"", escape_graphql_string(doc)))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(
+                "query DesktopSessionHeads {{ requests: AgentRequest(docIDs: [{docs}]) {{ {AGENT_REQUEST_FIELDS} }} }}"
+            )
+        })
+        .collect()
+}
+
+fn missing_session_head_scopes(
+    scopes: &[(String, String, String, Option<String>, String)],
+    seeds: &[AgentRequestRow],
+) -> Vec<(String, String, String, Option<String>, String)> {
+    let seeded_docs = seeds
+        .iter()
+        .filter_map(|row| row.doc_id.as_deref())
+        .collect::<HashSet<_>>();
+    scopes
+        .iter()
+        .filter(|(doc_id, _, _, _, _)| !seeded_docs.contains(doc_id.as_str()))
+        .cloned()
+        .collect()
+}
+
+pub(super) fn task_request_queries(data: &Value, node_did: Option<&str>) -> Vec<String> {
+    let Some(triggers) = data.get("triggers").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut scopes = triggers
+        .iter()
+        .filter_map(|row| {
+            let node = row.get("node_did")?.as_str()?;
+            if node_did.is_some_and(|expected| expected != node) {
+                return None;
+            }
+            let trigger = row.get("trigger_id")?.as_str()?;
+            (!node.trim().is_empty() && !trigger.trim().is_empty())
+                .then(|| (node.to_owned(), trigger.to_owned()))
+        })
+        .collect::<Vec<_>>();
+    scopes.sort();
+    scopes.dedup();
+    scopes
+        .chunks(32)
+        .map(|chunk| {
+            let fields = chunk
+                .iter()
+                .enumerate()
+                .map(|(index, (node, trigger))| {
+                    format!(
+                        "trigger_{index}: AgentRequest(filter: {{ node_did: {{ _eq: \"{}\" }}, caused_by_trigger_id: {{ _eq: \"{}\" }}, purpose: {{ _eq: \"normal\" }} }}, order: [{{ node_did: ASC }}, {{ caused_by_trigger_id: ASC }}, {{ purpose: ASC }}, {{ created_at: DESC }}, {{ request_id: DESC }}, {{ session_id: ASC }}], limit: 8) {{ {TASK_REQUEST_FIELDS} }}",
+                        escape_graphql_string(node),
+                        escape_graphql_string(trigger),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("query DesktopTaskRequestHeads {{ {fields} }}")
+        })
+        .collect()
+}
+
+/// The pinned planner requires the equality prefix in index ordering and
+/// cannot combine that ordering with the implicit physical-document suffix.
+/// Refine only the cutoff tie so physical twins retain the full-store order.
+fn task_request_boundary_queries(rows: &[AgentRequestRow]) -> Result<Vec<String>> {
+    let mut groups = std::collections::BTreeMap::new();
+    for row in rows {
+        let node = row
+            .node_did
+            .as_deref()
+            .context("task request lacks node scope")?;
+        let trigger = row
+            .caused_by_trigger_id
+            .as_deref()
+            .context("task request lacks trigger scope")?;
+        groups
+            .entry((node, trigger))
+            .or_insert_with(Vec::new)
+            .push(row);
+    }
+    let mut selections = Vec::new();
+    for ((node, trigger), rows) in groups {
+        if rows.len() < 8 {
+            continue;
+        }
+        anyhow::ensure!(rows.len() == 8, "task candidate page exceeded its limit");
+        let boundary = rows.last().expect("nonempty candidate page");
+        let filter = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+            "node_did": {"_eq": node}, "caused_by_trigger_id": {"_eq": trigger},
+            "purpose": {"_eq": "normal"},
+            "created_at": {"_eq": boundary.created_at},
+            "request_id": {"_eq": boundary.request_id},
+            "session_id": {"_eq": boundary.session_id},
+        }))?;
+        selections.push(format!("AgentRequest(filter: {filter}, order: {{ _docID: ASC }}, limit: 8) {{ {TASK_REQUEST_FIELDS} }}"));
+    }
+    Ok(selections
+        .chunks(32)
+        .map(|chunk| {
+            let roots = chunk
+                .iter()
+                .enumerate()
+                .map(|(index, selection)| format!("trigger_{index}: {selection}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("query DesktopTaskRequestBoundary {{ {roots} }}")
+        })
+        .collect())
+}
+
+fn dedupe_request_seeds(rows: &mut Vec<AgentRequestRow>) {
+    let mut seen = HashSet::new();
+    rows.retain(|row| {
+        row.doc_id
+            .as_ref()
+            .is_none_or(|doc| seen.insert(doc.clone()))
+    });
+}
+
+pub(super) fn scoped_session_heads(
+    rows: Vec<AgentRequestRow>,
+    scopes: &[(String, String, String, Option<String>, String)],
+) -> Vec<AgentRequestRow> {
+    let expected = scopes
+        .iter()
+        .map(|(doc, node, session, requester, request_id)| {
+            (
+                doc.as_str(),
+                node.as_str(),
+                session.as_str(),
+                requester.as_deref(),
+                request_id.as_str(),
+            )
+        })
+        .collect::<HashSet<_>>();
+    rows.into_iter()
+        .filter(|row| {
+            row.purpose == Some(gents_protocol::request_admission::RequestPurpose::Normal)
+                && row.doc_id.as_ref().is_some_and(|doc| {
+                    row.node_did
+                        .as_deref()
+                        .zip(row.session_id.as_deref())
+                        .is_some_and(|(node, session)| {
+                            expected.contains(&(
+                                doc.as_str(),
+                                node,
+                                session,
+                                row.requester_did.as_deref(),
+                                row.request_id.as_str(),
+                            ))
+                        })
+                })
+        })
+        .collect()
+}
+
+pub(super) fn complete_request_rows(data: &Value, root: &str) -> Result<Vec<AgentRequestRow>> {
+    let (rows, complete) = parse_query_rows_with_completeness::<AgentRequestRow>(data, root)?;
+    anyhow::ensure!(complete, "request query {root} returned malformed rows");
+    Ok(rows)
+}
+
+fn snapshot_request_rows(data: &Value) -> Result<Vec<AgentRequestRow>> {
+    if data.get("requests").is_none() {
+        return Ok(Vec::new());
+    }
+    complete_request_rows(data, "requests")
+}
+
+fn parse_task_request_rows(data: &Value) -> Result<Vec<AgentRequestRow>> {
+    let Some(fields) = data.as_object() else {
+        bail!("task request query returned a non-object payload");
+    };
+    let mut requests = Vec::new();
+    for root in fields.keys().filter(|root| root.starts_with("trigger_")) {
+        let rows = complete_request_rows(data, root)?;
+        anyhow::ensure!(
+            rows.iter().all(|row| {
+                gents_protocol::request_admission::RequestPurpose::is_public(row.purpose)
+                    && row.doc_id.as_deref().is_some_and(|id| !id.is_empty())
+            }),
+            "task request query returned a non-public or unidentified row"
+        );
+        requests.extend(rows);
+    }
+    Ok(requests)
+}
+
+pub(super) async fn complete_local_snapshot_requests(
+    node: &EmbeddedNode,
+    data: &Value,
+    node_did: Option<&str>,
+) -> Result<Vec<AgentRequestRow>> {
+    let head_scopes = request_head_scopes(data)?;
+    let mut seeds = snapshot_request_rows(data)?;
+    let mut task_rows = Vec::new();
+    for query in task_request_queries(data, node_did) {
+        let response = execute_local_graphql_query(node, &query, "recent trigger requests").await?;
+        task_rows.extend(parse_task_request_rows(&response)?);
+    }
+    for query in task_request_boundary_queries(&task_rows)? {
+        let response =
+            execute_local_graphql_query(node, &query, "task request cutoff ties").await?;
+        seeds.extend(parse_task_request_rows(&response)?);
+    }
+    seeds.extend(task_rows);
+    dedupe_request_seeds(&mut seeds);
+    let missing_heads = missing_session_head_scopes(&head_scopes, &seeds);
+    for query in session_head_queries(&missing_heads) {
+        let response = execute_local_graphql_query(node, &query, "session request heads").await?;
+        seeds.extend(scoped_session_heads(
+            complete_request_rows(&response, "requests")?,
+            &head_scopes,
+        ));
+    }
+    dedupe_request_seeds(&mut seeds);
+    let requests = if seeds.is_empty() {
+        seeds
+    } else {
+        super::close_request_rows(node, seeds).await?
+    };
+    Ok(requests)
+}
+
+async fn complete_access_snapshot_requests(
+    access: &gents::config_client::ConfigAccess,
+    data: &Value,
+    node_did: Option<&str>,
+) -> Result<Vec<AgentRequestRow>> {
+    let head_scopes = request_head_scopes(data)?;
+    let mut seeds = snapshot_request_rows(data)?;
+    let mut task_rows = Vec::new();
+    for query in task_request_queries(data, node_did) {
+        let response =
+            execute_access_graphql_query(access, &query, "recent trigger requests").await?;
+        task_rows.extend(parse_task_request_rows(&response)?);
+    }
+    for query in task_request_boundary_queries(&task_rows)? {
+        let response =
+            execute_access_graphql_query(access, &query, "task request cutoff ties").await?;
+        seeds.extend(parse_task_request_rows(&response)?);
+    }
+    seeds.extend(task_rows);
+    dedupe_request_seeds(&mut seeds);
+    let missing_heads = missing_session_head_scopes(&head_scopes, &seeds);
+    for query in session_head_queries(&missing_heads) {
+        let response =
+            execute_access_graphql_query(access, &query, "session request heads").await?;
+        seeds.extend(scoped_session_heads(
+            complete_request_rows(&response, "requests")?,
+            &head_scopes,
+        ));
+    }
+    dedupe_request_seeds(&mut seeds);
+    let requests = if seeds.is_empty() {
+        seeds
+    } else {
+        super::close_request_rows_on(access, seeds).await?
+    };
+    Ok(requests)
+}
+
 pub(crate) fn parse_projected_query_rows<T>(
     data: &Value,
     root: &str,
@@ -174,17 +519,6 @@ where
 {
     parse_projected_query_rows_with_source(data, root, fields, sibling_fields, None)
         .map(|(rows, _)| rows)
-}
-
-pub(crate) fn parse_observation_query_rows<T>(
-    data: &Value,
-    root: &str,
-    fields: &str,
-) -> Result<Vec<T>>
-where
-    T: DeserializeOwned,
-{
-    parse_rows_with_source(data, root, fields, "", None, true).map(|(rows, _)| rows)
 }
 
 pub(crate) fn parse_projected_query_rows_with_source<T>(
@@ -223,22 +557,71 @@ fn parse_rows_with_source<T>(
 where
     T: DeserializeOwned,
 {
+    let (parsed, sources, _) = parse_rows_with_source_completeness(
+        data,
+        root,
+        fields,
+        sibling_fields,
+        source_field,
+        exact_projection,
+    )?;
+    Ok((parsed, sources))
+}
+
+pub(super) fn parse_query_rows_with_completeness<T>(
+    data: &Value,
+    root: &str,
+) -> Result<(Vec<T>, bool)>
+where
+    T: DeserializeOwned,
+{
+    let (rows, _, complete) = parse_rows_with_source_completeness(data, root, "", "", None, false)?;
+    Ok((rows, complete))
+}
+
+fn parse_projected_query_rows_with_completeness<T>(
+    data: &Value,
+    root: &str,
+    fields: &str,
+    sibling_fields: &str,
+) -> Result<(Vec<T>, bool)>
+where
+    T: DeserializeOwned,
+{
+    let (rows, _, complete) =
+        parse_rows_with_source_completeness(data, root, fields, sibling_fields, None, false)?;
+    Ok((rows, complete))
+}
+
+fn parse_rows_with_source_completeness<T>(
+    data: &Value,
+    root: &str,
+    fields: &str,
+    sibling_fields: &str,
+    source_field: Option<&str>,
+    exact_projection: bool,
+) -> Result<(Vec<T>, Vec<Option<String>>, bool)>
+where
+    T: DeserializeOwned,
+{
     let rows = data
         .get(root)
         .ok_or_else(|| anyhow!("query result missing root field {root}"))?;
     match rows {
-        Value::Null => Ok((Vec::new(), Vec::new())),
+        Value::Null => Ok((Vec::new(), Vec::new(), true)),
         Value::Array(rows) => {
             let fields: Vec<&str> = fields.split_whitespace().collect();
             let sibling_fields: Vec<&str> = sibling_fields.split_whitespace().collect();
             let mut parsed = Vec::with_capacity(rows.len());
             let mut sources = Vec::with_capacity(rows.len());
+            let mut complete = true;
             for row in rows {
                 let source = source_field
                     .and_then(|field| row.get(field))
                     .and_then(Value::as_str)
                     .map(ToOwned::to_owned);
                 let Some(object) = row.as_object() else {
+                    complete = false;
                     tracing::warn!(target: "gents_desktop_core::query", root, "skipping malformed query row");
                     continue;
                 };
@@ -262,11 +645,12 @@ where
                         sources.push(source);
                     }
                     Err(error) => {
+                        complete = false;
                         tracing::warn!(target: "gents_desktop_core::query", root, error = %error, "skipping malformed query row")
                     }
                 }
             }
-            Ok((parsed, sources))
+            Ok((parsed, sources, complete))
         }
         other => Err(anyhow!(
             "query result for {root} returned non-array payload: {other}"
@@ -277,7 +661,8 @@ where
 pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
     let query = snapshot_query(None)?;
     let data = execute_local_graphql_query(node, &query, "desktop snapshot").await?;
-    snapshot_rows(&data, None)
+    let requests = complete_local_snapshot_requests(node, &data, None).await?;
+    snapshot_rows_with_requests(&data, None, requests)
 }
 
 pub async fn load_full_snapshot_with_peer_records(
@@ -319,6 +704,7 @@ async fn load_operator_config(
 ) -> Result<ClientStore> {
     let did = escape_graphql_string(node_did);
     let did_filter = format!("filter: {{ node_did: {{ _eq: \"{did}\" }} }}");
+    let request_args = snapshot_request_args(Some(node_did));
     let (trigger_fields, _) =
         gents::config_client::config_projection(gents::Collection::Trigger, None)?;
     let (backend_fields, _) =
@@ -348,60 +734,96 @@ async fn load_operator_config(
             datastore_tool_surfaces: DatastoreToolSurface({did_filter}) {{ {DATASTORE_TOOL_SURFACE_FIELDS} }}
             chain_key_bindings: ChainKeyBinding({did_filter}) {{ {CHAIN_KEY_BINDING_FIELDS} }}
             sessions: {AGENT_SESSION_NAME}({did_filter}) {{ {AGENT_SESSION_FIELDS} }}
-            requests: {AGENT_REQUEST_NAME}({did_filter}) {{ {AGENT_REQUEST_FIELDS} }}
+            requests: {AGENT_REQUEST_NAME}{request_args} {{ {AGENT_REQUEST_FIELDS} }}
         }}"
     );
     let data = execute_access_graphql_query(access, &query, "operator config").await?;
-    Ok(ClientStore::from_rows(ClientStoreRows {
-        nodes: parse_query_rows(&data, "nodes")?,
-        agents: parse_query_rows(&data, "agents")?,
-        runtimes: parse_query_rows(&data, "runtimes")?,
-        node_readiness: parse_query_rows(&data, "node_readiness")?,
-        contexts: parse_query_rows(&data, "contexts")?,
-        tools: parse_query_rows(&data, "tools")?,
-        inference_backends: parse_projected_query_rows(
-            &data,
+    let requests = complete_access_snapshot_requests(access, &data, Some(node_did)).await?;
+    operator_config_store_from_data_with_requests(&data, node_did, requests)
+}
+
+#[cfg(test)]
+pub(crate) fn operator_config_store_from_data(data: &Value, node_did: &str) -> Result<ClientStore> {
+    operator_config_store_from_data_with_requests(data, node_did, snapshot_request_rows(data)?)
+}
+
+fn operator_config_store_from_data_with_requests(
+    data: &Value,
+    node_did: &str,
+    requests: Vec<AgentRequestRow>,
+) -> Result<ClientStore> {
+    let (nodes, nodes_complete) = parse_query_rows_with_completeness(data, "nodes")?;
+    let (agents, agents_complete) = parse_query_rows_with_completeness(data, "agents")?;
+    let (inference_profiles, profiles_complete) =
+        parse_query_rows_with_completeness(data, "inference_profiles")?;
+    let (inference_backends, backends_complete) = parse_projected_query_rows_with_completeness(
+        data,
+        "inference_backends",
+        INFERENCE_BACKEND_FIELDS,
+        INFERENCE_BACKEND_OBSERVATION_FIELDS,
+    )?;
+    let (backend_observations, backend_observation_source_node_dids) =
+        parse_observation_query_rows_with_source(
+            data,
             "inference_backends",
-            INFERENCE_BACKEND_FIELDS,
             INFERENCE_BACKEND_OBSERVATION_FIELDS,
-        )?,
-        backend_observations: parse_observation_query_rows(
-            &data,
-            "inference_backends",
-            INFERENCE_BACKEND_OBSERVATION_FIELDS,
-        )?,
-        inference_profiles: parse_query_rows(&data, "inference_profiles")?,
-        inference_sampling: parse_query_rows(&data, "inference_sampling")?,
-        inference_execution: parse_query_rows(&data, "inference_execution")?,
-        tasks: parse_query_rows(&data, "tasks")?,
-        schedules: parse_query_rows(&data, "schedules")?,
-        schedule_observations: parse_observation_query_rows(
-            &data,
+            Some("node_did"),
+        )?;
+    let (schedule_observations, schedule_observation_source_node_dids) =
+        parse_observation_query_rows_with_source(
+            data,
             "triggers",
             SCHEDULE_OBSERVATION_FIELDS,
-        )?,
+            Some("node_did"),
+        )?;
+    let (trigger_observations, trigger_observation_source_node_dids) =
+        parse_observation_query_rows_with_source(
+            data,
+            "triggers",
+            TRIGGER_OBSERVATION_FIELDS,
+            Some("node_did"),
+        )?;
+    let mut rows = ClientStoreRows {
+        nodes,
+        agents,
+        runtimes: parse_query_rows(data, "runtimes")?,
+        node_readiness: parse_query_rows(data, "node_readiness")?,
+        contexts: parse_query_rows(data, "contexts")?,
+        tools: parse_query_rows(data, "tools")?,
+        inference_backends,
+        backend_observations,
+        backend_observation_source_node_dids,
+        inference_profiles,
+        inference_sampling: parse_query_rows(data, "inference_sampling")?,
+        inference_execution: parse_query_rows(data, "inference_execution")?,
+        tasks: parse_query_rows(data, "tasks")?,
+        schedules: parse_query_rows(data, "schedules")?,
+        schedule_observations,
+        schedule_observation_source_node_dids,
         triggers: parse_projected_query_rows(
-            &data,
+            data,
             "triggers",
             TRIGGER_FIELDS,
             &format!("{TRIGGER_OBSERVATION_FIELDS} {SCHEDULE_OBSERVATION_FIELDS}"),
         )?,
-        trigger_observations: parse_observation_query_rows(
-            &data,
-            "triggers",
-            TRIGGER_OBSERVATION_FIELDS,
-        )?,
-        skills: parse_query_rows(&data, "skills")?,
-        compactions: parse_query_rows(&data, "compactions")?,
-        tool_service_registries: parse_query_rows(&data, "tool_service_registries")?,
-        event_sources: parse_query_rows(&data, "event_sources")?,
-        agent_targets: parse_query_rows(&data, "agent_targets")?,
-        datastore_tool_surfaces: parse_query_rows(&data, "datastore_tool_surfaces")?,
-        chain_key_bindings: parse_query_rows(&data, "chain_key_bindings")?,
-        sessions: parse_query_rows(&data, "sessions")?,
-        requests: parse_query_rows(&data, "requests")?,
+        trigger_observations,
+        trigger_observation_source_node_dids,
+        skills: parse_query_rows(data, "skills")?,
+        compactions: parse_query_rows(data, "compactions")?,
+        tool_service_registries: parse_query_rows(data, "tool_service_registries")?,
+        event_sources: parse_query_rows(data, "event_sources")?,
+        agent_targets: parse_query_rows(data, "agent_targets")?,
+        datastore_tool_surfaces: parse_query_rows(data, "datastore_tool_surfaces")?,
+        chain_key_bindings: parse_query_rows(data, "chain_key_bindings")?,
+        sessions: parse_query_rows(data, "sessions")?,
+        requests,
         ..ClientStoreRows::default()
-    }))
+    };
+    if nodes_complete && agents_complete && profiles_complete && backends_complete {
+        rows.operator_config_authoritative_node_dids
+            .insert(node_did.to_owned());
+    }
+    Ok(ClientStore::from_rows(rows))
 }
 
 pub async fn load_node_scoped_snapshot_with_peer_records(

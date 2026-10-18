@@ -1,5 +1,4 @@
-//! Shared, read-only skill source loading. Publication and attachment belong to
-//! configuration owners; importing instructions never executes supporting files.
+//! Importing skill instructions never executes supporting files.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -10,21 +9,16 @@ use crate::document_config::SkillDocument;
 
 const MAX_SOURCE_BYTES: u64 = 1024 * 1024;
 
-/// Parsed metadata and instruction body from the shared SKILL.md import format.
 #[derive(Default, serde::Deserialize)]
 pub struct SkillFrontmatter {
     pub name: Option<String>,
     pub description: Option<String>,
-    /// Agent Skills `license`.
     #[serde(default)]
     pub license: Option<String>,
-    /// Agent Skills `allowed-tools`: space-separated tool names.
     #[serde(default, rename = "allowed-tools")]
     pub allowed_tools: Option<String>,
 }
 
-/// Shared by operator imports and model-facing configuration. Broken metadata
-/// is an error, not an instruction body or silently discarded configuration.
 pub fn parse_skill_md(contents: &str) -> anyhow::Result<(SkillFrontmatter, String)> {
     let mut lines = contents.lines();
     if lines.next().map(str::trim) == Some("---") {
@@ -71,8 +65,7 @@ pub struct OpenAiTool {
 }
 
 /// Load a single directory containing SKILL.md, or that file directly. The
-/// caller resolves/authorizes each path (including optional metadata) before
-/// reading; model callers must use the existing tool filesystem boundary.
+/// caller resolves/authorizes each path before reading.
 pub fn load_skill_source(
     source: &Path,
     skill_id: &str,
@@ -229,7 +222,6 @@ mod tests {
             skill.instructions.as_deref(),
             Some("Read references/checklist.md.")
         );
-        // Optional source annotations are not Gents tool selection or grants.
         assert!(skill.tool_refs.is_empty());
         assert!(skill.interface_json.is_none());
     }

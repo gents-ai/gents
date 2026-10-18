@@ -12,38 +12,23 @@ use std::path::PathBuf;
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ConfigLayerSource {
-    /// Managed preferences layer delivered by MDM (macOS only).
     #[serde(rename_all = "camelCase")]
     Mdm {
         domain: String,
         key: String,
     },
-
-    /// Managed config layer from a file (usually `managed_config.toml`).
     #[serde(rename_all = "camelCase")]
     System {
-        /// This is the path to the system config.toml file, though it is not
-        /// guaranteed to exist.
         file: AbsolutePathBuf,
     },
 
-    /// User config layer from $CODEX_HOME/config.toml. This layer is special
-    /// in that it is expected to be:
-    /// - writable by the user
-    /// - generally outside the workspace directory
     #[serde(rename_all = "camelCase")]
     User {
-        /// This is the path to the user's config.toml file, though it is not
-        /// guaranteed to exist.
         file: AbsolutePathBuf,
 
-        /// Name of the selected profile-v2 config layered on top of the base
-        /// user config, when this layer represents one.
         profile: Option<String>,
     },
 
-    /// Path to a .codex/ folder within a project. There could be multiple of
-    /// these between `cwd` and the project/repo root.
     #[serde(rename_all = "camelCase")]
     Project {
         dot_codex_folder: AbsolutePathBuf,
@@ -52,10 +37,6 @@ pub enum ConfigLayerSource {
     /// Session-layer overrides supplied via `-c`/`--config`.
     SessionFlags,
 
-    /// `managed_config.toml` was designed to be a config that was loaded
-    /// as the last layer on top of everything else. This scheme did not quite
-    /// work out as intended, but we keep this variant as a "best effort" while
-    /// we phase out `managed_config.toml` in favor of `requirements.toml`.
     #[serde(rename_all = "camelCase")]
     LegacyManagedConfigTomlFromFile {
         file: AbsolutePathBuf,
@@ -65,8 +46,6 @@ pub enum ConfigLayerSource {
 }
 
 impl ConfigLayerSource {
-    /// A settings from a layer with a higher precedence will override a setting
-    /// from a layer with a lower precedence.
     pub fn precedence(&self) -> i16 {
         match self {
             ConfigLayerSource::Mdm { .. } => 0,
@@ -86,8 +65,6 @@ impl ConfigLayerSource {
     }
 }
 
-/// Compares [ConfigLayerSource] by precedence, so `A < B` means settings from
-/// layer `A` will be overridden by settings from layer `B`.
 impl PartialOrd for ConfigLayerSource {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.precedence().cmp(&other.precedence()))
@@ -175,7 +152,6 @@ pub struct AppsConfig {
     pub apps: HashMap<String, AppConfig>,
 }
 
-/// Backward-compatible API shape for ChatGPT workspace login restrictions.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum ForcedChatgptWorkspaceIds {
@@ -202,8 +178,6 @@ pub struct Config {
     pub model_auto_compact_token_limit_scope: Option<AutoCompactTokenLimitScope>,
     pub model_provider: Option<String>,
     pub approval_policy: Option<AskForApproval>,
-    /// [UNSTABLE] Optional default for where approval requests are routed for
-    /// review.
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox_mode: Option<SandboxMode>,
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
@@ -270,7 +244,6 @@ pub struct OverriddenMetadata {
 pub struct ConfigWriteResponse {
     pub status: WriteStatus,
     pub version: String,
-    /// Canonical path to the config file that was written.
     pub file_path: AbsolutePathBuf,
     pub overridden_metadata: Option<OverriddenMetadata>,
 }
@@ -291,9 +264,6 @@ pub enum ConfigWriteErrorCode {
 pub struct ConfigReadParams {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub include_layers: bool,
-    /// Optional working directory to resolve project config layers. If specified,
-    /// return the effective config as seen from that directory (i.e., including any
-    /// project layers between `cwd` and the project/repo root).
     pub cwd: Option<String>,
 }
 
@@ -392,18 +362,11 @@ pub struct NetworkRequirements {
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
-    /// Canonical network permission map for `experimental_network`.
     pub domains: Option<BTreeMap<String, NetworkDomainPermission>>,
-    /// When true, only managed allowlist entries are respected while managed
-    /// network enforcement is active.
     pub managed_allowed_domains_only: Option<bool>,
-    /// Legacy compatibility view derived from `domains`.
     pub allowed_domains: Option<Vec<String>>,
-    /// Legacy compatibility view derived from `domains`.
     pub denied_domains: Option<Vec<String>>,
-    /// Canonical unix socket permission map for `experimental_network`.
     pub unix_sockets: Option<BTreeMap<String, NetworkUnixSocketPermission>>,
-    /// Legacy compatibility view derived from `unix_sockets`.
     pub allow_unix_sockets: Option<Vec<String>>,
     pub allow_local_binding: Option<bool>,
 }
@@ -431,7 +394,6 @@ pub enum ResidencyRequirement {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigRequirementsReadResponse {
-    /// Null if no requirements are configured (e.g. no requirements.toml/MDM entries).
     pub requirements: Option<ConfigRequirements>,
 }
 
@@ -520,7 +482,6 @@ pub struct MigrationDetails {
 pub struct ExternalAgentConfigMigrationItem {
     pub item_type: ExternalAgentConfigMigrationItemType,
     pub description: String,
-    /// Null or empty means home-scoped migration; non-empty means repo-scoped migration.
     pub cwd: Option<PathBuf>,
     pub details: Option<MigrationDetails>,
 }
@@ -534,10 +495,8 @@ pub struct ExternalAgentConfigDetectResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ExternalAgentConfigDetectParams {
-    /// If true, include detection under the user's home (~/.claude, ~/.codex, etc.).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub include_home: bool,
-    /// Zero or more working directories to include for repo-scoped detection.
     pub cwds: Option<Vec<PathBuf>>,
 }
 
@@ -561,7 +520,6 @@ pub struct ConfigValueWriteParams {
     pub key_path: String,
     pub value: JsonValue,
     pub merge_strategy: MergeStrategy,
-    /// Path to the config file to write; defaults to the user's `config.toml` when omitted.
     pub file_path: Option<String>,
     pub expected_version: Option<String>,
 }
@@ -570,10 +528,8 @@ pub struct ConfigValueWriteParams {
 #[serde(rename_all = "camelCase")]
 pub struct ConfigBatchWriteParams {
     pub edits: Vec<ConfigEdit>,
-    /// Path to the config file to write; defaults to the user's `config.toml` when omitted.
     pub file_path: Option<String>,
     pub expected_version: Option<String>,
-    /// When true, hot-reload the updated user config into all loaded threads after writing.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub reload_user_config: bool,
 }
@@ -589,9 +545,7 @@ pub struct ConfigEdit {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct TextPosition {
-    /// 1-based line number.
     pub line: usize,
-    /// 1-based column number (in Unicode scalar values).
     pub column: usize,
 }
 
@@ -605,14 +559,10 @@ pub struct TextRange {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigWarningNotification {
-    /// Concise summary of the warning.
     pub summary: String,
-    /// Optional extra guidance or error details.
     pub details: Option<String>,
-    /// Optional path to the config file that triggered the warning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
-    /// Optional range for the error location inside the config file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub range: Option<TextRange>,
 }

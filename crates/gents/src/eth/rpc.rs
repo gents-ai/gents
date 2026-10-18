@@ -1,9 +1,3 @@
-//! JSON-RPC client for a single EthTool endpoint.
-//!
-//! User-Agent is required (public Base returns 403 without one). Chain id is
-//! checked against the document and cached. `eth_getLogs` is preflighted
-//! before the wire.
-
 use std::collections::BTreeSet;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -165,7 +159,7 @@ impl<T: JsonRpcTransport> EthRpcClient<T> {
         self.rpc(&method, params).await
     }
 
-    /// Internal `eth_call` for generated read tools. Bypasses `query_methods`.
+    /// Internal `eth_call` for generated read tools; bypasses `query_methods`.
     pub async fn eth_call(&self, to: &str, data: &str, block: Option<&str>) -> Result<Value> {
         self.ensure_chain_id().await?;
         let block = block
@@ -176,7 +170,7 @@ impl<T: JsonRpcTransport> EthRpcClient<T> {
             .await
     }
 
-    #[allow(dead_code)] // Wired into generated write tools in the next stack commit.
+    #[allow(dead_code)]
     pub(crate) async fn simulate_transaction(&self, transaction: Value) -> Result<Value> {
         self.ensure_chain_id().await?;
         self.rpc("eth_call", json!([transaction, "pending"])).await
@@ -317,7 +311,6 @@ pub fn revert_reason_from_error(error: &Value) -> Option<String> {
     decode_revert_data(hex)
 }
 
-/// `Error(string)` selector `0x08c379a0`.
 pub fn decode_revert_data(hex: &str) -> Option<String> {
     let hex = hex.strip_prefix("0x").unwrap_or(hex);
     if hex.len() < 8 + 64 + 64 || !hex.to_ascii_lowercase().starts_with("08c379a0") {

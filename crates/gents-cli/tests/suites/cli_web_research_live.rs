@@ -58,7 +58,7 @@ fn real_web_research_registry_mutation(node_did: &str) -> String {
 async fn live_research_registry_matches_measured_loopback_endpoint() -> Result<()> {
     let node = Arc::new(gents::defra_node::EmbeddedNode::builder().build().await?);
     gents::ensure_runtime_schemas(node.as_ref()).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let node_did = "did:key:web-research-registry-test";
     access
         .write(
@@ -105,7 +105,7 @@ async fn configure_live_research_inference_profile(
 ) -> Result<()> {
     let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(&graphql));
     access
-        .transact("test.web_research.inference", |txn| {
+        .transact_write("test.web_research.inference", |txn| {
             Box::pin(async move {
                 let (_, value) = read_desired_state_record_in_txn(
                     txn,
@@ -568,10 +568,6 @@ async fn wait_for_exact_research_tool_surfaces(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "starts the real Docker search/extraction stack and consumes substantial real model tokens"]
-/// Failed runs retain their home and server logs under
-/// `GENTS_WEB_RESEARCH_ARTIFACT_DIR` (default: the temporary directory's
-/// `gents-web-research-failures`), keeping at most five completed failures.
-/// Set `GENTS_WEB_RESEARCH_RETAIN_FAILURES=0` to clean failed runs too.
 async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Result<()> {
     let root = std::env::var_os("GENTS_WEB_RESEARCH_ARTIFACT_DIR")
         .map(std::path::PathBuf::from)
@@ -671,9 +667,6 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
     let researcher_slot = format!("researcher={profile_id}");
     let verifier_slot = format!("verifier={profile_id}");
 
-    // A local packs checkout (`GENTS_WEB_RESEARCH_PACK=/path/to/web_deep_research`)
-    // installs offline; the bare coordinate is the only correct answer once
-    // gents-ai/packs is published, but resolves nowhere until then.
     let pack_spec = std::env::var("GENTS_WEB_RESEARCH_PACK")
         .unwrap_or_else(|_| "gents/web_deep_research".to_string());
     let install = run_cli_json_with_env(
@@ -789,8 +782,6 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
         "deep research used too few real model calls ({}): {watch}",
         inference_calls.len()
     );
-    // Provider prompt/input totals already include their cached subset. Keep the
-    // cached counter observable, but do not double-count it toward acceptance.
     let total_tokens = usage_value(&watch, "reported_input_tokens")
         + usage_value(&watch, "reported_output_tokens")
         + usage_value(&watch, "estimated_input_tokens");

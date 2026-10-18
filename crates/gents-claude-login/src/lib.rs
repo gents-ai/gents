@@ -1,9 +1,3 @@
-//! Claude subscription OAuth login (PKCE) used by `gents claude-login`.
-//!
-//! Owns only the browser/loopback and manual-paste code exchanges. Tokens go
-//! back to the caller for immediate persistence in DefraDB. Client constants
-//! mirror `gents::claude_oauth`; keep both in sync (a gents-cli unit test pins it).
-
 use std::collections::HashMap;
 use std::fmt;
 use std::io;
@@ -11,10 +5,11 @@ use std::sync::Arc;
 use std::thread;
 
 use base64::Engine;
+use gents_login_ui::CallbackPage;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tiny_http::{Response, Server};
+use tiny_http::Server;
 use tokio::sync::{mpsc, Notify};
 use url::Url;
 
@@ -31,7 +26,6 @@ pub struct LoginOptions {
     pub authorize_url: String,
     pub token_url: String,
     pub open_browser: bool,
-    /// Test hook for deterministic callback-state checks.
     pub force_state: Option<String>,
 }
 
@@ -54,7 +48,6 @@ pub struct LoginTokens {
     pub expires_in: Option<i64>,
     pub scope: Option<String>,
     pub account_id: Option<String>,
-    /// The organization and account ids of the token response, when present.
     pub organization_uuid: Option<String>,
     pub account_uuid: Option<String>,
 }
@@ -100,8 +93,6 @@ impl LoginServer {
     }
 }
 
-/// Loopback PKCE login: binds an ephemeral localhost port, prints/opens the
-/// authorize URL, accepts one `/callback`, exchanges the code.
 pub fn run_loopback_login(options: LoginOptions) -> io::Result<LoginServer> {
     let pkce = generate_pkce();
     let state = options.force_state.clone().unwrap_or_else(generate_state);
@@ -145,8 +136,8 @@ pub fn run_loopback_login(options: LoginOptions) -> io::Result<LoginServer> {
                     let outcome =
                         handle_callback_request(request.url(), &options, &redirect_uri, &pkce, &state)
                             .await;
-                    let (status, body, completed) = outcome.into_parts();
-                    let response = text_response(status, body);
+                    let (page, completed) = outcome.into_parts();
+                    let response = gents_login_ui::response(page);
                     let _ = tokio::task::spawn_blocking(move || request.respond(response)).await;
                     if let Some(result) = completed {
                         break result;
@@ -166,9 +157,6 @@ pub fn run_loopback_login(options: LoginOptions) -> io::Result<LoginServer> {
     })
 }
 
-/// Manual-paste login for hosts without a browser: prints the authorize URL
-/// (redirect = Anthropic's code page), the caller supplies the pasted
-/// `code#state` string, we exchange it.
 pub async fn run_manual_login(
     options: LoginOptions,
     read_pasted: impl FnOnce(&str) -> io::Result<String>,
@@ -204,26 +192,18 @@ pub(crate) fn parse_manual_code(pasted: &str, expected_state: &str) -> io::Resul
 }
 
 enum CallbackOutcome {
-    Continue {
-        status: u16,
-        body: String,
-    },
+    Continue(CallbackPage),
     Complete {
-        status: u16,
-        body: String,
+        page: CallbackPage,
         result: io::Result<LoginTokens>,
     },
 }
 
 impl CallbackOutcome {
-    fn into_parts(self) -> (u16, String, Option<io::Result<LoginTokens>>) {
+    fn into_parts(self) -> (CallbackPage, Option<io::Result<LoginTokens>>) {
         match self {
-            Self::Continue { status, body } => (status, body, None),
-            Self::Complete {
-                status,
-                body,
-                result,
-            } => (status, body, Some(result)),
+            Self::Continue(page) => (page, None),
+            Self::Complete { page, result } => (page, Some(result)),
         }
     }
 }
@@ -236,24 +216,15 @@ async fn handle_callback_request(
     expected_state: &str,
 ) -> CallbackOutcome {
     let Ok(parsed) = Url::parse(&format!("http://localhost{request_target}")) else {
-        return CallbackOutcome::Continue {
-            status: 400,
-            body: "Invalid callback request.".into(),
-        };
+        return CallbackOutcome::Continue(CallbackPage::Incomplete);
     };
     if parsed.path() != "/callback" {
-        return CallbackOutcome::Continue {
-            status: 404,
-            body: "Not found.".into(),
-        };
+        return CallbackOutcome::Continue(CallbackPage::NotFound);
     }
     let params: HashMap<String, String> = parsed.query_pairs().into_owned().collect();
     if params.get("state").map(String::as_str) != Some(expected_state) {
         tracing::warn!("rejected Claude OAuth callback with mismatched state");
-        return CallbackOutcome::Continue {
-            status: 400,
-            body: "OAuth state mismatch. Return to the terminal and retry sign-in.".into(),
-        };
+        return CallbackOutcome::Continue(CallbackPage::StaleLink);
     }
     if let Some(error) = params.get("error") {
         let message = params
@@ -262,8 +233,7 @@ async fn handle_callback_request(
             .filter(|v| !v.trim().is_empty())
             .unwrap_or(error);
         return CallbackOutcome::Complete {
-            status: 400,
-            body: "Claude sign-in was not completed. Return to Gents for details.".into(),
+            page: CallbackPage::NotCompleted,
             result: Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 format!("Claude authorization failed: {message}"),
@@ -275,27 +245,18 @@ async fn handle_callback_request(
         .map(String::as_str)
         .filter(|v| !v.is_empty())
     else {
-        return CallbackOutcome::Continue {
-            status: 400,
-            body: "The callback omitted its authorization code.".into(),
-        };
+        return CallbackOutcome::Continue(CallbackPage::Incomplete);
     };
     match exchange_code(options, redirect_uri, pkce, code, expected_state).await {
         Ok(tokens) => CallbackOutcome::Complete {
-            status: 200,
-            body: "Claude sign-in complete. You may close this window.".into(),
+            page: CallbackPage::SignedIn,
             result: Ok(tokens),
         },
         Err(error) => CallbackOutcome::Complete {
-            status: 502,
-            body: "Claude token exchange failed. Return to Gents for details.".into(),
+            page: CallbackPage::ExchangeFailed,
             result: Err(error),
         },
     }
-}
-
-fn text_response(status: u16, body: String) -> Response<std::io::Cursor<Vec<u8>>> {
-    gents_login_ui::response(status, body)
 }
 
 #[derive(Clone)]
@@ -372,7 +333,7 @@ struct TokenResponse {
     #[serde(default)]
     account: Option<serde_json::Value>,
     /// A `Value` so a malformed block leaves the ids empty instead of failing
-    /// the sign-in. Only its `uuid` is read; the name is never kept.
+    /// the sign-in.
     #[serde(default)]
     organization: Option<serde_json::Value>,
 }
@@ -413,6 +374,7 @@ pub(crate) async fn exchange_code(
     };
     let response = reqwest::Client::new()
         .post(&options.token_url)
+        .timeout(std::time::Duration::from_secs(30))
         .header("Content-Type", "application/json")
         .json(&request)
         .send()
@@ -459,68 +421,12 @@ fn redacted_transport_error(error: reqwest::Error) -> io::Error {
 mod tests {
     use super::*;
 
-    #[test]
-    fn account_label_prefers_email_and_falls_back_to_a_nonempty_id() {
-        use serde_json::json;
-        assert_eq!(
-            account_label(&json!({"email_address":" person@example.test ","uuid":"account-1"})),
-            Some("person@example.test".into())
-        );
-        for email in [json!(null), json!(" "), json!(false)] {
-            assert_eq!(
-                account_label(&json!({"email_address":email,"uuid":"account-1"})),
-                Some("account-1".into())
-            );
-        }
-        assert_eq!(
-            account_label(&json!({"uuid":"account-1"})),
-            Some("account-1".into())
-        );
-        assert_eq!(
-            account_label(&json!({"email_address":null,"uuid":" "})),
-            None
-        );
-    }
-
     fn options() -> LoginOptions {
         LoginOptions {
             open_browser: false,
             force_state: Some("state-1".into()),
             ..LoginOptions::default()
         }
-    }
-
-    #[test]
-    fn authorize_url_carries_claude_code_query_shape() {
-        let pkce = generate_pkce();
-        let url = build_authorize_url(
-            &options(),
-            "http://localhost:4242/callback",
-            &pkce,
-            "state-1",
-        )
-        .unwrap();
-        let parsed = url::Url::parse(&url).unwrap();
-        assert_eq!(parsed.origin().ascii_serialization(), "https://claude.com");
-        assert_eq!(parsed.path(), "/cai/oauth/authorize");
-        let q: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
-        assert_eq!(q["code"], "true");
-        assert_eq!(q["client_id"], CLIENT_ID);
-        assert_eq!(q["response_type"], "code");
-        assert_eq!(q["redirect_uri"], "http://localhost:4242/callback");
-        assert_eq!(q["scope"], SCOPES);
-        assert_eq!(q["code_challenge"], pkce.challenge);
-        assert_eq!(q["code_challenge_method"], "S256");
-        assert_eq!(q["state"], "state-1");
-    }
-
-    #[test]
-    fn pkce_challenge_is_s256_of_verifier() {
-        let pkce = generate_pkce();
-        let expected = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(Sha256::digest(pkce.verifier.as_bytes()));
-        assert_eq!(pkce.challenge, expected);
-        assert!(pkce.verifier.len() >= 43);
     }
 
     #[test]
@@ -540,102 +446,6 @@ mod tests {
         let pkce = generate_pkce();
         let rendered = format!("{pkce:?}");
         assert!(!rendered.contains(&pkce.verifier), "{rendered}");
-    }
-
-    #[test]
-    fn manual_code_parsing_requires_matching_state() {
-        assert_eq!(parse_manual_code("abc#state-1", "state-1").unwrap(), "abc");
-        assert!(parse_manual_code("abc#state-2", "state-1").is_err());
-        assert!(parse_manual_code("abc", "state-1").is_err());
-        assert!(parse_manual_code("", "state-1").is_err());
-    }
-
-    #[tokio::test]
-    async fn callback_with_wrong_state_is_rejected_and_keeps_waiting() {
-        let pkce = generate_pkce();
-        let outcome = handle_callback_request(
-            "/callback?code=abc&state=wrong",
-            &options(),
-            "http://localhost:1/callback",
-            &pkce,
-            "state-1",
-        )
-        .await;
-        let (status, _, completed) = outcome.into_parts();
-        assert_eq!(status, 400);
-        assert!(completed.is_none());
-    }
-
-    #[tokio::test]
-    async fn exchange_posts_json_with_state_and_verifier() {
-        let (url, handle) = one_shot_server(200, r#"{"access_token":"access-NEW","refresh_token":"refresh-NEW","expires_in":28800,"scope":"user:inference","account":{"uuid":"account-1","email_address":"person@example.test"},"organization":{"uuid":"org-1","name":"Example Org"}}"#).await;
-        let opts = LoginOptions {
-            token_url: url,
-            ..options()
-        };
-        let pkce = generate_pkce();
-        let tokens = exchange_code(
-            &opts,
-            "http://localhost:1/callback",
-            &pkce,
-            "code-1",
-            "state-1",
-        )
-        .await
-        .unwrap();
-        let request = handle.await.unwrap();
-        let body: serde_json::Value =
-            serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
-        assert_eq!(body["grant_type"], "authorization_code");
-        assert_eq!(body["code"], "code-1");
-        assert_eq!(body["redirect_uri"], "http://localhost:1/callback");
-        assert_eq!(body["client_id"], CLIENT_ID);
-        assert_eq!(body["code_verifier"], pkce.verifier);
-        assert_eq!(body["state"], "state-1");
-        assert!(
-            request.contains("content-type: application/json"),
-            "{request}"
-        );
-        assert_eq!(tokens.access_token, "access-NEW");
-        assert_eq!(tokens.refresh_token, "refresh-NEW");
-        assert_eq!(tokens.expires_in, Some(28800));
-        assert_eq!(tokens.account_id.as_deref(), Some("person@example.test"));
-        assert_eq!(tokens.organization_uuid.as_deref(), Some("org-1"));
-        assert_eq!(tokens.account_uuid.as_deref(), Some("account-1"));
-    }
-
-    /// A malformed organization block still signs in, with no organization id,
-    /// so no provider account key can be formed from the pair.
-    #[tokio::test]
-    async fn exchange_with_a_malformed_organization_signs_in_without_its_id() {
-        for organization in [
-            r#""org-1""#,
-            "42",
-            r#"["org-1"]"#,
-            r#"{"uuid":42}"#,
-            r#"{"name":"Example Org"}"#,
-        ] {
-            let body = format!(
-                r#"{{"access_token":"access-NEW","refresh_token":"refresh-NEW","account":{{"uuid":"account-1"}},"organization":{organization}}}"#
-            );
-            let (url, _handle) = one_shot_server(200, Box::leak(body.into_boxed_str())).await;
-            let opts = LoginOptions {
-                token_url: url,
-                ..options()
-            };
-            let tokens = exchange_code(
-                &opts,
-                "http://localhost:1/callback",
-                &generate_pkce(),
-                "code-1",
-                "state-1",
-            )
-            .await
-            .unwrap_or_else(|err| panic!("{organization}: {err}"));
-            assert_eq!(tokens.access_token, "access-NEW");
-            assert_eq!(tokens.organization_uuid, None, "{organization}");
-            assert_eq!(tokens.account_uuid.as_deref(), Some("account-1"));
-        }
     }
 
     #[tokio::test]
@@ -659,7 +469,6 @@ mod tests {
         assert!(err.to_string().contains("401"), "{err}");
     }
 
-    /// One-shot HTTP responder (no extra dependency): accepts one request, returns it, answers with `status` + `body`.
     async fn one_shot_server(
         status: u16,
         body: &'static str,

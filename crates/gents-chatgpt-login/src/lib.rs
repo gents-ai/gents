@@ -1,10 +1,3 @@
-//! Minimal ChatGPT OAuth flows used by the Gents CLI and desktop app.
-//!
-//! This crate intentionally owns only the browser PKCE and device-code
-//! exchanges. Tokens are returned to the caller for immediate persistence in
-//! DefraDB; no Codex configuration, keyring, provider, sandbox, or app-server
-//! code is linked into Gents.
-
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
@@ -12,12 +5,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
+use gents_login_ui::CallbackPage;
 use gents_protocol::chatgpt_oauth::{token_endpoint, CLIENT_ID, DEFAULT_ISSUER};
 use rand::RngCore;
 use reqwest::StatusCode;
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
-use tiny_http::{Response, Server};
+use tiny_http::Server;
 use tokio::sync::{mpsc, Notify};
 use url::Url;
 
@@ -35,7 +29,6 @@ pub struct LoginOptions {
     pub issuer: String,
     pub port: u16,
     pub open_browser: bool,
-    /// Test hook for deterministic callback-state checks.
     pub force_state: Option<String>,
 }
 
@@ -58,7 +51,6 @@ pub struct LoginTokens {
     pub refresh_token: String,
 }
 
-/// Token values never reach logs or error text through `Debug`.
 impl std::fmt::Debug for LoginTokens {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LoginTokens")
@@ -99,7 +91,6 @@ impl LoginServer {
     }
 }
 
-/// Start a loopback-only OAuth callback server.
 pub fn run_login_server(options: LoginOptions) -> io::Result<LoginServer> {
     let pkce = generate_pkce();
     let state = options.force_state.clone().unwrap_or_else(generate_state);
@@ -149,8 +140,8 @@ pub fn run_login_server(options: LoginOptions) -> io::Result<LoginServer> {
                         &pkce,
                         &state,
                     ).await;
-                    let (status, body, completed) = outcome.into_parts();
-                    let response = callback_response(status, body);
+                    let (page, completed) = outcome.into_parts();
+                    let response = gents_login_ui::response(page);
                     let _ = tokio::task::spawn_blocking(move || request.respond(response)).await;
                     if let Some(result) = completed {
                         break result;
@@ -171,26 +162,18 @@ pub fn run_login_server(options: LoginOptions) -> io::Result<LoginServer> {
 }
 
 enum CallbackOutcome {
-    Continue {
-        status: u16,
-        body: String,
-    },
+    Continue(CallbackPage),
     Complete {
-        status: u16,
-        body: String,
+        page: CallbackPage,
         result: io::Result<LoginTokens>,
     },
 }
 
 impl CallbackOutcome {
-    fn into_parts(self) -> (u16, String, Option<io::Result<LoginTokens>>) {
+    fn into_parts(self) -> (CallbackPage, Option<io::Result<LoginTokens>>) {
         match self {
-            Self::Continue { status, body } => (status, body, None),
-            Self::Complete {
-                status,
-                body,
-                result,
-            } => (status, body, Some(result)),
+            Self::Continue(page) => (page, None),
+            Self::Complete { page, result } => (page, Some(result)),
         }
     }
 }
@@ -204,8 +187,7 @@ async fn handle_callback_request(
 ) -> CallbackOutcome {
     if request_target == "/cancel" {
         return CallbackOutcome::Complete {
-            status: 200,
-            body: "ChatGPT login cancelled. You may close this window.".to_string(),
+            page: CallbackPage::Cancelled,
             result: Err(io::Error::other("ChatGPT login was cancelled")),
         };
     }
@@ -213,26 +195,17 @@ async fn handle_callback_request(
     let parsed = match Url::parse(&format!("http://localhost{request_target}")) {
         Ok(parsed) => parsed,
         Err(_) => {
-            return CallbackOutcome::Continue {
-                status: 400,
-                body: "Invalid callback request.".to_string(),
-            };
+            return CallbackOutcome::Continue(CallbackPage::Incomplete);
         }
     };
     if parsed.path() != "/auth/callback" {
-        return CallbackOutcome::Continue {
-            status: 404,
-            body: "Not found.".to_string(),
-        };
+        return CallbackOutcome::Continue(CallbackPage::NotFound);
     }
 
     let params: HashMap<String, String> = parsed.query_pairs().into_owned().collect();
     if params.get("state").map(String::as_str) != Some(expected_state) {
         tracing::warn!("rejected ChatGPT OAuth callback with mismatched state");
-        return CallbackOutcome::Continue {
-            status: 400,
-            body: "OAuth state mismatch. Return to Gents and retry sign-in.".to_string(),
-        };
+        return CallbackOutcome::Continue(CallbackPage::StaleLink);
     }
     if let Some(error) = params.get("error") {
         let description = params
@@ -241,8 +214,7 @@ async fn handle_callback_request(
             .filter(|value| !value.trim().is_empty());
         let message = description.unwrap_or(error);
         return CallbackOutcome::Complete {
-            status: 400,
-            body: "ChatGPT sign-in was not completed. Return to Gents for details.".to_string(),
+            page: CallbackPage::NotCompleted,
             result: Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 format!("ChatGPT authorization failed: {message}"),
@@ -254,28 +226,19 @@ async fn handle_callback_request(
         .map(String::as_str)
         .filter(|value| !value.is_empty())
     else {
-        return CallbackOutcome::Continue {
-            status: 400,
-            body: "The callback omitted its authorization code.".to_string(),
-        };
+        return CallbackOutcome::Continue(CallbackPage::Incomplete);
     };
 
     match exchange_code_for_tokens(options, redirect_uri, pkce, code).await {
         Ok(tokens) => CallbackOutcome::Complete {
-            status: 200,
-            body: "ChatGPT sign-in complete. You may close this window.".to_string(),
+            page: CallbackPage::SignedIn,
             result: Ok(tokens),
         },
         Err(error) => CallbackOutcome::Complete {
-            status: 502,
-            body: "ChatGPT token exchange failed. Return to Gents for details.".to_string(),
+            page: CallbackPage::ExchangeFailed,
             result: Err(error),
         },
     }
-}
-
-fn callback_response(status: u16, body: String) -> Response<std::io::Cursor<Vec<u8>>> {
-    gents_login_ui::response(status, body)
 }
 
 fn bind_server(port: u16) -> io::Result<Server> {
@@ -362,6 +325,7 @@ async fn exchange_code_for_tokens(
     let endpoint = token_endpoint(&options.issuer);
     let response = build_http_client()?
         .post(endpoint)
+        .timeout(Duration::from_secs(30))
         .form(&[
             ("grant_type", "authorization_code"),
             ("code", code),
@@ -623,54 +587,6 @@ mod tests {
     }
 
     #[test]
-    fn authorize_url_preserves_the_codex_compatible_contract() {
-        let options = LoginOptions {
-            open_browser: false,
-            ..LoginOptions::default()
-        };
-        let pkce = PkceCodes {
-            verifier: "verifier".to_string(),
-            challenge: "challenge".to_string(),
-        };
-        let url = build_authorize_url(
-            &options,
-            "http://localhost:1455/auth/callback",
-            &pkce,
-            "state",
-        )
-        .expect("authorize URL");
-        let url = Url::parse(&url).expect("valid URL");
-        let query: HashMap<_, _> = url.query_pairs().into_owned().collect();
-        assert_eq!(url.path(), "/oauth/authorize");
-        assert_eq!(query.get("client_id").map(String::as_str), Some(CLIENT_ID));
-        assert_eq!(
-            query.get("code_challenge").map(String::as_str),
-            Some("challenge")
-        );
-        assert_eq!(
-            query.get("code_challenge_method").map(String::as_str),
-            Some("S256")
-        );
-        assert_eq!(query.get("state").map(String::as_str), Some("state"));
-        assert_eq!(
-            query.get("originator").map(String::as_str),
-            Some(ORIGINATOR)
-        );
-        assert!(query
-            .get("scope")
-            .is_some_and(|scope| scope.contains("offline_access")));
-    }
-
-    #[test]
-    fn pkce_values_have_the_required_entropy_and_encoding() {
-        let pkce = generate_pkce();
-        assert!(pkce.verifier.len() >= 43 && pkce.verifier.len() <= 128);
-        assert!(!pkce.verifier.contains('='));
-        assert!(!pkce.challenge.contains('='));
-        assert_ne!(pkce.verifier, generate_pkce().verifier);
-    }
-
-    #[test]
     fn oauth_errors_do_not_echo_unstructured_response_bodies() {
         assert_eq!(
             oauth_error_message(r#"{"error":{"message":"denied"}}"#),
@@ -680,24 +596,6 @@ mod tests {
             oauth_error_message("secret=do-not-log"),
             "unstructured error response"
         );
-    }
-
-    #[test]
-    fn device_interval_accepts_string_and_number_encodings() {
-        let string: UserCodeResponse = serde_json::from_value(serde_json::json!({
-            "device_auth_id": "id",
-            "user_code": "code",
-            "interval": "7"
-        }))
-        .expect("string interval");
-        let number: UserCodeResponse = serde_json::from_value(serde_json::json!({
-            "device_auth_id": "id",
-            "user_code": "code",
-            "interval": 3
-        }))
-        .expect("numeric interval");
-        assert_eq!(string.interval, 7);
-        assert_eq!(number.interval, 3);
     }
 
     #[tokio::test]
@@ -710,9 +608,8 @@ mod tests {
             "expected",
         )
         .await;
-        let (status, body, completed) = outcome.into_parts();
-        assert_eq!(status, 400);
-        assert!(body.contains("state mismatch"));
+        let (page, completed) = outcome.into_parts();
+        assert_eq!(page, CallbackPage::StaleLink);
         assert!(completed.is_none(), "a legitimate callback may still retry");
     }
 

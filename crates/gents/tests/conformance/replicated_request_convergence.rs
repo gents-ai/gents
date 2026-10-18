@@ -116,8 +116,6 @@ async fn create_owned_request_with_times_and_requester(
     } else {
         String::new()
     };
-    // These fixtures model previously owned rows observed after an execution
-    // crashed. Recovery requires the exact expired generation tuple.
     let execution_fields = if matches!(lifecycle_state, "claimed" | "processing") {
         format!(
             r#", execution_generation: "{}", execution_lease_expires_at: "{CONVERGENCE_CREATED_AT}", execution_progress_seq: 0"#,
@@ -306,7 +304,7 @@ pub(super) async fn single_claimer_watcher_never_claims_foreign_replica() {
     )
     .await;
 
-    let mut watcher = DefraWatcher::new(db.node.clone(), OWNER_DID);
+    let mut watcher = DefraWatcher::new(db.node.clone(), OWNER_DID).expect("request watcher");
 
     assert!(
         watcher
@@ -378,13 +376,24 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
         "completed",
     )
     .await;
+    create_owned_request_with_times_and_requester(
+        &db.node,
+        "convergence-owned-self-terminal",
+        "convergence-owned-self-terminal-session",
+        OWNER_DID,
+        "completed",
+        CONVERGENCE_CREATED_AT,
+        CONVERGENCE_CREATED_AT,
+        Some(OWNER_DID),
+    )
+    .await;
 
     let first = RequestLifecycle::redrive_terminal_convergence(&db.node, OWNER_DID)
         .await
         .unwrap();
     assert_eq!(
         first.scanned, 1,
-        "only the owned terminal request is a candidate (foreign + active excluded)"
+        "only the routed owned terminal request is a candidate (foreign, active and local-self excluded)"
     );
     assert_eq!(
         first.reasserted, 1,

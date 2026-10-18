@@ -3,24 +3,14 @@ import Proofs.ToolPolicy.Meet
 /-!
 # Selection obligations for the agent sibling-tools operation
 
-The focused agent configurator refines the canonical Tools document inside the
-existing self-config patch transaction. Every selection here is operation
-scoped: omission preserves the stored value, and an explicit value may only
-preserve or narrow. The write itself stays an ordinary self-config Tools write
-through `SelfConfig.step` under the `keepsControl` no-lockout guard, so nothing
-here is a parallel write path or an ACP bypass, and the narrowing guarantee is
-claimed for this operation only, not for every Engineer configuration write.
-Presenting native graph tools is an independent opt-in: it is neither
-graph-caller admission nor installation or configuration authority, both of
-which stay behind document ACP with their existing owners.
+Every selection here is operation scoped. The write stays an ordinary
+self-config Tools write through `SelfConfig.step` under the `keepsControl`
+no-lockout guard: nothing here is a parallel write path or an ACP bypass, and
+the narrowing guarantee is claimed for this operation only.
 -/
 
 namespace SelfConfig
 
-/-! ## Tool-group selection -/
-
-/-- An explicit sibling-tools selection refines the stored Tools value:
-omission preserves the current selection, an explicit value overrides it. -/
 def selectedToolFlag (requested : Option Bool) (existing : Bool) : Bool :=
   requested.getD existing
 
@@ -32,8 +22,7 @@ theorem explicit_tool_selection_wins (requested existing : Bool) :
 
 /-! ## Network selection -/
 
-/-- Network selection reuses the command-policy vocabulary and tool-policy
-ordering. The sibling-tools operation may preserve the stored selection or
+/-- The sibling-tools operation may preserve the stored selection or
 explicitly narrow it to disabled; inherit/enabled are never admitted inputs. -/
 def selectedNetworkMode
     (requested : Option CommandPolicy.NetworkMode)
@@ -56,13 +45,9 @@ theorem only_disabled_network_selection_admitted
 /-! ## The scoped sibling-tools operation -/
 
 structure SiblingToolsOperation where
-  /-- The operation targets the invoking agent's own Tools document. -/
   ownerMatches : Bool
-  /-- The target carries configuration this operation may not mutate. -/
   isProtected : Bool
-  /-- The stored context is not shared with another agent. -/
   sharedContext : Bool
-  /-- The stored Tools document is not shared with another agent. -/
   sharedTools : Bool
   requestedNetwork : Option CommandPolicy.NetworkMode
   existingNetwork : CommandPolicy.NetworkMode
@@ -99,10 +84,6 @@ theorem shared_tools_sibling_tools_denied (owner isProtected sharedContext : Boo
 theorem unshared_owned_sibling_tools_allowed :
     siblingToolsAllowed true false false false = true := rfl
 
-/-- The narrowing guarantee holds for this operation only: an admitted
-sibling-tools selection never widens the stored network rank. Other node or
-Engineer configuration writes make no such claim and are checked the normal
-way by their existing owners. -/
 theorem sibling_tools_operation_narrows_network (op : SiblingToolsOperation)
     (h : op.admitted = true) :
     ToolPolicy.networkRank op.resultNetwork ≤ ToolPolicy.networkRank op.existingNetwork := by
@@ -118,9 +99,8 @@ theorem sibling_tools_operation_narrows_network (op : SiblingToolsOperation)
 
 /-! ## Graph tool presentation -/
 
-/-- Native graph tool presentation is an independent opt-in. Presentation is
-not graph caller admission and does not grant installation or configuration;
-graph callers stay behind document ACP and their existing admission owners. -/
+/-- Native graph tool presentation is an independent opt-in: presentation is
+not graph caller admission and does not grant installation or configuration. -/
 def graphToolPresented (requested : Bool) (_selfConfig _packInstall : Bool) : Bool :=
   requested
 

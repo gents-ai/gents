@@ -26,7 +26,7 @@ pub(super) fn row_matches_coalesced_source_and_key(
 }
 
 pub async fn reconcile_coalesced_pending_request(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     session_id: &str,
     node_did: &str,
     source: QueueSource,
@@ -84,7 +84,6 @@ pub async fn reconcile_coalesced_pending_request(
     Ok(Some(survivor))
 }
 
-/// Supersede one still-pending request of `node_did` by the survivor.
 pub(crate) fn supersede_pending_mutation(
     doc_id: &str,
     node_did: &str,
@@ -148,13 +147,12 @@ async fn matching_coalesced_pending_requests(
         }}"#
     );
 
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query pending queue entries for session {session_id} failed: {:?}",
-            response.errors
-        );
-    }
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "matching_coalesced_pending_requests",
+    )
+    .await?;
 
     let rows: Vec<AgentRequestRow> = crate::graphql::rows(&response, "AgentRequest")?;
 

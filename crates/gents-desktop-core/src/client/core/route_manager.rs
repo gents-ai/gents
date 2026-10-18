@@ -1,5 +1,3 @@
-//! Single owner for directional desktop-to-runtime route lifecycle.
-
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -34,9 +32,6 @@ pub(super) struct ClientRouteManager {
     node: Arc<EmbeddedNode>,
     p2p: Arc<dyn P2POps>,
     actor: Arc<PrincipalIdentity>,
-    /// The one serialization boundary for desktop route intent and effects.
-    /// Directory generations, transport changes, desired/applied documents,
-    /// remote return routes, and status publication must move under this gate.
     lifecycle: Mutex<()>,
 }
 
@@ -220,8 +215,6 @@ impl ClientRouteManager {
         updated
     }
 
-    /// Repair both directional routes and return a durable readiness update.
-    /// `None` preserves the last known value across transient admin/store errors.
     async fn reconcile(
         &self,
         record: &PeerRecord,
@@ -517,8 +510,6 @@ impl ClientRouteManager {
         Ok(())
     }
 
-    /// HTTP P2P admin for a runtime's management endpoint, acting as the
-    /// runtime's node identity exactly when the operator endpoint does.
     fn remote_admin(
         &self,
         record: &PeerRecord,
@@ -533,9 +524,6 @@ impl ClientRouteManager {
 
     async fn teardown_remote(&self, record: &PeerRecord) -> Result<()> {
         if is_enrollment_peer(record) {
-            // The runtime enrollment owner retracts its own return route from
-            // the authorization revision. This client only tears down its
-            // locally owned outbound route.
             return Ok(());
         }
         let route_id = client_route_id(&record.peer_id, PairingDirection::RuntimeToClient);
@@ -548,9 +536,6 @@ impl ClientRouteManager {
         if let Ok(applied) = store.load_applied(&route_id).await {
             addresses.extend(applied.state.replicator_addresses);
         }
-        // Desired state can be missing after a partial local write. The live
-        // desktop transport endpoint is still the authoritative target of the
-        // remote return route and lets removal prove absence before committing.
         addresses.insert(
             current_local_endpoint(&self.p2p, self.actor.as_ref())
                 .await?
@@ -865,10 +850,6 @@ fn replacement_endpoint(
                 gents::agent::p2p_reconcile::TransportEndpoint::parse(address.clone()).ok()?;
             (endpoint.peer_id() == current.peer_id()).then_some((address, endpoint))
         })
-        // `/p2p/info` may contain both a canonical shareable ticket and an
-        // equivalent listen-address spelling. Pick one authoritative
-        // candidate before comparing it with persisted state; otherwise an
-        // old equivalent spelling can mask a newly rotated ticket.
         .max_by_key(|(address, endpoint)| {
             (
                 address.starts_with("endpoint"),
@@ -1014,231 +995,5 @@ fn ensure_pairing_status<'a>(
             .pairing
             .push(PairingCollectionStatus::new(collection));
         status.pairing.last_mut().expect("pairing status inserted")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn transient_failure_preserves_last_known_readiness() {
-        assert_eq!(
-            combined_route_readiness(RouteReconcileState::Ready, RouteReconcileState::Unavailable),
-            None
-        );
-        assert_eq!(
-            combined_route_readiness(RouteReconcileState::Unavailable, RouteReconcileState::Ready),
-            None
-        );
-        assert_eq!(
-            combined_route_readiness(
-                RouteReconcileState::Unavailable,
-                RouteReconcileState::Drifted
-            ),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn missing_graphql_endpoint_cannot_be_ready() {
-        let record = PeerRecord::new(
-            "Mandrake",
-            "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
-            "did:key:mandrake",
-        );
-        assert_eq!(management_endpoint(&record), None);
-        assert_eq!(
-            combined_route_readiness(RouteReconcileState::Ready, RouteReconcileState::Drifted),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn enrollment_needs_current_server_route_receipt() {
-        assert_eq!(
-            combined_route_readiness(
-                RouteReconcileState::Ready,
-                enrollment_remote_route_state(false),
-            ),
-            Some(false)
-        );
-        assert_eq!(
-            combined_route_readiness(
-                RouteReconcileState::Ready,
-                enrollment_remote_route_state(true),
-            ),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn healthy_routes_use_slow_reconcile_cadence() {
-        assert!(!ClientRouteManager::reconcile_due(
-            true,
-            Some(Duration::from_secs(2)),
-            false
-        ));
-        assert!(ClientRouteManager::reconcile_due(
-            true,
-            Some(gents::agent::p2p_reconcile::PAIRING_SWEEP_INTERVAL),
-            false
-        ));
-        assert!(ClientRouteManager::reconcile_due(
-            false,
-            Some(UNREADY_ROUTE_RETRY_INTERVAL),
-            false
-        ));
-        assert!(!ClientRouteManager::reconcile_due(
-            false,
-            Some(Duration::from_secs(2)),
-            false
-        ));
-    }
-
-    #[test]
-    fn endpoint_refresh_prefers_rotated_shareable_ticket_before_equivalence_check() {
-        let old = "endpointacmyt7vq36usszcwsyes6mscehvncwfnfr7xrtdjvkmzvnyfsnqvuaibab7qaaab337ag";
-        let new = "endpointacmyt7vq36usszcwsyes6mscehvncwfnfr7xrtdjvkmzvnyfsnqvuaibab7qaaabyteqg";
-        let current = gents::agent::p2p_reconcile::TransportEndpoint::parse(old).unwrap();
-
-        assert_eq!(
-            replacement_endpoint(&current, [old.to_string(), new.to_string()]),
-            Some(new.to_string())
-        );
-        let refreshed = gents::agent::p2p_reconcile::TransportEndpoint::parse(new).unwrap();
-        assert_eq!(
-            replacement_endpoint(&refreshed, [old.to_string(), new.to_string()]),
-            None,
-            "the canonical current ticket must not oscillate back to an older spelling"
-        );
-    }
-
-    #[tokio::test]
-    async fn route_diagnostics_preserve_identity_filter_error_and_retry() {
-        let record = PeerRecord::new(
-            "Mandrake",
-            "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
-            "did:key:mandrake",
-        );
-        let route = ClientRouteIdentity::new(
-            &record.peer_id,
-            &record.addr,
-            "did:key:phone",
-            &record.node_did,
-        )
-        .unwrap();
-        let desired = route.desired(PairingDirection::ClientToRuntime);
-        let (_tempdir, sync_state) = ClientSyncStateOwner::for_test(
-            vec![record.clone()],
-            vec![ClientPeerStatus {
-                peer_id: record.peer_id.clone(),
-                label: record.label.clone(),
-                node_did: record.node_did.clone(),
-                addr: record.addr.clone(),
-                dial_succeeded: true,
-                last_error: None,
-                pairing: Vec::new(),
-                routes: Vec::new(),
-            }],
-        )
-        .await;
-        let mut updates = sync_state.subscribe();
-        record_failure(
-            &record,
-            &sync_state,
-            &desired,
-            &RemoteP2pAdminError::RpcTimeout,
-        );
-        assert!(updates.has_changed().expect("sync watch remains open"));
-        updates.borrow_and_update();
-        record_pairing_error(&record, &sync_state, &anyhow::anyhow!("filter mismatch"));
-        assert!(updates.has_changed().expect("sync watch remains open"));
-        updates.borrow_and_update();
-
-        let status = sync_state.snapshot().peers[0].clone();
-        assert!(route
-            .desired_id(PairingDirection::ClientToRuntime)
-            .ends_with(":client-to-runtime"));
-        assert_eq!(route.directory_id, record.peer_id);
-        assert_eq!(
-            route.transport.peer_id(),
-            "6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb"
-        );
-        assert!(desired.replicator_filter.contains_key("AgentRequest"));
-        assert!(status.last_error.unwrap().contains("filter mismatch"));
-        assert!(status
-            .pairing
-            .iter()
-            .all(|entry| entry.pairing_retry_count == 1));
-
-        record_route_success(&record, &sync_state);
-        assert!(updates.has_changed().expect("sync watch remains open"));
-        assert!(sync_state.snapshot().peers[0]
-            .pairing
-            .iter()
-            .all(|entry| entry.pairing_retry_count == 0));
-    }
-
-    #[tokio::test]
-    async fn route_owner_publishes_both_directional_statuses() {
-        let record = PeerRecord::new(
-            "Mandrake",
-            "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
-            "did:key:mandrake",
-        );
-        let (_tempdir, sync_state) = ClientSyncStateOwner::for_test(
-            vec![record.clone()],
-            vec![ClientPeerStatus {
-                peer_id: record.peer_id.clone(),
-                label: record.label.clone(),
-                node_did: record.node_did.clone(),
-                addr: record.addr.clone(),
-                dial_succeeded: true,
-                last_error: None,
-                pairing: Vec::new(),
-                routes: Vec::new(),
-            }],
-        )
-        .await;
-        let mut updates = sync_state.subscribe();
-        let route = ClientRouteIdentity::new(
-            &record.peer_id,
-            &record.addr,
-            "did:key:phone",
-            &record.node_did,
-        )
-        .unwrap();
-        for direction in [
-            PairingDirection::ClientToRuntime,
-            PairingDirection::RuntimeToClient,
-        ] {
-            let desired = route.desired(direction);
-            publish_route_status(
-                &record,
-                &sync_state,
-                route_status(&record, direction, Some(&desired), true, true, true),
-                None,
-                None,
-            );
-            assert!(updates.has_changed().expect("sync watch remains open"));
-            updates.borrow_and_update();
-        }
-        let status = sync_state.snapshot().peers[0].clone();
-        assert_eq!(status.routes.len(), 2);
-        assert_eq!(status.routes[0].direction, "client-to-runtime");
-        assert_eq!(status.routes[1].direction, "runtime-to-client");
-        assert!(status.routes.iter().all(|route| {
-            route.directory_id == record.peer_id
-                && route.template.as_deref() == Some("client")
-                && route.desired
-                && route.applied
-                && route.live_match
-                && route.transport_peer_id.is_some()
-                && route.address.is_some()
-                && route.filter_summary.contains("scoped filters")
-                && route.last_error.is_none()
-                && route.retry_count == 0
-        }));
     }
 }

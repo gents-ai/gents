@@ -31,7 +31,6 @@ pub struct IsolatedWorkspaceDoc {
     pub branch: String,
     pub creation_policy: String,
     pub adapter: String,
-    /// The node workspace scope copied from the verified workspace; not host identity.
     pub owner_node_did: String,
     pub writer_principal: String,
     pub integrator_principal: String,
@@ -60,7 +59,6 @@ impl IsolatedWorkspaceDoc {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspacePlacementDoc {
     pub workspace_id: String,
-    /// The node workspace scope copied from the verified workspace; not host identity.
     pub owner_node_did: String,
     pub host_path: String,
     pub repository_placement_id: String,
@@ -93,7 +91,6 @@ pub struct WorkspaceBindingDoc {
     pub request_id: String,
     pub request_doc_id: String,
     pub authority: String,
-    /// The node workspace scope copied from the verified workspace; not host identity.
     pub owner_node_did: String,
     pub seal_hash: Option<String>,
     pub lifecycle_state: String,
@@ -130,7 +127,6 @@ pub struct WorkspaceReceiptDoc {
     pub head_sha: Option<String>,
     pub changed_files: Option<String>,
     pub diff_artifact: Option<String>,
-    pub checks_run: Option<String>,
     pub unresolved_conflicts: Option<String>,
     pub integration_instructions: Option<String>,
 }
@@ -235,8 +231,6 @@ pub(crate) fn new_isolated_workspace(
     }
 }
 
-/// Upsert IsolatedWorkspace. Identity fields are add-only; retries may only
-/// update mutable `lifecycle_state` / `seal_hash`.
 pub fn isolated_workspace_upsert_mutation(doc: &IsolatedWorkspaceDoc) -> String {
     format!(
         "mutation {{ {} }}",
@@ -304,8 +298,6 @@ pub fn workspace_bindings_upsert_mutation(docs: &[WorkspaceBindingDoc]) -> Strin
     format!("mutation {{\n{}\n}}", fields.join("\n"))
 }
 
-/// One GraphQL mutation for the seal recovery unit: workspace, placement,
-/// writer receipt, and any binding releases.
 pub fn workspace_seal_docs_mutation(
     workspace: &IsolatedWorkspaceDoc,
     placement: &WorkspacePlacementDoc,
@@ -474,7 +466,6 @@ fn workspace_receipt_upsert_field(alias: &str, doc: &WorkspaceReceiptDoc) -> Str
                     head_sha: {head_sha},
                     changed_files: {changed_files},
                     diff_artifact: {diff_artifact},
-                    checks_run: {checks_run},
                     unresolved_conflicts: {unresolved_conflicts},
                     integration_instructions: {integration_instructions}
                 }},
@@ -482,7 +473,6 @@ fn workspace_receipt_upsert_field(alias: &str, doc: &WorkspaceReceiptDoc) -> Str
                     head_sha: {head_sha},
                     changed_files: {changed_files},
                     diff_artifact: {diff_artifact},
-                    checks_run: {checks_run},
                     unresolved_conflicts: {unresolved_conflicts},
                     integration_instructions: {integration_instructions}
                 }}
@@ -500,7 +490,6 @@ fn workspace_receipt_upsert_field(alias: &str, doc: &WorkspaceReceiptDoc) -> Str
         head_sha = graphql_nullable_string(doc.head_sha.as_deref()),
         changed_files = graphql_nullable_string(doc.changed_files.as_deref()),
         diff_artifact = graphql_nullable_string(doc.diff_artifact.as_deref()),
-        checks_run = graphql_nullable_string(doc.checks_run.as_deref()),
         unresolved_conflicts = graphql_nullable_string(doc.unresolved_conflicts.as_deref()),
         integration_instructions = graphql_nullable_string(doc.integration_instructions.as_deref()),
     )
@@ -539,8 +528,6 @@ pub(crate) fn binding_id_for(workspace_id: &str, request_id: &str) -> String {
     format!("wb-{workspace_id}-{request_id}")
 }
 
-/// Integrator result docs: receipt plus any released Integrate bindings.
-/// Workspace stays Sealed; trunk mutation is not a workspace lifecycle change.
 pub fn workspace_integrate_docs_mutation(
     bindings: &[WorkspaceBindingDoc],
     receipt: &WorkspaceReceiptDoc,
@@ -555,8 +542,6 @@ pub fn workspace_integrate_docs_mutation(
     format!("mutation {{\n{}\n}}", fields.join("\n"))
 }
 
-/// Explicit cleanup: IsolatedWorkspace lifecycle plus released bindings.
-/// Placement is left in place for audit; the host path is no longer a worktree.
 pub fn workspace_cleanup_docs_mutation(
     workspace: &IsolatedWorkspaceDoc,
     bindings: &[WorkspaceBindingDoc],
@@ -571,8 +556,6 @@ pub fn workspace_cleanup_docs_mutation(
     format!("mutation {{\n{}\n}}", fields.join("\n"))
 }
 
-// DefraDB stores this immutable tagged value in a String field. Missing/null
-// values are invalid.
 mod capability_string {
     use super::super::WorkspacePathCapability;
     use serde::{Deserialize, Deserializer, Serializer};

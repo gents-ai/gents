@@ -1,19 +1,27 @@
-/* What the window does for itself, apart from any screen: its theme and
-   platform styling, links that leave the app, the simulator's end-to-end
-   boot, and the title macOS shows. */
 import { useEffect } from "react";
 
 import { installExternalLinkGuard } from "../../lib/externalLinks";
-import { setWindowTitle } from "../../lib/nativeShell";
+import {
+  inNativeShell,
+  onZoomMenu,
+  setWebviewZoom,
+  setWindowTitle,
+} from "../../lib/nativeShell";
 import { startNativeSimulatorE2e } from "../../lib/nativeSimulatorE2e";
 import { applyShellPlatform, isMacTauriShell } from "../../lib/shellPlatform";
 import { useSelectedSessionValue } from "../hooks/useSelectedSession";
 import { useSelectedNode } from "../hooks/useClient";
 import type { Route } from "../lib/router";
 import { useApp } from "./AppContext";
-import { applyChosenTheme } from "../preferences";
+import {
+  applyChosenTheme,
+  followOtherWindows,
+  followZoom,
+  preferences,
+  zoomLevel,
+} from "../preferences";
+import { onZoomKeys, stepZoom, type ZoomAction } from "../lib/zoom";
 
-/** The window's theme, platform styling, link guard and simulator boot, once. */
 export function usePlatformSetup() {
   const { openExternalUrl } = useApp().actions;
   useEffect(() => {
@@ -27,6 +35,20 @@ export function usePlatformSetup() {
   useEffect(() => {
     void startNativeSimulatorE2e();
   }, []);
+  useEffect(() => followOtherWindows(), []);
+  useEffect(() => {
+    if (!inNativeShell()) return;
+    const step = (action: ZoomAction) =>
+      preferences.setZoom(stepZoom(zoomLevel(), action));
+    const stopFollowing = followZoom(setWebviewZoom);
+    const stopListening = isMacTauriShell()
+      ? onZoomMenu(step)
+      : onZoomKeys(window, step);
+    return () => {
+      stopFollowing();
+      stopListening();
+    };
+  }, []);
 }
 
 const TITLES: Partial<Record<Route["name"], string>> = {
@@ -35,7 +57,6 @@ const TITLES: Partial<Record<Route["name"], string>> = {
   mailbox: "Mailbox",
 };
 
-/** The macOS window title: the screen, then the selected node. */
 export function useWindowTitle(route: Route) {
   const agent = useSelectedNode()?.node.displayName ?? null;
   const sessionTitle = useSelectedSessionValue((s) => s?.title ?? null);

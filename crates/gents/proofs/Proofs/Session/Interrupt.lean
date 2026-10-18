@@ -113,15 +113,11 @@ private theorem drainWakeKeys_terminalizes_wake
         · exact ih _ h_rest h_still
         · exact drainWakeKeys_terminal_monotonic observed _ rest h_terminal
 
-/-- A first latch drains only physical queue identities observed by its earlier
-pending-row scan. A concurrently committed unobserved wake may survive even if
-its commit precedes this latch commit; all wakes committed after the latch must
-survive. Replay cannot widen the observed set. The native adapter must retain
-the exact authenticated session scope across capture and commit. The pinned
-Regolith store does not detect empty-scan phantoms, including at Serializable;
-DefraDB's HTTP transaction begin exposes only the read-only option. The local
-write gate orders local completion publication, but an overlapping HTTP latch
-may miss a completion inserted after its pending scan. -/
+/-- External obligations: the native adapter must retain the exact authenticated
+session scope across capture and commit; the pinned Regolith store does not
+detect empty-scan phantoms (DefraDB's HTTP transaction begin exposes only the
+read-only option); the local write gate orders local completion publication, but
+an overlapping HTTP latch may miss a completion inserted after its pending scan. -/
 def latchInterruptObserved (request : RequestContext)
     (observed : List RequestId) (queue : SessionQueueState) :
     RequestContext × SessionQueueState :=
@@ -129,7 +125,6 @@ def latchInterruptObserved (request : RequestContext)
   else ({ request with interruptRequestedAt := some request.currentTime },
     drainWakeKeys observed queue queue.pending)
 
-/-- Sequential first latch captures the whole current pending queue. -/
 def latchInterrupt (request : RequestContext) (queue : SessionQueueState) :
     RequestContext × SessionQueueState :=
   latchInterruptObserved request (queue.pending.map QueueEntry.requestId) queue
@@ -201,8 +196,6 @@ theorem latchInterrupt_first_preserves_nonwake
   simp [latchInterrupt, latchInterruptObserved, h_first]
   exact drainWakeKeys_preserves_entry _ queue queue.pending entry (Or.inl h_nonwake) h_pending
 
-/-- Interactive work remains pending even when its source metadata resembles an
-automated background wake. -/
 theorem latchInterruptObserved_preserves_interactive
     (request : RequestContext) (queue : SessionQueueState)
     (observed : List RequestId) (entry : QueueEntry)
@@ -273,8 +266,6 @@ theorem latchInterruptObserved_replay_preserves_later_queue
   unfold latchInterruptObserved
   simp [h_latched]
 
-/-- Replay after any intervening completion retains that entire newer queue,
-including completions coalesced under a pre-existing key. -/
 theorem latchInterrupt_replay_preserves_later_queue
     (request : RequestContext) (before later : SessionQueueState) :
     latchInterrupt (latchInterrupt request before).1 later =

@@ -1,5 +1,3 @@
-//! Explicitly gated live inference smoke; shared fixtures live in support.
-
 use crate::support::fixtures::test_identity;
 use crate::support::interrupt::create_runtime_request;
 use crate::support::live_inference::*;
@@ -17,7 +15,7 @@ async fn target_backend_probes_healthy_and_completes() {
     let db = test_db("steward-loop-live-smoke").await;
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("steward-loop-live-smoke"));
 
-    let (node_did, agent_id) = bind_target(db.node.as_ref(), identity.as_ref(), &target).await;
+    let (node_did, agent_id) = bind_target(&db.node, identity.as_ref(), &target).await;
 
     let agent = boot_live_agent(&db, identity)
         .await
@@ -27,7 +25,7 @@ async fn target_backend_probes_healthy_and_completes() {
     let session_id = "session-live-smoke";
     let started = std::time::Instant::now();
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &agent_id,
         request_id,
@@ -36,8 +34,7 @@ async fn target_backend_probes_healthy_and_completes() {
     )
     .await;
 
-    let terminal =
-        wait_for_request_terminal(db.node.as_ref(), request_id, Duration::from_secs(120)).await;
+    let terminal = wait_for_request_terminal(&db.node, request_id, Duration::from_secs(120)).await;
     let elapsed = started.elapsed();
     eprintln!("[live-smoke] request terminal state = {terminal} (latency {elapsed:?})");
     assert_eq!(
@@ -46,8 +43,7 @@ async fn target_backend_probes_healthy_and_completes() {
         target.name
     );
 
-    let answer =
-        wait_for_assistant_answer(db.node.as_ref(), request_id, Duration::from_secs(30)).await;
+    let answer = wait_for_assistant_answer(&db.node, request_id, Duration::from_secs(30)).await;
     eprintln!("[live-smoke] assistant answer = {answer:?}");
     assert!(
         !answer.trim().is_empty(),

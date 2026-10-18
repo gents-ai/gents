@@ -4,8 +4,6 @@ namespace StreamingResponse
 
 open CanonicalOutput
 
-/-- Observation changes only by immutable fact delivery or by an owner fact
-changing. Canonical execution, not this projection, authorizes those facts. -/
 inductive Transition : Observation → Observation → Prop
   | deliverSegment (observation : Observation) (record : Segment) :
       Transition observation

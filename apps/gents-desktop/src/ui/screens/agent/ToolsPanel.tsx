@@ -11,7 +11,13 @@ import {
   TextRow,
   PathRow,
 } from "./editors";
-import { newId, optionalAbsolutePath, problemOf, useDraft } from "./draft";
+import {
+  focusFirstProblem,
+  newId,
+  optionalAbsolutePath,
+  problemOf,
+  useDraft,
+} from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import {
@@ -24,7 +30,6 @@ import { useCallback, useState } from "react";
 import { useApp } from "@/app/AppContext";
 import { Disclosure } from "../../components/Disclosure";
 
-/* the document a draft starts from: read-only files, no commands */
 export function newToolsDocument(deployment: NodeView): Tools {
   return {
     tools_id: newId("tools"),
@@ -36,12 +41,6 @@ export function newToolsDocument(deployment: NodeView): Tools {
 
 const ROOT = "Workspace root";
 
-/**
- * The Canonical JSON field as the Tools document takes it: an object of
- * the fields only it edits, each limit, timeout, target, remote service
- * and datastore surface checked against the node. Throws the first
- * problem; remote services' tool names are trimmed and deduplicated.
- */
 export function parseAdvancedTools(
   text: string,
   deployment: NodeView,
@@ -145,7 +144,8 @@ export function parseAdvancedTools(
             .filter(Boolean),
         ),
       ];
-      service.background_tool_names = backgroundNames.length ? backgroundNames : null;
+      const granted = backgroundNames.filter((name) => names.includes(name));
+      service.background_tool_names = granted.length ? granted : null;
     }
     if (
       !deployment.toolServiceRegistries.some(
@@ -155,10 +155,6 @@ export function parseAdvancedTools(
       throw new Error(`Unknown remote service: ${service.mcp_service_id}`);
     if (service.tool_names?.some((name) => /[*?]/.test(name)))
       throw new Error("Remote tool names must be exact names, not wildcards");
-    if (
-      service.background_tool_names?.some((name) => !service.tool_names?.includes(name))
-    )
-      throw new Error("Background remote tools must be selected tool names");
     for (const [label, value] of [
       ["Remote connection timeout", service.connect_timeout_secs],
       ["Remote discovery timeout", service.discovery_timeout_secs],
@@ -191,10 +187,8 @@ export function ToolsEditor({
   draft: draftMode,
 }: {
   deployment: NodeView;
-  /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
   tools: Tools;
-  /* a new document that exists only here until Save */
   draft?: { onSaved: (toolsId: string) => void; onCancel: () => void };
 }) {
   const { changeConfig } = useApp().actions;
@@ -385,8 +379,6 @@ export function ToolsEditor({
         }}
       />
       <Group title="Advanced tool groups">
-        {/* the whole document as JSON: an escape hatch, closed by default; open, it
-            shows in full so the page is the only thing that scrolls */}
         <Disclosure summary="Canonical JSON" summaryClassName="px-5 py-4">
           <AreaRow
             id={id("advanced")}
@@ -409,7 +401,13 @@ export function ToolsEditor({
         error={limitError ?? d.error}
         saveLabel={draftMode ? "Create" : undefined}
         onSave={() => {
-          if (limitError) return;
+          if (limitError) {
+            focusFirstProblem(
+              invalidLimits,
+              Object.fromEntries(Object.keys(invalidLimits).map((id) => [id, id])),
+            );
+            return;
+          }
           if (draftMode) {
             void d.save().then((ok) => ok && draftMode.onSaved(tools.tools_id));
             return;

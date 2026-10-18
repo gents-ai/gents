@@ -1,7 +1,3 @@
-//! Versioned provider/model guidance shared by first-run onboarding and later
-//! inference editing. Provider responses remain advertised facts; every value
-//! Gents recommends lives here and is labelled with this catalog version.
-
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
@@ -132,9 +128,9 @@ pub struct InferenceModelRecommendation {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct InferenceModelOption {
-    /// Facts returned by the provider. Unknown facts stay `None`.
+    /// Provider-advertised facts; unknown facts stay `None`.
     pub advertised: AdvertisedModel,
-    /// Versioned Gents guidance, never presented as provider-advertised data.
+    /// Gents guidance, never presented as provider-advertised data.
     pub recommendation: InferenceModelRecommendation,
 }
 
@@ -192,26 +188,42 @@ pub fn inference_setup_catalog() -> InferenceSetupCatalog {
             InferenceProviderOption {
                 id: Anthropic,
                 display_name: "Anthropic".into(),
-                description: "Use a Claude Pro or Max subscription.".into(),
-                auth_methods: vec![ClaudeOauth],
-                auth_options: vec![InferenceAuthOption {
-                    method: ClaudeOauth,
-                    display_name: "Claude sign-in".into(),
-                    default_endpoint: CLAUDE_ENDPOINT.into(),
-                }],
+                description: "Use a Claude Pro or Max subscription, or an Anthropic API key."
+                    .into(),
+                auth_methods: vec![ClaudeOauth, ApiKey],
+                auth_options: vec![
+                    InferenceAuthOption {
+                        method: ClaudeOauth,
+                        display_name: "Claude sign-in".into(),
+                        default_endpoint: CLAUDE_ENDPOINT.into(),
+                    },
+                    InferenceAuthOption {
+                        method: ApiKey,
+                        display_name: "Anthropic API key".into(),
+                        default_endpoint: crate::claude_subscription::ANTHROPIC_API_ENDPOINT.into(),
+                    },
+                ],
                 default_auth_method: ClaudeOauth,
                 default_endpoint: CLAUDE_ENDPOINT.into(),
             },
             InferenceProviderOption {
                 id: Grok,
                 display_name: "Grok".into(),
-                description: "Use SuperGrok or an eligible X Premium+ subscription.".into(),
-                auth_methods: vec![GrokOauth],
-                auth_options: vec![InferenceAuthOption {
-                    method: GrokOauth,
-                    display_name: "Grok sign-in".into(),
-                    default_endpoint: GROK_ENDPOINT.into(),
-                }],
+                description:
+                    "Use SuperGrok, an eligible X Premium+ subscription, or an xAI API key.".into(),
+                auth_methods: vec![GrokOauth, ApiKey],
+                auth_options: vec![
+                    InferenceAuthOption {
+                        method: GrokOauth,
+                        display_name: "Grok sign-in".into(),
+                        default_endpoint: GROK_ENDPOINT.into(),
+                    },
+                    InferenceAuthOption {
+                        method: ApiKey,
+                        display_name: "xAI API key".into(),
+                        default_endpoint: XAI_API_ENDPOINT.into(),
+                    },
+                ],
                 default_auth_method: GrokOauth,
                 default_endpoint: GROK_ENDPOINT.into(),
             },
@@ -367,8 +379,6 @@ pub fn connection_spec(
     Ok(spec)
 }
 
-/// Recover the setup vocabulary for an existing canonical backend. This keeps
-/// the post-onboarding editor on the same provider contract as first run.
 pub fn provider_selection_for_backend(
     provider_kind: BackendProviderKind,
     endpoint: &str,
@@ -408,20 +418,15 @@ pub fn provider_selection_for_backend(
     }
 }
 
-/// Exact xAI API endpoint, ignoring ASCII case and trailing `/`
-/// (`PromptAssembly.ResponsesStorage.atXaiApi`).
 pub(crate) fn is_xai_api_endpoint(endpoint: &str) -> bool {
     endpoint
         .trim_end_matches('/')
         .eq_ignore_ascii_case(XAI_API_ENDPOINT)
 }
 
-/// The reasoning effort a request sends. An `OpenAiCompatible` Responses
-/// backend at the xAI API endpoint sends only an effort the model's discovered
-/// catalog advertises: xAI returns 400 "does not support parameter
-/// reasoningEffort" for any effort on the other models. Unknown support omits
-/// it too, so the model default applies
-/// (`PromptAssembly.ResponsesStorage.sentEffort`).
+/// For an `OpenAiCompatible` Responses backend at the xAI API endpoint, send
+/// only an effort the model's advertised catalog lists: xAI rejects other
+/// efforts with 400 for those models. Unknown support omits the effort too.
 pub(crate) fn sent_reasoning_effort(
     kind: BackendProviderKind,
     wire: OpenAiWireApi,
@@ -450,9 +455,8 @@ fn reasoning_model(model: &str) -> bool {
         || model.contains("glm-5.3")
 }
 
-/// Reviewed fallback for catalog responses that omit capability metadata.
-/// Sources: platform.claude.com/docs/en/models/overview and /build-with-claude/effort.
-/// Unknown models do not inherit capabilities from a family-name guess.
+/// Reviewed fallback for catalog responses omitting capability metadata
+/// (platform.claude.com/docs/en/models/overview, /build-with-claude/effort).
 pub(crate) fn claude_model_defaults(
     model: &str,
 ) -> Option<(i64, i64, Vec<ReasoningEffort>, ReasoningEffort)> {
@@ -558,8 +562,6 @@ pub fn recommendation_for_model(
         None
     };
 
-    // Claude Messages deliberately sends no sampling controls. Reasoning-style
-    // OpenAI models also reject or ignore ordinary temperature/top-p settings.
     let supports_sampling = !is_claude && !is_codex && !is_reasoning;
     let fixture = advertised.model_name == "GLM-5.3-Flash-NVFP4";
     let temperature = (supports_sampling || fixture).then(|| RecommendedNumberControl {
@@ -935,17 +937,57 @@ mod tests {
             opus.reasoning_effort.unwrap().recommended,
             ReasoningEffort::Medium
         );
+    }
 
+    #[test]
+    fn subscription_catalogs_expose_api_keys_through_their_existing_connection_contracts() {
         let catalog = inference_setup_catalog();
-        let anthropic = catalog
-            .providers
-            .iter()
-            .find(|provider| provider.id == InferenceProviderId::Anthropic)
-            .unwrap();
-        assert_eq!(
-            anthropic.auth_methods,
-            vec![InferenceAuthMethod::ClaudeOauth]
-        );
+        for (id, subscription, subscription_endpoint, key_label, kind, key_endpoint) in [
+            (
+                InferenceProviderId::Anthropic,
+                InferenceAuthMethod::ClaudeOauth,
+                CLAUDE_ENDPOINT,
+                "Anthropic API key",
+                BackendProviderKind::AnthropicApiKey,
+                crate::claude_subscription::ANTHROPIC_API_ENDPOINT,
+            ),
+            (
+                InferenceProviderId::Grok,
+                InferenceAuthMethod::GrokOauth,
+                GROK_ENDPOINT,
+                "xAI API key",
+                BackendProviderKind::OpenAiCompatible,
+                XAI_API_ENDPOINT,
+            ),
+        ] {
+            let provider = catalog
+                .providers
+                .iter()
+                .find(|provider| provider.id == id)
+                .unwrap();
+            assert_eq!(
+                provider.auth_methods,
+                vec![subscription, InferenceAuthMethod::ApiKey]
+            );
+            assert_eq!(provider.default_auth_method, subscription);
+            assert_eq!(provider.default_endpoint, subscription_endpoint);
+            let key = provider
+                .auth_options
+                .iter()
+                .find(|option| option.method == InferenceAuthMethod::ApiKey)
+                .unwrap();
+            assert_eq!(key.display_name, key_label);
+            assert_eq!(key.default_endpoint, key_endpoint);
+            let spec = connection_spec(provider.id, key.method, &key.default_endpoint).unwrap();
+            assert_eq!(spec.provider_kind, kind);
+            assert_eq!(spec.endpoint, key_endpoint);
+            assert!(spec.api_key_required);
+            assert!(spec.oauth_provider.is_none());
+            assert_eq!(
+                provider_selection_for_backend(spec.provider_kind, &spec.endpoint),
+                (id, key.method)
+            );
+        }
     }
 
     #[test]

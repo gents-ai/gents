@@ -3,10 +3,6 @@ import type { EvalTier } from "./EvalTier.js";
 
 export type EvalCheckRef = {
 /**
- * A name in the builtin check registry. Definitions never contain code.
+ * Builtin check registry name.
  */
-check: string,
-/**
- * Interpreted by the named check. Its schema belongs to that check.
- */
-params: unknown, tier: EvalTier, weight: number, };
+check: string, params: unknown, tier: EvalTier, weight: number, };

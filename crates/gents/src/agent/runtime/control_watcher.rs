@@ -12,10 +12,6 @@ use super::super::document_view;
 use super::super::DocumentResolveContext;
 
 pub(super) const CONTROL_RECONCILE_DEBOUNCE: Duration = Duration::from_secs(5);
-/// A write committed on this node arrives as one transaction's changes, so it
-/// needs no replication-burst coalescing. An operator waiting on the resulting
-/// readiness (desktop setup confirms within seconds) must not pay the replicated
-/// debounce.
 pub(super) const CONTROL_RECONCILE_LOCAL_DEBOUNCE: Duration = Duration::from_millis(250);
 pub(super) const CONTROL_RECONCILE_SETTLE_RETRY: Duration = Duration::from_secs(1);
 const CONTROL_RECONCILE_SETTLE_WINDOW: Duration = Duration::from_secs(60);
@@ -38,9 +34,27 @@ const CONTROL_WATCHER_TIMING: ControlWatcherTiming = ControlWatcherTiming {
     idle_sleep: CONTROL_WATCHER_IDLE_SLEEP,
 };
 
+/// Coalesced changes to the control collections, with each subscribed
+/// collection id mapped back to its name.
+pub(super) struct ControlSubscription {
+    changes: events::DocumentChangeSubscription,
+    names_by_id: HashMap<String, &'static str>,
+}
+
+pub(super) fn subscribe_control_changes(
+    node: &defra_node::EmbeddedNode,
+) -> Result<ControlSubscription> {
+    let names = document_view::control_collection_names().collect::<Vec<_>>();
+    let ids = crate::collection_ids(node, names.iter().copied())?;
+    Ok(ControlSubscription {
+        changes: node.subscribe_collection_changes(ids.clone()),
+        names_by_id: ids.into_iter().zip(names).collect(),
+    })
+}
+
 pub(super) async fn run_control_watcher(
     node: Arc<defra_node::EmbeddedNode>,
-    subscription: events::DocumentChangeSubscription,
+    subscription: ControlSubscription,
     node_did: String,
     resolve_context: DocumentResolveContext,
     proposals_tx: mpsc::Sender<ResolvedRuntimeSnapshot>,
@@ -65,7 +79,7 @@ pub(super) async fn run_control_watcher(
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_control_watcher_with_timing(
     node: Arc<defra_node::EmbeddedNode>,
-    mut subscription: events::DocumentChangeSubscription,
+    subscription: ControlSubscription,
     node_did: String,
     resolve_context: DocumentResolveContext,
     proposals_tx: mpsc::Sender<ResolvedRuntimeSnapshot>,
@@ -74,8 +88,7 @@ pub(super) async fn run_control_watcher_with_timing(
     mut shutdown: watch::Receiver<bool>,
     timing: ControlWatcherTiming,
 ) -> Result<()> {
-    let mut document_view =
-        document_view::load_document_runtime_view(node.as_ref(), &node_did).await?;
+    let mut document_view = document_view::load_document_runtime_view(&node, &node_did).await?;
     let sleep = tokio::time::sleep(timing.idle_sleep);
     tokio::pin!(sleep);
     let mut dirty = false;
@@ -85,9 +98,12 @@ pub(super) async fn run_control_watcher_with_timing(
     let mut phase_transition_pending = false;
     let mut resync_required = false;
     let mut replicated_pending = false;
-    let mut collection_id_to_name = HashMap::<String, String>::new();
+    let ControlSubscription {
+        changes: mut subscription,
+        names_by_id,
+    } = subscription;
     let mut measured_mcp_availability =
-        crate::tool_surface::measured_available_mcp_service_ids(node.as_ref(), &node_did)
+        crate::tool_surface::measured_available_mcp_service_ids(&node, &node_did)
             .await?
             .into_iter()
             .collect::<BTreeSet<_>>();
@@ -98,7 +114,7 @@ pub(super) async fn run_control_watcher_with_timing(
             _ = &mut sleep, if dirty => {
                 replicated_pending = false;
                 if resync_required || pending_visibility || settle_deadline.is_some() {
-                    match document_view::load_document_runtime_view(node.as_ref(), &node_did).await {
+                    match document_view::load_document_runtime_view(&node, &node_did).await {
                         Ok(reloaded) => {
                             document_view = reloaded;
                             pending_visibility = document_view.has_unresolved_agent_references();
@@ -155,7 +171,7 @@ pub(super) async fn run_control_watcher_with_timing(
                 let mut proposed_update = false;
                 let mut resolve_failed = false;
                 match document_view::resolve_document_runtime_snapshot_from_view(
-                    node.as_ref(),
+                    &node,
                     &resolve_context,
                     &document_view,
                 )
@@ -163,10 +179,6 @@ pub(super) async fn run_control_watcher_with_timing(
                 {
                     Ok(snapshot) => {
                         let fingerprint = snapshot.configuration_fingerprint();
-                        // A fresh observed write must reach the reconcile owner
-                        // even when it changes only non-runtime metadata. Its
-                        // existing no-op path publishes completion. Suppress
-                        // only unchanged settle retries, not new observations.
                         if phase_announced || last_proposed_fingerprint.as_deref() != Some(fingerprint.as_str()) {
                             if !phase_announced {
                                 runtime_status
@@ -212,10 +224,6 @@ pub(super) async fn run_control_watcher_with_timing(
                         .set_reconcile_phase(ReconcilePhase::Idle)
                         .await;
                 }
-                // A successful visible snapshot has completed this reconcile.
-                // The settle deadline bounds retries for unresolved references
-                // and failed reloads; it must not turn every observed write into
-                // a one-second full-view polling loop.
                 dirty = false;
                 settle_deadline = None;
                 sleep.as_mut().reset(tokio::time::Instant::now() + timing.idle_sleep);
@@ -256,14 +264,13 @@ pub(super) async fn run_control_watcher_with_timing(
                 }
 
                 for update in batch.changes {
-                    let collection_name = resolve_collection_name(
-                        node.as_ref(),
-                        &mut collection_id_to_name,
-                        update.collection_id.as_str(),
-                    );
-                    if collection_name.as_deref() == Some("ToolServiceHealthState") {
+                    let collection_name = names_by_id
+                        .get(&update.collection_id)
+                        .copied()
+                        .unwrap_or(update.collection_id.as_str());
+                    if collection_name == "ToolServiceHealthState" {
                         let current = match crate::tool_surface::measured_available_mcp_service_ids(
-                            node.as_ref(),
+                            &node,
                             &node_did,
                         )
                         .await
@@ -284,9 +291,8 @@ pub(super) async fn run_control_watcher_with_timing(
                         measured_mcp_availability = current;
                     }
                     match document_view::apply_control_update(
-                        node.as_ref(),
                         &node_did,
-                        collection_name.as_deref().unwrap_or(update.collection_id.as_str()),
+                        collection_name,
                         &update.doc_id,
                         &mut document_view,
                     )
@@ -294,7 +300,7 @@ pub(super) async fn run_control_watcher_with_timing(
                     {
                         Ok(document_view::ControlUpdateOutcome::Irrelevant) => continue,
                         Ok(document_view::ControlUpdateOutcome::FullReload) => {
-                            match document_view::load_document_runtime_view(node.as_ref(), &node_did).await {
+                            match document_view::load_document_runtime_view(&node, &node_did).await {
                                 Ok(reloaded) => {
                                     document_view = reloaded;
                                     pending_visibility = document_view.has_unresolved_agent_references();
@@ -323,7 +329,7 @@ pub(super) async fn run_control_watcher_with_timing(
                                 error = %error,
                                 "runtime control update apply failed; forcing full resync"
                             );
-                            match document_view::load_document_runtime_view(node.as_ref(), &node_did).await {
+                            match document_view::load_document_runtime_view(&node, &node_did).await {
                                 Ok(reloaded) => {
                                     document_view = reloaded;
                                     pending_visibility = document_view.has_unresolved_agent_references();
@@ -373,22 +379,4 @@ pub(super) async fn run_control_watcher_with_timing(
             }
         }
     }
-}
-
-fn resolve_collection_name(
-    node: &defra_node::EmbeddedNode,
-    cache: &mut HashMap<String, String>,
-    collection_id: &str,
-) -> Option<String> {
-    if let Some(name) = cache.get(collection_id) {
-        return Some(name.clone());
-    }
-    let names = node.list_collections().ok()?;
-    for name in names {
-        let Some(definition) = node.get_collection(&name).ok().flatten() else {
-            continue;
-        };
-        cache.insert(definition.collection_id.clone(), definition.name.clone());
-    }
-    cache.get(collection_id).cloned()
 }

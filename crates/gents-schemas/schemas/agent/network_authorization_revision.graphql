@@ -1,6 +1,6 @@
-# Append-only admin authority for enrollment membership. The unique maximal
-# sequence is authoritative; equal-sequence conflicts fail closed. Revocation
-# is an authenticated tombstone and history is never deleted.
+# Append-only admin authority for enrollment membership; the unique maximal
+# sequence is authoritative and equal-sequence conflicts fail closed.
+# Revocation is a tombstone; history is never deleted.
 type NetworkAuthorizationRevision @branchable {
     protocol_version: Int @immutable
     revision_id: String @index(unique: true) @immutable

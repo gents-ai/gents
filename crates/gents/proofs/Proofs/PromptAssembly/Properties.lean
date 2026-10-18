@@ -347,16 +347,8 @@ theorem filterCallsBy_eq_self (l : List MessageRow) :
       rw [filterCallsBy_cons_ordinary row rest R hk,
         ih R ∅ h.2 hne' hres']
 
-/-! ## Per-turn resolution agrees with global resolution
+/-! ## Per-turn resolution agrees with global resolution -/
 
-`filterCallsBy` credits an announcement from the global resolved set;
-`filterCallsByTurn` credits it only from its own turn. They coincide under
-`UniqueCallIds`. Soundness transfers only on that fragment; structural helper
-lemmas with no uniqueness premise do not prove unconditional runtime alignment. -/
-
-/-- Every result closes a call owned by the nearest preceding announcement.
-This is `ActiveBlockValidFrom` without the `pending = ∅` obligations, i.e.
-exactly the shape `dropOrphanedFrom` leaves behind. -/
 def ResultsOwnedFrom (pending : Finset ToolExecution.ToolCallId) :
     List MessageRow → Prop
   | [] => True
@@ -396,7 +388,6 @@ theorem resultsOwnedFrom_dropOrphanedFrom (l : List MessageRow) :
       rw [hk]
       exact ih ∅
 
-/-- Owned results only ever name pending or later-announced calls. -/
 theorem resolvedIn_subset_of_resultsOwned (l : List MessageRow) :
     ∀ pending, ResultsOwnedFrom pending l → resolvedIn l ⊆ pending ∪ callsIn l := by
   induction l with
@@ -428,9 +419,6 @@ theorem resolvedIn_subset_of_resultsOwned (l : List MessageRow) :
       exact Finset.mem_union_right _
         ((Finset.mem_union.mp (ih ∅ howned hc)).elim (by intro h; simp at h) id)
 
-/-- **The crux.** A turn's announcements can only be resolved inside that turn:
-anything later belongs to a later announcement, which `UniqueCallIds` keeps
-disjoint. -/
 theorem inter_resolvedIn_eq_inter_resolvedInTurn (l : List MessageRow) :
     ∀ callIds, ResultsOwnedFrom callIds l → Disjoint callIds (callsIn l) →
       callIds ∩ resolvedIn l = callIds ∩ resolvedInTurn l := by
@@ -446,8 +434,6 @@ theorem inter_resolvedIn_eq_inter_resolvedInTurn (l : List MessageRow) :
         rwa [callsIn_cons_result row rest callId key hk] at hdisj
       rw [resolvedIn_cons_result row rest callId key hk,
         resolvedInTurn_cons_result row rest callId key hk]
-      -- Both sides insert the same id; the tails agree by induction after
-      -- erasing it, and `callId` itself is in `callIds` either way.
       apply Finset.ext
       intro c
       by_cases hc : c = callId
@@ -465,9 +451,6 @@ theorem inter_resolvedIn_eq_inter_resolvedInTurn (l : List MessageRow) :
       rw [hk] at howned
       rw [resolvedIn_cons_assistant row rest callIds' hk,
         resolvedInTurn_cons_assistant row rest callIds' hk, Finset.inter_empty]
-      -- A new announcement ends the turn. Everything the tail resolves is owned
-      -- by that announcement or a later one, all inside `callsIn rest`, which
-      -- `UniqueCallIds` keeps disjoint from `callIds`.
       have hsub : resolvedIn rest ⊆ callIds' ∪ callsIn rest :=
         resolvedIn_subset_of_resultsOwned rest callIds' howned
       have hdisjPair : Disjoint callIds callIds' ∧ Disjoint callIds (callsIn rest) := by
@@ -513,9 +496,6 @@ theorem uniqueCallIds_dropOrphanedFrom (l : List MessageRow) :
         uniqueCallIds_cons_ordinary row _ hk]
       exact ih ∅ huniq'
 
-/-- Per-turn and global resolution produce the same list on owned, unique-id
-input. `R` is the ambient global set; the hypothesis says it decides exactly
-`l`'s own announcements. -/
 theorem filterCallsByTurn_eq_filterCallsBy (l : List MessageRow) :
     ∀ (R pending : Finset ToolExecution.ToolCallId),
       ResultsOwnedFrom pending l →
@@ -541,8 +521,6 @@ theorem filterCallsByTurn_eq_filterCallsBy (l : List MessageRow) :
       have hcallsSub : callIds ⊆ callsIn (row :: rest) := by
         rw [callsIn_cons_assistant row rest callIds hk]
         exact Finset.subset_union_left
-      -- `R` decides this row's announcements exactly as the global set does,
-      -- and the crux confines them to this turn.
       have hinter : callIds ∩ R = callIds ∩ resolvedInTurn rest := by
         have hstep : callIds ∩ R = callIds ∩ resolvedIn rest := by
           apply Finset.ext; intro c
@@ -568,8 +546,6 @@ theorem filterCallsByTurn_eq_filterCallsBy (l : List MessageRow) :
       have huniq' := (uniqueCallIds_cons_result row rest callId key hk).mp huniq
       have hdisj' : Disjoint pending (callsIn rest) := by
         rwa [callsIn_cons_result row rest callId key hk] at hdisj
-      -- The closed call belongs to an earlier announcement, so `UniqueCallIds`
-      -- keeps it out of everything the tail announces.
       have hnotCall : callId ∉ callsIn rest :=
         fun hc => Finset.disjoint_left.mp hdisj' howned.1 hc
       have hRrest : ∀ c ∈ callsIn rest, (c ∈ R ↔ c ∈ resolvedIn rest) := by
@@ -597,9 +573,9 @@ theorem filterCallsByTurn_eq_filterCallsBy (l : List MessageRow) :
         filterCallsBy_cons_ordinary row rest R hk,
         ih R ∅ howned huniq' (Finset.disjoint_empty_left _) hRrest]
 
-/-- **The alignment.** The per-turn sanitizer production implements and the
-global-resolution model the pairing theorems are stated over are the same
-function on unique-id transcripts. -/
+/-- The per-turn sanitizer production implements and the global-resolution
+model the pairing theorems are stated over are the same function on unique-id
+transcripts. -/
 theorem sanitizeTurn_eq_sanitizeGlobal {msgs : List MessageRow}
     (huniq : UniqueCallIds msgs) : sanitizeTurn msgs = sanitizeGlobal msgs := by
   unfold sanitizeTurn sanitizeGlobal dropUnpairedCallsTurn dropUnpairedCalls dropOrphanedResults
@@ -625,9 +601,6 @@ theorem sanitizeGlobal_idempotent {msgs : List MessageRow}
     (huniq : UniqueCallIds msgs) :
     sanitizeGlobal (sanitizeGlobal msgs) = sanitizeGlobal msgs :=
   sanitizeGlobal_fixpoint (sanitizeGlobal_sound huniq) (nonemptyAnnouncements_sanitize msgs)
-
-/-! The per-turn row entry retains direct guarantees. Soundness still uses the
-unique-call-id bridge; this does not model repeated call occurrences. -/
 
 private theorem pending_subset_resolvedInTurn (l : List MessageRow) :
     ∀ pending, ActiveBlockValidFrom pending l → pending ⊆ resolvedInTurn l := by

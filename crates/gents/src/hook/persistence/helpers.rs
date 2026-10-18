@@ -22,13 +22,12 @@ pub(super) async fn count_live_backgrounded_rows(
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query live backgrounded tool count for request {request_id} failed: {:?}",
-            response.errors
-        );
-    }
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "count_live_backgrounded_rows",
+    )
+    .await?;
     let rows: Vec<BackgroundedRow> = response
         .data
         .as_ref()
@@ -155,99 +154,6 @@ pub(super) fn bounded_tool_result_with_presentation(
     )
 }
 
-pub(super) fn model_observation_for_tool_result(tool_name: &str, raw_result: &str) -> String {
-    if !is_read_file_tool(tool_name) {
-        return raw_result.to_string();
-    }
-
-    project_read_file_observation(raw_result).unwrap_or_else(|| raw_result.to_string())
-}
-
-fn is_read_file_tool(tool_name: &str) -> bool {
-    matches!(tool_name, "read_file" | "read" | "cat")
-}
-
-fn project_read_file_observation(raw_result: &str) -> Option<String> {
-    project_read_file_json_observation(raw_result)
-        .or_else(|| project_read_file_compact_observation(raw_result))
-}
-
-fn project_read_file_compact_observation(raw_result: &str) -> Option<String> {
-    let (first_line, body) = raw_result.split_once('\n')?;
-    let metadata = first_line.strip_prefix("gents_fs: ")?;
-    let metadata: serde_json::Value = serde_json::from_str(metadata).ok()?;
-    if metadata.get("tool").and_then(|value| value.as_str()) != Some("read_file") {
-        return None;
-    }
-    let content = body.strip_prefix("content:\n").unwrap_or(body);
-    Some(render_read_file_observation(&metadata, content))
-}
-
-fn project_read_file_json_observation(raw_result: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(raw_result.trim()).ok()?;
-    let content = value.get("content").and_then(|value| value.as_str())?;
-    if !looks_like_read_file_wrapper(&value) {
-        return None;
-    }
-    Some(render_read_file_observation(&value, content))
-}
-
-fn looks_like_read_file_wrapper(value: &serde_json::Value) -> bool {
-    if value.get("tool").and_then(|value| value.as_str()) == Some("read_file") {
-        return true;
-    }
-
-    value.get("ok").is_some()
-        && value.get("status").is_some()
-        && value.get("path").is_some()
-        && value.get("start_line").is_some()
-        && value.get("end_line").is_some()
-}
-
-fn render_read_file_observation(metadata: &serde_json::Value, content: &str) -> String {
-    let path = metadata
-        .get("path")
-        .and_then(|value| value.as_str())
-        .filter(|path| !path.trim().is_empty())
-        .unwrap_or("file");
-    let truncated = metadata
-        .get("truncated")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false);
-
-    let mut provenance = format!("Read {path}");
-    if let (Some(start), Some(end)) = (
-        json_usize(metadata, "start_line"),
-        json_usize(metadata, "end_line"),
-    ) {
-        provenance.push_str(&format!(" (lines {start}-{end}"));
-        if let Some(total) = json_usize(metadata, "total_count") {
-            provenance.push_str(&format!(" of {total}"));
-        }
-        if truncated {
-            provenance.push_str(", truncated");
-        }
-        provenance.push(')');
-    } else if truncated {
-        provenance.push_str(" (truncated)");
-    }
-    provenance.push(':');
-
-    let content = content.trim_end();
-    if content.is_empty() {
-        provenance
-    } else {
-        format!("{provenance}\n{content}")
-    }
-}
-
-fn json_usize(value: &serde_json::Value, key: &str) -> Option<usize> {
-    value
-        .get(key)
-        .and_then(|value| value.as_u64())
-        .and_then(|value| usize::try_from(value).ok())
-}
-
 pub(super) fn json_string(value: serde_json::Value) -> String {
     crate::tool_output::render(
         &value,
@@ -270,16 +176,6 @@ pub(super) fn json_string(value: serde_json::Value) -> String {
     .expect("JSON values serialize")
 }
 
-/// Build a model-facing JSON envelope that embeds a potentially oversized
-/// result while staying inside the hook's truncation limits.
-///
-/// Skip reasons are bounded by `skip_tool_result` with no JSON awareness: if an
-/// embedded result pushes the envelope past the limits, the outer truncation
-/// slices the envelope mid-structure and the model receives corrupt JSON. So
-/// bound the embedded copy first at half the byte budget (headroom for JSON
-/// string escaping), and if escaping inflation still overflows the limits,
-/// fall back to a stub — the envelope must always survive the outer bound
-/// intact. The full output stays on the durable AgentToolCall row.
 pub(super) fn json_envelope_with_bounded_result(
     mut envelope: serde_json::Value,
     result_key: &str,
@@ -495,12 +391,7 @@ mod tests {
 
     #[test]
     fn json_envelope_falls_back_to_stub_when_escaping_inflates_past_limits() {
-        // Control characters escape 6x (0x01 -> \\u0001), defeating the half-budget
-        // headroom; the helper must fall back to a stub rather than let the
-        // outer truncation slice the envelope.
         let limits = crate::truncation::TruncationLimits::default();
-        // Many short control-char lines: small enough to survive the inner
-        // half-budget bound, but escaping inflates ~6x past the full budget.
         let pathological = vec!["\u{1}".repeat(10); 1500].join("\n");
         let rendered = json_envelope_with_bounded_result(
             serde_json::json!({"ok": true, "result": null}),
@@ -521,79 +412,18 @@ mod tests {
     }
 
     #[test]
-    fn json_envelope_passes_small_results_through_untruncated() {
-        let limits = crate::truncation::TruncationLimits::default();
-        let rendered = json_envelope_with_bounded_result(
-            serde_json::json!({"ok": true, "result": null}),
-            "result",
-            "done",
-            "wait_process",
-            &limits,
-        );
-        let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
-        assert_eq!(parsed["result"], "done");
-    }
-
-    #[test]
-    fn read_file_compact_output_projects_to_model_observation() {
-        let raw = concat!(
-            r#"gents_fs: {"ok":true,"status":"success","tool":"read_file","path":"notes.txt","returned_count":2,"total_count":3,"truncated":false,"start_line":2,"end_line":3}"#,
-            "\ncontent:\nL2: beta\nL3: gamma\n"
-        );
-
-        assert_eq!(
-            model_observation_for_tool_result("read_file", raw),
-            "Read notes.txt (lines 2-3 of 3):\nL2: beta\nL3: gamma"
-        );
-    }
-
-    #[test]
-    fn read_file_raw_json_output_projects_to_model_observation() {
-        let raw = r#"{"ok":true,"status":"success","tool":"read_file","path":"src/main.rs","returned_count":1,"total_count":9,"truncated":true,"start_line":4,"end_line":4,"content":"L4: fn main() {}"}"#;
-
-        assert_eq!(
-            model_observation_for_tool_result("read_file", raw),
-            "Read src/main.rs (lines 4-4 of 9, truncated):\nL4: fn main() {}"
-        );
-    }
-
-    #[test]
-    fn read_file_projection_does_not_parse_plain_file_json() {
-        let raw = r#"{"path":"data.json","content":"not a wrapper"}"#;
-
-        assert_eq!(model_observation_for_tool_result("read_file", raw), raw);
-    }
-
-    #[test]
-    fn non_read_tool_result_is_unchanged_for_model() {
-        let raw = r#"{"ok":true,"content":"still structured"}"#;
-
-        assert_eq!(model_observation_for_tool_result("grep", raw), raw);
-    }
-
-    #[test]
-    fn hook_managed_tool_result_is_bounded_before_model_loop() {
-        let limits = crate::truncation::TruncationLimits {
-            max_lines: 2,
-            max_bytes: 80,
-        };
-        let raw = "line 1\nline 2\nline 3\nline 4";
-
-        let bounded = bounded_tool_result_for_model("agent_new", raw, &limits);
-
-        assert!(bounded.contains("line 1\nline 2"));
-        assert!(!bounded.contains("line 3"));
-        assert!(bounded.contains("[Showing lines 1-2 of 4"));
-    }
-
-    #[test]
     fn prepared_presentation_handles_normalized_crlf_head_and_tail() {
         let limits = crate::truncation::TruncationLimits {
             max_lines: 2,
             max_bytes: 80,
         };
         let raw = "one\r\ntwo\r\nthree\r\nfour";
-        for tool in ["wait_process", "bash"] {
+        for tool in [
+            "wait_process",
+            "bash",
+            "agent_session_list",
+            "agent_session_read",
+        ] {
             let (bounded, presentation) = bounded_tool_result_with_presentation(tool, raw, &limits);
             let presentation = presentation.expect("CRLF input should truncate");
             assert_eq!(

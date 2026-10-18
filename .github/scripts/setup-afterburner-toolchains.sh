@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# The full CLI suite compiles every supported Afterburner source language.
 # Keep the non-Rust compilers out of mutable host state: install pinned,
 # checksum-verified release artifacts into this job's temporary tool directory.
 if [[ "$(uname -s)-$(uname -m)" != "Darwin-arm64" ]]; then
@@ -34,8 +33,6 @@ echo "$binaryen_sha256  $download_root/$binaryen_archive" | shasum -a 256 --chec
 tar -xzf "$download_root/$binaryen_archive" -C "$tool_root"
 ln -sf "$tool_root/binaryen-version_${binaryen_version}/bin/wasm-opt" "$bin_root/wasm-opt"
 
-# Native Rust plugins target WASI Preview 1. setup-rust.sh installs the
-# migration fixture's wasm32-unknown-unknown target, which is distinct.
 rustup target add wasm32-wasip1
 
 "$bin_root/javy" --version

@@ -1,3 +1,4 @@
+import type { JsonValue } from "../generated/serde_json/JsonValue.js";
 import type {
   PackPluginCallRequest,
   UxDataCallRequest,
@@ -9,24 +10,31 @@ import type {
 import type { createDesktopInvoker } from "./invoke.js";
 import type { DesktopApiAdapter, UxPluginCommand } from "./types.js";
 
-/* the UX plugin doors: the inventory on disk, one plugin's module when it
-   is enabled, and the pack .afb call a plugin's page makes under its own
-   listing; the bridge takes the call's fields under `request` */
+/* the five ux commands answer JSON the bridge does not type yet; the shapes
+   in ../types/uxPlugins.ts are the client's reading of them */
+const shaped = <T>(answer: Promise<JsonValue>) => answer as Promise<unknown> as Promise<T>;
+
 export function createUxPluginCommands(
   invokeDesktop: ReturnType<typeof createDesktopInvoker>,
 ): Pick<DesktopApiAdapter, UxPluginCommand> {
   return {
     listUxPlugins: () =>
-      invokeDesktop<{ plugins: UxPluginListing[] }>("desktop_ux_plugins_list"),
+      shaped<{ plugins: UxPluginListing[] }>(invokeDesktop("desktop_ux_plugins_list")),
     readUxPluginSource: (id: string) =>
-      invokeDesktop<UxPluginSource>("desktop_ux_plugin_source", { id }),
+      shaped<UxPluginSource>(invokeDesktop("desktop_ux_plugin_source", { id })),
     callPackPlugin: (request: PackPluginCallRequest) =>
-      invokeDesktop<{ output: unknown }>("desktop_plugin_call", { request }),
+      shaped<{ output: unknown }>(
+        invokeDesktop("desktop_plugin_call", {
+          request: { ...request, input: (request.input ?? null) as JsonValue },
+        }),
+      ),
     callUxData: (request: UxDataCallRequest) =>
-      invokeDesktop<UxDataCallResult>("desktop_ux_data_call", { request }),
+      shaped<UxDataCallResult>(
+        invokeDesktop("desktop_ux_data_call", {
+          request: { ...request, args: (request.args ?? {}) as JsonValue },
+        }),
+      ),
     listUxDataSurfaces: (request: UxDataSurfacesRequest) =>
-      invokeDesktop<{ surfaces: unknown[] }>("desktop_ux_data_surfaces", {
-        request,
-      }),
+      shaped<{ surfaces: unknown[] }>(invokeDesktop("desktop_ux_data_surfaces", { request })),
   };
 }

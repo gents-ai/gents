@@ -150,7 +150,7 @@ impl DefraWatcher {
         let failure_reason =
             format!("request rejected at ingest: incoherent durable lineage ({error})");
         if let Err(persist_error) = crate::request_admission::terminalize_pending_request_rejection(
-            self.node.as_ref(),
+            &self.node,
             row.doc_id.as_deref().unwrap_or_default(),
             &self.node_did,
             &failure_reason,
@@ -180,7 +180,7 @@ impl DefraWatcher {
         }
         let reason = "request rejected at ingest: malformed durable AgentRequest row";
         if let Err(error) = crate::request_admission::terminalize_pending_request_rejection(
-            self.node.as_ref(),
+            &self.node,
             &row.doc_id,
             &self.node_did,
             reason,
@@ -202,7 +202,7 @@ impl DefraWatcher {
             .filter_map(|row| row.doc_id.clone())
             .collect::<Vec<_>>();
         let order = crate::config_client::ConfigAccess::transact_local_readonly(
-            self.node.as_ref(),
+            &self.node,
             None,
             "watcher.request_arrival_order",
             |txn| {
@@ -361,17 +361,11 @@ fn prioritize_aged_background_wakes(
     mut rows: Vec<AgentRequestRow>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Vec<AgentRequestRow> {
-    // The query is already FIFO. Stable partitioning preserves that order
-    // within both classes while preventing an old completion wake from being
-    // perpetually overtaken by ordinary work. Once selected, the wake has at
-    // most the bounded executor queue and active workers ahead of it.
     rows.sort_by_key(|row| !is_aged_background_completion_wakeup(row, now));
     rows
 }
 
 fn claimable_pending_rows_from_rows(rows: Vec<AgentRequestRow>) -> Vec<AgentRequestRow> {
-    // Quarantine malformed pending work without allowing a second claim next
-    // to malformed live work in the same session.
     let blocked_sessions = rows
         .iter()
         .filter(|row| {
@@ -539,9 +533,6 @@ mod tests {
         assert_eq!(ranked[1].request_id, "fresh-wake");
     }
 
-    /// A malformed `valid_until` must fail closed (#1339): it is never
-    /// claimable, even though the sole other pending row in its session
-    /// would otherwise leave the ordinary FIFO gate open for it.
     #[test]
     fn malformed_valid_until_is_never_claimable() {
         let mut row = pending_row(

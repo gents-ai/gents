@@ -1,5 +1,5 @@
-//! Native macOS tabs keep each webview alive when it moves between windows.
-//! Navigation, drafts and in-flight UI work therefore need no transfer protocol.
+//! AppKit's tab-bar + button sends newWindowForTab: through the responder
+//! chain.
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -11,7 +11,7 @@ use objc2_app_kit::{
     NSApplication, NSResponder, NSWindow, NSWindowOrderingMode, NSWindowTabbingMode,
 };
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
-use tauri::{AppHandle, Manager, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow, WebviewWindowBuilder};
 
 const TABBING_IDENTIFIER: &str = "com.source-inc.gents.views";
 static NEXT_WINDOW: AtomicU64 = AtomicU64::new(1);
@@ -42,8 +42,6 @@ pub fn desktop_window_setup_complete(window: WebviewWindow) -> Result<(), String
 }
 
 define_class!(
-    // AppKit's tab-bar + button sends newWindowForTab: through the responder
-    // chain. Keep this thin adapter next to the native menu's New Tab action.
     #[unsafe(super(NSResponder))]
     #[thread_kind = MainThreadOnly]
     #[ivars = AppHandle]
@@ -60,8 +58,8 @@ define_class!(
 );
 
 thread_local! {
-    // NSResponder.nextResponder does not retain its target. This lives until
-    // process exit and is only ever accessed on AppKit's main thread.
+    // NSResponder.nextResponder does not retain its target; this must live
+    // until process exit.
     static TAB_RESPONDER: RefCell<Option<Retained<TabResponder>>> = const { RefCell::new(None) };
 }
 
@@ -87,6 +85,17 @@ pub fn setup(app: &mut tauri::App) -> tauri::Result<()> {
     let new_window =
         MenuItem::with_id(app, "new-window", "New Window", false, Some("Cmd+Shift+N"))?;
     file.prepend_items(&[&new_tab, &new_window, &PredefinedMenuItem::separator(app)?])?;
+    let view = items
+        .iter()
+        .filter_map(|item| item.as_submenu())
+        .find(|item| item.text().ok().as_deref() == Some("View"))
+        .expect("default macOS menu has View");
+    view.prepend_items(&[
+        &MenuItem::with_id(app, "zoom-reset", "Actual Size", true, Some("Cmd+0"))?,
+        &MenuItem::with_id(app, "zoom-in", "Zoom In", true, Some("Cmd+="))?,
+        &MenuItem::with_id(app, "zoom-out", "Zoom Out", true, Some("Cmd+-"))?,
+        &PredefinedMenuItem::separator(app)?,
+    ])?;
     let window_menu = menu
         .get(tauri::menu::WINDOW_SUBMENU_ID)
         .expect("default macOS menu has Window");
@@ -139,6 +148,11 @@ pub fn handle_menu(app: &AppHandle, action: &str) -> tauri::Result<()> {
     if matches!(action, "new-tab" | "new-window") {
         create_window(app, action == "new-tab")?;
     } else if let Some(window) = focused_window(app) {
+        // the page owns its zoom, so it is remembered with the viewer's
+        // other preferences and reaches the other windows from there
+        if let Some(step) = action.strip_prefix("zoom-") {
+            return app.emit_to(window.label(), "zoom", step);
+        }
         with_native_window(&window, |native| match action {
             "detach-tab" => native.moveTabToNewWindow(None),
             "merge-windows" => native.mergeAllWindows(None),
@@ -184,8 +198,7 @@ pub fn create_window(app: &AppHandle, tab: bool) -> tauri::Result<WebviewWindow>
     }
     window.show()?;
     window.set_focus()?;
-    // Explicit New Window bypasses the system's "always prefer tabs" setting;
-    // once shown it can participate in dragging and merging like every tab.
+    // Explicit New Window bypasses the system's "always prefer tabs" setting.
     with_native_window(&window, |native| {
         native.setTabbingMode(NSWindowTabbingMode::Automatic)
     })?;
@@ -200,8 +213,7 @@ fn with_native_window<T>(
     window: &WebviewWindow,
     action: impl FnOnce(&NSWindow) -> T,
 ) -> tauri::Result<T> {
-    // All callers are native setup/menu/window-event callbacks on the main
-    // thread. The Tauri window retains its NSWindow throughout this call.
+    // Native callbacks only; the Tauri window retains its NSWindow.
     assert!(objc2::MainThreadMarker::new().is_some());
     let pointer = window.ns_window()?;
     let native = unsafe { &*pointer.cast::<NSWindow>() };

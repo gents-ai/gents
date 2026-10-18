@@ -40,26 +40,15 @@ pub use waits::{
     wait_for_tool_call,
 };
 
-/// A gents-crate fixture pack directory, shared by every gents-cli
-/// integration test that installs or runs a pack:
-/// `crates/gents/tests/fixtures/packs/<name>`.
 pub fn fixture_pack_dir(name: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../gents/tests/fixtures/packs")
         .join(name)
 }
 
-// Matches the DEFAULT_LIVE_ENDPOINT the gents e2e_live suite uses
-// (workstation-1 over Tailscale). The previous default was a LAN address
-// unroutable from anywhere else, so tests falling through the
-// GENTS_CLI_E2E_MODEL_* overrides hung until their deadlines.
 pub const DEFAULT_MODEL_ENDPOINT: &str = "http://100.73.235.38:8000/v1";
 pub const DEFAULT_MODEL_NAME: &str = "GLM-5.2";
 
-/// Initialize an node home through `gents init --identity-only` and open its
-/// embedded node with the registered signing identity. Homes assembled without
-/// this fail the CLI's initialized-home check, and their commits would be
-/// unsigned.
 pub async fn initialized_node(
     cwd: &std::path::Path,
     node_home: &std::path::Path,
@@ -106,9 +95,6 @@ pub fn node_did_from_init(init: &serde_json::Value) -> anyhow::Result<String> {
     Ok(node_did.to_string())
 }
 
-/// Load the exact initialized-home identity into this test process so fixtures
-/// that represent runtime-authored documents can use the production signing
-/// path. The server process registers the same key independently.
 pub fn identity_from_init(init: &serde_json::Value) -> anyhow::Result<gents::KeyIdentity> {
     use anyhow::Context as _;
 

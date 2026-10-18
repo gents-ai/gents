@@ -1,5 +1,3 @@
-//! Opt-in qualification uses a fresh disposable embedded node and real HTTP
-//! inference endpoints. It never attaches to an operator's running node.
 #![cfg(feature = "live-e2e")]
 
 mod support;
@@ -40,8 +38,6 @@ fn artifact_directory(label: &str) -> Result<std::path::PathBuf> {
     Ok(directory)
 }
 
-/// Durable admitted-provider intervals use a half-open boundary: an ending
-/// call releases its slot before a call beginning at the same timestamp.
 fn provider_peaks(calls: &[Value]) -> Result<BTreeMap<String, usize>> {
     let mut events: BTreeMap<String, Vec<(chrono::DateTime<chrono::FixedOffset>, i32)>> =
         BTreeMap::new();
@@ -109,7 +105,7 @@ async fn apply(
         .collect();
     let plan = DesiredStateApplyPlan::new(documents)?;
     access
-        .transact("test.delivery_live.configure", |txn| {
+        .transact_write("test.delivery_live.configure", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
         })
@@ -145,7 +141,7 @@ fn string<'a>(row: &'a Value, field: &str) -> Result<&'a str> {
 
 async fn configure(
     access: &ConfigAccess,
-    node: &gents::defra_node::EmbeddedNode,
+    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
     owner: &str,
     endpoints: &[String; 2],
 ) -> Result<()> {
@@ -233,9 +229,6 @@ async fn configure(
     Ok(())
 }
 
-/// Both URLs must name real, separately hosted GLM servers. The test creates
-/// all documents locally; provider traffic alone crosses the workstation link.
-/// This qualifies a 64-document burst, not 64 simultaneously running providers.
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "real inference: GENTS_TRIGGER_DELIVERY_LIVE=1; GENTS_DELIVERY_ENDPOINT_1 and GENTS_DELIVERY_ENDPOINT_2"]
 async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> Result<()> {
@@ -258,7 +251,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
     let db = support::test_db_from_home(home);
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let owner = identity.did().to_owned();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     access.add_schema(SCHEMA).await?;
     configure(&access, &db.node, &owner, &endpoints).await?;
     let runtime = boot_live_agent(&db, identity).await?;
@@ -305,8 +298,6 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
         "independent lead fires reused a session"
     );
     let mut expected = BTreeMap::new();
-    // Alternate destination independently of backend, so both workstations
-    // deliver outcomes to both same-behavior leads.
     for shard in 0..64 {
         let handoff = format!("assignment-{shard:02}");
         let session = &sessions[(shard / 2) % 2];

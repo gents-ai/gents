@@ -1,8 +1,3 @@
-/* The answer surface for an `ask` item whose payload is a typed question:
-   one button per option (a click sends it), or toggles plus Send when the
-   question takes several, and an "Other" field when it accepts free text.
-   Sending is the item's ordinary reply request; the bridge renders its
-   content from the question. */
 import { Check } from "lucide-react";
 import type {
   MailboxItemView,
@@ -15,13 +10,9 @@ import { Input } from "@gents/ui/components/input";
 import { useState } from "react";
 import { toastFailure } from "@/lib/failure";
 
-/* the question's shape, checked in full: any ask may carry an arbitrary
-   payload, and only a well-formed question gets the answer surface */
 const text = (value: unknown): value is string =>
   typeof value === "string" && value.trim() !== "";
 const flag = (value: unknown) => value === undefined || typeof value === "boolean";
-/* the runtime's types deny unknown fields; a payload it could not decode
-   must not offer answers the bridge would refuse */
 const only = (value: object, keys: string[]) =>
   Object.keys(value).every((key) => keys.includes(key));
 
@@ -86,8 +77,6 @@ export function QuestionAnswer({
   const [selected, setSelected] = useState<string[]>([]);
   const [other, setOther] = useState("");
   const [sending, setSending] = useState(false);
-  /* a sent answer may wait behind the asking turn while the item stays
-     open; only a failed send offers the controls again */
   const [sent, setSent] = useState(false);
   const send = async (answer: MailboxQuestionAnswer) => {
     setSending(true);
@@ -101,7 +90,6 @@ export function QuestionAnswer({
     }
   };
   const note = other.trim() || null;
-  /* a single choice sends on click unless a note is being written with it */
   const deferred = question.multi_select || (question.allow_free_text && note !== null);
   const choose = (id: string) => {
     if (!deferred) {

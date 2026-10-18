@@ -350,9 +350,6 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         };
     }
 
-    // An auth failure only degrades overall health when an OAuth backend is actually
-    // configured and enabled — deployments that don't use that backend have no credential
-    // and must still report `ok`.
     let chatgpt_backend_configured = backend_reports.iter().any(|report| {
         report.get("provider_kind").and_then(Value::as_str)
             == Some(gents::backend_provider::BackendProviderKind::ChatGptCodex.as_str())
@@ -440,9 +437,6 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     Ok(())
 }
 
-/// One entry per account of a provider, for `checks.<provider>_auth.accounts`:
-/// its label, whether its token is usable now, and what to do when not. The
-/// check's own fields and gate stay on the provider's default account.
 fn accounts_json(
     accounts: &[&gents::oauth_credential::AccountSummary],
     node_did: &str,
@@ -472,11 +466,6 @@ fn accounts_json(
         .collect()
 }
 
-/// `checks.claude_auth.ok` reports token freshness, but a stale access token
-/// alone does not degrade the overall status: the prober counts such a
-/// credential healthy and the next request refreshes it. Only a credential
-/// that could not be read at all (missing, or a decode error) degrades — the
-/// agent snapshot gate refuses the agent in that case.
 fn claude_auth_gate(backend_configured: bool, check: &Value) -> bool {
     !backend_configured || check.get("credential_id").is_some()
 }

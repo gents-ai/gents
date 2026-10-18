@@ -59,12 +59,10 @@ mod tests {
         }
 
         let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        // rustup is the authority on whether the SELECTED toolchain actually
-        // carries the component; a shim on PATH proves nothing (rustup
-        // installs proxies for every known tool, and minimal profiles — this
-        // repo pins one — omit rust-analyzer). Executing rustup here is fine:
-        // the production constraint is only that ADMISSION never executes a
-        // helper.
+        // rustup is the authority on whether the SELECTED toolchain carries
+        // the component; a shim on PATH proves nothing (minimal profiles omit
+        // rust-analyzer). Executing rustup here is fine: the production
+        // constraint is only that ADMISSION never executes a helper.
         let Ok(oracle) = std::process::Command::new(&proxy_target)
             .args(["which", "rust-analyzer"])
             .current_dir(&workspace)
@@ -73,9 +71,9 @@ mod tests {
             return;
         };
         if !oracle.status.success() {
-            // The selected toolchain has no rust-analyzer binary: the shim
-            // would fail at spawn, so admission must fail closed instead of
-            // resolving a nonexistent path.
+            // A shim without a toolchain binary would fail at spawn;
+            // admission must fail closed instead of resolving a
+            // nonexistent path.
             let err = admit_command("rust-analyzer", &workspace)
                 .expect_err("missing toolchain component must deny, not resolve");
             assert_eq!(err.to_contract(), "workspaceExecutable");

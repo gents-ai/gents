@@ -108,7 +108,6 @@ pub(super) async fn run(
                     accepting = false;
                     continue;
                 }
-                // Commit in input order; only output observation runs concurrently.
                 let submitted = async {
                 let input = gents::lifecycle::prepare_user_message_input(
                     &gents::ConfigAccess::Graphql(graphql.clone()),
@@ -347,7 +346,6 @@ mod tests {
             assert_eq!(approval::pending(home.path()).unwrap().len(), 1);
             assert!(!waiter.is_finished());
         }
-        // These may have been buffered before the prompt was displayed.
         for text in ["yes", "o", "file"] {
             assert!(!handle_approval_command(home.path(), &mut shown, text).unwrap());
             assert!(!waiter.is_finished());

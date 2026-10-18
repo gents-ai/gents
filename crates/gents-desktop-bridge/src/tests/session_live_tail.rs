@@ -3,8 +3,8 @@ use gents_protocol::output::{
 };
 use serde_json::Value;
 
-use super::support::{boot_core, OPERATOR};
-use crate::tauri_commands::chat::session_snapshot;
+use super::support::{boot_core, refresh_request_and_assert_fresh_projection, OPERATOR};
+use crate::commands::session_snapshot;
 use crate::types::RenderedTimelineItem;
 
 async fn create(
@@ -38,9 +38,6 @@ fn request(request_id: &str, state: &str, created_at: &str) -> Value {
     })
 }
 
-/// H streams; Q was then sent and queued behind it, or F was folded into
-/// it. A bounded session read that names Q or F still loads H's open output,
-/// so the snapshot keeps H's streaming text as its live tail.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_queued_or_folded_submission_keeps_the_running_turns_streaming_text() {
     let (core, _tmp) = boot_core().await;
@@ -117,9 +114,8 @@ async fn a_queued_or_folded_submission_keeps_the_running_turns_streaming_text() 
     )
     .await;
     for request_id in ["req_head", "req_queued", "req_folded"] {
-        core.refresh_local_request(OPERATOR, request_id)
-            .await
-            .expect("refresh request");
+        refresh_request_and_assert_fresh_projection(&core, OPERATOR, "sess_live", None, request_id)
+            .await;
     }
 
     for submitted in ["req_queued", "req_folded"] {

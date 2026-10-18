@@ -234,7 +234,6 @@ theorem publishAuthored_preserves_toolProjectionCoherent
       message notAssistant generation publication
       (toolProjectionCoherent_append_open before closing fresh openSource coherent)
 
-/-- Heartbeats update the lease only; tool facts retain their projection. -/
 theorem renew_preserves_toolProjectionCoherent
     (before after : World) (generation : Generation) (deadline : Time)
     (coherent : toolProjectionCoherent before = true)

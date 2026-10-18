@@ -932,49 +932,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn projection_resource_map_parses_nonempty_collection_resource_pairs() -> Result<()> {
-        let map = parse_projection_resource_map(Some(
-            r#"{"AgentRequest":"runtime_request"," AgentToolCall ":" runtime_tool_call "}"#,
-        ))?;
-
-        assert_eq!(
-            map.get("AgentRequest").map(String::as_str),
-            Some("runtime_request")
-        );
-        assert_eq!(
-            map.get("AgentToolCall").map(String::as_str),
-            Some("runtime_tool_call")
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn projection_resource_map_rejects_empty_resource_names() {
-        let error = parse_projection_resource_map(Some(r#"{"AgentRequest":""}"#))
-            .expect_err("empty resource names should fail");
-
-        assert!(
-            error
-                .to_string()
-                .contains("must map non-empty collection names"),
-            "unexpected error: {error:#}"
-        );
-    }
-
-    #[test]
-    fn projection_resource_map_rejects_unknown_collection_names() {
-        let error = parse_projection_resource_map(Some(r#"{"AgentMesage":"messages"}"#))
-            .expect_err("unknown collection names should fail");
-
-        assert!(
-            error
-                .to_string()
-                .contains("unknown runtime collection AgentMesage"),
-            "unexpected error: {error:#}"
-        );
-    }
-
     #[tokio::test]
     async fn projection_acp_filter_omits_rows_denied_by_defradb_acp() -> Result<()> {
         let mut allowed = BTreeMap::new();

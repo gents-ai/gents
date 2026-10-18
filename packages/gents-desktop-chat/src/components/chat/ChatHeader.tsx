@@ -44,8 +44,6 @@ function ContextMeter({
   );
   const durable = Math.max(0, context.estimatedDurableTokens);
   const conversation = Math.max(0, context.estimatedConversationTokens);
-  // The configured window as the runtime resolves it, so a profile edit shows
-  // at once; a window the runtime rejects is reported, never shown as in use.
   const windowError = context.contextWindowError ?? null;
   const contextWindow = Math.max(1, context.contextWindow);
   const threshold = Math.max(0, context.compactionThresholdTokens);

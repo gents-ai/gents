@@ -1,23 +1,11 @@
 use super::*;
 
-/// Stands in for an image part on a provider whose wire cannot carry one
-/// inside a tool result.
 pub const TOOL_RESULT_IMAGE_OMITTED: &str =
     "[image omitted: this model's provider does not accept images in tool results]";
 
-/// Stands in for an image part when a later request replays the call from the
-/// transcript, which records tool output as text.
 pub const TOOL_RESULT_IMAGE_NOT_REPLAYED: &str =
     "[image omitted: images from earlier tool calls are not replayed; call the tool again to see it]";
 
-/// A dispatched tool's output as the provider receives it. Output with no
-/// image part is bounded whole and then split, as it always was. Output that
-/// splits into image parts (`{"response", "parts"}`, the plugin ABI in
-/// `gents::plugin`) is split first and each text part is bounded. Every image
-/// passes whole where `profile` carries tool-result images, because a
-/// byte-bounded image is not an image; the tool's own output limit bounds it.
-/// Elsewhere each image becomes [`TOOL_RESULT_IMAGE_OMITTED`]: the OpenAI-family
-/// converters refuse a whole request over one tool-result image.
 pub(super) fn bounded_tool_result(
     profile: crate::provider_input::ProviderInputProfile,
     tool_name: &str,
@@ -43,10 +31,6 @@ pub(super) fn bounded_tool_result(
     bound_split_parts(tool_name, content, note, &TruncationLimits::default())
 }
 
-/// The text a later request replays for output that splits into image parts:
-/// the parts [`bounded_tool_result`] threads, text bounded by `limits`, one per
-/// line, each image [`TOOL_RESULT_IMAGE_NOT_REPLAYED`]. `None` for output
-/// without an image part, which replays as bounded text.
 pub fn replayed_tool_result_text(
     tool_name: &str,
     output: &str,
@@ -74,8 +58,6 @@ pub fn replayed_tool_result_text(
     Some(lines.join("\n"))
 }
 
-/// Bounds each text part of split output; each image passes whole, or becomes
-/// `image_note` when one is given.
 fn bound_split_parts(
     tool_name: &str,
     content: Vec<ToolResultContent>,
@@ -102,13 +84,8 @@ pub(super) fn close_streaming_turn(
     assistant_source: Option<crate::claude_messages_body::ReplayTag>,
     pending_results: Vec<(ToolCall, String, Vec<ToolResultContent>)>,
 ) -> Vec<LoopStreamItem> {
-    // Thread the assistant turn (text + reasoning + tool calls) ahead of its
-    // tool results, matching rig's history ordering. Carry the provider
-    // message id (captured into `stream.message_id` from the stream's
-    // `MessageId` event) onto the threaded message — rig threads this same id,
-    // and OpenAI Responses / ChatGPT Codex follow-up requests reference prior
-    // `msg_` ids, so dropping it breaks them.
     if let Some(mut assistant_message) = accumulator.take_message() {
+        // Follow-up Responses requests reference the provider message id.
         if let Message::Assistant { id, .. } = &mut assistant_message {
             *id = message_id;
         }
@@ -151,7 +128,6 @@ pub(super) fn close_streaming_turn(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider_input::ProviderInputProfile;
 
     fn image_output(data_len: usize, response_len: usize) -> String {
         serde_json::json!({
@@ -160,64 +136,6 @@ mod tests {
         })
         .to_string()
     }
-
-    #[test]
-    fn output_without_images_is_bounded_whole_then_split() {
-        let small = r#"{"response":"ok"}"#;
-        assert_eq!(
-            bounded_tool_result(ProviderInputProfile::ClaudeMessages, "plugin", small),
-            ToolResultContent::from_tool_output(small)
-        );
-        let big = "x".repeat(200_000);
-        let (bounded, _, truncated) = truncate_text(
-            &big,
-            crate::truncation::TruncationMode::Head,
-            &TruncationLimits::default(),
-        );
-        assert!(truncated);
-        assert_eq!(
-            bounded_tool_result(ProviderInputProfile::ClaudeMessages, "plugin", &big),
-            vec![ToolResultContent::text(bounded)]
-        );
-    }
-
-    #[test]
-    fn images_pass_whole_and_only_text_parts_are_bounded() {
-        let limits = TruncationLimits::default();
-        let content = bounded_tool_result(
-            ProviderInputProfile::ClaudeMessages,
-            "plugin",
-            &image_output(400_000, 200_000),
-        );
-        let [ToolResultContent::Text(text), ToolResultContent::Image(image)] = content.as_slice()
-        else {
-            panic!("one text part and one image part: {content:?}");
-        };
-        assert!(text.text.len() < 200_000 && text.text.len() <= limits.max_bytes + 200);
-        let gents_protocol::message::DocumentSourceKind::Base64(data) = &image.data else {
-            panic!("base64 image data");
-        };
-        assert_eq!(data.len(), 400_000);
-    }
-
-    #[test]
-    fn a_provider_without_tool_result_images_gets_a_note_instead() {
-        let content = bounded_tool_result(
-            ProviderInputProfile::OpenAiChatCompletions,
-            "plugin",
-            &image_output(400_000, 10),
-        );
-        assert_eq!(
-            content,
-            vec![
-                ToolResultContent::text(format!("\"{}\"", "r".repeat(10))),
-                ToolResultContent::text(TOOL_RESULT_IMAGE_OMITTED),
-            ]
-        );
-    }
-
-    /// `carries_tool_result_images` matches what each wire's converter
-    /// accepts: every profile projects a bounded image result.
     #[cfg(feature = "native")]
     #[test]
     fn every_profile_projects_a_bounded_image_result() {

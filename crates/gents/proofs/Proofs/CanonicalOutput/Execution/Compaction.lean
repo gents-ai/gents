@@ -5,12 +5,9 @@ import Proofs.Compaction.ReductionEngine
 /-!
 # Canonical publication / provider compaction boundary
 
-Execution rows use physical tool documents for ownership. The provider sanitizer
-uses native call-id strings, which may be reused in later turns. This adapter
-projects the reconstructed native blocks; it never casts physical document IDs
-to provider symbols. Missing/conflicting payloads reject a projection instead of
-silently shortening the history. System messages stay with the system-prompt
-owner and are not user/assistant compaction rows.
+This adapter never casts physical tool-document IDs to provider call-id
+symbols (which may be reused in later turns); missing or conflicting payloads
+reject a projection instead of silently shortening the history.
 -/
 namespace CanonicalOutput.Execution.Compaction
 
@@ -47,9 +44,6 @@ def nativeRow? (message : MessageEnvelope) (native : ReconstructedMessage) :
     | .system => none
   pure { messageId := message.header.id, sessionId := message.header.session, sequence := message.sequence, role := role, kind := kind }
 
-/-- Use the existing canonical display/reconstruction owner, including fork
-origin validation. This is an authorized snapshot supplied by the native ACP
-owner; it does not grant access to missing or denied dependencies. -/
 def observation (world : World) (message : MessageEnvelope) : StreamingResponse.Observation :=
   { request := message.header.request.getD world.requestId
     session := world.sessionId
@@ -67,19 +61,6 @@ def publishedRow? (world : World) (message : MessageEnvelope) :
       if actual == message then nativeRow? message native else none
   | _ => none
 
-/-! ## Native provider-projection seam
-
-The provider serializer is deliberately not duplicated in Lean.  This adapter
-does own the other half of the boundary: an explicitly selected, ordered list
-of canonical message identities must resolve to the exact reconstructed native
-messages before the native provider projection callback can run.  Missing,
-conflicting, loading, or incomplete publications therefore fail the whole
-request instead of being filtered out of the estimate.
--/
-
-/-- Resolve one canonical identity to its exact published native message.
-Duplicate delivery of the same immutable envelope is harmless; two different
-envelopes at the identity are ambiguous and fail closed. -/
 def reconstructedMessage? (world : World) (id : DocId) : Option ReconstructedMessage := do
   let message ← match (world.messages.filter fun candidate =>
       candidate.header.session == world.sessionId && candidate.header.id == id).dedup with
@@ -90,10 +71,6 @@ def reconstructedMessage? (world : World) (id : DocId) : Option ReconstructedMes
       if actual == message then some native else none
   | _ => none
 
-/-- Compose canonical reconstruction with the native provider owner. `fixed`
-captures every non-message request layer. The error value describes failure at
-this already-authorized snapshot boundary; authorization itself remains the
-native observation owner's premise. -/
 def canonicalProviderRequest {Fixed Request Error : Type}
     (world : World) (fixed : Fixed)
     (project : Fixed → List ReconstructedMessage → Except Error Request)
@@ -116,9 +93,6 @@ theorem canonicalProviderRequest_success_uses_exact_reconstruction
       simp [canonicalProviderRequest, hnatives] at h
       exact ⟨native, rfl, h⟩
 
-/-- Reconstruct the exact retained canonical suffix before injecting the new
-checkpoint.  The checkpoint is a generated provider message payload, never
-reinterpreted as a canonical document identity. -/
 def canonicalRebuiltRequest {Fixed Request Error : Type}
     (world : World) (fixed : Fixed)
     (rebuild : Fixed → Nat → List ReconstructedMessage → Except Error Request)
@@ -128,9 +102,6 @@ def canonicalRebuiltRequest {Fixed Request Error : Type}
   | none => .error projectionError
   | some native => rebuild fixed checkpoint native
 
-/-- Canonical-output entry into the shared reduction/remeasurement owner.  The
-initial projection and retained-suffix rebuild share the same fixed request
-context, while only the latter receives the generated checkpoint. -/
 def reduceCanonicalRebuildAndAuthorize {Fixed Request Error : Type}
     (world : World) (fixed : Fixed)
     (project : Fixed → List ReconstructedMessage → Except Error Request)
@@ -160,9 +131,6 @@ theorem canonical_rebuilt_success_uses_exact_suffix {Fixed Request Error : Type}
       simp [canonicalRebuiltRequest, hnatives] at h
       exact ⟨native, rfl, h⟩
 
-/-- Canonical composition inherits the shared post-reduction threshold and
-positive-output authorization; its projectors are definitionally the exact
-canonical reconstruction adapters above. -/
 theorem canonical_composed_dispatch_is_authorized {Fixed Request Error : Type}
     (world : World) (fixed : Fixed)
     (project : Fixed → List ReconstructedMessage → Except Error Request)
@@ -189,9 +157,6 @@ theorem canonical_composed_dispatch_is_authorized {Fixed Request Error : Type}
     estimate source contextWindow thresholdBasisPoints configuredMaxOutputTokens canFit
     prefixLength checkpoint outputTokens projected h
 
-/-- A successful composed dispatch used the exact reconstructed canonical
-source and exact reconstructed retained suffix. The generated checkpoint is
-passed separately to the rebuild owner. -/
 theorem canonical_composed_dispatch_binds_reconstruction {Fixed Request Error : Type}
     (world : World) (fixed : Fixed)
     (project : Fixed → List ReconstructedMessage → Except Error Request)
@@ -225,9 +190,6 @@ theorem canonical_composed_dispatch_binds_reconstruction {Fixed Request Error : 
   exact ⟨initialNative, retainedNative, initial.request, compactedPrefix, retainedSuffix, hsource,
     hproject, hpartition, hsuffix, hrebuild⟩
 
-/-- A successful provider request witnesses the exact reconstructed list given
-to the native projection owner; there is no independent list on which an
-estimator could operate. -/
 private theorem mapM_some_resolves_member {α β : Type} (f : α → Option β)
     (items : List α) (values : List β) (item : α)
     (hmapped : items.mapM f = some values) (hmember : item ∈ items) :
@@ -248,9 +210,6 @@ private theorem mapM_some_resolves_member {α β : Type} (f : α → Option β)
               | inl heq => subst item; exact ⟨firstValue, hfirst⟩
               | inr hmember => exact ih restValues hrest hmember
 
-/-- Any unresolved selected identity, including one in the middle or at the
-end, prevents the callback from manufacturing a request from a shortened
-history. -/
 theorem canonicalProviderRequest_unresolved_selected_is_error
     {Fixed Request Error : Type}
     (world : World) (messageIds : List DocId) (id : DocId) (fixed : Fixed)
@@ -267,8 +226,6 @@ theorem canonicalProviderRequest_unresolved_selected_is_error
       rw [hmissing] at hresolved
       contradiction
 
-/-- Empty, missing, ambiguous, and non-published observations cannot resolve a
-native message merely because a provider callback exists. -/
 theorem reconstructedMessage_requires_exact_publication
     (world : World) (id : DocId) (native : ReconstructedMessage)
     (h : reconstructedMessage? world id = some native) :
@@ -294,9 +251,6 @@ theorem reconstructedMessage_requires_exact_publication
               · simp [reconstructedMessage?, selected, hselected, hproject, heq] at h
           | _ => simp [reconstructedMessage?, selected, hselected, hproject] at h
 
-/-- Select an exact immutable prefix. The caller may choose a cursor but not
-manufacture row classifications. Invalid/unsupported native shapes reject the
-entire prefix. No unavailable message is filtered out as if it did not exist. -/
 def prefixView? (world : World) (throughSequence : Transcript.Sequence) :
     Option _root_.Compaction.PromptView := do
   let messages := ((world.messages.filter fun message =>
@@ -313,10 +267,6 @@ def prefixView? (world : World) (throughSequence : Transcript.Sequence) :
         | _ => none }
   pure view
 
-/-- Advance the already-compacted watermark only across an actually published,
-provider-stable prefix in the shared allocator. This is eligibility/accounting
-for the existing compaction owner, not a new summarizer. `prefixView?` may inspect
-a future candidate; inspection alone never authorizes changing the watermark. -/
 def advanceCursor? (world : World) (throughSequence : Transcript.Sequence) : Option World :=
   if throughSequence ≥ world.transcript.nextSeq then none
   else if world.compactionCursor.any (fun previous => throughSequence < previous) then none
@@ -409,8 +359,6 @@ theorem published_row_requires_actual_canonical_projection
     exact ⟨native, hproject, h⟩
   · contradiction
 
-/-- The compactor's provider-symbol projection never allocates or renumbers a
-message. This connects its cursor space to the shared publication allocator. -/
 theorem published_row_preserves_shared_sequence
     (world : World) (message : MessageEnvelope) (row : Transcript.MessageRow)
     (h : publishedRow? world message = some row) : row.sequence = message.sequence := by

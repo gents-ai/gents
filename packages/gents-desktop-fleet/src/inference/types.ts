@@ -14,7 +14,6 @@ export type InferenceSetupOptions = {
   ) => Promise<unknown>;
   onProbeInferenceEndpoint: (endpoint: string) => Promise<InferenceProbeResult>;
   onCodexLogin: (nodeDid: string) => Promise<CodexLoginResult>;
-  /** Abort a ChatGPT sign-in whose browser was closed, so it does not hang. */
   onCancelCodexLogin?: () => Promise<unknown>;
   onCodexLoginUrl?: (
     onUrl: (url: string | null) => void,

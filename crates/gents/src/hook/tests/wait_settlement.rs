@@ -37,8 +37,6 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
         if during_completion {
             let reached = Arc::new(tokio::sync::Notify::new());
             let release = Arc::new(tokio::sync::Notify::new());
-            // The first mutation elects Running. The next mutation is inside
-            // completion, after the foreground handle has left the map.
             let mut pending = Box::pin(ConfigApplyTxn::with_successful_mutation_pause_at(
                 2,
                 reached.clone(),
@@ -122,7 +120,7 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
             Some(expected.terminal_state.as_str())
         );
         let result = crate::tool_call_lifecycle::query::load_tool_call_result(
-            &ConfigAccess::Local(node.clone()),
+            &ConfigAccess::local(node.clone()),
             document,
             agent,
             &session,

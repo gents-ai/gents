@@ -99,8 +99,6 @@ pub(super) fn validate_request_scoped_rows(
     rendered_requests: &[TimelineRenderedRequestRow],
 ) -> Result<()> {
     for row in messages {
-        // Messages no longer carry a logical request label; the physical
-        // request doc is the only request reference (#1425).
         anyhow::ensure!(
             row.request_doc_id == row.header.request_doc_id,
             "AgentMessage row disagrees with its canonical request reference"
@@ -132,10 +130,6 @@ pub(super) fn validate_request_scoped_rows(
         )?;
     }
     for row in compactions {
-        // A fork copies compaction state so the child session can preserve its
-        // prompt-reduction boundary, but it does not copy the parent requests.
-        // Such imported session context is intentionally unbound; any bound
-        // compaction must still resolve as an exact logical/physical pair.
         validate_optional_request_binding(
             bindings,
             "CompactionEntry",
@@ -174,9 +168,7 @@ pub(super) fn request_scoped_row_is_in_timeline(
     let request_doc_id = nonempty(request_doc_id);
     match (request_id, request_doc_id) {
         (None, None) => true,
-        // Previous schema generations wrote only the logical label. They are
-        // not evidence for a physical join and must not poison the rest of the
-        // timeline or be projected as verified provenance.
+        // Legacy logical-only labels are not evidence for a physical join.
         (Some(_), None) => false,
         (request_id, Some(doc_id)) => {
             bindings.contains_key(doc_id)

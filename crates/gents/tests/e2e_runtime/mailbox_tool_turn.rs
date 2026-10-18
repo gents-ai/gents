@@ -17,9 +17,6 @@ use crate::support::test_db;
 const AGENT: &str = "mailbox-turn-engineer";
 const SURFACE: &str = "engineer-mailbox";
 
-/// Filing an informational mailbox item through a surface shaped like the
-/// Engineer's (`gents init --engineer`) is an ordinary tool call: the
-/// receipt reaches the model and the request completes on the next turn.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
     let db = test_db("mailbox-tool-turn").await;
@@ -53,7 +50,7 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
     )
     .await;
     configure_agent_tools(
-        db.node.as_ref(),
+        &db.node,
         &did,
         AGENT,
         None,
@@ -126,7 +123,6 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
         .unwrap();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].title, "Crew ready");
-    // The first filing's outcome comes from the Lean-bound notification owner.
     let outcome = serde_json::to_value(
         gents::mailbox::NotificationIdentity::Event.write_outcome(false, false),
     )
@@ -153,7 +149,7 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
 
 pub(super) async fn configure_engineer_mailbox(db: &crate::support::TestDb, did: &str) {
     configure_agent_tools(
-        db.node.as_ref(),
+        &db.node,
         did,
         AGENT,
         None,
@@ -185,9 +181,6 @@ pub(super) async fn configure_engineer_mailbox(db: &crate::support::TestDb, did:
     .await;
 }
 
-/// A question filed without waiting is answered by the item's ordinary reply
-/// request: the claim consumes the item and the answer reaches the model as
-/// the session's next user message.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_filed_question_is_answered_through_the_reply_request() {
     use gents_protocol::mailbox_question::{
@@ -332,9 +325,6 @@ pub(super) async fn request_state(
         .map(str::to_owned)
 }
 
-/// The person answers while the asking turn is still running: the reply is an
-/// ordinary interactive request into the busy session, queued behind the
-/// active turn, and still resolves the item through the reply claim.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn() {
     use gents_protocol::mailbox_question::{
@@ -392,7 +382,6 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
         },
     )
     .await;
-    // The asking turn keeps working: its next provider turn waits on the test.
     prepared.backend.enable_dynamic_followups(prompt);
     configure_engineer_mailbox(&db, &did).await;
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
@@ -424,8 +413,6 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
         )
     );
 
-    // The desktop bridge's shape for an answer into a busy session: a queued
-    // user turn behind the active request.
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "mailbox-question-busy-reply",
@@ -456,7 +443,6 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
     assert!(!created.has_errors(), "{:?}", created.errors);
     let reply_doc =
         crate::support::exact_request_doc_id(db.node.as_ref(), "mailbox-question-busy-reply").await;
-    // Admitted and waiting behind the running turn, not refused or failed.
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(
         request_state(db.node.as_ref(), "mailbox-question-busy-reply")

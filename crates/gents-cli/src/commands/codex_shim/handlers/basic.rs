@@ -86,7 +86,7 @@ pub(super) async fn handle_basic_request(
         }
         codex::ClientRequest::ConfigRead { request_id, .. } => {
             let model_id = load_bound_model_selection_id_for_state(
-                state.node.as_ref(),
+                &state.node,
                 &state.node_did,
                 &state.agent_id,
             )
@@ -243,27 +243,21 @@ pub(super) async fn handle_basic_request(
     }
 }
 
-/// The stored usage of the account the session's backend names, with a
-/// plan only for ChatGPT: other providers' plans are not Codex plan types.
-/// Never reads the provider: on-demand reads belong to the runtime. Usage
-/// gates nothing, so a failed load answers as if nothing were stored.
+/// Stored usage of the session backend's account; on-demand provider reads belong to the runtime.
 async fn session_usage(state: &ShimState) -> Option<StoredUsage> {
     let load = async {
         let profile = load_bound_agent(state).await?.inference_profile;
         let node_did = state.node_did.as_ref();
         let backend_id = profile.backend_id.as_str();
-        let backend =
-            ConfigAccess::transact_local(state.node.as_ref(), None, "codex.usage", |txn| {
-                Box::pin(
-                    async move { load_inference_backend_in_txn(txn, node_did, backend_id).await },
-                )
-            })
-            .await?;
+        let backend = ConfigAccess::transact_local_write(&state.node, None, "codex.usage", |txn| {
+            Box::pin(async move { load_inference_backend_in_txn(txn, node_did, backend_id).await })
+        })
+        .await?;
         let Some(backend) = backend else {
             return Ok(None);
         };
         let mut stored =
-            usage_for_backend(&ConfigAccess::Local(state.node.clone()), node_did, &backend).await?;
+            usage_for_backend(&ConfigAccess::local(state.node.clone()), node_did, &backend).await?;
         if backend.provider_kind != gents::BackendProviderKind::ChatGptCodex {
             if let Some(stored) = stored.as_mut() {
                 stored.report.plan = None;
@@ -326,13 +320,12 @@ mod tests {
         }
     }
 
-    /// Binds the session's agent to `backend` through one profile.
     async fn bind(node: &Arc<EmbeddedNode>, backend: InferenceBackend) {
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         write_inference_backend_document(&access, &backend)
             .await
             .expect("backend");
-        ConfigAccess::transact_local(node.as_ref(), None, "codex.usage.test.catalog", |txn| {
+        ConfigAccess::transact_local_write(node, None, "codex.usage.test.catalog", |txn| {
             let backend = &backend;
             Box::pin(async move {
                 record_model_catalog_in_txn(
@@ -492,7 +485,7 @@ mod tests {
         assert_eq!(limits["primary"]["usedPercent"], json!(12));
         assert_eq!(limits["primary"]["windowDurationMins"], json!(300));
         assert_eq!(limits["planType"], json!("plus"));
-        let stored = load_usage(&ConfigAccess::Local(node), &account)
+        let stored = load_usage(&ConfigAccess::local(node), &account)
             .await
             .unwrap()
             .unwrap();
@@ -575,7 +568,6 @@ mod tests {
         let tempdir = tempfile::tempdir().unwrap();
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        // No agent is bound, so loading the session's account fails.
         let state = state(node, &tempdir);
         let (outbound, mut received) = mpsc::unbounded_channel();
         let request: codex::ClientRequest =

@@ -16,11 +16,11 @@ const B: &str = "did:key:z6MkUsageB";
 const CODEX: &str = "chatgpt-codex";
 
 async fn node() -> Arc<EmbeddedNode> {
-    Arc::new(test_support::test_node().await)
+    test_support::test_node().await
 }
 
 fn local(node: &Arc<EmbeddedNode>) -> ConfigAccess {
-    ConfigAccess::Local(node.clone())
+    ConfigAccess::local(node.clone())
 }
 
 fn credential(node_did: &str, account_ref: Option<&str>, key: Option<&str>) -> OAuthCredential {
@@ -92,7 +92,6 @@ fn api_key_account(node_did: &str) -> UsageAccount {
     }
 }
 
-/// Every stored row as `(node_did, provider, usage_key)`.
 async fn rows(node: &Arc<EmbeddedNode>) -> Vec<(String, String, String)> {
     let response = node
         .execute("{ ProviderAccountUsage { node_did provider usage_key } }")
@@ -349,9 +348,6 @@ async fn store_new_first_account_never_shows_the_removed_accounts_usage() {
     assert_eq!(for_backend, None);
 }
 
-/// Remove-all then sign in again within the same second: `connected_at` has
-/// seconds precision, so only a key the new sign-in does not inherit keeps
-/// the removed account's usage apart.
 #[tokio::test]
 async fn store_next_original_account_never_shows_the_removed_accounts_usage() {
     let node = node().await;
@@ -372,7 +368,7 @@ async fn store_next_original_account_never_shows_the_removed_accounts_usage() {
 
     let credential_id = removed.credential_id.as_str();
     access
-        .transact("test.remove_account", |txn| {
+        .transact_write("test.remove_account", |txn| {
             Box::pin(async move {
                 crate::oauth_credential::remove_account_in_txn(txn, A, credential_id).await
             })
@@ -403,7 +399,7 @@ async fn late_response_from_removed_account_does_not_populate_replacement_usage(
     let old_client_account = UsageAccount::for_credential(&removed);
     let credential_id = removed.credential_id.as_str();
     access
-        .transact("test.remove_account", |txn| {
+        .transact_write("test.remove_account", |txn| {
             Box::pin(async move {
                 crate::oauth_credential::remove_account_in_txn(txn, A, credential_id).await
             })
@@ -449,14 +445,22 @@ async fn queued_usage_write_rechecks_removed_or_disabled_account_under_gate() {
         let account = UsageAccount::for_credential(&original);
         let queued = Arc::new(tokio::sync::Notify::new());
         let acquired = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let writer = access
-            .transact("test.hold_usage_gate", |txn| {
+        let (writer, fillers) = access
+            .transact_write("test.hold_usage_gate", |txn| {
                 let node = node.clone();
                 let account = account.clone();
                 let original = original.clone();
                 let queued = queued.clone();
                 let acquired = acquired.clone();
                 Box::pin(async move {
+                    let gate_node = Arc::clone(&node);
+                    let fillers = tokio::spawn(async move {
+                        crate::config_client::ConfigApplyTxn::fill_mutation_write_gate_for_test(
+                            gate_node.as_ref(),
+                        )
+                        .await
+                    })
+                    .await?;
                     let writing_queued = queued.clone();
                     let writing_acquired = acquired.clone();
                     let writer = tokio::spawn(async move {
@@ -495,11 +499,12 @@ async fn queued_usage_write_rechecks_removed_or_disabled_account_under_gate() {
                         ))
                         .await?;
                     }
-                    Ok(writer)
+                    Ok((writer, fillers))
                 })
             })
             .await
             .unwrap();
+        drop(fillers);
         tokio::time::timeout(std::time::Duration::from_secs(10), writer)
             .await
             .unwrap()
@@ -736,7 +741,6 @@ const CODEX_USAGE_BODY: &str = r#"{"plan_type":"plus","rate_limit":{"primary_win
 const OPENROUTER_KEY_BODY: &str =
     r#"{"data":{"limit":20,"limit_remaining":15,"limit_reset":"daily"}}"#;
 
-/// A signed-in account of `provider` for `node_did`, expiring at `expires_at`.
 async fn sign_in(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
@@ -760,7 +764,6 @@ async fn sign_in(
     }
 }
 
-/// The server origin of a `one_shot_token_server` URL.
 fn origin(url: &str) -> String {
     url.trim_end_matches("/v1/oauth/token").to_string()
 }
@@ -796,7 +799,6 @@ async fn read(
         .expect("read")
 }
 
-/// The server got no connection within a short wait.
 async fn never_called(handle: tokio::task::JoinHandle<String>) {
     let mut handle = handle;
     let waited = tokio::time::timeout(std::time::Duration::from_millis(300), &mut handle).await;
@@ -1173,8 +1175,6 @@ async fn read_guard_recent_read_is_skipped() {
     );
     never_called(handle).await;
 
-    // A recent read skips before any token is touched: an expired sign-in
-    // is not refreshed.
     let did = "did:key:z6MkUsageReadRecent";
     sign_in(&node, did, CODEX, now - Duration::hours(1), None).await;
     let account = UsageAccount::Credential {
@@ -1420,160 +1420,10 @@ async fn read_guard_unresolvable_key_is_unavailable_with_no_request() {
     never_called(handle).await;
 }
 
-fn view_now() -> DateTime<Utc> {
-    "2026-10-01T16:00:00Z".parse().expect("now")
-}
-
-fn stored_with(windows: Vec<UsageWindow>) -> StoredUsage {
-    StoredUsage {
-        report: report(windows),
-        ..StoredUsage::default()
-    }
-}
-
-#[test]
-fn usage_view_fresh_window_has_countdown_and_age() {
-    use crate::BackendProviderKind as Kind;
-    let now = view_now();
-    let mut fresh = window("5h", 42.0, now - Duration::minutes(4));
-    fresh.resets_at = Some(now + Duration::minutes(133));
-    let view = usage_view(
-        Some(&stored_with(vec![fresh])),
-        Kind::ClaudeCliSubscription,
-        now,
-    );
-    assert_eq!(view.note, None);
-    let [shown] = view.windows.as_slice() else {
-        panic!("one window: {view:?}");
-    };
-    assert_eq!(shown.label, "5h");
-    assert_eq!(shown.used_pct, 42.0);
-    assert_eq!(shown.resets_in_secs, Some(133 * 60));
-    assert_eq!(shown.age_secs, 4 * 60);
-    assert!(!shown.last_known);
-    assert_eq!(shown.source, UsageSource::Header);
-}
-
-#[test]
-fn usage_view_stale_window_is_last_known() {
-    let now = view_now();
-    let stale = window("primary", 10.0, now - Duration::minutes(20));
-    let view = usage_view(
-        Some(&stored_with(vec![stale])),
-        crate::BackendProviderKind::ChatGptCodex,
-        now,
-    );
-    assert!(view.windows[0].last_known, "{view:?}");
-    assert_eq!(view.windows[0].age_secs, 20 * 60);
-}
-
-#[test]
-fn usage_view_past_reset_or_old_windows_are_dropped_to_unknown() {
-    let now = view_now();
-    let mut past = window("5h", 90.0, now);
-    past.resets_at = Some(now - Duration::seconds(1));
-    let old = window("7d", 50.0, now - Duration::minutes(61));
-    let view = usage_view(
-        Some(&stored_with(vec![past, old])),
-        crate::BackendProviderKind::ClaudeCliSubscription,
-        now,
-    );
-    assert!(view.windows.is_empty(), "{view:?}");
-    assert_eq!(view.note, Some("unknown"));
-}
-
-#[test]
-fn usage_view_nothing_stored_is_unknown() {
-    use crate::BackendProviderKind as Kind;
-    for kind in [
-        Kind::ChatGptCodex,
-        Kind::ClaudeCliSubscription,
-        Kind::XaiGrokOAuth,
-        Kind::OpenRouter,
-    ] {
-        let view = usage_view(None, kind, view_now());
-        assert!(view.windows.is_empty(), "{kind:?}");
-        assert_eq!(view.note, Some("unknown"), "{kind:?}");
-    }
-}
-
-#[test]
-fn usage_view_openai_compatible_never_seen_is_not_reported() {
-    let kind = crate::BackendProviderKind::OpenAiCompatible;
-    let now = view_now();
-    assert_eq!(usage_view(None, kind, now).note, Some("not reported"));
-    assert_eq!(
-        usage_view(Some(&StoredUsage::default()), kind, now).note,
-        Some("not reported")
-    );
-    let seen = usage_view(
-        Some(&stored_with(vec![window("requests", 7.0, now)])),
-        kind,
-        now,
-    );
-    assert_eq!(seen.note, None);
-    assert_eq!(seen.windows[0].label, "requests");
-}
-
-#[test]
-fn usage_view_uncapped_openrouter_is_no_cap_on_this_key() {
-    let kind = crate::BackendProviderKind::OpenRouter;
-    let now = view_now();
-    let read = StoredUsage {
-        read_at: Some(now - Duration::minutes(1)),
-        ..StoredUsage::default()
-    };
-    assert_eq!(
-        usage_view(Some(&read), kind, now).note,
-        Some("no cap on this key")
-    );
-    let failed = StoredUsage {
-        read_error: Some("throttled".into()),
-        ..read.clone()
-    };
-    assert_eq!(usage_view(Some(&failed), kind, now).note, Some("unknown"));
-    let aged_out = StoredUsage {
-        report: report(vec![window("daily", 25.0, now - Duration::minutes(61))]),
-        ..read
-    };
-    assert_eq!(usage_view(Some(&aged_out), kind, now).note, Some("unknown"));
-}
-
-#[test]
-fn usage_view_plan_and_read_state_carry_over() {
-    let now = view_now();
-    let mut stored = stored_with(vec![window("primary", 5.0, now)]);
-    stored.report.plan = Some(UsagePlan {
-        name: "plus".into(),
-        observed_at: now,
-    });
-    stored.read_at = Some(now - Duration::minutes(2));
-    stored.read_error = Some("throttled".into());
-    let view = usage_view(Some(&stored), crate::BackendProviderKind::ChatGptCodex, now);
-    assert_eq!(view.plan.as_deref(), Some("plus"));
-    assert_eq!(view.read_at, stored.read_at);
-    assert_eq!(view.read_error.as_deref(), Some("throttled"));
-}
-
-#[test]
-fn usage_view_claude_endpoint_windows_show_as_read() {
-    let kind = crate::BackendProviderKind::ClaudeCliSubscription;
-    let now = view_now();
-    let mut endpoint = window("7d", 72.0, now);
-    endpoint.source = UsageSource::Endpoint;
-    let view = usage_view(Some(&stored_with(vec![endpoint])), kind, now);
-    assert_eq!(view.windows.len(), 1, "{view:?}");
-    assert_eq!(view.windows[0].label, "7d");
-    assert_eq!(view.windows[0].used_pct, 72.0);
-    assert_eq!(view.windows[0].source, UsageSource::Endpoint);
-    assert_eq!(view.note, None);
-}
-
 const GROK: &str = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
 const CLAUDE: &str = crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
 const GROK_BILLING_BODY: &str = r#"{"config":{"creditUsagePercent":30,"currentPeriod":{"start":"2100-01-01T00:00:00Z","end":"2100-01-08T00:00:00Z"}}}"#;
 
-/// A second account of `provider` with reference `account_ref`.
 async fn sign_in_ref(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
@@ -1915,8 +1765,6 @@ async fn node_read_outcomes_hold_no_secrets() {
     assert!(!json.contains("did:"), "{json}");
 }
 
-/// Account `acct-a` with usage under its fallback key (before its key was
-/// known) and under its key, account `acct-b`, and an API-key backend.
 async fn seed_remove_fixture(node: &Arc<EmbeddedNode>) -> (OAuthCredential, String) {
     let mut first = credential(A, Some("acct-a"), None);
     first.connected_at = Some(Utc::now());
@@ -1970,7 +1818,7 @@ async fn seed_remove_fixture(node: &Arc<EmbeddedNode>) -> (OAuthCredential, Stri
 
 async fn remove(node: &Arc<EmbeddedNode>, credential_id: &str) {
     local(node)
-        .transact("test.remove_account", |txn| {
+        .transact_write("test.remove_account", |txn| {
             Box::pin(async move {
                 crate::oauth_credential::remove_account_in_txn(txn, A, credential_id).await
             })

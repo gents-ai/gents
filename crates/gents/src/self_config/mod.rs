@@ -1,9 +1,4 @@
-//! Node-scoped self-configuration through canonical context and inference documents.
-//! Patches name explicit writable fields and commit through the common desired-state
-//! transaction after validating the complete retained configuration. Nested tool
-//! permissions and auth references retain their existing typed owners. Raw API keys
-//! cannot be changed or returned. Optional no-lockout checks the candidate config
-//! chain. Agent management publishes canonical documents in the same transaction.
+//! Raw API keys cannot be changed or returned.
 
 pub mod agent;
 mod agent_management;
@@ -17,6 +12,7 @@ mod execution;
 pub use execution::ConfigExecutionReceipt;
 mod graph_preview;
 mod ops;
+mod pack_plugins;
 mod read;
 #[cfg(test)]
 mod tests;
@@ -46,7 +42,6 @@ use agent::derive_agent_id;
 use defra_node::EmbeddedNode;
 use ops::{decode_merged, validate_merged_selection, ApplyRequest};
 
-// Engineer-granted configurator: identity and self-config.
 pub const ENGINEER_AGENT_TAG: &str = "gents:engineer";
 
 pub fn engineer_self_config() -> crate::document_config::SelfConfigTools {
@@ -62,18 +57,12 @@ pub const GET_GRAPH_RUN_TOOL_NAME: &str = "get_graph_run";
 pub const GET_GRAPH_RESULT_TOOL_NAME: &str = "get_graph_result";
 pub const CANCEL_GRAPH_RUN_TOOL_NAME: &str = "cancel_graph_run";
 
-/// The graph tools a transport outside a model turn offers: the reads, each
-/// made under the caller's own DefraDB identity. Starting or cancelling a run
-/// there would need an authorization decision that DefraDB does not make for
-/// the graph collections, and gents adds no authorization layer of its own.
 pub const MCP_GRAPH_READ_TOOL_NAMES: [&str; 3] = [
     LIST_GRAPHS_TOOL_NAME,
     GET_GRAPH_RUN_TOOL_NAME,
     GET_GRAPH_RESULT_TOOL_NAME,
 ];
 
-/// Model-facing names reserved by the runtime. Configuration is one coherent
-/// argv-style surface; graph execution remains a separate operational surface.
 pub const SELF_CONFIG_TOOL_NAMES: [&str; 7] = [
     CONFIG_TOOL_NAME,
     PREVIEW_GRAPH_TOOL_NAME,
@@ -86,8 +75,6 @@ pub const SELF_CONFIG_TOOL_NAMES: [&str; 7] = [
 
 pub(crate) use crate::tool_output::{ordered, Ordered};
 
-/// Reading order of an effective configuration: the agent and its chain,
-/// then what it may do, then grants and timing.
 const EFFECTIVE_ORDER: &[&str] = &[
     "execution_settings",
     "agent_id",
@@ -103,8 +90,6 @@ const EFFECTIVE_ORDER: &[&str] = &[
     "effect_timing",
 ];
 
-/// Error wrapper mirroring `DefraQueryError`: render the full anyhow chain to
-/// the model.
 #[derive(Debug)]
 pub struct SelfConfigError(anyhow::Error);
 
@@ -130,10 +115,6 @@ fn outcome_text(outcome: &PatchOutcome) -> Result<String> {
     serde_json::to_string_pretty(outcome).map_err(|error| anyhow!("serialize outcome: {error}"))
 }
 
-// ---------------------------------------------------------------------------
-// Category request builders: each returns the ApplyRequest the core drives.
-// ---------------------------------------------------------------------------
-
 fn anchored_request(
     target: SelfConfigTarget,
     field: &'static str,
@@ -155,8 +136,6 @@ fn agent_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<
     fence_profile_pick(&mut request);
     request
 }
-/// An `inference_profile_id` pick may not switch accounts of one provider.
-/// Unset (compaction only) reuses the agent's profile.
 fn fence_profile_pick(request: &mut ApplyRequest<'static>) {
     request.validate = Box::new(|txn, anchor, stored, merged| {
         Box::pin(async move {
@@ -187,10 +166,8 @@ fn fence_profile_pick(request: &mut ApplyRequest<'static>) {
 }
 
 /// Model-facing patches may target any owned agent, including the invoking
-/// configurator itself; its lockout protection is the no-lockout guard (Lean
-/// `SelfConfig.keepsControl`), and operator grants are bounded in the validate
-/// slot (Lean `SelfConfig.keepsGrants`). Keep the shared-reference check inside the
-/// same transaction as validation/publication so a stale preflight cannot
+/// configurator itself. Keep the shared-reference check inside the same
+/// transaction as validation/publication so a stale preflight cannot
 /// authorize a write.
 fn protect_working_agent(mut request: ApplyRequest<'static>) -> ApplyRequest<'static> {
     let target = request.target;
@@ -198,11 +175,6 @@ fn protect_working_agent(mut request: ApplyRequest<'static>) -> ApplyRequest<'st
     request.validate = Box::new(move |txn, anchor, stored, merged| {
         let validation = validate(txn, anchor, stored, merged);
         Box::pin(async move {
-            // Context and Tools are reusable documents. A targeted edit must
-            // not mutate another agent (especially Engineer) through a shared
-            // reference. Keep the observation and rejection in the same
-            // transaction as the canonical patch publication, matching the
-            // Lean siblingToolsAllowed contract.
             let owner = anchor
                 .doc
                 .get("node_did")
@@ -261,10 +233,6 @@ fn protect_working_agent(mut request: ApplyRequest<'static>) -> ApplyRequest<'st
     });
     request
 }
-/// The `host.root` the stored Tools document already holds. An edit that
-/// leaves it unchanged re-admits a stored grant (the operator may have since
-/// narrowed below it); a patch that sets a new root is held to strict
-/// admission.
 fn stored_host_root(stored: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
     serde_json::from_value::<crate::document_config::Tools>(serde_json::Value::Object(
         stored.clone(),
@@ -313,14 +281,6 @@ fn tools_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<
     request.guard = Box::new(|_, stored, merged| guard_tools_keep_control(stored, merged));
     request
 }
-/// A set of a nested Tools group replaces the whole group, so a partial group
-/// silently drops what it omits. On the invoker's own Tools that loses its
-/// working surfaces (the mailbox surface, defra_query) without a lockout the
-/// no-lockout guard would catch, so such a patch is refused and names what it
-/// would drop unless `allow_drop` names the group. This confirms intent; it
-/// narrows no legal transition (Lean `SelfConfig.keepsControl` stays the only
-/// lockout protection). Like that guard it applies only to the invoker under
-/// no_lockout, which the Engineer's grant sets.
 fn refuse_silent_tools_drops(
     mut request: ApplyRequest<'static>,
     allow_drop: BTreeSet<String>,
@@ -331,8 +291,6 @@ fn refuse_silent_tools_drops(
         .map(|(field, _)| field.clone())
         .filter(|field| !allow_drop.contains(field))
         .collect::<Vec<_>>();
-    // Rides the invoker-only guard slot, after the lockout guard so a lockout
-    // is reported as one.
     let guard = request.guard;
     request.guard = Box::new(move |anchor, stored, merged| {
         guard(anchor, stored, merged)?;
@@ -362,9 +320,6 @@ fn refuse_silent_tools_drops(
     request
 }
 
-/// Settings present in `before` and absent from `after`: removed keys, removed
-/// array items, and values cleared to null. A changed value is a choice, not a
-/// drop.
 fn dropped_settings(path: &str, before: &Value, after: &Value, out: &mut Vec<String>) {
     match (before, after) {
         (Value::Null, _) => {}
@@ -399,7 +354,6 @@ fn profile_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
     fence_profile_backend(&mut request);
     request
 }
-/// A profile's backend selection may not switch accounts of one provider.
 fn fence_profile_backend(request: &mut ApplyRequest<'static>) {
     request.validate = Box::new(|txn, _, stored, merged| {
         Box::pin(async move {
@@ -572,8 +526,7 @@ fn automation_request(
                 );
             }
             // Packs may publish an event source before installing its schema;
-            // the schema tool installs schemas first, so a
-            // collection it cannot see here is a typo that would never fire.
+            // a collection missing here is a typo that would never fire.
             if target == SelfConfigTarget::EventSource {
                 if let Some(collection) = merged.get("source_collection").and_then(Value::as_str) {
                     anyhow::ensure!(
@@ -612,13 +565,8 @@ fn automation_target(kind: &str) -> Result<SelfConfigTarget> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Agent management arguments
-// ---------------------------------------------------------------------------
-
-/// Model-facing tri-state for agent edits. Serde invokes `Default` only
-/// when the property is absent; a present JSON null reaches the deserializer
-/// and becomes `Clear`.
+/// Model-facing tri-state for agent edits. A present JSON null is `Clear`;
+/// the property must be absent to stay `Omitted`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum StringUpdate {
     #[default]
@@ -656,60 +604,34 @@ impl StringUpdate {
     }
 }
 
-fn agent_edit_fields(args: &ConfigureAgentParams) -> Vec<String> {
-    [
-        ("display_name", &args.display_name),
-        ("description", &args.description),
-        ("system_prompt", &args.system_prompt),
-        ("root", &args.root),
-        ("preset", &args.preset),
-        ("profile_id", &args.profile_id),
-    ]
-    .into_iter()
-    .filter(|(_, value)| value.is_present())
-    .map(|(field, _)| field.to_owned())
-    .collect()
-}
-
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigureAgentParams {
-    /// `list` | `inspect` | `preview` | `create` | `edit` | `clone` | `disable`.
     pub action: String,
-    /// Proposed mutation for `action: "preview"`.
     #[serde(default)]
     pub operation: Option<String>,
     #[serde(default)]
     pub display_name: StringUpdate,
-    /// User-facing summary for the working agent and its context.
     #[serde(default)]
     pub description: StringUpdate,
-    /// Complete operating instructions for the working agent. Required
-    /// when creating from a permission preset; optional overrides a clone or
-    /// an existing agent.
     #[serde(default)]
     pub system_prompt: StringUpdate,
-    /// Exact agent_id of the sibling agent (required for edit/disable).
     #[serde(default)]
     pub agent_id: Option<String>,
-    /// Exact sibling agent_id to clone; a supplied preset requests a new agent.
     #[serde(default)]
     pub clone_from: Option<String>,
     #[serde(default)]
     pub root: StringUpdate,
     #[serde(default)]
     pub preset: StringUpdate,
-    /// Exact owner-scoped inference profile ID.
     #[serde(default)]
     pub profile_id: StringUpdate,
-    /// Promote the applied agent to this node's default agent.
     #[serde(default)]
     pub make_default: bool,
     #[serde(default)]
     pub enable_lsp: Option<bool>,
     #[serde(default)]
     pub enable_graph_tools: Option<bool>,
-    /// Optional fail-closed network narrowing for canonical host bash tools.
     #[serde(default)]
     pub network_mode: Option<crate::toolset::CommandNetworkMode>,
 }
@@ -931,15 +853,14 @@ async fn guard_agent_profile_choice(
     ops::guard_compaction_choice_in_txn(txn, SelfConfigTarget::Agent, &anchor, &own, &cloned).await
 }
 
-/// Install document and graph packs from the home's pack store or the registry through the
+/// Install document, graph and plugins-only packs from the home's pack store or the registry through the
 /// canonical resolver, package publication, and activation owners. The running
 /// node is always the install owner; callers cannot select another DID,
 /// filesystem distribution, registry endpoint, or control-plane endpoint.
 struct PackInstaller {
     core: SelfConfigCore,
     node: Arc<EmbeddedNode>,
-    /// The runtime's gents home, which holds the pack store and the plugin
-    /// store; `None` resolves from the registry in memory and installs no plugins.
+    /// `None` resolves from the registry in memory and installs no plugins.
     home: Option<std::path::PathBuf>,
 }
 
@@ -951,14 +872,6 @@ struct PackInstallParams {
     pub expected_digest: Option<String>,
 }
 
-/// What [`crate::plugin::install::snapshot_pack_plugin_records`] observed, to restore on failure.
-type PluginRollback = Vec<(
-    String,
-    String,
-    Option<crate::plugin::store::InstalledPlugin>,
-)>;
-
-/// A resolved pack and where it came from.
 struct ConfigPackDistribution(crate::pack_resolve::ResolvedNamedPack);
 
 impl ConfigPackDistribution {
@@ -978,11 +891,12 @@ impl ConfigPackDistribution {
         }
     }
 
-    /// The exact `namespace/name@version` this distribution resolved to, so
-    /// applying a preview resolves the same pack again (from the store the
-    /// preview filled) rather than whatever is newest by then. `requested`
-    /// stands when the version is not one a store index can hold.
+    /// Pin the preview's resolution so applying it resolves the same pack
+    /// again rather than whatever is newest by then.
     fn pinned_spec(&self, requested: &str) -> String {
+        if crate::pack::local::classify(requested).is_some() {
+            return self.digest().to_owned();
+        }
         let manifest = self.manifest();
         if crate::pack_store::is_valid_index_version(&manifest.version) {
             format!(
@@ -1020,7 +934,9 @@ impl PackInstaller {
     fn validate(&self, args: &PackInstallParams) -> anyhow::Result<()> {
         let coordinate = args.package.trim();
         anyhow::ensure!(!coordinate.is_empty(), "pack name must not be blank");
-        crate::pack_resolve::parse_pack_spec(coordinate)?;
+        if crate::pack::local::classify(coordinate).is_none() {
+            crate::pack_resolve::parse_pack_spec(coordinate)?;
+        }
         anyhow::ensure!(
             args.variables.len() <= 32,
             "pack variables exceed the 32-entry limit"
@@ -1048,10 +964,6 @@ impl PackInstaller {
         Ok(())
     }
 
-    /// Resolves the pack named by `args`: an installed record whose archive
-    /// the home's store still holds, then the store, then the registry. An
-    /// `update` asks the registry for the newest version first, so it never
-    /// resolves back to the version it is meant to replace.
     async fn resolve(
         &self,
         operation: &str,
@@ -1059,6 +971,56 @@ impl PackInstaller {
     ) -> anyhow::Result<ConfigPackDistribution> {
         self.validate(args)?;
         let coordinate = args.package.trim();
+        if let Some(local) = crate::pack::local::classify(coordinate) {
+            let home = self
+                .home
+                .as_deref()
+                .context("local packs require a runtime plugin home")?;
+            let archive = match local {
+                crate::pack::local::LocalName::Digest(_) => crate::pack::local::open(&local, home)?,
+                crate::pack::local::LocalName::Path(path) => {
+                    // Effective authority, not the process ceiling alone: a
+                    // narrower agent selection (or WorkspaceRoot policy) must
+                    // bound what this inspection can read.
+                    let effective = self
+                        .core
+                        .read_effective_config(&BTreeSet::new(), false, false)
+                        .await?;
+                    let mode = effective
+                        .pointer("/runtime_effective/effective/file_mode")
+                        .and_then(Value::as_str)
+                        .map(crate::tool_surface::FileToolMode::parse)
+                        .transpose()?
+                        .unwrap_or_default();
+                    anyhow::ensure!(mode != crate::tool_surface::FileToolMode::Off, "local pack inspection requires effective file read permission on the invoking agent");
+                    let root = effective
+                        .pointer("/runtime_effective/effective/root")
+                        .and_then(Value::as_str)
+                        .context("local pack inspection requires an effective tool root")?;
+                    let context = crate::toolset::ToolContext::new(root.into(), false)?;
+                    let path = context
+                        .resolve_existing_file(path.to_str().context("pack path is not UTF-8")?)?;
+                    anyhow::ensure!(path.extension().is_some_and(|extension| extension == crate::pack_archive::EXTENSION), "native local inspection accepts a built .pack artifact; directories require a scoped build owner");
+                    // The no-follow import carries the same handle the
+                    // admission validated, so a swap after admission cannot
+                    // change which bytes are verified and stored.
+                    crate::pack::local::open(&crate::pack::local::LocalName::Path(&path), home)?
+                }
+            };
+            anyhow::ensure!(
+                matches!(
+                    archive.manifest().metadata.kind,
+                    crate::pack::PackKind::Plugins
+                ),
+                "native local lifecycle currently accepts plugins-only artifacts"
+            );
+            return Ok(ConfigPackDistribution(
+                crate::pack_resolve::ResolvedNamedPack {
+                    archive,
+                    from: crate::pack_resolve::ResolvedFrom::Store,
+                },
+            ));
+        }
         let registry_url = crate::pack_registry::resolve_registry_url(None);
         let spec = match crate::pack_resolve::parse_pack_spec(coordinate)? {
             parsed if operation == "update" && parsed.version.is_none() => {
@@ -1079,7 +1041,7 @@ impl PackInstaller {
             }
             _ => coordinate.to_owned(),
         };
-        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let installed = crate::pack::installed_packs(
             self.home.as_deref(),
             Some((&access, self.core.node_did())),
@@ -1099,25 +1061,20 @@ impl PackInstaller {
             operation == "get"
                 || matches!(
                     distribution.manifest().metadata.kind,
-                    crate::pack::PackKind::Graph | crate::pack::PackKind::Documents
+                    crate::pack::PackKind::Graph | crate::pack::PackKind::Documents | crate::pack::PackKind::Plugins
                 ),
-            "pack {:?} is {:?}; the model-facing installer supports document and graph packs only",
+            "pack {:?} is {:?}; the model-facing installer supports document, graph and plugins-only packs",
             distribution.manifest().name,
             distribution.manifest().metadata.kind
         );
         Ok(distribution)
     }
 
-    /// The active graph of the installed pack with `manifest`'s namespace and
-    /// name. The install record is keyed by `namespace/name`, so a pack of the
-    /// same name from another namespace is never reported as installed.
-    // vertexia: graphs are looked up by bare package name, so two namespaces
-    // installed at once with the same name fail loud as ambiguous.
     async fn installed(
         &self,
         manifest: &crate::pack::PackManifest,
     ) -> anyhow::Result<Option<crate::graph_pipeline::GraphPlan>> {
-        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
         if crate::pack::read_installed_pack(&access, self.core.node_did(), &coordinate)
             .await?
@@ -1137,6 +1094,22 @@ impl PackInstaller {
         &self,
         manifest: &crate::pack::PackManifest,
     ) -> anyhow::Result<Option<Value>> {
+        if manifest.metadata.kind == crate::pack::PackKind::Plugins {
+            return self
+                .home
+                .as_deref()
+                .map(|home| {
+                    crate::pack::read_home_install(
+                        home,
+                        &format!("{}/{}", manifest.metadata.namespace, manifest.name),
+                    )
+                })
+                .transpose()?
+                .flatten()
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(Into::into);
+        }
         if manifest.metadata.kind == crate::pack::PackKind::Graph {
             return Ok(self.installed(manifest).await?.map(|plan| {
                 json!({
@@ -1144,7 +1117,7 @@ impl PackInstaller {
                 })
             }));
         }
-        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
         crate::pack::read_installed_pack(&access, self.core.node_did(), &coordinate)
             .await?
@@ -1160,7 +1133,7 @@ impl PackInstaller {
         distribution: &ConfigPackDistribution,
         commit: bool,
     ) -> anyhow::Result<String> {
-        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let owner = self.core.node_did();
         let prior = self.installation_status(distribution.manifest()).await?;
         anyhow::ensure!(
@@ -1320,11 +1293,6 @@ impl PackInstaller {
         }))?)
     }
 
-    /// One page of the packs the home's pack store holds, by `namespace/name`.
-    /// Bounded by `limit`; the store's name index is read whole (names only,
-    /// no archives), and only the page's manifests are opened.
-    // vertexia: the name index is listed whole, a cursor-seeked directory walk
-    // if a home ever holds thousands of pack names.
     async fn list(&self, limit: usize, cursor: Option<&str>) -> anyhow::Result<String> {
         anyhow::ensure!(
             (1..=50).contains(&limit),
@@ -1369,7 +1337,9 @@ impl PackInstaller {
             let manifest = archive.manifest();
             let installable = matches!(
                 manifest.metadata.kind,
-                crate::pack::PackKind::Graph | crate::pack::PackKind::Documents
+                crate::pack::PackKind::Graph
+                    | crate::pack::PackKind::Documents
+                    | crate::pack::PackKind::Plugins
             );
             let installed = if installable {
                 self.installation_status(manifest).await?
@@ -1426,7 +1396,7 @@ impl PackInstaller {
         ordered! {
             "items": items,
             "next_call": if has_more { page.checked_add(1).map(|next| json!({"argv":["pack","search"],"options":{"query":query,"page":next}})) } else { None },
-            "guidance": "Inspect a candidate with pack get before installation: it reports its kind, inference slots and installed state. This installer supports document and graph packs; search includes other kinds too.",
+            "guidance": "Inspect a candidate with pack get before installation: it reports its kind, inference slots and installed state. This installer supports document, graph and plugins-only packs; search includes other kinds too.",
             "registry": registry,
             "page": page,
             "has_more": has_more,
@@ -1441,7 +1411,7 @@ impl PackInstaller {
             expected_digest: None,
         };
         let distribution = self.resolve("get", &args).await?;
-        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let inference = crate::pack::inspect_pack_inference_bindings(
             &access,
             distribution.manifest(),
@@ -1451,7 +1421,9 @@ impl PackInstaller {
         .await?;
         let installable = matches!(
             distribution.manifest().metadata.kind,
-            crate::pack::PackKind::Graph | crate::pack::PackKind::Documents
+            crate::pack::PackKind::Graph
+                | crate::pack::PackKind::Documents
+                | crate::pack::PackKind::Plugins
         );
         let installed = if distribution.manifest().metadata.kind == crate::pack::PackKind::Graph {
             self.installed(distribution.manifest())
@@ -1472,17 +1444,17 @@ impl PackInstaller {
             "installed": installed,
             "installable": installable,
             "installation_blockers": self.plugin_install_blockers(distribution.manifest()),
-            "supported_operations": installable.then_some(["preview install", "install", "preview update", "update", "remove"]),
+            "supported_operations": if distribution.manifest().metadata.kind == crate::pack::PackKind::Plugins {
+                Some(vec!["preview install", "install", "preview update", "update"])
+            } else { installable.then_some(vec!["preview install", "install", "preview update", "update", "remove"]) },
         }))?)
     }
 
     /// Removes an installed graph package's `PackInstallation` record and
-    /// everything it lists: its `GraphDefinition`, every revision it
-    /// produced and their derived triggers, and the package's own
-    /// documents. Refused while any of its graphs has a run that has not
-    /// reached a terminal status. The package is named by coordinate alone,
-    /// so removing never resolves it (no store or registry lookup). It
-    /// releases no plugin bytes or archive; use `gents pack remove` for that.
+    /// everything it lists. Refused while any of its graphs has a run that
+    /// has not reached a terminal status. Never resolves the package (no
+    /// store or registry lookup); releases no plugin bytes or archive; use
+    /// `gents pack remove` for that.
     async fn remove(&self, package: &str) -> anyhow::Result<String> {
         let args = PackInstallParams {
             package: package.to_owned(),
@@ -1499,7 +1471,10 @@ impl PackInstaller {
             spec.name
         );
         let coordinate = format!("{}/{}", spec.namespace, spec.name);
-        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        if let Some(home) = self.home.as_deref() {
+            anyhow::ensure!(crate::pack::read_home_install(home, &coordinate)?.is_none(), "native removal of home-installed plugin/assets packs is unavailable; the existing pack removal owner must release plugin and home records together. Current installation is unchanged");
+        }
+        let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let report = crate::pack::remove_pack(
             &access,
             self.core.node_did(),
@@ -1542,16 +1517,17 @@ impl PackInstaller {
 
     /// Installs the plugins `distribution` ships into the home's plugin store,
     /// sealed: a plugin that asks for authority is refused, because granting
-    /// it is the operator's call. Returns the records to restore if the
-    /// graph install that follows fails, and the plugins now installed.
+    /// it is the operator's call. Local plugin records are the publication
+    /// boundary; later graph failures do not roll them back.
     fn install_plugins(
         &self,
         distribution: &ConfigPackDistribution,
         package_digest: &str,
-    ) -> anyhow::Result<(PluginRollback, Vec<crate::plugin::store::InstalledPlugin>)> {
+        bindings: &crate::pack::PackInferenceBindings,
+    ) -> anyhow::Result<Vec<crate::plugin::store::InstalledPlugin>> {
         let manifest = distribution.manifest();
         if manifest.metadata.plugins.is_empty() {
-            return Ok((Vec::new(), Vec::new()));
+            return Ok(Vec::new());
         }
         let home = self.home.as_deref().with_context(|| {
             format!(
@@ -1559,13 +1535,15 @@ impl PackInstaller {
                 manifest.name
             )
         })?;
-        let rollback = crate::plugin::install::snapshot_pack_plugin_records(home, manifest);
-        let installed = crate::plugin::install::install_pack_plugins(
+        crate::plugin::install::install_pack_plugins_with_bindings(
             home,
             manifest,
             package_digest,
             |path| distribution.0.archive.asset(path),
             false,
+            Some(self.core.node_did()),
+            bindings,
+            |_| Ok(()),
         )
         .with_context(|| {
             format!(
@@ -1573,8 +1551,6 @@ impl PackInstaller {
                 manifest.name
             )
         })
-        .inspect_err(|_| crate::plugin::install::rollback_pack_plugin_records(home, &rollback))?;
-        Ok((rollback, installed))
     }
 
     /// Pack slots have no current backend: each bound profile must be
@@ -1584,7 +1560,7 @@ impl PackInstaller {
         bindings: &crate::pack::PackInferenceBindings,
     ) -> anyhow::Result<()> {
         let owner = self.core.node_did();
-        crate::config_client::ConfigAccess::transact_local(
+        crate::config_client::ConfigAccess::transact_local_write(
             &self.node,
             Some(self.core.identity()?),
             "self_config.pack_profile_choice",
@@ -1610,6 +1586,11 @@ impl PackInstaller {
                 distribution.digest()
             );
         }
+        if distribution.manifest().metadata.kind == crate::pack::PackKind::Plugins {
+            return self
+                .plugins_pack(operation, &args, &distribution, false)
+                .await;
+        }
         if distribution.manifest().metadata.kind == crate::pack::PackKind::Documents {
             return self.documents(operation, &args, &distribution, false).await;
         }
@@ -1619,7 +1600,7 @@ impl PackInstaller {
             "pack {:?} is not installed; preview install instead",
             distribution.manifest().name
         );
-        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let inspected = crate::pack::inspect_pack_inference_bindings(
             &access,
             distribution.manifest(),
@@ -1723,6 +1704,11 @@ impl PackInstaller {
             "pack digest changed: preview authorized {expected:?}, resolved {:?}; preview again",
             distribution.digest()
         );
+        if distribution.manifest().metadata.kind == crate::pack::PackKind::Plugins {
+            return self
+                .plugins_pack(operation, &args, &distribution, true)
+                .await;
+        }
         if distribution.manifest().metadata.kind == crate::pack::PackKind::Documents {
             return self.documents(operation, &args, &distribution, true).await;
         }
@@ -1732,7 +1718,7 @@ impl PackInstaller {
             "pack {:?} is not installed; use pack install",
             distribution.manifest().name
         );
-        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let missing_slots = distribution
             .manifest()
             .metadata
@@ -1770,19 +1756,8 @@ impl PackInstaller {
         };
         let external_dependencies = package.manifest.external_dependencies.clone();
         let plugins = package.manifest.metadata.plugins.clone();
-        let (plugin_rollback, installed_plugins) =
-            self.install_plugins(&distribution, &package.package_digest)?;
-        if let Some(home) = self.home.as_deref() {
-            crate::plugin::install::bind_plugin_slots(
-                home,
-                distribution.manifest(),
-                self.core.node_did(),
-                &bindings.inference_slots,
-            )
-            .inspect_err(|_| {
-                crate::plugin::install::rollback_pack_plugin_records(home, &plugin_rollback)
-            })?;
-        }
+        let installed_plugins =
+            self.install_plugins(&distribution, &package.package_digest, &inference.bindings)?;
         let record = crate::graph_package::GraphInstallRecord {
             plugins: installed_plugins
                 .iter()
@@ -1793,10 +1768,10 @@ impl PackInstaller {
                 .collect(),
             explicit: operation == "install",
         };
-        // A failure past this point must not leave the plugins installed
-        // above orphaned: undo them along with the graph install that never
-        // landed.
-        let receipt = match crate::graph_package::install_loaded_graph_package(
+        // Local plugin publication is its own completed effect. A later node
+        // transaction failure is reported without deleting that installation;
+        // retrying the pinned pack operation can reconcile the graph record.
+        let receipt = crate::graph_package::install_loaded_graph_package(
             &access,
             self.core.node_did(),
             &package,
@@ -1805,15 +1780,7 @@ impl PackInstaller {
             &record,
         )
         .await
-        {
-            Ok(receipt) => receipt,
-            Err(error) => {
-                if let Some(home) = self.home.as_deref() {
-                    crate::plugin::install::rollback_pack_plugin_records(home, &plugin_rollback);
-                }
-                return Err(error);
-            }
-        };
+        .context("graph installation failed after local pack plugins were published; the plugins remain installed")?;
         let activation = crate::graph_pipeline::activate_graph_revision_with_access(
             &access,
             self.core.node_did(),
@@ -1821,7 +1788,8 @@ impl PackInstaller {
             &receipt.revision_digest,
             previous.as_ref().map(|plan| plan.digest.as_str()),
         )
-        .await?;
+        .await
+        .context("graph installation completed, but activation failed; locally published plugins remain installed")?;
         let effective = self
             .installed(distribution.manifest())
             .await?
@@ -1851,15 +1819,9 @@ impl PackInstaller {
 }
 
 fn graph_access(node: &Arc<EmbeddedNode>) -> crate::config_client::ConfigAccess {
-    crate::config_client::ConfigAccess::Local(node.clone())
+    crate::config_client::ConfigAccess::local(node.clone())
 }
 
-/// The `list_graphs` reply text for `owner_did`, read through `access`:
-/// every graph definition the owner holds with its verified active plan,
-/// sorted by graph id, as pretty-printed JSON. `run_tool` names the tool that
-/// starts a listed graph; a surface that offers no run tool passes `None`,
-/// and the reply then carries no `run_with`. Every read runs with
-/// `access`'s identity.
 pub async fn list_graphs_value(
     access: &crate::config_client::ConfigAccess,
     owner_did: &str,
@@ -2014,10 +1976,6 @@ impl Tool for RunGraphTool {
                     format!("graph {graph_id:?} has no active revision; call list_graphs again")
                 }
             })?;
-        // The same selection `prepare_entry_run` makes below, so the
-        // ceiling decision can never disagree with which entry actually
-        // runs (a mismatch here would let a model-invoked run reach a
-        // `git_diff` host step with no ceiling at all).
         let selected_entry = crate::graph_package::select_entry(&plan, args.entry.as_deref()).ok();
         let requires_git_diff_ceiling = selected_entry
             .and_then(|entry| entry.prepare.as_ref())
@@ -2219,9 +2177,6 @@ impl Tool for CancelGraphRunTool {
     }
 }
 
-/// The model-facing definitions of the five graph tools, in registration
-/// order. The in-session tools present exactly these, and the `/mcp` reads
-/// present the entries named in [`MCP_GRAPH_READ_TOOL_NAMES`].
 pub fn graph_tool_definitions() -> [ToolDefinition; 5] {
     [
         list_graphs_definition(),
@@ -2282,8 +2237,6 @@ fn cancel_graph_run_definition() -> ToolDefinition {
     }
 }
 
-/// Build the gated self-config tool family for one agent. Fails closed:
-/// with an empty node DID (bare oneshot contexts) no tools are registered.
 pub fn build_self_config_tools(
     node: Arc<EmbeddedNode>,
     node_did: String,
@@ -2358,14 +2311,10 @@ pub fn build_self_config_tools(
     tools
 }
 
-/// A graph intent reaches storage only through pack installation, so the
-/// preview is offered only with that grant; without it the tool's schema is a
-/// per-turn cost with no path to publication.
 fn previews_graphs(config: &SelfConfigToolConfig) -> bool {
     config.enable_graph_tools && config.enable_pack_install
 }
 
-/// Advertised tool names for a resolved self-config surface.
 pub fn self_config_tool_names(config: &SelfConfigToolConfig) -> Vec<String> {
     let mut names = Vec::new();
     if previews_graphs(config) {

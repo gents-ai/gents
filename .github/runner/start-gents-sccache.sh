@@ -22,5 +22,5 @@ export SCCACHE_BASEDIRS
 export SCCACHE_NO_DAEMON=1
 export SCCACHE_START_SERVER=1
 
-# Foreground mode lets launchd own and supervise the actual cache server.
+# launchd supervises the cache server; it must stay in the foreground.
 exec /opt/homebrew/bin/sccache

@@ -52,12 +52,10 @@ inductive Transition : ToolCallContext → ToolCallContext → Prop where
       (h_post  : post = { pre with awaitMode := .background })
       : Transition pre post
 
-  /-- Reacquiring a background row in the foreground is a wait. A
-  `agent_new`/`agent_message` row never becomes foreground: its result
-  arrives only as a completion notification. Jack's 0.20 decision removes the
-  foreground wait on another session because it couples the caller's turn to
-  another agent's lifetime, which is the privileged parent position the runtime
-  no longer encodes. -/
+  /-- A `agent_new`/`agent_message` row never becomes foreground: its result
+  arrives only as a completion notification; the foreground wait on another
+  session is removed because it couples the caller's turn to another agent's
+  lifetime. -/
   | foreground {pre post : ToolCallContext}
       (h_state : pre.state = .running)
       (h_mode  : pre.awaitMode = .background)

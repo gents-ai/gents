@@ -1,6 +1,3 @@
-//! Canonical configuration replacement inside the existing apply transaction.
-//! File loading belongs to the common pack loader. This owner validates the
-//! complete retained reference set; callers own commit/discard.
 use super::{mint_recreate_identity, ConfigApplyTxn};
 use crate::defra_query::SchemaField;
 use crate::graphql::{escape_graphql_string, graphql_string_list_literal};
@@ -15,8 +12,6 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
-// Derived serde root metadata is the configuration-field source of truth.
-// Stop before visiting values: flattened/map/unsupported roots fail explicitly.
 #[derive(Default)]
 struct RootFields(Option<&'static [&'static str]>);
 impl<'de> serde::Deserializer<'de> for &mut RootFields {
@@ -70,12 +65,7 @@ fn project<T: DeserializeOwned + Serialize>(
                     }
                 });
             }
-            // `updated_at` is written by the mutation owner, including the
-            // recreate-identity nonce on create. It is observation metadata,
-            // not desired configuration, so retaining it would make an
-            // immediate read-after-create differ from the authored document.
             object.remove("updated_at");
-            // Verify that clearing omitted values preserves the canonical type's defaults.
             let _: T = serde_json::from_value(config.clone())
                 .context("canonical replacement defaults do not roundtrip")?;
             Ok(config)
@@ -84,9 +74,6 @@ fn project<T: DeserializeOwned + Serialize>(
     Ok((fields, normalized))
 }
 
-/// Canonical desired-field metadata and optional typed configuration normalization.
-/// Runtime observations are excluded. This describes data; it grants no read or
-/// write authority and callers must retain the existing scoped transaction owner.
 pub fn config_projection(
     collection: Collection,
     value: Option<&Value>,
@@ -123,16 +110,12 @@ pub fn config_projection(
     }
 }
 
-/// Commit canonical desired values, never reinterpret strings as legacy JSON.
-/// Callers compare normalized plan/read projections, excluding runtime observations.
 pub fn desired_state_document_digest(value: &Value) -> Result<String> {
     let mut value = value.clone();
     let root = value
         .as_object_mut()
         .context("desired commitment must be a document object")?;
     root.remove("updated_at");
-    // Only root compact config omissions normalize. Nested JSON and strings
-    // retain their exact meaning (including null array elements and key names).
     root.retain(|_, value| !value.is_null() && !value.as_array().is_some_and(Vec::is_empty));
     Ok(format!(
         "sha256:{:x}",
@@ -161,9 +144,32 @@ fn reference_filter(collection: Collection, owner: &str, id: &str) -> Result<Str
     }
 }
 
-/// One query loads at most this many logical IDs, so a page's query size
-/// never scales with the plan being read.
 const READ_RECORDS_PAGE_SIZE: usize = 256;
+
+type DesiredStateRecordKey = (Collection, String, String);
+type DesiredStateRecord = (String, Value);
+
+#[cfg(test)]
+tokio::task_local! {
+    static DESIRED_STATE_READ_PAGE_QUERIES: std::sync::Arc<std::sync::atomic::AtomicUsize>;
+}
+
+#[cfg(test)]
+fn record_desired_state_read_page_query() {
+    let _ = DESIRED_STATE_READ_PAGE_QUERIES
+        .try_with(|queries| queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+}
+
+#[cfg(test)]
+pub(crate) async fn count_desired_state_read_page_queries<F: std::future::Future>(
+    future: F,
+) -> (F::Output, usize) {
+    let queries = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let output = DESIRED_STATE_READ_PAGE_QUERIES
+        .scope(queries.clone(), future)
+        .await;
+    (output, queries.load(std::sync::atomic::Ordering::Relaxed))
+}
 
 pub async fn read_record(
     txn: &ConfigApplyTxn<'_>,
@@ -176,11 +182,6 @@ pub async fn read_record(
         .remove(id))
 }
 
-/// Batched form of [`read_record`]: one query per page of `ids` (bounded by
-/// [`READ_RECORDS_PAGE_SIZE`]) rather than one query per document. A missing
-/// ID is simply absent from the result map. Two live documents sharing an
-/// owner and ID still fail loudly, naming them, exactly as [`read_record`]
-/// does for a single ID.
 pub async fn read_records(
     txn: &ConfigApplyTxn<'_>,
     collection: Collection,
@@ -190,9 +191,6 @@ pub async fn read_records(
     read_records_paged(txn, collection, owner, ids, READ_RECORDS_PAGE_SIZE).await
 }
 
-/// Test-only entry point exercising the pager at a page size smaller than
-/// [`READ_RECORDS_PAGE_SIZE`], so a multi-page read can be tested without a
-/// multi-hundred-document fixture.
 #[cfg(test)]
 pub(crate) async fn read_records_with_page_size(
     txn: &ConfigApplyTxn<'_>,
@@ -232,8 +230,6 @@ async fn read_records_paged(
     let ordered: Vec<&str> = unique_ids.into_iter().collect();
     for page in ordered.chunks(page_size.max(1)) {
         let filter = if collection == Collection::Node {
-            // The unique field IS `node_did` here; an `_in` clause on it
-            // would duplicate the `_eq` key in the same filter object.
             format!(
                 r#"{{ node_did: {{ _eq: "{}" }} }}"#,
                 escape_graphql_string(owner)
@@ -251,6 +247,8 @@ async fn read_records_paged(
                 fields.join(" ")
             ))
             .await?;
+        #[cfg(test)]
+        record_desired_state_read_page_query();
         let mut by_id: BTreeMap<String, Vec<Value>> = BTreeMap::new();
         for row in graphql_rows_from_response(&response, name) {
             let id = row
@@ -279,6 +277,29 @@ async fn read_records_paged(
     Ok(out)
 }
 
+async fn read_identity_records(
+    txn: &ConfigApplyTxn<'_>,
+    identities: &[(Collection, String, String)],
+) -> Result<BTreeMap<DesiredStateRecordKey, DesiredStateRecord>> {
+    let mut requested: BTreeMap<(Collection, String), BTreeSet<String>> = BTreeMap::new();
+    for (collection, owner, id) in identities {
+        requested
+            .entry((*collection, owner.clone()))
+            .or_default()
+            .insert(id.clone());
+    }
+
+    let mut records = BTreeMap::new();
+    for ((collection, owner), ids) in requested {
+        let ids = ids.into_iter().collect::<Vec<_>>();
+        let id_refs = ids.iter().map(String::as_str).collect::<Vec<_>>();
+        for (id, record) in read_records(txn, collection, &owner, &id_refs).await? {
+            records.insert((collection, owner.clone(), id), record);
+        }
+    }
+    Ok(records)
+}
+
 pub(crate) async fn read_desired_state_document_in_txn(
     txn: &ConfigApplyTxn<'_>,
     collection: Collection,
@@ -290,20 +311,24 @@ pub(crate) async fn read_desired_state_document_in_txn(
         .map(|(_, value)| value))
 }
 
-/// Expect every document this plan writes that already exists to still match
-/// the plan's authored create form. Absent documents carry no expectation.
 #[cfg(test)]
 pub(crate) async fn expect_existing_documents_unchanged(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,
 ) -> Result<()> {
+    let identities = plan
+        .documents()
+        .iter()
+        .map(|document| {
+            let (owner, id) = document_identity(document.collection, &document.add)?;
+            Ok((document.collection, owner.to_owned(), id.to_owned()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let records = read_identity_records(txn, &identities).await?;
     let mut expected = Vec::new();
     for document in plan.documents() {
         let (owner, id) = document_identity(document.collection, &document.add)?;
-        if read_desired_state_document_in_txn(txn, document.collection, owner, id)
-            .await?
-            .is_some()
-        {
+        if records.contains_key(&(document.collection, owner.to_owned(), id.to_owned())) {
             expected.push(DesiredStateExpectation {
                 collection: document.collection,
                 owner: owner.to_owned(),
@@ -316,9 +341,6 @@ pub(crate) async fn expect_existing_documents_unchanged(
     ensure_expectations_hold(txn, &guarded).await
 }
 
-/// Read-only preview of the same retained configuration checked at publication.
-/// Schema installation may follow this check; publication still validates in
-/// its own transaction to fence changes made after the preview.
 pub(crate) async fn validate_desired_state_plan(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,
@@ -381,13 +403,6 @@ pub(crate) async fn validate_desired_state_plan(
     Ok(())
 }
 
-/// A fire renders `{{ doc.X }}` against the delivered source document with
-/// strict undefined values, so a field the source collection does not declare
-/// fails every fire (#1970). The source collection's schema is observable here;
-/// one the schema does not have yet cannot refute the template, matching the
-/// other live-field checks. Only triggers whose trigger, task or event source
-/// this plan writes are checked, so an unrelated write never fails on retained
-/// configuration.
 async fn validate_trigger_document_fields(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,
@@ -444,8 +459,6 @@ async fn validate_trigger_document_fields(
     Ok(())
 }
 
-/// The templates a fire of `trigger` renders against the delivered document:
-/// the task's prompt and goal objective, and the trigger's session template.
 fn event_trigger_templates<'a>(
     trigger: &'a crate::document_config::Trigger,
     task: &'a crate::document_config::Task,
@@ -463,16 +476,6 @@ fn event_trigger_templates<'a>(
     ]
 }
 
-/// A fire renders `{{ doc.X }}` against the delivered source document with
-/// strict undefined values, so a field the source collection does not declare
-/// fails every fire (#1970). `_`-prefixed names are engine metadata, a
-/// template that guards an absent value renders it instead of failing, and a
-/// `doc.` reference to an aggregate pseudo-field is refused: it resolves
-/// through the query engine, never the delivered document. A per-document
-/// `emit_outcome` delivery of `CallbackResult` or `WorkspaceReceipt` resolves
-/// `handoff_id`, `reply_session_id` and `attempt` even undeclared: the
-/// trigger engine injects that native-route provenance into the fire's
-/// document (#2341).
 pub fn validate_event_trigger_document_fields(
     trigger: &crate::document_config::Trigger,
     task: &crate::document_config::Task,
@@ -526,10 +529,6 @@ pub fn validate_event_trigger_document_fields(
     Ok(())
 }
 
-/// The `{{ doc.X }}` field names [`validate_event_trigger_document_fields`]
-/// judges for this trigger and task, so a caller that must decide whether the
-/// source collection's schema is worth introspecting derives that from the
-/// rule instead of re-deriving a template walk.
 pub fn event_trigger_document_field_names(
     trigger: &crate::document_config::Trigger,
     task: &crate::document_config::Task,
@@ -562,15 +561,6 @@ pub(crate) struct OutcomeSourceSchemaError {
     message: String,
 }
 
-/// A `FireOutcome` is itself a handoff document: its `source_handoff_id` is
-/// copied from the delivered document's `handoff_id`, and fire admission
-/// refuses an opted-in delivery whose document has none. A Trigger that
-/// delivers a collection without a `String` `handoff_id` field to an
-/// `emit_outcome` Task could therefore never admit a fire, so publication
-/// refuses it. Only deliveries whose Trigger, Task or EventSource this plan
-/// writes are checked, and a collection the schema does not have yet cannot
-/// refute the document; admission still refuses each document without a
-/// `handoff_id` value.
 async fn validate_outcome_source_fields(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,
@@ -624,11 +614,6 @@ async fn validate_outcome_source_fields(
     Ok(())
 }
 
-/// Profiles this plan writes, or whose backend it writes, are admitted against
-/// the backend's advertised catalog read in the same transaction, through the
-/// owner runtime resolution uses. Preview and publication both run it, so
-/// neither accepts what the runtime would reject, such as a context window
-/// above the advertised maximum.
 async fn validate_advertised_profiles(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,
@@ -666,16 +651,10 @@ async fn validate_advertised_profiles(
     Ok(())
 }
 
-/// Introspected fields per target collection; `None` for a collection the
-/// schema does not have yet.
 type IntrospectedFields = BTreeMap<String, Option<BTreeMap<String, SchemaField>>>;
 
-/// Collections one introspection query asks about at most, so a plan's size
-/// never grows a single query without bound.
 const INTROSPECTION_PAGE: usize = 64;
 
-/// The correlation and expected-count fields `source` asks the schema about;
-/// both `None` means its validation needs no schema.
 fn event_source_schema_fields(
     source: &crate::document_config::EventSource,
 ) -> (Option<&str>, Option<&str>) {
@@ -699,8 +678,6 @@ fn event_source_schema_fields(
     (correlation, count_field)
 }
 
-/// Every create tool of the surface `candidate` whose output obligation names
-/// an expected-count field: `(tool_name, collection, field)`.
 fn obligation_count_fields(candidate: &Value) -> Result<Vec<(String, String, String)>> {
     let entries = crate::document_config::deserialize_optional_surface_tools(
         candidate.get("entries").cloned().unwrap_or(Value::Null),
@@ -721,9 +698,6 @@ fn obligation_count_fields(candidate: &Value) -> Result<Vec<(String, String, Str
         .collect())
 }
 
-/// The collections the schema checks of a `collection` document would
-/// introspect for `candidate`. A payload that does not decode names none: the
-/// check that reads it reports that failure itself.
 fn schema_targets(collection: Collection, candidate: &Value) -> Vec<String> {
     match collection {
         Collection::EventSource => {
@@ -746,10 +720,6 @@ fn schema_targets(collection: Collection, candidate: &Value) -> Vec<String> {
     }
 }
 
-/// Introspects, a page of collections per query, every collection the schema
-/// checks of `plan` may read, so [`declared_fields`] answers each from
-/// `introspected`. Both payloads of a document are covered: which one is
-/// written depends on the row's presence, decided later in the transaction.
 async fn prefetch_declared_fields(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,
@@ -765,8 +735,6 @@ async fn prefetch_declared_fields(
         })
         .collect::<BTreeSet<_>>()
         .into_iter()
-        // A name that is not an identifier is the structural owner's
-        // diagnostic; `declared_fields` reports no collection for it.
         .filter(|collection| {
             !introspected.contains_key(collection)
                 && crate::defra_query::schema::introspection_query(collection).is_ok()
@@ -794,10 +762,6 @@ async fn prefetch_declared_fields(
     Ok(())
 }
 
-/// The declared fields of one collection, or `None` when introspection cannot
-/// see the collection. A malformed collection name is the structural owner's
-/// diagnostic, not an introspection failure, so it reports no collection
-/// rather than an error.
 async fn declared_fields<'a>(
     txn: &ConfigApplyTxn<'_>,
     collection: &str,
@@ -820,7 +784,6 @@ async fn declared_fields<'a>(
     Ok(introspected.get(collection).and_then(Option::as_ref))
 }
 
-/// Whether introspection sees `collection` in this transaction.
 pub(crate) async fn collection_is_installed(
     txn: &ConfigApplyTxn<'_>,
     collection: &str,
@@ -832,25 +795,6 @@ pub(crate) async fn collection_is_installed(
     )
 }
 
-/// The runtime reads an obligation's expected count from the durable arguments
-/// of each completed write, not from the stored document, so the count must
-/// both match the field's native input and permit the write to complete. The
-/// field's GraphQL type is reported by `defra_query::schema`;
-/// [`crate::defra_write::can_hold_canonical_count`] owns that question.
-/// Refusing at publication precedes the runtime failure, which differs by
-/// refused class: a `Boolean` or scalar-list field still resolves a write-tool
-/// argument schema, so the tool registers, a write completes, and the
-/// obligation fails only at completion, after the work ran; a relation-typed or
-/// absent field resolves none, so `BoundedWriteTool` is not well formed,
-/// `ToolSurface::build_tools` refuses to register it, and no write completes at
-/// all. A relation list is relation-typed, not a scalar list.
-/// The target collection's schema is observable here, inside the publishing
-/// transaction; the structural owner
-/// (`WriteToolDecl::output_obligation_is_well_formed`) has no schema access.
-///
-/// `candidate` is the surface exactly as it will be stored: a plan carries a
-/// create and a replacement payload that need only agree on identity, and the
-/// row's presence in this transaction decides which one is written.
 async fn validate_output_obligation_count_fields(
     txn: &ConfigApplyTxn<'_>,
     candidate: &Value,
@@ -862,13 +806,6 @@ async fn validate_output_obligation_count_fields(
         .unwrap_or_default();
     for (tool_name, collection, field) in obligation_count_fields(candidate)? {
         let field = field.as_str();
-        // Introspection cannot see a collection that does not exist yet,
-        // and publishing a surface ahead of its schema is legitimate.
-        // Nothing revalidates the obligation when that schema arrives, so a
-        // surface published in that order is never checked here. A package
-        // that installs the target collection's own schema takes this path
-        // in its preflight, because `ensure_package_schemas` runs after it;
-        // only the publishing transaction sees the installed schema.
         let Some(fields) = declared_fields(txn, &collection, introspected).await? else {
             continue;
         };
@@ -891,21 +828,6 @@ async fn validate_output_obligation_count_fields(
     Ok(())
 }
 
-/// The runtime reads a group's expected count out of the stored source
-/// documents and the correlation out of each delivered document with
-/// `Value::as_str`, so a correlation field whose named type is not `String`
-/// can never correlate and a count field that cannot carry a canonical count
-/// can never complete a group. The correlation rule stays at `String` even
-/// where the reader would also read another string scalar: widening it is a
-/// policy change, not a report of what the runtime does. The structural owner
-/// (`EventSource::validate`) has no schema access; the target collection's
-/// schema is observable here, inside the publishing transaction. A collection
-/// the schema does not have yet cannot refute the document, and publishing
-/// ahead of a later schema install is legitimate.
-///
-/// `candidate` is the source exactly as it will be stored: a plan carries a
-/// create and a replacement payload that need only agree on identity, and the
-/// row's presence in this transaction decides which one is written.
 async fn validate_event_source_live_fields(
     txn: &ConfigApplyTxn<'_>,
     candidate: &Value,
@@ -964,28 +886,15 @@ async fn validate_event_source_live_fields(
 #[derive(Clone, Debug, PartialEq)]
 pub struct DesiredStateApplyDocument {
     pub collection: Collection,
-    /// Complete canonical create configuration (compact authoring accepted).
     pub add: Value,
-    /// Complete canonical replacement configuration; not a sparse patch.
-    /// Its owner and logical ID must match add. Runtime observations are forbidden.
     pub update: Value,
 }
 
-/// A digest precondition checked inside the publishing transaction. `digest:
-/// None` requires the document to be absent. Digests come from
-/// [`desired_state_document_digest`] over the normalized live projection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DesiredStateExpectation {
     pub collection: Collection,
     pub owner: String,
     pub id: String,
-    /// Compute this from a live read of the document's normalized projection
-    /// (`read_desired_state_document_in_txn` then
-    /// [`desired_state_document_digest`]), never from an authored form. The
-    /// two forms diverge wherever the update path strips fields: a
-    /// `ChainKeyBinding` replacement always drops the authored `created_at`,
-    /// and drops a blank `revoked_at`, keeping the live values instead, so an
-    /// authored digest would never match there.
     pub digest: Option<String>,
 }
 
@@ -998,8 +907,6 @@ pub struct DriftedDocument {
     pub found: Option<String>,
 }
 
-/// Refinement of `ApplyReconcile.publishIf`: a stale expectation leaves desired
-/// and live state unchanged. Recover it with [`stale_expectation`].
 #[derive(Debug)]
 pub struct StaleExpectation {
     pub drifted: Vec<DriftedDocument>,
@@ -1037,8 +944,6 @@ pub struct DesiredStateApplyPlan {
     expected: Vec<DesiredStateExpectation>,
 }
 impl DesiredStateApplyPlan {
-    /// Ordinary and graph packs share the canonical collection mapping and
-    /// full-replacement normalization. Topology is compiled separately.
     pub fn from_pack_config(config: &crate::document_config::PackConfig) -> Result<Self> {
         let bundle = serde_json::to_value(config)?;
         let mut documents = Vec::new();
@@ -1105,8 +1010,6 @@ impl DesiredStateApplyPlan {
             expected: Vec::new(),
         })
     }
-    /// Remove exact owner/logical identities in the same atomic publication.
-    /// Retained inbound references must still resolve after all removals.
     pub fn with_removals(mut self, removals: Vec<(Collection, String, String)>) -> Result<Self> {
         let mut identities: BTreeSet<_> = self
             .documents
@@ -1137,13 +1040,6 @@ impl DesiredStateApplyPlan {
         &self.documents
     }
 
-    /// Guard this publication with digest preconditions. Expectations may name
-    /// documents the plan does not write: promotion freezes a whole closure
-    /// and writes only its targets. A second call replaces the previous
-    /// expectation set, the same convention [`Self::with_removals`] follows.
-    /// An expectation may also name a document this plan removes
-    /// (delete-if-unchanged); it is checked exactly like any other, and is
-    /// outside the Lean `publishIf` model, which has no removals.
     pub fn with_expected(mut self, expected: Vec<DesiredStateExpectation>) -> Result<Self> {
         let mut identities = BTreeSet::new();
         for expectation in &expected {
@@ -1207,17 +1103,36 @@ async fn ensure_expectations_hold(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,
 ) -> Result<()> {
+    let identities = plan
+        .expected()
+        .iter()
+        .map(|expectation| {
+            (
+                expectation.collection,
+                expectation.owner.clone(),
+                expectation.id.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let records = read_identity_records(txn, &identities).await?;
+    ensure_expectations_match(plan, &records)
+}
+
+fn ensure_expectations_match(
+    plan: &DesiredStateApplyPlan,
+    records: &BTreeMap<DesiredStateRecordKey, DesiredStateRecord>,
+) -> Result<()> {
     let mut drifted = Vec::new();
     for expectation in plan.expected() {
-        let found = read_desired_state_document_in_txn(
-            txn,
-            expectation.collection,
-            &expectation.owner,
-            &expectation.id,
-        )
-        .await?
-        .map(|live| desired_state_document_digest(&live))
-        .transpose()?;
+        let found = records
+            .get(&(
+                expectation.collection,
+                expectation.owner.clone(),
+                expectation.id.clone(),
+            ))
+            .map(|(_, live)| live)
+            .map(desired_state_document_digest)
+            .transpose()?;
         if found != expectation.digest {
             drifted.push(DriftedDocument {
                 collection: expectation.collection,
@@ -1251,8 +1166,6 @@ fn validate_node_replacement(current: &Value, candidate: &Value) -> Result<()> {
 
 /// All writes remain in the caller's transaction. Reference checks run after
 /// staged writes so valid cyclic configurations do not depend on write order.
-/// Digest expectations are checked first, in the same transaction; a mismatch
-/// returns [`StaleExpectation`] before any write.
 pub async fn apply_desired_state_plan(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,
@@ -1260,14 +1173,20 @@ pub async fn apply_desired_state_plan(
     ensure_expectations_hold(txn, plan).await?;
     let mut introspected = IntrospectedFields::new();
     prefetch_declared_fields(txn, plan, &mut introspected).await?;
+    let document_identities = plan
+        .documents()
+        .iter()
+        .map(|document| {
+            let (owner, id) = document_identity(document.collection, &document.add)?;
+            Ok((document.collection, owner.to_owned(), id.to_owned()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut existing_documents = read_identity_records(txn, &document_identities).await?;
     let mut counts = DesiredStateApplyCounts::default();
     for document in plan.documents() {
         let (owner, id) = document_identity(document.collection, &document.add)?;
-        let existing = read_record(txn, document.collection, owner, id).await?;
-        // Only configuration changes are diagnostic events. Keeping this at
-        // the common desired-state owner covers packs, self-config, and
-        // direct writers without making runtime resolution log on every
-        // reconcile.
+        let existing =
+            existing_documents.remove(&(document.collection, owner.to_owned(), id.to_owned()));
         let changed = existing
             .as_ref()
             .is_none_or(|(_, current)| current != &document.update);
@@ -1304,15 +1223,14 @@ pub async fn apply_desired_state_plan(
             }
             _ => {}
         }
-        let response = txn
-            .execute_with_variables(&mutation, &serde_json::json!({"input": input}))
-            .await?;
-        extract_mutation_doc_id(&response, name)?;
+        if changed {
+            let response = txn
+                .execute_with_variables(&mutation, &serde_json::json!({"input": input}))
+                .await?;
+            extract_mutation_doc_id(&response, name)?;
+        }
         counts.increment(document.collection);
         if changed && document.collection == Collection::InferenceBackend {
-            // DesiredStateApplyPlan already validates this canonical document.
-            // A diagnostic must never turn an accepted configuration write into
-            // a failed one if that invariant changes in the future.
             if let Ok(backend) =
                 serde_json::from_value::<crate::InferenceBackend>(document.update.clone())
             {
@@ -1324,8 +1242,16 @@ pub async fn apply_desired_state_plan(
             }
         }
     }
+    let removal_identities = plan
+        .removals()
+        .iter()
+        .map(|(collection, owner, id)| (*collection, owner.clone(), id.clone()))
+        .collect::<Vec<_>>();
+    let mut existing_removals = read_identity_records(txn, &removal_identities).await?;
     for (collection, owner, id) in plan.removals() {
-        if let Some((doc_id, _)) = read_record(txn, *collection, owner, id).await? {
+        if let Some((doc_id, _)) =
+            existing_removals.remove(&(*collection, owner.clone(), id.clone()))
+        {
             let name = collection.graphql_type();
             txn.execute(&format!(
                 r#"mutation {{ delete_{name}(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,

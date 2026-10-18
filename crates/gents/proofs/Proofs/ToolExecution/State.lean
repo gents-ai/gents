@@ -56,10 +56,8 @@ instance : HasTerminal ToolCallState where
 
 end ToolCallState
 
-/-- Whether the calling turn blocks on the call. Background rows outlive the
-turn that started them; their terminal is delivered as a completion
-notification. An `agent_new`/`agent_message` row is always background: its
-result arrives only as a message, never through a wait. -/
+/-- Background rows outlive the turn that started them and their terminal is
+delivered as a completion notification. -/
 inductive AwaitMode where
   | foreground
   | background

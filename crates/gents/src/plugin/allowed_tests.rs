@@ -261,3 +261,30 @@ fn persisted_allowances_apply_the_same_breadth_rules_as_working_folders() {
     .unwrap();
     assert!(Scope::load(&world.gents, None, Some(&world.root)).is_err());
 }
+#[test]
+fn concurrent_grants_keep_other_paths_and_the_widest_approval() {
+    let home = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let paths: Vec<_> = (0..12)
+        .map(|index| {
+            let path = outside.path().join(format!("document-{index}"));
+            std::fs::write(&path, "document").unwrap();
+            path
+        })
+        .collect();
+    std::thread::scope(|scope| {
+        for path in &paths {
+            for access in [BindAccess::Read, BindAccess::ReadWrite] {
+                let home = home.path();
+                scope.spawn(move || {
+                    grant_at_least(home, path, access).unwrap();
+                });
+            }
+        }
+    });
+    let grants = list(home.path()).unwrap();
+    assert_eq!(grants.len(), paths.len());
+    assert!(grants
+        .iter()
+        .all(|grant| grant.access == BindAccess::ReadWrite));
+}

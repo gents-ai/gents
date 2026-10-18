@@ -20,13 +20,13 @@ import { ToolsEditor } from "./ToolsPanel";
 import { toolsInWords } from "./automation";
 import { useDraft } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
-import { Group } from "./rows";
+import { Group, NameLinks } from "./rows";
+import { someNames } from "./behaviorDraft";
 import { contextOrigin, forgetContextOrigins } from "./contextOrigin";
 import { RowMenu } from "./RowMenu";
 import { agentOf } from "@/lib/agents";
 import { useApp } from "@/app/AppContext";
 
-/* a context's detail names this many of its agents, then counts the rest */
 const USERS_SHOWN = 8;
 
 function Editor({
@@ -77,7 +77,6 @@ function Editor({
       });
     },
     {
-      /* each reference names a document the node still lists */
       problems: (next) => {
         const missingSkill = next.skillIds.find(
           (skillId) => !deployment.skills.some((row) => row.skillId === skillId),
@@ -102,7 +101,6 @@ function Editor({
   );
   const id = (f: string) => `${context.context_id}-${f}`;
   const users = deployment.agents.filter((b) => b.contextId === context.context_id);
-  /* New tools… from the field, and the chosen document's editor beside the page */
   const [newTools, setNewTools] = useState<((id: string | null) => void) | null>(null);
   const [besideTools, setBesideTools] = useState<string | null>(null);
   const besideDoc = deployment.tools.find((t) => t.tools_id === besideTools) ?? null;
@@ -150,20 +148,14 @@ function Editor({
           }
         >
           {users.length ? (
-            <span className="flex flex-wrap justify-end gap-x-3 gap-y-1">
-              {users.slice(0, USERS_SHOWN).map((b) => (
-                <a
-                  key={b.agentId}
-                  href={href({ ...base, section: "agents", item: b.agentId })}
-                  className="underline-offset-2 hover:text-foreground hover:underline"
-                >
-                  {b.displayName}
-                </a>
-              ))}
-              {users.length > USERS_SHOWN && (
-                <span>and {users.length - USERS_SHOWN} more</span>
-              )}
-            </span>
+            <NameLinks
+              shown={USERS_SHOWN}
+              items={users.map((b) => ({
+                key: b.agentId,
+                name: b.displayName,
+                href: href({ ...base, section: "agents", item: b.agentId }),
+              }))}
+            />
           ) : (
             "—"
           )}
@@ -287,7 +279,6 @@ export function ContextsPanel({
     nodeDid: deployment.nodeDid,
     section: "contexts",
   };
-  /* a context opened from its agent goes back to that agent */
   const originId = item ? contextOrigin(item) : null;
   const origin = agentOf(deployment, originId);
   const back = origin
@@ -299,7 +290,6 @@ export function ContextsPanel({
   useEffect(() => {
     if (!item) forgetContextOrigins();
   }, [item]);
-  /* reached from the Agents list to clear out unused ones, so they come first */
   const inUse = new Set(deployment.agents.map((b) => b.contextId));
   const unusedFirst = (a: AgentContext, b: AgentContext) =>
     Number(inUse.has(a.context_id)) - Number(inUse.has(b.context_id));
@@ -336,7 +326,7 @@ export function ContextsPanel({
               .filter((b) => b.contextId === c.context_id)
               .map((b) => b.displayName);
             return names.length
-              ? `Used by ${names.length <= 3 ? names.join(", ") : `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`}`
+              ? `Used by ${someNames(names)}`
               : "Not used by any agent";
           })(),
           badge: deployment.agents.some((b) => b.contextId === c.context_id)

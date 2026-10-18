@@ -23,12 +23,9 @@ pub(crate) trait StreamGuardLifecycle {
     }
 }
 
-/// The stream consumer also performs response writes. It may stop polling
-/// `next()` to await one of those writes while finalization owns the same gate.
-/// Independently schedule the owner so that both storage completion and its
-/// timeout continue to be polled. This does not make storage preemptible.
-/// The stream still owns cancellation: dropping it aborts this worker and lets
-/// the existing guard Drop path perform terminal repair.
+/// The stream consumer may stop polling `next()` while finalization owns the
+/// same write gate, so the owner runs independently; dropping the stream still
+/// aborts it and lets the guard's Drop path perform terminal repair.
 pub(crate) async fn finish_guard<G>(guard: G) -> Result<(), AdmissionError>
 where
     G: StreamGuardLifecycle + Send + 'static,

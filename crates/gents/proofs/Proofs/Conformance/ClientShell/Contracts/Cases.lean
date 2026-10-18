@@ -60,8 +60,6 @@ def storeNewCompleted : LocalStore :=
 def storeNewRunning : LocalStore :=
   storeWith [sessionObs sid1 (some reqNew) (some turnRunning)]
 
-/-- Rows whose observation `SessionTurn.observe` computes: `reqOld` running,
-`reqNew` either queued behind it or already folded into it. -/
 def queuedRows : List ClientShell.SessionTurn.Row :=
   [ SessionTurnCases.row 1 reqOld .active
   , SessionTurnCases.row 2 reqNew .unclaimed (queuedAfter := some reqOld) ]
@@ -83,8 +81,6 @@ def storeNewQueuedBehindRunning : LocalStore :=
 def storeNewFoldedIntoRunning : LocalStore :=
   storeWith (rowsObs foldedRows)
 
-/-- The rows a desktop case's store is built from, when its observation was
-computed from rows. -/
 def desktopRowsFor (store : LocalStore) : List ClientShell.SessionTurn.Row :=
   if store.sessions = storeNewQueuedBehindRunning.sessions then queuedRows
   else if store.sessions = storeNewFoldedIntoRunning.sessions then foldedRows
@@ -153,8 +149,6 @@ def queuedRequestsOf (obs : Option SessionObservation) : List RequestId :=
 def foldedRequestsOf (obs : Option SessionObservation) : List RequestId :=
   (obs.map (·.foldedRequests)).getD []
 
-/-- A submission observed as queued or folded is not the session's turn; the
-frontend then tracks the turn it waits behind or was folded into. -/
 def trackedRequestForFrontend
     (selection : Selection)
     (obs : Option SessionObservation)

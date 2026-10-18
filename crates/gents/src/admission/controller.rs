@@ -13,24 +13,12 @@ use super::persistence::{
     persist_terminal_call, spawn_persistence,
 };
 
-/// One backend's admission capacity, shared by every controller incarnation
-/// and every open period of the backend (Lean `InferenceCall.Registry`).
-/// Calls admitted before a rewrite or an outage keep counting against it
-/// until they release; queued calls survive capacity-only rewrites.
 pub(super) struct CapacityPool {
     ledger: Mutex<CapacityLedger>,
     waiters: AtomicUsize,
 }
 
-/// Lean `InferenceCall.Registry.Ledger`. Tokio permits cannot go negative,
-/// so held permits above capacity are `owed` and paid by forgetting permits.
-/// A permit taken from the semaphore counts as admitted only once registered
-/// here: Tokio returns a permit it assigned to a dropped waiter directly to
-/// the semaphore, bypassing this ledger, so registration pays outstanding
-/// debt before admitting.
 struct CapacityLedger {
-    /// Replaced on reopening after an outage. Permits of a retired semaphore
-    /// return to the current one through `held`.
     semaphore: Arc<Semaphore>,
     open: bool,
     capacity: usize,
@@ -45,7 +33,6 @@ pub(super) enum AdmitError {
 
 enum Registration {
     Admitted(PoolPermit),
-    /// The permit paid debt or belonged to a retired semaphore.
     Reacquire,
     Closed,
 }
@@ -68,8 +55,6 @@ impl CapacityPool {
         self.ledger.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Applies an available configuration: reopens a closed pool on a fresh
-    /// semaphore charged with the permits still held, or resizes an open one.
     pub(super) fn configure(&self, capacity: usize) {
         let mut ledger = self.ledger();
         if !ledger.open {
@@ -90,8 +75,6 @@ impl CapacityPool {
         ledger.capacity = capacity;
     }
 
-    /// Fails every queued waiter and every later acquisition with
-    /// `BackendGone`. Held permits stay counted until they drop.
     pub(super) fn close(&self) {
         let mut ledger = self.ledger();
         ledger.open = false;
@@ -99,8 +82,6 @@ impl CapacityPool {
         ledger.semaphore.close();
     }
 
-    /// A closed pool never reopens once pruned; a permit still in transit
-    /// from it is rejected at registration because the pool is closed.
     pub(super) fn is_retired(&self) -> bool {
         let ledger = self.ledger();
         !ledger.open && ledger.held == 0
@@ -122,7 +103,6 @@ impl CapacityPool {
         }
     }
 
-    /// `None` when admission closed while the call waited.
     async fn admit_waiting(self: &Arc<Self>) -> Option<PoolPermit> {
         loop {
             let semaphore = self.ledger().semaphore.clone();
@@ -141,17 +121,11 @@ impl CapacityPool {
         permit: OwnedSemaphorePermit,
     ) -> Registration {
         let mut ledger = self.ledger();
-        // The single admission point: pool identity, openness and debt are
-        // checked together under the ledger lock (Lean
-        // `Registry.Ledger.register`).
         if !Arc::ptr_eq(&semaphore, &ledger.semaphore) {
-            // Taken from a semaphore an outage retired; it grants no slot in
-            // the current one, so the caller must acquire again there.
             permit.forget();
             return Registration::Reacquire;
         }
         if !ledger.open {
-            // Assigned before admission closed; the closed semaphore absorbs it.
             drop(permit);
             return Registration::Closed;
         }
@@ -217,8 +191,6 @@ impl CapacityLedger {
     }
 }
 
-/// An admitted permit. It returns through its pool's ledger on drop, into
-/// whichever semaphore is current by then.
 pub(super) struct PoolPermit {
     pool: Arc<CapacityPool>,
     permit: Option<(Arc<Semaphore>, OwnedSemaphorePermit)>,
@@ -255,10 +227,6 @@ impl BackendAdmissionController {
         self.config == *config
     }
 
-    /// Admits a call issued through a provider client built for
-    /// `slot_connection`, which the call's row records as its backend
-    /// fingerprint. A connection change never rejects a call: in-progress
-    /// work finishes on the connection its slot started with.
     pub(super) async fn acquire(
         self: Arc<Self>,
         node: Arc<EmbeddedNode>,
@@ -320,21 +288,17 @@ impl BackendAdmissionController {
         }
 
         let call = self.call_record(pending, queue_depth, slot_connection);
-        // The guard exists before the fallible durable write: a persist error
-        // must still release the waiter unit, or each failure permanently
-        // shrinks the queue toward `QueueFull` (#1001; Lean
-        // `InferenceCall.ControllerBookkeeping.persist_error_releases_waiter`).
-        // It arms terminal-persist-on-drop only once the queued row is durable
-        // — before that there is no row to terminalize.
+        // Armed only after the queued row is durable (#1001): a persist error
+        // must still release the waiter unit.
         let mut queued_guard = QueuedCallGuard {
             node: node.clone(),
             controller: self.clone(),
             call: call.clone(),
-            persist_on_drop: false,
+            doc_id: None,
         };
         let doc_id = match super::persistence::persist_call_queued(node.clone(), &call).await {
             Ok(doc_id) => {
-                queued_guard.arm();
+                queued_guard.arm(doc_id.clone());
                 doc_id
             }
             Err(error) => {
@@ -349,6 +313,7 @@ impl BackendAdmissionController {
                 if let Err(persist_error) = persist_existing_call_terminal(
                     node,
                     &call,
+                    &doc_id,
                     "cancelled",
                     Some("BackendGone"),
                     None,
@@ -364,7 +329,7 @@ impl BackendAdmissionController {
         // Only the queued row can acquire this running state. If recovery has
         // already terminalized it, release the permit before provider dispatch.
         // Other persistence failures leave a queued row for ordered recovery.
-        if let Err(error) = persist_existing_call_running(node.clone(), &call).await {
+        if let Err(error) = persist_existing_call_running(node.clone(), &call, &doc_id).await {
             drop(permit);
             return Err(super::persistence::completion_persistence_error(error));
         }
@@ -442,7 +407,6 @@ impl CapacityPool {
         self.ledger().owed
     }
 
-    /// Permits a Tokio waiter holds but the ledger has not registered.
     pub(super) fn in_transit_for_test(&self) -> usize {
         let ledger = self.ledger();
         if !ledger.open {
@@ -452,9 +416,6 @@ impl CapacityPool {
             .saturating_sub(ledger.held + ledger.semaphore.available_permits())
     }
 
-    /// Takes a permit from the current semaphore without registering it,
-    /// standing for a waiter Tokio has woken but that has not reached the
-    /// ledger lock yet.
     pub(super) fn take_unregistered_for_test(&self) -> (Arc<Semaphore>, OwnedSemaphorePermit) {
         let semaphore = self.ledger().semaphore.clone();
         let permit = semaphore
@@ -464,8 +425,6 @@ impl CapacityPool {
         (semaphore, permit)
     }
 
-    /// Registers such a permit: `Ok(Some)` admits, `Ok(None)` means the
-    /// caller must acquire again, `Err` rejects as closed.
     pub(super) fn register_for_test(
         self: &Arc<Self>,
         taken: (Arc<Semaphore>, OwnedSemaphorePermit),
@@ -490,16 +449,16 @@ pub(super) struct QueuedCallGuard {
     node: Arc<EmbeddedNode>,
     controller: Arc<BackendAdmissionController>,
     call: InferenceCallRecord,
-    persist_on_drop: bool,
+    doc_id: Option<String>,
 }
 
 impl QueuedCallGuard {
-    fn arm(&mut self) {
-        self.persist_on_drop = true;
+    fn arm(&mut self, doc_id: String) {
+        self.doc_id = Some(doc_id);
     }
 
     pub(super) fn disarm(mut self) -> Self {
-        self.persist_on_drop = false;
+        self.doc_id = None;
         self
     }
 }
@@ -507,15 +466,16 @@ impl QueuedCallGuard {
 impl Drop for QueuedCallGuard {
     fn drop(&mut self) {
         self.controller.leave_queue();
-        if !self.persist_on_drop {
+        let Some(doc_id) = self.doc_id.take() else {
             return;
-        }
+        };
         let node = self.node.clone();
         let call = self.call.clone();
         spawn_persistence(async move {
             if let Err(error) = persist_existing_call_terminal(
                 node,
                 &call,
+                &doc_id,
                 "cancelled",
                 Some("Cancelled"),
                 None,
@@ -556,9 +516,6 @@ pub(super) struct InferenceCallRecord {
     pub(super) attempt: i64,
     pub(super) queue_depth_at_enqueue: usize,
     pub(super) controller_generation: u64,
-    /// Keyed connection fingerprint of the behavior slot that made the call;
-    /// one `controller_generation` can carry two values across a connection
-    /// change.
     pub(super) backend_config_fingerprint: String,
 }
 

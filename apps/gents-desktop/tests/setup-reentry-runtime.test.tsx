@@ -13,6 +13,8 @@ import { setupErrorMessage } from "../src/lib/setupErrors";
 import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 
+const CONNECTED = /^(Account connected|Connected as )/;
+
 type MockApi = Record<string, ReturnType<typeof vi.fn>>;
 
 const NODE_DID = deployment.nodeDid;
@@ -79,7 +81,6 @@ const NOT_SAVED = new BridgeInvokeError({
   endpoint: null,
 });
 
-/* The bridge's held sign-in, observed through the provider account list. */
 function holdFailedSignIn(api: MockApi) {
   let held = false;
   api.listProviderAccounts.mockImplementation(async () =>
@@ -233,7 +234,6 @@ describe("setup re-entry at the provider step", () => {
     expect(screen.queryByRole("button", { name: "Sign in" })).not.toBeInTheDocument();
     expect(api.claudeLogin).not.toHaveBeenCalled();
 
-    // Try again reuses the same start + readiness owner.
     api.startManagedServer.mockResolvedValue(status({ state: "running" }));
     api.managedServerStatus
       .mockResolvedValueOnce(status({ state: "stopped" }))
@@ -269,7 +269,7 @@ describe("setup re-entry at the provider step", () => {
     );
     await user.click(await screen.findByRole("button", { name: "Retry save" }));
 
-    expect(await screen.findByText("Account connected")).toBeVisible();
+    expect(await screen.findByText(CONNECTED)).toBeVisible();
     expect(api.retrySaveProviderAccount).toHaveBeenCalledWith(
       NODE_DID,
       "claude-subscription",
@@ -298,7 +298,7 @@ describe("setup re-entry at the provider step", () => {
 
     reenter(app);
     await user.click(await screen.findByRole("button", { name: "Retry save" }));
-    expect(await screen.findByText("Account connected")).toBeVisible();
+    expect(await screen.findByText(CONNECTED)).toBeVisible();
     expect(api.claudeLogin).toHaveBeenCalledTimes(1);
     expect(api.retrySaveProviderAccount).toHaveBeenCalledWith(
       NODE_DID,
@@ -314,7 +314,7 @@ describe("setup re-entry at the provider step", () => {
     reenter(app);
 
     expect(await screen.findByRole("button", { name: "Retry save" })).toBeVisible();
-    expect(screen.queryByText("Account connected")).not.toBeInTheDocument();
+    expect(screen.queryByText(CONNECTED)).not.toBeInTheDocument();
     expect(api.claudeLogin).not.toHaveBeenCalled();
   });
 
@@ -349,10 +349,10 @@ describe("setup re-entry at the provider step", () => {
     expect(
       screen.queryByRole("radiogroup", { name: "Inference provider" }),
     ).not.toBeInTheDocument();
-    expect(screen.queryByText("Account connected")).not.toBeInTheDocument();
+    expect(screen.queryByText(CONNECTED)).not.toBeInTheDocument();
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Retry save" }));
-    expect(await screen.findByText("Account connected")).toBeVisible();
+    expect(await screen.findByText(CONNECTED)).toBeVisible();
     expect(api.retrySaveProviderAccount).toHaveBeenCalledWith(
       NODE_DID,
       "claude-subscription",

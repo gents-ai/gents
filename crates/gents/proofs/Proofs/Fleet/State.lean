@@ -5,9 +5,7 @@ import Mathlib.Data.Finset.Card
 open AdmissionState SchedulerState
 open scoped BigOperators
 
-/-- Aggregate admission projection over requests already claimed through the common
-request entrance. This model does not create requests or select inference.
-Actual provider permits and controller replacement belong to InferenceCall. -/
+/-- Actual provider permits and controller replacement belong to InferenceCall. -/
 structure FleetState where
   activeIds : Finset Nat
   ctx : Nat → RequestContext

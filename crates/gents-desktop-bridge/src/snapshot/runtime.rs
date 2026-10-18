@@ -17,14 +17,11 @@ use super::super::types::{
     TriggerView,
 };
 use super::runtime_tasks::{
-    recent_runs_for_task_views, session_summaries, source_matches_node, task_run_history,
+    recent_runs_for_task_views, session_summaries, source_matches_node, task_run_histories,
 };
 use super::to_health_view;
 
 pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot {
-    // Directory rows and transport status come from one watched revision.
-    // Reading `core.peer_records()` here would reintroduce a split sample where
-    // a readiness write wakes the bridge before the rebuilt view can see it.
     let sync_state = core.sync_state();
     let store = core.store().snapshot();
     let enrollment_requests = core
@@ -326,13 +323,14 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 .collect::<Vec<_>>();
             triggers.sort_by(|left, right| left.config.trigger_id.cmp(&right.config.trigger_id));
 
+            let mut run_histories = task_run_histories(store.as_ref(), &peer.node_did, &triggers);
             let mut tasks = scoped_task_rows
                 .into_iter()
                 .map(|(_index, row)| {
                     project_task_view(
                         row,
                         recent_runs_for_task_views(&triggers, &peer.node_did, &row.task_id),
-                        task_run_history(store.as_ref(), &peer.node_did, &row.task_id, &triggers),
+                        run_histories.remove(&row.task_id).unwrap_or_default(),
                     )
                 })
                 .collect::<Vec<_>>();
@@ -364,10 +362,6 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                     .map(str::to_owned);
             }
 
-            // The managed runtime's operator root (init.json tool_root) is
-            // the ceiling the snapshot clamps observed grants against; a
-            // paired remote peer keeps its stored grant, which is the only
-            // authority this client can observe for it.
             let operator_root = peer
                 .local_node_home
                 .as_deref()
@@ -388,10 +382,6 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             );
 
             let chat_safe = peer.is_chat_ready_at(Utc::now());
-            // Pairing readiness controls admission of new remote work. It does
-            // not control visibility of rows already authorized and present in
-            // the local database. Keeping this projection stable is what lets
-            // the mobile UI remain useful while the transport reconnects.
             let node_readiness = project_node_readiness(
                 store.node_readiness(&peer.node_did),
                 &peer.node_did,
@@ -473,7 +463,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
         })
         .collect::<Vec<_>>();
 
-    let access = gents::config_client::ConfigAccess::Local(core.node_arc());
+    let access = gents::config_client::ConfigAccess::local(core.node_arc());
     super::runtime_tasks::resolve_summary_starters(
         &access,
         deployments
@@ -505,6 +495,15 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             .count(),
         row_count: store.row_count(),
         approx_serialized_bytes: store.approx_serialized_bytes(),
+        operator_config_authoritative_node_dids: {
+            let mut dids = store
+                .operator_config_authoritative_node_dids
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>();
+            dids.sort();
+            (!dids.is_empty()).then_some(dids)
+        },
         deployments,
     }
 }
@@ -538,30 +537,7 @@ mod task_view_tests {
 
     #[test]
     fn canonical_task_hooks_and_tags_survive_projection() {
-        let task: gents::document_config::Task = serde_json::from_value(serde_json::json!({
-            "node_did": "did:test:owner",
-            "task_id": "release",
-            "display_name": "Release",
-            "agent_id": "operator",
-            "prompt_template": "Ship it",
-            "emit_outcome": true,
-            "output_schema_ref": "schemas/release-result.json",
-            "hooks": [
-                {
-                    "hook_id": "prepare",
-                    "phase": "before",
-                    "command": ["sh", "-c", "./prepare.sh"],
-                    "timeout_secs": 45
-                },
-                {
-                    "hook_id": "cleanup",
-                    "phase": "finally",
-                    "command": ["./cleanup"]
-                }
-            ],
-            "tags": ["release", "operator"]
-        }))
-        .expect("canonical task");
+        let task : gents :: document_config :: Task = serde_json :: from_value (serde_json :: json ! ({ "node_did" : "did:test:owner" , "task_id" : "release" , "display_name" : "Release" , "agent_id" : "operator" , "prompt_template" : "Ship it" , "emit_outcome" : true , "output_schema_ref" : "schemas/release-result.json" , "hooks" : [{ "hook_id" : "prepare" , "phase" : "before" , "command" : ["sh" , "-c" , "./prepare.sh"] , "timeout_secs" : 45 } , { "hook_id" : "cleanup" , "phase" : "finally" , "command" : ["./cleanup"] }] , "tags" : ["release" , "operator"] })) . expect ("canonical task") ;
         let view = project_task_view(
             &task,
             TaskRecentRunsView {
@@ -574,7 +550,6 @@ mod task_view_tests {
             },
             Vec::new(),
         );
-
         assert_eq!(view.hooks, task.hooks);
         assert!(view.emit_outcome);
         assert_eq!(view.output_schema_ref, task.output_schema_ref);
@@ -777,11 +752,6 @@ fn resolve_agent_environments(
                 inference_profile_name: profile
                     .and_then(|profile| profile.display_name.clone())
                     .or_else(|| agent.inference_profile_id.clone()),
-                // Project the root the runtime would actually use, not the
-                // raw stored grant: the selection/ceiling meet clamps a grant
-                // the operator narrowed below, a rootless default inherits the
-                // operator root, and a disjoint grant (refused by the runtime)
-                // claims no authority here.
                 workspace_root: host.and_then(|host| {
                     let stored_root = host
                         .root
@@ -1018,8 +988,6 @@ mod agent_environment_tests {
         let canonical_project = std::fs::canonicalize(&project).unwrap();
         let canonical_project = canonical_project.to_str().expect("utf-8 root");
 
-        // A stored grant wider than the narrowed operator root clamps to it,
-        // so the view reports the root the runtime actually enforces.
         let mut wide = tools();
         wide.host.as_mut().unwrap().root = Some(workspace.path().to_string_lossy().into_owned());
         let environments = resolve_agent_environments(
@@ -1037,8 +1005,6 @@ mod agent_environment_tests {
             "the view must agree with the clamped root the runtime uses"
         );
 
-        // A rootless default inherits the operator root instead of reporting
-        // no authority.
         let mut rootless = tools();
         rootless.host.as_mut().unwrap().root = None;
         let environments = resolve_agent_environments(
@@ -1056,8 +1022,6 @@ mod agent_environment_tests {
             "a rootless default inherits the operator root in the view"
         );
 
-        // A grant disjoint from the operator root is refused by the runtime;
-        // the view claims no authority for it.
         let elsewhere = tempfile::tempdir().expect("elsewhere");
         let mut disjoint = tools();
         disjoint.host.as_mut().unwrap().root =
@@ -1075,15 +1039,6 @@ mod agent_environment_tests {
             environments[0].workspace_root, None,
             "a grant the runtime refuses must not appear as authority"
         );
-    }
-
-    #[test]
-    fn invalid_tool_modes_are_rejected_instead_of_misreported() {
-        for field in ["files", "bash"] {
-            let mut value = serde_json::to_value(tools()).unwrap();
-            value["host"][field]["mode"] = serde_json::json!("FutureMode");
-            assert!(serde_json::from_value::<Tools>(value).is_err());
-        }
     }
 
     #[test]

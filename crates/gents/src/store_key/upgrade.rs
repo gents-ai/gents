@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use storage::corekv::{IterOptions, Store};
-use storage::encrypted_store::EncryptedStore;
 use storage::RegolithStore;
 
 use super::{StoreEncryption, StoreKey};
@@ -42,7 +41,6 @@ enum Action {
     Refuse,
 }
 
-/// `StoreEncryptionUpgrade.next`, including interrupted directory renames.
 fn next(phase: Phase, source: bool, stage: bool, retired: bool) -> Action {
     match (phase, source, stage, retired) {
         (Phase::Copying, true, _, false) => Action::Copy,
@@ -144,13 +142,12 @@ fn save(data: &Path, journal: &Journal, initial: bool) -> Result<()> {
     sync_parent(&path)
 }
 
-/// Read this before allocating a key or consulting the enclosing metadata.
+/// Read this before allocating a key.
 pub fn pending_record(data: &Path) -> Result<Option<StoreEncryption>> {
     Ok(load(data)?.map(|journal| journal.record))
 }
 
-/// Filesystem entries owned by a recorded conversion, for the existing
-/// explicit archive/delete owner. Unrecorded siblings are never adopted.
+/// Unrecorded siblings are never adopted.
 pub fn retirement_entries(data: &Path) -> Result<Vec<PathBuf>> {
     if load(data)?.is_none() {
         return Ok(Vec::new());
@@ -199,8 +196,7 @@ pub fn begin(data: &Path, record: &StoreEncryption) -> Result<()> {
     )
 }
 
-/// The path whose existence prevents regeneration of a lost encryption key.
-/// The original plaintext MANIFEST must not prevent first key creation.
+/// The original plaintext MANIFEST must not prevent first key creation here.
 pub fn key_store_path(data: &Path) -> Result<PathBuf> {
     let journal = load(data)?.context("store upgrade has no durable intent")?;
     Ok(match action(data, journal.phase)? {
@@ -226,15 +222,13 @@ fn action(data: &Path, phase: Phase) -> Result<Action> {
 }
 
 /// Encrypt every raw KV entry through DefraDB's encryption owner, then verify
-/// the entire decrypted destination before publishing it. The completed intent
-/// remains until the enclosing metadata durably records `record` and calls
-/// `finish`. No node, query executor, schema writer or P2P service starts here.
+/// the entire decrypted destination before publishing it. No node, query
+/// executor, schema writer or P2P service starts here.
 pub async fn encrypt_existing(data: &Path, record: &StoreEncryption, key: &StoreKey) -> Result<()> {
     encrypt_existing_with_progress(data, record, key, &mut |_| {}).await
 }
 
-/// Reports only completed copy/verification batches through the caller's
-/// startup progress owner; waiting on I/O never manufactures progress.
+/// Reports only completed copy/verification batches to the startup progress owner.
 pub async fn encrypt_existing_with_progress(
     data: &Path,
     record: &StoreEncryption,
@@ -283,19 +277,14 @@ pub async fn encrypt_existing_with_progress(
     }
 }
 
-/// Call only after the enclosing metadata durably records the pending key and
-/// the native node/schema owners successfully reopen the encrypted store.
 /// Raw KV equality proves byte preservation, not valid DefraDB plaintext:
 /// an unrecorded store encrypted by another key must retain its original until
-/// those owners accept the destination's contents.
-/// Removing the old representation is deferred until that commit; interruption
-/// during removal is retryable without touching the installed encrypted store.
+/// the native node/schema owners accept the destination's contents. Removing
+/// the old representation is deferred until that commit.
 pub fn finish(data: &Path) -> Result<()> {
     let Some(journal) = load(data)? else {
         return Ok(());
     };
-    // The caller supplies both external premises through this function's
-    // contract; this owner can observe only the durable conversion phase.
     ensure!(
         may_finish(journal.phase, true, true),
         "store upgrade is not installed"
@@ -313,14 +302,15 @@ pub fn finish(data: &Path) -> Result<()> {
     sync_parent(data)
 }
 
+/// Only the offline staging writer uses snapshot isolation: DefraLevel forbids
+/// raw writes to assigned log keys. Close it before verification and promotion
+/// so every subsequent open restores normal append and validation rules.
 async fn copy_and_verify(
     data: &Path,
     stage: &Path,
     key: &StoreKey,
     progress: &mut (dyn FnMut(&'static str) + Send),
 ) -> Result<()> {
-    // A retry starts from the original source snapshot, including deletions
-    // an earlier binary might have committed between interrupted upgrades.
     let source =
         RegolithStore::open_with_options(data, crate::storage_backend::regolith_options())?;
     let result = async {
@@ -329,15 +319,20 @@ async fn copy_and_verify(
         }
         fs::create_dir(stage)?;
         fs::set_permissions(stage, fs::metadata(data)?.permissions())?;
-        let destination = EncryptedStore::new(
-            RegolithStore::open_with_options(stage, crate::storage_backend::regolith_options())?,
-            *key.0,
-        );
+        let target_options = crate::storage_backend::regolith_options()
+            .with_encryption_key(*key.0)
+            .with_isolation(regolith::IsolationLevel::SnapshotIsolation);
+        let destination = RegolithStore::open_with_options(stage, target_options)?;
         let copied = copy_values(&source, &destination, progress).await;
-        let verified = match copied {
-            Ok(()) => verify_values(&source, &destination, progress).await,
-            Err(error) => Err(error),
-        };
+        let closed = destination.close().await;
+        drop(destination);
+        copied?;
+        closed?;
+        let destination = RegolithStore::open_with_options(
+            stage,
+            crate::storage_backend::regolith_options().with_encryption_key(*key.0),
+        )?;
+        let verified = verify_values(&source, &destination, progress).await;
         let closed = destination.close().await;
         drop(destination);
         verified?;
@@ -360,6 +355,9 @@ async fn copy_values(
     destination: &dyn Store,
     progress: &mut (dyn FnMut(&'static str) + Send),
 ) -> Result<()> {
+    const BATCH_BYTES: usize = 1024 * 1024;
+    const BATCH_ENTRIES: usize = 1024;
+
     let read = source.new_txn(true).await?;
     let mut entries = read.iterator(IterOptions::default()).await?;
     let mut write = destination.new_txn(false).await?;
@@ -369,7 +367,7 @@ async fn copy_values(
         write.set(&entry.key, &entry.value).await?;
         bytes += entry.key.len() + entry.value.len();
         count += 1;
-        if bytes >= 1024 * 1024 || count >= 1024 {
+        if bytes >= BATCH_BYTES || count >= BATCH_ENTRIES {
             write.commit().await?;
             progress("store_encryption_copy");
             write = destination.new_txn(false).await?;
@@ -396,10 +394,10 @@ async fn recheck_source(
     let source =
         RegolithStore::open_with_options(data, crate::storage_backend::regolith_options())?;
     let result = async {
-        let destination = EncryptedStore::new(
-            RegolithStore::open_with_options(stage, crate::storage_backend::regolith_options())?,
-            *key.0,
-        );
+        let destination = RegolithStore::open_with_options(
+            stage,
+            crate::storage_backend::regolith_options().with_encryption_key(*key.0),
+        )?;
         let equal = values_equal(&source, &destination, progress).await;
         let closed = destination.close().await;
         drop(destination);
@@ -478,9 +476,6 @@ async fn values_equal(
     Ok(equal)
 }
 
-/// Regolith 0.1.7 owns MANIFEST (and its compaction temporary), LOCK, sst/
-/// and wal/. Other entries belong to host owners, including command recovery
-/// journals, and must survive replacement without following symlinks.
 fn copy_sidecars(source: &Path, destination: &Path) -> Result<()> {
     for entry in fs::read_dir(source)? {
         let entry = entry?;

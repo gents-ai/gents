@@ -1,6 +1,3 @@
-/* An inference profile as its editor drafts it: the profile with its
-   sampling and execution documents as text, the numbers among them with
-   their labels and bounds, and what makes a draft unsavable. */
 import type { InferenceProfile } from "@source-inc/gents-desktop-client";
 
 import type { NodeView } from "../../../hooks/fleetStore";
@@ -52,7 +49,6 @@ export type ProfileDraft = ReturnType<typeof profileDraftFrom>;
 
 type NumberSpec = { label: string; integer: boolean; min?: number; max?: number };
 
-/** Each number a profile draft holds, labelled as its field is. */
 export const PROFILE_NUMBERS = {
   contextWindow: { label: "Context window", integer: true, min: 1 },
   maxOutputTokens: { label: "Max output tokens", integer: true, min: 1 },
@@ -89,15 +85,10 @@ const EXECUTION_FIELDS = [
 
 export type ProfileContext = {
   deployment: NodeView;
-  /** a model that advertises only its maximum context has no model-aware
-      control, but that maximum still bounds the profile's window */
   contextMax: number | undefined;
-  /** the window and output limits are fields of their own, the model's
-      recommendation having none for them */
   limitsShown: { contextWindow: boolean; maxOutputTokens: boolean };
 };
 
-/** A number of the draft; throws its problem. */
 export function profileNumber(
   draft: ProfileDraft,
   field: ProfileNumber,
@@ -113,7 +104,6 @@ export function profileNumber(
     : optionalNumber(spec.label, draft[field], bounds);
 }
 
-/** Every number of the draft; throws the first problem. */
 export function profileNumbers(
   draft: ProfileDraft,
   context: Pick<ProfileContext, "contextMax">,
@@ -126,12 +116,6 @@ export function profileNumbers(
   ) as Record<ProfileNumber, number | null>;
 }
 
-/**
- * What is wrong with a profile draft, at the fields the editor draws. The
- * sampling values beyond temperature and top-p have no field here, and
- * the model-aware settings are checked against the recommendation when
- * saved, so neither is said at a field.
- */
 export function profileProblems(
   draft: ProfileDraft,
   context: ProfileContext,

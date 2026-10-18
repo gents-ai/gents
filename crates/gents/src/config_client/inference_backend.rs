@@ -15,7 +15,6 @@ pub async fn load_inference_backend_in_txn(
         .transpose()
 }
 
-/// Every backend of `node_did` in this transaction's snapshot.
 pub async fn list_inference_backends_in_txn(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
@@ -35,8 +34,6 @@ pub async fn list_inference_backends_in_txn(
         .collect()
 }
 
-/// Replace one backend inside a caller's transaction; the whole principal's
-/// configuration is validated before the caller commits.
 pub(crate) async fn write_inference_backend_in_txn(
     txn: &ConfigApplyTxn<'_>,
     backend: &InferenceBackend,
@@ -52,15 +49,13 @@ pub(crate) async fn write_inference_backend_in_txn(
     Ok(())
 }
 
-/// Full canonical replacement through the shared retained-candidate owner.
-/// Runtime catalogs and health never enter the authored configuration.
 pub async fn write_inference_backend_document(
     access: &ConfigAccess,
     backend: &InferenceBackend,
 ) -> Result<String> {
     backend.validate()?;
     access
-        .transact("config.inference_backend.upsert", |txn| {
+        .transact_write("config.inference_backend.upsert", |txn| {
             Box::pin(async move {
                 write_inference_backend_in_txn(txn, backend).await?;
                 super::desired_state::read_record(
@@ -77,14 +72,13 @@ pub async fn write_inference_backend_document(
         .await
 }
 
-/// Each backend of `node_did` with the account it runs on.
 pub async fn serving_accounts(
     access: &ConfigAccess,
     node_did: &str,
 ) -> Result<BTreeMap<String, ServingAccount>> {
     let accounts = crate::oauth_credential::list_accounts(access, node_did).await?;
     let backends = access
-        .transact("config.serving_accounts", |txn| {
+        .transact_readonly("config.serving_accounts", |txn| {
             Box::pin(async move { list_inference_backends_in_txn(txn, node_did).await })
         })
         .await?;
@@ -147,7 +141,7 @@ mod tests {
         let did = "did:key:z6MkTestServing";
         let node = Arc::new(defra_node::EmbeddedNode::builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::local(node);
         let oauth = |account_ref: Option<&str>| BackendAuth::NodeOAuth {
             account_ref: account_ref.map(str::to_owned),
         };

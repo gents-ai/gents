@@ -6,14 +6,9 @@ use crate::config_writes::ConfigAccess;
 
 use super::super::DesiredStateManifest;
 
-/// Validate live state that cannot be checked from the manifest alone.
-///
-/// Apply validates trigger filter syntax and `doc.*` template fields; the
-/// template rule itself is the publication owner's
-/// (`gents::config_client::validate_event_trigger_document_fields`), called
-/// here against the same introspected schema, so a configuration refused
-/// here is one the publication owner refuses too. Resolving fields below the
-/// top level remains outside this contract.
+/// Apply validates trigger filter syntax and `doc.*` template fields via the
+/// publication owner's rule against the same introspected schema; resolving
+/// fields below the top level remains outside this contract.
 pub(crate) async fn validate_manifest_against_live(
     manifest: &DesiredStateManifest,
     access: &ConfigAccess,
@@ -35,10 +30,6 @@ pub(crate) async fn validate_manifest_against_live(
 
         if let Some(filter) = source.filter.as_deref().map(str::trim) {
             if !filter.is_empty() {
-                // `filter` is interpolated into the probe query as a raw filter
-                // fragment; validate it like the runtime trigger engine does
-                // (`trigger_engine::event_source`) before building the probe.
-                // `source_collection` is already validated by the guard above.
                 if let Err(err) = gents::graphql::validate_graphql_filter_fragment(filter) {
                     errors.push(format!(
                         "event source {} filter is not a valid filter fragment: {}",
@@ -96,10 +87,6 @@ pub(crate) async fn validate_manifest_against_live(
             for (trigger, task) in &joined {
                 match gents::config_client::event_trigger_document_field_names(trigger, task) {
                     Ok(names) if !names.is_empty() => walks_templates = true,
-                    // A template that does not parse is refused by the same
-                    // static owner apply runs; reporting it here keeps the
-                    // pre-flight's refusal independent of whether an
-                    // unrelated correlation or count field forced a probe.
                     Err(error) => errors.push(format!("{error:#}")),
                     Ok(_) => {}
                 }
@@ -181,7 +168,7 @@ mod tests {
                 .build()
                 .await?,
         );
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::local(node);
         access.add_schema(PROBE_SDL).await?;
         Ok(access)
     }
@@ -218,29 +205,41 @@ mod tests {
         source
     }
 
-    /// The issue's shape: a per-document `emit_outcome` delivery of
-    /// WorkspaceReceipt whose prompt reads the native-route provenance fields
-    /// no schema declares, because the runtime injects them into every fire.
     fn receipt_manifest(
         source_extra: serde_json::Value,
         emit_outcome: bool,
     ) -> Result<DesiredStateManifest> {
         manifest(
             json!([receipt_source("reviewed", source_extra)]),
-            json!([{
-                "node_did": OWNER,
-                "task_id": "review",
-                "agent_id": "beh",
-                "prompt_template": "Review attempt {{ doc.attempt }} for {{ doc.workspace_id }}",
-                "emit_outcome": emit_outcome,
-            }]),
-            json!([{
-                "node_did": OWNER,
-                "trigger_id": "on-review",
-                "task_id": "review",
-                "source": {"kind": "event", "event_source_id": "reviewed"},
-            }]),
+            json ! ([{ "node_did" : OWNER , "task_id" : "review" , "agent_id" : "beh" , "prompt_template" : "Review attempt {{ doc.attempt }} for {{ doc.workspace_id }}" , "emit_outcome" : emit_outcome , }]),
+            json ! ([{ "node_did" : OWNER , "trigger_id" : "on-review" , "task_id" : "review" , "source" : { "kind" : "event" , "event_source_id" : "reviewed" } , }]),
         )
+    }
+
+    #[tokio::test]
+    async fn refuses_native_route_fields_without_the_runtime_preconditions() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let access = probe_access(&tempdir).await?;
+        let grouped = receipt_manifest(
+            json ! ({ "correlation_field" : "workspace_id" , "group" : { "expected_count" : 2 } }),
+            true,
+        )?;
+        let errors = validate_manifest_against_live(&grouped, &access).await?;
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("trigger on-review prompt_template references doc.attempt")
+                && errors[0].contains("WorkspaceReceipt has no field \"attempt\""),
+            "{errors:?}"
+        );
+        let outcome_less = receipt_manifest(json ! ({ "event_kind" : "created" }), false)?;
+        let errors = validate_manifest_against_live(&outcome_less, &access).await?;
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("trigger on-review prompt_template references doc.attempt")
+                && errors[0].contains("WorkspaceReceipt has no field \"attempt\""),
+            "{errors:?}"
+        );
+        Ok(())
     }
 
     #[tokio::test]
@@ -250,7 +249,7 @@ mod tests {
         let manifest = manifest(
             json!([source(
                 "filtered",
-                json!({"filter": "{undeclared: {_eq: \"x\"}}"})
+                json ! ({ "filter" : "{undeclared: {_eq: \"x\"}}" })
             )]),
             json!([]),
             json!([]),
@@ -268,7 +267,7 @@ mod tests {
     async fn accepts_native_route_template_fields_the_schema_does_not_declare() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         let access = probe_access(&tempdir).await?;
-        let manifest = receipt_manifest(json!({"event_kind": "created"}), true)?;
+        let manifest = receipt_manifest(json ! ({ "event_kind" : "created" }), true)?;
         let errors = validate_manifest_against_live(&manifest, &access).await?;
         assert_eq!(errors, Vec::<String>::new(), "{errors:?}");
         Ok(())
@@ -279,26 +278,12 @@ mod tests {
         let tempdir = tempfile::tempdir()?;
         let access = probe_access(&tempdir).await?;
         let manifest = manifest(
-            json!([source("broken", json!({"correlation_field": "batch"}),)]),
-            json!([{
-                "node_did": OWNER,
-                "task_id": "summarize",
-                "agent_id": "beh",
-                "prompt_template": "Summarize {{ doc.x",
-            }]),
-            json!([{
-                "node_did": OWNER,
-                "trigger_id": "on-broken",
-                "task_id": "summarize",
-                "source": {"kind": "event", "event_source_id": "broken"},
-            }]),
+            json!([source("broken", json ! ({ "correlation_field" : "batch" }),)]),
+            json ! ([{ "node_did" : OWNER , "task_id" : "summarize" , "agent_id" : "beh" , "prompt_template" : "Summarize {{ doc.x" , }]),
+            json ! ([{ "node_did" : OWNER , "trigger_id" : "on-broken" , "task_id" : "summarize" , "source" : { "kind" : "event" , "event_source_id" : "broken" } , }]),
         )?;
-
         let errors = validate_manifest_against_live(&manifest, &access).await?;
-        assert!(
-            errors.iter().any(|error| error.contains("template parse error")),
-            "an unparsable template must fail the pre-flight without a correlation or count probe: {errors:?}"
-        );
+        assert ! (errors . iter () . any (| error | error . contains ("template parse error")) , "an unparsable template must fail the pre-flight without a correlation or count probe: {errors:?}");
         Ok(())
     }
 
@@ -326,34 +311,6 @@ mod tests {
         assert!(
             errors[0].contains("references doc.nope")
                 && errors[0].contains("LiveProbe has no field \"nope\""),
-            "{errors:?}"
-        );
-        Ok(())
-    }
-
-    /// The pre-flight answers the publication owner, so removing any injection
-    /// precondition returns the owner's refusal, not a CLI-local verdict.
-    #[tokio::test]
-    async fn refuses_native_route_fields_without_the_runtime_preconditions() -> Result<()> {
-        let tempdir = tempfile::tempdir()?;
-        let access = probe_access(&tempdir).await?;
-        let grouped = receipt_manifest(
-            json!({"correlation_field": "workspace_id", "group": {"expected_count": 2}}),
-            true,
-        )?;
-        let errors = validate_manifest_against_live(&grouped, &access).await?;
-        assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(
-            errors[0].contains("trigger on-review prompt_template references doc.attempt")
-                && errors[0].contains("WorkspaceReceipt has no field \"attempt\""),
-            "{errors:?}"
-        );
-        let outcome_less = receipt_manifest(json!({"event_kind": "created"}), false)?;
-        let errors = validate_manifest_against_live(&outcome_less, &access).await?;
-        assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(
-            errors[0].contains("trigger on-review prompt_template references doc.attempt")
-                && errors[0].contains("WorkspaceReceipt has no field \"attempt\""),
             "{errors:?}"
         );
         Ok(())

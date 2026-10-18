@@ -16,10 +16,7 @@ impl<'a> InferenceCallSlotRow<'a> {
 }
 
 /// Whether an `InferenceCall` in this `call_state` currently holds a backend
-/// concurrency slot. The single owner of that definition — reused by the
-/// admission runtime's own reconstruction (in tests, below) and by
-/// out-of-process readers (`gents fleet-slots`) so neither re-derives it
-/// from the raw string.
+/// concurrency slot; shared with `gents fleet-slots` readers.
 pub fn call_state_holds_backend_slot(call_state: &str) -> bool {
     call_state == "running"
 }

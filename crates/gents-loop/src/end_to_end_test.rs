@@ -1,9 +1,3 @@
-//! Proves the loop is usable with no DefraDB and no network: a scripted
-//! in-memory [`CompletionModel`] streams a tool call on turn one and a final
-//! answer on turn two, an in-memory [`SessionHook`] records every
-//! persistence call, and a plain [`ToolDyn`] tool is dispatched in between.
-//! Nothing here touches a socket or a filesystem.
-
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -20,8 +14,9 @@ use crate::tool::{Tool, ToolDefinition, ToolDyn};
 use crate::tool_call_lifecycle::ToolOutcome;
 use crate::{HookAction, ToolCallHookAction};
 
-/// A `CompletionModel` that replays a fixed script of streamed responses, one
-/// script entry per `stream` call: no network, no rig provider.
+#[cfg(feature = "native")]
+mod provider_finish_tests;
+
 #[derive(Clone, Default)]
 struct ScriptedModel {
     turns: Arc<Mutex<Vec<Vec<RawStreamingChoice<()>>>>>,
@@ -62,8 +57,6 @@ impl CompletionModel for ScriptedModel {
             .lock()
             .unwrap()
             .push(serde_json::to_string(&request.chat_history).unwrap());
-        // This scripted provider has no transport. Claim the modeled attempt
-        // when scoped; this fixture does not establish durable input capture.
         let _ = crate::rendered_request::scope::claim_pending();
         let items = self
             .turns
@@ -79,8 +72,6 @@ impl CompletionModel for ScriptedModel {
     }
 }
 
-/// A tool with no filesystem, socket, or DefraDB access at all: it just
-/// echoes its argument back, uppercased.
 struct EchoTool {
     calls: Arc<Mutex<Vec<String>>>,
     policy_allows: bool,
@@ -133,7 +124,6 @@ impl Tool for EchoTool {
     }
 }
 
-/// Every persistence call the loop made, in order, with no DefraDB behind it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RecordedCall {
     CompletionCall { prompt: String },
@@ -327,10 +317,6 @@ async fn the_loop_dispatches_a_tool_and_threads_messages_with_no_defradb_and_no_
     );
 }
 
-/// This binds the loop's admission and hook-action boundaries, not database
-/// receipt semantics or the native command-policy owner. The native hook tests
-/// separately check actual receipt failures and policy settlement against the
-/// same generated permission outcomes.
 #[tokio::test]
 async fn modeled_dispatch_permissions_gate_real_tool_invocation() {
     use futures::StreamExt;

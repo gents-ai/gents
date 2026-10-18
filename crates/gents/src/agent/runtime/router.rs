@@ -52,10 +52,8 @@ impl RuntimeAdmissionGate {
     }
 
     pub(in crate::agent) async fn close(&self) {
-        // Announce closure before waiting for in-progress routing admissions.
-        // A router may hold the read-side lease while an executor queue is
-        // full; that blocked send selects on this watch and releases the lease
-        // so the write-side drain cannot deadlock behind it.
+        // Announce closure before waiting for in-progress routing admissions;
+        // a blocked executor-queue send selects on this watch.
         self.changed.send_replace(false);
         *self.state.write().await = false;
     }
@@ -118,7 +116,7 @@ pub(super) async fn run_router(
     if !admission_gate.wait_open(&mut shutdown).await {
         return Ok(());
     }
-    let watcher = DefraWatcher::new(node.clone(), &node_did);
+    let watcher = DefraWatcher::new(node.clone(), &node_did)?;
     let result = run_router_with_watcher(
         node,
         node_did,
@@ -131,9 +129,8 @@ pub(super) async fn run_router(
     )
     .await;
     if result.is_err() {
-        // A router failure is an admission failure. Close locally before the
-        // task reports to the runtime coordinator so no concurrent watcher can
-        // dispatch against a readiness row whose router acknowledgement failed.
+        // Close locally before reporting: no concurrent watcher may dispatch
+        // against a readiness row whose acknowledgement failed.
         admission_gate.close().await;
     }
     result
@@ -155,6 +152,7 @@ where
     let mut active_snapshot = active_snapshot_rx.borrow().clone();
     let mut admission_changed = admission_gate.subscribe();
     let mut readiness_changed = runtime_status.readiness().subscribe_observation();
+    let mut pending_request = None;
 
     loop {
         let Some((request, routed_snapshot, admission_observation)) =
@@ -167,6 +165,7 @@ where
                 &admission_gate,
                 &mut admission_changed,
                 &mut readiness_changed,
+                &mut pending_request,
                 Some(&runtime_status),
                 runtime_snapshot_observer.as_deref(),
             )
@@ -222,28 +221,42 @@ where
                 if let Some(dispatch_attempted) = &admission_gate.dispatch_attempted {
                     let _ = dispatch_attempted.send(());
                 }
-                let sent = tokio::select! {
+                let permit = tokio::select! {
                     biased;
                     changed = admission_changed.changed() => {
                         if changed.is_err() || !*admission_changed.borrow_and_update() {
                             return Ok(());
                         }
+                        pending_request = Some(request);
                         continue;
                     }
                     changed = shutdown.changed() => {
                         if changed.is_err() || *shutdown.borrow_and_update() {
                             return Ok(());
                         }
+                        pending_request = Some(request);
                         continue;
                     }
-                    sent = dispatcher.send(request) => sent,
+                    changed = active_snapshot_rx.changed() => {
+                        if changed.is_err() {
+                            return Ok(());
+                        }
+                        pending_request = Some(request);
+                        continue;
+                    }
+                    permit = dispatcher.reserve() => permit,
                 };
-                sent.map_err(|_| {
+                let permit = permit.map_err(|_| {
                     anyhow!(
                         "executor queue for agent {} closed unexpectedly",
                         resolution.agent_id
                     )
                 })?;
+                if active_snapshot_rx.has_changed().unwrap_or(false) {
+                    pending_request = Some(request);
+                    continue;
+                }
+                permit.send(request);
             }
             EffectiveAgentAdmission::Unavailable {
                 public_reason,
@@ -298,6 +311,7 @@ pub(super) async fn wait_for_next_request_with_latest_snapshot<W>(
     readiness_changed: &mut watch::Receiver<
         crate::node_readiness_publisher::AgentAdmissionObservation,
     >,
+    pending_request: &mut Option<AgentRequest>,
     runtime_status: Option<&RuntimeStatusHandle>,
     runtime_snapshot_observer: Option<&dyn RuntimeSnapshotObserver>,
 ) -> Result<
@@ -310,7 +324,6 @@ pub(super) async fn wait_for_next_request_with_latest_snapshot<W>(
 where
     W: Watcher,
 {
-    let mut pending_request = None;
     loop {
         let routed_snapshot = active_snapshot_rx.borrow_and_update().clone();
         let readiness_observation = readiness_changed.borrow_and_update().clone();
@@ -398,7 +411,7 @@ where
                 }
             }
         };
-        pending_request = Some(request);
+        *pending_request = Some(request);
     }
 }
 
@@ -446,7 +459,7 @@ pub(super) async fn fail_routed_request(
             Err(error) => {
                 let reason = format!("request admission denied: {error:#}");
                 return crate::request_admission::terminalize_pending_request_rejection(
-                    node.as_ref(),
+                    &node,
                     &request.doc_id,
                     node_did,
                     &reason,

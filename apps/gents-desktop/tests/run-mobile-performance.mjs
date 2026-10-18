@@ -12,15 +12,10 @@ const APP_ROOT = resolve(TESTS_ROOT, "..");
 const REPOSITORY_ROOT = resolve(APP_ROOT, "..", "..");
 const DEFAULT_RUNS = 5;
 const DEFAULT_PORT = 1427;
-/* every transcript row, drawn or kept as a box of its height */
 const TRANSCRIPT_ROWS = '[data-testid="transcript-panel"] [data-window-row]';
 const VIEWPORT = { width: 390, height: 844 };
 const TYPING_NEXT_PAINT_BUDGET_MS = 50;
 const TYPING_REACT_BUDGET_MS_PER_CHARACTER = 12;
-/* The bridge announces no plugin approval request, so the access prompt polls
-   the approval queue on a timer; those reads are not caused by what a scenario
-   does and are reported apart from its budgets. */
-const POLLED_COMMANDS = new Set(["listPendingPluginApprovals"]);
 
 const args = process.argv.slice(2);
 const runs = integerArgument("--runs", DEFAULT_RUNS);
@@ -235,9 +230,6 @@ async function runSample(browserInstance, sampleIndex) {
     }),
   );
 
-  /* Rows far from the view are drawn as boxes, so the oldest row is marked
-     at its wrapper, which a box keeps: a remount while the older page lands
-     would drop the mark. The page is counted by row wrappers too. */
   const rowsBeforeOlderPage = await page.locator(TRANSCRIPT_ROWS).count();
   await page.evaluate((selector) => {
     document.querySelector(selector)?.setAttribute("data-perf-retained", "");
@@ -248,16 +240,9 @@ async function runSample(browserInstance, sampleIndex) {
       cdp,
       "page_older_transcript_rows",
       async () => {
-        await page.getByTestId("transcript-panel").evaluate((panel) => {
-          const viewport = panel.closest('[data-slot="scroll-area-viewport"]') ?? panel;
-          viewport.scrollTop = 0;
-          viewport.dispatchEvent(
-            new WheelEvent("wheel", { deltaY: -100, bubbles: true }),
-          );
-        });
-        await page.waitForFunction(
-          ([selector, count]) => document.querySelectorAll(selector).length >= count,
-          [TRANSCRIPT_ROWS, rowsBeforeOlderPage + 40],
+        await loadOlderTranscriptPage(
+          page,
+          rowsBeforeOlderPage + fixture.transcriptPageSize,
         );
       },
       async () => ({
@@ -290,18 +275,7 @@ async function runSample(browserInstance, sampleIndex) {
         for (let index = 0; index < additionalPages; index += 1) {
           const expectedRows =
             typingStartingRows + (index + 1) * fixture.transcriptPageSize;
-          await page.getByTestId("transcript-panel").evaluate((panel) => {
-            const viewport =
-              panel.closest('[data-slot="scroll-area-viewport"]') ?? panel;
-            viewport.scrollTop = 0;
-            viewport.dispatchEvent(
-              new WheelEvent("wheel", { deltaY: -100, bubbles: true }),
-            );
-          });
-          await page.waitForFunction(
-            ([selector, count]) => document.querySelectorAll(selector).length === count,
-            [TRANSCRIPT_ROWS, expectedRows],
-          );
+          await loadOlderTranscriptPage(page, expectedRows);
         }
       },
       async () => ({
@@ -611,7 +585,6 @@ async function domSnapshot(page) {
     transcriptTurnBlocks: document.querySelectorAll(
       '[data-testid="transcript-panel"] [data-slot="assistant-message"], [data-testid="transcript-panel"] [data-slot="user-message"], [data-testid="transcript-panel"] [data-slot="tool-steps"]',
     ).length,
-    /* loaded rows, drawn or kept as boxes of their height */
     transcriptRows: document.querySelectorAll(
       '[data-testid="transcript-panel"] [data-window-row]',
     ).length,
@@ -620,9 +593,8 @@ async function domSnapshot(page) {
 }
 
 function bridgeSummary(allCalls) {
-  const calls = allCalls.filter((call) => !POLLED_COMMANDS.has(call.command));
   const byCommand = {};
-  for (const call of calls) {
+  for (const call of allCalls) {
     const entry = (byCommand[call.command] ??= {
       count: 0,
       requestBytes: 0,
@@ -637,11 +609,10 @@ function bridgeSummary(allCalls) {
     entry.maxResponseBytes = Math.max(entry.maxResponseBytes, call.responseBytes);
   }
   return {
-    callCount: calls.length,
-    requestBytes: sum(calls.map((call) => call.requestBytes)),
-    responseBytes: sum(calls.map((call) => call.responseBytes)),
+    callCount: allCalls.length,
+    requestBytes: sum(allCalls.map((call) => call.requestBytes)),
+    responseBytes: sum(allCalls.map((call) => call.responseBytes)),
     byCommand,
-    polledCallCount: allCalls.length - calls.length,
   };
 }
 
@@ -761,7 +732,6 @@ function evaluateStructuralAssertions(samples) {
       observedMax: Math.max(
         ...typing.map((scenario) => scenario.dom.transcriptTurnBlocks),
       ),
-      /* five pages loaded; far rows are boxes, so at most that many drawn */
       passed: typing.every(
         (scenario) =>
           scenario.loadedPages === samples[0].fixture.typingLoadedPages &&
@@ -968,7 +938,6 @@ function collectEnvironment(browserVersion) {
 }
 
 async function openMobileNavigation(page) {
-  /* the bar's own Back button leads back to the list */
   await page.getByTestId("window-bar").getByRole("button", { name: "Back" }).click();
   await page
     .locator('[data-testid="session-session-large"]')
@@ -982,6 +951,28 @@ async function settleRender(page) {
         requestAnimationFrame(() => requestAnimationFrame(resolve)),
       ),
   );
+}
+
+async function loadOlderTranscriptPage(page, expectedRows) {
+  const panel = page.getByTestId("transcript-panel");
+  await panel.evaluate((panel) => {
+    const viewport = panel.closest('[data-slot="scroll-area-viewport"]') ?? panel;
+    viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -100, bubbles: true }));
+    viewport.scrollTop = 0;
+  });
+  await page.waitForFunction(
+    ([selector, count]) => document.querySelectorAll(selector).length === count,
+    [TRANSCRIPT_ROWS, expectedRows],
+  );
+  /* Rows commit before their momentum offset settles. Wait for its removal
+     so the next synthetic jump reaches the older-page threshold. */
+  await page.waitForFunction(() => {
+    const viewport = document
+      .querySelector('[data-testid="transcript-panel"]')
+      ?.closest('[data-slot="scroll-area-viewport"]');
+    const content = viewport?.firstElementChild;
+    return content != null && getComputedStyle(content).marginTop === "0px";
+  });
 }
 
 async function waitForHttp(url) {

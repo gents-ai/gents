@@ -20,10 +20,10 @@ async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
 
     let db = test_db("mailbox-real-inference").await;
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("mailbox-real-inference"));
-    let (node_did, agent_id) = bind_target(db.node.as_ref(), identity.as_ref(), &target).await;
+    let (node_did, agent_id) = bind_target(&db.node, identity.as_ref(), &target).await;
     let surface_id = "mailbox-live-surface";
     configure_agent_tools(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &agent_id,
         None,
@@ -89,21 +89,15 @@ async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
     let session_id = "session-mailbox-live";
     let prompt = "Call file_mailbox_item exactly once with title='Mailbox live verified', then answer MAILBOX_FILED. The tool owns notification identity and handling.";
     create_runtime_request_caused_by_source(
-        db.node.as_ref(),
-        &node_did,
-        &agent_id,
-        request_id,
-        session_id,
-        &source_id,
-        prompt,
+        &db.node, &node_did, &agent_id, request_id, session_id, &source_id, prompt,
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(db.node.as_ref(), request_id, Duration::from_secs(120)).await,
+        wait_for_request_terminal(&db.node, request_id, Duration::from_secs(120)).await,
         "completed"
     );
 
-    let items = list_mailbox_items(db.node.as_ref(), identity.did(), Some(MailboxStatus::Open))
+    let items = list_mailbox_items(&db.node, identity.did(), Some(MailboxStatus::Open))
         .await
         .unwrap();
     assert_eq!(items.len(), 1);

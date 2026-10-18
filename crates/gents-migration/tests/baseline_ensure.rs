@@ -1,5 +1,3 @@
-//! Migration conformance: baseline registration, idempotence, single-version DAG.
-
 use std::collections::BTreeSet;
 
 use gents_migration::{
@@ -31,14 +29,6 @@ fn default_baseline_matches_ordered_protocol_catalog() {
 
     assert_eq!(actual, expected, "baseline must use the canonical live SDL");
     assert!(gents_migration::DEFAULT_STEPS.is_empty());
-    // Client-authored plane (#1123/#1125): these collections must stay
-    // fresh-apply compatible, so they evolve by baseline re-pin only. Any
-    // DEFAULT_STEPS entry targeting one recreates the breakage:
-    // PatchVersioned chains the version DAG so a fresh client's genesis CID
-    // can never match, and PatchInPlace diverges the server's indexes or
-    // policies from a bare fresh apply WITHOUT moving the version CID — a
-    // divergence the CID-comparing parity test cannot see, which is why this
-    // guard must stay step-kind-agnostic.
     let stepped_client_collections = gents_migration::DEFAULT_STEPS
         .iter()
         .filter_map(MigrationStep::collection)
@@ -146,7 +136,6 @@ async fn ensure_migrations_registers_baseline_and_is_idempotent() {
         "re-run should be cheap/idempotent: {report2:?}"
     );
 
-    // Every managed collection is present and active.
     for entry in gents_migration::DEFAULT_BASELINE {
         let cv = node
             .get_collection(entry.name)
@@ -165,13 +154,6 @@ async fn ensure_migrations_registers_baseline_and_is_idempotent() {
 
 #[tokio::test]
 async fn agent_request_baseline_is_chain_free_and_migrations_are_idempotent() {
-    // #1123: AgentRequest is a client-authored plane collection, deliberately
-    // kept off the step chain so a fresh client store's genesis version
-    // matches the server's (see the baseline_entry! comment in registry.rs).
-    // This test locks in that the baseline SDL already carries every current
-    // field (no PatchVersioned step needed) and that re-running
-    // ensure_migrations against an already-registered, already-populated
-    // store is a safe no-op.
     let node = fresh_node().await;
     let baseline = gents_migration::DEFAULT_BASELINE
         .iter()
@@ -200,8 +182,6 @@ async fn agent_request_baseline_is_chain_free_and_migrations_are_idempotent() {
         .await
         .expect("apply production migrations");
 
-    // Single-version DAG: the baseline root is still the active version,
-    // because there is no post-baseline step to chain it forward.
     let cv = node
         .get_collection(gents_protocol::schemas::AGENT_REQUEST_NAME)
         .expect("get_collection")
@@ -230,9 +210,6 @@ async fn agent_request_baseline_is_chain_free_and_migrations_are_idempotent() {
     assert_eq!(rows[0]["request_id"], "existing-request");
     assert_eq!(rows[0]["content"], "hello");
 
-    // The idempotence half of the test name: this store's AgentRequest was
-    // first registered by raw add_schema (the client-like genesis path), not
-    // by ensure_migrations — a re-run over it must still be a pure no-op.
     let rerun = ensure_migrations(node.as_ref())
         .await
         .expect("re-run ensure_migrations");
@@ -294,8 +271,6 @@ async fn goal_creation_claim_baseline_enforces_uniqueness() {
 
 #[tokio::test]
 async fn rendered_request_reaches_a_pre_existing_store_through_the_baseline() {
-    // A store created before RenderedRequest existed: every other baseline
-    // collection registered at its canonical SDL, with live data in one of them.
     let node = fresh_node().await;
     for entry in gents_migration::DEFAULT_BASELINE {
         if entry.name == gents_protocol::schemas::RENDERED_REQUEST_NAME {
@@ -338,7 +313,6 @@ async fn rendered_request_reaches_a_pre_existing_store_through_the_baseline() {
         .expect("RenderedRequest baseline pin");
     assert_eq!(rendered.version_id, pin);
 
-    // Pre-upgrade data is untouched.
     let response = node
         .execute(r#"{ AgentSession(filter: {session_id: {_eq: "pre-upgrade-session"}}) { session_id } }"#)
         .await;
@@ -355,8 +329,6 @@ async fn rendered_request_reaches_a_pre_existing_store_through_the_baseline() {
         .expect("AgentSession rows");
     assert_eq!(rows.len(), 1);
 
-    // The registered collection is usable, and `capture_key` is the unique
-    // idempotency key the capture sink will depend on.
     let capture = r#"mutation {
         create_RenderedRequest(input: {
             capture_key: "rendered:v1:aaa"
@@ -404,7 +376,6 @@ async fn rendered_request_reaches_a_pre_existing_store_through_the_baseline() {
         .expect("RenderedRequest rows");
     assert_eq!(rows.len(), 1, "one capture per key, ever");
 
-    // Every field is @immutable: a capture is a fact, never an update.
     let overwrite = node
         .execute(
             r#"mutation {
@@ -429,7 +400,6 @@ async fn multi_version_lineage_is_rejected() {
     let node = fresh_node().await;
     ensure_migrations(node.as_ref()).await.expect("baseline");
 
-    // Apply a field patch outside the registry → foreign multi-version DAG.
     let patch = r#"[{"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"__foreign_test_field","Kind":"String"}}]"#;
     let _ = node
         .patch_collection("AgentRequest", patch)
@@ -439,7 +409,6 @@ async fn multi_version_lineage_is_rejected() {
     let err = ensure_migrations(node.as_ref())
         .await
         .expect_err("foreign multi-version DAG must fail");
-    // The root is this baseline's; the extra version came from another build.
     assert!(err.is_foreign_version(), "unexpected error: {err}");
     assert!(!err.is_unknown_lineage());
     match err {
@@ -510,8 +479,6 @@ async fn unknown_lineage_is_rejected_before_the_baseline_writes_the_store() {
         .version_id;
     authoring_node.shutdown().await;
 
-    // A store written by an older build: its collection predates this
-    // registry's root, and it lacks a collection this build adds.
     let node = fresh_node().await;
     node.add_schema(OLD_SDL).await.expect("register old root");
     let before = node
@@ -567,10 +534,10 @@ async fn unknown_lineage_is_rejected_before_the_baseline_writes_the_store() {
 
 #[tokio::test]
 async fn empty_registry_injectable_for_tests() {
-    // Engine accepts custom registries (conformance injects crash chains later).
     let empty = Registry {
         baseline: &[],
         steps: &[],
+        ordinary_indexes: &[],
     };
     let node = fresh_node().await;
     let report = ensure_migrations_with_registry(node.as_ref(), &empty)

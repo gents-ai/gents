@@ -1,34 +1,79 @@
-/* Native host adapter: screens keep calling href/navigate/useRoute.
-   MemoryNavProvider owns the stack; this module never writes location.
-   href() is a path token (not a URL). Clicks on those tokens, and leftover
-   prototype `#/…` hrefs, are intercepted and pushed onto the memory stack. */
-import { parseRoute, pathFor, useNav, type Nav, type Route } from "@gents/shell";
+// Native host adapter: screens keep calling href/navigate/useRoute;
+// MemoryNavProvider owns the stack and this module never writes location.
+import {
+  parseRoute as shellParseRoute,
+  pathFor as shellPathFor,
+  useNav,
+  type Nav,
+  type Route as ShellRoute,
+} from "@gents/shell";
 
-export type { Route };
-export { pathFor, parseRoute };
+/* the desktop's routes: the kit's, and a UX plugin's own page. The kit's
+   memory history carries any route object and never re-parses, so the
+   extra route costs it nothing; only the path functions must know it. */
+export type Route = ShellRoute | { name: "plugin"; pluginId: string };
 
-let current: Nav | null = null;
+export function pathFor(route: Route): string {
+  if (route.name === "plugin") return `/plugins/${encodeURIComponent(route.pluginId)}`;
+  return shellPathFor(route);
+}
 
-export function bindNav(nav: Nav) {
-  current = nav;
+export function parseRoute(path: string): Route {
+  const parts = path.replace(/^#\/?/, "").replace(/^\//, "").split("/").filter(Boolean);
+  if (parts[0] === "plugins" && parts[1]) {
+    return { name: "plugin", pluginId: decodeURIComponent(parts[1]) };
+  }
+  return shellParseRoute(path);
+}
+
+/* the kit's nav typed with the desktop's routes */
+type DesktopNav = Omit<Nav, "route" | "navigate"> & {
+  readonly route: Route;
+  navigate: (route: Route) => void;
+};
+
+const asDesktop = (nav: Nav): DesktopNav => nav as unknown as DesktopNav;
+
+let current: DesktopNav | null = null;
+
+export function bindNav(nav: Nav | null) {
+  current = nav ? asDesktop(nav) : null;
 }
 
 export function href(route: Route) {
   return pathFor(route);
 }
 
-/* the memory nav pushes every call, and an entry equal to the one shown
-   would make Back look like it did nothing */
 export function navigate(route: Route) {
   if (!current || pathFor(route) === pathFor(current.route)) return;
   current.navigate(route);
 }
 
-export function useRoute(): Route {
-  return useNav().route;
+/* a draft's save can settle after the person has left it, and must not
+   take them back */
+const navShowing = (route: Route) =>
+  current && pathFor(route) === pathFor(current.route) ? current : null;
+
+export function leave(from: Route, fallback: Route) {
+  const nav = navShowing(from);
+  if (!nav) return;
+  if (nav.canBack) nav.back();
+  else navigate(fallback);
 }
 
-/* back and forward, with whether each can go: the memory nav's own cursor */
+/* the memory nav has no replace: going back one entry and pushing drops
+   the draft from the history */
+export function replace(from: Route, to: Route) {
+  const nav = navShowing(from);
+  if (!nav) return;
+  if (nav.canBack) nav.back();
+  nav.navigate(to);
+}
+
+export function useRoute(): Route {
+  return asDesktop(useNav()).route;
+}
+
 export type History = Pick<Nav, "canBack" | "canForward" | "back" | "forward">;
 
 export function useHistory(): History {

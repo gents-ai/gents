@@ -105,7 +105,6 @@ fn a_file_bound_beside_exposes_its_folder_and_names_the_file() {
 fn make_fifo(path: &Path) {
     use std::os::unix::ffi::OsStrExt;
     let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
-    // The pathname is NUL-terminated and remains alive for this call.
     assert_eq!(
         unsafe { libc::mkfifo(name.as_ptr(), 0o600) },
         0,

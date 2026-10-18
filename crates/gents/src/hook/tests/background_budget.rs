@@ -148,9 +148,6 @@ impl ToolDyn for NamedPendingTool {
     }
 }
 
-/// Configured lifetimes reach the spawned row's deadline, the remote target's
-/// service is recorded on that row, and `wait_process` without a timeout uses
-/// the handle's configured wait.
 #[tokio::test]
 async fn configured_background_lifetimes_and_waits_follow_the_target() {
     let dir = tempfile::tempdir().unwrap();
@@ -289,8 +286,6 @@ impl ToolDyn for NoisyTool {
     }
 }
 
-/// The owning behavior's configured `max_output_chars` for the tool bounds
-/// the completion notification's summary, resolved when the notice renders.
 #[tokio::test]
 async fn background_completion_summary_honors_the_configured_output_budget() {
     let dir = tempfile::tempdir().unwrap();
@@ -320,7 +315,7 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
             update: tools,
         }])
         .unwrap();
-        ConfigAccess::transact_local(&node, None, "test.output_budget", |txn| {
+        ConfigAccess::transact_local_write(&node, None, "test.output_budget", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
@@ -384,8 +379,6 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
         "{notification}"
     );
 
-    // Redrive after a budget change (a crash before the delivery was marked):
-    // the published notice replays under the budget it was rendered with.
     {
         use crate::config_client::{
             apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
@@ -400,7 +393,7 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
             update: tools,
         }])
         .unwrap();
-        ConfigAccess::transact_local(&node, None, "test.output_budget", |txn| {
+        ConfigAccess::transact_local_write(&node, None, "test.output_budget", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })

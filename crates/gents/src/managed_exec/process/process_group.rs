@@ -15,13 +15,52 @@ pub(super) struct ManagedChild {
 
 impl ManagedChild {
     pub(super) fn new(child: Child) -> Self {
-        // The pre_exec setsid() call makes the child's pid its process-group id.
-        // If setsid() fails, Command::spawn returns an error before this point.
         let pgid = child.id().and_then(|pid| i32::try_from(pid).ok());
         Self {
             inner: child,
             pgid,
             finished: false,
+        }
+    }
+
+    pub(super) fn has_exited(&self) -> std::io::Result<bool> {
+        if self.finished {
+            return Ok(true);
+        }
+        let pid = self
+            .pgid
+            .ok_or_else(|| std::io::Error::other("managed child has no process id"))?;
+        // Keep the leader waitable so its PID/PGID cannot be reused before group cleanup.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if result == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(unsafe { info.si_pid() } != 0)
+    }
+
+    pub(super) async fn terminate_service(&mut self) {
+        if self.finished {
+            return;
+        }
+        if let Some(pgid) = self.pgid {
+            let _ = signal_process_group(pgid, libc::SIGTERM);
+            tokio::time::sleep(TERM_GRACE).await;
+            // Kill descendants before reaping the leader, even when it exited on TERM.
+            let _ = signal_process_group(pgid, libc::SIGKILL);
+        }
+        if matches!(
+            tokio::time::timeout(KILL_GRACE, self.inner.wait()).await,
+            Ok(Ok(_))
+        ) {
+            self.finished = true;
         }
     }
 
@@ -37,7 +76,7 @@ impl ManagedChild {
 impl Drop for ManagedChild {
     fn drop(&mut self) {
         if !self.finished {
-            // Drop is last-resort cleanup, so skip TERM grace and force the group down.
+            // Last-resort cleanup cannot wait through the TERM grace period.
             if let Some(pgid) = self.pgid {
                 let _ = signal_process_group(pgid, libc::SIGKILL);
             }

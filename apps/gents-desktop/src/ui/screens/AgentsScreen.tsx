@@ -1,10 +1,5 @@
-/* Nodes, the fleet: every deployment this desktop knows. A card per
-   node from the Fleet design: picture with a status dot, name, how many
-   runs are live, and an overflow menu with what the desktop's fleet row
-   offers (rename the saved label, check the peer, remove). Add node is
-   the desktop's status enrolment: a server address, a request the
-   server's admin approves, then the peer joins. */
 import { memo, useState } from "react";
+import { useStore } from "zustand";
 import { EllipsisVertical, Inbox, Plus, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@gents/ui/components/button";
@@ -38,7 +33,7 @@ import { Input } from "@gents/ui/components/input";
 import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
-import { inferenceIsConfigured, isLocalNode } from "@/lib/firstRun";
+import { configIsRead, inferenceIsConfigured, isLocalNode } from "@/lib/firstRun";
 import { href } from "@/lib/router";
 import { isLive } from "@/lib/live";
 import { NodeAvatar } from "./AgentAvatar";
@@ -51,6 +46,7 @@ import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
 import { fleetNodes } from "@/lib/scope";
 import { nodeKeyOf, type NodeView } from "../../hooks/fleetStore";
 import { useShallow } from "zustand/react/shallow";
+import { errorText } from "../../lib/errorText";
 
 export function AgentsScreen() {
   const {
@@ -70,8 +66,6 @@ export function AgentsScreen() {
   const [removingBusy, setRemovingBusy] = useState(false);
   const pending = useEnrollmentRequests();
   const homeDid = useHomeDid();
-  /* the node this machine runs, then the paired ones with the reachable
-     first: the dot is the first thing read on a row */
   const groups = [
     {
       key: "local",
@@ -157,7 +151,7 @@ export function AgentsScreen() {
       <AddAgentDialog open={adding} onClose={() => setAdding(false)} />
       <RenameDialog
         key={renaming?.peerId ?? "none"}
-        title="Rename deployment"
+        title="Rename node"
         description="The saved label on this desktop; the node's own name does not change."
         value={renaming?.label ?? null}
         onSave={async (next) => {
@@ -214,7 +208,6 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
   const [address, setAddress] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /* every way out clears the failure, so the next opening starts clean */
   const close = () => {
     setError(null);
     onClose();
@@ -229,7 +222,7 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
       setAddress("");
       close();
     } catch (e) {
-      const reason = e instanceof Error ? e.message : String(e);
+      const reason = errorText(e);
       setError(`Couldn't request enrolment: ${reason}`);
     } finally {
       setBusy(false);
@@ -288,7 +281,6 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
   );
 }
 
-/* one label edited in place: a deployment's saved label or an account's */
 export function RenameDialog({
   title,
   description,
@@ -311,7 +303,7 @@ export function RenameDialog({
       if (next && next !== value) await onSave(next);
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     }
   };
   return (
@@ -347,8 +339,6 @@ export function RenameDialog({
   );
 }
 
-/* one node: its counts are selected by key, so a change on another node
-   leaves the row as it is */
 const AgentRow = memo(function AgentRow({
   node: d,
   homeDid,
@@ -361,8 +351,12 @@ const AgentRow = memo(function AgentRow({
   onRemove: (peer: { nodeDid: string; peerId: string; label: string }) => void;
 }) {
   const {
+    stores,
     actions: { selectNode, fetchPeerStatus },
   } = useApp();
+  const configRead = useStore(stores.client, (state) =>
+    state.snapshot ? configIsRead(state.snapshot, d.nodeDid) : false,
+  );
   const live = useFleet(
     (s) =>
       (s.sessionsOf[nodeKeyOf(d)] ?? NO_SESSIONS).filter((c) => isLive(c.turnState))
@@ -385,7 +379,7 @@ const AgentRow = memo(function AgentRow({
       };
       toast(r?.reachable ? `${d.label} is reachable` : `${d.label} is not reachable`);
     } catch (e) {
-      toast(`Status check failed: ${e instanceof Error ? e.message : String(e)}`);
+      toast(`Status check failed: ${errorText(e)}`);
     }
   };
   return (
@@ -393,10 +387,6 @@ const AgentRow = memo(function AgentRow({
       key={d.nodeDid}
       className="flex items-center gap-4 rounded-2xl border border-border/60 bg-raised px-5 py-4 transition-colors hover:border-border hover:bg-accent"
     >
-      {/* the row lights up whole, so it is clickable whole: the
-                    link reaches back through the padding it sits in rather
-                    than ending where its text does, which left the top and
-                    bottom of every row looking live and doing nothing */}
       <a
         href={href({ name: "sessions", nodeDid: d.nodeDid })}
         onClick={() => selectNode(d.nodeDid)}
@@ -417,14 +407,9 @@ const AgentRow = memo(function AgentRow({
           role="img"
         />
         <span className="grid min-w-0 flex-1 auto-cols-[minmax(0,max-content)] grid-flow-col items-baseline justify-start gap-3">
-          {/* name and label are columns that each take their full text when it
-                      fits; the short one always does, and the long one truncates
-                      into what is left (both split the row when both are long) */}
           <span className="truncate font-heading text-base font-medium text-heading">
             {name}
           </span>
-          {/* the pairing label names a remote node when the node's own
-                        name does not; the local node's pill already says it */}
           {!isWorkingNode(d, homeDid) && d.label !== name && (
             <span className="min-w-0 truncate text-xs text-muted-foreground">
               {d.label}
@@ -437,7 +422,7 @@ const AgentRow = memo(function AgentRow({
           )}
         </span>
       </a>
-      {isLocalNode(d, homeDid) && !inferenceIsConfigured(d) && (
+      {isLocalNode(d, homeDid) && configRead && !inferenceIsConfigured(d) && (
         <Button
           size="sm"
           variant="outline"

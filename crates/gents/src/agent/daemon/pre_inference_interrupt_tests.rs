@@ -32,9 +32,6 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for InterruptionCaptur
     }
 }
 
-/// Parks the request inside provider-input estimation. `build_request` awaits
-/// every tool definition, so this future holds the daemon in the window between
-/// the claim and the first provider call for as long as a test needs.
 #[derive(Clone)]
 struct PreInferenceBlockingTool {
     entered: Arc<tokio::sync::Notify>,
@@ -104,7 +101,7 @@ fn pre_inference_agent() -> Arc<ResolvedAgent> {
 }
 
 async fn seed_titled_session(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
     request: &AgentRequest,
     agent_config: &ResolvedAgent,
 ) -> anyhow::Result<()> {
@@ -112,7 +109,7 @@ async fn seed_titled_session(
         text: "pre-inference interrupt".into(),
         source: gents_protocol::session::SessionTitleSource::Task,
     };
-    let created = crate::config_client::ConfigAccess::transact_local(
+    let created = crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "session.create",
@@ -165,8 +162,6 @@ async fn request_terminal_row(
         .context("AgentRequest read selected no row for the claimed request")
 }
 
-/// The lease outlives the assertion window and this harness runs no recovery
-/// sweep, so only the live owner can terminalize the request.
 #[tokio::test]
 async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
@@ -210,7 +205,7 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
     let request = create_routed_request(&node, &agent_config, &node_did).await;
     let request_doc_id = request.doc_id.clone();
     let requester_did = request.requester_did.clone();
-    seed_titled_session(node.as_ref(), &request, &agent_config)
+    seed_titled_session(&node, &request, &agent_config)
         .await
         .expect("seed a titled session through the session writer");
 
@@ -232,7 +227,7 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
         assert_eq!(row["lifecycle_state"], "processing");
 
         crate::interrupt::interrupt_request_by_doc_id(
-            node.as_ref(),
+            &node,
             &request_doc_id,
             &node_did,
             requester_did.as_deref(),
@@ -276,9 +271,6 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
     node.shutdown().await;
 }
 
-/// Observing the real latch before invoking the handler makes the admission
-/// window deterministic; the durable Claimed state distinguishes it from the
-/// later Processing preparation window.
 #[tokio::test]
 async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
@@ -319,7 +311,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
     let request = create_routed_request(&node, &agent_config, &node_did).await;
     let request_doc_id = request.doc_id.clone();
     let requester_did = request.requester_did.clone();
-    seed_titled_session(node.as_ref(), &request, &agent_config)
+    seed_titled_session(&node, &request, &agent_config)
         .await
         .expect("seed a titled session through the session writer");
 
@@ -370,7 +362,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         ),
     );
     crate::interrupt::interrupt_request_by_doc_id(
-        node.as_ref(),
+        &node,
         &request_doc_id,
         &node_did,
         requester_did.as_deref(),
@@ -455,9 +447,6 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
     node.shutdown().await;
 }
 
-/// The paused read is the provider-context checkpoint restoration inside
-/// `run_inference`, after its initial latch check; it never completes, so only
-/// observing the latch across that preparation lets the owner terminalize.
 #[tokio::test]
 async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_the_owner() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
@@ -498,7 +487,7 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
     let request = create_routed_request(&node, &agent_config, &node_did).await;
     let request_doc_id = request.doc_id.clone();
     let requester_did = request.requester_did.clone();
-    seed_titled_session(node.as_ref(), &request, &agent_config)
+    seed_titled_session(&node, &request, &agent_config)
         .await
         .expect("seed a titled session through the session writer");
 
@@ -524,7 +513,7 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
         assert_eq!(row["lifecycle_state"], "processing");
 
         crate::interrupt::interrupt_request_by_doc_id(
-            node.as_ref(),
+            &node,
             &request_doc_id,
             &node_did,
             requester_did.as_deref(),
@@ -555,8 +544,6 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
     node.shutdown().await;
 }
 
-/// A Git clean filter parks `git add -A` inside sealed-workspace hashing, so
-/// the interrupt arrives while Git, not the runtime, holds the preparation.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn interrupt_while_hashing_a_sealed_workspace_kills_git_and_keeps_its_index() {

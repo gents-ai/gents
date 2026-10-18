@@ -1,12 +1,7 @@
-//! The "Allowed folders" setting and the plugin access questions: the same
-//! list `gents plugin dirs` edits and the same questions `gents chat` answers,
-//! through `gents::plugin::{allowed, approval}`, in the managed local Node's
-//! home.
-
+pub use crate::plugin_access::{AllowedFoldersView, PluginApprovalView, PluginApprovalsView};
 use gents::pack::BindAccess;
 use gents::plugin::{allowed, approval};
-use serde_json::{json, Value};
-use tauri::State;
+use tauri::{Runtime, State, WebviewWindow};
 
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
@@ -24,12 +19,16 @@ fn failed(error: anyhow::Error) -> BridgeError {
     BridgeError::untyped(format!("{error:#}"))
 }
 
-fn view(home: &std::path::Path) -> Result<Value, BridgeError> {
-    Ok(json!({ "dirs": allowed::list(home).map_err(failed)? }))
+fn view(home: &std::path::Path) -> Result<AllowedFoldersView, BridgeError> {
+    Ok(AllowedFoldersView {
+        dirs: allowed::list(home).map_err(failed)?,
+    })
 }
 
 #[tauri::command]
-pub fn desktop_allowed_dirs_list(state: State<'_, DesktopAppState>) -> Result<Value, BridgeError> {
+pub fn desktop_allowed_dirs_list(
+    state: State<'_, DesktopAppState>,
+) -> Result<AllowedFoldersView, BridgeError> {
     view(&home(&state)?)
 }
 
@@ -38,7 +37,7 @@ pub fn desktop_allowed_dirs_add(
     path: String,
     access: String,
     state: State<'_, DesktopAppState>,
-) -> Result<Value, BridgeError> {
+) -> Result<AllowedFoldersView, BridgeError> {
     let home = home(&state)?;
     let access: BindAccess = access.parse().map_err(failed)?;
     allowed::add(&home, std::path::Path::new(&path), access).map_err(failed)?;
@@ -49,51 +48,74 @@ pub fn desktop_allowed_dirs_add(
 pub fn desktop_allowed_dirs_remove(
     path: String,
     state: State<'_, DesktopAppState>,
-) -> Result<Value, BridgeError> {
+) -> Result<AllowedFoldersView, BridgeError> {
     let home = home(&state)?;
     allowed::remove(&home, std::path::Path::new(&path)).map_err(failed)?;
     view(&home)
 }
 
-/// The questions running plugin calls are waiting on, oldest first.
 #[tauri::command]
-pub fn desktop_plugin_approvals_pending(
+pub fn desktop_plugin_approvals_pending<R: Runtime>(
+    window: WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
-) -> Result<Value, BridgeError> {
-    let pending = approval::pending(&home(&state)?).map_err(failed)?;
-    Ok(json!({
-        "requests": pending
-            .iter()
-            .map(|request| json!({
-                "id": request.id,
-                "prompt": request.prompt(),
-                "folder": request.folder,
-                "path": request.path,
-                "isDir": request.is_dir,
-                "sessionId": request.session_id,
-            }))
-            .collect::<Vec<_>>()
-    }))
+) -> Result<PluginApprovalsView, BridgeError> {
+    let subscribed = state
+        .bridge
+        .lock()
+        .expect("desktop bridge lock poisoned")
+        .approvals_prompt_subscriptions
+        .contains_window(window.label());
+    let pending = if subscribed {
+        approval::pending_requests(&home(&state)?).map_err(failed)?
+    } else {
+        Vec::new()
+    };
+    Ok(PluginApprovalsView {
+        requests: pending.iter().map(PluginApprovalView::from).collect(),
+    })
 }
 
-/// Answers one question: `once`, `file` (also allows that exact file from now
-/// on), `always` (also allows its folder from now on) or `deny`.
 #[tauri::command]
 pub fn desktop_plugin_approval_decide(
     id: String,
     decision: String,
     state: State<'_, DesktopAppState>,
 ) -> Result<(), BridgeError> {
-    let answer = match decision.as_str() {
-        "once" => approval::Answer::Once,
-        "file" => approval::Answer::AlwaysPath,
-        "always" => approval::Answer::AlwaysFolder,
-        "deny" => approval::Answer::Deny,
-        other => {
-            return Err(BridgeError::untyped(format!(
-                "{other:?} is not an answer; use once, file, always or deny"
-            )))
-        }
-    };
+    let answer = crate::plugin_access::answer(&decision)?;
     approval::decide(&home(&state)?, &id, answer).map_err(failed)
 }
+
+#[tauri::command]
+pub fn desktop_plugin_approval_subscribe<R: Runtime>(
+    window: WebviewWindow<R>,
+    token: String,
+    state: State<'_, DesktopAppState>,
+) -> Result<(), BridgeError> {
+    home(&state)?;
+    let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
+    if bridge.has_window(window.label()) {
+        bridge
+            .approvals_prompt_subscriptions
+            .subscribe(window.label(), token);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn desktop_plugin_approval_unsubscribe<R: Runtime>(
+    window: WebviewWindow<R>,
+    token: String,
+    state: State<'_, DesktopAppState>,
+) -> Result<(), BridgeError> {
+    state
+        .bridge
+        .lock()
+        .expect("desktop bridge lock poisoned")
+        .approvals_prompt_subscriptions
+        .unsubscribe(window.label(), &token);
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "allowed_dirs_tests.rs"]
+mod tests;

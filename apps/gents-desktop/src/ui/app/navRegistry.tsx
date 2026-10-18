@@ -42,7 +42,7 @@ export interface NavItem {
 }
 
 /* a route the router knows: the shape `to` must resolve to. The union is
-   closed in @gents/shell, and pathFor prints any name, so the names and
+   closed in @/lib/router, and pathFor prints any name, so the names and
    their required fields are checked here. */
 function isRoute(value: unknown): value is Route {
   if (typeof value !== "object" || value === null) return false;

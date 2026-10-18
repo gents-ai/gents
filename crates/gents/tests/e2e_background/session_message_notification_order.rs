@@ -36,7 +36,7 @@ struct TranscriptRow {
 async fn configure_session_chain(db: &TestDb) {
     let node_did = db.node_identity.did().to_string();
     configure_child_agent(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         CHILD_AGENT_ID,
         "e2e-session-order-child-tools",
@@ -45,7 +45,7 @@ async fn configure_session_chain(db: &TestDb) {
     )
     .await;
     configure_child_agent(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         PARENT_AGENT_ID,
         "e2e-session-order-parent-tools",
@@ -60,8 +60,6 @@ async fn configure_session_chain(db: &TestDb) {
     .await;
 }
 
-/// Every message of the session in sequence order, reconstructed through the
-/// canonical message owner.
 async fn session_transcript(node: &EmbeddedNode, node_did: &str) -> Vec<TranscriptRow> {
     let session_id = escape_graphql_string(SESSION_ID);
     let response = node
@@ -116,10 +114,6 @@ async fn wait_for_transcript_marker(node: &EmbeddedNode, node_did: &str, marker:
     }
 }
 
-/// The observer appends the started session's completion notification to the
-/// caller's session. A prompt authored after a restart must be sequenced after
-/// that notification, not over it: the resumed runtime's hook sequence is
-/// read from the durable transcript rather than from the stopped runtime.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resumed_prompt_sorts_after_an_observer_appended_notification() {
     let db = test_db("e2e-session-order").await;
@@ -172,7 +166,7 @@ async fn resumed_prompt_sorts_after_an_observer_appended_notification() {
     )
     .expect("start resume backend");
     bind_agent_backend(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         PARENT_AGENT_ID,
         RESUME_BACKEND_ID,

@@ -21,11 +21,6 @@ fn running_session_message_filter(local_did: &str) -> String {
     )
 }
 
-/// Settle every running local `agent_new`/`agent_message` row whose
-/// caused request reached a durable terminal (Lean
-/// `Recovery.sessionMessageRecoverySweep`). Any other row keeps running: no
-/// parent fate or deadline settles it. The winner of the row's terminal compare
-/// appends its completion notification and wake. Returns the settled count.
 pub(crate) async fn settle_running_session_message_rows(
     node: &Arc<EmbeddedNode>,
     local_did: &str,
@@ -56,10 +51,6 @@ pub(crate) async fn settle_running_session_message_rows(
     Ok(settled)
 }
 
-/// Observer arm: a request that reached a durable terminal may be the one a
-/// local running session-message row caused, which it names through
-/// `caused_by_parent_tool_call_doc_id`; only that row is settled here. Any
-/// other terminal is left to the periodic sweep.
 pub(super) async fn settle_rows_after_request_update(
     node: &Arc<EmbeddedNode>,
     local_did: &str,
@@ -123,12 +114,6 @@ async fn settle_row(node: &Arc<EmbeddedNode>, row: &SessionMessageRow) -> Result
     settle_session_message_row(node, &mut lifecycle).await
 }
 
-/// Settle one running session-message row from what it observes of its
-/// caused request (Lean `Recovery.sessionMessageRecoverySweep`): the caused
-/// terminal ends it with that result; a row that cannot name its caused
-/// request fails closed once (`causedRequestUnbound`); a request not yet
-/// visible here leaves it running. The winner of the row's terminal compare
-/// appends its completion notification.
 pub(crate) async fn settle_session_message_row(
     node: &Arc<EmbeddedNode>,
     lifecycle: &mut ToolCallLifecycle,
@@ -154,7 +139,7 @@ pub(crate) async fn settle_session_message_row(
                 return Ok(false);
             }
             append_background_tool_completion(
-                node.as_ref(),
+                node,
                 lifecycle.session_id(),
                 &calling_request_id,
                 &doc_id,
@@ -173,7 +158,7 @@ pub(crate) async fn settle_session_message_row(
         .as_deref()
         .context("caused request lacks physical identity")?;
     let Some(terminal) =
-        crate::background_tools::load_caused_request_terminal(node.as_ref(), caused_doc_id).await?
+        crate::background_tools::load_caused_request_terminal(node, caused_doc_id).await?
     else {
         return Ok(false);
     };
@@ -181,7 +166,7 @@ pub(crate) async fn settle_session_message_row(
         return Ok(false);
     }
     append_background_tool_completion(
-        node.as_ref(),
+        node,
         lifecycle.session_id(),
         &calling_request_id,
         &doc_id,

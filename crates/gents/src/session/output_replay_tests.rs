@@ -31,7 +31,6 @@ enum CaptureStorage {
     MissingDeltaBase,
 }
 
-/// The accepted request a fixture capture recorded.
 #[derive(Clone)]
 struct CapturedRequest {
     issuer: ReplayIssuer,
@@ -213,8 +212,6 @@ impl ReplayFixture {
         wire.map(|wire| CapturedRequest { issuer, wire, body })
     }
 
-    /// Append one more accepted provider assistant turn — close, header and
-    /// its own capture coordinate — so a fixture can hold K replayable turns.
     async fn insert_provider_turn(&mut self, turn_index: u32, body: serde_json::Value) {
         let now = chrono::Utc::now().to_rfc3339();
         let source = OutputSource::ProviderTurn {
@@ -275,10 +272,9 @@ impl ReplayFixture {
         };
         let created = self
             .node
-            .execute_request_with_retry(
+            .execute_request(
                 defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                     .with_variables(output_segment_create_variables(&segment).unwrap()),
-                defra_node::ExecuteRetryPolicy::default(),
             )
             .await;
         assert!(!created.has_errors(), "{:?}", created.errors);
@@ -331,10 +327,9 @@ impl ReplayFixture {
         };
         let created = self
             .node
-            .execute_request_with_retry(
+            .execute_request(
                 defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                     .with_variables(transcript_message_create_variables(&header).unwrap()),
-                defra_node::ExecuteRetryPolicy::default(),
             )
             .await;
         assert!(!created.has_errors(), "{:?}", created.errors);
@@ -393,10 +388,9 @@ impl ReplayFixture {
         };
         let created = self
             .node
-            .execute_request_with_retry(
+            .execute_request(
                 defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                     .with_variables(output_segment_create_variables(&segment).unwrap()),
-                defra_node::ExecuteRetryPolicy::default(),
             )
             .await;
         assert!(!created.has_errors(), "{:?}", created.errors);
@@ -436,10 +430,9 @@ impl ReplayFixture {
         };
         let created = self
             .node
-            .execute_request_with_retry(
+            .execute_request(
                 defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                     .with_variables(transcript_message_create_variables(&header).unwrap()),
-                defra_node::ExecuteRetryPolicy::default(),
             )
             .await;
         assert!(!created.has_errors(), "{:?}", created.errors);
@@ -705,10 +698,9 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
         created_at: now.clone(),
     };
     let created = node
-        .execute_request_with_retry(
+        .execute_request(
             defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                 .with_variables(output_segment_create_variables(&segment).unwrap()),
-            defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
@@ -789,10 +781,9 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
         created_at: now,
     };
     let created = node
-        .execute_request_with_retry(
+        .execute_request(
             defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                 .with_variables(transcript_message_create_variables(&header).unwrap()),
-            defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
@@ -865,8 +856,6 @@ async fn signed_capture_restores_exact_authenticated_suffix_and_rejects_rewritte
     let resolve = |_: &ReplayTag| evidence.clone();
     let stage = replay_stage(&rows, &projection.issuer, projection.wire, resolve);
     assert_eq!(stage, rows, "provenance-valid turn stays in the stage");
-    // The next request appends this turn and a user message to the accepted
-    // capture, exactly as the owned loop assembles it.
     let next_body = |system: &str| {
         let mut body = projection.body.clone();
         body["system"] = serde_json::json!([{"type": "text", "text": system}]);
@@ -969,9 +958,6 @@ async fn exact_capture_source_binds_canonical_assistant_across_request_versions(
         .await;
     assert!(projection.is_none());
     assert_eq!(observed.candidates().await.unwrap().len(), 1);
-    // A later mutable lease-field version must not invalidate the capture's
-    // historical physical request CID. This fixture only tests version
-    // membership, not RenewalTask authorization or scheduling.
     let later_deadline = crate::graphql::escape_graphql_string(
         &(chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
     );
@@ -1037,9 +1023,6 @@ async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive(
     use gents_protocol::message::AssistantContent;
     use gents_protocol::rendered_request::CaptureScopeKind;
 
-    // This is a complete, physically published provider assistant, not a
-    // body-only lookalike. Its OneShot close is invalid for the Inference
-    // resolver, so historical reasoning cannot acquire that provenance.
     let fixture =
         fixture_with_provider_payload_and_scope_and_tool(true, CaptureScopeKind::OneShot, false)
             .await;
@@ -1119,7 +1102,7 @@ async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive(
 }
 
 #[tokio::test]
-async fn replay_high_water_and_header_twins_fail_closed() {
+async fn replay_rejects_forged_high_water_and_storage_rejects_sequence_twins() {
     let observed = fixture().await;
     let mut forged = observed.boundary.clone();
     forged.canonical_through.as_mut().unwrap().commit_cid = "not-a-header-commit".into();
@@ -1147,18 +1130,22 @@ async fn replay_high_water_and_header_twins_fail_closed() {
     twin.message_key.push_str(":twin");
     let created = observed
         .node
-        .execute_request_with_retry(
+        .execute_request(
             defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                 .with_variables(transcript_message_create_variables(&twin).unwrap()),
-            defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
-    assert!(!created.has_errors(), "{:?}", created.errors);
-    assert!(observed.candidates().await.is_err());
+    assert!(
+        created.has_errors(),
+        "a sequence slot cannot hold a second header"
+    );
+    assert!(created
+        .errors
+        .iter()
+        .any(|error| error.message.contains("unique index")));
+    assert!(observed.candidates().await.is_ok());
 }
 
-/// A capture that cannot be verified drops only that turn's reasoning: the
-/// resolver answers, the request proceeds, and replay strips the reasoning.
 #[tokio::test]
 async fn unverifiable_capture_drops_its_reasoning_without_failing_the_request() {
     use gents_protocol::message::AssistantContent;
@@ -1235,18 +1222,15 @@ struct CountingRequests<'a> {
 
 #[async_trait::async_trait]
 impl ReplayRequestReader for CountingRequests<'_> {
-    async fn request_rows(&self, query: &str) -> anyhow::Result<serde_json::Value> {
-        self.rows.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.node.request_rows(query).await
-    }
-
-    async fn request_commits(
+    async fn request_facts(
         &self,
-        id: &str,
-    ) -> anyhow::Result<Vec<crate::graphql::CompositeCommit>> {
+        ids: &[String],
+    ) -> anyhow::Result<std::collections::BTreeMap<String, super::output::ReplayRequestFacts>> {
         self.commits
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.node.request_commits(id).await
+            .fetch_add(ids.len(), std::sync::atomic::Ordering::Relaxed);
+        self.rows
+            .fetch_add(ids.len(), std::sync::atomic::Ordering::Relaxed);
+        self.node.request_facts(ids).await
     }
 }
 
@@ -1260,9 +1244,9 @@ async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_ca
     let mut duplicate = fixture.header.clone();
     duplicate.sequence += 1;
     duplicate.message_key.push_str("-physical-duplicate");
-    let access = crate::config_client::ConfigAccess::Local(fixture.node.clone());
+    let access = crate::config_client::ConfigAccess::local(fixture.node.clone());
     access
-        .transact("test.replay.duplicate_header", |txn| {
+        .transact_write("test.replay.duplicate_header", |txn| {
             let duplicate = duplicate.clone();
             Box::pin(async move {
                 txn.execute_with_variables(
@@ -1342,29 +1326,26 @@ async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_ca
 
 #[async_trait::async_trait]
 impl ReplayRequestReader for FaultingRequests<'_> {
-    async fn request_rows(&self, query: &str) -> anyhow::Result<serde_json::Value> {
-        if query.contains(self.request_doc_id) {
+    async fn request_facts(
+        &self,
+        request_doc_ids: &[String],
+    ) -> anyhow::Result<std::collections::BTreeMap<String, super::output::ReplayRequestFacts>> {
+        if request_doc_ids.iter().any(|id| id == self.request_doc_id) {
             match self.fault {
                 Some(RequestFault::RowsReadFails) => anyhow::bail!("injected AgentRequest read"),
-                Some(RequestFault::Missing) => {
-                    return Ok(serde_json::json!({"data": {"AgentRequest": []}}))
+                Some(RequestFault::CommitsReadFails) => {
+                    anyhow::bail!("injected composite commit read")
                 }
                 _ => {}
             }
         }
-        self.node.request_rows(query).await
-    }
-
-    async fn request_commits(
-        &self,
-        request_doc_id: &str,
-    ) -> anyhow::Result<Vec<crate::graphql::CompositeCommit>> {
-        if request_doc_id == self.request_doc_id
-            && matches!(self.fault, Some(RequestFault::CommitsReadFails))
-        {
-            anyhow::bail!("injected composite commit read");
+        let mut facts = self.node.request_facts(request_doc_ids).await?;
+        if matches!(self.fault, Some(RequestFault::Missing)) {
+            if let Some(request) = facts.get_mut(self.request_doc_id) {
+                request.rows.clear();
+            }
         }
-        self.node.request_commits(request_doc_id).await
+        Ok(facts)
     }
 }
 
@@ -1390,8 +1371,6 @@ async fn load_with_fault(
     .await
 }
 
-/// A historical turn's reasoning is dropped only when its physical request is
-/// verifiably unavailable; a failed read of that request fails the lookup.
 #[tokio::test]
 async fn historical_request_store_faults_propagate_instead_of_dropping_reasoning() {
     let fixture = signed_fixture().await;
@@ -1627,10 +1606,9 @@ async fn replay_resolution_observes_a_header_replicated_before_dispatch() {
     duplicate.message_key.push_str("-replicated-twin");
     let created = fixture
         .node
-        .execute_request_with_retry(
+        .execute_request(
             defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                 .with_variables(transcript_message_create_variables(&duplicate).unwrap()),
-            defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
@@ -1647,9 +1625,6 @@ async fn replay_resolution_observes_a_header_replicated_before_dispatch() {
     );
 }
 
-/// The admission estimate and the first dispatch resolve the same tags
-/// back-to-back; the estimate's recorded pass serves that dispatch, and every
-/// later lookup revalidates the canonical evidence exactly as before.
 #[tokio::test]
 async fn the_dispatch_after_an_admission_estimate_serves_its_resolution_without_rereading() {
     let fixture = signed_fixture().await;
@@ -1711,11 +1686,6 @@ async fn the_dispatch_after_an_admission_estimate_serves_its_resolution_without_
     );
 }
 
-/// Binds the documented seed window: a header twin replicating between the
-/// admission estimate and its first dispatch is served per the estimate, and
-/// observed by the next resolution. A tag the estimate resolved empty is not
-/// seeded, so its dispatch lookup still revalidates and observes a capture
-/// that arrived in the window.
 #[tokio::test]
 async fn a_header_twin_arriving_between_the_admission_estimate_and_dispatch_waits_for_the_next_lookup(
 ) {
@@ -1753,10 +1723,9 @@ async fn a_header_twin_arriving_between_the_admission_estimate_and_dispatch_wait
     duplicate.message_key.push_str("-estimate-twin");
     let created = fixture
         .node
-        .execute_request_with_retry(
+        .execute_request(
             defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                 .with_variables(transcript_message_create_variables(&duplicate).unwrap()),
-            defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
@@ -1778,10 +1747,6 @@ async fn a_header_twin_arriving_between_the_admission_estimate_and_dispatch_wait
     );
 }
 
-/// One pass over many selected turns reads the capture rows in one chunked
-/// statement and the blocks' field-commit witnesses in batches spanning every
-/// manifest, instead of one statement set per turn, and answers exactly what
-/// the per-tag singleton owner answers.
 #[tokio::test]
 async fn a_pass_with_many_selected_turns_batches_capture_rows_and_block_commits() {
     let turns = 4;
@@ -1816,8 +1781,6 @@ async fn a_pass_with_many_selected_turns_batches_capture_rows_and_block_commits(
     };
     let tags = candidates.iter().map(tag_for).collect::<Vec<_>>();
 
-    // The expected statement count derives from the stored rows through the
-    // same decode owner the preload uses, not from a fixture constant.
     let capture_keys = candidates
         .iter()
         .map(|candidate| {
@@ -1914,11 +1877,6 @@ async fn a_pass_with_many_selected_turns_batches_capture_rows_and_block_commits(
     }
 }
 
-/// A capture whose manifest pins a block whose stored payload does not hash to
-/// the pinned key is a verification failure of that capture alone. The pass's
-/// shared block preload must isolate it per manifest — skipping only that
-/// capture's blocks — so the pass completes and every healthy turn stays
-/// replayable, exactly as the per-capture reader always classified it.
 #[tokio::test]
 async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() {
     let turns = 3u32;
@@ -1945,8 +1903,6 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
             }),
         )
         .await;
-    // The corrupt turn's body carries bytes no healthy capture shares, so the
-    // block poisoned below is pinned by its manifest alone.
     let body = serde_json::json!({
         "model": "claude-test",
         "messages": [
@@ -1956,10 +1912,8 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
             ]}
         ]
     });
-    // The exact bytes the sink will chunk for this body, so the poisoned block
-    // lands under the content key the sink's manifest will pin.
-    let canonical = gents_loop::rendered_request::canonical_json_string(&body).unwrap();
-    let chunks = crate::rendered_request::encoding::chunk_capture_body(&canonical);
+    let layout = crate::rendered_request::encoding::capture_block_layout(&body).unwrap();
+    let chunks = crate::rendered_request::encoding::chunk_capture_body(&layout);
     let index = chunks
         .iter()
         .position(|chunk| {
@@ -1968,7 +1922,6 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
                 .contains(marker)
         })
         .expect("the marker lands in a block");
-    // Same length, different bytes: byte_len still pins, the content key does not.
     let mut poisoned = chunks[index].bytes.clone();
     let at = std::str::from_utf8(&poisoned)
         .expect("canonical block bytes are UTF-8")
@@ -1981,7 +1934,7 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
     );
     let created = fixture
         .node
-        .execute_request_with_retry(
+        .execute_request(
             defra_node::QueryRequest::new(
                 "mutation($input: RenderedRequestBlockMutationInputArg!) { \
                  create_RenderedRequestBlock(input: $input) { _docID } }",
@@ -1992,7 +1945,6 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
                 "byte_len": chunks[index].bytes.len(),
                 "created_at": chrono::Utc::now().to_rfc3339(),
             }})),
-            defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
@@ -2006,8 +1958,6 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
 
     fixture.insert_provider_turn(corrupt_turn, body).await;
 
-    // Fixture guarantee: the poisoned document is pinned by the corrupt turn's
-    // manifest only, so a degraded turn is the corrupt turn and nothing else.
     let response = fixture
         .node
         .execute(r#"{ RenderedRequest { capture_version request_json } }"#)

@@ -67,11 +67,11 @@ describe("managed server tray control ownership", () => {
     const api = apiFixture();
     const app = testApp({ api });
     renderHook(() => useManagedServerTrayControls(app));
-    expect(view.listen).toHaveBeenCalledTimes(3);
+    expect(view.listen).toHaveBeenCalledTimes(4);
 
     view.label = "gents-view-1";
     renderHook(() => useManagedServerTrayControls(app));
-    expect(view.listen).toHaveBeenCalledTimes(3);
+    expect(view.listen).toHaveBeenCalledTimes(4);
 
     const stop = view.listen.mock.calls.find(
       ([event]) => event === MANAGED_SERVER_TRAY_STOP_EVENT,
@@ -106,12 +106,29 @@ describe("managed server tray control ownership", () => {
     );
   });
 
+  it("reveals the owner and reports a quit failure", async () => {
+    const app = testApp({ api: apiFixture() });
+    renderHook(() => useManagedServerTrayControls(app));
+    const failed = view.listen.mock.calls.find(
+      ([event]) => event === "desktop://app-quit-failed",
+    );
+    expect(failed).toBeDefined();
+    await act(async () => {
+      failed?.[1]({ payload: "service busy" });
+    });
+    expect(view.show).toHaveBeenCalledOnce();
+    expect(view.setFocus).toHaveBeenCalledOnce();
+    expect(toastMocks.error).toHaveBeenCalledExactlyOnceWith(
+      "Could not quit: service busy. The desktop remains open.",
+    );
+  });
+
   it("cleans up subscriptions that resolve after unmount", async () => {
     const resolvers: Array<(cleanup: () => void) => void> = [];
     view.listen.mockImplementation(
       () => new Promise<() => void>((resolve) => resolvers.push(resolve)),
     );
-    const cleanups = [vi.fn(), vi.fn(), vi.fn()];
+    const cleanups = [vi.fn(), vi.fn(), vi.fn(), vi.fn()];
     const app = testApp({ api: apiFixture() });
     const { unmount } = renderHook(() => useManagedServerTrayControls(app));
     unmount();

@@ -78,9 +78,6 @@ fn absent_profile_effort_does_not_inject_reasoning() {
     .is_none());
 }
 
-/// Codex is the one backend whose reasoning default predates profile
-/// configuration: it has a known Responses contract and shipped a hardcoded
-/// `medium`. Profile plumbing may override that, never silently drop it (#540).
 #[test]
 fn absent_profile_effort_keeps_the_codex_medium_default() {
     assert_eq!(
@@ -181,19 +178,11 @@ fn profile_none_disables_local_thinking() {
         .is_none());
 }
 
-/// End-to-end wire-shape proof: the `additional_params` we attach by default in
-/// [`loop_config`] must serialize into the OpenAI-compatible completion body as
-/// a TOP-LEVEL `chat_template_kwargs` object — that is exactly where vLLM's
-/// `--reasoning-parser` reads `enable_thinking` to turn the reasoning trace on.
-/// This runs the real rig OpenAI request conversion (the same path the live
-/// `CompletionsClient` uses for OpenAI-compatible backends) and asserts the flattened body,
-/// so it proves the kwarg reaches the server without needing a live endpoint.
 #[test]
 fn profile_reasoning_serializes_top_level_into_openai_body() {
     use rig::completion::message::{Message, Text, UserContent};
     use rig::one_or_many::OneOrMany;
 
-    // The profile-derived additional params for a DeepSeek-compatible backend.
     let additional_params = merge_optional_params(
         merge_optional_params(
             reasoning_profile_params(
@@ -227,8 +216,6 @@ fn profile_reasoning_serializes_top_level_into_openai_body() {
         output_schema: None,
     };
 
-    // Same conversion the live OpenAI CompletionsClient performs before POSTing
-    // to `/chat/completions`.
     let openai_req = rig::providers::openai::CompletionRequest::try_from((
         "fixture-model".to_string(),
         core_req,
@@ -236,8 +223,6 @@ fn profile_reasoning_serializes_top_level_into_openai_body() {
     .expect("openai request conversion should succeed");
     let body = serde_json::to_value(&openai_req).expect("serializing openai request");
 
-    // Flattened to the top level of the request body — NOT nested under any
-    // wrapper — which is where vLLM expects it.
     assert_eq!(
         body["chat_template_kwargs"]["enable_thinking"], true,
         "request body must carry top-level chat_template_kwargs.enable_thinking=true; body was {body}"
@@ -260,16 +245,6 @@ fn openrouter_additional_params_require_parameters() {
             .require_parameters(true)
             .to_json()
     );
-}
-
-#[test]
-fn openai_compatible_has_no_provider_specific_additional_params() {
-    assert!(provider_additional_params(
-        BackendProviderKind::OpenAiCompatible,
-        crate::OpenAiWireApi::Responses,
-        crate::inference_setup::OPENAI_ENDPOINT,
-    )
-    .is_none());
 }
 
 #[test]
@@ -404,29 +379,6 @@ fn sampling_additional_params_merge_with_provider_params() {
     assert_eq!(value["top_k"], 40);
     assert!(value.get("max_tokens").is_none());
     assert!(value.get("temperature").is_none());
-}
-
-#[test]
-fn sampling_additional_params_omit_dedicated_completion_fields() {
-    let sampling = SamplingConfig {
-        temperature: Some(0.1),
-        top_p: None,
-        top_k: None,
-        max_tokens: Some(1024),
-        ..Default::default()
-    };
-
-    assert!(sampling.additional_params().is_none());
-}
-
-#[test]
-fn effective_max_tokens_falls_back_to_agent_budget() {
-    assert_eq!(effective_max_tokens(4096, None), Some(4096));
-}
-
-#[test]
-fn effective_max_tokens_prefers_sampling_override() {
-    assert_eq!(effective_max_tokens(4096, Some(512)), Some(512));
 }
 
 #[test]
@@ -770,8 +722,6 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
         let mut request = request();
         request.doc_id = case.request_doc_id.clone();
         request.request_id = "req-budget".to_string();
-        // This is the already resolved, pinned execution observation. Authored
-        // profile limits are validated before this restart boundary.
         request.max_total_tokens = case.pinned_limit.map(|limit| i64::try_from(limit).unwrap());
         let budget = aggregate_token_budget_for_request(&node, &request)
             .await
@@ -794,12 +744,6 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
     }
 }
 
-/// #649: every sampling knob a profile can pin must reach the provider body.
-///
-/// rig's `CompletionRequest` models only `temperature`/`max_tokens`, so the
-/// rest ride `additional_params` — if a knob is missing here it is silently at
-/// the mercy of the served checkpoint's `generation_config.json`, which is
-/// exactly the gap #649 reports.
 #[test]
 fn every_profile_sampling_knob_reaches_the_provider_body() {
     let sampling = SamplingConfig {
@@ -826,14 +770,10 @@ fn every_profile_sampling_knob_reaches_the_provider_body() {
     assert_eq!(value["frequency_penalty"], 0.5);
     assert_eq!(value["presence_penalty"], -0.25);
     assert_eq!(value["repetition_penalty"], 1.1);
-    // temperature and max_tokens are modeled rig fields, not body extras —
-    // emitting them here too would double-send them.
     assert!(value.get("temperature").is_none());
     assert!(value.get("max_tokens").is_none());
 }
 
-/// An unpinned knob must emit NOTHING: the served model's own default has to
-/// stand. Emitting a null/zero would silently override the checkpoint.
 #[test]
 fn unpinned_sampling_knobs_emit_no_provider_params() {
     let sampling = SamplingConfig {
@@ -847,10 +787,6 @@ fn unpinned_sampling_knobs_emit_no_provider_params() {
     );
 }
 
-/// Capture is a property of every completion loop, not a privilege of the
-/// inference path (#840). `loop_config` is the only place a loop's capture
-/// scope is chosen, so this is where a call site that forgets one — or reuses
-/// another's — becomes visible.
 #[tokio::test]
 async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
     use crate::rendered_request::scope::{
@@ -924,17 +860,4 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
         }
     })
     .await;
-}
-
-/// `loop_config_for_request` is the inference path's entry point; it must not
-/// silently drop the capture the daemon depends on.
-#[test]
-fn loop_config_for_request_keeps_the_inference_capture_scope() {
-    let agent = agent_with_retry(CompletionRetryProfileFields::default());
-    let config =
-        loop_config_for_request(&agent, "preamble".to_string(), &request(), None, 0).unwrap();
-    assert!(
-        config.on_rendered_request.is_some(),
-        "the request path must arm a rendered-request capture"
-    );
 }

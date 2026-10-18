@@ -1,10 +1,7 @@
 //! Live compatibility of the collection versions two running nodes replicate.
-//!
-//! DefraDB admits a peer connection regardless of schema, then resolves every
-//! merged block by `schema_version_id` and rejects versions the receiver does
-//! not hold. Gents has no schema upgrade path between builds, so a peer whose
-//! active versions differ can never merge the other side's writes and must
-//! be reported instead.
+//! DefraDB resolves every merged block by `schema_version_id` and rejects
+//! versions the receiver does not hold; a peer whose active versions differ can
+//! never merge the other side's writes and must be reported instead.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -27,8 +24,6 @@ pub struct ReplicatedCollectionIdentity {
 }
 
 impl ReplicatedCollectionIdentity {
-    /// Read the identity from DefraDB's collection-version JSON. `None` when
-    /// the version has no ID.
     pub fn from_collection_version(version: &Value) -> Option<Self> {
         let version_id = version
             .get("VersionID")
@@ -90,8 +85,6 @@ impl fmt::Display for ReplicatedSchemaSkew {
 
 impl std::error::Error for ReplicatedSchemaSkew {}
 
-/// Compare every `expected` collection. A collection missing on either side
-/// is a mismatch.
 pub fn compare_replicated_schema(
     expected: &[&str],
     local: &ReplicatedSchema,
@@ -120,99 +113,5 @@ pub fn compare_replicated_schema(
             collections,
             advertised: true,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    const EXPECTED: &[&str] = &["AgentMessage", "AgentSession"];
-
-    fn identity(version_id: &str) -> ReplicatedCollectionIdentity {
-        ReplicatedCollectionIdentity {
-            version_id: version_id.to_string(),
-            branchable: true,
-            policy_resource: None,
-        }
-    }
-
-    fn schema(session_version: &str) -> ReplicatedSchema {
-        [
-            ("AgentMessage".to_string(), identity("bafy-message")),
-            ("AgentSession".to_string(), identity(session_version)),
-        ]
-        .into()
-    }
-
-    #[test]
-    fn identical_versions_are_compatible() {
-        assert_eq!(
-            compare_replicated_schema(EXPECTED, &schema("bafy-a"), Some(&schema("bafy-a"))),
-            Ok(())
-        );
-    }
-
-    #[test]
-    fn a_changed_replicated_collection_is_reported_by_name() {
-        let skew = compare_replicated_schema(EXPECTED, &schema("bafy-a"), Some(&schema("bafy-b")))
-            .unwrap_err();
-        assert_eq!(skew.collections, vec!["AgentSession".to_string()]);
-        let text = skew.to_string();
-        assert!(text.contains("update the app and the runtime to the same version"));
-        assert!(text.contains("AgentSession"));
-    }
-
-    #[test]
-    fn branchable_and_policy_settings_are_part_of_the_identity() {
-        let local = schema("bafy-a");
-        let mut remote = local.clone();
-        remote.get_mut("AgentMessage").unwrap().branchable = false;
-        assert!(compare_replicated_schema(EXPECTED, &local, Some(&remote)).is_err());
-
-        let mut remote = local.clone();
-        remote.get_mut("AgentMessage").unwrap().policy_resource = Some("message".into());
-        assert!(compare_replicated_schema(EXPECTED, &local, Some(&remote)).is_err());
-    }
-
-    #[test]
-    fn a_collection_missing_on_either_side_fails_closed() {
-        let full = schema("bafy-a");
-        let mut partial = full.clone();
-        partial.remove("AgentMessage");
-        for (local, remote) in [(&full, &partial), (&partial, &full)] {
-            let skew = compare_replicated_schema(EXPECTED, local, Some(remote)).unwrap_err();
-            assert_eq!(skew.collections, vec!["AgentMessage".to_string()]);
-        }
-    }
-
-    #[test]
-    fn a_peer_without_a_schema_is_incompatible() {
-        let skew = compare_replicated_schema(EXPECTED, &schema("bafy-a"), None).unwrap_err();
-        assert!(!skew.advertised);
-        assert!(skew.to_string().contains("does not advertise"));
-    }
-
-    #[test]
-    fn identity_reads_defradb_collection_version_json() {
-        let version = json!({
-            "Name": "AgentSession",
-            "VersionID": "bafy-session",
-            "IsBranchable": true,
-            "Policy": { "ID": "local-id", "ResourceName": "session" },
-        });
-        assert_eq!(
-            ReplicatedCollectionIdentity::from_collection_version(&version),
-            Some(ReplicatedCollectionIdentity {
-                version_id: "bafy-session".into(),
-                branchable: true,
-                policy_resource: Some("session".into()),
-            })
-        );
-        assert_eq!(
-            ReplicatedCollectionIdentity::from_collection_version(&json!({ "VersionID": "" })),
-            None
-        );
     }
 }

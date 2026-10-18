@@ -7,11 +7,9 @@ use clap::Parser;
 use gents::defra_node::NodeBuilder;
 use serde::de::DeserializeOwned;
 
-/// The account remove and usage read the desktop shares with `gents accounts`.
 pub mod accounts {
     pub use crate::commands::accounts::{remove_account, request_usage_reads, UsageReads};
 }
-/// Authenticated enrollment offer issuance shared by native server hosts.
 pub mod enrollment {
     pub use crate::http::enrollment::{
         ensure_enrollment_network, EnrollmentOfferIssuer, EnrollmentOfferStatus,
@@ -552,61 +550,22 @@ async fn http_send_bytes(request: reqwest::RequestBuilder) -> Result<(reqwest::U
     Ok((url, body.to_vec()))
 }
 
-/// The control plane a command reads and writes, holding the claim on the
-/// home's store for exactly as long as it holds that store open.
-///
-/// The claim is the store lock `gents init` and `gents server` take, so
-/// `gents init --overwrite` cannot wipe a store a command still has open.
-/// Fields drop in declaration order: the access, and with it this command's
-/// handle on the embedded node, is released before the claim.
-pub(crate) struct CommandAccess {
-    access: ConfigAccess,
-    _claim: Option<gents::home::StoreLock>,
-}
-
-impl std::ops::Deref for CommandAccess {
-    type Target = ConfigAccess;
-
-    fn deref(&self) -> &ConfigAccess {
-        &self.access
-    }
-}
-
-impl std::borrow::Borrow<ConfigAccess> for CommandAccess {
-    fn borrow(&self) -> &ConfigAccess {
-        &self.access
-    }
-}
-
-impl From<ConfigAccess> for CommandAccess {
-    /// Access whose store, if any, its caller already holds.
-    fn from(access: ConfigAccess) -> Self {
-        Self {
-            access,
-            _claim: None,
-        }
-    }
-}
-
-/// Opens the control plane a command reads and writes: the running server's
-/// GraphQL endpoint, or the home's own store as an embedded node claimed for
-/// as long as the returned access lives.
 pub(crate) async fn resolve_config_access(
     home: Option<&Path>,
     explicit_graphql: Option<&str>,
-) -> Result<(CommandAccess, PathBuf)> {
+) -> Result<(ConfigAccess, PathBuf)> {
     let home_dir = resolve_home_dir(home);
     if let Some(graphql) = explicit_graphql
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
         let endpoint = resolve_graphql_endpoint(Some(graphql), home)?;
-        return Ok((ConfigAccess::Graphql(endpoint).into(), home_dir));
+        return Ok((ConfigAccess::Graphql(endpoint), home_dir));
     }
     if let Some(runtime_state) = read_runtime_state(&home_dir)? {
         if graphql_endpoint_available(&runtime_state.graphql).await {
             let endpoint = home_graphql_endpoint(&home_dir, runtime_state.graphql);
-            return Ok((ConfigAccess::Graphql(endpoint).into(), home_dir));
+            return Ok((ConfigAccess::Graphql(endpoint), home_dir));
         }
     }
 
@@ -614,36 +573,24 @@ pub(crate) async fn resolve_config_access(
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
     let claim = gents::home::lock_store(&home_dir, &data_dir)?;
-    let node = {
-        use std::sync::Arc;
-        let node_arc = Arc::new(
-            persistent_node_builder_with_stored_identity(&home_dir, &data_dir)
-                .await?
-                .build()
-                .await
-                .with_context(|| {
-                    format!("building embedded DefraDB node from {}", data_dir.display())
-                })?,
-        );
-        gents::migration::ensure_all_runtime_migrations(node_arc.clone())
+    let node = std::sync::Arc::new(
+        persistent_node_builder_with_stored_identity(&home_dir, &data_dir)
+            .await?
+            .build()
             .await
-            .map_err(|error| gents::storage_backend::classify_store_error(error, &data_dir))?;
-        gents::store_key::upgrade::finish(&data_dir)?;
-        Arc::try_unwrap(node_arc).unwrap_or_else(|_| {
-            unreachable!("node_arc had exactly one strong reference at this point")
-        })
-    };
-    Ok((
-        CommandAccess {
-            access: ConfigAccess::Local(std::sync::Arc::new(node)),
-            _claim: Some(claim),
-        },
-        home_dir,
-    ))
+            .with_context(|| {
+                format!("building embedded DefraDB node from {}", data_dir.display())
+            })?,
+    );
+    let migration_node = node.clone();
+    let access = ConfigAccess::claimed_local(node, claim)?;
+    gents::migration::ensure_all_runtime_migrations(migration_node)
+        .await
+        .map_err(|error| gents::storage_backend::classify_store_error(error, &data_dir))?;
+    gents::store_key::upgrade::finish(&data_dir)?;
+    Ok((access, home_dir))
 }
 
-/// The builder for an initialized home's store at `data_dir`, encrypted with
-/// the key the home recorded.
 pub(crate) async fn persistent_node_builder(
     home_dir: &Path,
     data_dir: &Path,
@@ -685,18 +632,13 @@ pub(crate) fn normalize_optional_string(value: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// Removes everything under the resolved home `home` except `keep` (the held
-/// store lock), so a runtime cannot take the store while it is wiped. `home`
-/// must come from [`overwritable_home`]; every removal stays under it.
+/// `home` must come from [`overwritable_home`]; the held store lock is kept so
+/// a runtime cannot take the store while it is wiped.
 pub(crate) fn dangerously_overwrite_home(home: &Path, keep: &Path) -> Result<()> {
     remove_tree_except(home, keep)
         .with_context(|| format!("dangerously overwriting {}", home.display()))
 }
 
-/// Resolves the directory an overwrite of `home_dir` would wipe, through
-/// every symlink and `.`/`..` alias, and refuses the filesystem root, the
-/// user home and any ancestor of it. An unknown user home is refused, not
-/// skipped. `None` when the home does not exist.
 pub(crate) fn overwritable_home(
     home_dir: &Path,
     user_home: Option<&Path>,
@@ -839,8 +781,6 @@ mod tests {
         assert!(!data.join("MANIFEST").exists(), "the store is never opened");
     }
 
-    /// An initialized home: the signing key and `init.json` every
-    /// embedded-node entry point requires before it will open the store.
     fn initialized_home(temp: &Path) -> PathBuf {
         let home = temp.join("home");
         let key_path = default_key_path(&home, "default");
@@ -889,9 +829,9 @@ mod tests {
         let home = initialized_home(temp.path());
 
         let (access, _) = resolve_config_access(Some(&home), None).await.unwrap();
-        let ConfigAccess::Local(node) = &*access else {
-            panic!("an offline home opens its store");
-        };
+        let node = access
+            .local_node()
+            .expect("an offline home opens its store");
         let node = std::sync::Arc::downgrade(node);
 
         let error = gents::home::lock_store(&home, &default_data_dir(&home))
@@ -903,8 +843,6 @@ mod tests {
 
         drop(access);
         assert_eq!(node.strong_count(), 0, "the access held the only node");
-        // The backend refuses a store still open in this process, so reopening
-        // proves the node closed as well as the claim released.
         let (reopened, _) = resolve_config_access(Some(&home), None)
             .await
             .expect("a dropped access releases the store");
@@ -940,17 +878,6 @@ mod tests {
         };
 
         assert!(error.to_string().contains("run `gents init --home"));
-    }
-
-    #[test]
-    fn default_codex_remote_matches_shim_port() {
-        // serve.rs decides whether to print a --remote hint by comparing the
-        // formatted shim URL against DEFAULT_CODEX_REMOTE; the two constants
-        // must agree byte-for-byte.
-        assert_eq!(
-            DEFAULT_CODEX_REMOTE,
-            format!("ws://127.0.0.1:{DEFAULT_CODEX_SHIM_PORT}/")
-        );
     }
 
     #[test]

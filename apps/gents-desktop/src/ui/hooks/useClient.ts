@@ -1,5 +1,4 @@
-/* What screens read about the client and the selection, by name. Each
-   re-renders its caller only when what it returns changes. */
+import { useMemo } from "react";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 
@@ -12,10 +11,10 @@ import {
   type NodeView,
 } from "../../hooks/fleetStore";
 
-import { folderOf } from "../../hooks/chatFolders";
+import { folderOf, recentFolders } from "../../hooks/chatFolders";
 import { useIncompatibleHome } from "../../hooks/useIncompatibleHome";
 import { useApp, useView } from "../app/AppContext";
-import { workingNode } from "../lib/nodes";
+import { isWorkingNode, workingNode } from "../lib/nodes";
 import {
   defaultScope,
   fleetNodes,
@@ -27,13 +26,10 @@ import {
 import { useFleet } from "./useFleet";
 import { clientRunning, syncHealthOf } from "../../hooks/clientStore";
 
-/** What the home was set up with, as last read; the same object while it
-    is unchanged. */
 export function useBootstrap() {
   return useStore(useApp().stores.client, (state) => state.snapshot?.bootstrap);
 }
 
-/** The home's node DID, which marks the node this machine runs. */
 export function useHomeDid() {
   return useStore(
     useApp().stores.client,
@@ -41,22 +37,17 @@ export function useHomeDid() {
   );
 }
 
-/** The selected node's DID, or the first node's while nothing is selected. */
 export function useSelectedNodeDid(): string | null {
   const nodeDid = useApp().stores.selection.use.nodeDid();
   const first = useFleet((state) => firstNode(state)?.nodeDid ?? null);
   return nodeDid ?? first;
 }
 
-/** The selected node as the fleet holds it, or the first one while nothing
-    is selected yet; the same object while it is unchanged. */
 export function useSelectedNode(): NodeView | null {
   const nodeDid = useApp().stores.selection.use.nodeDid();
   return useFleet((state) => nodeOrFirst(state, nodeDid));
 }
 
-/** A mailbox item on the selected node, or the first node while nothing is
-    selected yet; null when that node no longer lists it. */
 export function useSelectedNodeMailboxItem(
   itemId: string | null | undefined,
 ): MailboxItemView | null {
@@ -68,25 +59,19 @@ export function useSelectedNodeMailboxItem(
   });
 }
 
-/** The node this machine runs, as the fleet holds it; null when the client
-    is paired only to remote nodes. */
 export function useWorkingNode(): NodeView | null {
   const homeDid = useHomeDid();
   return useFleet((state) => workingNode(fleetNodes(state), homeDid));
 }
 
-/** How many nodes the client can see. */
 export function useNodeCount() {
   return useFleet((state) => state.nodeKeys.length);
 }
 
-/** Whether the client is running. */
 export function useOnline() {
   return useStore(useApp().stores.client, clientRunning);
 }
 
-/** The enrolment requests in flight; null while the signed enrolment state
-    cannot be read, undefined while the client is not running. */
 export function useEnrollmentRequests() {
   return useStore(
     useApp().stores.client,
@@ -94,12 +79,10 @@ export function useEnrollmentRequests() {
   );
 }
 
-/** How the client's database sync is doing. */
 export function useSyncHealth() {
   return useStore(useApp().stores.client, syncHealthOf);
 }
 
-/** The tool root and ceiling this machine's node was set up with. */
 export function useToolAuthority() {
   return useStore(
     useApp().stores.client,
@@ -110,8 +93,22 @@ export function useToolAuthority() {
   );
 }
 
-/** A value worked out over the fleet in the selection's scope; re-renders
-    when it changes, item by item for a list. */
+export function useNodeReach(node: NodeView) {
+  const homeDid = useHomeDid();
+  const own = useToolAuthority();
+  const local = isWorkingNode(node, homeDid);
+  const env =
+    node.agentEnvironments.find((e) => e.isDefault) ??
+    node.agentEnvironments[0] ??
+    null;
+  return {
+    local,
+    root: (local ? own.root : env?.workspaceRoot) ?? null,
+    ceiling: (local ? own.ceiling : null) ?? null,
+    env,
+  };
+}
+
 export function useInScope<T>(pick: (ctx: ScopeContext) => T): T {
   const selectedNodeDid = useSelectedNodeDid();
   const homeDid = useHomeDid();
@@ -120,29 +117,30 @@ export function useInScope<T>(pick: (ctx: ScopeContext) => T): T {
   );
 }
 
-/** How many open mailbox items wait in the mailbox's default scope. */
 export function useMailboxCount() {
   return useInScope((ctx) => mailboxInScope(defaultScope("mailbox"), ctx).length);
 }
 
-/** The newest sessions in the recents' default scope. */
 export function useRecentSessions(limit: number) {
   return useInScope((ctx) => recentInScope(defaultScope("recents"), ctx, limit));
 }
 
-/** The agent a message goes to: the selection's, settled against the node. */
 export function useSelectedAgentId() {
   return useView((view) => view.agentReadiness.agentId);
 }
 
-/** The folder the selected chat works in. */
 export function useChatFolder() {
   const { stores } = useApp();
   const sessionId = stores.selection.use.sessionId();
   return useStore(stores.chat, (state) => folderOf(state.folders, sessionId));
 }
 
-/** The mailbox item the next message answers, while it is held. */
+export function useRecentFolders() {
+  const { stores } = useApp();
+  const folders = useStore(stores.chat, (state) => state.folders);
+  return useMemo(() => recentFolders(folders), [folders]);
+}
+
 export function useMailboxCause() {
   const { stores } = useApp();
   const route = stores.selection.use.mailboxRoute();
@@ -151,7 +149,6 @@ export function useMailboxCause() {
   return route ? { itemId: route.itemId, agentId: agentId ?? "", sessionId } : null;
 }
 
-/** Startup as screens show it. */
 export function useStartup() {
   const { stores, lifecycle, actions } = useApp();
   const managedServerWait = useStore(stores.localServer, (s) => s.wait);
@@ -170,7 +167,6 @@ export function useStartup() {
     ...state,
     managedServerWait,
     incompatibleHome: useIncompatibleHome(stores.client, lifecycle.home),
-    /* a restart needs the node name and authority the failed start reported */
     canRestartManagedServer: Boolean(
       failure?.status.nodeName &&
       failure.status.effectiveToolCeiling &&
@@ -179,12 +175,10 @@ export function useStartup() {
   };
 }
 
-/** How the selected session's last read went. */
 export function useSessionLoad() {
   return useStore(useApp().stores.session, (state) => state.load);
 }
 
-/** Whether a turn is running that Stop can interrupt. */
 export function useInterruptVisible() {
   return useView((view) => {
     const kind = view.shellProjection.workflow.kind;

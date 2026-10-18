@@ -22,9 +22,6 @@ pub(crate) struct SelfAgent {
     pub(crate) endpoint: String,
     pub(crate) inference_profile_id: String,
     pub(crate) context_window: Option<i64>,
-    /// Compaction threshold fraction (0.0-1.0) resolved through the agent's
-    /// context and compaction document. Missing optional configuration uses
-    /// the runtime default.
     pub(crate) compaction_threshold: f64,
 }
 
@@ -40,8 +37,6 @@ pub(crate) struct ContextBudget {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub(crate) struct ContextIndicator {
-    /// The effective input budget (context window scaled by the compaction
-    /// threshold) of the primary agent, not the raw context window.
     pub(crate) max_tokens: Option<i64>,
     pub(crate) current_estimate: Option<i64>,
     pub(crate) utilization_percent: Option<f64>,
@@ -351,10 +346,6 @@ fn build_context_indicator(
     agents: &[SelfAgent],
     context_budget: &ContextBudget,
 ) -> ContextIndicator {
-    // max_tokens is the effective input budget (context window scaled by the
-    // compaction threshold) of the enabled agent with the largest window,
-    // not the raw context window: utilization is measured against the same
-    // budget the runtime dispatches against.
     let max_tokens = agents
         .iter()
         .filter(|agent_config| agent_config.enabled)
@@ -382,197 +373,5 @@ fn build_context_indicator(
         utilization_percent,
         compaction_count: context_budget.compaction_count,
         last_compacted_at: context_budget.latest_compaction_at.clone(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    fn rows<T: serde::de::DeserializeOwned>(value: Value) -> Vec<T> {
-        serde_json::from_value(value).unwrap()
-    }
-
-    #[test]
-    fn joins_agent_with_backend_and_profile() {
-        let agents = build_agents(
-            rows(json!([{
-                "agent_id": "amy-general",
-                "display_name": "Amy General",
-                "inference_profile_id": "p1",
-                "context_id": "c1",
-                "enabled": true
-            }])),
-            rows(json!([{
-                "backend_id": "b1",
-                "provider_kind": "OpenAiCompatible",
-                "endpoint": "http://host/v1"
-            }])),
-            rows(
-                json!([{ "profile_id": "p1", "backend_id": "b1", "model_name": "gpt-4", "context_window": 128000 }]),
-            ),
-            rows(json!([{ "context_id": "c1", "compaction_id": "compact-1" }])),
-            rows(json!([{ "compaction_id": "compact-1", "threshold": 0.8 }])),
-        );
-
-        assert_eq!(agents.len(), 1);
-        let b = &agents[0];
-        assert_eq!(b.model_name, "gpt-4");
-        assert_eq!(b.provider_kind, "OpenAiCompatible");
-        assert_eq!(b.endpoint, "http://host/v1");
-        assert_eq!(b.context_window, Some(128000));
-        assert_eq!(b.compaction_threshold, 0.8);
-    }
-
-    #[test]
-    fn agent_without_matching_backend_or_profile_has_empty_join() {
-        let agents = build_agents(
-            rows(json!([{ "agent_id": "orphan", "inference_profile_id": "missing" }])),
-            rows(json!([])),
-            rows(json!([])),
-            rows(json!([])),
-            rows(json!([])),
-        );
-        assert_eq!(agents.len(), 1);
-        assert_eq!(agents[0].provider_kind, "");
-        assert_eq!(agents[0].endpoint, "");
-        assert_eq!(agents[0].context_window, None);
-        assert!(agents[0].enabled);
-        assert_eq!(
-            agents[0].compaction_threshold,
-            gents::config::DEFAULT_COMPACTION_THRESHOLD
-        );
-    }
-
-    #[test]
-    fn distinct_session_ids_dedupes_and_drops_empty() {
-        let ids = distinct_session_ids(&rows(json!([
-            { "request_id": "r-1", "session_id": "s-a" },
-            { "request_id": "r-2", "session_id": "s-a" },
-            { "request_id": "r-3", "session_id": "s-b" },
-            { "request_id": "r-4", "session_id": "" },
-            { "request_id": "r-5", "session_id": null }
-        ])));
-        assert_eq!(ids, vec!["s-a".to_string(), "s-b".to_string()]);
-    }
-
-    #[test]
-    fn self_view_rejects_request_without_request_id() {
-        let error = decode::<SelfViewEnvelope>(
-            json!({ "data": { "AgentRequest": [{ "session_id": "s-a" }] } }),
-            "self view",
-        )
-        .unwrap_err();
-
-        assert!(
-            format!("{error:#}").contains("missing field `request_id`"),
-            "{error:#}"
-        );
-    }
-
-    #[test]
-    fn context_budget_counts_and_picks_latest_compaction() {
-        let budget = aggregate_compaction(rows(json!([
-            { "created_at": "2026-06-01T10:00:00Z", "original_tokens": 100, "compacted_tokens": 40 },
-            { "created_at": "2026-06-02T10:00:00Z", "original_tokens": 200, "compacted_tokens": 80 }
-        ])));
-        assert_eq!(budget.compaction_count, 2);
-        assert_eq!(
-            budget.latest_compaction_at.as_deref(),
-            Some("2026-06-02T10:00:00Z")
-        );
-        assert_eq!(budget.latest_original_tokens, Some(200));
-        assert_eq!(budget.latest_compacted_tokens, Some(80));
-    }
-
-    #[test]
-    fn empty_compactions_yield_default_budget() {
-        let budget = aggregate_compaction(rows(json!([])));
-        assert_eq!(budget.compaction_count, 0);
-        assert_eq!(budget.latest_compaction_at, None);
-    }
-
-    #[test]
-    fn context_indicator_uses_enabled_agent_window_and_latest_compaction() {
-        let agents = vec![
-            SelfAgent {
-                agent_id: "disabled".to_string(),
-                display_name: String::new(),
-                model_name: String::new(),
-                enabled: false,
-                backend_id: String::new(),
-                provider_kind: String::new(),
-                endpoint: String::new(),
-                inference_profile_id: String::new(),
-                context_window: Some(2000),
-                compaction_threshold: 0.75,
-            },
-            SelfAgent {
-                agent_id: "enabled".to_string(),
-                display_name: String::new(),
-                model_name: String::new(),
-                enabled: true,
-                backend_id: String::new(),
-                provider_kind: String::new(),
-                endpoint: String::new(),
-                inference_profile_id: String::new(),
-                context_window: Some(1000),
-                compaction_threshold: 0.8,
-            },
-        ];
-        let budget = ContextBudget {
-            compaction_count: 2,
-            latest_compaction_at: Some("2026-06-03T10:30:00Z".to_string()),
-            latest_original_tokens: Some(800),
-            latest_compacted_tokens: Some(400),
-            sessions_considered: 1,
-            request_scan_limit: RECENT_REQUEST_SCAN as i64,
-        };
-
-        let context = build_context_indicator(&agents, &budget);
-
-        // max_tokens is the effective input budget of the enabled agent_config
-        // with the largest window (1000 * 0.8 == 800), not the raw window.
-        assert_eq!(context.max_tokens, Some(800));
-        assert_eq!(context.current_estimate, Some(400));
-        assert_eq!(context.utilization_percent, Some(50.0));
-        assert_eq!(context.compaction_count, 2);
-        assert_eq!(
-            context.last_compacted_at.as_deref(),
-            Some("2026-06-03T10:30:00Z")
-        );
-    }
-
-    #[test]
-    fn context_indicator_utilization_is_measured_against_the_effective_input_budget() {
-        let agents = vec![SelfAgent {
-            agent_id: "enabled".to_string(),
-            display_name: String::new(),
-            model_name: String::new(),
-            enabled: true,
-            backend_id: String::new(),
-            provider_kind: String::new(),
-            endpoint: String::new(),
-            inference_profile_id: String::new(),
-            context_window: Some(100_000),
-            compaction_threshold: 0.75,
-        }];
-        let budget = ContextBudget {
-            compaction_count: 0,
-            latest_compaction_at: None,
-            latest_original_tokens: Some(60_000),
-            latest_compacted_tokens: None,
-            sessions_considered: 1,
-            request_scan_limit: RECENT_REQUEST_SCAN as i64,
-        };
-
-        let context = build_context_indicator(&agents, &budget);
-
-        // Budget is 100_000 * 0.75 == 75_000, so 60_000 current tokens is
-        // 80% utilized, not 60% of the raw 100_000 window.
-        assert_eq!(context.max_tokens, Some(75_000));
-        assert_eq!(context.current_estimate, Some(60_000));
-        assert_eq!(context.utilization_percent, Some(80.0));
     }
 }

@@ -3,15 +3,6 @@ import Proofs.Enrollment.RequestInput
 import Proofs.Request.Executable
 import Proofs.Request.CausalHop
 
-/-!
-# Agent request admission owned by authenticated enrollment
-
-Replication is transport, not authority.  Every newly observed `AgentRequest`
-must carry exactly one authenticated provenance branch.  Mutable lifecycle
-columns are deliberately outside `AgentRequestSemantics`; the signature covers
-every immutable request semantic and every admission-generation field.
--/
-
 namespace Enrollment
 
 inductive AgentRequestAdmissionKind where
@@ -40,8 +31,6 @@ structure TitleParentLink where
   documentId : String
   deriving DecidableEq, Repr
 
-/-- The existing local-control source lookup authenticates these facts against
-the parent row. Its lifecycle state is intentionally not an admission input. -/
 structure TitleParentEvidence where
   link : TitleParentLink
   nodeDid : Did
@@ -51,17 +40,13 @@ structure TitleParentEvidence where
   physicalBindingCurrent : Bool
   deriving DecidableEq, Repr
 
-/-- Abstract signed semantic fields for the parent lineage only; the hop is the
-separate `hopField`. Native `push_option` uses byte tags 1/0; the native adapter
+/-- Native `push_option` uses byte tags 1/0; the native adapter
 must map the typed link through its existing encoder, not interpret these model
 labels as the native signature payload bytes. -/
 def titleParentFields (link : TitleParentLink) : CanonicalFields :=
   textFieldsToBytes ["some", link.requestId, "some", link.documentId, "none", "none"]
 
-/-- Exact immutable request semantics covered by the request signature. -/
 structure AgentRequestSemantics where
-  /-- Signed causal hop (`request_hop`, see `CausalHop`), encoded by
-  `hopField` as the leading signed semantic field. -/
   hop : Nat := 0
   requestId : String
   purpose : RequestPurpose
@@ -72,7 +57,6 @@ structure AgentRequestSemantics where
   content : String
   input : RequestInput
   createdAt : String
-  /-- Physical `_docID` of the canonical Trigger configuration row. -/
   triggerConfigDocumentId : String
   retryFields : CanonicalFields
   triggerFields : CanonicalFields
@@ -80,12 +64,11 @@ structure AgentRequestSemantics where
   workspace : RequestWorkspace
   deriving DecidableEq, Repr
 
-/-- Abstract signed element for the causal hop, the only hop in the signed
-fields. As with `titleParentFields`, these model bytes (one field whose length
-is the hop) are not the native signature payload: native signing encodes the
-hop through its existing decimal `request_hop` encoder, and the adapter maps
-the typed `hop` (emitted as a typed JSON field) to that encoder. Both encodings
-are injective, so a changed hop always changes the signed fields. -/
+/-- These model bytes (one field whose length is the hop) are not the native
+signature payload: native signing encodes the hop through its existing decimal
+`request_hop` encoder, and the adapter maps the typed `hop` (emitted as a typed
+JSON field) to that encoder. Both encodings are injective, so a changed hop
+always changes the signed fields. -/
 def hopField (hop : Nat) : WireBytes := List.replicate hop 0
 
 def agentRequestSemanticFields (request : AgentRequestSemantics) : CanonicalFields :=
@@ -144,8 +127,6 @@ theorem purpose_change_changes_signed_fields
     hpurpose, RequestPurpose.toWire] at hsecond
   exact (by decide : stringBytes "normal" ≠ stringBytes "title-audit") hsecond
 
-/-- The hop is signed: a request cannot keep its signature while claiming a
-different causal hop, so no holder can reset a chain's depth. -/
 theorem hop_change_changes_signed_fields
     (request : AgentRequestSemantics) (admission : AgentRequestAdmission) (hop : Nat)
     (hne : hop ≠ request.hop) :
@@ -159,45 +140,31 @@ theorem hop_change_changes_signed_fields
   simp only [List.length_replicate] at hlen
   exact hne hlen.symm
 
-/--
-Claim-time evidence reconstructed by the target runtime.  These observations
+/-- Claim-time evidence reconstructed by the target runtime. These observations
 are never trusted from request columns: the issuer signature, durable source
-binding, and target policy are checked against local state.
--/
+binding, and target policy are checked against local state. -/
 structure RuntimeInternalEvidence where
   sourceKind : RuntimeInternalSourceKind
   issuerDid : Did
   sourceRequestId : String
   targetNode : Did
   targetRuntimeAttestationValid : Bool
-  /-- Includes complete signed workspace reference agreement with the existing
-  authenticated source via requestWorkspaceWithinSource. -/
   sourceBindingCurrent : Bool
   triggerConfigDocumentBindingCurrent : Bool
-  /-- The local-control parent exactly owns the source; for a normal
-  continuation it is in the same session under the same requester. -/
   sourceDocumentBindingCurrent : Bool
   targetPolicyAllows : Bool
-  /-- Existing Goal physical-edge validator authenticates this exact receipt's
-  original sequence/wrapup, source/goal/physical-parent binding and deterministic
-  identity. This is reconstructed evidence, never copied from input unchecked. -/
   verifiedGoalContinuation : Option GoalContinuationInput := none
   titleParent : Option TitleParentEvidence := none
-  /-- The requester that owns the existing `AgentSession` of
-  `(targetNode, sessionId)`, read by the session owner; `none` for a new
-  session. -/
+  /-- Read by the session owner; `none` for a new session. -/
   sessionScope : Option Did := none
   deriving DecidableEq, Repr
 
-/-- The requester a runtime-authored request is written under. A completion
-wake, control continuation or trigger fire delivered into an existing session
-adopts the requester that owns that session, so it lands in the session a
-paired client started instead of a node-scoped copy that cannot find it
-(#2064); a new session is the target's own. The runtime can choose no other
-requester. Local-control continuations additionally bind a parent in the same
-session under the same requester (`sourceDocumentBindingCurrent`). A title
-audit is audit-only and never delivered into a session, so it keeps the target
-runtime's requester. -/
+/-- A completion wake, control continuation or trigger fire delivered into an
+existing session adopts the requester that owns that session; a new session is
+the target's own. The runtime can choose no other requester. Local-control
+continuations additionally bind a parent in the same session under the same
+requester (`sourceDocumentBindingCurrent`). A title audit is audit-only and
+never delivered into a session, so it keeps the target runtime's requester. -/
 def runtimeRequesterScope (request : AgentRequestSemantics)
     (evidence : RuntimeInternalEvidence) : Did :=
   match request.purpose with
@@ -246,9 +213,8 @@ instance (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
     (exactEnrollmentGeneration request admission enrollmentRequest decision) := by
   unfold exactEnrollmentGeneration; infer_instance
 
-/-- Title is a runtime-authored, parent-only request in the same session and
-agent. The authenticated parent is provenance; neither its lifecycle state
-nor its execution generation grants title write authority. -/
+/-- Neither the parent's lifecycle state nor its execution generation grants
+title write authority. -/
 def titlePurposeAllowed
     (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
     (runtimeEvidence : Option RuntimeInternalEvidence) : Prop :=
@@ -305,20 +271,13 @@ instance (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
         simp only [requestPurposeAllowed, hpurpose, titlePurposeAllowed, hparent]
         infer_instance
 
-/-- What the target node decides for a request it did not issue. -/
 structure TargetAuthority where
-  /-- The target's `PeerAdmissionAuthority` ACP verdict for the requester DID. -/
   peerAuthorityAllows : Bool
-  /-- The target node's configured `max_request_hop` (default
-  `CausalHop.defaultMaxRequestHop`); every branch bounds the signed causal hop
-  by it (`CausalHop.admitHop`). -/
   maxRequestHop : Nat
   deriving DecidableEq, Repr
 
-/--
-The executable router boundary. `authorizationFresh` is the current-clock
-lease check made during this admission attempt, not a cached observation.
--/
+/-- `authorizationFresh` is the current-clock lease check made during this
+admission attempt, not a cached observation. -/
 def agentRequestAdmissible
     (s : State) (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
     (enrollmentRequest : Option Request) (decision : Option Decision)
@@ -362,9 +321,8 @@ instance (s : State) (request : AgentRequestSemantics) (admission : AgentRequest
   cases admission.kind <;> cases enrollmentRequest <;> cases decision <;>
     cases runtimeEvidence <;> infer_instance
 
-/-- Runtime-only continuation facts require the authenticated local-control
-branch and exact original receipt facts. Queue provenance never grants that
-branch; a goal wake missing its original facts cannot infer them from Goal. -/
+/-- Queue provenance never grants a runtime continuation branch; a goal wake
+missing its original facts cannot infer them from Goal. -/
 def goalContinuationAllowed (input : RequestInput) (kind : AgentRequestAdmissionKind)
     (source : RuntimeInternalSourceKind) (verified : Option GoalContinuationInput) : Bool :=
   match input.goalContinuation with
@@ -378,11 +336,6 @@ def requestGoalInputAllowed (request : AgentRequestSemantics)
   goalContinuationAllowed request.input admission.kind admission.runtimeSourceKind
     (evidence.bind RuntimeInternalEvidence.verifiedGoalContinuation)
 
-/-- Composed claim boundary: signatures authenticate input but do not grant
-skills, cwd escape, or runtime queue origins. The observed session agent is
-resolved by the session owner; blank/mismatched selection cannot be repaired by
-falling back to the node name. New-session creation passes its selected
-agent through the same boundary. -/
 def agentRequestClaimable
     (s : State) (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
     (enrollmentRequest : Option Request) (decision : Option Decision)
@@ -465,7 +418,6 @@ theorem goal_input_requires_runtime_control (input : RequestInput)
       verified = some facts := by
   simpa [goalContinuationAllowed, hpresent, Bool.and_eq_true, and_assoc] using h
 
-/-- Explicit observations used by generated implementation conformance cases. -/
 structure AgentRequestAdmissionObservation where
   kind : AgentRequestAdmissionKind
   signatureValid : Bool
@@ -476,8 +428,6 @@ structure AgentRequestAdmissionObservation where
   requesterMatchesTarget : Bool
   signerMatchesTarget : Bool
   signerMatchesIssuer : Bool
-  /-- The requester is `runtimeRequesterScope`: the owner of the existing
-  target session, or the target for a new session or a title audit. -/
   requesterMatchesSessionScope : Bool
   currentApproval : Bool
   exactGeneration : Bool
@@ -519,11 +469,8 @@ def projectAgentRequestAdmission (observation : AgentRequestAdmissionObservation
           observation.requesterMatchesSessionScope &&
           observation.triggerConfigDocumentBindingCurrent && observation.targetPolicyAllows
 
-/--
-The claim boundary distinguishes an authoritative negative observation from an
-unavailable observation.  Only the former may terminalize a durable request;
-transport/store/identity unavailability leaves it pending for a later attempt.
--/
+/-- The claim boundary distinguishes an authoritative negative observation from an
+unavailable observation. Only the former may terminalize a durable request. -/
 inductive AgentRequestAdmissionDisposition where
   | admit
   | deny
@@ -542,10 +489,6 @@ def projectAgentRequestAdmissionDisposition
   admissionDispositionFromResult observationAvailable
     (projectAgentRequestAdmission observation)
 
-/-- The purpose-aware pending scan retries unavailable observations and routes
-an authoritative title decision through the existing request transition owner.
-An admit leaves this request Pending for Handover.claimTitle's canonical lease
-claim; the separate output owner selects NoMessage for a rejected title. -/
 def titlePendingDisposition
     (observationAvailable : Bool) (s : State) (request : AgentRequestSemantics)
     (admission : AgentRequestAdmission) (runtimeEvidence : Option RuntimeInternalEvidence)
@@ -662,7 +605,6 @@ theorem local_self_requires_exact_node
   rcases hadmit with ⟨_, _, _, _, ⟨hsigner, htarget⟩, _⟩
   exact ⟨hsigner, htarget⟩
 
-/-- Enrollment history cannot disable a cryptographically exact local owner. -/
 theorem local_self_admission_is_independent_of_enrollment_state
     (s₁ s₂ : State) (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
     (enrollmentRequest : Option Request) (decision : Option Decision) (fresh : Bool)
@@ -688,9 +630,6 @@ theorem runtime_internal_requires_owned_issue
   simp only [agentRequestAdmissible, hkind] at hadmit
   rcases runtimeEvidence with _ | evidence <;> simp_all
 
-/-- A runtime-authored request delivered into an existing session is written
-under that session's owning requester, and a new session under the target's
-own; no other requester is admissible. -/
 theorem runtime_internal_adopts_session_scope
     {s : State} {request : AgentRequestSemantics} {admission : AgentRequestAdmission}
     {enrollmentRequest : Option Request} {decision : Option Decision} {fresh : Bool}
@@ -706,7 +645,6 @@ theorem runtime_internal_adopts_session_scope
   have h := hexact.2.2.2.2.2.2.2.2.1
   simpa [runtimeRequesterScope, hnormal] using h
 
-/-- Target-runtime attestation, not a node's enrollment history, owns internal admission. -/
 theorem runtime_internal_admission_is_independent_of_enrollment_state
     (s₁ s₂ : State) (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
     (enrollmentRequest : Option Request) (decision : Option Decision) (fresh : Bool)
@@ -719,8 +657,6 @@ theorem runtime_internal_admission_is_independent_of_enrollment_state
         branchFieldsExact pendingDeadlineAbsent target := by
   simp [agentRequestAdmissible, hkind]
 
-/-- A peer request is authored by another node and authorized only by the
-target's peer ACP; a same-node request can never take this branch. -/
 theorem peer_requires_foreign_signed_authorized_requester
     {s : State} {request : AgentRequestSemantics} {admission : AgentRequestAdmission}
     {enrollmentRequest : Option Request} {decision : Option Decision} {fresh : Bool}
@@ -734,7 +670,6 @@ theorem peer_requires_foreign_signed_authorized_requester
   simp only [agentRequestAdmissible, hkind] at hadmit
   exact hadmit.2.2.2.2.1
 
-/-- Every admitted request, whatever its branch, is within the hop bound. -/
 theorem admitted_request_within_hop_bound
     {s : State} {request : AgentRequestSemantics} {admission : AgentRequestAdmission}
     {enrollmentRequest : Option Request} {decision : Option Decision} {fresh : Bool}

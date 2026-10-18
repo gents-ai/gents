@@ -1,8 +1,5 @@
-//! Authoritative logical-to-physical AgentRequest binding lookup.
-//!
-//! `request_id` is a human-facing label; `_docID` is the provenance edge.
-//! Every caller uses the same limit-two lookup so missing and ambiguous labels
-//! cannot silently become half-bound writes.
+//! Every caller shares this limit-two lookup so missing and ambiguous labels
+//! cannot become half-bound writes.
 
 use anyhow::Result;
 use defra_node::EmbeddedNode;

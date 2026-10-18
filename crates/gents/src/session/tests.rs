@@ -117,11 +117,13 @@ async fn history_reconstruction_scans_a_shared_request_once() {
 #[tokio::test]
 async fn compaction_entries_track_files_cumulatively() {
     let data_path = std::env::temp_dir().join(format!("gents-compaction-{}", uuid::Uuid::new_v4()));
-    let node = defra_node::EmbeddedNode::builder()
-        .data_path(&data_path)
-        .build()
-        .await
-        .unwrap();
+    let node = std::sync::Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
 
     save_compaction_entry(
@@ -187,6 +189,44 @@ async fn compaction_entries_track_files_cumulatively() {
     assert_eq!(entries[1].files_read, vec!["/tmp/a.rs", "/tmp/c.rs"]);
     assert_eq!(entries[1].files_modified, vec!["/tmp/b.rs", "/tmp/d.rs"]);
     assert_eq!(entries[2].compacted_through_sequence, Some(40));
+    let stored = node
+        .execute(
+            r#"{ CompactionEntry(filter: { session_id: { _eq: "session-1" }, node_did: { _eq: "did:test:test" } }, order: { sequence: ASC }) { files_read files_modified } }"#,
+        )
+        .await;
+    assert!(
+        !stored.has_errors(),
+        "stored rows query failed: {:?}",
+        stored.errors
+    );
+    let stored_rows = stored.data.unwrap()["CompactionEntry"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            (
+                row["files_read"].as_str().unwrap().to_owned(),
+                row["files_modified"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        stored_rows,
+        vec![
+            (
+                r#"{"version":1,"paths":["/tmp/a.rs"]}"#.to_owned(),
+                r#"{"version":1,"paths":["/tmp/b.rs"]}"#.to_owned(),
+            ),
+            (
+                r#"{"version":1,"paths":["/tmp/c.rs"]}"#.to_owned(),
+                r#"{"version":1,"paths":["/tmp/d.rs"]}"#.to_owned(),
+            ),
+            (
+                r#"{"version":1,"paths":[]}"#.to_owned(),
+                r#"{"version":1,"paths":[]}"#.to_owned(),
+            ),
+        ]
+    );
     let prompt_state =
         load_prompt_compaction_state(&node, "session-1", "did:test:test", None, None)
             .await
@@ -213,8 +253,99 @@ async fn compaction_entries_track_files_cumulatively() {
 }
 
 #[tokio::test]
+async fn legacy_cumulative_compaction_paths_extend_and_redeliver_as_deltas() {
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    let session_id = "session-legacy-file-activity";
+    let key = escape_graphql_string(&compaction_key("did:test:test", session_id, None, 1));
+    let mutation = format!(
+        r#"mutation {{ create_CompactionEntry(input: {{
+            compaction_key: "{key}"
+            session_id: "{session_id}"
+            node_did: "did:test:test"
+            requester_did: null
+            request_id: "old-request"
+            request_doc_id: "old-request-doc"
+            sequence: 1
+            summary: "legacy"
+            files_read: "[\"/legacy/read.rs\"]"
+            files_modified: "[\"/legacy/write.rs\"]"
+            messages_compacted: 1
+            compacted_through_sequence: 10
+            original_tokens: 100
+            compacted_tokens: 20
+            created_at: "2026-10-15T00:00:00Z"
+        }}) {{ _docID }} }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "legacy seed failed: {:?}",
+        response.errors
+    );
+
+    let prior = load_prompt_compaction_state(&node, session_id, "did:test:test", None, None)
+        .await
+        .unwrap();
+    let files_read = ["/legacy/read.rs".to_string(), "/new/read.rs".to_string()];
+    let files_modified = ["/new/write.rs".to_string()];
+    let save = || {
+        save_compaction_entry_with_requester_did(
+            &node,
+            session_id,
+            "did:test:test",
+            None,
+            "new-request",
+            "new-request-doc",
+            "new summary",
+            &files_read,
+            &files_modified,
+            1,
+            20,
+            100,
+            20,
+            &prior.generation,
+        )
+    };
+    let first = save().await.unwrap();
+    assert_eq!(first.files_read, vec!["/legacy/read.rs", "/new/read.rs"]);
+    assert_eq!(
+        first.files_modified,
+        vec!["/legacy/write.rs", "/new/write.rs"]
+    );
+    assert_eq!(save().await.unwrap(), first);
+    let entries = load_compaction_entries(&node, session_id, "did:test:test", None)
+        .await
+        .unwrap();
+    assert_eq!(entries[0].files_read, vec!["/legacy/read.rs"]);
+    assert_eq!(entries[1].files_read, first.files_read);
+    assert_eq!(entries[1].files_modified, first.files_modified);
+    let stored = node
+        .execute(
+            r#"{ CompactionEntry(filter: { session_id: { _eq: "session-legacy-file-activity" }, sequence: { _eq: 2 } }) { files_read files_modified } }"#,
+        )
+        .await;
+    assert!(
+        !stored.has_errors(),
+        "stored row query failed: {:?}",
+        stored.errors
+    );
+    let stored_data = stored.data.unwrap();
+    let stored_row = &stored_data["CompactionEntry"][0];
+    assert_eq!(
+        stored_row["files_read"].as_str(),
+        Some(r#"{"version":1,"paths":["/new/read.rs"]}"#)
+    );
+    assert_eq!(
+        stored_row["files_modified"].as_str(),
+        Some(r#"{"version":1,"paths":["/new/write.rs"]}"#)
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let generation =
         load_prompt_compaction_state(&node, "session-race", "did:test:test", None, None)
@@ -296,7 +427,7 @@ async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
 
 #[tokio::test]
 async fn exact_compaction_redelivery_is_idempotent() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let generation =
         load_prompt_compaction_state(&node, "session-redelivery", "did:test:test", None, None)
@@ -363,9 +494,6 @@ async fn exact_compaction_redelivery_is_idempotent() {
 async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
     let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
-    // Exercise selection over received facts, including an out-of-scope
-    // middle header. This does not authorize a requester to change the owner
-    // of an existing session; publication authority is tested separately.
     let turns = [
         ("request-cursor-old", None, "sparse-old"),
         (
@@ -390,8 +518,6 @@ async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
         .await;
     }
 
-    // Full owner-local history keeps the sparse sequence selection: the
-    // remote turn occupies sequence 2 and must not appear.
     let local = history::load_sequenced_history_projection(
         &node,
         "session-cursor",
@@ -408,8 +534,6 @@ async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
         vec![1, 3]
     );
 
-    // The sequence cursor loads only the suffix after sequence 1: sequence 3,
-    // never the compacted prefix and never the out-of-scope remote sequence.
     let rows = history::load_sequenced_history_projection(
         &node,
         "session-cursor",
@@ -429,11 +553,13 @@ async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
 #[tokio::test]
 async fn close_session_preserves_creation_time() {
     let data_path = std::env::temp_dir().join(format!("gents-session-{}", uuid::Uuid::new_v4()));
-    let node = defra_node::EmbeddedNode::builder()
-        .data_path(&data_path)
-        .build()
-        .await
-        .unwrap();
+    let node = std::sync::Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
 
     create_session_with_id(&node, "session-1", "deploy-test", "did:test:test")
@@ -499,11 +625,13 @@ async fn close_session_preserves_creation_time() {
 async fn create_session_with_id_is_idempotent() {
     let data_path =
         std::env::temp_dir().join(format!("gents-session-upsert-{}", uuid::Uuid::new_v4()));
-    let node = defra_node::EmbeddedNode::builder()
-        .data_path(&data_path)
-        .build()
-        .await
-        .unwrap();
+    let node = std::sync::Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
 
     create_session_with_id(&node, "session-1", "general", "did:test:test")
@@ -581,11 +709,13 @@ async fn create_session_with_id_is_idempotent() {
 async fn create_session_with_agent_id_rejects_mismatched_existing_binding() {
     let data_path =
         std::env::temp_dir().join(format!("gents-session-binding-{}", uuid::Uuid::new_v4()));
-    let node = defra_node::EmbeddedNode::builder()
-        .data_path(&data_path)
-        .build()
-        .await
-        .unwrap();
+    let node = std::sync::Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
 
     create_session_with_agent_id(&node, "session-1", "did:test:test", "general")
@@ -656,10 +786,26 @@ async fn fork_rolls_back_at_every_mutation_position() {
         "fork-rollback-compaction",
         "fork-rollback-compaction-doc",
         "early turns",
-        &[],
+        &["/tmp/a.rs".to_string()],
         &[],
         2,
         2,
+        100,
+        10,
+    )
+    .await
+    .unwrap();
+    save_compaction_entry(
+        &node,
+        SOURCE,
+        AGENT,
+        "fork-rollback-compaction-2",
+        "fork-rollback-compaction-doc-2",
+        "later turns",
+        &["/tmp/b.rs".to_string()],
+        &[],
+        1,
+        3,
         100,
         10,
     )
@@ -679,11 +825,17 @@ async fn fork_rolls_back_at_every_mutation_position() {
     )
     .await;
     assert_eq!(outcome.copied_messages, 3);
-    assert_eq!(outcome.copied_compaction_entries, 1);
+    assert_eq!(outcome.copied_compaction_entries, 2);
     assert!(
         writes > 4,
         "headers, compaction, and session header are separate writes: {writes}"
     );
+    let child_entries = load_compaction_entries(&node, &outcome.session_id, AGENT, None)
+        .await
+        .unwrap();
+    assert_eq!(child_entries.len(), 2);
+    assert_eq!(child_entries[0].files_read, vec!["/tmp/a.rs"]);
+    assert_eq!(child_entries[1].files_read, vec!["/tmp/a.rs", "/tmp/b.rs"]);
     node.shutdown().await;
 }
 
@@ -691,7 +843,7 @@ async fn fork_rolls_back_at_every_mutation_position() {
 async fn compaction_save_fault_leaves_chain_and_generation_intact() {
     const AGENT: &str = "did:test:compaction-rollback";
     const SESSION: &str = "compaction-rollback";
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     save_compaction_entry(
         &node,
@@ -752,12 +904,6 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
     node.shutdown().await;
 }
 
-/// Insert canonical replica observations for reader filtering tests. These
-/// tests intentionally place foreign facts beside local ones; they establish
-/// no claim about admission or publication authority. The writer tests below
-/// use the claimed execution owner instead.
-/// Seed an already-published canonical observation for reader/claim tests.
-/// This does not exercise publication authorization or producer transitions.
 pub(crate) async fn import_history_observation(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     request_id: &str,
@@ -816,10 +962,9 @@ pub(crate) async fn import_history_observation(
         created_at: now.clone(),
     };
     let response = node
-        .execute_request_with_retry(
+        .execute_request(
             defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                 .with_variables(output_segment_create_variables(&segment).unwrap()),
-            defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -865,10 +1010,9 @@ pub(crate) async fn import_history_observation(
         created_at: now,
     };
     let response = node
-        .execute_request_with_retry(
+        .execute_request(
             defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                 .with_variables(transcript_message_create_variables(&header).unwrap()),
-            defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -1008,7 +1152,7 @@ async fn authored_keys_are_immutable_and_sequences_are_node_scoped() {
 
 #[tokio::test]
 async fn compaction_chains_with_equal_session_labels_remain_owner_scoped() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     for (owner, summary) in [
         ("did:key:owner", "local summary"),
@@ -1182,75 +1326,86 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
             None,
         )
         .await;
-        ConfigAccess::transact_local(&node, None, "test.single_header_coordinates", |txn| {
-            Box::pin(async move {
-                let response = txn
-                    .execute(&format!("{{ AgentMessage {{ {AGENT_MESSAGE_FIELDS} }} }}"))
-                    .await?;
-                let original = decode_transcript_message_row(&response["data"]["AgentMessage"][0])?;
-                let mut noise = transcript_message_create_variables(&original.message)?;
-                noise["input"]["message_key"] = serde_json::json!("unrelated-key");
-                noise["input"]["sequence"] = serde_json::json!(99);
-                noise["input"]["blocks"] = serde_json::json!({"invalid": "unrelated"});
-                for index in 0..if case == "unrelated" { 49 } else { 1 } {
-                    noise["input"]["message_key"] = serde_json::json!(format!("unrelated-{index}"));
-                    noise["input"]["sequence"] = serde_json::json!(99 + index);
-                    txn.execute_with_variables(CREATE_AGENT_MESSAGE_MUTATION, &noise)
+        let result = ConfigAccess::transact_local_write(
+            &node,
+            None,
+            "test.single_header_coordinates",
+            |txn| {
+                Box::pin(async move {
+                    let response = txn
+                        .execute(&format!("{{ AgentMessage {{ {AGENT_MESSAGE_FIELDS} }} }}"))
                         .await?;
-                }
+                    let original =
+                        decode_transcript_message_row(&response["data"]["AgentMessage"][0])?;
+                    let mut noise = transcript_message_create_variables(&original.message)?;
+                    noise["input"]["message_key"] = serde_json::json!("unrelated-key");
+                    noise["input"]["sequence"] = serde_json::json!(99);
+                    noise["input"]["blocks"] = serde_json::json!({"invalid": "unrelated"});
+                    for index in 0..if case == "unrelated" { 49 } else { 1 } {
+                        noise["input"]["message_key"] =
+                            serde_json::json!(format!("unrelated-{index}"));
+                        noise["input"]["sequence"] = serde_json::json!(99 + index);
+                        txn.execute_with_variables(CREATE_AGENT_MESSAGE_MUTATION, &noise)
+                            .await?;
+                    }
 
-                let mut other = original.message.clone();
-                let mut target = original.doc_id.clone();
-                match case {
-                    "key" => other.sequence = 2,
-                    "sequence" => other.message_key = "sequence-twin".into(),
-                    "both" => other.native_id = Some("distinct-physical-twin".into()),
-                    "foreign" => other.node_did = "did:test:foreign".into(),
-                    "requester" => other.requester_did = Some("did:test:requester".into()),
-                    "fork" => {
-                        other.session_id = "child-session".into();
-                        other.message_key = "fork-key".into();
-                        other.request_doc_id = None;
-                        other.publication = MessagePublication::Fork {
-                            origin_message_doc_id: original.doc_id.clone(),
-                        };
+                    let mut other = original.message.clone();
+                    let mut target = original.doc_id.clone();
+                    match case {
+                        "key" => other.sequence = 2,
+                        "sequence" => other.message_key = "sequence-twin".into(),
+                        "both" => other.native_id = Some("distinct-physical-twin".into()),
+                        "foreign" => other.node_did = "did:test:foreign".into(),
+                        "requester" => {
+                            other.requester_did = Some("did:test:requester".into());
+                            other.sequence = 2;
+                        }
+                        "fork" => {
+                            other.session_id = "child-session".into();
+                            other.message_key = "fork-key".into();
+                            other.request_doc_id = None;
+                            other.publication = MessagePublication::Fork {
+                                origin_message_doc_id: original.doc_id.clone(),
+                            };
+                        }
+                        _ => {}
                     }
-                    _ => {}
-                }
-                if case != "unrelated" {
-                    let created = txn
-                        .execute_with_variables(
-                            CREATE_AGENT_MESSAGE_MUTATION,
-                            &transcript_message_create_variables(&other)?,
-                        )
-                        .await?;
-                    assert_ne!(
-                        crate::graphql::created_doc_id(&created, "AgentMessage")?,
-                        original.doc_id,
-                    );
-                    if case == "fork" {
-                        target = crate::graphql::created_doc_id(&created, "AgentMessage")?;
+                    if case != "unrelated" {
+                        let created = txn
+                            .execute_with_variables(
+                                CREATE_AGENT_MESSAGE_MUTATION,
+                                &transcript_message_create_variables(&other)?,
+                            )
+                            .await?;
+                        assert_ne!(
+                            crate::graphql::created_doc_id(&created, "AgentMessage")?,
+                            original.doc_id,
+                        );
+                        if case == "fork" {
+                            target = crate::graphql::created_doc_id(&created, "AgentMessage")?;
+                        }
                     }
-                }
-                let single =
-                    output::load_canonical_message_in_txn(txn, &target, "did:test:owner", None)
+                    let single =
+                        output::load_canonical_message_in_txn(txn, &target, "did:test:owner", None)
+                            .await
+                            .map_err(|error| format!("{error:#}"));
+                    let bulk = output::TxnCanonicalReader::new(txn, "did:test:owner", None)
+                        .load_message(&target)
                         .await
                         .map_err(|error| format!("{error:#}"));
-                let bulk = output::TxnCanonicalReader::new(txn, "did:test:owner", None)
-                    .load_message(&target)
-                    .await
-                    .map_err(|error| format!("{error:#}"));
-                assert_eq!(single, bulk, "single/bulk mismatch for {case}");
-                assert_eq!(
-                    single.is_err(),
-                    matches!(case, "key" | "sequence" | "both"),
-                    "{case}"
-                );
-                Ok(())
-            })
-        })
-        .await
-        .unwrap();
+                    assert_eq!(single, bulk, "single/bulk mismatch for {case}");
+                    assert_eq!(single.is_err(), case == "key", "{case}");
+                    Ok(())
+                })
+            },
+        )
+        .await;
+        if matches!(case, "sequence" | "both") {
+            let error = result.expect_err("the existing session sequence is already occupied");
+            assert!(format!("{error:#}").contains("unique index"), "{error:#}");
+        } else {
+            result.unwrap();
+        }
         node.shutdown().await;
     }
 }
@@ -1264,7 +1419,7 @@ async fn retry_frontier_matches_lean_admission() {
         mutation: &str,
         field: &str,
     ) -> String {
-        let response = crate::config_client::ConfigAccess::Local(node.clone())
+        let response = crate::config_client::ConfigAccess::local(node.clone())
             .write("test.retry_frontier", mutation)
             .await
             .unwrap();

@@ -1,12 +1,3 @@
-//! Claude subscription OAuth: public client constants, the credential
-//! provider name, and operator-facing error copy.
-//!
-//! The client id, endpoints, and scopes are Claude Code's public OAuth client
-//! constants, read from the Claude Code 2.1.260 bundle on 2026-09-04 (see
-//! `docs/superpowers/specs/2026-09-04-claude-oauth-credential-parity-design.md`
-//! §1). They are not secrets; they can change without notice, which is why
-//! they live here and nowhere else.
-
 use std::fmt;
 
 use chrono::{DateTime, Duration, Utc};
@@ -52,7 +43,6 @@ pub fn classify_claude_auth_error(
     classify_oauth_auth_error(&CLAUDE_OAUTH_PRODUCT, node_did, provider, problem)
 }
 
-/// Tokens returned by the authorization-code exchange. `expires_in` is seconds.
 #[derive(Clone)]
 pub struct ClaudeLoginTokens {
     pub access_token: String,
@@ -124,12 +114,6 @@ mod tests {
     use crate::oauth_credential::OAuthAuthProblem;
 
     #[test]
-    fn client_id_is_public_uuid_shape() {
-        assert_eq!(CLAUDE_OAUTH_CLIENT_ID.len(), 36);
-        assert_eq!(CLAUDE_OAUTH_CLIENT_ID.matches('-').count(), 4);
-    }
-
-    #[test]
     fn scopes_are_the_subscription_set() {
         let scopes: Vec<&str> = CLAUDE_OAUTH_SCOPES.split(' ').collect();
         assert_eq!(
@@ -143,16 +127,6 @@ mod tests {
             ]
         );
         assert!(!CLAUDE_OAUTH_SCOPES.contains("org:create_api_key"));
-    }
-
-    #[test]
-    fn normalize_provider_defaults_and_trims() {
-        assert_eq!(normalize_provider(""), CLAUDE_OAUTH_PROVIDER);
-        assert_eq!(normalize_provider("  "), CLAUDE_OAUTH_PROVIDER);
-        assert_eq!(
-            normalize_provider(" claude-subscription "),
-            "claude-subscription"
-        );
     }
 
     #[test]

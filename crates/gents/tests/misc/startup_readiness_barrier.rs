@@ -19,8 +19,6 @@ use crate::support::fixtures::test_identity;
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::waits::RecordingProcessObserver;
 
-// This guards against a wedged startup, not startup latency. The package-wide
-// suite runs many embedded DefraDB nodes concurrently on shared CI runners.
 const STARTUP_DEADLOCK_GUARD: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Clone, Debug)]
@@ -152,7 +150,7 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
     ensure_runtime_schemas(node.as_ref()).await?;
     let mock_endpoint = MockModelEndpoint::start("default")?;
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-559",
         mock_endpoint.endpoint(),
@@ -287,7 +285,7 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
     ensure_runtime_schemas(node.as_ref()).await?;
     let mock_endpoint = MockModelEndpoint::start("default")?;
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-559-late",
         mock_endpoint.endpoint(),

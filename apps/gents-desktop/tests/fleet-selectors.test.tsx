@@ -49,7 +49,6 @@ const item = (itemId: string): MailboxItemView => ({
 const here = (over: Record<string, unknown> = {}) =>
   node({ nodeDid: AGENT, sessions: [summary("s-1", "one")], ...over });
 
-/* renders `ui` under `app` and counts the commits that reach it */
 function commitsOf(app: ReturnType<typeof testApp>, ui: React.ReactElement) {
   let commits = 0;
   renderIn(

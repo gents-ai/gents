@@ -23,8 +23,6 @@ inductive FailureOrigin
   /-- A malformed or truncated provider-delivered stream is not a malformed
   local request. This origin applies whether or not a preview item arrived. -/
   | providerStreamMalformed
-  /-- A provider 400 naming a replayed thinking signature or undecryptable
-  encrypted reasoning content. -/
   | providerReasoningRejected
   deriving DecidableEq, Repr
 
@@ -44,9 +42,6 @@ structure Budget where
 publication-side observations, not provider-attempt phases. -/
 inductive Phase
   | issuing
-  /-- A provider attempt is in flight; this does not assert that the first
-  streamed item has arrived. Native pre-first and mid-stream routes both
-  refine this phase, with retraction after a failed attempt. -/
   | streaming
   | retractRequired (failure : FailureClass) (error : String) (wake : Time)
   | retracted (failure : FailureClass) (error : String) (wake : Time)

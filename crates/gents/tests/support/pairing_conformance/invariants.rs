@@ -103,9 +103,7 @@ pub fn check_safety(history: &[ObservedSnapshot]) -> Result<(), SafetyViolation>
 }
 
 fn pending_owned_ops(snapshot: &ObservedSnapshot) -> Vec<gents::agent::p2p_reconcile::DiffOp> {
-    // The conformance harness applies every successful replicator install with
-    // the desired filter and records that identity in `PairingApplied`. Mirror
-    // that live filter observation here so the runtime diff sees the same
+    // Mirror the live filter observation so the runtime diff sees the same
     // route the harness installed instead of an artificial unfiltered route.
     let live_filter = to_replication_filters(&snapshot.applied.replicator_filter)
         .expect("conformance filters are representable");

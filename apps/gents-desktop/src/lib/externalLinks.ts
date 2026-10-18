@@ -12,8 +12,6 @@ export function isExternalUrl(href: string): boolean {
   }
 }
 
-/** Opens a URL outside the app without the bridge: the OS's opener in the
-    shell, a new tab in a plain browser. */
 export async function openInBrowser(url: string): Promise<void> {
   if (inNativeShell()) return openWithOpener(url);
   window.open(url, "_blank", "noopener,noreferrer");
@@ -35,8 +33,6 @@ export function handleExternalLinkClick(
   }
 }
 
-/** Keeps every link click inside the webview: an external one opens with
-    `open`, anything else goes nowhere. */
 export function installExternalLinkGuard(
   doc: Document,
   open: (url: string) => Promise<void> = openInBrowser,

@@ -4,10 +4,6 @@ use serde_json::Value;
 use super::{asset_path, interpolate, validate_pack_manifest, PackInstallOptions, PackManifest};
 use crate::document_config::{EvalCase, PackConfig};
 
-/// Decode the same canonical authored bundle for document and graph packs.
-/// Callers provide asset bytes and environment lookup; distribution admission,
-/// interpolation, sidecars and installation scope have this single owner.
-/// Reference/resource validation and persistence remain the installer's job.
 pub fn load_pack_config(
     manifest: &PackManifest,
     options: &PackInstallOptions,
@@ -32,14 +28,6 @@ pub fn load_pack_config(
     Ok(config)
 }
 
-/// A distributable pack brings agents; which agent runs by default is
-/// the user's decision, never the pack's. Install never writes the node
-/// (it is shared identity), so an authored `default_agent_id` would be
-/// silently ignored there and silently honoured by harnesses that stage the
-/// bundle whole. Refusing it at load keeps both paths honest. A user's own
-/// desired-state root decodes through [`decode_pack_config`] directly and
-/// keeps its node, default included; harnesses select the agent
-/// under test after loading.
 pub fn ensure_pack_leaves_default_unselected(config: &PackConfig) -> Result<()> {
     if let Some(default) = &config.node.default_agent_id {
         anyhow::bail!(
@@ -52,10 +40,6 @@ pub fn ensure_pack_leaves_default_unselected(config: &PackConfig) -> Result<()> 
     Ok(())
 }
 
-/// Qualifies and pins every plugin node of `config` that names one of the
-/// pack's own plugins by `name`: graph capabilities and plugin callbacks. The
-/// one place that decides it, so a pack read from a directory, a built archive
-/// or the install's staging folder runs the artifact the pack ships.
 pub fn pin_pack_plugins(
     manifest: &PackManifest,
     read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
@@ -75,10 +59,6 @@ pub fn pin_pack_plugins(
     Ok(())
 }
 
-/// Decode canonical authoring for both distributed packs and local configuration.
-/// Explicit install scope wins over ambient environment. Without install options,
-/// the authored node must supply its owner. Sidecar access stays with the
-/// caller's asset/filesystem boundary; sidecar contents are never interpolated.
 pub fn decode_pack_config(
     mut value: Value,
     options: Option<&PackInstallOptions>,
@@ -124,8 +104,6 @@ pub fn decode_pack_config(
         owner,
         "node",
     )?;
-    // These are document roots, not an unrestricted recursive DID replacement.
-    // The canonical serde decoder below rejects unknown collections/fields.
     for collection in crate::Collection::ALL
         .into_iter()
         .filter_map(|collection| collection.dir_name())
@@ -174,10 +152,6 @@ pub fn decode_pack_config(
     Ok(config)
 }
 
-/// A plugin node that names one of the pack's own plugins by `name` runs that
-/// artifact: the name is qualified with the pack's namespace, as installing the
-/// pack records it, and pinned to the artifact's digest. A plugin from outside
-/// the pack is named `namespace/name` and pinned by the author.
 fn pin_pack_plugin(
     manifest: &PackManifest,
     read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
@@ -197,9 +171,6 @@ fn pin_pack_plugin(
     Ok(())
 }
 
-/// [`pin_pack_plugin`] for a callback: a plugin handler naming one of the
-/// pack's own plugins by `name` with an empty `digest` (or the shipped one)
-/// runs the artifact the pack ships.
 fn pin_callback_plugin(
     manifest: &PackManifest,
     read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
@@ -219,9 +190,6 @@ fn pin_callback_plugin(
     Ok(())
 }
 
-/// An entry that prepares its input on the host names one of the pack's own
-/// plugins the same way a plugin node does; pin it the same way, and validate
-/// its declared `input_schema` compiles within the load-time ceiling.
 fn pin_entry_prepare_plugin(
     manifest: &PackManifest,
     read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
@@ -248,9 +216,6 @@ fn pin_entry_prepare_plugin(
     Ok(())
 }
 
-/// The qualified name and `sha256:` digest of the pack's own plugin `plugin`,
-/// or `None` when `plugin` is already `namespace/name`. `authored`, when
-/// given, must be the digest the pack ships.
 fn own_plugin(
     manifest: &PackManifest,
     read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
@@ -303,10 +268,6 @@ fn bind_owner(value: &mut Value, owner: &str, location: &str) -> Result<()> {
     Ok(())
 }
 
-/// A case of an eval definition may be authored as a `./` sidecar path: the
-/// file holds one `EvalCase`, read through the caller's sidecar boundary after
-/// interpolation, so its prompts stay literal like every other sidecar. The
-/// installed definition carries the cases inline; the paths never reach it.
 fn hydrate_eval_cases(
     root: &mut serde_json::Map<String, Value>,
     read_sidecar: &dyn Fn(crate::Collection, &str, &str) -> Result<String>,

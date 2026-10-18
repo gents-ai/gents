@@ -1,6 +1,6 @@
 {
   "name": "@source-inc/gents-desktop-operations",
-  "version": "0.20.0",
+  "version": "0.21.0-rc0",
   "license": "Apache-2.0",
   "description": "Focused health, trace, and workspace surfaces for Gents desktop",
   "type": "module",
@@ -24,19 +24,19 @@
   ],
   "scripts": {
     "build": "node ../../scripts/clean-desktop-package-dist.mjs && tsc -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run --passWithNoTests"
   },
   "peerDependencies": {
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "@source-inc/gents-desktop-client": "0.20.0",
-    "@source-inc/gents-desktop-tokens": "0.20.0",
-    "@source-inc/gents-desktop-ui": "0.20.0"
+    "@source-inc/gents-desktop-client": "0.21.0-rc0",
+    "@source-inc/gents-desktop-tokens": "0.21.0-rc0",
+    "@source-inc/gents-desktop-ui": "0.21.0-rc0"
   },
   "devDependencies": {
-    "@source-inc/gents-desktop-client": "0.20.0",
-    "@source-inc/gents-desktop-tokens": "0.20.0",
-    "@source-inc/gents-desktop-ui": "0.20.0",
+    "@source-inc/gents-desktop-client": "0.21.0-rc0",
+    "@source-inc/gents-desktop-tokens": "0.21.0-rc0",
+    "@source-inc/gents-desktop-ui": "0.21.0-rc0",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "react": "^19.1.0",

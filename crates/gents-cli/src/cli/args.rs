@@ -15,7 +15,7 @@ use crate::{
     SESSION_AFTER_HELP, STATUS_AFTER_HELP, TASK_AFTER_HELP, TOOLS_AFTER_HELP, TRACE_AFTER_HELP,
 };
 
-use crate::default_backend_max_queue_depth;
+use gents::backend_registry::{DEFAULT_MAX_CONCURRENT, DEFAULT_MAX_QUEUE_DEPTH};
 
 fn parse_env_var_name(value: &str) -> Result<String, String> {
     let mut chars = value.chars();
@@ -358,7 +358,6 @@ pub(crate) struct PackListArgs {
     pub(crate) home: Option<PathBuf>,
 }
 
-/// What `gents pack new` and `init` start a pack from.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum PackTemplate {
@@ -552,7 +551,6 @@ pub(crate) struct PackTestArgs {
     pub(crate) scenario: bool,
 }
 
-/// The ecosystem a plugin being imported comes from.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PackImportFrom {
     /// Agent Plugins: `plugin.json`, `skills/`, `mcp.json`.
@@ -978,14 +976,11 @@ pub(crate) struct PackInstallArgs {
     )]
     pub(crate) grant_authority: bool,
     /// Whether this install was requested for its own sake, rather than only
-    /// as a documents pack's dependency; never a CLI flag, so a parsed
-    /// top-level `gents pack install` always reads `true`, and code
-    /// constructing a dependency's own args sets `false`.
+    /// as a documents pack's dependency; never a CLI flag.
     #[arg(skip = true)]
     pub(crate) explicit: bool,
 }
 
-/// What to do with pack documents someone edited since the pack wrote them.
 #[derive(clap::Args, Clone, Copy, Debug, Default)]
 pub(crate) struct PackDriftArgs {
     #[arg(long, conflicts_with = "keep", help = "Replace edited pack documents")]
@@ -1616,6 +1611,7 @@ pub(crate) struct ProvisionArgs {
     pub(crate) secure_enclave_label: Option<String>,
     /// Keychain on macOS and a file elsewhere when omitted. Tests pass
     /// `file` so they never write login-keychain items.
+
     #[arg(long, value_enum, hide = true)]
     pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,
 }
@@ -1693,6 +1689,7 @@ pub(crate) struct InitArgs {
     pub(crate) secure_enclave_label: Option<String>,
     /// Keychain on macOS and a file elsewhere when omitted. Tests pass
     /// `file` so they never write login-keychain items.
+
     #[arg(long, value_enum, hide = true)]
     pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,
     #[arg(
@@ -1737,9 +1734,9 @@ pub(crate) struct InitArgs {
         help = "Model id to bind to the default agent. Required for presets without a local default model"
     )]
     pub(crate) model_name: Option<String>,
-    #[arg(long, default_value_t = 2)]
+    #[arg(long, default_value_t = DEFAULT_MAX_CONCURRENT)]
     pub(crate) max_concurrent: i64,
-    #[arg(long, default_value_t = default_backend_max_queue_depth())]
+    #[arg(long, default_value_t = DEFAULT_MAX_QUEUE_DEPTH)]
     pub(crate) max_queue_depth: i64,
     #[arg(
         long = "write",
@@ -1919,7 +1916,7 @@ pub(crate) struct ServeArgs {
     #[arg(
         long,
         default_value_t = false,
-        help = "Expose the Grok TUI leader socket so stock Grok can attach as the pager client: start this server first, then run `grok --leader --leader-socket <path>`"
+        help = "Expose the Grok TUI leader socket (Unix only) so stock Grok can attach as the pager client: start this server first, then run `grok --leader --leader-socket <path>`"
     )]
     pub(crate) grok_shim: bool,
     #[arg(
@@ -2413,10 +2410,6 @@ impl BackendPresetArg {
         }
     }
 
-    /// Default model for presets whose endpoint implies a model source. The
-    /// shared DEFAULT_INIT_MODEL_NAME is an HF GGUF repo path: valid for
-    /// llama-server (`-hf`) but not an Ollama tag, so the ollama preset pulls
-    /// the same model through Ollama's `hf.co/` form instead.
     pub(crate) fn default_model_name(self) -> Option<&'static str> {
         match self {
             Self::Ollama => Some(crate::DEFAULT_OLLAMA_MODEL_NAME),
@@ -2954,7 +2947,6 @@ pub(crate) struct SkillShowArgs {
     pub(crate) skill_id: String,
 }
 
-/// Shared args for skill commands that target a single skill by id.
 #[derive(clap::Args)]
 pub(crate) struct SkillRefArgs {
     #[arg(long)]
@@ -3002,7 +2994,6 @@ pub(crate) struct WorkspaceRootUpsertArgs {
     pub(crate) disabled: bool,
 }
 
-/// Replace one canonical agent document through the shared config writer.
 #[derive(clap::Args)]
 pub(crate) struct AgentUpsertArgs {
     #[arg(long)]
@@ -3031,7 +3022,6 @@ pub(crate) struct AgentUpsertArgs {
     pub(crate) enabled: bool,
 }
 
-/// Configure an agent through the shared self-config owner.
 #[derive(clap::Args)]
 pub(crate) struct AgentCreateArgs {
     #[arg(long)]
@@ -3068,7 +3058,6 @@ pub(crate) struct AgentCreateArgs {
     pub(crate) profile_id: String,
 }
 
-/// Clone an agent belonging to the initialized home signer.
 #[derive(clap::Args)]
 pub(crate) struct AgentCloneArgs {
     #[arg(long)]
@@ -3092,7 +3081,6 @@ pub(crate) struct AgentCloneArgs {
     pub(crate) profile_id: String,
 }
 
-/// Disable an agent belonging to the initialized home signer.
 #[derive(clap::Args)]
 pub(crate) struct AgentDisableArgs {
     #[arg(long)]
@@ -3506,7 +3494,6 @@ mode (push or replicate). Enrollment approvals select the authoritative route sc
     },
 }
 
-/// Subcommands for `p2p network` — the peer-registry front door.
 #[derive(Subcommand)]
 pub(crate) enum P2pNetworkCommand {
     #[command(about = "Register this node into the peer discovery registry (idempotent upsert)")]
@@ -3575,7 +3562,6 @@ pub(crate) struct P2pEnrollmentDecisionArgs {
     pub(crate) lease_seconds: u64,
 }
 
-/// Subcommands for `p2p templates`.
 #[derive(Subcommand)]
 pub(crate) enum P2pTemplatesCommand {
     #[command(about = "List all built-in scope templates")]
@@ -3588,7 +3574,6 @@ pub(crate) struct P2pTemplatesListArgs {
     pub(crate) output: OutputFormat,
 }
 
-/// Low-level live P2P admin commands. Escape hatch beneath `p2p pairings`.
 #[derive(Subcommand)]
 pub(crate) enum P2pAdminCommand {
     #[command(about = "Connect the running runtime to another peer")]
@@ -4258,8 +4243,6 @@ pub(crate) struct ResponseWaitArgs {
     pub(crate) poll_secs: u64,
 }
 
-/// `--home` and `--graphql`, resolved the way every home-reading command
-/// resolves them.
 #[derive(clap::Args, Clone, Debug, Default)]
 pub(crate) struct EvalScopeArgs {
     #[arg(long)]
@@ -4337,13 +4320,11 @@ impl EvalCommand {
             Self::Watch(args) => &args.scope,
             Self::Gc(args) => &args.scope,
             Self::Init(args) => &args.scope,
-            // `dispatch` answers `checks` before resolving any home.
             Self::Checks(_) => &NO_SCOPE,
         }
     }
 }
 
-/// The scope of a command that reads no home.
 static NO_SCOPE: EvalScopeArgs = EvalScopeArgs {
     home: None,
     graphql: None,
@@ -4418,9 +4399,6 @@ pub(crate) struct EvalRmArgs {
     pub(crate) scope: EvalScopeArgs,
 }
 
-/// `--interval`: at least 250 ms, so a watcher never spins, and at most an
-/// hour, so every wait the watch derives from it is representable. Takes
-/// `ms` as well as the `s`, `m` and `h` suffixes.
 pub(crate) fn parse_interval(raw: &str) -> Result<std::time::Duration, String> {
     let interval = match raw.trim().strip_suffix("ms") {
         Some(millis) => millis
@@ -4440,12 +4418,8 @@ pub(crate) fn parse_interval(raw: &str) -> Result<std::time::Duration, String> {
     Ok(interval)
 }
 
-/// `gents eval run` and `gents eval resume`'s exit statuses: scripts must
-/// not read a stopped run as a success.
 const EVAL_RUN_AFTER_HELP: &str = "Exit status: 0 when the run finished; 1 when it stopped with slots still owed (Ctrl-C, a cancel marker, or abandoned slots; `gents eval resume` continues it) or the command was refused; 2 on a usage error.";
 
-/// `gents eval watch`'s exit statuses: scripts must not read a stopped run
-/// as a success.
 const EVAL_WATCH_AFTER_HELP: &str = "Exit status: 0 when the run ends finished, or after the one render of --once; 1 when it ends stopped (slots still owed, as after a cancel, or the report unavailable) or the watch fails; 2 on a usage error.";
 
 #[derive(clap::Args)]
@@ -4465,9 +4439,6 @@ pub(crate) struct EvalWatchArgs {
     pub(crate) scope: EvalScopeArgs,
 }
 
-/// `--older-than`: any duration, zero included, that a cutoff can be taken
-/// from: one that reaches back no further than the earliest representable
-/// time from the Unix epoch, so it does from any later now.
 pub(crate) fn parse_age(raw: &str) -> Result<std::time::Duration, String> {
     let age =
         crate::request_helpers::parse_duration_suffix(raw).map_err(|error| error.to_string())?;
@@ -4501,7 +4472,6 @@ pub(crate) struct EvalGcArgs {
     pub(crate) scope: EvalScopeArgs,
 }
 
-/// No scope: the catalog is the binary's builtin registry, read with no home.
 #[derive(clap::Args)]
 pub(crate) struct EvalChecksArgs {
     #[arg(long)]
@@ -4513,7 +4483,6 @@ pub(crate) struct EvalChecksArgs {
     pub(crate) validate_case: Option<String>,
 }
 
-/// `--policy defaults` or a path to a `PolicyV2` JSON document.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PolicyArg {
     Defaults,
@@ -4561,11 +4530,9 @@ pub(crate) struct EvalCompareArgs {
     pub(crate) scope: EvalScopeArgs,
 }
 
-/// One `--cell <id>=<pack>[:<agent>]`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CellArg {
     pub(crate) cell_id: String,
-    /// A directory, or a pack name resolved like `gents pack install`.
     pub(crate) pack: String,
     pub(crate) agent: Option<String>,
 }
@@ -4593,7 +4560,6 @@ pub(crate) fn parse_cell(raw: &str) -> Result<CellArg, String> {
     })
 }
 
-/// `<key>=<value>`, both non-empty.
 pub(crate) fn parse_assignment(raw: &str) -> Result<(String, String), String> {
     match raw.split_once('=') {
         Some((key, value)) if !key.trim().is_empty() && !value.trim().is_empty() => {
@@ -4603,8 +4569,6 @@ pub(crate) fn parse_assignment(raw: &str) -> Result<(String, String), String> {
     }
 }
 
-/// `gents eval run --purpose`: anything but `pilot`, which leaves a run out
-/// of exposure and so belongs to `gents eval init --pilot` alone.
 pub(crate) fn parse_run_purpose(raw: &str) -> Result<String, String> {
     let purpose = raw.trim();
     if purpose == gents::eval::scoring::PILOT_PURPOSE {
@@ -4620,8 +4584,7 @@ pub(crate) fn parse_split(raw: &str) -> Result<gents::document_config::EvalSplit
         .map_err(|_| format!("unknown split {raw:?}; expected train, validation or held_out"))
 }
 
-/// A saved collection of existing `eval run` arguments. The shared ceiling
-/// counts complete trial attempts, not individual provider requests.
+/// The shared ceiling counts complete trial attempts, not individual provider requests.
 #[derive(clap::Args)]
 pub(crate) struct EvalBatchArgs {
     /// JSON object with `runs: [{args: ["definition-id", "--cell", ...]}]`.
@@ -4639,8 +4602,6 @@ pub(crate) struct EvalBatchArgs {
     pub(crate) scope: EvalScopeArgs,
 }
 
-// Each stage's captures come from the eval definition (`EvalStage.capture`),
-// not from this command; `run` passes no run-level fallback.
 #[derive(clap::Args)]
 pub(crate) struct EvalRunArgs {
     pub(crate) definition_id: String,
@@ -4681,7 +4642,6 @@ pub(crate) struct EvalRunArgs {
     pub(crate) scope: EvalScopeArgs,
 }
 
-/// `gents eval init`'s exit statuses.
 const EVAL_INIT_AFTER_HELP: &str = "Needs a terminal (this command is an interview) and a served home: start `gents server` first, or the command refuses before reading anything. An existing --out refuses unless --force replaces it, and --force replaces only a definition pack gents eval init wrote; an --out that is, lies inside, or contains the subject's directory, a Gents home, the user home or the working directory always refuses. --validation-min (default 6) is the floor the author drafts the validation split against; lower it when the operator wants fewer validation cases. --pilot runs the written pack once against the subject, one trial per case and one run per populated split (train, validation, held-out), and asks to spend that before it does, unless --yes; a decline leaves the pack written at --out but the command still exits 1. The session id printed at the end continues with `gents chat --session-id <id> --agent-id <the author's agent>`. A documents capture filter's only variable is \"$trial\", replaced with the trial's DID wherever it appears in a string value. Exit status: 0 when the pack was written and validated (piloted too, with --pilot) or the operator ended the interview with nothing written; 1 when refused (an existing --out without --force, an --out overlapping the subject, a non-terminal stdin, an unserved home, a declined pilot, or another failure) or when three drafts did not validate; 2 on a usage error.";
 
 #[derive(clap::Args)]
@@ -4743,7 +4703,6 @@ pub(crate) struct EvalResumeArgs {
     pub(crate) scope: EvalScopeArgs,
 }
 
-/// `--subject <pack>[:<agent>]`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SubjectArg {
     pub(crate) pack: String,
@@ -4764,9 +4723,6 @@ pub(crate) fn parse_subject(raw: &str) -> Result<SubjectArg, String> {
     })
 }
 
-/// `--target context` (the subject agent's system prompt) or
-/// `--target task:<task_id>` (the prompt template of that task of the
-/// subject agent).
 pub(crate) fn parse_target(raw: &str) -> Result<JobTarget, String> {
     match raw.trim() {
         "context" => Ok(JobTarget::Context),
@@ -4779,7 +4735,6 @@ pub(crate) fn parse_target(raw: &str) -> Result<JobTarget, String> {
     }
 }
 
-/// `--proposer scripted:<file>` or `--proposer agent:<pack>[:<agent>]`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ProposerArg {
     /// A script of proposals, one per round.

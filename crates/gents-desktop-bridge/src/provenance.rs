@@ -1,9 +1,3 @@
-// The desktop's view of one session's lineage. `gents::session_origin` owns
-// the rule (`lineage` for the session links, `caused_requests` for the
-// request each call caused); this module maps its answers onto the view and
-// reads only the rows those answers name. It confers no hierarchy, cascade
-// or authority.
-
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -20,8 +14,6 @@ use crate::types::{
     SessionProvenanceView, TurnSenderView,
 };
 
-/// `desktop_session_provenance`: the requested session scope, under the
-/// selected node when the request names none.
 pub async fn session_provenance_request(
     core: &Arc<ClientCore>,
     request: DesktopSessionProvenanceRequest,
@@ -49,11 +41,11 @@ pub async fn session_provenance(
     core: &Arc<ClientCore>,
     scope: SessionScope,
 ) -> Result<SessionProvenanceView, String> {
-    let access = ConfigAccess::Local(core.node_arc());
+    let access = ConfigAccess::local(core.node_arc());
     let fail = |error: anyhow::Error| format!("session provenance: {error:#}");
     let lineage = lineage(&access, &scope).await.map_err(fail)?;
     let calls = caused_calls(&access, &scope).await.map_err(fail)?;
-    let senders = turn_senders(core, &scope, &lineage);
+    let senders = turn_senders(&lineage);
     let link = |link: &SessionLink| LinkedSessionView {
         node_did: link.scope.node_did.clone(),
         session_id: link.scope.session_id.clone(),
@@ -94,8 +86,6 @@ fn text(row: &Value, field: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// This session's `agent_new`/`agent_message` calls, each with the request
-/// the lineage owner says it caused and that request's state.
 async fn caused_calls(
     access: &ConfigAccess,
     scope: &SessionScope,
@@ -122,8 +112,6 @@ async fn caused_calls(
     if caused.is_empty() {
         return Ok(Vec::new());
     }
-    // The state of exactly the requests the owner named: each is the one
-    // public request carrying its call's physical edge.
     let states = rows(
         access,
         &format!(
@@ -162,13 +150,7 @@ async fn caused_calls(
         .collect())
 }
 
-/// Which lineage session sent each of this session's requests. A request
-/// names its causing request document; that document is either the link's
-/// own cause or a request the desktop store holds, whose session must be one
-/// the lineage owner linked. A cause neither names stays unattributed.
 fn turn_senders<'a>(
-    core: &ClientCore,
-    scope: &SessionScope,
     lineage: &'a gents::session_origin::SessionLineage,
 ) -> Vec<(String, &'a SessionLink)> {
     let links = lineage
@@ -179,38 +161,18 @@ fn turn_senders<'a>(
     if links.is_empty() {
         return Vec::new();
     }
-    let store = core.store().snapshot();
-    let scope_of = |doc_id: &str| {
-        store
-            .requests
-            .iter()
-            .find(|row| row.doc_id.as_deref() == Some(doc_id))
-            .and_then(|row| {
-                Some(SessionScope {
-                    node_did: row.node_did.clone()?,
-                    session_id: row.session_id.clone()?,
-                    requester_did: row.requester_did.clone(),
-                })
-            })
-    };
-    store
-        .requests
+    lineage
+        .request_causes
         .iter()
-        .filter(|row| {
-            row.node_did.as_deref() == Some(scope.node_did.as_str())
-                && row.session_id.as_deref() == Some(scope.session_id.as_str())
-                && row.requester_did == scope.requester_did
-        })
-        .filter_map(|row| {
-            let cause = row.caused_by_parent_request_doc_id.as_deref()?;
+        .filter_map(|request| {
             let sender = links
                 .iter()
-                .find(|link| link.cause_request_doc_id == cause)
+                .find(|link| link.cause_request_doc_id == request.cause_request_doc_id)
                 .or_else(|| {
-                    let cause_scope = scope_of(cause)?;
-                    links.iter().find(|link| link.scope == cause_scope)
+                    let cause_scope = request.cause_scope.as_ref()?;
+                    links.iter().find(|link| link.scope == *cause_scope)
                 })?;
-            Some((row.request_id.clone(), *sender))
+            Some((request.request_id.clone(), *sender))
         })
         .collect()
 }

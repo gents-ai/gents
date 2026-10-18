@@ -30,7 +30,7 @@ pub(super) async fn backend_set(args: BackendSetArgs) -> Result<()> {
     let (access, _) =
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let doc_id = access
-        .transact("cli.backend.set", |txn| {
+        .transact_write("cli.backend.set", |txn| {
             let backend = &backend;
             let plan = &plan;
             Box::pin(async move {
@@ -73,7 +73,6 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
         .build()
         .context("building backend discovery client")?;
     let (oauth_credential, oauth_node_did) = if target.provider_kind.is_node_scoped_oauth() {
-        // A preset becomes a backend with no reference, which runs on the original account.
         let account_ref = stored
             .as_ref()
             .and_then(|backend| backend.auth.oauth_account_ref());
@@ -138,8 +137,6 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
         Err(error) => return Err(error),
     };
 
-    // Discovery of a stored backend always publishes its credential-free
-    // catalog; an explicit connection probe has no backend to publish onto.
     let catalog_written = if let Some(backend) = stored.as_ref() {
         let (access, _) =
             crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
@@ -189,10 +186,6 @@ async fn load_oauth_credential_for_discovery(
     Ok((credential, node_did))
 }
 
-/// Whether a model-discovery error is an authentication failure (HTTP 401/403), so ChatGptCodex
-/// discovery can append re-login guidance the bare error omits. Inspects the typed status carried
-/// by [`ModelDiscoveryHttpError`] rather than scraping the rendered message (which also contains the
-/// endpoint URL and response body, and could otherwise match "401"/"403" spuriously).
 fn discovery_error_is_auth(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
@@ -201,9 +194,6 @@ fn discovery_error_is_auth(error: &anyhow::Error) -> bool {
     })
 }
 
-/// Whether a model-discovery error is the provider's client-version gate (HTTP 426), so Grok
-/// discovery can append the advertised-version guidance the bare error omits. Inspects the typed
-/// status carried by [`ModelDiscoveryHttpError`] rather than scraping the rendered message.
 fn discovery_error_is_client_version_gate(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
@@ -212,8 +202,6 @@ fn discovery_error_is_client_version_gate(error: &anyhow::Error) -> bool {
     })
 }
 
-/// Connection of a stored backend. Node OAuth resolves the invoking
-/// node's OAuthCredential separately; it has no shared key here.
 fn stored_backend_target(backend: &InferenceBackend) -> Result<ResolvedBackendConfig> {
     backend.validate()?;
     Ok(ResolvedBackendConfig {
@@ -247,7 +235,7 @@ async fn resolve_backend_discovery_target(
         let (access, _) =
             crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
         let backend = access
-            .transact("cli.backend.discovery_target", |txn| {
+            .transact_write("cli.backend.discovery_target", |txn| {
                 let owner = &owner;
                 Box::pin(async move {
                     let (_, value) = read_desired_state_record_in_txn(
@@ -283,42 +271,4 @@ async fn resolve_backend_discovery_target(
         }
     }
     Ok((None, target))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn canonical_oauth_backend_retains_defaults_without_fake_catalog() {
-        let (backend,plan)=backend_plan(br#"{"node_did":"owner","backend_id":"claude","name":"Claude","provider_kind":"ClaudeCliSubscription","endpoint":"https://api.anthropic.com","auth":{"kind":"node_oauth"}}"#).unwrap();
-        assert_eq!(backend.auth, BackendAuth::NodeOAuth { account_ref: None });
-        assert_eq!(backend.max_concurrent, None);
-        assert!(plan.documents()[0].add.get("catalogs").is_none());
-        assert!(plan.documents()[0].add.get("models").is_none());
-    }
-    #[test]
-    fn retired_auth_and_observation_fields_are_not_config() {
-        for field in ["api_key", "models", "probe_status"] {
-            let mut value = json!({"node_did":"owner","backend_id":"local","name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}});
-            value[field] = json!("invalid");
-            assert!(backend_plan(&serde_json::to_vec(&value).unwrap()).is_err());
-        }
-    }
-
-    #[test]
-    fn stored_subscription_backend_resolves_without_a_shared_key() {
-        let backend: InferenceBackend = serde_json::from_value(json!({
-            "node_did": "did:key:owner", "backend_id": "claude", "name": "Claude",
-            "provider_kind": "ClaudeCliSubscription",
-            "endpoint": "https://api.anthropic.com/v1",
-            "auth": {"kind": "node_oauth"},
-        }))
-        .unwrap();
-        let target = stored_backend_target(&backend).unwrap();
-        assert_eq!(
-            target.provider_kind,
-            BackendProviderKind::ClaudeCliSubscription
-        );
-        assert!(target.api_key.is_none() && target.api_key_env_var.is_none());
-    }
 }

@@ -35,10 +35,10 @@ async fn register_action_request_schema(node: &EmbeddedNode) {
         .expect("add_schema for ActionRequest");
 }
 
-/// Publish canonical desired-state documents through the shared apply owner.
-/// Exact owner (node_did) is authored on every document; the desired-state
-/// owner validates same-owner references before committing.
-async fn apply_documents(node: &EmbeddedNode, documents: Vec<(Collection, serde_json::Value)>) {
+async fn apply_documents(
+    node: &Arc<EmbeddedNode>,
+    documents: Vec<(Collection, serde_json::Value)>,
+) {
     use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
     let plan = DesiredStateApplyPlan::new(
         documents
@@ -51,7 +51,7 @@ async fn apply_documents(node: &EmbeddedNode, documents: Vec<(Collection, serde_
             .collect(),
     )
     .unwrap();
-    ConfigAccess::transact_local(node, None, "test.automation_configuration", |txn| {
+    ConfigAccess::transact_local_write(node, None, "test.automation_configuration", |txn| {
         let plan = &plan;
         Box::pin(async move { gents::config_client::apply_desired_state_plan(txn, plan).await })
     })
@@ -60,7 +60,7 @@ async fn apply_documents(node: &EmbeddedNode, documents: Vec<(Collection, serde_
 }
 
 async fn configure_action_trigger(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     owner: &str,
     task_id: &str,
     trigger_id: &str,
@@ -266,7 +266,7 @@ async fn boot_agent_with_action_trigger(
     let identity = Arc::new(test_identity(test_name));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_agent_backend(
-        db.node.as_ref(),
+        &db.node,
         identity.did(),
         &format!("backend-{test_name}"),
         mock_endpoint.endpoint(),
@@ -301,7 +301,7 @@ async fn boot_agent_with_action_trigger(
     );
 
     configure_action_trigger(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         task_id,
         trigger_id,
@@ -405,7 +405,7 @@ async fn declared_write_tool_call_fires_event_trigger() {
         boot_agent_with_action_trigger(&db, "b6-tooldriven", task_id, trigger_id).await;
 
     let tool = BoundedWriteTool::new(
-        gents::ConfigAccess::Local(db.node.clone()),
+        gents::ConfigAccess::local(db.node.clone()),
         request_action_decl(),
     );
     assert_eq!(

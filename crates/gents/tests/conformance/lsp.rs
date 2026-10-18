@@ -1,6 +1,3 @@
-//! Generated permission cases exercise the LSP authorization owner.
-//! Mapping canonical per-service config into that owner belongs to the loader.
-
 use gents::tool_surface::FileToolMode;
 use gents::toolset::{
     lsp_action_authorized, lsp_advertised, lsp_apply_authorized, LspAction, LspMutationSource,

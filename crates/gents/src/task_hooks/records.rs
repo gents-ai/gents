@@ -15,15 +15,6 @@ use crate::managed_exec::ownership::{
     HostRecord, HostRecordStore, ProcessIdentity, ProcessRecorder,
 };
 
-/// The host's observations of one execution's hook attempts, the input
-/// `TaskHooks.recoverInterrupted` selects remaining cleanup from. The record
-/// is persisted only when the execution actually starts (its first hook
-/// launch or its owned work), which is the model's `started`; each attempt is
-/// recorded before its command launches, so an attempt without a result is an
-/// unknown outcome that recovery never replays. The admitted hooks, their cwd
-/// and the root guard that admitted it are kept with it: recovery runs what
-/// this execution was admitted to run, and only while that root is still
-/// admitted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct TaskHookRecord {
     pub(crate) request_doc_id: String,
@@ -47,7 +38,6 @@ pub(crate) struct RecordedHookAttempt {
 }
 
 impl TaskHookRecord {
-    /// `TaskHooks.recoveryCleanup`.
     fn remaining_cleanup(&self) -> Vec<TaskHook> {
         self.hooks
             .iter()
@@ -69,13 +59,6 @@ impl HostRecord for TaskHookRecord {
     }
 }
 
-/// Host store of task hook records. Like background process records, durable
-/// records live in a directory of the runtime's exclusively locked store, so
-/// only that runtime recovers them. `live` names the records an executor in
-/// this runtime holds now, live or recovering; no second owner may take one.
-/// Recovered cleanup runs in tracked tasks that runtime shutdown cancels and
-/// awaits, so an interrupted recovery leaves the same record the live path
-/// would.
 #[derive(Clone)]
 pub(crate) struct TaskHookRecordStore {
     storage: HostRecordStore<TaskHookRecord>,
@@ -108,7 +91,6 @@ impl TaskHookRecordStore {
         Self::with_storage(HostRecordStore::Durable(dir))
     }
 
-    /// Awaits every recovered cleanup started so far.
     pub(crate) async fn wait_for_recoveries(&self) {
         loop {
             let pending = std::mem::take(&mut *locked(&self.recoveries));
@@ -123,7 +105,6 @@ impl TaskHookRecordStore {
         }
     }
 
-    /// Cancels recovered cleanup through runtime shutdown and awaits it.
     pub(crate) async fn shutdown(&self) {
         self.shutdown.cancel();
         self.wait_for_recoveries().await;
@@ -141,7 +122,6 @@ impl TaskHookRecordStore {
         self.storage.list()
     }
 
-    /// Claims `record` for one executor, or `None` while another holds it.
     fn claim(&self, record: TaskHookRecord) -> Option<TaskHookRecordHandle> {
         if !locked(&self.live).insert(record.request_doc_id.clone()) {
             return None;
@@ -152,8 +132,6 @@ impl TaskHookRecordStore {
         })))
     }
 
-    /// Claims a fresh execution's record. Nothing is persisted until the
-    /// execution starts (`TaskHooks.recovery_before_start_no_cleanup`).
     pub(crate) fn begin(&self, record: TaskHookRecord) -> std::io::Result<TaskHookRecordHandle> {
         let key = record.request_doc_id.clone();
         self.claim(record).ok_or_else(|| {
@@ -174,8 +152,6 @@ impl Drop for HandleInner {
     }
 }
 
-/// One executor's claim on its record. Dropping the last handle releases the
-/// claim, so a record whose executor is gone becomes recoverable.
 #[derive(Clone)]
 pub(crate) struct TaskHookRecordHandle(Arc<HandleInner>);
 
@@ -197,8 +173,7 @@ impl TaskHookRecordHandle {
         self.0.store.write(&record)
     }
 
-    /// Durable writes sync the file and its directory, so they run on the
-    /// blocking pool rather than the executor that awaits them.
+    /// Durable writes sync the file and directory, so they run on the blocking pool.
     async fn update(
         &self,
         change: impl FnOnce(&mut TaskHookRecord) + Send + 'static,
@@ -209,7 +184,6 @@ impl TaskHookRecordHandle {
             .map_err(std::io::Error::other)?
     }
 
-    /// Persists the record as the execution's owned work begins.
     pub(crate) async fn work_started(&self) -> std::io::Result<()> {
         self.update(|_| {}).await
     }
@@ -226,9 +200,6 @@ impl TaskHookRecordHandle {
         .await
     }
 
-    /// Records the launched command's process identity, so a runtime that
-    /// restarts while it runs can prove it owns the survivor and stop it. The
-    /// managed-exec recorder is synchronous and runs right after spawn.
     pub(crate) fn process_recorder(&self, hook_id: &str) -> ProcessRecorder {
         let handle = self.clone();
         let hook_id = hook_id.to_owned();
@@ -258,8 +229,6 @@ impl TaskHookRecordHandle {
         }
     }
 
-    /// Records an occurrence refused without launching, for a reason retrying
-    /// cannot change, so recovery never selects it again.
     pub(crate) async fn attempt_refused(&self, hook_id: &str, result: HookCommandResult) {
         let key = hook_id.to_owned();
         if let Err(error) = self
@@ -276,9 +245,6 @@ impl TaskHookRecordHandle {
         }
     }
 
-    /// Forgets the record once every cleanup occurrence has an attempt, and
-    /// reports whether it did. Cleanup that shutdown kept from launching
-    /// stays recorded for recovery.
     pub(crate) async fn release(&self) -> bool {
         let handle = self.clone();
         tokio::task::spawn_blocking(move || {
@@ -294,8 +260,6 @@ impl TaskHookRecordHandle {
     }
 }
 
-/// A request is resolved once request recovery (or its live owner) has
-/// written its terminal, or the request is gone.
 async fn request_resolved(node: &EmbeddedNode, request_doc_id: &str) -> Result<bool> {
     #[derive(Deserialize)]
     struct Row {
@@ -380,13 +344,7 @@ async fn recover_record(
     handle.release().await;
 }
 
-/// `TaskHooks.recoverInterrupted` for this runtime's records, after request
-/// recovery has decided each request's terminal. A command still running from
-/// the lost execution is stopped only when its recorded identity proves this
-/// host owns it; no ordinary phase is rerun and no recorded attempt is
-/// repeated; every unattempted cleanup occurrence runs once from the recorded,
-/// cwd while its root guard still admits it; then the record is forgotten. Cleanup runs in tracked
-/// tasks, off the caller's reconcile tick.
+/// Recovery stops a process only when its recorded identity proves this runtime owns it.
 pub(crate) async fn recover_task_hook_records(
     node: &Arc<EmbeddedNode>,
     node_did: &str,

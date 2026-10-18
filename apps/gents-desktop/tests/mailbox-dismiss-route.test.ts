@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { selection } from "../src/hooks/selectionStore";
 import { testApp } from "./app-fixture";
 
-/* a compose route opened on an item, with the selection it set up */
 const routed = (itemId: string) => ({
   nodeDid: "did:key:a",
   agentId: "engineer",

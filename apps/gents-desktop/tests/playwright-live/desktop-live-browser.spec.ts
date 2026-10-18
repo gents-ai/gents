@@ -307,8 +307,6 @@ test.describe("desktop live browser smoke", () => {
       const liveProse = () =>
         liveAssistant.locator('[data-slot="assistant-message"]').evaluate((element) => {
           const prose = element.cloneNode(true) as HTMLElement;
-          // Reasoning's disclosure (including its word count) and activity
-          // status are separate from ReplyText's durable assistant content.
           prose
             .querySelectorAll(
               ':scope > [data-slot="collapsible"], [data-testid="activity-status"]',
@@ -335,9 +333,6 @@ test.describe("desktop live browser smoke", () => {
         submitted.sessionId,
         submitted.requestId,
       );
-      // Closure replaces the transient overlay with its canonical message.
-      // Assert the retained bytes through that reader, including after reload;
-      // a retired response row is not evidence of durable partial publication.
       const retainedAssistant = page.locator('[data-slot="assistant-message"]').last();
       await expect(retainedAssistant).toContainText(partialText);
       await page.reload();

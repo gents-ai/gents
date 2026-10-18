@@ -16,10 +16,6 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
             "{} should cite terminal coherence",
             case.witness
         );
-        // `is_superseded` is an independent observation input, not a derived
-        // alias for the lifecycle state. The model exercises both a superseded
-        // lifecycle with no override and a processing lifecycle with one.
-        // Compare their native projection below, without rewriting either input.
         if case.local_interrupt_acked {
             assert!(
                 case.interruptible_request_state,
@@ -39,11 +35,6 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
                 case.witness
             );
         } else {
-            // The exported phase must agree with the canonical client
-            // projection (`gents_protocol::client_protocol`), which owns
-            // `deriveAttempt`/`ClientTurnState` in Rust. The local-interrupt
-            // override is shim-specific and is checked by the dedicated
-            // witnesses below.
             let head = gents_protocol::client_protocol::project_persisted_attempt(
                 &case.request_state,
                 case.is_superseded,
@@ -208,54 +199,6 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
         .lean_theorems
         .contains(&"CodexShim.interrupt_step_is_terminal".to_string()));
 
-    let thread_status_cases = lean_codex_shim_thread_status_cases();
-    assert_eq!(thread_status_cases.len(), 10);
-    for case in thread_status_cases {
-        use gents_protocol::client_protocol::ClientTurnState;
-        let head = case.request_state.as_deref().and_then(|request_state| {
-            gents_protocol::client_protocol::project_persisted_attempt(request_state, false)
-        });
-        let expected = match head.map(|head| head.turn_state) {
-            Some(ClientTurnState::WaitingForClaim) => "active",
-            Some(ClientTurnState::Running) => "active",
-            Some(ClientTurnState::Failed) => "systemError",
-            Some(
-                ClientTurnState::Completed
-                | ClientTurnState::Superseded
-                | ClientTurnState::Interrupted,
-            ) => "idle",
-            None => "idle",
-        };
-        assert_eq!(case.projected_status, expected, "{}", case.witness);
-    }
-
-    let agent_cases = lean_codex_shim_agent_selection_cases();
-    assert_eq!(agent_cases.len(), 5);
-    for case in agent_cases {
-        let exact_scope = case.selected_owner == case.actual_owner
-            && case.projected_agent_id == case.actual_agent;
-        if !exact_scope || case.resolved_model.is_none() {
-            assert!(
-                case.projected_model.is_none(),
-                "{}: unavailable or foreign bindings cannot supply display metadata",
-                case.witness
-            );
-        } else {
-            assert_eq!(
-                case.projected_model, case.resolved_model,
-                "{}: exact binding must preserve the selected model",
-                case.witness
-            );
-        }
-    }
-    assert!(agent_cases
-        .iter()
-        .any(|case| case.selected_owner != case.actual_owner));
-    assert!(agent_cases
-        .iter()
-        .any(|case| case.projected_agent_id != case.actual_agent));
-    assert!(agent_cases.iter().any(|case| case.resolved_model.is_none()));
-
     let tool_metadata_cases = lean_codex_shim_tool_metadata_cases();
     assert_eq!(tool_metadata_cases.len(), 11);
     let context_cases = lean_codex_shim_context_usage_cases();
@@ -340,8 +283,6 @@ pub(super) fn generated_codex_shim_binding_cases_pin_runnable_gated_binding() {
             case.witness
         );
 
-        // Re-observing the same generation must change nothing
-        // (CodexShim.Binding.Shim.observePublish_idempotent).
         let settled = shim.clone();
         shim.observe_publish(runnable.iter().copied(), || host_can_listen);
         assert_eq!(

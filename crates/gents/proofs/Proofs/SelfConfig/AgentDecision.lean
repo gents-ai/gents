@@ -3,12 +3,10 @@ import Proofs.Configuration
 
 namespace SelfConfig
 
-/-- Read-only projection of the node's Agent documents for create, edit and
-disable decisions. `protectedIds` are product-owned agents (the Engineer): they
-may be cloned but never edited or disabled through agent management, so a
-recovery/configuration agent stays available. `defaultId` is the node's default
-agent; publication rejects a disabled default, so disabling it is refused here
-rather than admitted and left to fail at every reconcile. -/
+/-- `protectedIds` are product-owned agents (the Engineer): they may be cloned
+but never edited or disabled through agent management, so a
+recovery/configuration agent stays available. Publication rejects a disabled
+default. -/
 structure AgentCatalog where
   agents : List (String × Bool)
   protectedIds : List String
@@ -27,14 +25,12 @@ def AgentCatalog.present (c : AgentCatalog) (id : String) : Bool :=
 def AgentCatalog.mutable (c : AgentCatalog) (id : String) : Bool :=
   !c.protectedIds.contains id
 
-/-- A new agent takes an unused id. -/
 def agentCreateDecision (c : AgentCatalog) (target : String) : Bool :=
   !c.present target
 
 def agentEditDecision (c : AgentCatalog) (target : String) : Bool :=
   c.present target && c.mutable target
 
-/-- `makeDefault` is the same request designating the target as default. -/
 def agentDisableDecision (c : AgentCatalog) (target : String)
     (makeDefault : Bool) : Bool :=
   c.present target && c.mutable target && !makeDefault
@@ -68,10 +64,6 @@ theorem unprotected_edit_accepted (c : AgentCatalog) (target : String)
     agentEditDecision c target = true := by
   simp [agentEditDecision, AgentCatalog.mutable, hpresent, hp]
 
-/-! ## Create input -/
-
-/-- Inputs the agent create decision inspects beyond the id. `cloneFrom` is
-empty for a fresh agent. -/
 structure AgentCreateInput where
   name : String
   systemPrompt : String
@@ -83,8 +75,7 @@ def AgentCatalog.enabled (c : AgentCatalog) (id : String) : Bool :=
   c.agents.contains (id, true)
 
 /-- No implicit profile exists: create names a nonblank published inference
-profile. A fresh agent carries operating instructions; a clone may inherit its
-source prompt and must name an enabled source. -/
+profile. -/
 def agentCreateInputOk (profiles : List String) (c : AgentCatalog)
     (i : AgentCreateInput) : Bool :=
   i.name != "" && i.profile.trim != "" && profiles.contains i.profile
@@ -112,13 +103,6 @@ theorem clone_requires_enabled_source (profiles : List String) (c : AgentCatalog
     agentCreateInputOk profiles c i = false := by
   simp [agentCreateInputOk, hclone, h]
 
-/-! ## Edit patches
-
-An edit is a self-config patch: an absent key is `omitted`, `PatchOp.clear`
-clears and `PatchOp.set` replaces, so no separate field-update vocabulary
-exists. -/
-
-/-- Admission of one edited field. `none` is an omitted field. -/
 def editNameOk : Option PatchOp → Bool
   | some (.set n) => n != ""
   | _ => true
@@ -127,7 +111,6 @@ def editPromptOk : Option PatchOp → Bool
   | some (.set p) => p.trim != ""
   | _ => true
 
-/-- The profile binding cannot be cleared; a set names a published profile. -/
 def editProfileOk (profiles : List String) : Option PatchOp → Bool
   | none => true
   | some .clear => false
@@ -141,7 +124,6 @@ theorem omitted_edit_fields_admitted (profiles : List String) :
 theorem profile_clear_rejected (profiles : List String) :
     editProfileOk profiles (some .clear) = false := rfl
 
-/-- A key absent from the patch keeps its stored value. -/
 theorem omitted_field_preserved (t : Target) (doc : Doc) (p : Patch) (k : FieldKey)
     (h : p.any (fun e => e.key == k) = false) : applyPatch t doc p k = doc k := by
   by_contra hne
@@ -158,16 +140,12 @@ theorem explicit_set_replaces_writable (t : Target) (doc : Doc) (k : FieldKey)
     applyPatch t doc [⟨k, .set v⟩] k = some v := by
   simp [applyPatch, applyEntry, hw, PatchOp.value]
 
-/-- A single-field edit (profile-only, name-only) leaves every other field. -/
 theorem single_field_edit_preserves_others (t : Target) (doc : Doc) (e : PatchEntry)
     (k : FieldKey) (h : k ≠ e.key) : applyPatch t doc [e] k = doc k := by
   show applyEntry t doc e k = doc k
   unfold applyEntry
   split <;> simp [h]
 
-/-! ## Operation admission -/
-
-/-- Edited Agent fields; `none` omits a field and keeps its stored value. -/
 structure AgentEditFields where
   name : Option PatchOp := none
   systemPrompt : Option PatchOp := none
@@ -177,7 +155,6 @@ structure AgentEditFields where
 def agentEditFieldsOk (profiles : List String) (f : AgentEditFields) : Bool :=
   editNameOk f.name && editPromptOk f.systemPrompt && editProfileOk profiles f.profile
 
-/-- An agent management operation with the inputs its admission inspects. -/
 inductive AgentOperation where
   | create (input : AgentCreateInput)
   | edit (fields : AgentEditFields)
@@ -195,9 +172,9 @@ def agentOperationInputOk (profiles : List String) (c : AgentCatalog) :
   | .edit f => agentEditFieldsOk profiles f
   | .disable => true
 
-/-- The single operation-admission owner: catalog decision and modeled inputs
-together. Materialization admits only through it, because canonical resolution
-accepts an absent context and so cannot restore the create-prompt guarantee. -/
+/-- The single operation-admission owner; materialization admits only through
+it because canonical resolution accepts an absent context and cannot restore
+the create-prompt guarantee. -/
 def agentOperationAdmitted (profiles : List String) (c : AgentCatalog)
     (operation : AgentOperation) (target : String) (makeDefault : Bool) : Bool :=
   agentDecision c operation.op target makeDefault && agentOperationInputOk profiles c operation
@@ -209,7 +186,6 @@ theorem admitted_create_input_ok (profiles : List String) (c : AgentCatalog)
   simpa [agentOperationAdmitted, agentOperationInputOk, AgentOperation.op,
     agentDecision] using h
 
-/-- Every admitted create, fresh or clone, names a nonblank published profile. -/
 theorem admitted_create_profile (profiles : List String) (c : AgentCatalog)
     (i : AgentCreateInput) (target : String) (makeDefault : Bool)
     (h : agentOperationAdmitted profiles c (.create i) target makeDefault = true) :
@@ -225,7 +201,6 @@ theorem admitted_edit_fields_ok (profiles : List String) (c : AgentCatalog)
   simpa [agentOperationAdmitted, agentOperationInputOk, AgentOperation.op,
     agentDecision] using h
 
-/-- A name-only edit omits the profile and is admitted without one. -/
 theorem name_only_edit_does_not_require_profile (profiles : List String)
     (c : AgentCatalog) (target name : String) (makeDefault : Bool)
     (hpresent : c.present target = true) (hp : target ∉ c.protectedIds)
@@ -236,10 +211,6 @@ theorem name_only_edit_does_not_require_profile (profiles : List String)
     agentEditFieldsOk, editNameOk, editPromptOk, editProfileOk,
     unprotected_edit_accepted c target hpresent hp, hname]
 
-/-! ## Default selection and materialization -/
-
-/-- Default selection is part of the same admitted create/edit publication and
-points the node at the separately authored target. -/
 def defaultAgentAfter (preDefault applied : String) (op : AgentOp)
     (makeDefault : Bool) : String :=
   if op ≠ .disable ∧ makeDefault = true then applied else preDefault
@@ -253,9 +224,9 @@ theorem omitted_promotion_keeps_default (preDefault applied : String) (op : Agen
     defaultAgentAfter preDefault applied op false = preDefault := by
   simp [defaultAgentAfter]
 
-/-- A create or edit result must resolve as one context-plus-inference
-configuration, supplied by the shared authoring loader as a candidate registry.
-Disable is admitted but starts no session. Candidate construction is a loader
+/-- A create or edit result resolves as one context-plus-inference
+configuration from the shared authoring loader's candidate registry; disable
+is admitted but starts no session. Candidate construction is a loader
 refinement obligation. -/
 def materializedAgent (profiles : List String) (c : AgentCatalog)
     (operation : AgentOperation) (target : String) (makeDefault : Bool)

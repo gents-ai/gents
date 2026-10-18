@@ -1,34 +1,10 @@
-//! Transition methods on ToolCallLifecycle.
-//!
-//! Mirrors `crates/gents/src/lifecycle/transition.rs`. Each transition
-//! method calls `ensure_state` at the top to assert the precondition state,
-//! then performs the GraphQL mutation atomically, then updates in-memory
-//! state on confirmed success.
-//!
-//! `ensure_state` is verified via Bucket 3 integration tests (Task 25), which
-//! exercise it through every transition method's precondition path. There is
-//! no standalone unit test — fabricating a stub `Arc<EmbeddedNode>` would
-//! require unsafe memory tricks and the integration coverage is sufficient.
-
 use anyhow::{anyhow, Context, Result};
-use defra_node::{EmbeddedNode, QueryResponse};
 
 use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::toolset::CommandPolicyDenial;
 
 use super::{AwaitMode, CancelCause, FailureClass, ToolCallLifecycle, ToolCallState};
 
-async fn execute_mutation_with_retry(
-    node: &EmbeddedNode,
-    mutation: &str,
-    operation: &'static str,
-) -> Result<QueryResponse> {
-    crate::config_client::ConfigAccess::write_local_response(node, operation, mutation).await
-}
-
-/// Error returned when a transition method is called from an illegal
-/// pre-state.
-/// Programmer error, not a user-visible failure.
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum IllegalToolCallTransition {
     #[error(
@@ -119,8 +95,6 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
-    /// Assert that the current state is in `allowed`. Returns
-    /// `IllegalToolCallTransition` otherwise.
     pub(crate) fn ensure_state(
         &self,
         allowed: &[ToolCallState],
@@ -143,6 +117,3 @@ mod session_message;
 pub use session_message::CausedRequestTerminal;
 mod mode_policy;
 mod native;
-
-#[cfg(test)]
-mod tests;

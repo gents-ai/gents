@@ -1,5 +1,5 @@
-/* The OS-managed local node service. The desktop observes and controls it,
-   but does not own its process lifetime. */
+/* The desktop observes and controls the OS-managed local node service, but
+   does not own its process lifetime. */
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import type { ManagedServerAuthorityInput } from "@source-inc/gents-desktop-client";
@@ -17,10 +17,11 @@ import {
   describeManagedServerWait,
   managedServerWaitKind,
 } from "../../../lib/managedServerStartup";
-import { Fact, Group, Row } from "./rows";
+import { Fact, Group, PathFact, Row, StackedRow } from "./rows";
 import { useApp } from "@/app/AppContext";
 import { ManagedRuntimeUnavailableError } from "../../../lib/managedRuntimeReadiness";
 import { useStartup } from "@/hooks/useClient";
+import { errorText } from "../../../lib/errorText";
 
 export function LocalServer() {
   const { stores, actions } = useApp();
@@ -30,7 +31,6 @@ export function LocalServer() {
   const status = stores.localServer.use.status();
   const readFailure = stores.localServer.use.readFailure();
   const wait = stores.localServer.use.wait();
-  /* the tray, or startup, may be starting or stopping it */
   const operating = stores.localServer.use.operation() !== null;
   const statusError = readFailure
     ? `Could not check the background node: ${readFailure}`
@@ -59,6 +59,8 @@ export function LocalServer() {
     }
   };
   const running = status?.state === "running" || status?.state === "external";
+  const failure = statusError || status?.error;
+  const backgroundRefused = status?.state === "running" && status.approvalRequired;
   const updating =
     wait?.kind === "updating" ||
     (status ? managedServerWaitKind(status) === "updating" : false);
@@ -79,8 +81,6 @@ export function LocalServer() {
     try {
       let next = await actions.restartLocalServer(name, authority);
       if (!next.pairingReady) {
-        /* a status read that fails while waiting says why; the wait running
-           out is worded for a restart */
         const paired = await actions
           .awaitLocalServerPairing()
           .catch((cause: unknown) => {
@@ -105,7 +105,7 @@ export function LocalServer() {
       await refreshSnapshot();
       toast("Managed runtime restarted with the reviewed access");
     } catch (cause) {
-      setAuthorityError(cause instanceof Error ? cause.message : String(cause));
+      setAuthorityError(errorText(cause));
       await incompatibleHome?.adopt(cause);
     } finally {
       setBusy(false);
@@ -140,25 +140,32 @@ export function LocalServer() {
     >
       <Row
         label="State"
-        description="Node readiness is checked against the OS service and runtime endpoint. Pairing and desktop connectivity are observed separately."
+        description={
+          <>
+            Node readiness is checked against the OS service and runtime endpoint.
+            Pairing and desktop connectivity are observed separately.
+            {wait && (
+              <span role="status" className="mt-1 block">
+                {describeManagedServerWait(wait, Date.now()).label}
+              </span>
+            )}
+          </>
+        }
+        error={
+          (failure || backgroundRefused) && (
+            <>
+              {failure && <span className="block wrap-break-word">{failure}</span>}
+              {backgroundRefused && (
+                <span className="block">
+                  macOS no longer allows Gents in the background, so the node will not
+                  start again after it stops. Turn on Gents under {LOGIN_ITEMS_PATH}.
+                </span>
+              )}
+            </>
+          )
+        }
       >
         <span className="flex items-center gap-2">
-          {(statusError || status?.error) && (
-            <span role="alert" className="text-xs text-destructive">
-              {statusError || status?.error}
-            </span>
-          )}
-          {status?.state === "running" && status.approvalRequired && (
-            <span role="alert" className="text-xs text-destructive">
-              macOS no longer allows Gents in the background, so the node will not start
-              again after it stops. Turn on Gents under {LOGIN_ITEMS_PATH}.
-            </span>
-          )}
-          {wait && (
-            <span role="status" className="text-xs text-muted-foreground">
-              {describeManagedServerWait(wait, Date.now()).label}
-            </span>
-          )}
           <Badge
             variant={
               running
@@ -174,16 +181,16 @@ export function LocalServer() {
       </Row>
       <Row
         label="Desktop app"
-        description="Closing the window keeps controls in the menu bar. Quit Desktop closes only this frontend; the node keeps running."
+        description="Closing the window keeps controls in the menu bar. Quitting stops the local node unless background running is enabled."
       >
-        <Fact>Independent</Fact>
+        <Fact>{status?.autoStart ? "Runs in background" : "Stops on quit"}</Fact>
       </Row>
       <Row
-        label="Start at login"
-        description="Let your operating system—not the desktop app—start the node when you sign in. Stop node keeps this preference, so it may start again at your next login."
+        label="Keep running after quit"
+        description="Keep triggers, schedules and sync running after quitting, and start the node when you sign in. Stop node keeps this setting."
       >
         <Switch
-          aria-label="Start at login"
+          aria-label="Keep running after quit"
           checked={status?.autoStart ?? false}
           disabled={busy || !status}
           onCheckedChange={(on) =>
@@ -203,9 +210,13 @@ export function LocalServer() {
         label="Host access"
         description="Reviewed host access, confirmed by the runtime while running. Changing access stops the OS service, saves your choices, and starts it again."
       >
-        <div className="grid justify-items-end gap-1 text-right">
+        <div className="grid justify-items-end gap-1 text-right *:max-w-full max-md:justify-items-start max-md:text-left md:max-w-1/2 md:shrink-0">
           <Fact>{status?.effectiveToolCeiling ?? "—"}</Fact>
-          <Fact mono>{status?.effectiveToolRoot ?? "No host path"}</Fact>
+          {status?.effectiveToolRoot ? (
+            <PathFact path={status.effectiveToolRoot} local />
+          ) : (
+            <Fact mono>No host path</Fact>
+          )}
           {running && status?.state !== "external" ? (
             <Button size="sm" variant="outline" onClick={beginAuthorityEdit}>
               Change access…
@@ -214,15 +225,10 @@ export function LocalServer() {
         </div>
       </Row>
       {editingAuthority && home ? (
-        <div className="grid gap-4 border-t border-border/60 pt-4">
-          <div>
-            <p className="text-sm font-medium">Restart-required access change</p>
-            <p className="text-xs text-muted-foreground">
-              The node keeps its current access unless the native service stops
-              successfully. It restarts only after the reviewed root and ceiling are
-              saved.
-            </p>
-          </div>
+        <StackedRow
+          label="Restart-required access change"
+          description="The node keeps its current access unless the native service stops successfully. It restarts only after the reviewed root and ceiling are saved."
+        >
           <ManagedRuntimeAuthorityPicker
             home={home}
             toolCeiling={toolCeiling}
@@ -250,7 +256,7 @@ export function LocalServer() {
               {busy ? <Spinner /> : null} Review complete — restart
             </Button>
           </div>
-        </div>
+        </StackedRow>
       ) : null}
       <Row label="GraphQL">
         <Fact mono>{status?.graphql ?? "—"}</Fact>

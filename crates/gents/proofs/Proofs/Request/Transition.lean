@@ -15,7 +15,7 @@ inductive Transition : RequestContext → RequestContext → Prop where
       post = { pre with state := .claimed, admission := .waiting, claimTime := pre.currentTime, deadline := pre.claimDeadline } →
       Transition pre post
   | dedup_lose {pre post : RequestContext} :
-      pre.state = .pending →
+      (pre.state = .pending ∨ pre.state = .workspaceBindingPending) →
       pre.admission = .released →
       post = { pre with state := .superseded } →
       Transition pre post
@@ -29,9 +29,7 @@ inductive Transition : RequestContext → RequestContext → Prop where
       pre.admission = .acquired →
       post = { pre with state := .processing, admission := .executing } →
       Transition pre post
-  /-- Permission for the owned loop to continue processing after its foreground
-  dependencies are clear. This is a lifecycle stutter, not evidence of work,
-  output progress, scheduling fairness, or a request-row write. -/
+  /-- Owned-loop processing stutter, not evidence of work, output progress, fairness, or a request-row write. -/
   | continue_processing {pre post : RequestContext} :
       pre.state = .processing →
       pre.admission = .executing →

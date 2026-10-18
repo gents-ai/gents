@@ -1,5 +1,3 @@
-//! Signed P2P replication fences canonical context/inference dependencies and excludes credentials.
-
 use std::time::{Duration, Instant};
 
 use gents::agent::p2p_reconcile::templates::single_string_eq;
@@ -11,8 +9,6 @@ use serde_json::Value;
 use crate::support::p2p_waits::wait_for_listen_addr;
 use crate::support::test_p2p_db;
 
-/// Peer node DID the conversation grant is written for. Transcript rows
-/// selected by the conversation grant requester filter.
 const SAFE_CONFIG: &[&str] = &[
     "Agent",
     "AgentContext",
@@ -25,8 +21,6 @@ const SAFE_CONFIG: &[&str] = &[
 ];
 
 const PEER_DID: &str = "did:key:phone";
-/// Foreign requester DID on the same source node: its AgentRequest row must stay
-/// behind the replicator's requester-scoped AgentRequest filter.
 const FOREIGN_DID: &str = "did:key:outsider";
 
 #[tokio::test]
@@ -73,9 +67,6 @@ async fn signed_conversation_pairing_replays_agent_config_over_p2p() {
         .await;
     assert!(!response.has_errors(), "seed config: {:?}", response.errors);
 
-    // Seed the transcript plane the conversation template scopes by
-    // requester_did: one row for the granted peer and one for a foreign
-    // requester. Only the peer-owned row may cross the replicator.
     for (request_id, requester_did) in [
         ("req-phone-owned", PEER_DID),
         ("req-foreign-owned", FOREIGN_DID),
@@ -134,9 +125,6 @@ async fn signed_conversation_pairing_replays_agent_config_over_p2p() {
             "config collection {collection} must cross the signed grant unfiltered"
         );
     }
-    // The transcript plane the test actually seeds must be requester-scoped by
-    // the owner template, otherwise the exclusion asserted below would pass
-    // against an unfiltered transport too.
     let request_filter = filters
         .get("AgentRequest")
         .expect("conversation template scopes AgentRequest");
@@ -177,8 +165,6 @@ async fn signed_conversation_pairing_replays_agent_config_over_p2p() {
         );
     }
 
-    // This is the converged snapshot observed below, not proof of transport
-    // ordering or permanent absence; the filter owner is asserted separately.
     let requests = data
         .get("AgentRequest")
         .and_then(Value::as_array)

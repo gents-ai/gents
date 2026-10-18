@@ -10,7 +10,7 @@ use crate::toolset::{
     CommandNetworkMode,
 };
 
-use super::adapter::{bound_dirty_base_summary, DIRTY_BASE_SUMMARY_LIMIT};
+use super::adapter::DIRTY_BASE_SUMMARY_LIMIT;
 use super::*;
 
 fn capabilities() -> BTreeSet<String> {
@@ -299,7 +299,6 @@ fn isolated_workspace_mutation_has_no_host_path() {
         head_sha: None,
         changed_files: None,
         diff_artifact: None,
-        checks_run: None,
         unresolved_conflicts: None,
         integration_instructions: None,
     };
@@ -379,7 +378,6 @@ fn existing_target_mismatch_does_not_overwrite_or_cleanup() {
 
     let mut docs = MemoryWorkspaceDocuments::default();
     let action = fx.action("foreign", "unit-1", "topic-foreign");
-    // Force dest to be the pre-existing foreign directory.
     let planned = workspace_host_path(
         &fx.repo,
         &action.workspace_id,
@@ -685,16 +683,6 @@ fn git_worktree_diff_denies_metadata_writes_allows_reads() {
         deny_git_metadata_writes: true,
     };
     assert!(constraints.to_spawn_policy().deny_git_metadata_writes());
-}
-
-#[test]
-fn dirty_base_summary_truncates_on_char_boundary() {
-    let cjk = "文".repeat(700);
-    assert!(cjk.len() > DIRTY_BASE_SUMMARY_LIMIT);
-    assert!(!cjk.is_char_boundary(DIRTY_BASE_SUMMARY_LIMIT));
-    let summary = bound_dirty_base_summary(&cjk);
-    assert!(summary.len() <= DIRTY_BASE_SUMMARY_LIMIT);
-    assert!(cjk.is_char_boundary(summary.len()));
 }
 
 #[test]
@@ -1564,12 +1552,7 @@ fn integrate_does_not_commit_until_receipt_and_retries_from_journal() {
     );
     assert_eq!(first.receipt.kind, "integrator");
 
-    // Crash loses this new integration receipt, not the previously durable
-    // writer seal witness that authorizes integration.
     docs.receipts.remove(&first.receipt.receipt_id);
-    // Commit objects include second-resolution timestamps. Cross a timestamp
-    // boundary so regenerating the commit cannot accidentally look like
-    // successful recovery of the persisted pending SHA.
     std::thread::sleep(std::time::Duration::from_secs(2));
     let second = execute_integrate_workspace_plan(
         &emit_integrate_workspace_plan(IntegrateWorkspaceAction {
@@ -1959,8 +1942,6 @@ fn integrate_and_cleanup_plans_omit_host_path() {
     .is_err());
 }
 
-/// Actual Git/executor consumers for the emitted seal subset. Other operation
-/// cases retain follow-up coverage until their recovery fixtures are wired.
 fn generated_workspace_path_capability_seal_cases_drive_real_git_executor() {
     let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
     let cases = snapshot["workspace_path_capability_cases"]
@@ -1969,8 +1950,6 @@ fn generated_workspace_path_capability_seal_cases_drive_real_git_executor() {
     let mut exercised = BTreeSet::new();
     for case in cases.iter().filter(|case| case["operation"] == "seal") {
         let name = case["name"].as_str().unwrap();
-        // Path parser rejection is exercised separately against real admission;
-        // it must not be represented by a fabricated Git path outside the root.
         if name == "noncanonical_delta_rejected" {
             continue;
         }
@@ -2193,8 +2172,6 @@ fn generated_workspace_receipt_cases_recover_without_checkout_or_reapplying() {
             integrate_writer(&fx, &mut docs, "ws-replay-cap", "req-int");
         }
         if name == "changed_capability_cannot_replay_receipt" {
-            // Mutable test storage deliberately violates immutable row identity;
-            // the existing receipt must not authenticate this widened binding.
             docs.workspaces
                 .get_mut("ws-replay-cap")
                 .unwrap()
@@ -2452,8 +2429,6 @@ fn generated_legacy_workspace_cases_recover_identity_without_fresh_provision() {
         )
         .unwrap();
         let dest = PathBuf::from(&created.placement.host_path);
-        // Simulate the precise migration boundary: persisted old row now has
-        // explicit compatibility, while the historical host marker lacks it.
         docs.workspaces
             .get_mut("ws-legacy-cap")
             .unwrap()

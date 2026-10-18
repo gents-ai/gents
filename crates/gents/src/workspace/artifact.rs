@@ -1,5 +1,3 @@
-//! Request-owned compiler output, separate from the sealed source capability.
-//! The workspace executor owns the containing Git worktree directory and cleanup.
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -87,15 +85,21 @@ fn checked_directory(path: &Path) -> Result<DirectoryIdentity> {
 }
 
 fn create_private_directory(path: &Path) -> Result<()> {
-    let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
+        let mut builder = std::fs::DirBuilder::new();
         builder.mode(0o700);
+        builder
+            .create(path)
+            .with_context(|| format!("creating private artifacts {}", path.display()))
     }
-    builder
-        .create(path)
-        .with_context(|| format!("creating private artifacts {}", path.display()))
+    #[cfg(not(unix))]
+    {
+        std::fs::DirBuilder::new()
+            .create(path)
+            .with_context(|| format!("creating private artifacts {}", path.display()))
+    }
 }
 
 fn checked_worktree_git_dir(source: &Path, workspace_id: &str) -> Result<PathBuf> {
@@ -240,9 +244,8 @@ impl ArtifactGrant {
         Ok(grant)
     }
 
-    /// Revalidates this incarnation immediately before shared command preparation.
-    /// Existing request cancellation remains responsible for process termination
-    /// if cancellation races the subsequent spawn; this is not a second owner.
+    /// Revalidates this incarnation immediately before shared command preparation;
+    /// existing request cancellation remains responsible for process termination.
     pub async fn validate_for_launch(&self) -> Result<()> {
         let owner = &self.0;
         for (path, expected) in &owner.identities {

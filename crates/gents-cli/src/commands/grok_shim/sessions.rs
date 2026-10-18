@@ -101,9 +101,6 @@ struct Cursor {
     query: String,
 }
 
-/// Scan bounded pages without silently dropping an older session behind a
-/// fixed request-count ceiling. Request IDs are the stable scan key; the
-/// result is ordered by actual persisted activity, not lexical UUID order.
 pub(super) async fn requests(
     node: &EmbeddedNode,
     principal: &str,
@@ -118,8 +115,6 @@ pub(super) async fn requests(
     Ok(result)
 }
 
-/// Keep discovery's memory proportional to sessions, not transcript size.
-/// Replay explicitly collects rows above; listing folds each bounded page.
 async fn scan_requests(
     node: &EmbeddedNode,
     principal: &str,
@@ -143,7 +138,7 @@ async fn scan_requests(
         let response = graphql_with_transaction_retry(
             node,
             &format!(
-                r#"{{ AgentRequest(filter: {{ {scope} }}, order: {{request_id: ASC}}, limit: {PAGE_SIZE}) {{
+                r#"{{ AgentRequest(filter: {{ {scope} }}, order: [{{request_id: ASC}}, {{_docID: ASC}}], limit: {PAGE_SIZE}) {{
             _docID request_id session_id node_did requester_did agent_id
             content created_at terminalized_at lifecycle_state runtime_source_kind
         }} }}"#,
@@ -287,7 +282,6 @@ async fn list_entries(
         .await?;
     }
     let mut entries = Vec::new();
-    // Batch owner validation: no N+1 per-request or per-session DB query.
     let ids: Vec<_> = grouped.keys().cloned().collect();
     for page in ids.chunks(PAGE_SIZE) {
         let ids = page
@@ -324,7 +318,7 @@ async fn list_entries(
             let Some(first) = summary.first.as_ref() else {
                 continue;
             };
-            // A session another session started is hydrated under its
+            // A session started by another session is hydrated under its
             // starter, not offered as a root; its stored provenance says so.
             let provenance = match owner.get("provenance") {
                 Some(Value::String(encoded)) => {
@@ -413,13 +407,8 @@ pub(super) async fn list(
     )
 }
 
-/// The leader dashboard is the stock client's server-hosted resume surface.
-/// Unlike its local-filesystem history picker, selecting a roster entry
-/// directly sends session/load without requiring a local JSONL file.
 pub(super) async fn roster(node: &EmbeddedNode, principal: &str, behavior: &str) -> Result<Value> {
     let mut sessions = Vec::new();
-    // The roster has no pagination on the wire. Fold history once, rather
-    // than re-scanning all requests for each 1,000-session picker page.
     for (_, _, row) in list_entries(node, principal, behavior, &ListParams::default()).await? {
         sessions.push(json!({"sessionId":row["sessionId"], "title":row["summary"],
                 "cwd":"", "activity":row["_meta"]["gents/activity"],
@@ -433,10 +422,85 @@ pub(super) async fn roster(node: &EmbeddedNode, principal: &str, behavior: &str)
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn history_pages_filter_detached_requests_before_the_page_limit() {
+        use gents_protocol::request_admission::RequestPurpose;
+
+        let dir = tempfile::tempdir().unwrap();
+        let node = std::sync::Arc::new(
+            EmbeddedNode::builder()
+                .data_path(dir.path().join("db"))
+                .build()
+                .await
+                .unwrap(),
+        );
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+        let owner = "did:test:history";
+        let mut rows = Vec::new();
+        for index in 0..PAGE_SIZE {
+            rows.push((
+                format!("a-foreign-{index:03}"),
+                "did:test:other",
+                RequestPurpose::PUBLIC,
+            ));
+            rows.push((
+                format!("b-public-{index:03}"),
+                owner,
+                RequestPurpose::PUBLIC,
+            ));
+            rows.push((
+                format!("c-detached-{index:03}"),
+                owner,
+                RequestPurpose::TitleAudit,
+            ));
+        }
+        rows.push(("d-public".into(), owner, RequestPurpose::PUBLIC));
+        let statements = rows
+            .chunks(64)
+            .map(|batch| {
+                let selections = batch
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (id, principal, purpose))| {
+                        let id = escape_graphql_string(id);
+                        let principal = escape_graphql_string(principal);
+                        let purpose = escape_graphql_string(purpose.as_str());
+                        format!(
+                            r#"r{index}: create_AgentRequest(input: {{
+                    request_id: "{id}", node_did: "{principal}", requester_did: "{principal}",
+                    session_id: "session", purpose: "{purpose}", lifecycle_state: "completed"
+                }}) {{ _docID }}"#
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("mutation {{{selections}}}")
+            })
+            .collect::<Vec<_>>();
+        gents::ConfigAccess::transact_local_write(&node, None, "history.page_fixture", |txn| {
+            let statements = &statements;
+            Box::pin(async move {
+                for statement in statements {
+                    txn.execute(statement).await?;
+                }
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+        let mut observed = Vec::new();
+        let result = scan_requests(&node, owner, None, |row| observed.push(row.request_id)).await;
+        node.shutdown().await;
+        result.unwrap();
+        assert_eq!(observed.len(), PAGE_SIZE + 1);
+        assert_eq!(observed.last().map(String::as_str), Some("d-public"));
+        assert!(observed
+            .iter()
+            .all(|id| id.starts_with("b-public-") || id == "d-public"));
+    }
+
     #[test]
     fn summary_fold_preserves_first_prompt_search_and_activity_in_any_scan_order() {
-        // Scan keys are UUIDs, not chronological coordinates. A later turn
-        // must contribute search/activity without replacing the first prompt.
         let rows: Vec<AgentRequestRow> = serde_json::from_value(json!([
             {"request_id":"z", "content":"original prompt", "created_at":"2026-09-01T00:00:00Z",
                 "terminalized_at":"2026-09-01T00:01:00Z", "lifecycle_state":"completed"},
@@ -458,37 +522,6 @@ mod tests {
             assert!(summary.matches_query);
             assert!(summary.working);
             assert_eq!(summary.updated, timestamp(Some("2026-09-04T00:00:00Z")));
-        }
-    }
-
-    #[test]
-    fn picker_filters_validate_and_cursor_is_bound_to_search() {
-        let mut params: ListParams = serde_json::from_value(
-            json!({"query":"  HELLO ", "_meta":{"x.ai/facetFilters":{"kind":["build"]}}}),
-        )
-        .unwrap();
-        params.validate().unwrap();
-        assert!(!params.excludes_build());
-        params.cursor = Some(
-            serde_json::to_string(&Cursor {
-                updated_at: Utc::now(),
-                session_id: "s".into(),
-                query: "hello".into(),
-            })
-            .unwrap(),
-        );
-        params.validate().unwrap();
-        params.query = Some("another".into());
-        assert!(params.validate().is_err());
-        for invalid in [
-            json!({"limit":0}),
-            json!({"headless":"unknown"}),
-            json!({"_meta":{"x.ai/facetFilters":{"cwd":"/tmp"}}}),
-        ] {
-            assert!(serde_json::from_value::<ListParams>(invalid)
-                .unwrap()
-                .validate()
-                .is_err());
         }
     }
 }

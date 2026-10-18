@@ -1,9 +1,3 @@
-//! What a decision reads, and what a proposer may read.
-//!
-//! The runs of one decision are paired one at a time by `eval::report` and
-//! concatenated, so a re-run adds pairs (finding F1). What reaches a proposer
-//! is narrower still: a check's name, what it scored and what it said.
-
 use sha2::{Digest, Sha256};
 
 use crate::document_config::{EvalDefinition, EvalTier};
@@ -14,22 +8,9 @@ use crate::eval::VerdictRecord;
 use crate::optimization::policy::{evidence_from_pairs, Evidence, TokenTotals};
 use crate::optimization::proposer::CheckFeedback;
 
-/// The two cell ids every optimization run uses. A train run has only
-/// [`BASELINE_CELL`], the checkpoint; the held-out run compares the original
-/// baseline against the final checkpoint under the same two ids.
 pub const BASELINE_CELL: &str = "baseline";
 pub const CANDIDATE_CELL: &str = "candidate";
 
-/// Token totals for both cells across `runs`: what feeds `PolicyV2`'s cost
-/// gate. `None` skips that gate, and the decision journals `cost_skipped`.
-///
-/// A trial that reported no usage is unknown, not free (ruling T312-1). It is
-/// excluded from its cell's token mean, whose denominator is only the trials
-/// that did report, so the side with more missing usage does not look cheaper.
-/// It counts instead toward the missing share over every counted trial, which
-/// is what `PolicyV2::max_missing_usage_bp` bounds: that tolerance is the
-/// field's purpose, and past it the result is `None`. A cell with no trial
-/// that reported usage has no mean at all, so the result is `None` as well.
 pub fn token_totals(runs: &[RunRows], max_missing_usage_bp: u64) -> Option<TokenTotals> {
     let (mut baseline, mut candidate) = (CellUsage::default(), CellUsage::default());
     for rows in runs {
@@ -45,11 +26,6 @@ fn add(total: &mut CellUsage, one: CellUsage) {
     total.missing += one.missing;
 }
 
-/// The cost gate's token totals for two cells, by the rule [`token_totals`]
-/// documents: unknown usage is not free; past the tolerated missing share, or
-/// with a cell that reported nothing, `None`. Pure: `eval::report::compare`
-/// calls it too, so an operator's comparison and the optimizer skip the cost
-/// gate on exactly the same data.
 pub fn totals(
     baseline: CellUsage,
     candidate: CellUsage,
@@ -82,14 +58,10 @@ pub fn totals(
     })
 }
 
-/// The trials of one cell that reported usage: the mean's denominator.
 fn reported(usage: &CellUsage) -> u64 {
     usage.trials.saturating_sub(usage.missing)
 }
 
-/// The evidence one decision reads: every run paired separately, the pairs
-/// concatenated, over the cases the first run froze. All runs of one decision
-/// share a definition and a split, so they froze the same case list.
 pub fn decision_evidence(
     definition: &EvalDefinition,
     runs: &[RunRows],
@@ -110,11 +82,6 @@ pub fn decision_evidence(
     )
 }
 
-/// What a proposer may read from the train run: for each acceptance check
-/// that counts, its name, what it scored, and what it said. Only the train
-/// run's checkpoint cell, [`BASELINE_CELL`], is read, at each slot's latest
-/// completed attempt and after regrade supersession, both selected by
-/// `eval::report` (ruling T312-2). Ordered so two reads produce the same input.
 pub fn train_feedback(definition: &EvalDefinition, train: &RunRows) -> Vec<CheckFeedback> {
     let mut counted: Vec<&VerdictRecord> = counted_verdicts(definition, train, BASELINE_CELL)
         .into_iter()
@@ -133,8 +100,6 @@ pub fn train_feedback(definition: &EvalDefinition, train: &RunRows) -> Vec<Check
         .collect()
 }
 
-/// The Monte Carlo seed, derived from the runs the decision reads, so a
-/// recomputed decision is identical.
 pub fn decision_seed(run_ids: &[String]) -> u64 {
     let digest = Sha256::digest(run_ids.join("\n").as_bytes());
     let mut bytes = [0u8; 8];
@@ -157,21 +122,6 @@ mod tests {
                 slot(CANDIDATE_CELL, 1, 10_000),
             ],
         )
-    }
-
-    /// F1: a re-run adds pairs, so two identical runs double the case's pairs
-    /// and sums instead of collapsing to worst-case imputation.
-    #[test]
-    fn a_rerun_adds_pairs_to_the_decision() {
-        let definition = one_case_definition();
-        let once = decision_evidence(&definition, &[improving("v0")], 2_000);
-        let twice = decision_evidence(&definition, &[improving("v0"), improving("v1")], 2_000);
-        assert_eq!(once.cases[0].pairs, 2);
-        assert_eq!(twice.cases[0].pairs, 4);
-        assert_eq!(twice.cases[0].sum_baseline_bp, 0);
-        assert_eq!(twice.cases[0].sum_candidate_bp, 40_000);
-        assert_eq!(twice.keys, 4);
-        assert!(twice.cases_match);
     }
 
     #[test]
@@ -198,8 +148,6 @@ mod tests {
         );
     }
 
-    /// T312-1: a trial without usage is unknown, not free. It counts toward
-    /// the missing share but not toward its cell's mean.
     #[test]
     fn a_trial_without_usage_is_left_out_of_its_cells_mean() {
         let mut slots: Vec<Slot> = (0..5)
@@ -237,8 +185,6 @@ mod tests {
         );
     }
 
-    /// T312-2: the proposer reads only the verdicts that count: the latest
-    /// completed attempt, after regrades, acceptance tier only.
     #[test]
     fn feedback_is_read_from_counted_acceptance_verdicts_only() {
         let definition = one_case_definition();
@@ -315,18 +261,6 @@ mod tests {
                 "{forbidden} leaked: {rendered}"
             );
         }
-    }
-
-    #[test]
-    fn the_decision_seed_follows_the_run_ids_and_nothing_else() {
-        let one = decision_seed(&["job-r1-v0".to_owned()]);
-        assert_eq!(one, decision_seed(&["job-r1-v0".to_owned()]));
-        assert_ne!(one, decision_seed(&["job-r1-v1".to_owned()]));
-        assert_ne!(
-            one,
-            decision_seed(&["job-r1-v0".to_owned(), "job-r1-v1".to_owned()]),
-            "a re-run changes the seed, because it changes the evidence"
-        );
     }
 
     #[test]

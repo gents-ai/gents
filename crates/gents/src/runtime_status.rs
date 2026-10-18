@@ -11,12 +11,8 @@ use crate::graphql::escape_graphql_string;
 use crate::node_readiness_publisher::{NodeReadinessPublisherHandle, NodeReadinessPublisherOwner};
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 
-/// Target of the reconcile-phase transition event.
-///
-/// `NodeRuntime.reconcile_phase` holds only the phase the runtime is in now,
-/// and a reconcile leaves the intermediate phases for as long as its debounce
-/// and resolve take. The order and duration of those phases is therefore only
-/// observable through this event stream, not by reading the document.
+/// Reconcile-phase transitions are only observable through this event stream:
+/// `NodeRuntime.reconcile_phase` holds only the phase the runtime is in now.
 pub(crate) const RECONCILE_PHASE_EVENT_TARGET: &str = "gents.runtime.reconcile_phase";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -338,7 +334,7 @@ impl RuntimeStatusHandle {
             );
         }
         *guard = next.clone();
-        if let Err(error) = upsert_runtime_status(self.node.as_ref(), &next).await {
+        if let Err(error) = upsert_runtime_status(&self.node, &next).await {
             tracing::warn!(
                 node_did = %next.node_did,
                 error = %error,
@@ -348,46 +344,50 @@ impl RuntimeStatusHandle {
     }
 }
 
+fn runtime_status_fields(row: &RuntimeStatusRow) -> [(&'static str, String); 8] {
+    let string = |value: &str| format!("\"{}\"", escape_graphql_string(value));
+    [
+        ("reconcile_phase", string(&row.reconcile_phase)),
+        (
+            "agent_executor_capacity",
+            row.agent_executor_capacity.to_string(),
+        ),
+        (
+            "agent_executor_queue_depth",
+            row.agent_executor_queue_depth.to_string(),
+        ),
+        (
+            "agent_executor_status_json",
+            string(&row.agent_executor_status_json),
+        ),
+        ("last_reconcile_result", string(&row.last_reconcile_result)),
+        ("last_reconcile_error", string(&row.last_reconcile_error)),
+        (
+            "last_reconcile_completed_at",
+            string(&row.last_reconcile_completed_at),
+        ),
+        ("updated_at", string(&row.updated_at)),
+    ]
+}
+
 async fn upsert_runtime_status(
-    node: &defra_node::EmbeddedNode,
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
     row: &RuntimeStatusRow,
 ) -> anyhow::Result<()> {
+    let fields = runtime_status_fields(row)
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let node_did = escape_graphql_string(&row.node_did);
     let mutation = format!(
         r#"mutation {{
             upsert_NodeRuntime(
                 filter: {{ node_did: {{ _eq: "{node_did}" }} }},
-                add: {{
-                    node_did: "{node_did}",
-                    reconcile_phase: "{reconcile_phase}",
-                    agent_executor_capacity: {agent_executor_capacity},
-                    agent_executor_queue_depth: {agent_executor_queue_depth},
-                    agent_executor_status_json: "{agent_executor_status_json}",
-                    last_reconcile_result: "{last_reconcile_result}",
-                    last_reconcile_error: "{last_reconcile_error}",
-                    last_reconcile_completed_at: "{last_reconcile_completed_at}",
-                    updated_at: "{updated_at}"
-                }},
-                update: {{
-                    reconcile_phase: "{reconcile_phase}",
-                    agent_executor_capacity: {agent_executor_capacity},
-                    agent_executor_queue_depth: {agent_executor_queue_depth},
-                    agent_executor_status_json: "{agent_executor_status_json}",
-                    last_reconcile_result: "{last_reconcile_result}",
-                    last_reconcile_error: "{last_reconcile_error}",
-                    last_reconcile_completed_at: "{last_reconcile_completed_at}",
-                    updated_at: "{updated_at}"
-                }}
+                add: {{ node_did: "{node_did}", {fields} }},
+                update: {{ {fields} }}
             ) {{ _docID }}
         }}"#,
-        node_did = escape_graphql_string(&row.node_did),
-        reconcile_phase = escape_graphql_string(&row.reconcile_phase),
-        agent_executor_capacity = row.agent_executor_capacity,
-        agent_executor_queue_depth = row.agent_executor_queue_depth,
-        agent_executor_status_json = escape_graphql_string(&row.agent_executor_status_json),
-        last_reconcile_result = escape_graphql_string(&row.last_reconcile_result),
-        last_reconcile_error = escape_graphql_string(&row.last_reconcile_error),
-        last_reconcile_completed_at = escape_graphql_string(&row.last_reconcile_completed_at),
-        updated_at = escape_graphql_string(&row.updated_at),
     );
     let response = crate::config_client::ConfigAccess::write_local_response(
         node,

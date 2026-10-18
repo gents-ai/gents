@@ -14,6 +14,7 @@ async fn mcp_register_upserts_a_host_endpoint() -> Result<()> {
     {
         let node = initialized_node(tempdir.path(), &node_home, "mcp-register-test").await?;
         ensure_runtime_schemas(&node).await?;
+        node.shutdown().await;
     }
     let node_home_text = node_home.to_str().context("node home utf8")?;
     let output = run_cli_text(
@@ -69,6 +70,7 @@ async fn mcp_probe_json_reports_health_snapshot_for_registry_service() -> Result
         let node = initialized_node(tempdir.path(), &node_home, "mcp-probe-test").await?;
         ensure_runtime_schemas(&node).await?;
         seed_mcp_service(&node, &service_id, "fixture-host", "", "", 0, "online").await?;
+        node.shutdown().await;
     }
 
     let node_home = node_home.to_str().context("node home utf8")?;
@@ -138,6 +140,7 @@ async fn mcp_probe_all_json_lists_each_online_service() -> Result<()> {
         seed_mcp_service(&node, &missing_port_id, "fixture-host", "", "", 0, "online").await?;
         seed_mcp_service(&node, &missing_address_id, "", "", "", 9201, "online").await?;
         seed_mcp_service(&node, &offline_id, "offline-host", "", "", 0, "offline").await?;
+        node.shutdown().await;
     }
 
     let node_home = node_home.to_str().context("node home utf8")?;
@@ -185,6 +188,7 @@ async fn mcp_probe_single_missing_service_fails() -> Result<()> {
     {
         let node = initialized_node(tempdir.path(), &node_home, "mcp-probe-missing").await?;
         ensure_runtime_schemas(&node).await?;
+        node.shutdown().await;
     }
 
     let node_home = node_home.to_str().context("node home utf8")?;

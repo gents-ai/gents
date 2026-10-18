@@ -7,12 +7,9 @@ use crate::AgentDocument as Agent;
 use super::ConfigApplyTxn;
 use super::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 
-/// Replace one complete canonical behavior. Omitted optional fields clear their
-/// previous values; sparse edits belong to the explicit patch owner.
-/// Desired-state application validates references in the mutation transaction.
 pub async fn write_agent_document(access: &ConfigAccess, behavior: &Agent) -> Result<String> {
     access
-        .transact("config.agent.write", |txn| {
+        .transact_write("config.agent.write", |txn| {
             Box::pin(async move {
                 let value = serde_json::to_value(behavior)?;
                 let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -61,7 +58,7 @@ mod tests {
     async fn replacement_is_scoped_clears_context_and_rolls_back_dangling_links() -> Result<()> {
         let node = Arc::new(EmbeddedNode::builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         for owner in ["did:key:owner", "did:key:other"] {
             let backend = json!({"node_did":owner,"backend_id":"local","name":"Local",
                 "provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1",
@@ -81,7 +78,7 @@ mod tests {
                 },
             ])?;
             access
-                .transact("test.behavior.seed", |txn| {
+                .transact_write("test.behavior.seed", |txn| {
                     let plan = &plan;
                     Box::pin(async move {
                         super::super::apply_desired_state_plan(txn, plan)
@@ -109,7 +106,7 @@ mod tests {
         behavior.tags.clear();
         assert_eq!(write_agent_document(&access, &behavior).await?, original_id);
         access
-            .transact("test.behavior.read", |txn| {
+            .transact_write("test.behavior.read", |txn| {
                 let behavior = &behavior;
                 let foreign = &foreign;
                 Box::pin(async move {
@@ -130,7 +127,7 @@ mod tests {
         invalid.context_id = Some("missing".to_owned());
         assert!(write_agent_document(&access, &invalid).await.is_err());
         access
-            .transact("test.behavior.rollback", |txn| {
+            .transact_write("test.behavior.rollback", |txn| {
                 let behavior = &behavior;
                 Box::pin(async move {
                     assert_eq!(

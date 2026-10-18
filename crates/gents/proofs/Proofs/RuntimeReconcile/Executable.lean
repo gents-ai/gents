@@ -12,8 +12,8 @@ inductive Action where
   | publish (resolved : ResolvedSnapshot)
   | applyFailed
   | routerObserve (process : ProcessState)
-  /-- Mandatory agent is decoded from the authenticated request; absent/blank
-  identifiers are rejected before this Nat identifier abstraction. -/
+  /-- Mandatory agent is decoded from the authenticated request before this
+  Nat identifier abstraction. -/
   | acceptRequest (process : ProcessState) (sessionId : SessionId) (requestId : RequestId)
       (requested : AgentId)
   | finishRequest (requestId : RequestId)
@@ -272,8 +272,6 @@ theorem publish_step_resolved_wellFormed
   simp [step?] at h_step
   exact (h_pending resolved h_step.1.2.1).2
 
-/-- An agent can only be published into the runnable dispatcher set after
-all dependencies declared during resolution were satisfied. -/
 theorem publish_step_runnable_dependencies_satisfied
     {pre post : RuntimeState}
     {resolved : ResolvedSnapshot}
@@ -333,7 +331,7 @@ theorem mismatched_session_agent_denied
   simp [step?, CanAdmitRequest, hbound, hne]
 
 /-- Admission is the atomic boundary: an accepted request already owns its
-session/agent projection; there is no later repair transition. -/
+session/agent projection. -/
 theorem accept_step_projects_session_atomically
     {pre post : RuntimeState}
     {process : ProcessState}

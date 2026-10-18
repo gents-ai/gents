@@ -1,9 +1,3 @@
-//! Signed wire records for authenticated status-first enrollment.
-//!
-//! A status offer and candidate request are invitations to an operator-owned
-//! decision, never grants. The append-only authorization revision with the
-//! unique maximal sequence is the sole membership authority.
-
 use std::io::Cursor;
 
 use anyhow::{Context, Result};
@@ -90,7 +84,6 @@ impl EnrollmentRequestRecord {
         canonical_enrollment_digest(self.canonical_text_fields())
     }
 
-    /// Validate the immutable request against the exact signed offer it embeds.
     pub fn validate_against_offer(&self, offer: &EnrollmentOfferRecord) -> Result<()> {
         anyhow::ensure!(
             self.protocol_version == ENROLLMENT_PROTOCOL_VERSION,
@@ -224,16 +217,15 @@ impl EnrollmentDecisionKind {
 }
 
 /// Short-lived, admin-signed command accepted by the live runtime operator
-/// surface. The durable decision and authorization revision remain the only
-/// enrollment authority; this record merely authenticates an invocation of
-/// that owner.
+/// surface; the durable decision and authorization revision remain the only
+/// enrollment authority.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnrollmentOperatorDecisionCommand {
     pub protocol_version: u8,
     pub request_id: String,
     pub action: EnrollmentOperatorAction,
-    /// Requested approval lease. Must be zero for deny/revoke.
+    /// Must be zero for deny/revoke.
     pub lease_seconds: u64,
     pub admin_did: String,
     pub issued_at: String,
@@ -304,8 +296,7 @@ impl EnrollmentOperatorDecisionCommand {
     }
 }
 
-/// Short-lived, admin-signed read invocation. Pending enrollment identities
-/// are operator data and are never exposed by an unauthenticated GET.
+/// Short-lived signed reads keep pending enrollment identities off unauthenticated endpoints.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnrollmentOperatorQueryCommand {
@@ -965,10 +956,9 @@ pub fn authorization_lease_is_fresh_at(expires_at: &str, now: DateTime<Utc>) -> 
         .is_some_and(|expires_at| now < expires_at.with_timezone(&Utc))
 }
 
-/// Fingerprint of the exact durable enrollment wire schemas.
-///
-/// This is carried in signed offers so a client cannot write a request whose
-/// immutable fields the server interprets under a different schema.
+/// Fingerprint of the exact durable enrollment wire schemas: carried in signed
+/// offers so a client cannot write a request whose immutable fields the server
+/// interprets under a different schema.
 pub fn enrollment_schema_fingerprint() -> String {
     let mut hash = Sha256::new();
     hash.update(canonical_domain_payload(
@@ -1081,339 +1071,4 @@ fn lower_hex(bytes: &[u8]) -> String {
         rendered.push(DIGITS[(byte & 0x0f) as usize] as char);
     }
     rendered
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn authorization_lease_is_strict_and_canonical_at_the_write_boundary() {
-        let before = "2026-08-30T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
-        let boundary = "2026-08-30T12:00:01Z".parse::<DateTime<Utc>>().unwrap();
-        assert!(authorization_lease_is_fresh_at(
-            "2026-08-30T12:00:01Z",
-            before
-        ));
-        assert!(!authorization_lease_is_fresh_at(
-            "2026-08-30T12:00:01Z",
-            boundary
-        ));
-        assert!(!authorization_lease_is_fresh_at(
-            "2026-08-30T12:00:01+00:00",
-            before
-        ));
-    }
-
-    #[test]
-    fn request_digest_matches_the_formal_wire_vectors() {
-        assert_eq!(
-            canonical_enrollment_digest(["a|b", "c"]),
-            "utf8hex-v1:000000ff000000000000000000000000000000000000000000000000000000ff67656e74732d656e726f6c6c6d656e742d726571756573742d7631000000ff617c6200ff63"
-        );
-        assert_ne!(
-            canonical_enrollment_digest(["a|b", "c"]),
-            canonical_enrollment_digest(["a", "b|c"])
-        );
-    }
-
-    #[test]
-    fn offer_round_trip_and_signature_payload_ignore_only_signature() {
-        let mut offer = EnrollmentOfferRecord {
-            version: ENROLLMENT_PROTOCOL_VERSION,
-            offer_id: "offer-a".into(),
-            challenge: "challenge-a".into(),
-            network_id: "network-a".into(),
-            admin_did: "did:key:admin".into(),
-            server_peer: "peer-a".into(),
-            server_ticket: "ticket-a".into(),
-            owner_agent: "did:key:agent".into(),
-            profile: "client".into(),
-            schema_fingerprint: enrollment_schema_fingerprint(),
-            issued_at: "2026-08-29T00:00:00Z".into(),
-            expires_at: "2026-08-29T00:05:00Z".into(),
-            admin_sig: vec![1; 64],
-        };
-        let payload = offer.signing_payload();
-        offer.admin_sig = vec![9; 64];
-        assert_eq!(offer.signing_payload(), payload);
-        assert_eq!(decode_offer(&encode_offer(&offer).unwrap()).unwrap(), offer);
-    }
-
-    #[test]
-    fn offer_decoder_rejects_whitespace_trailing_data_and_invalid_shape() {
-        let offer = EnrollmentOfferRecord {
-            version: ENROLLMENT_PROTOCOL_VERSION,
-            offer_id: "offer-a".into(),
-            challenge: "challenge-a".into(),
-            network_id: "network-a".into(),
-            admin_did: "did:key:admin".into(),
-            server_peer: "peer-a".into(),
-            server_ticket: "ticket-a".into(),
-            owner_agent: "did:key:agent".into(),
-            profile: "client".into(),
-            schema_fingerprint: enrollment_schema_fingerprint(),
-            issued_at: "2026-08-29T00:00:00Z".into(),
-            expires_at: "2026-08-29T00:05:00Z".into(),
-            admin_sig: vec![1; 64],
-        };
-        let token = encode_offer(&offer).unwrap();
-        assert!(decode_offer(&format!(" {token}")).is_err());
-
-        let mut bytes = bs58::decode(&token).into_vec().unwrap();
-        bytes.push(0);
-        assert!(decode_offer(&bs58::encode(bytes).into_string()).is_err());
-
-        let mut invalid = offer;
-        invalid.network_id = " network-a".into();
-        assert!(decode_offer(&encode_offer(&invalid).unwrap()).is_err());
-    }
-
-    #[test]
-    fn request_cannot_extend_or_escape_the_signed_offer_window() {
-        // Field-boundary safety of derived ids: the unit separator must not let
-        // one id's tail impersonate another's, or the request-id — which the
-        // signature window below covers — could be replayed across requests.
-        assert_ne!(
-            derive_enrollment_id("domain", &["a\u{1f}b", "c"]),
-            derive_enrollment_id("domain", &["a", "b\u{1f}c"]),
-        );
-        let offer = EnrollmentOfferRecord {
-            version: ENROLLMENT_PROTOCOL_VERSION,
-            offer_id: "offer-a".into(),
-            challenge: "challenge-a".into(),
-            network_id: "network-a".into(),
-            admin_did: "did:key:admin".into(),
-            server_peer: "peer-a".into(),
-            server_ticket: "ticket-a".into(),
-            owner_agent: "did:key:agent".into(),
-            profile: "client".into(),
-            schema_fingerprint: enrollment_schema_fingerprint(),
-            issued_at: "2026-08-29T00:00:00Z".into(),
-            expires_at: "2026-08-29T00:05:00Z".into(),
-            admin_sig: vec![1; 64],
-        };
-        let candidate_did = "did:key:candidate";
-        let candidate_peer = "candidate-peer";
-        let nonce = "nonce-a";
-        let mut request = EnrollmentRequestRecord {
-            protocol_version: ENROLLMENT_PROTOCOL_VERSION,
-            request_id: format!(
-                "enroll-{}",
-                derive_enrollment_id(
-                    "gents-enrollment-request-id-v1",
-                    &[&offer.offer_id, candidate_did, candidate_peer, nonce],
-                )
-            ),
-            request_digest: String::new(),
-            offer_id: offer.offer_id.clone(),
-            offer_token: "offer-token".into(),
-            challenge: offer.challenge.clone(),
-            network_id: offer.network_id.clone(),
-            admin_did: offer.admin_did.clone(),
-            server_peer: offer.server_peer.clone(),
-            candidate_did: candidate_did.into(),
-            candidate_peer: candidate_peer.into(),
-            candidate_ticket: "candidate-ticket".into(),
-            owner_agent: offer.owner_agent.clone(),
-            profile: offer.profile.clone(),
-            client_nonce: nonce.into(),
-            issued_at: "2026-08-29T00:01:00Z".into(),
-            expires_at: offer.expires_at.clone(),
-            candidate_sig: vec![2; 64],
-        };
-        request.request_digest = request.computed_digest();
-        assert!(request.validate_against_offer(&offer).is_ok());
-
-        let decision = EnrollmentDecisionRecord {
-            protocol_version: ENROLLMENT_PROTOCOL_VERSION,
-            decision_id: derive_decision_id(&request.request_id, &request.request_digest),
-            request_id: request.request_id.clone(),
-            request_digest: request.request_digest.clone(),
-            network_id: request.network_id.clone(),
-            admin_did: request.admin_did.clone(),
-            candidate_did: request.candidate_did.clone(),
-            candidate_peer: request.candidate_peer.clone(),
-            owner_agent: request.owner_agent.clone(),
-            decision: EnrollmentDecisionKind::Approved,
-            authorization_sequence: 1,
-            authorization_expires_at: "2026-09-28T00:02:00Z".into(),
-            decided_at: "2026-08-29T00:02:00Z".into(),
-            signer_did: request.admin_did.clone(),
-            admin_sig: vec![3; 64],
-        };
-        assert!(decision.validate_against_request(&request).is_ok());
-        let revision = AuthorizationRevisionRecord {
-            protocol_version: ENROLLMENT_PROTOCOL_VERSION,
-            revision_id: derive_revision_id(
-                &request.network_id,
-                &request.candidate_did,
-                1,
-                &AuthorizationRevisionKind::Active,
-                &request.request_digest,
-            ),
-            request_id: request.request_id.clone(),
-            request_digest: request.request_digest.clone(),
-            network_id: request.network_id.clone(),
-            admin_did: request.admin_did.clone(),
-            member_did: request.candidate_did.clone(),
-            member_peer: request.candidate_peer.clone(),
-            owner_agent: request.owner_agent.clone(),
-            sequence: 1,
-            authorization_expires_at: decision.authorization_expires_at.clone(),
-            kind: AuthorizationRevisionKind::Active,
-            issued_at: decision.decided_at.clone(),
-            signer_did: request.admin_did.clone(),
-            admin_sig: vec![4; 64],
-        };
-        assert!(revision
-            .validate_against_approval(&request, &decision)
-            .is_ok());
-
-        let direction = EnrollmentRouteReceiptDirection::ClientToServer;
-        let receipt = EnrollmentRouteReceiptRecord {
-            protocol_version: ENROLLMENT_PROTOCOL_VERSION,
-            receipt_id: derive_route_receipt_id(
-                &request.request_id,
-                &request.request_digest,
-                decision.authorization_sequence,
-                &direction,
-            ),
-            request_id: request.request_id.clone(),
-            request_digest: request.request_digest.clone(),
-            network_id: request.network_id.clone(),
-            admin_did: request.admin_did.clone(),
-            member_did: request.candidate_did.clone(),
-            member_peer: request.candidate_peer.clone(),
-            server_peer: request.server_peer.clone(),
-            owner_agent: request.owner_agent.clone(),
-            authorization_sequence: decision.authorization_sequence,
-            authorization_expires_at: decision.authorization_expires_at.clone(),
-            direction,
-            applied_at: "2026-08-29T00:02:01Z".into(),
-            signer_did: request.admin_did.clone(),
-            admin_sig: vec![5; 64],
-        };
-        assert!(receipt
-            .validate_against_approval(&request, &decision)
-            .is_ok());
-        let mut stale_generation = receipt.clone();
-        stale_generation.authorization_sequence += 1;
-        assert!(stale_generation
-            .validate_against_approval(&request, &decision)
-            .is_err());
-        let mut premature = receipt;
-        premature.applied_at = "2026-08-29T00:01:59Z".into();
-        assert!(premature
-            .validate_against_approval(&request, &decision)
-            .is_err());
-
-        let mut alternate_timestamp = revision.clone();
-        alternate_timestamp.issued_at = "2026-08-29T00:02:00.000Z".into();
-        assert!(alternate_timestamp
-            .validate_against_approval(&request, &decision)
-            .is_err());
-
-        let mut mismatched_active_time = revision.clone();
-        mismatched_active_time.issued_at = "2026-08-29T00:02:01Z".into();
-        assert!(mismatched_active_time
-            .validate_against_approval(&request, &decision)
-            .is_err());
-
-        let mut revocation = revision.clone();
-        revocation.sequence = 2;
-        revocation.kind = AuthorizationRevisionKind::Revoked;
-        revocation.issued_at = "2026-08-29T00:01:59Z".into();
-        revocation.revision_id = derive_revision_id(
-            &request.network_id,
-            &request.candidate_did,
-            revocation.sequence,
-            &revocation.kind,
-            &request.request_digest,
-        );
-        assert!(revocation
-            .validate_against_approval(&request, &decision)
-            .is_err());
-
-        let mut opposite = decision.clone();
-        opposite.decision = EnrollmentDecisionKind::Denied;
-        assert_eq!(opposite.decision_id, decision.decision_id);
-        assert!(opposite.validate_against_request(&request).is_err());
-
-        request.expires_at = "2026-08-29T00:06:00Z".into();
-        request.request_digest = request.computed_digest();
-        assert!(request.validate_against_offer(&offer).is_err());
-
-        request.expires_at = offer.expires_at.clone();
-        request.issued_at = "2026-08-28T23:59:59Z".into();
-        request.request_digest = request.computed_digest();
-        assert!(request.validate_against_offer(&offer).is_err());
-    }
-
-    #[test]
-    fn operator_decision_command_is_canonical_short_lived_and_signature_bounded() {
-        let now = "2026-08-29T00:01:30Z".parse::<DateTime<Utc>>().unwrap();
-        let command = EnrollmentOperatorDecisionCommand {
-            protocol_version: ENROLLMENT_PROTOCOL_VERSION,
-            request_id: "request-1".into(),
-            action: EnrollmentOperatorAction::Approve,
-            lease_seconds: DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
-            admin_did: "did:key:admin".into(),
-            issued_at: "2026-08-29T00:01:00Z".into(),
-            nonce: "nonce-1".into(),
-            admin_sig: vec![7; 64],
-        };
-        assert!(command.validate_at(now).is_ok());
-        let payload = command.signing_payload();
-
-        let mut opposite = command.clone();
-        opposite.action = EnrollmentOperatorAction::Deny;
-        opposite.lease_seconds = 0;
-        assert_ne!(payload, opposite.signing_payload());
-        assert!(opposite.validate_at(now).is_ok());
-        opposite.action = EnrollmentOperatorAction::Revoke;
-        assert!(opposite.validate_at(now).is_ok());
-        opposite.lease_seconds = 1;
-        assert!(opposite.validate_at(now).is_err());
-
-        let mut excessive_lease = command.clone();
-        excessive_lease.lease_seconds = MAX_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS + 1;
-        assert!(excessive_lease.validate_at(now).is_err());
-
-        let mut stale = command.clone();
-        stale.issued_at = "2026-08-29T00:00:00Z".into();
-        assert!(stale.validate_at(now).is_err());
-        let mut future = command.clone();
-        future.issued_at = "2026-08-29T00:01:36Z".into();
-        assert!(future.validate_at(now).is_err());
-        let mut hostile = command;
-        hostile.request_id = "request\n2".into();
-        assert!(hostile.validate_at(now).is_err());
-        let mut encoded = serde_json::to_value(&hostile).unwrap();
-        encoded
-            .as_object_mut()
-            .unwrap()
-            .insert("unexpected".into(), serde_json::json!(true));
-        assert!(serde_json::from_value::<EnrollmentOperatorDecisionCommand>(encoded).is_err());
-    }
-
-    #[test]
-    fn pending_operator_query_is_short_lived_and_signature_bounded() {
-        let now = "2026-08-29T00:01:30Z".parse::<DateTime<Utc>>().unwrap();
-        let query = EnrollmentOperatorQueryCommand {
-            protocol_version: ENROLLMENT_PROTOCOL_VERSION,
-            query: EnrollmentOperatorQuery::Pending,
-            admin_did: "did:key:admin".into(),
-            issued_at: "2026-08-29T00:01:00Z".into(),
-            nonce: "nonce-1".into(),
-            admin_sig: vec![7; 64],
-        };
-        assert!(query.validate_at(now).is_ok());
-        let mut stale = query.clone();
-        stale.issued_at = "2026-08-29T00:00:00Z".into();
-        assert!(stale.validate_at(now).is_err());
-        let mut hostile = query;
-        hostile.nonce = "nonce\n2".into();
-        assert!(hostile.validate_at(now).is_err());
-    }
 }

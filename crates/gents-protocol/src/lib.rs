@@ -1,8 +1,11 @@
 pub mod canonical;
 pub mod chatgpt_oauth;
+pub mod client_media;
 pub mod client_protocol;
 pub mod enrollment;
 pub mod event_delivery;
+pub mod goal;
+pub mod goal_control;
 pub mod graphql;
 pub mod mailbox_question;
 pub mod message;
@@ -26,8 +29,6 @@ pub mod tool_service_health;
 pub mod transcript;
 pub mod trigger_delivery;
 
-/// Shared product instructions consumed by CLI, desktop, and live acceptance.
 pub const ENGINEER_PROMPT: &str = include_str!("../prompts/engineer.md");
 
-/// Shared first-run configurator grant; decoded using canonical Tools types.
 pub const ENGINEER_SELF_CONFIG_JSON: &str = include_str!("../presets/engineer-self-config.json");

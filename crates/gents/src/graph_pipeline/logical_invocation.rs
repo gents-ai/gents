@@ -1,6 +1,3 @@
-//! Derive logical invocations from authenticated physical request ancestry.
-//! Goal remains the continuation owner; this projection observes its committed
-//! obligation without replaying retry, activity, or budget decisions.
 use super::*;
 use crate::goal::{GoalDocument, GOAL_FIELDS};
 use crate::request_admission::{verify_request_receipt_signature, SIGNED_REQUEST_FIELDS};
@@ -16,13 +13,10 @@ pub(super) struct Invocation {
 
 pub(super) struct Projection {
     pub requests: Vec<GraphRunRequestView>,
-    /// Plugin node calls. They count toward their stage but are not model
-    /// requests, so cancelling a run never tries to interrupt one.
     pub plugin_calls: Vec<GraphRunRequestView>,
     pub invocations: Vec<Invocation>,
 }
 
-/// Plugin node invocations this run caused, each its own logical invocation.
 async fn plugin_invocations(
     executor: &(impl GraphRunQuery + ?Sized),
     correlation: &str,
@@ -71,11 +65,9 @@ async fn plugin_invocations(
                 .and_then(Value::as_u64)
                 .and_then(|attempts| u32::try_from(attempts).ok())
                 .unwrap_or(0);
-            // An unreadable journal cannot prove the call is safe to repeat.
             let journal: Option<Vec<crate::workspace::ActionJournalEntry>> =
                 serde_json::from_str(field("action_journal")).ok();
             let succeeded = state == crate::callback::LIFECYCLE_SUCCEEDED;
-            // A failure that will be retried is still work in progress.
             let terminal = succeeded
                 || state == crate::callback::LIFECYCLE_DENIED
                 || (state == crate::callback::LIFECYCLE_FAILED
@@ -125,10 +117,14 @@ pub(super) fn authentic_root(row: &AgentRequestRow, owner_did: &str) -> bool {
         && row.runtime_issuer_did.as_deref() == Some(target)
         && row.requester_did.as_deref() == Some(target)
         && row.runtime_source_request_id == row.caused_by_trigger_id
-        // Historical seal coherence from automated-trigger admission. Current
-        // trigger/task existence and enablement belong to fresh admission only.
-        && matches!(row.caused_by_trigger_kind.as_deref(), Some("event" | "schedule"))
-        && row.caused_by_trigger_doc_id.as_deref().is_some_and(|id| !id.is_empty())
+        && matches!(
+            row.caused_by_trigger_kind.as_deref(),
+            Some("event" | "schedule")
+        )
+        && row
+            .caused_by_trigger_doc_id
+            .as_deref()
+            .is_some_and(|id| !id.is_empty())
 }
 
 pub(super) struct AssignmentHead {
@@ -180,8 +176,6 @@ pub(super) async fn load(
             .context("selected graph route is absent from pinned plan")?
             .clone();
         if !authentic_root(root, owner_did) {
-            // Owner DID comes from the verified GraphRun/revision, never the
-            // candidate row or mutable Task/Agent configuration.
             continue;
         }
         let owner = root.node_did.as_deref().unwrap();
@@ -241,7 +235,6 @@ pub(super) async fn load(
         );
         let members = ancestry.member_doc_ids.into_iter().collect::<BTreeSet<_>>();
         let parents = ancestry.parents;
-        // Pinned-root association belongs to GraphRun, not generic Goal ancestry.
         let mut invalid = parents.contains_key(root_doc)
             || root_rows.iter().any(|candidate| {
                 candidate
@@ -270,9 +263,6 @@ pub(super) async fn load(
             let open = goal
                 .state()
                 .is_some_and(crate::goal::GoalState::has_continuation_obligation);
-            // Keep invocation ancestry and other authenticated Goal chains as
-            // association evidence. Ordinary interactive rows cannot erase an
-            // obligation; a replacement Goal on another chain cannot acquire it.
             let mut invocation_rows = requests
                 .iter()
                 .filter(|row| {

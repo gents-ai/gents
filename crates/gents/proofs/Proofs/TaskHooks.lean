@@ -8,8 +8,7 @@ namespace TaskHooks
 Executable model: phases `before`, `afterSuccess`, `afterFailure`, `finally`
 around one agent execution. Literal argv hooks, optional positive timeout
 (default 120, at most `maxHookTimeoutSecs`); nonpositive, negative and
-over-maximum timeouts (`Option Int`) are rejected at
-admission, as are empty argv and duplicate occurrence IDs, before any hook or
+over-maximum timeouts (`Option Int`) are rejected at admission, as are empty argv and duplicate occurrence IDs, before any hook or
 agent step. Ordinary phases stop at their first error; `runFinally` attempts every cleanup hook and records each attempt, so
 cleanup errors are secondary while the primary error (hook id, agent, or
 interruption) is preserved. Interruption is representable
@@ -23,7 +22,6 @@ cleanup; this is not an exactly-once guarantee for unobserved host effects. No
 persisted TaskRun, new action journal, or cwd/template schema. -/
 inductive HookPhase where | before | afterSuccess | afterFailure | finally
   deriving DecidableEq, Repr
-/-- Task hook: stable id, phase, literal argv, optional timeout in seconds. -/
 structure TaskHook where
   hookId : String
   phase : HookPhase
@@ -35,11 +33,8 @@ def defaultHookTimeoutSecs : Nat := 120
 from above so every admitted hook has a deadline the host can represent; the
 executor then never refuses a hook at launch for its timeout. -/
 def maxHookTimeoutSecs : Nat := 86400
-/-- Effective timeout: configured value, else the 120s executor default. -/
 def TaskHook.effectiveTimeout (h : TaskHook) : Nat :=
   match h.timeoutSecs with | none => defaultHookTimeoutSecs | some t => t.toNat
-/-- A command must contain an executable and its explicit timeout must be
-positive and at most `maxHookTimeoutSecs`. -/
 def hookAdmitted (h : TaskHook) : Bool :=
   !h.command.isEmpty &&
     (ConfigDefaults.resolveNat defaultHookTimeoutSecs 1 h.timeoutSecs).isSome &&
@@ -132,8 +127,6 @@ maps to `none` — no managed-termination claim is made. -/
 def CommandResult.toState : CommandResult → Option ManagedExecState
   | .exited _ => some .exited | .launchFailed => some .spawnFailed
   | .timedOut => some .killed | .interrupted => none
-/-- Every known-outcome attempt lands in a terminal managed-exec state,
-matching `HasTerminal.isTerminal` for `ManagedExecState`. -/
 theorem CommandResult.toState_terminal (r : CommandResult) (s : ManagedExecState)
     (h : r.toState = some s) : HasTerminal.isTerminal s := by
   cases r with
@@ -142,7 +135,6 @@ theorem CommandResult.toState_terminal (r : CommandResult) (s : ManagedExecState
     simp [CommandResult.toState] at h; subst h; exact Or.inr (Or.inr (Or.inl rfl))
   | timedOut => simp [CommandResult.toState] at h; subst h; exact Or.inr (Or.inl rfl)
   | interrupted => simp [CommandResult.toState] at h
-/-- A command attempt succeeds iff the child exited with status 0. -/
 def CommandResult.succeeded : CommandResult → Bool
   | .exited 0 => true | _ => false
 /-- Observations for one execution attempt, not a promise that host commands
@@ -178,10 +170,8 @@ so ordinary outcome phases are skipped while cleanup still runs, and whatever
 terminal the request's current owner records stands. -/
 inductive AgentResult where | success | failure | cancelled | interrupted
   deriving DecidableEq, Repr
-/-- Primary error identity: a failing hook (by id) or the agent itself. -/
 inductive PrimaryError where | hook (id : String) | agent
   deriving DecidableEq, Repr
-/-- Primary task outcome before cleanup accounting. -/
 inductive TaskOutcome where | success | failure (err : PrimaryError) | interrupted
   deriving DecidableEq, Repr
 /-- Reuse of the existing request terminal-result abstraction: success
@@ -195,7 +185,6 @@ theorem TaskOutcome.toRequestState_terminal (o : TaskOutcome) :
   | success => exact Or.inl rfl
   | failure _ => exact Or.inr (Or.inl rfl)
   | interrupted => exact Or.inr (Or.inr (Or.inr (Or.inr rfl)))
-/-- One recorded hook attempt, in execution order. -/
 structure HookAttempt where
   hookId : String
   result : CommandResult
@@ -231,8 +220,6 @@ theorem runFinally_all (hs : List TaskHook) (exec : HookExec) :
     (runFinally hs exec).map HookAttempt.hookId = hs.map TaskHook.hookId := by
   simp [runFinally, List.map_map, Function.comp_def]
 
-/-- One error reduction for ordinary phases and cleanup: preserve the first
-failed occurrence and distinguish interrupted/unknown results from known failure. -/
 def phaseOutcome (attempts : List HookAttempt) : TaskOutcome :=
   match attempts.find? (fun a => !a.result.succeeded) with
   | none => .success
@@ -240,7 +227,6 @@ def phaseOutcome (attempts : List HookAttempt) : TaskOutcome :=
     | .interrupted => .interrupted
     | _ => .failure (.hook a.hookId)
 
-/-- Hooks of a given phase, preserving the declared list order. -/
 def hooksOfPhase (hs : List TaskHook) (p : HookPhase) : List TaskHook :=
   hs.filter (fun h => h.phase == p)
 /-- Attempt trace and primary outcome. Agent absence records that preparation
@@ -253,7 +239,6 @@ structure RunResult where
   finallyAttempted : List HookAttempt := []
   agentResult : Option AgentResult := none
   deriving DecidableEq, Repr
-/-- Secondary cleanup errors, recorded from the finally trace. -/
 def phaseErrors (as : List HookAttempt) : List String :=
   (as.filter (fun a => !a.result.succeeded)).map HookAttempt.hookId
 def RunResult.cleanupErrors (r : RunResult) : List String := phaseErrors r.finallyAttempted
@@ -270,12 +255,10 @@ def RunResult.finalOutcome (r : RunResult) : TaskOutcome :=
   | .success => phaseOutcome r.finallyAttempted
   | other => other
 
-/-- Cleanup cannot overwrite any prior failure or interruption. -/
 theorem finalOutcome_primary_preserved (r : RunResult) (h : r.outcome ≠ .success) :
     r.finalOutcome = r.outcome := by
   cases ho : r.outcome <;> simp_all [finalOutcome]
 
-/-- A previously successful run adopts the cleanup phase's first error. -/
 theorem finalOutcome_cleanup (r : RunResult) (h : r.outcome = .success) :
     r.finalOutcome = phaseOutcome r.finallyAttempted := by simp [finalOutcome, h]
 
@@ -310,21 +293,18 @@ def runTask (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult) : Ru
         outcome := .failure .agent,
         afterFailureAttempted := runPhase (hooksOfPhase hooks .afterFailure) exec }
 
-/-- Cleanup attempt order is independent of preparation and agent outcome. -/
 theorem runTask_finally_all (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult) :
     (runTask hooks exec agent).finallyAttempted.map HookAttempt.hookId =
       (hooksOfPhase hooks .finally).map TaskHook.hookId := by
   cases h : phaseOutcome (runPhase (hooksOfPhase hooks .before) exec) <;>
     cases agent <;> simp [runTask, h, runFinally_all]
 
-/-- Exactly successful preparation records an agent attempt. -/
 theorem runTask_agent_attempt_iff (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult) :
     (runTask hooks exec agent).agentResult = some agent ↔
       phaseOutcome (runPhase (hooksOfPhase hooks .before) exec) = .success := by
   cases h : phaseOutcome (runPhase (hooksOfPhase hooks .before) exec) <;>
     cases agent <;> simp [runTask, h]
 
-/-- Before failure prevents the agent and selects after_failure. -/
 theorem runTask_beforeFailure (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult)
     (error : PrimaryError)
     (hb : phaseOutcome (runPhase (hooksOfPhase hooks .before) exec) = .failure error) :
@@ -334,14 +314,12 @@ theorem runTask_beforeFailure (hooks : List TaskHook) (exec : HookExec) (agent :
     (runTask hooks exec agent).afterFailureAttempted =
       runPhase (hooksOfPhase hooks .afterFailure) exec := by simp [runTask, hb]
 
-/-- Success runs only after_success, even when that phase fails. -/
 theorem runTask_agentSuccess (hooks : List TaskHook) (exec : HookExec)
     (hb : phaseOutcome (runPhase (hooksOfPhase hooks .before) exec) = .success) :
     (runTask hooks exec .success).afterFailureAttempted = [] ∧
     (runTask hooks exec .success).afterSuccessAttempted =
       runPhase (hooksOfPhase hooks .afterSuccess) exec := by simp [runTask, hb]
 
-/-- Agent failure remains primary while after_failure is attempted. -/
 theorem runTask_agentFailure (hooks : List TaskHook) (exec : HookExec)
     (hb : phaseOutcome (runPhase (hooksOfPhase hooks .before) exec) = .success) :
     (runTask hooks exec .failure).outcome = .failure .agent ∧
@@ -349,7 +327,6 @@ theorem runTask_agentFailure (hooks : List TaskHook) (exec : HookExec)
     (runTask hooks exec .failure).afterFailureAttempted =
       runPhase (hooksOfPhase hooks .afterFailure) exec := by simp [runTask, hb]
 
-/-- Both cancellation and unknown interruption skip ordinary outcome phases. -/
 theorem runTask_interrupted (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult)
     (hb : phaseOutcome (runPhase (hooksOfPhase hooks .before) exec) = .success)
     (ha : agent = .cancelled ∨ agent = .interrupted) :
@@ -358,7 +335,6 @@ theorem runTask_interrupted (hooks : List TaskHook) (exec : HookExec) (agent : A
     (runTask hooks exec agent).afterFailureAttempted = [] := by
   rcases ha with rfl | rfl <;> simp [runTask, hb]
 
-/-- Admission is the sole entrance; rejected config produces no execution trace. -/
 def runOrReject (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult) : Option RunResult :=
   (admitHooks hooks).map (fun admitted => runTask admitted exec agent)
 
@@ -417,14 +393,11 @@ theorem recovery_does_not_repeat_attempt (interruptRequested started : Bool)
     intro old ho heq
     exact recovery_excludes_observed hooks observed h hh old ho (heq.trans he.symm)
 
-/-- Cleanup recovery reports exactly the request recovery owner's decision. -/
 theorem recovery_reports_request_owner_decision (interruptRequested started : Bool)
     (hooks : List TaskHook) (observed : List HookAttempt) (exec : HookExec) :
     (recoverInterrupted interruptRequested started hooks observed exec).1 =
       Recovery.recoveredRequestState interruptRequested := rfl
 
-/-- Recovery without an interrupt request fails the request; it is not reported
-as an interruption the user never asked for. -/
 theorem recovery_without_interrupt_request_fails (started : Bool) (hooks : List TaskHook)
     (observed : List HookAttempt) (exec : HookExec) :
     (recoverInterrupted false started hooks observed exec).1 = .failed := rfl
@@ -433,7 +406,6 @@ theorem recovery_with_interrupt_request_interrupts (started : Bool) (hooks : Lis
     (observed : List HookAttempt) (exec : HookExec) :
     (recoverInterrupted true started hooks observed exec).1 = .interrupted := rfl
 
-/-! ## Concrete checks -/
 def sampleBefore : TaskHook := { hookId := "prepare", phase := .before, command := ["bin/prepare"] }
 def sampleFinally : TaskHook :=
   { hookId := "cleanup", phase := HookPhase.finally, command := ["bin/cleanup"] }
@@ -441,8 +413,6 @@ def sampleHooks : List TaskHook := [sampleBefore, sampleFinally]
 def cleanupOnlyHooks : List TaskHook := [sampleFinally]
 def failExec : HookExec := fun _ => .exited 1
 def okExec : HookExec := fun _ => .exited 0
-/-- A failing first before-hook prevents the agent, fails with the hook's
-identity, and still attempts every finally command in order. -/
 theorem sample_before_failure :
     (runTask sampleHooks failExec .success).outcome =
       TaskOutcome.failure (PrimaryError.hook "prepare") ∧
@@ -450,57 +420,41 @@ theorem sample_before_failure :
     (runTask sampleHooks failExec .success).finallyAttempted.map
       HookAttempt.hookId = ["cleanup"] := by
   decide
-/-- Cleanup failure turns success into failure while the secondary error is
-recorded. -/
 theorem sample_cleanup_failure_fails :
     (runTask cleanupOnlyHooks failExec .success).outcome = .success ∧
     (runTask cleanupOnlyHooks failExec .success).cleanupErrors = ["cleanup"] ∧
     (runTask cleanupOnlyHooks failExec .success).finalOutcome =
       .failure (PrimaryError.hook "cleanup") := by
   decide
-/-- Hook interruption: reported as interrupted, agent never ran, every finally
-command still attempted. -/
 theorem sample_hook_interrupted :
     (runTask sampleHooks (fun _ => CommandResult.interrupted) .success).outcome = .interrupted ∧
     (runTask sampleHooks (fun _ => CommandResult.interrupted) .success).agentResult = none ∧
     (runTask sampleHooks (fun _ => CommandResult.interrupted) .success).finallyAttempted.map HookAttempt.hookId = ["cleanup"] := by
   decide
-/-- A negative configured timeout is rejected before admission: no hooks, no
-agent step. -/
 theorem sample_negative_timeout_rejected :
     admitHooks [{ hookId := "h", phase := .before, command := ["x"],
                   timeoutSecs := some (-1) }] = none := by
   decide
 theorem sample_admit_ok : admitHooks sampleHooks = some sampleHooks := by
   decide
-
-/-- Occurrences must remain distinguishable even across different phases. -/
 theorem sample_duplicate_id_rejected :
     admitHooks [sampleBefore, { sampleFinally with hookId := sampleBefore.hookId }] = none := by
   decide
-
 theorem sample_empty_command_rejected :
     admitHooks [{ sampleBefore with command := [] }] = none := by
   decide
-
 theorem sample_cleanup_interruption_reported :
     (runTask cleanupOnlyHooks (fun _ => .interrupted) .success).finalOutcome = .interrupted := by
   decide
-
-/-- Cleanup interruption does not overwrite an earlier agent failure. -/
 theorem sample_cleanup_interruption_preserves_failure :
     (runTask cleanupOnlyHooks (fun _ => .interrupted) .failure).finalOutcome =
       .failure .agent := by
   decide
-
-/-- A prior cleanup failure stays primary if a later cleanup is interrupted. -/
 theorem sample_first_cleanup_failure_preserved :
     (runTask [sampleFinally, { sampleFinally with hookId := "second" }]
       (fun h => if h.hookId == "cleanup" then .exited 1 else .interrupted) .success).finalOutcome =
       .failure (.hook "cleanup") := by
   decide
-
-/-- Started recovery skips an unknown observed command but attempts remaining cleanup. -/
 theorem sample_recovery_remaining_cleanup :
     (recoverInterrupted false true [sampleFinally, { sampleFinally with hookId := "second" }]
       [{ hookId := "cleanup", result := .interrupted }] okExec).2.map HookAttempt.hookId =

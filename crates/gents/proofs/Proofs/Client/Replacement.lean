@@ -87,8 +87,6 @@ private def retryFixture
       }
   }
 
-/-- The keyed resolver is insensitive to observation order for a simple retry
-    chain because parenthood, rather than list position, selects the tip. -/
 theorem unordered_retry_chain_resolves_tip_in_both_orders :
     let root := retryFixture "authorized-session" "root" none .failed
     let retry := retryFixture "authorized-session" "retry" (some "root") .pending

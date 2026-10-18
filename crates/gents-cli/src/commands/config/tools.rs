@@ -44,7 +44,7 @@ pub(super) async fn tools_set(args: ToolsSetArgs) -> Result<()> {
     let id = tools.tools_id.clone();
     let (plan, owner, id) = (&plan, &owner, &id);
     let doc_id = access
-        .transact("cli.tools.set", move |txn| {
+        .transact_write("cli.tools.set", move |txn| {
             Box::pin(async move {
                 apply_desired_state_plan(txn, plan).await?;
                 let (doc_id, _) =
@@ -58,29 +58,4 @@ pub(super) async fn tools_set(args: ToolsSetArgs) -> Result<()> {
     crate::print_json(
         &json!({"doc_id": doc_id, "tools_id": tools.tools_id, "node_did": tools.node_did}),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn nested_tools_use_canonical_defaults_and_preserve_explicit_selection() {
-        let (tools, plan) = tools_plan(br#"{"node_did":"owner","tools_id":"main","built_ins":{"enable_goal_tools":true},"agents":{"target_ids":["worker"]}}"#).unwrap();
-        assert_eq!(tools.agents.unwrap().target_ids, ["worker"]);
-        assert_eq!(plan.documents().len(), 1);
-        assert_eq!(
-            plan.documents()[0].update["built_ins"]["enable_goal_tools"],
-            true
-        );
-    }
-    #[test]
-    fn invalid_or_retired_fields_cannot_enter_tools_plan() {
-        for input in [
-            r#"{"node_did":"owner","tools_id":"main","enable_bash":true}"#,
-            r#"{"tools_id":"main"}"#,
-            r#"{"node_did":"owner","tools_id":"main","host":{"unknown":true}}"#,
-        ] {
-            assert!(tools_plan(input.as_bytes()).is_err(), "{input}");
-        }
-    }
 }

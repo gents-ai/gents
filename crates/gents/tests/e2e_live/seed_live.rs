@@ -1,19 +1,3 @@
-//! LIVE qualification for sampling-seed propagation through the complete
-//! request path and a real OpenAI-compatible provider.
-//!
-//! The deterministic tests retain the schema, hydration, precedence, and exact
-//! body-shape contracts. This test establishes the provider-facing behavior
-//! they cannot: the configured live provider accepts the request produced by
-//! Gents, the request completes, and the pre-send durable capture contains the
-//! effective profile seed for ordinary inference and a model-backed compaction
-//! continuation.
-//!
-//! ```bash
-//! GENTS_EVAL_TARGET=workstation-1 cargo test -p gents --features live-e2e --test e2e_live \
-//!   live_seeds_reach_the_provider \
-//!   -- --ignored --test-threads=1 --nocapture
-//! ```
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -47,16 +31,14 @@ async fn live_seeds_reach_the_provider() {
 
     let db = test_db("live-seed").await;
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("live-seed"));
-    let (node_did, agent_id) = bind_target(db.node.as_ref(), identity.as_ref(), &target).await;
+    let (node_did, agent_id) = bind_target(&db.node, identity.as_ref(), &target).await;
 
     let profile_id = default_inference_profile_id_for_agent(&agent_id);
-    configure_seed_and_compaction(db.node.as_ref(), &node_did, &agent_id, &profile_id).await;
+    configure_seed_and_compaction(&db.node, &node_did, &agent_id, &profile_id).await;
 
-    // Create requests before boot so every provider call resolves the same
-    // profile-owned sampling document before the daemon can claim them.
     let profile_request_id = "req-live-profile-seed";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &agent_id,
         profile_request_id,
@@ -67,7 +49,7 @@ async fn live_seeds_reach_the_provider() {
 
     let second_request_id = "req-live-second-profile-seed";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &agent_id,
         second_request_id,
@@ -79,7 +61,7 @@ async fn live_seeds_reach_the_provider() {
     let compaction_request_id = "req-live-compaction-seed";
     let compaction_session_id = "session-live-compaction-seed";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &agent_id,
         compaction_request_id,
@@ -87,7 +69,7 @@ async fn live_seeds_reach_the_provider() {
         "Use the retained context and reply with the single lowercase word: compacted",
     )
     .await;
-    seed_compaction_history(db.node.as_ref(), &node_did, compaction_session_id).await;
+    seed_compaction_history(&db.node, &node_did, compaction_session_id).await;
 
     let agent = boot_live_agent(&db, identity)
         .await
@@ -99,21 +81,20 @@ async fn live_seeds_reach_the_provider() {
         (compaction_request_id, PROFILE_SEED, true),
     ] {
         let terminal =
-            wait_for_request_terminal(db.node.as_ref(), request_id, Duration::from_secs(120)).await;
+            wait_for_request_terminal(&db.node, request_id, Duration::from_secs(120)).await;
         assert_eq!(
             terminal, "completed",
             "target {} must accept and complete seeded request {request_id}",
             target.name
         );
 
-        let answer =
-            wait_for_assistant_answer(db.node.as_ref(), request_id, Duration::from_secs(30)).await;
+        let answer = wait_for_assistant_answer(&db.node, request_id, Duration::from_secs(30)).await;
         assert!(
             !answer.trim().is_empty(),
             "seeded request {request_id} must persist a non-empty response"
         );
 
-        let rows = rendered_requests(db.node.as_ref(), request_id).await;
+        let rows = rendered_requests(&db.node, request_id).await;
         let inference_rows = rows
             .iter()
             .filter(|row| row.capture_scope.starts_with("inference."))
@@ -134,7 +115,7 @@ async fn live_seeds_reach_the_provider() {
         for row in inference_rows.into_iter().chain(compaction_rows) {
             assert_eq!(row.source, "openai_chat_completions");
             let body = gents::rendered_request::decode_capture_json_embedded(
-                db.node.as_ref(),
+                &db.node,
                 row.capture_version,
                 &row.request_json,
                 gents::rendered_request::CapturePayloadKind::RequestBody,
@@ -153,7 +134,7 @@ async fn live_seeds_reach_the_provider() {
 }
 
 async fn configure_seed_and_compaction(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
     profile_id: &str,
@@ -163,7 +144,7 @@ async fn configure_seed_and_compaction(
         DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
 
-    gents::ConfigAccess::transact_local(node, None, "test.configure_live_seed", |txn| {
+    gents::ConfigAccess::transact_local_write(node, None, "test.configure_live_seed", |txn| {
         Box::pin(async move {
             let (_, profile) = read(txn, Collection::InferenceProfile, node_did, profile_id)
                 .await?
@@ -245,8 +226,6 @@ async fn configure_seed_and_compaction(
     .expect("configure live seed and compaction");
 }
 
-/// History is scoped to the signed LocalSelf request's agent and requester;
-/// rows under any other scope are invisible to its transcript.
 async fn seed_compaction_history(node: &EmbeddedNode, node_did: &str, session_id: &str) {
     let timestamp = chrono::Utc::now().to_rfc3339();
     for turn in 0..10 {

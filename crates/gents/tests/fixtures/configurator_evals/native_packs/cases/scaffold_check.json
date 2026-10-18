@@ -1,0 +1,147 @@
+{
+  "case_id": "native-scaffold-and-check-without-installation",
+  "split": "validation",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "scaffold",
+      "prompt": "Create a minimal documents pack named scratch_native in this workspace using the native config pack scaffold command. Discover the relevant help first. Keep shell off. Do not install the pack, change agents or tools, or run a graph. Use native config commands; do not invoke a CLI or shell.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "installations",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash",
+              "run_graph",
+              "agent_message",
+              "agent_new"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "completed",
+                "equals": true
+              },
+              {
+                "field": "pack",
+                "equals": "scratch_native"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "installations",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "check",
+      "prompt": "Use the native config pack check command to validate the scratch_native pack created in the preceding request and report the actual validation result. Keep shell off. Do not install the pack, change agents or tools, or run a graph.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "installations",
+          "collection": "PackInstallation",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash",
+              "run_graph",
+              "agent_message",
+              "agent_new"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "pack",
+                "equals": "scratch_native"
+              },
+              {
+                "field": "validated",
+                "equals": true
+              },
+              {
+                "field": "problems",
+                "equals": []
+              },
+              {
+                "field": "unverified",
+                "equals": []
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "installations",
+            "min": 0,
+            "max": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

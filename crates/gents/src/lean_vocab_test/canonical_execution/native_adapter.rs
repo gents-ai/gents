@@ -65,8 +65,6 @@ fn modeled_time_at(epoch_seconds: i64, value: &str) -> Result<u64> {
     u64::try_from(elapsed).context("native timestamp precedes fixture epoch")
 }
 
-// Native session sequences are one-based; the Lean allocator starts at zero.
-// Normalize only the representation, preserving order and reservation gaps.
 fn modeled_sequence(value: u64) -> Result<u64> {
     value
         .checked_sub(1)
@@ -82,9 +80,6 @@ fn owner_error_is(error: &anyhow::Error, message: &str) -> bool {
     error.chain().any(|cause| cause.to_string() == message)
 }
 
-/// Auxiliary publication attempts must reach the publication owner with their
-/// original source. Transcript reconstruction already refuses that provenance,
-/// so decode the candidate's payload through the sealed-stream owner instead.
 fn auxiliary_publication_candidate(
     records: &[ObservedSegment<'_>],
     header: &TranscriptMessage,
@@ -165,7 +160,7 @@ fn auxiliary_publication_candidate(
 }
 
 async fn create_signed_fixture_request(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
     spec: crate::lifecycle::RequestSpec,
 ) -> Result<crate::watcher::AgentRequest> {
@@ -1242,19 +1237,12 @@ impl NativeCanonicalExecution {
                     .and_then(serde_json::Value::as_str)
                     .map(|value| self.modeled_time(value))
                     .transpose()?;
-                // Lean's transcript inFlight tracks the accepted parent's
-                // unsettled foreground ownership, not a still-running physical
-                // executor. The native terminal owner records handoff in
-                // `stuck_since`; retaining a running row after that is valid.
                 in_flight =
                     state == "running" && await_mode == "foreground" && tool_stuck_since.is_none();
                 physical_tool_request = Some(self.request_id);
                 accepted_sequence = Some(sequence);
             }
         }
-        // Initialization admits no seeded transcript/tool facts and creates a
-        // fresh isolated session, so these two authoritative collections are
-        // the complete native sequence reservation set for this adapter.
         let message_max = self.messages.iter().map(|message| message.sequence).max();
         self.next_sequence = message_max
             .into_iter()
@@ -1738,7 +1726,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     let nested_node = Arc::clone(&node);
                     let generation = symbolic_generation(*generation);
                     let now = native.fixture_time(*now)?;
-                    let attempted = crate::config_client::ConfigAccess::transact_local(
+                    let attempted = crate::config_client::ConfigAccess::transact_local_write(
                         &node,
                         None,
                         "lean.same_task_holder",
@@ -1992,13 +1980,12 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         ),
                     };
                     let segment = native.provider_segment(record, generation)?;
-                    let response = native.node.execute_request_with_retry(
+                    let response = native.node.execute_request(
                         defra_node::QueryRequest::new(
                             crate::session::canonical_rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
                         ).with_variables(
                             crate::session::canonical_rows::output_segment_create_variables(&segment)?,
                         ),
-                        defra_node::ExecuteRetryPolicy::default(),
                     ).await;
                     anyhow::ensure!(
                         !response.has_errors(),
@@ -2108,7 +2095,7 @@ impl NativeCanonicalExecution {
             Err(error) => return Err(error.context("native CloseAuxiliary owner failed")),
         }
         let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
-        let response = crate::config_client::ConfigAccess::Local(self.node.clone())
+        let response = crate::config_client::ConfigAccess::local(self.node.clone())
             .execute(&format!(
                 r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
                 crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS,
@@ -2137,8 +2124,6 @@ impl NativeCanonicalExecution {
         generation: u64,
         item: &crate::lean_vocab_test::LeanCanonicalRecoveryItem,
     ) -> Result<LeanCanonicalExecutionObservation> {
-        // Preserve the candidate's writer independently of the actor's lease
-        // generation so stale operations reach the native authorization owner.
         let LeanCanonicalWriter::Request {
             generation: writer_generation,
         } = &item.closing.writer
@@ -2278,10 +2263,6 @@ impl NativeCanonicalExecution {
         );
         let sealed = self.provider_segment(closing, generation)?;
         let header = self.protocol_message(message, generation)?;
-        // A replay reads the already committed close through `observe`. The
-        // candidate is that same physical identity, not a second source row.
-        // Verify its immutable facts before excluding it from the input extent
-        // used to reconstruct the expected native message.
         for committed in self.segments.iter().filter(|row| row.id == closing.id) {
             anyhow::ensure!(
                 committed == closing,
@@ -2297,10 +2278,6 @@ impl NativeCanonicalExecution {
             .iter()
             .map(|segment| self.provider_segment(segment, generation))
             .collect::<Result<Vec<_>>>()?;
-        // Build the expected native message from the same committed source
-        // bytes the publication owner will inspect. The supplied close remains
-        // untouched in `final_flush` below, so an invalid modeled extent is
-        // rejected by that owner instead of this transport encoder.
         let mut reconstruction_close = sealed.clone();
         reconstruction_close.close = None;
         let open_doc_ids = preceding
@@ -2351,8 +2328,6 @@ impl NativeCanonicalExecution {
         )?);
         let expected_native = expected.clone();
         let final_flush = sealed;
-        // Each admission's modeled await mode is immutable publication input:
-        // a background admission is accepted directly as a background row.
         let background_calls = admissions
             .iter()
             .filter(|admission| admission.await_mode == "background")
@@ -2975,9 +2950,9 @@ fn generated_title_execution_inventory_keeps_external_premises_explicit() {
     );
 }
 
-/// Native representation negative controls outside Lean's valid Time domain:
-/// a missing durable deadline fails in the append owner, while malformed input
-/// is rejected by DefraDB's DateTime scalar before it can become a durable row.
+/// Negative controls outside Lean's valid Time domain: a missing durable
+/// deadline fails in the append owner, malformed input is rejected by
+/// DefraDB's DateTime scalar.
 #[tokio::test]
 async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing() {
     let case = crate::lean_vocab_test::lean_contract_snapshot()
@@ -3101,8 +3076,6 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
     native.node.shutdown().await;
 }
 
-/// In-process, fixture-time gate experiment: this binds a generated lease-ordering
-/// trace to the real transaction owner, not to host clock jumps or OS suspension.
 #[tokio::test]
 async fn generated_renewal_commits_while_ordinary_write_gate_is_held() {
     use crate::config_client::ConfigApplyTxn;
@@ -3328,9 +3301,6 @@ async fn terminal_request_without_tool_handoff_still_reports_in_flight() {
     assert!(before.in_flight);
     assert_eq!(before.tool_stuck_since, None);
 
-    // Deliberately inject a terminal request without the terminal owner's
-    // tool-accounting write. This is a negative control for the observation:
-    // request terminality alone must not conceal an unreleased foreground tool.
     let doc_id = crate::graphql::escape_graphql_string(&native.request_doc_id);
     let mutation = format!(
         r#"mutation {{ update_AgentRequest(
@@ -3413,10 +3383,9 @@ async fn canonical_tool_output_uses_modeled_physical_source_facts() {
                 .unwrap();
             let response = native
                 .node
-                .execute_request_with_retry(
+                .execute_request(
                     defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                         .with_variables(output_segment_create_variables(&segment).unwrap()),
-                    defra_node::ExecuteRetryPolicy::default(),
                 )
                 .await;
             assert!(

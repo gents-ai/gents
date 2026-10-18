@@ -2,7 +2,6 @@ use gents_protocol::plugin::{PluginExecutionReceipt, PluginExecutionVerdict};
 
 use super::ToolCallState;
 
-/// Lean `ToolPolicy.PluginReceipt.Decision`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ReceiptDecision {
     Commit,
@@ -11,7 +10,6 @@ pub(super) enum ReceiptDecision {
     Conflict,
 }
 
-/// Lean `ToolPolicy.PluginReceipt.published`.
 pub(super) fn published(
     terminal: ToolCallState,
     receipt: &PluginExecutionReceipt,
@@ -30,7 +28,6 @@ pub(super) fn published(
     receipt
 }
 
-/// Lean `ToolPolicy.PluginReceipt.decide`.
 pub(super) fn decide<T: PartialEq + ?Sized>(
     terminal: bool,
     existing: Option<&T>,
@@ -161,7 +158,7 @@ mod persistence_tests {
                         .unwrap();
                 }
             }
-            let row = ConfigAccess::Local(node.clone()).execute(&format!(
+            let row = ConfigAccess::local(node.clone()).execute(&format!(
                 r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state plugin_execution_receipt }} }}"#,
                 escape_graphql_string(&doc_id),
             )).await.unwrap();
@@ -173,7 +170,7 @@ mod persistence_tests {
             assert_eq!(stored.output_digest.is_some(), terminal == "complete");
             if terminal == "complete" {
                 let presented = load_tool_call_presentation(
-                    &ConfigAccess::Local(node.clone()),
+                    &ConfigAccess::local(node.clone()),
                     &doc_id,
                     &tool.node_did,
                     &tool.session_id,
@@ -231,7 +228,7 @@ mod persistence_tests {
         let evidence = receipt();
         child.stage_plugin_receipt(Some(evidence.clone()));
         child.complete("child output").await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let rows = access.execute(&format!(
             r#"{{ AgentToolCall(docID: "{}") {{ plugin_execution_receipt terminal_output lifecycle_state }} }}"#,
             escape_graphql_string(child.doc_id().unwrap()),
@@ -293,7 +290,7 @@ mod persistence_tests {
             escape_graphql_string(tool.request_doc_id.as_deref().unwrap()),
         )).await.unwrap();
         tool.complete("plugin output").await.unwrap();
-        let row = ConfigAccess::Local(node.clone()).execute(&format!(
+        let row = ConfigAccess::local(node.clone()).execute(&format!(
             r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state plugin_execution_receipt }} }}"#,
             escape_graphql_string(tool.doc_id().unwrap()),
         )).await.unwrap();
@@ -348,7 +345,7 @@ mod persistence_tests {
         loser.stage_plugin_receipt(Some(receipt()));
         loser.complete("late plugin success").await.unwrap();
         assert_eq!(loser.state, ToolCallState::Cancelled);
-        let row = ConfigAccess::Local(node.clone()).execute(&format!(
+        let row = ConfigAccess::local(node.clone()).execute(&format!(
             r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state plugin_execution_receipt }} }}"#,
             escape_graphql_string(&doc_id),
         )).await.unwrap();

@@ -7,9 +7,7 @@ export RUSTUP_HOME="$rustup_home" CARGO_HOME="$cargo_home"
 export PATH="$cargo_home/bin:$PATH"
 mkdir -p "$rustup_home"
 
-# The macOS runner slots share one rustup installation. Serialize manifest
-# component installation as well as target installation, like setup-elan.sh.
-# No component files or global default toolchain are modified outside rustup.
+# Serialize shared rustup installation across runner slots, like setup-elan.sh.
 if [[ "${GENTS_RUST_INSTALL_LOCKED:-0}" != "1" ]]; then
   if ! command -v lockf >/dev/null 2>&1; then
     echo "::error::macOS Rust setup requires lockf to serialize shared rustup installation."
@@ -31,9 +29,7 @@ cd "$workspace_root"
 # do not introduce another toolchain version list or change the global default.
 unset RUSTUP_TOOLCHAIN
 rustup toolchain install --no-self-update
-# rustup's no-name install branch honors the manifest but does not forward
-# CLI target options; add the runtime's WASM target, plus any targets named as
-# arguments, explicitly under this lock.
+# rustup's no-name install branch does not forward CLI target options.
 rustup target add wasm32-unknown-unknown "$@"
 active_toolchain="$(rustup show active-toolchain)"
 active_toolchain="${active_toolchain%% *}"

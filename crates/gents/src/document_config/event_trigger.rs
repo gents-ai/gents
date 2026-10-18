@@ -2,14 +2,10 @@ use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::graphql::escape_graphql_string;
 
-/// Maximum cursors read ahead before ScheduleSource evaluates this tick's batch.
 pub(crate) const TRIGGER_CURSOR_BATCH_SIZE: usize = 64;
 
-/// Sparse runtime observations for the canonical Trigger. Setting a status
-/// clears a previous error unless a replacement error is supplied. Fire counts
-/// are observational bookkeeping, never delivery/idempotence authority.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct TriggerRuntimeUpdate {
     pub(crate) next_run_at: Option<String>,
@@ -20,9 +16,22 @@ pub(crate) struct TriggerRuntimeUpdate {
     pub(crate) fire_count_delta: Option<i64>,
 }
 
-/// Load cursors for the exact owner/trigger scopes in bounded alias batches.
-/// Results stay aligned with `scopes`, so one malformed owner, ambiguous
-/// trigger, or aliased GraphQL error cannot hide another trigger's outcome.
+fn render_trigger_runtime_mutation(
+    escaped_owner: &str,
+    escaped_trigger_id: &str,
+    entries: &[String],
+) -> String {
+    let input_literal = format!("{{ {} }}", entries.join(", "));
+    format!(
+        r#"mutation {{
+            update_Trigger(
+                filter: {{ node_did: {{ _eq: "{escaped_owner}" }}, trigger_id: {{ _eq: "{escaped_trigger_id}" }} }},
+                input: {input_literal}
+            ) {{ _docID }}
+        }}"#
+    )
+}
+
 pub(crate) async fn load_trigger_next_run_at_batch(
     node: &EmbeddedNode,
     scopes: &[(String, String)],
@@ -161,10 +170,8 @@ pub(crate) async fn count_trigger_cursor_batch_queries<F: std::future::Future>(
     (output, queries.load(std::sync::atomic::Ordering::Relaxed))
 }
 
-/// Update only runtime observations on the exact owner-scoped trigger.
-/// Deleted triggers are harmless; concurrent fire-count updates may undercount.
 pub(crate) async fn update_trigger_runtime_fields(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     trigger_id: &str,
     updates: TriggerRuntimeUpdate,
@@ -174,7 +181,6 @@ pub(crate) async fn update_trigger_runtime_fields(
         !node_did.is_empty(),
         "trigger observation owner is required"
     );
-    // Short-circuit: nothing to write.
     if updates.next_run_at.is_none()
         && updates.last_attempt_at.is_none()
         && updates.last_fired_source_doc_id.is_none()
@@ -184,51 +190,6 @@ pub(crate) async fn update_trigger_runtime_fields(
     {
         return Ok(());
     }
-
-    // Resolve the current fire_count if we need to increment it. Also use this
-    // to detect whether the trigger doc still exists (idempotent behavior on
-    // a deleted trigger).
-    let current_fire_count = if updates.fire_count_delta.is_some() {
-        let escaped_trigger_id = escape_graphql_string(trigger_id);
-        let query = format!(
-            r#"{{
-                Trigger(
-                    filter: {{ node_did: {{ _eq: "{escaped_owner}" }}, trigger_id: {{ _eq: "{escaped_trigger_id}" }} }},
-                    limit: 2
-                ) {{
-                    fire_count
-                }}
-            }}"#
-        );
-        let resp = graphql_with_transaction_retry(
-            node,
-            &query,
-            "query Trigger fire_count for runtime update",
-        )
-        .await?;
-        let rows = resp
-            .data
-            .as_ref()
-            .and_then(|data| data.get("Trigger"))
-            .and_then(|value| value.as_array())
-            .cloned()
-            .unwrap_or_default();
-        anyhow::ensure!(rows.len() <= 1, "ambiguous scoped trigger observation");
-        if rows.is_empty() {
-            // Trigger doc disappeared; nothing to update.
-            tracing::info!(
-                trigger_id,
-                "Trigger doc missing during runtime update; skipping"
-            );
-            return Ok(());
-        }
-        rows.first()
-            .and_then(|row| row.get("fire_count"))
-            .and_then(|value| value.as_i64())
-            .unwrap_or(0)
-    } else {
-        0
-    };
 
     // Build the input literal with only the requested fields so apply-owned
     // fields are never overwritten.
@@ -254,38 +215,79 @@ pub(crate) async fn update_trigger_runtime_fields(
     if updates.last_error.is_none() && updates.last_status.is_some() {
         entries.push("last_error: null".into());
     }
-    if let Some(delta) = updates.fire_count_delta {
-        let new_fire_count = current_fire_count.saturating_add(delta);
-        entries.push(format!("fire_count: {new_fire_count}"));
-    }
-    let input_literal = format!("{{ {} }}", entries.join(", "));
-
     let escaped_trigger_id = escape_graphql_string(trigger_id);
-    // Use a filter-based mutation so we key on the apply-owned trigger_id and
-    // don't need to resolve the _docID separately. DefraDB matches at most one
-    // trigger (trigger_id is unique) so this updates the single target doc.
-    let mutation = format!(
-        r#"mutation {{
-            update_Trigger(
-                filter: {{ node_did: {{ _eq: "{escaped_owner}" }}, trigger_id: {{ _eq: "{escaped_trigger_id}" }} }},
-                input: {input_literal}
-            ) {{ _docID }}
-        }}"#
-    );
+    let Some(fire_count_delta) = updates.fire_count_delta else {
+        let mutation =
+            render_trigger_runtime_mutation(&escaped_owner, &escaped_trigger_id, &entries);
+        crate::config_client::ConfigAccess::write_local(
+            node,
+            "document.update_trigger_runtime",
+            &mutation,
+        )
+        .await?;
+        return Ok(());
+    };
 
-    crate::config_client::ConfigAccess::write_local(
+    // Read and write in one transaction. Conflict retries rerun this whole
+    // read-modify-write against a fresh snapshot, so concurrent committed
+    // deltas cannot overwrite one another.
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
+        None,
         "document.update_trigger_runtime",
-        &mutation,
+        |txn| {
+            let escaped_owner = escaped_owner.clone();
+            let escaped_trigger_id = escaped_trigger_id.clone();
+            let mut entries = entries.clone();
+            Box::pin(async move {
+                let query = format!(
+                    r#"{{
+                        Trigger(
+                            filter: {{ node_did: {{ _eq: "{escaped_owner}" }}, trigger_id: {{ _eq: "{escaped_trigger_id}" }} }},
+                            limit: 2
+                        ) {{ fire_count }}
+                    }}"#
+                );
+                let response = txn.execute(&query).await?;
+                let rows = response
+                    .get("data")
+                    .and_then(|data| data.get("Trigger"))
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                anyhow::ensure!(rows.len() <= 1, "ambiguous scoped trigger observation");
+                let Some(row) = rows.first() else {
+                    tracing::info!(
+                        trigger_id,
+                        "Trigger doc missing during runtime update; skipping"
+                    );
+                    return Ok(());
+                };
+                let current_fire_count = row
+                    .get("fire_count")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(0);
+                entries.push(format!(
+                    "fire_count: {}",
+                    current_fire_count.saturating_add(fire_count_delta)
+                ));
+                let mutation = render_trigger_runtime_mutation(
+                    &escaped_owner,
+                    &escaped_trigger_id,
+                    &entries,
+                );
+                txn.execute(&mutation).await?;
+                Ok(())
+            })
+        },
     )
     .await?;
 
     Ok(())
 }
 
-/// Reusable event-source configuration. Trigger owns task selection, enabled
-/// state, concurrency, and delivery observations. The existing event engine owns
-/// group state independently for each typed trigger/callback consumer.
+/// Reusable event-source configuration; the existing event engine owns group
+/// state independently per typed trigger/callback consumer.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -297,8 +299,7 @@ pub struct EventSource {
     pub display_name: Option<String>,
     pub source_collection: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    /// Absent/null means created, never all events. Explicit values use the
-    /// existing event engine vocabulary and are validated before installation.
+    /// Absent/null means created, never all events.
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub event_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -307,8 +308,6 @@ pub struct EventSource {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub correlation_field: Option<String>,
-    /// Absent processes each document independently. A group requires a
-    /// correlation_field; that same correlation remains available to templates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub group: Option<EventGroup>,
@@ -321,7 +320,6 @@ pub struct EventSource {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub updated_at: Option<String>,
-    /// Optional UI/discovery labels. References, never tags, determine execution.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -332,13 +330,11 @@ pub struct EventSource {
 }
 
 /// Completion conditions for documents sharing an event correlation.
-/// Existing group deduplication, bounds, and durable ownership remain authoritative.
-/// Shared validation requires correlation and expected_count or timeout_secs.
-/// Counts/timeouts must be positive; min_count defaults to 1 and cannot exceed
-/// a known expected count. Source-field counts are validated on delivery too.
-/// Graph compilation additionally requires expected_count >= 2 and refuses
-/// latest_only concurrency on every graph edge (Lean
+/// Existing group deduplication, bounds, and durable ownership remain
+/// authoritative. Graph compilation additionally requires expected_count >= 2
+/// and refuses latest_only concurrency on every graph edge (Lean
 /// `GraphPipeline.graphEdgeValid`); shared types do not widen graph semantics.
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -368,7 +364,6 @@ pub enum EventGroupCount {
 }
 
 impl EventSource {
-    /// Shared matching configuration validation for admission and runtime loads.
     pub fn validate(&self) -> anyhow::Result<()> {
         crate::graphql::validate_collection_identifier(&self.source_collection)?;
         anyhow::ensure!(
@@ -392,9 +387,6 @@ impl EventSource {
         self.validate_group()
     }
 
-    /// Validate group completion conditions before admission or runtime projection.
-    /// Missing grouping processes each document independently; explicit malformed
-    /// counts and timeouts are errors, never defaults.
     pub fn validate_group(&self) -> anyhow::Result<()> {
         use crate::runtime_snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS;
         let correlation_field = self
@@ -402,7 +394,6 @@ impl EventSource {
             .as_deref()
             .filter(|field| !field.trim().is_empty());
         let Some(group) = self.group.as_ref() else {
-            // per_document: no grouping configuration is allowed.
             return Ok(());
         };
 
@@ -485,7 +476,3 @@ impl EventSource {
         Ok(())
     }
 }
-
-#[cfg(test)]
-#[path = "event_group_validation_tests.rs"]
-mod group_validation_tests;

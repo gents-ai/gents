@@ -1,11 +1,5 @@
-//! Test-only adapter from a real accepted provider turn to the existing hook.
-//! It reuses the publication owner; it never constructs an AcceptedToolCall.
-
 use super::*;
 
-/// Bind the exact configured parent agent to a signed, claimed request.
-/// The direct-hook R4C tests retain their assertions but no longer invent a
-/// processing row without the execution owner or an accepted provider turn.
 pub(super) async fn bind_accepted_request(
     db: &crate::support::TestDb,
     hook: &DefraSessionHook,
@@ -17,7 +11,7 @@ pub(super) async fn bind_accepted_request(
     let did = db.node_identity.did();
     assert_eq!(hook.node_did, did, "hook and signed request owner differ");
     crate::session::ensure_session_with_agent_id_and_requester_did(
-        db.node.as_ref(),
+        &db.node,
         session_id,
         did,
         agent_id,

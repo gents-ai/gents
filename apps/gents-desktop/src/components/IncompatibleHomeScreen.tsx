@@ -13,11 +13,6 @@ const SCOPE_LABEL = {
   client: "Desktop app data",
 } as const;
 
-/**
- * The single answer to a local home this version cannot open, whichever
- * operation found it: back it up (the default), delete it, or quit without
- * touching it.
- */
 export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenProps) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const report = home.report;
@@ -54,12 +49,12 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
       data-testid="incompatible-home"
     >
       <div className="grid w-full max-w-lg gap-6">
-        <Mark className="h-4 text-ink" />
+        <Mark className="h-5 w-7 text-ink" />
         {report.completed ? (
           <div className="grid gap-3" data-testid="incompatible-home-done">
             <h2
               id="incompatible-home-title"
-              className="font-heading text-2xl font-medium text-heading"
+              className="font-heading text-xl font-medium text-heading"
             >
               {report.disposition === "delete"
                 ? "Old home deleted"
@@ -92,12 +87,9 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
         ) : (
           <div className="grid gap-4">
             <div className="grid gap-2">
-              <p className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
-                {home.fullReset ? "Reset" : "Upgrade"}
-              </p>
               <h2
                 id="incompatible-home-title"
-                className="font-heading text-2xl font-medium text-heading"
+                className="font-heading text-xl font-medium text-heading"
               >
                 {home.fullReset
                   ? "Reset Gents on this Mac"
@@ -160,10 +152,12 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
                 ))}
               </p>
             ) : null}
-            <div className="grid gap-1 text-sm">
-              <p>Starting fresh moves or deletes exactly these:</p>
-              {pathList(report.plannedPaths, "incompatible-home-planned")}
-            </div>
+            {confirmingDelete ? null : (
+              <div className="grid gap-1 text-sm">
+                <p>Starting fresh moves or deletes exactly these:</p>
+                {pathList(report.plannedPaths, "incompatible-home-planned")}
+              </div>
+            )}
             {report.browserPaths.length > 0 ? (
               <div className="grid gap-1 text-sm" data-testid="reset-browser-clear">
                 <p>

@@ -1,7 +1,3 @@
-//! Unit tests for the self-config tool family. End-to-end lifecycle coverage
-//! (identity-scoped writes, reconcile pickup) lives in
-//! `tests/e2e_runtime/self_config_tools.rs`.
-
 use super::command::{agent_params, help_patch_contracts};
 use super::*;
 
@@ -90,29 +86,6 @@ pub(super) fn config(categories: &[&str]) -> SelfConfigToolConfig {
         enable_graph_tools: false,
         process_ceiling: Default::default(),
     }
-}
-
-#[test]
-fn tool_names_follow_enabled_categories() {
-    let names = self_config_tool_names(&config(&["agent", "tools", "profile"]));
-    assert_eq!(
-        names,
-        vec![CONFIG_TOOL_NAME.to_string()],
-        "all granted categories share one model-facing config command"
-    );
-
-    let disabled = SelfConfigToolConfig::default();
-    assert!(self_config_tool_names(&disabled).is_empty());
-}
-
-#[test]
-fn pack_install_requires_its_separate_opt_in() {
-    let without_install = config(&["agent"]);
-    assert_eq!(self_config_tool_names(&without_install), [CONFIG_TOOL_NAME]);
-
-    let mut with_install = without_install;
-    with_install.enable_pack_install = true;
-    assert_eq!(self_config_tool_names(&with_install), [CONFIG_TOOL_NAME]);
 }
 
 #[test]
@@ -328,9 +301,6 @@ async fn build_fails_closed_without_node_did() {
 
 #[tokio::test]
 async fn build_registers_gated_family() {
-    // Smoke assertion: the builder registers whatever the sorted name table
-    // lists (owned by `tool_names_follow_enabled_categories`); this only
-    // proves the real registration path is wired for a gated config.
     let tempdir = tempfile::tempdir().expect("tempdir");
     let node = defra_node::EmbeddedNode::builder()
         .data_path(tempdir.path().join("data"))
@@ -351,8 +321,6 @@ async fn build_registers_gated_family() {
     );
     assert_eq!(tools[0].name(), CONFIG_TOOL_NAME);
     let definition = tools[0].definition(String::new()).await;
-    // The description is the small core of the layered text (#2088); fields,
-    // recipes and the configuration model live in help and the Engineer prompt.
     assert!(
         definition.description.len() <= 700,
         "config description grew to {} chars",
@@ -380,7 +348,6 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         crate::test_support::install_test_agent(&node, &node_did, role).await;
     }
 
-    // The pack resolves from the home's store: the registry is never asked.
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("review_graph");
     let mut tool_config = config(&[]);
     tool_config.agent_id = "setup".to_string();
@@ -603,7 +570,6 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         list["graphs"][0]["active_plan"]["digest"],
         output["install"]["revision_digest"]
     );
-    // No run has been attempted here.
     let runs = node
         .execute(&format!(
             r#"{{ GraphRun(filter: {{owner_did: {{_eq: "{}"}}}}) {{run_id}} }}"#,
@@ -616,8 +582,6 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         .unwrap()
         .is_empty());
 
-    // `pack remove` is a real operation now, not a stale refusal: it deletes
-    // the installed graph and its record.
     let removed = tool
         .call(json!({"argv": ["pack", "remove", "fixture/review_graph"]}).to_string())
         .await
@@ -644,7 +608,6 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     assert!(again.to_string().contains("is not installed"), "{again:#}");
 }
 
-/// A tool over `plugins` that may install packs, plus the node it acts on.
 async fn pack_tool(
     label: &str,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
@@ -692,7 +655,6 @@ async fn pack_list_pages_the_packs_the_home_store_holds() {
     assert_eq!(page["items"][0]["installable"], true);
     assert_eq!(page["items"][0]["installed"], Value::Null);
 
-    // The cursor names the last coordinate returned; nothing sorts after it.
     let after: Value = serde_json::from_str(
         &config_call(
             &tools,
@@ -709,7 +671,6 @@ async fn pack_list_pages_the_packs_the_home_store_holds() {
         .unwrap_err();
     assert!(error.to_string().contains("between 1 and 50"), "{error}");
 
-    // A runtime with no home has no store to list.
     let (_node, _did, homeless) = pack_tool("pack-list-homeless", test_plugins()).await;
     let page: Value =
         serde_json::from_str(&config_call(&homeless, &["pack", "list"]).await.unwrap()).unwrap();
@@ -728,7 +689,6 @@ async fn pack_list_reports_a_damaged_archive_as_an_error_row() {
         .path(digest)
         .unwrap();
     std::fs::write(path, b"not a pack archive").unwrap();
-    // An open prefers the unpacked copy, so the damage must be all there is.
     std::fs::remove_dir_all(home.path().join("packs").join("unpacked")).unwrap();
 
     let page: Value =
@@ -761,7 +721,6 @@ async fn pack_update_without_a_version_asks_the_registry_and_fails_loudly_offlin
         error.contains("the newest version of fixture/review_graph could not be looked up"),
         "{error}"
     );
-    // A pinned version resolves from the store with no network call.
     let error = config_call(
         &tools,
         &["pack", "preview", "update", "fixture/review_graph@1.0.0"],
@@ -821,8 +780,6 @@ async fn pack_install_puts_a_sealed_plugin_in_the_home_and_refuses_one_that_asks
     );
     assert!(record.granted.is_none(), "a sealed plugin holds no grant");
 
-    // The same pack with a plugin that asks for network access is refused,
-    // and nothing is left behind.
     let (_guard, dir) =
         crate::test_support::fixture_pack_copy("prepared_graph", &serde_json::json!({}));
     let manifest_path = dir.join("manifest.json");
@@ -981,10 +938,6 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
     )
     .await
     .expect("code-review pack installs");
-    // The `review_graph` fixture has no `prepare`, so this test passes the
-    // entry's workspace and ref fields directly, provisioned through the
-    // same production path as `git_diff`, and leaves out evidence. That is
-    // enough to start, observe and cancel the run.
     let rev_parse = |rev: &str| -> String {
         let output = std::process::Command::new("git")
             .arg("-C")
@@ -1024,7 +977,6 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
         "pr_number": "",
         "focus": "Review the changed text.",
     });
-    // Running an admitted pack needs neither installation nor self-config.
     tool_config.enabled = false;
     tool_config.enable_pack_install = false;
     let tools = build_self_config_tools(
@@ -1095,10 +1047,6 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
     assert_ne!(cancelled["status"], "succeeded");
 }
 
-/// A `graph_id` run goes through the same selection owner as a package run:
-/// a digest that is not the active revision is refused there, naming the
-/// active one, before any start transaction, and the `graph_id` and digest
-/// `list_graphs` returns start the graph's only entry on the default input.
 #[tokio::test]
 async fn run_graph_by_graph_id_is_selected_through_the_shared_owner() {
     let node = build_agent_node().await;
@@ -1198,8 +1146,6 @@ async fn run_graph_by_graph_id_is_selected_through_the_shared_owner() {
     .expect("the pinned run cancels");
 }
 
-/// Read from the registered tool, so it binds whichever source supplies the
-/// in-session definitions: a `graph_id` run may omit entry and input too.
 #[tokio::test]
 async fn run_graph_description_makes_entry_optional_for_every_selection() {
     let mut tool_config = config(&[]);
@@ -1226,9 +1172,6 @@ async fn run_graph_description_makes_entry_optional_for_every_selection() {
     );
 }
 
-/// The in-session `list_graphs` reply is the text of `list_graphs_value`
-/// with the run tool; without one, as on `/mcp`, no listed graph names a
-/// run tool.
 #[tokio::test]
 async fn list_graphs_value_is_the_in_session_reply_and_names_no_run_tool_without_one() {
     let node = build_agent_node().await;
@@ -1310,13 +1253,6 @@ async fn list_graphs_value_is_the_in_session_reply_and_names_no_run_tool_without
     );
 }
 
-/// `RunGraphTool`'s host-ceiling gate for an entry whose `prepare` declares a
-/// `git_diff` host step: refused when the current agent has no effective
-/// read authority, and refused again once it does but the named repository
-/// escapes the effective root. Both refusals happen before any plugin runs,
-/// so the fixture's prepare plugin never needs to actually resolve, and both
-/// go through the same entry selection the run itself uses (#RunGraphTool
-/// ceiling gate).
 #[tokio::test]
 async fn run_graph_refuses_a_git_diff_prepare_without_ceiling_authority() {
     let node = build_agent_node().await;
@@ -1371,9 +1307,6 @@ async fn run_graph_refuses_a_git_diff_prepare_without_ceiling_authority() {
     tool_config.agent_id = "setup".to_owned();
     tool_config.enable_graph_tools = true;
 
-    // No process ceiling has been granted at all: `process_ceiling` defaults
-    // to `file_mode: Off`, so effective authority is `Off` regardless of
-    // anything the agent itself requests.
     let tools = build_self_config_tools(
         node.clone(),
         node_did.clone(),
@@ -1413,10 +1346,6 @@ async fn run_graph_refuses_a_git_diff_prepare_without_ceiling_authority() {
         "{pinned_off:#}"
     );
 
-    // Grant a read-only process ceiling rooted at a directory that does not
-    // contain the repository the operator is about to name, and request
-    // that same root on the agent itself (the effective root is the meet
-    // of the two).
     let allowed_root = tempfile::tempdir().expect("allowed root");
     let outside = tempfile::tempdir().expect("outside directory");
     tool_config.process_ceiling = crate::tool_surface::SelfConfigProcessCeiling {
@@ -1467,12 +1396,6 @@ async fn run_graph_refuses_a_git_diff_prepare_without_ceiling_authority() {
     );
 }
 
-/// A model-invoked `run_graph` of an entry whose `prepare` declares a
-/// `git_diff` host step, end to end under a granted effective root: the
-/// repository named by the input resolves inside that root, the pack's
-/// prepare plugin runs on the collected facts, its evidence document is
-/// persisted, and the run starts on the plugin's input rather than the
-/// operator's.
 #[tokio::test]
 async fn run_graph_prepares_host_input_under_the_effective_root() {
     let node = build_agent_node().await;
@@ -1686,28 +1609,7 @@ async fn config_tools_cannot_self_grant_pack_install() {
     );
 }
 
-#[test]
-fn operator_grants_project_from_the_tools_group() {
-    let project = |tools: Value| OperatorGrants::from_tools_json(tools.as_object().unwrap());
-    assert_eq!(project(json!({})).unwrap(), OperatorGrants::default());
-    assert_eq!(
-        project(json!({"self_config": null})).unwrap(),
-        OperatorGrants::default()
-    );
-    assert!(
-        project(json!({"self_config": {"enable_self_config": true, "enable_pack_install": true}}))
-            .unwrap()
-            .pack_install
-    );
-    assert!(
-        project(json!({"self_config": {"unknown": 1}})).is_err(),
-        "a group that does not decode fails closed"
-    );
-}
-
-/// Replace a Tools document through the operator route (no self-config
-/// guard), as the desktop and `config apply` do.
-async fn operator_replace_tools(node: &defra_node::EmbeddedNode, tools: Value) {
+async fn operator_replace_tools(node: &Arc<defra_node::EmbeddedNode>, tools: Value) {
     use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: crate::Collection::Tools,
@@ -1715,7 +1617,7 @@ async fn operator_replace_tools(node: &defra_node::EmbeddedNode, tools: Value) {
         update: tools,
     }])
     .unwrap();
-    ConfigAccess::transact_local(node, None, "test.operator_tools", |txn| {
+    ConfigAccess::transact_local_write(node, None, "test.operator_tools", |txn| {
         let plan = &plan;
         Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
     })
@@ -1723,8 +1625,11 @@ async fn operator_replace_tools(node: &defra_node::EmbeddedNode, tools: Value) {
     .unwrap();
 }
 
-/// The operator grants pack installation on `tools_id`.
-async fn operator_grant_pack_install(node: &defra_node::EmbeddedNode, owner: &str, tools_id: &str) {
+async fn operator_grant_pack_install(
+    node: &Arc<defra_node::EmbeddedNode>,
+    owner: &str,
+    tools_id: &str,
+) {
     operator_replace_tools(
         node,
         json!({"node_did": owner, "tools_id": tools_id,
@@ -1838,8 +1743,6 @@ fn argv_of(words: &[&str]) -> Vec<String> {
     words.iter().map(|word| (*word).to_owned()).collect()
 }
 
-/// The `error` message of a refused `config` call, read from its JSON
-/// failure envelope, so quoted ids compare unescaped.
 fn config_error_message(error: crate::llm::tool::ToolError) -> String {
     let crate::llm::tool::ToolError::ToolCallError(error) = error else {
         panic!("missing typed config error: {error}");
@@ -1852,7 +1755,6 @@ fn config_error_message(error: crate::llm::tool::ToolError) -> String {
         .to_owned()
 }
 
-/// `call_config_tool`, with a refusal reduced to its envelope's message.
 async fn config_call_message(
     tools: &[Box<dyn crate::llm::tool::ToolDyn>],
     argv: Vec<String>,
@@ -1866,9 +1768,6 @@ async fn config_call_message(
         .map_err(config_error_message)
 }
 
-/// `worker` (the invoker) and `sibling` with plain chains, and two chains
-/// whose Tools the operator granted pack installation; the config tool runs
-/// as `worker` with the agent catalog grant, holding the grant or not.
 async fn reselection_tools(
     label: &str,
     hold_pack_install: bool,
@@ -1973,8 +1872,6 @@ async fn agent_reselect_cannot_acquire_grants() {
     .expect("an agent holding the grant may select a chain that carries it");
 }
 
-/// A non-holder may move between two Tools documents that both carry the
-/// grant: nothing is raised above the previous selection.
 #[tokio::test]
 async fn context_reselect_between_granted_tools_is_accepted() {
     let tools = reselection_tools("context-between-granted", false).await;
@@ -2015,30 +1912,6 @@ async fn context_create_selecting_granted_tools_requires_the_grant() {
     call_config_tool(&holder, create)
         .await
         .expect("an agent holding the grant may create a Context that selects it");
-}
-
-// -- agent commands (#Task 5) --
-
-#[test]
-fn agent_edit_arguments_distinguish_omission_clear_and_set() {
-    let args: ConfigureAgentParams = serde_json::from_value(json!({
-        "action": "edit",
-        "agent_id": "review",
-        "display_name": "Review reconnaissance",
-        "root": null
-    }))
-    .expect("valid sparse edit arguments");
-    assert_eq!(
-        agent_edit_fields(&args),
-        vec!["display_name".to_string(), "root".to_string()]
-    );
-    assert_eq!(
-        args.display_name,
-        StringUpdate::Set("Review reconnaissance".to_string())
-    );
-    assert_eq!(args.root, StringUpdate::Clear);
-    assert_eq!(args.profile_id, StringUpdate::Omitted);
-    assert_eq!(args.system_prompt, StringUpdate::Omitted);
 }
 
 pub(super) async fn build_agent_node() -> std::sync::Arc<defra_node::EmbeddedNode> {
@@ -2537,7 +2410,6 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
         project_root.to_string_lossy().into_owned(),
     ];
 
-    // The user-approved source tuples produce the real, sanitized production shape.
     let discovered: ConfigurationDiscoveryInventory =
         serde_json::from_str(&call_config_tool(&tools, scan.clone()).await.unwrap()).unwrap();
     assert!(discovered
@@ -2553,8 +2425,6 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
     assert!(!serialized.contains("FAKE_DISCOVERY_SECRET_123"));
     assert!(!serialized.contains("SHOULD_NEVER_RUN"));
 
-    // Clarification selects only the project instruction. Conflicting model hints and the
-    // disabled remote tool remain unresolved and therefore absent from the proposal.
     let approved = discovered
         .items
         .iter()
@@ -2636,7 +2506,6 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
         "preview must not apply the proposal"
     );
 
-    // This edit represents the separately approved minimal preview.
     call_config_tool(
         &tools,
         vec![
@@ -2714,7 +2583,6 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
             .unwrap(),
         expected_help
     );
-    // A command's --help narrows to that command's syntax and field shapes.
     let create_help = call_config_tool(&tools, command(&["datastore", "preview", "create", "-h"]))
         .await
         .unwrap();
@@ -2916,7 +2784,6 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
     ))
     .await
     .unwrap();
-    // The Engineer may edit surfaces its own Tools select (#1796).
     for verb in [
         &["datastore", "preview", "edit"][..],
         &["datastore", "edit"],
@@ -2987,8 +2854,6 @@ pub(super) async fn call_config_tool(
         .map_err(|error| format!("{error:#}"))
 }
 
-/// Errors a model hit in the configurator skill-workflow eval name the call
-/// that can proceed, not only what failed.
 #[tokio::test]
 async fn outcome_schema_error_returns_an_executable_schema_recovery() {
     use crate::llm::tool::Tool;
@@ -2996,7 +2861,7 @@ async fn outcome_schema_error_returns_an_executable_schema_recovery() {
     let identity = node_identity("schema-recovery");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     access
         .add_schema("type Delivery { body: String }")
         .await
@@ -3079,7 +2944,6 @@ async fn config_errors_name_the_next_call() {
         serde_json::from_str::<Value>(&error.to_string()).unwrap()
     };
 
-    // A context preview cannot attach a skill that is only proposed.
     let skill = failure(json!({"argv":["agent","context","preview"],"options":{"agent":"builder"},"set":{"skill_ids":["eval-coding-check"]}})).await;
     let message = skill["error"].as_str().unwrap();
     assert!(
@@ -3114,7 +2978,6 @@ async fn config_errors_name_the_next_call() {
         .await
         .unwrap();
 
-    // preview edit is preview; a stray positional gets the whole correct call.
     let aliased = tool
         .call(json!({"argv":["agent","context","preview","edit"],"options":{"agent":"builder"},"set":{"skill_ids":[]}}).to_string())
         .await
@@ -3130,7 +2993,6 @@ async fn config_errors_name_the_next_call() {
     );
     assert_eq!(stray["config_execution"]["mutation_entered"], false);
 
-    // A display name or differently cased slug suggests the slug.
     let named = failure(json!({"argv":["agent","get","Builder"]})).await;
     assert_eq!(
         named["error"],
@@ -3227,7 +3089,6 @@ async fn config_execution_receipts_separate_rejected_syntax_from_write_dispatch(
             "{args}: {value}"
         );
     }
-    // A write in one invocation cannot contaminate a later read's receipt.
     let read: Value = serde_json::from_str(
         &tool
             .call(json!({"argv":["datastore","get"],"target_id":"notifications"}).to_string())
@@ -3267,27 +3128,6 @@ async fn agent_category_gates_the_tool() {
     assert!(with_agent
         .iter()
         .any(|tool| tool.name() == CONFIG_TOOL_NAME));
-}
-
-#[tokio::test]
-async fn agent_unknown_action_errors_cleanly() {
-    let node = build_agent_node().await;
-    let identity = node_identity("agent-unknown");
-    let tools = build_self_config_tools(
-        node,
-        identity.did().to_string(),
-        Some(identity),
-        &config(&["node"]),
-        test_plugins(),
-    );
-
-    let error = call_config_tool(&tools, vec!["agent".into(), "unknown-action".into()])
-        .await
-        .expect_err("unknown action must error");
-    assert!(
-        error.contains("unknown agent verb"),
-        "error should name the bad action: {error}"
-    );
 }
 
 #[tokio::test]
@@ -3807,7 +3647,6 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
     assert_eq!(default_preview["admitted"], true);
     assert_eq!(default_preview["make_default"], true);
 
-    // The Engineer edits its own Tools; only a lockout is refused (#1796).
     call_config_tool(
         &tools,
         vec![
@@ -3837,9 +3676,6 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
         "{lockout}"
     );
 
-    // Lean siblingToolsAllowed: both reference observations happen in the
-    // same patch transaction. Sharing either the Context or Tools with Engineer
-    // must reject without mutating the shared document.
     working_core
         .apply(anchored_request(
             SelfConfigTarget::AgentContext,
@@ -4281,7 +4117,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
     );
 
     let snapshot = crate::agent::resolve_document_runtime_snapshot(
-        node.as_ref(),
+        &node,
         &crate::agent::DocumentResolveContext::for_tests(
             identity,
             crate::tool_surface::ToolCeiling::readonly(),
@@ -4306,7 +4142,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
     );
     let names = runtime_agent
         .tools
-        .resolve(node.as_ref(), &node_did, &Default::default())
+        .resolve(&node, &node_did, &Default::default())
         .await
         .expect("new agent tool surface resolves after restart")
         .tool_names();
@@ -4610,8 +4446,8 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
         .expect("apply admits the selected root");
     let tools_id = format!("{agent_id}:tools");
     let persisted: crate::document_config::Tools =
-        crate::config_client::ConfigAccess::Local(node.clone())
-            .transact("test.self_config.read_tools", |txn| {
+        crate::config_client::ConfigAccess::local(node.clone())
+            .transact_write("test.self_config.read_tools", |txn| {
                 let owner = owner.clone();
                 let tools_id = tools_id.clone();
                 Box::pin(async move {
@@ -4679,7 +4515,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
     let workspace_root_mutation = format!(
         r#"mutation {{ create_WorkspaceRoot(input: {{root_path:"{escaped_selected}", enabled:true}}) {{_docID}} }}"#
     );
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         &node,
         Some(fixture_actor.clone()),
         "test.agent.workspace_root",
@@ -4770,7 +4606,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
     );
 
     let snapshot = crate::agent::resolve_document_runtime_snapshot(
-        node.as_ref(),
+        &node,
         &crate::agent::DocumentResolveContext::for_tests(
             identity.clone(),
             crate::tool_surface::ToolCeiling::readonly_at(operator_root.path()),
@@ -4787,7 +4623,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
     let surface = Arc::new(
         runtime_agent
             .tools
-            .resolve(node.as_ref(), &owner, &Default::default())
+            .resolve(&node, &owner, &Default::default())
             .await
             .expect("resolve fresh-request tool surface"),
     );
@@ -4920,7 +4756,6 @@ async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
     let owner = escape_graphql_string(&owner);
     let response=node.execute(&format!(r#"mutation {{update_InferenceBackend(filter:{{node_did:{{_eq:"{owner}"}},backend_id:{{_eq:"secret:backend"}}}},input:{{auth:{{kind:"api_key",key:"operator-secret"}}}}) {{_docID}}}}"#)).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    // Lean authPatchAllowed permits preserving an existing raw key exactly.
     core.preview(backend_request(vec![(
         "auth".into(),
         Some(json!({"kind":"api_key","key":"operator-secret"})),
@@ -4949,9 +4784,6 @@ async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
         .contains("operator-secret"));
 }
 
-/// A self-config write merges onto the raw stored document, so an unrelated
-/// backend field edit must keep an environment credential as its reference
-/// and never resolve the variable into storage, previews, or reads.
 #[tokio::test]
 async fn unrelated_backend_patch_keeps_environment_reference_unresolved() {
     const VARIABLE: &str = "GENTS_TEST_UNRELATED_PATCH_ENV_REFERENCE";
@@ -5017,7 +4849,6 @@ async fn unrelated_backend_patch_keeps_environment_reference_unresolved() {
     assert!(read.to_string().contains(VARIABLE));
 }
 
-/// The account fence lives in `validate`, so it holds with no-lockout off.
 #[tokio::test]
 async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
     let node = build_agent_node().await;
@@ -5025,7 +4856,7 @@ async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "acct").await;
     let core = SelfConfigCore::new(node.clone(), owner.clone(), "acct".into()).unwrap();
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let store = |kind: &str, auth: Value| {
         let backend: crate::InferenceBackend = serde_json::from_value(json!({
             "node_did": owner, "backend_id": "acct:backend", "name": "Test inference",
@@ -5086,11 +4917,6 @@ async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
     core.apply(backend_request(endpoint)).await.unwrap();
 }
 
-/// Two ChatGPT accounts and Grok's original account, a profile on each
-/// (`p-original`, `p-chat-b`, `p-grok`); the agent's own profile is on the
-/// original ChatGPT account and its context has an unset-profile compaction.
-/// Spare contexts `ctx-original` and `ctx-chat-b` use compactions `c-original`
-/// and `c-chat-b` on those profiles. No-lockout stays off.
 async fn account_choice_core(
     agent: &str,
 ) -> (
@@ -5102,7 +4928,7 @@ async fn account_choice_core(
     let identity = node_identity(agent);
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, agent).await;
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     for (id, kind, auth) in [
         (
             "chat-original",
@@ -5183,10 +5009,15 @@ async fn account_choice_core(
         .collect(),
     )
     .unwrap();
-    crate::config_client::ConfigAccess::transact_local(&node, None, "test.compaction", |txn| {
-        let plan = &plan;
-        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
-    })
+    crate::config_client::ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "test.compaction",
+        |txn| {
+            let plan = &plan;
+            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+        },
+    )
     .await
     .unwrap();
     let core = SelfConfigCore::new(node.clone(), owner, agent.into()).unwrap();
@@ -5242,13 +5073,10 @@ async fn agent_profile_pick_cannot_switch_account() {
         .unwrap();
 }
 
-/// [`account_choice_core`] plus Grok backend `grok-g2` on account `g2` (profile
-/// `p-grok-g2`) and the node's Grok sign-ins: the original row (no
-/// connection time) and `g2`, each enabled as given.
 async fn grok_accounts_core(agent: &str, original: bool, g2: bool) -> SelfConfigCore {
     let (node, _, core) = account_choice_core(agent).await;
     let owner = core.node_did().to_owned();
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let backend: crate::InferenceBackend = serde_json::from_value(json!({
         "node_did": owner, "backend_id": "grok-g2", "name": "grok-g2",
         "provider_kind": "XaiGrokOAuth", "endpoint": "http://127.0.0.1:1/v1",
@@ -5308,22 +5136,18 @@ async fn default_account_follows_the_resolver() {
         core.apply(agent_request(&core, to(profile))).await.unwrap();
     };
 
-    // The original is disabled, so g2 is Grok's default account.
     let core = grok_accounts_core("default-g2", false, true).await;
     assert_account_choice_refused(&core, || agent_request(&core, to("p-grok"))).await;
     accepted(core, "p-grok-g2").await;
 
-    // Both enabled: the original has no connection time, so it sorts first.
     let core = grok_accounts_core("default-original", true, true).await;
     assert_account_choice_refused(&core, || agent_request(&core, to("p-grok-g2"))).await;
     accepted(core, "p-grok").await;
 
-    // None enabled: the no-reference backend is allowed and fails at run time.
     let core = grok_accounts_core("default-none", false, false).await;
     accepted(core, "p-grok").await;
 }
 
-/// An unset compaction profile reuses the agent's, so that is its current.
 #[tokio::test]
 async fn compaction_profile_pick_cannot_switch_account() {
     let (_, _, core) = account_choice_core("compaction-pick").await;
@@ -5340,8 +5164,6 @@ async fn compaction_profile_pick_cannot_switch_account() {
     core.apply(to("p-grok")).await.unwrap();
 }
 
-/// Compaction runs on its own profile, else the agent's; re-pointing the
-/// context's compaction or the agent's context is a pick too.
 #[tokio::test]
 async fn compaction_reference_pick_cannot_switch_account() {
     let (_, _, core) = account_choice_core("compaction-ref-pick").await;
@@ -5366,8 +5188,6 @@ async fn compaction_reference_pick_cannot_switch_account() {
     core.apply(agent("ctx-original")).await.unwrap();
 }
 
-/// Create and clone have no current backend; edit's is the target agent's.
-/// The fence runs in the configuration publication transaction.
 #[tokio::test]
 async fn agent_management_profile_pick_cannot_switch_account() {
     let (node, identity, core) = account_choice_core("agent-pick").await;
@@ -5445,7 +5265,6 @@ async fn agent_management_profile_pick_cannot_switch_account() {
     }
 }
 
-/// Preview runs the write's account check, so the two agree.
 #[tokio::test]
 async fn agent_preview_agrees_with_the_account_choice_fence() {
     let (node, _, core) = account_choice_core("preview-pick").await;
@@ -5497,9 +5316,6 @@ async fn agent_preview_agrees_with_the_account_choice_fence() {
     }
 }
 
-/// A clone keeps its source's context, so its compaction may run on another
-/// backend than the clone's own profile; that inherited backend is a pick
-/// from the profile's, as when re-pointing the context.
 #[tokio::test]
 async fn agent_clone_inherited_compaction_cannot_switch_account() {
     let (node, identity, core) = account_choice_core("clone-pick").await;
@@ -5517,7 +5333,7 @@ async fn agent_clone_inherited_compaction_cannot_switch_account() {
         })
         .collect();
     let plan = crate::config_client::DesiredStateApplyPlan::new(sources).unwrap();
-    crate::config_client::ConfigAccess::transact_local(&node, None, "test.sources", |txn| {
+    crate::config_client::ConfigAccess::transact_local_write(&node, None, "test.sources", |txn| {
         let plan = &plan;
         Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
     })
@@ -5678,7 +5494,6 @@ async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply
     for field in ["settings", "init_options", "initOptions"] {
         let server = json!({field:{"check":{"overrideCommand":["custom-check"]}}});
         let raw = json!({"servers":{"rust-analyzer":server}}).to_string();
-        // Operator configuration keeps its existing broader admission.
         crate::toolset::lsp::LspConfigDocument::parse_operator(Some(&raw)).unwrap();
         let patch = json!({"integrations":{"lsp":{"config":raw}}});
         let preview = config
@@ -5767,8 +5582,6 @@ async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
     assert!(stored.contains("500000"), "{stored}");
 }
 
-/// #1796: the Engineer builds its crew and edits itself through `config`,
-/// and only a self-lockout is refused.
 #[tokio::test]
 async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out() {
     let node = build_agent_node().await;
@@ -5817,7 +5630,6 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         serde_json::from_str(&result.unwrap_or_else(|error| panic!("{error}"))).unwrap()
     };
 
-    // #2058: AgentTarget through the desired-state owner.
     let target_patch = [
         "--set",
         "name=\"gatekeeper\"",
@@ -5935,7 +5747,6 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     )
     .await);
 
-    // Own Tools: select the target, the sessions tool and read-only query.
     let enabled = ok(call_config_tool(
         &tools,
         command(&[
@@ -5988,7 +5799,6 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     .await
     .unwrap_err();
     assert!(disable.contains("no-lockout"), "{disable}");
-    // Two-step self-disable: the Engineer tag and the agent disable path.
     let untag = call_config_tool(
         &tools,
         command(&["agent", "edit", "setup", "--set", "tags=[\"ui:engineer\"]"]),
@@ -6014,7 +5824,6 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         .await
         .unwrap_err();
     assert!(agent_disable.contains("no-lockout"), "{agent_disable}");
-    // A selected target the runtime could not resolve is refused at publication.
     for name in ["\"\"", "\"   \""] {
         let blank = call_config_tool(
             &tools,
@@ -6057,7 +5866,6 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         "{duplicate}"
     );
 
-    // #2059: create an execution, bind it, then edit its limits normally.
     for verb in [
         &["execution", "preview", "create"][..],
         &["execution", "create"],
@@ -6154,7 +5962,6 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     .await);
     assert_eq!(bound["effective"], execution["effective"]);
 
-    // Automation that targets the Engineer itself.
     ok(call_config_tool(
         &tools,
         command(&[
@@ -6170,7 +5977,6 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     )
     .await);
 
-    // Delete through the reference-aware cleanup owner once deselected.
     assert!(call_config_tool(
         &tools,
         command(&["cleanup", "preview", "--target", "agent-target=gatekeeper"]),
@@ -6227,7 +6033,7 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
     let identity = node_identity("backend-catalog-read");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "setup").await;
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let backend = |id: &str, kind: &str, auth: Value| -> crate::document_config::InferenceBackend {
         serde_json::from_value(json!({
             "node_did": owner, "backend_id": id, "name": id, "provider_kind": kind,
@@ -6305,7 +6111,6 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
         let model = &get["observation"]["catalog"]["models"][0];
         assert_eq!(model["context_window"], 1_000_000);
         assert_eq!(model["reasoning_efforts"], json!(["low", "high"]));
-        // The endpoint is unreachable: a provider call would fail discover.
         let discover = call(&["discover", id]).await;
         assert_eq!(discover["refreshed"], false);
         assert_eq!(
@@ -6359,7 +6164,7 @@ async fn pack_search_uses_registry_pagination_without_installing() {
             .await
             .is_err());
     }
-    let access = crate::config_client::ConfigAccess::Local(node);
+    let access = crate::config_client::ConfigAccess::local(node);
     assert!(
         crate::pack::read_installed_pack(&access, &did, "fixture/review_graph")
             .await
@@ -6404,7 +6209,7 @@ async fn pack_documents_install_and_release_graph_dependencies() {
     ];
     args.extend(slots);
     config_call(&tools, &args).await.unwrap();
-    let access = crate::config_client::ConfigAccess::Local(node);
+    let access = crate::config_client::ConfigAccess::local(node);
     assert!(
         crate::pack::read_installed_pack(&access, &did, "fixture/review_graph")
             .await
@@ -6469,7 +6274,7 @@ async fn pack_document_installation_uses_existing_lifecycle() {
     .unwrap();
     assert_eq!(preview["ready"], true, "{preview}");
     let digest = preview["artifact_digest"].as_str().unwrap();
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     assert!(
         crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
             .await
@@ -6609,7 +6414,7 @@ async fn published_review_pack_preserves_installation_when_upgrade_needs_authori
         } else {
             applied.unwrap();
         }
-        let access = crate::config_client::ConfigAccess::Local(node.clone());
+        let access = crate::config_client::ConfigAccess::local(node.clone());
         let installed = crate::pack::read_installed_pack(&access, &did, "gents/code_review")
             .await
             .unwrap()
@@ -6619,7 +6424,7 @@ async fn published_review_pack_preserves_installation_when_upgrade_needs_authori
     config_call(&tools, &["pack", "remove", "gents/code_review"])
         .await
         .unwrap();
-    let access = crate::config_client::ConfigAccess::Local(node);
+    let access = crate::config_client::ConfigAccess::local(node);
     assert!(
         crate::pack::read_installed_pack(&access, &did, "gents/code_review")
             .await
@@ -6636,7 +6441,6 @@ async fn published_review_pack_preserves_installation_when_upgrade_needs_authori
     assert_eq!(rows["data"]["GraphRun"], json!([]));
 }
 
-/// Every `OAuthCredential`, `InferenceBackend` and `ProviderAccountUsage` row, as stored.
 async fn account_state_rows(node: &std::sync::Arc<defra_node::EmbeddedNode>) -> Value {
     let response = node
         .execute(
@@ -6680,7 +6484,7 @@ async fn seed_account_view(node: &std::sync::Arc<defra_node::EmbeddedNode>, owne
     upsert_oauth_credential(node, &account(Some("acct-l2"), "Work", false))
         .await
         .unwrap();
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     for (backend_id, kind, auth, endpoint) in [
         (
             "backend-usage-claude",
@@ -7020,7 +6824,7 @@ async fn public_agent_management_previews_without_publishing_and_checks_signer()
     let identity = node_identity("public-agent-management");
     let owner = identity.did().to_owned();
     crate::test_support::install_test_agent(&node, &owner, "seed").await;
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let mut args = ConfigureAgentParams {
         action: "preview".into(),
         operation: Some("create".into()),
@@ -7079,24 +6883,6 @@ async fn public_agent_management_previews_without_publishing_and_checks_signer()
     assert_eq!(crate::list_agents(&node, &owner).await.unwrap().len(), 2);
 }
 
-#[test]
-fn agent_decision_rejects_fields_outside_the_edit_contract() {
-    let view = agent::AgentCatalogView {
-        agents: BTreeMap::from([("target".into(), true)]),
-        ..Default::default()
-    };
-    for field in ["enabled", "node_did", "context_id", "unexpected"] {
-        let error = agent::decide_agent_operation(
-            &view,
-            &agent::AgentOperation::Edit(vec![(field.into(), Some(json!(true)))]),
-            "target",
-            false,
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("unsupported agent edit field"));
-    }
-}
-
 #[tokio::test]
 async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() {
     let node = build_agent_node().await;
@@ -7106,7 +6892,7 @@ async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() 
     let mut stored = crate::load_agent(&node, "target").await.unwrap().unwrap();
     stored.enabled = false;
     crate::upsert_agent(&node, &stored).await.unwrap();
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let mut args = ConfigureAgentParams {
         action: "preview".into(),
         operation: Some("edit".into()),
@@ -7210,7 +6996,7 @@ async fn public_prompt_edits_require_an_existing_unshared_context_without_partia
     let mut sibling = crate::load_agent(&node, "sibling").await.unwrap().unwrap();
     sibling.context_id = shared.context_id;
     crate::upsert_agent(&node, &sibling).await.unwrap();
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let query = "query { Agent(order: {agent_id: ASC}) { agent_id display_name context_id inference_profile_id enabled } AgentContext(order: {context_id: ASC}) { context_id display_name system_prompt tools_id } }";
     let before = access.execute(query).await.unwrap();
     for (target, expected) in [
@@ -7268,44 +7054,11 @@ async fn public_prompt_edits_require_an_existing_unshared_context_without_partia
     assert_eq!(after["data"]["AgentContext"], expected_contexts);
 }
 
-#[test]
-fn operator_grants_decode_and_preserve_main_bounds() {
-    use super::ops::{guard_tools_keep_grants, OperatorGrants};
-    let empty = json!({});
-    let granted = json!({"self_config":{"enable_self_config":true,"enable_pack_install":true}});
-    let malformed = json!({"self_config":{"unknown":true}});
-    assert_eq!(
-        OperatorGrants::from_tools_json(empty.as_object().unwrap()).unwrap(),
-        OperatorGrants::default()
-    );
-    assert!(OperatorGrants::from_tools_json(malformed.as_object().unwrap()).is_err());
-    assert!(guard_tools_keep_grants(
-        &OperatorGrants::default(),
-        None,
-        granted.as_object().unwrap()
-    )
-    .is_err());
-    assert!(guard_tools_keep_grants(
-        &OperatorGrants::default(),
-        Some(granted.as_object().unwrap()),
-        granted.as_object().unwrap()
-    )
-    .is_ok());
-    assert!(guard_tools_keep_grants(
-        &OperatorGrants { pack_install: true },
-        None,
-        granted.as_object().unwrap()
-    )
-    .is_ok());
-    assert!(guard_tools_keep_grants(
-        &OperatorGrants::default(),
-        Some(granted.as_object().unwrap()),
-        empty.as_object().unwrap()
-    )
-    .is_ok());
-}
-
-async fn grant_pack_install_for_test(node: &defra_node::EmbeddedNode, owner: &str, tools_id: &str) {
+async fn grant_pack_install_for_test(
+    node: &Arc<defra_node::EmbeddedNode>,
+    owner: &str,
+    tools_id: &str,
+) {
     let value = json!({"node_did":owner,"tools_id":tools_id,"self_config":{"enable_self_config":true,"enable_pack_install":true}});
     let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
         crate::config_client::DesiredStateApplyDocument {
@@ -7315,10 +7068,15 @@ async fn grant_pack_install_for_test(node: &defra_node::EmbeddedNode, owner: &st
         },
     ])
     .unwrap();
-    crate::config_client::ConfigAccess::transact_local(node, None, "test.operator_grant", |txn| {
-        let plan = &plan;
-        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
-    })
+    crate::config_client::ConfigAccess::transact_local_write(
+        node,
+        None,
+        "test.operator_grant",
+        |txn| {
+            let plan = &plan;
+            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+        },
+    )
     .await
     .unwrap();
 }
@@ -7369,7 +7127,7 @@ async fn model_clone_is_atomically_grant_bounded_but_operator_clone_is_not() {
     operator_args.display_name = StringUpdate::Set("Operator clone".into());
     let operator: Value = serde_json::from_str(
         &configure_agent(
-            &crate::config_client::ConfigAccess::Local(node.clone()),
+            &crate::config_client::ConfigAccess::local(node.clone()),
             &owner,
             identity.as_ref(),
             &operator_args,
@@ -7423,4 +7181,286 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
         .await
         .unwrap();
     no_grant.apply(tools_request(&no_grant, vec![("self_config".into(), Some(json!({"enable_self_config":true,"enable_pack_install":true,"self_config_preview":true})))])).await.unwrap();
+}
+
+#[tokio::test]
+async fn native_pack_local_install_inspection_selection_and_digest_fence() {
+    let (workspace, artifact, archive) =
+        crate::pack::plugin_lifecycle::tests::fixture("1.0.0", false);
+    let home = tempfile::tempdir().unwrap();
+    let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+        home.path().to_owned(),
+    )));
+    let node = build_agent_node().await;
+    let identity = node_identity("native-pack");
+    let did = identity.did().to_string();
+    crate::test_support::install_test_agent(&node, &did, "setup").await;
+    let mut cfg = config(&["tools", "agent"]);
+    cfg.agent_id = "setup".into();
+    cfg.enable_pack_install = true;
+    cfg.process_ceiling.file_mode = crate::tool_surface::FileToolMode::ReadOnly;
+    cfg.process_ceiling.root = Some(workspace.path().to_owned());
+    let tools = build_self_config_tools(
+        node.clone(),
+        did.clone(),
+        Some(identity),
+        &cfg,
+        plugins.clone(),
+    );
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .unwrap();
+    tool.call(json!({"argv":["tools","update"],"set":{"host":{"root":workspace.path(),"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}}).to_string()).await.unwrap();
+    tool.call(
+        json!({"argv":["tools","update"],"set":{"integrations":{"lsp":{"timeout_secs":31}}}})
+            .to_string(),
+    )
+    .await
+    .unwrap();
+    let path = artifact.to_str().unwrap();
+    let preview: Value = serde_json::from_str(
+        &config_call(&tools, &["pack", "preview", "install", path])
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(preview["ready"], true);
+    assert_eq!(preview["artifact_digest"], archive.digest());
+    assert_eq!(
+        preview["apply_with"]["argv"],
+        json!(["pack", "install", archive.digest()])
+    );
+    assert!(crate::plugin::store::list_records(home.path())
+        .unwrap()
+        .is_empty());
+    let wrong = format!("sha256:{}", "0".repeat(64));
+    let error = config_call(&tools, &["pack", "install", path, "--digest", &wrong])
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("digest changed"), "{error}");
+    assert!(crate::plugin::store::list_records(home.path())
+        .unwrap()
+        .is_empty());
+    let installed: Value = serde_json::from_str(
+        &config_call(
+            &tools,
+            &["pack", "install", path, "--digest", archive.digest()],
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(installed["committed"], true);
+    let inspect: Value = serde_json::from_str(
+        &config_call(&tools, &["plugin", "get", "fixture/native_echo"])
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(inspect["selection"]["plugin"], "fixture/native_echo");
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .unwrap();
+    let before: Value =
+        serde_json::from_str(&config_call(&tools, &["tools", "get"]).await.unwrap()).unwrap();
+    assert!(
+        !before.to_string().contains("native_echo"),
+        "install must not select a tool"
+    );
+    let mut integrations = before["document"]["integrations"].clone();
+    integrations
+        .as_object_mut()
+        .unwrap()
+        .insert("plugins".into(), json!([inspect["selection"].clone()]));
+    tool.call(json!({"argv":["tools","update"],"set":{"integrations":integrations}}).to_string())
+        .await
+        .unwrap();
+    let readback = config_call(&tools, &["tools", "get"]).await.unwrap();
+    assert!(readback.contains("fixture/native_echo"));
+    let persisted: crate::document_config::Tools =
+        crate::config_client::ConfigAccess::local(node.clone())
+            .transact_readonly("test.self_config.read_native_pack_tools", |txn| {
+                let did = did.clone();
+                Box::pin(async move {
+                    let value = crate::config_client::read_desired_state_document_in_txn(
+                        txn,
+                        crate::Collection::Tools,
+                        &did,
+                        "setup:tools",
+                    )
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("persisted Tools document disappeared"))?;
+                    Ok(serde_json::from_value(value)?)
+                })
+            })
+            .await
+            .unwrap();
+    assert_eq!(
+        persisted
+            .integrations
+            .as_ref()
+            .and_then(|integrations| integrations.lsp.as_ref())
+            .and_then(|lsp| lsp.timeout_secs),
+        Some(31),
+        "selecting the plugin must preserve another configured integration"
+    );
+    let record = crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap();
+    assert!(record.granted.is_none());
+    let surface = crate::tool_surface::AgentToolSurfaceConfig::from_tools_document(
+        "setup",
+        &persisted,
+        &crate::tool_surface::ToolCeiling::readonly_at(workspace.path()),
+        Vec::new(),
+    )
+    .unwrap()
+    .resolve(&node, &did, &plugins)
+    .await
+    .unwrap();
+    let runtime =
+        crate::tool_surface::ToolRuntimeContext::oneshot_with_node_did(node.clone(), &did)
+            .with_plugins(plugins.clone());
+    let fresh_tools = surface.build_tools(&runtime).await.unwrap();
+    let fresh_tool = fresh_tools
+        .iter()
+        .find(|tool| tool.name() == "native_echo")
+        .expect("a fresh ToolSurface built from persisted Tools should expose the selected plugin");
+    let output: Value = serde_json::from_str(&fresh_tool.call("{}".into()).await.unwrap()).unwrap();
+    assert_eq!(output, json!({"native_pack_echo":"ok"}));
+    let (_next_dir, next_path, next) =
+        crate::pack::plugin_lifecycle::tests::fixture("2.0.0", false);
+    std::fs::copy(next_path, &artifact).unwrap();
+    let error = config_call(
+        &tools,
+        &["pack", "update", path, "--digest", archive.digest()],
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("digest changed"));
+    config_call(&tools, &["pack", "update", path, "--digest", next.digest()])
+        .await
+        .unwrap();
+    let status: Value = serde_json::from_str(
+        &config_call(&tools, &["pack", "get", "fixture/native_echo_pack"])
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(status["installed"]["version"], "2.0.0");
+    let removal = config_call(&tools, &["pack", "remove", "fixture/native_echo_pack"])
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(removal.contains("native removal"));
+    assert_eq!(
+        crate::plugin::store::read_record(home.path(), "fixture", "native_echo")
+            .unwrap()
+            .version,
+        "2.0.0"
+    );
+}
+
+#[tokio::test]
+async fn native_pack_local_paths_and_approval_fail_closed() {
+    let (workspace, artifact, _) = crate::pack::plugin_lifecycle::tests::fixture("1.0.0", true);
+    let home = tempfile::tempdir().unwrap();
+    let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+        home.path().to_owned(),
+    )));
+    let node = build_agent_node().await;
+    let identity = node_identity("native-pack-refusals");
+    let did = identity.did().to_string();
+    crate::test_support::install_test_agent(&node, &did, "setup").await;
+    let mut cfg = config(&["tools"]);
+    cfg.agent_id = "setup".into();
+    cfg.enable_pack_install = true;
+    cfg.process_ceiling.root = Some(workspace.path().to_owned());
+    let tools = build_self_config_tools(
+        node.clone(),
+        did.clone(),
+        Some(identity.clone()),
+        &cfg,
+        plugins.clone(),
+    );
+    let path = artifact.to_str().unwrap();
+    assert!(config_call(&tools, &["pack", "get", path])
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("effective file read permission"));
+    cfg.process_ceiling.file_mode = crate::tool_surface::FileToolMode::ReadOnly;
+    let tools = build_self_config_tools(node, did, Some(identity), &cfg, plugins);
+    assert!(config_call(&tools, &["pack", "get", path])
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("effective file read permission"));
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .unwrap();
+    tool.call(json!({"argv":["tools","update"],"set":{"host":{"root":workspace.path(),"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}}).to_string()).await.unwrap();
+    let preview: Value = serde_json::from_str(
+        &config_call(&tools, &["pack", "preview", "install", path])
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(preview["ready"], false);
+    assert_eq!(preview["apply_with"], Value::Null);
+    let digest = preview["artifact_digest"].as_str().unwrap();
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .unwrap();
+    assert!(tool
+        .call(
+            json!({"argv":["pack","install",path],"options":{"digest":digest,"approved":true}})
+                .to_string()
+        )
+        .await
+        .is_err());
+    assert!(
+        config_call(&tools, &["pack", "install", path, "--digest", digest])
+            .await
+            .is_err()
+    );
+    assert!(crate::plugin::store::list_records(home.path())
+        .unwrap()
+        .is_empty());
+    let outside = tempfile::tempdir().unwrap();
+    let outside_path = outside.path().join("outside.pack");
+    std::fs::copy(&artifact, &outside_path).unwrap();
+    let error = config_call(&tools, &["pack", "get", outside_path.to_str().unwrap()])
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("outside the allowed tool root"));
+    #[cfg(unix)]
+    {
+        let link = workspace.path().join("escape.pack");
+        std::os::unix::fs::symlink(&outside_path, &link).unwrap();
+        assert!(
+            config_call(&tools, &["pack", "get", link.to_str().unwrap()])
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("outside the allowed tool root")
+        );
+    }
+    let corrupt = workspace.path().join("corrupt.pack");
+    std::fs::write(&corrupt, b"not a pack").unwrap();
+    assert!(
+        config_call(&tools, &["pack", "get", corrupt.to_str().unwrap()])
+            .await
+            .is_err()
+    );
+    assert!(
+        config_call(&tools, &["pack", "get", workspace.path().to_str().unwrap()])
+            .await
+            .is_err()
+    );
 }

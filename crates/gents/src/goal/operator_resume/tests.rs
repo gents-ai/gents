@@ -19,9 +19,6 @@ struct GeneratedResumeOnContracts {
     goal_operator_resume_on_cases: Vec<GeneratedResumeOnCase>,
 }
 
-/// A `usage_limited` Goal whose latest request (`PARENT`) failed on a limited
-/// call on Claude account A; the agent's profile is on A, and B is
-/// another enabled Claude account. `call_failure` is the failed call's text.
 struct Limited {
     f: Fixture,
     access: ConfigAccess,
@@ -70,7 +67,6 @@ impl Limited {
         .await
     }
 
-    /// The agent's context compacts with `summ`, also on A.
     async fn compacts_on_a(&self) {
         self.f.compacts_on(&self.access, &self.a).await;
     }
@@ -83,7 +79,7 @@ impl Limited {
         let did = self.f.identity.did();
         let (_, value) = self
             .access
-            .transact("test.resume_on.read", |txn| {
+            .transact_write("test.resume_on.read", |txn| {
                 Box::pin(async move {
                     read_desired_state_record_in_txn(
                         txn,
@@ -293,7 +289,7 @@ async fn moved_profile_retry_rejects_a_removed_target_account() {
     let credential = limited.b_credential.clone();
     limited
         .access
-        .transact("test.resume_on.remove_retry_target", move |txn| {
+        .transact_write("test.resume_on.remove_retry_target", move |txn| {
             let did = did.clone();
             let credential = credential.clone();
             Box::pin(async move {

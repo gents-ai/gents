@@ -1,9 +1,3 @@
-//! Run generated Codex client-status vectors through the protocol owner while
-//! the full runtime crate is intentionally red.
-//!
-//! This does not model local interrupt acknowledgement: that is a shim-local,
-//! transient observation and is deliberately outside the persisted request
-//! projection owned by `gents_protocol::client_protocol`.
 #[path = "../../gents/src/lean_vocab_test/support.rs"]
 mod runtime_contract;
 
@@ -74,8 +68,6 @@ fn generated_codex_client_status_vectors_use_persisted_request_projection() {
         );
     }
 
-    // `local_interrupt_acked` is intentionally not passed to the protocol
-    // owner: it has no persisted request-lifecycle representation.
     assert!(snapshot
         .codex_shim_projection_cases
         .iter()

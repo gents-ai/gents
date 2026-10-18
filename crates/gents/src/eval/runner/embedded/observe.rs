@@ -1,6 +1,3 @@
-//! Request observation for an embedded trial: wait until terminal, read the
-//! evidence rows, and classify the outcome the way the stage runner does.
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,12 +13,6 @@ use crate::defra_node::EmbeddedNode;
 use crate::graphql::{escape_graphql_string, first_row, graphql_with_transaction_retry};
 use crate::run_timeline::{RunTimelineRows, TimelineToolCallRow};
 
-/// Progress and usage callbacks for one `await_terminal_with` poll.
-///
-/// `on_state` runs when the observed `(lifecycle_state, session_id)` pair
-/// changes. `on_interrupt_requested` runs once, immediately before the deadline
-/// interrupt. `on_tick` runs after each non-terminal state read, with the time
-/// since observation began.
 #[async_trait::async_trait]
 pub trait ObservationHook: Send + Sync {
     async fn on_state(&self, _state: &str, _session_id: Option<&str>) {}
@@ -29,7 +20,6 @@ pub trait ObservationHook: Send + Sync {
     async fn on_tick(&self, _elapsed: Duration) {}
 }
 
-/// Hook that records nothing. [`await_terminal`] uses it.
 pub struct NoHook;
 
 #[async_trait::async_trait]
@@ -37,7 +27,7 @@ impl ObservationHook for NoHook {}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalObservation {
-    pub terminal_state: RequestLifecycleState,
+    pub terminal_state: Option<RequestLifecycleState>,
     pub session_id: Option<String>,
     pub interrupted_on_deadline: bool,
     pub elapsed: Duration,
@@ -89,42 +79,29 @@ pub struct RequestEvidence {
     pub failure_reason: Option<String>,
 }
 
-/// Poll `AgentRequest { lifecycle_state session_id }` until the request is
-/// terminal or the deadline-and-grace window ends.
-///
-/// Every `poll`, read the latest row. When `deadline` elapses while that state
-/// is still non-terminal, call [`crate::interrupt::interrupt_request`] exactly
-/// once and set `interrupted_on_deadline`. Keep polling until `deadline + grace`.
-///
-/// Return `Ok` as soon as the state parses to a terminal
-/// [`RequestLifecycleState`] (`Completed`, `Failed`, `Superseded`, `Dead`, or
-/// `Interrupted`). When the grace expires and the last observed state is still
-/// non-terminal, return `Ok` with `terminal_state` set to that state when
-/// [`RequestLifecycleState::parse`] yields a terminal state, otherwise
-/// `Interrupted`, and `interrupted_on_deadline: true`. This is the library form
-/// of today's `nonterminal_after_interrupt` observation: the caller still learns
-/// that the deadline fired, and a missing or unparseable row is not unwrapped.
+/// Read `AgentRequest { lifecycle_state session_id }` on each request change
+/// until the request is terminal or the deadline-and-grace window ends.
+/// Terminal evidence requires a durable terminal state; interrupt intent and
+/// an expired grace leave `terminal_state` absent.
 pub async fn await_terminal(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
     deadline: Duration,
     grace: Duration,
-    poll: Duration,
 ) -> Result<TerminalObservation> {
-    await_terminal_with(node, request_id, deadline, grace, poll, &NoHook).await
+    await_terminal_with(node, request_id, deadline, grace, &NoHook).await
 }
 
 pub async fn await_terminal_with(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
     deadline: Duration,
     grace: Duration,
-    poll: Duration,
     hook: &dyn ObservationHook,
 ) -> Result<TerminalObservation> {
+    let mut changes = crate::subscribe_collections(node, ["AgentRequest"])?;
     let started = std::time::Instant::now();
     let mut interrupted_on_deadline = false;
-    let mut last_state = String::new();
     let mut session_id = None;
     let mut last_progress: Option<(String, Option<String>)> = None;
     loop {
@@ -136,9 +113,6 @@ pub async fn await_terminal_with(
         let observed_session = row.as_ref().and_then(|row| row.session_id.clone());
         if let Some(row) = row.as_ref() {
             session_id.clone_from(&row.session_id);
-            if let Some(state) = row.lifecycle_state.as_deref() {
-                last_state = state.to_string();
-            }
         }
         let progress = (observed_state.clone(), observed_session.clone());
         if last_progress.as_ref() != Some(&progress) {
@@ -146,17 +120,15 @@ pub async fn await_terminal_with(
                 .await;
             last_progress = Some(progress);
         }
-        if let Some(state) = row.as_ref().and_then(|row| row.lifecycle_state.as_deref()) {
-            if let Ok(parsed) = RequestLifecycleState::parse(state) {
-                if parsed.is_terminal() {
-                    return Ok(TerminalObservation {
-                        terminal_state: parsed,
-                        session_id,
-                        interrupted_on_deadline,
-                        elapsed: started.elapsed(),
-                    });
-                }
-            }
+        let terminal_state =
+            observed_terminal_state(row.as_ref().and_then(|row| row.lifecycle_state.as_deref()));
+        if terminal_state.is_some() {
+            return Ok(TerminalObservation {
+                terminal_state,
+                session_id,
+                interrupted_on_deadline,
+                elapsed: started.elapsed(),
+            });
         }
         let elapsed = started.elapsed();
         hook.on_tick(elapsed).await;
@@ -168,10 +140,6 @@ pub async fn await_terminal_with(
             interrupted_on_deadline = true;
         }
         if interrupted_on_deadline && elapsed >= deadline.saturating_add(grace) {
-            let terminal_state = match RequestLifecycleState::parse(&last_state) {
-                Ok(state) if state.is_terminal() => state,
-                _ => RequestLifecycleState::Interrupted,
-            };
             return Ok(TerminalObservation {
                 terminal_state,
                 session_id,
@@ -179,8 +147,20 @@ pub async fn await_terminal_with(
                 elapsed: started.elapsed(),
             });
         }
-        tokio::time::sleep(poll).await;
+        let boundary = if interrupted_on_deadline {
+            deadline.saturating_add(grace)
+        } else {
+            deadline
+        };
+        let remaining = boundary.saturating_sub(started.elapsed());
+        if let Ok(None) = tokio::time::timeout(remaining, changes.recv()).await {
+            tokio::time::sleep(remaining).await;
+        }
     }
+}
+
+fn observed_terminal_state(state: Option<&str>) -> Option<RequestLifecycleState> {
+    RequestLifecycleState::parse_opt(state).filter(|state| state.is_terminal())
 }
 
 pub async fn collect_request_evidence(
@@ -193,7 +173,7 @@ pub async fn collect_request_evidence(
         .data
         .context("collect request evidence returned no data")?;
     let timeline = crate::run_timeline_fetch::load_run_timeline_rows(
-        &ConfigAccess::Local(node.clone()),
+        &ConfigAccess::local(node.clone()),
         request_id,
     )
     .await
@@ -201,11 +181,6 @@ pub async fn collect_request_evidence(
     Ok(request_evidence_from_sources(&data, &timeline))
 }
 
-/// Map the evidence-query data object and the request's run timeline into
-/// [`RequestEvidence`]. Tool calls and assistant messages come from the
-/// timeline, narrowed to this request’s physical document; the request failure
-/// reason and inference calls come from the query. The timeline also includes
-/// earlier session turns and child requests, which are not this stage’s calls.
 pub fn request_evidence_from_sources(data: &Value, timeline: &RunTimelineRows) -> RequestEvidence {
     let mut evidence = request_evidence_from_query_data(data);
     evidence.tool_calls = timeline
@@ -224,11 +199,6 @@ pub fn request_evidence_from_sources(data: &Value, timeline: &RunTimelineRows) -
     evidence
 }
 
-/// Map a query data object into [`RequestEvidence`].
-///
-/// `AgentToolCall` rows, when present, are serialized
-/// [`TimelineToolCallRow`]s, the shape the stage runner's observed outcome
-/// carries. Missing collections are empty; a row is never unwrapped.
 pub fn request_evidence_from_query_data(data: &Value) -> RequestEvidence {
     let requests = rows(data, "AgentRequest");
     let failure_reason = requests
@@ -276,8 +246,6 @@ fn tool_call_evidence(row: &TimelineToolCallRow) -> ToolCallEvidence {
     }
 }
 
-/// The request's own assistant messages in sequence order, presented through
-/// the transcript owner.
 fn assistant_messages(timeline: &RunTimelineRows) -> Vec<MessageEvidence> {
     let Some(request_doc_id) = timeline.request.doc_id.as_deref() else {
         return Vec::new();
@@ -301,16 +269,17 @@ fn assistant_messages(timeline: &RunTimelineRows) -> Vec<MessageEvidence> {
         .collect()
 }
 
-/// Same string kinds the stage runner returns today: `"deadline"`, `"tool"`,
-/// `"provider"`, `"runtime"`, or `"unknown"`. `None` means the request completed.
 pub fn classify_request_outcome(
-    terminal_state: RequestLifecycleState,
+    terminal_state: Option<RequestLifecycleState>,
     interrupted_on_deadline: bool,
     evidence: &RequestEvidence,
 ) -> Option<&'static str> {
     if interrupted_on_deadline {
         return Some("deadline");
     }
+    let Some(terminal_state) = terminal_state else {
+        return Some("infrastructure");
+    };
     if terminal_state == RequestLifecycleState::Completed {
         return None;
     }
@@ -320,6 +289,26 @@ pub fn classify_request_outcome(
     });
     if budget_exhausted {
         return Some("tool");
+    }
+    if evidence
+        .failure_reason
+        .iter()
+        .chain(
+            evidence
+                .inference_calls
+                .iter()
+                .filter_map(|call| call.failure_reason.as_ref()),
+        )
+        .any(|reason| {
+            matches!(
+                reason.as_str(),
+                "execution lease expired"
+                    | "execution lease expired or ownership was revoked"
+                    | "request execution lease: execution lease expired or ownership was revoked"
+            )
+        })
+    {
+        return Some("infrastructure");
     }
     let inference_failed = evidence.inference_calls.iter().any(|call| {
         matches!(call.call_state.as_deref(), Some("failed" | "error"))
@@ -376,8 +365,6 @@ fn poll_query(request_id: &str) -> String {
     )
 }
 
-/// The request failure reason and its inference calls. Tool calls and
-/// messages are read through the run timeline owner.
 pub fn evidence_query(request_id: &str) -> String {
     let request_id = escape_graphql_string(request_id);
     format!(
@@ -390,7 +377,6 @@ pub fn evidence_query(request_id: &str) -> String {
     )
 }
 
-/// Usage sample: inference timing and tokens.
 pub fn inference_sample_query(request_id: &str) -> String {
     let request_id = escape_graphql_string(request_id);
     format!(
@@ -434,11 +420,299 @@ fn field_u64(row: &Value, key: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
-
     use crate::eval::runner::embedded::EmbeddedHome;
     use gents_protocol::request_lifecycle::RequestLifecycleState;
     use serde_json::Value;
+
+    #[test]
+    fn request_outcomes_match_generated_native_failure_contract() {
+        #[derive(Debug, Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Case {
+            state: Option<String>,
+            observed_terminal_state: Option<String>,
+            deadline: bool,
+            inference_failed: bool,
+            tool_failed: bool,
+            request_reason: Option<String>,
+            inference_reason: Option<String>,
+            outcome: Option<String>,
+        }
+        let cases: Vec<Case> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/eval_request_outcome.json"
+        )))
+        .unwrap();
+        assert_eq!(cases.len(), 656);
+        let native_ownership_loss = crate::lifecycle::ExecutionOwnershipLost.to_string();
+        assert!(cases.iter().any(|case| {
+            case.request_reason.as_deref() == Some(native_ownership_loss.as_str())
+                && case.outcome.as_deref() == Some("infrastructure")
+        }));
+        for case in cases {
+            assert_eq!(
+                observed_terminal_state(case.state.as_deref()),
+                case.observed_terminal_state
+                    .as_deref()
+                    .map(|state| RequestLifecycleState::parse(state).unwrap()),
+                "{case:?}"
+            );
+            let mut evidence = evidence(
+                case.inference_failed,
+                case.tool_failed,
+                case.request_reason.as_deref(),
+            );
+            if evidence.inference_calls.is_empty() {
+                evidence.inference_calls.push(InferenceCallEvidence {
+                    call_seq: 1,
+                    call_state: Some("running".into()),
+                    failure_reason: case.inference_reason.clone(),
+                    prompt_tokens: None,
+                    completion_tokens: None,
+                    queued_at: None,
+                    started_at: None,
+                    ended_at: None,
+                });
+            } else {
+                evidence.inference_calls[0].failure_reason = case.inference_reason.clone();
+            }
+            assert_eq!(
+                classify_request_outcome(
+                    case.state
+                        .as_deref()
+                        .map(|state| RequestLifecycleState::parse(state).unwrap()),
+                    case.deadline,
+                    &evidence,
+                ),
+                case.outcome.as_deref(),
+                "{case:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn stage_tools_exclude_earlier_turns_children_and_unbound_rows() {
+        let mut timeline = RunTimelineRows::default();
+        timeline.request.doc_id = Some("exercise-doc".into());
+        timeline.tool_calls = [
+            (Some("setup-doc"), "config"),
+            (Some("exercise-doc"), "save_record"),
+            (Some("child-doc"), "config"),
+            (None, "config"),
+        ]
+        .into_iter()
+        .map(|(doc, name)| TimelineToolCallRow {
+            request_doc_id: doc.map(str::to_owned),
+            tool_name: name.into(),
+            ..Default::default()
+        })
+        .collect();
+        let evidence = request_evidence_from_sources(&serde_json::json!({}), &timeline);
+        assert_eq!(evidence.tool_calls.len(), 1);
+        assert_eq!(evidence.tool_calls[0].tool_name, "save_record");
+        timeline.request.doc_id = None;
+        assert!(
+            request_evidence_from_sources(&serde_json::json!({}), &timeline)
+                .tool_calls
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn every_query_observe_issues_is_valid_against_the_home_schema() {
+        let home = EmbeddedHome::create_temp("observe-queries").await.unwrap();
+        for query in [
+            poll_query("req-\"quoted\""),
+            evidence_query("req-\"quoted\""),
+            inference_sample_query("req-\"quoted\""),
+        ] {
+            let response = home.node.execute(&query).await;
+            assert!(response.errors.is_empty(), "{query}: {:?}", response.errors);
+        }
+        home.node.shutdown().await;
+    }
+
+    async fn insert_request(home: &EmbeddedHome, request_id: &str, lifecycle_state: &str) {
+        let request_id = crate::graphql::escape_graphql_string(request_id);
+        let node_did = crate::graphql::escape_graphql_string(home.did());
+        let lifecycle_state = crate::graphql::escape_graphql_string(lifecycle_state);
+        let mutation = format!(
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "observe", session_id: "s-1", content: "x", execution_origin: "interactive", lifecycle_state: "{lifecycle_state}", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#
+        );
+        let response = home.node.execute(&mutation).await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+    }
+
+    #[tokio::test]
+    async fn request_evidence_maps_every_source_it_reads() {
+        use crate::lifecycle::RequestTerminalOutcome;
+        use crate::streaming::DefraStreamWriter;
+        use crate::tool_call_lifecycle::admission_fixture::{
+            claimed_signed_request, publish_accepted_on_claimed_request,
+        };
+        use crate::tool_call_lifecycle::{AwaitMode, FailureClass};
+        use gents_protocol::message::{AssistantContent, Message, Text};
+        use gents_protocol::output::TerminalOutput;
+        let home = EmbeddedHome::create_temp("observe-evidence").await.unwrap();
+        let did = home.did().to_owned();
+        let mut request = claimed_signed_request(
+            &home.node,
+            "req-evidence",
+            "s-evidence",
+            home.identity.as_ref(),
+            None,
+        )
+        .await;
+        let mut tool = publish_accepted_on_claimed_request(
+            home.node.clone(),
+            &mut request,
+            &did,
+            0,
+            "fs_read",
+            "call-1",
+            serde_json :: json ! ({ "path" : "x" }),
+            AwaitMode::Foreground,
+            true,
+        )
+        .await
+        .unwrap();
+        tool.fail("denied", FailureClass::ArgumentInvalid)
+            .await
+            .unwrap();
+        let writer = DefraStreamWriter::new(home.node.clone(), &did, Duration::from_millis(1));
+        writer
+            .start_provider_attempt(
+                &request.request().doc_id,
+                1,
+                0,
+                "inference.2".parse().unwrap(),
+            )
+            .await;
+        let answer = writer
+            .publish_native_turn(
+                &request,
+                1,
+                0,
+                &Message::Assistant {
+                    id: Some("final".into()),
+                    content: vec![AssistantContent::Text(Text {
+                        text: "the answer".into(),
+                    })],
+                },
+            )
+            .await
+            .unwrap();
+        let request_doc_id = escape_graphql_string(&request.request().doc_id);
+        let did_literal = escape_graphql_string(&did);
+        let response = home . node . execute (& format ! (r#"mutation {{ create_InferenceCall(input: {{ request_id: "req-evidence", request_doc_id: "{request_doc_id}", node_did: "{did_literal}", call_id: "inference-1", call_kind: "inference", attempt: 0, call_seq: 3, call_state: "failed", failure_reason: "HTTP 503", prompt_tokens: 11, completion_tokens: 7, queued_at: "2026-01-01T00:00:00Z", started_at: "2026-01-01T00:00:01Z", ended_at: "2026-01-01T00:00:02Z" }}) {{ _docID }} }}"#)) . await ;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        request
+            .terminalize_owned(
+                RequestTerminalOutcome::Failed,
+                TerminalOutput::Message {
+                    message_doc_id: answer.message_doc_id,
+                },
+                Some("invalid_tool_call_budget_exhausted: limit=8, used=8"),
+            )
+            .await
+            .unwrap();
+        let evidence = collect_request_evidence(&home.node, "req-evidence")
+            .await
+            .unwrap();
+        assert!(
+            evidence
+                .failure_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("invalid_tool_call_budget_exhausted")),
+            "{:?}",
+            evidence.failure_reason
+        );
+        assert_eq!(evidence.tool_calls.len(), 1, "{:?}", evidence.tool_calls);
+        let tool_call = &evidence.tool_calls[0];
+        assert_eq!(tool_call.tool_name, "fs_read");
+        assert_eq!(tool_call.status.as_deref(), Some("failed"));
+        assert_eq!(tool_call.lifecycle_state.as_deref(), Some("failed"));
+        assert_eq!(
+            tool_call.tool_failure_class.as_deref(),
+            Some("argumentInvalid")
+        );
+        assert_eq!(
+            tool_call
+                .args
+                .as_str()
+                .map(|args| serde_json::from_str::<Value>(args).unwrap()),
+            Some(serde_json :: json ! ({ "path" : "x" }))
+        );
+        assert!(
+            tool_call
+                .result
+                .as_str()
+                .is_some_and(|result| result.contains("denied")),
+            "{:?}",
+            tool_call.result
+        );
+        for (field, at) in [
+            ("started_at", tool_call.started_at.as_deref()),
+            ("completed_at", tool_call.completed_at.as_deref()),
+        ] {
+            assert!(at.is_some_and(|at| !at.is_empty()), "{field}: {at:?}");
+        }
+        assert_eq!(evidence.inference_calls.len(), 1);
+        let call = &evidence.inference_calls[0];
+        assert_eq!(
+            (call.call_seq, call.prompt_tokens, call.completion_tokens),
+            (3, Some(11), Some(7))
+        );
+        assert_eq!(call.call_state.as_deref(), Some("failed"));
+        assert_eq!(call.failure_reason.as_deref(), Some("HTTP 503"));
+        assert_eq!(call.queued_at.as_deref(), Some("2026-01-01T00:00:00Z"));
+        assert_eq!(call.started_at.as_deref(), Some("2026-01-01T00:00:01Z"));
+        assert_eq!(call.ended_at.as_deref(), Some("2026-01-01T00:00:02Z"));
+        assert!(evidence.responses.is_empty());
+        assert_eq!(
+            evidence
+                .messages
+                .iter()
+                .map(|message| (message.role.as_str(), message.content.as_str()))
+                .collect::<Vec<_>>(),
+            [("assistant", ""), ("assistant", "the answer")],
+            "the request's assistant messages arrive in sequence order, tool results excluded"
+        );
+        assert!(
+            evidence.messages.iter().all(|message| message
+                .created_at
+                .as_deref()
+                .is_some_and(|at| !at.is_empty())),
+            "a message's created_at is its canonical header's: {:?}",
+            evidence.messages
+        );
+        assert_eq!(
+            classify_request_outcome(Some(RequestLifecycleState::Failed), false, &evidence),
+            Some("tool")
+        );
+        home.node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn await_terminal_returns_when_the_request_is_already_terminal() {
+        let home = EmbeddedHome::create_temp("observe").await.unwrap();
+        let request_id = "req-terminal";
+        insert_request(&home, request_id, "completed").await;
+        let observed = await_terminal(
+            &home.node,
+            request_id,
+            Duration::from_secs(5),
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            observed.terminal_state,
+            Some(RequestLifecycleState::Completed)
+        );
+        assert_eq!(observed.session_id.as_deref(), Some("s-1"));
+        assert!(!observed.interrupted_on_deadline);
+    }
 
     fn evidence(
         inference_failed: bool,
@@ -480,376 +754,80 @@ mod tests {
         }
     }
 
-    #[test]
-    fn stage_tools_exclude_earlier_turns_children_and_unbound_rows() {
-        let mut timeline = RunTimelineRows::default();
-        timeline.request.doc_id = Some("exercise-doc".into());
-        timeline.tool_calls = [
-            (Some("setup-doc"), "config"),
-            (Some("exercise-doc"), "save_record"),
-            (Some("child-doc"), "config"),
-            (None, "config"),
-        ]
-        .into_iter()
-        .map(|(doc, name)| TimelineToolCallRow {
-            request_doc_id: doc.map(str::to_owned),
-            tool_name: name.into(),
-            ..Default::default()
-        })
-        .collect();
-        let evidence = request_evidence_from_sources(&serde_json::json!({}), &timeline);
-        assert_eq!(evidence.tool_calls.len(), 1);
-        assert_eq!(evidence.tool_calls[0].tool_name, "save_record");
-        timeline.request.doc_id = None;
-        assert!(
-            request_evidence_from_sources(&serde_json::json!({}), &timeline)
-                .tool_calls
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn classification_matches_the_stages_table() {
-        use RequestLifecycleState as S;
-        assert_eq!(
-            classify_request_outcome(S::Interrupted, true, &evidence(false, false, None)),
-            Some("deadline")
-        );
-        assert_eq!(
-            classify_request_outcome(S::Completed, false, &evidence(false, false, None)),
-            None
-        );
-        assert_eq!(
-            classify_request_outcome(
-                S::Failed,
-                false,
-                &evidence(false, false, Some("invalid_tool_call_budget_exhausted"))
-            ),
-            Some("tool")
-        );
-        assert_eq!(
-            classify_request_outcome(
-                S::Failed,
-                false,
-                &evidence(
-                    true,
-                    true,
-                    Some("invalid_tool_call_budget_exhausted: limit=8, used=8")
-                )
-            ),
-            Some("tool"),
-            "budget exhaustion wins when inference and tool also failed"
-        );
-        assert_eq!(
-            classify_request_outcome(
-                S::Failed,
-                false,
-                &evidence(
-                    true,
-                    true,
-                    Some("repeated_tool_failure: tool=config, identical_failures=3")
-                )
-            ),
-            Some("tool"),
-            "a repeated identical tool failure is a tool outcome"
-        );
-        let mut status_only = evidence(false, false, None);
-        status_only.tool_calls.push(ToolCallEvidence {
-            tool_name: "t".into(),
-            status: Some("failed".into()),
-            lifecycle_state: Some("completed".into()),
-            tool_failure_class: None,
-            started_at: None,
-            completed_at: None,
-            args: Value::Null,
-            result: Value::Null,
-        });
-        assert_eq!(
-            classify_request_outcome(S::Failed, false, &status_only),
-            Some("runtime"),
-            "only the authoritative lifecycle_state marks a tool failed"
-        );
-        assert_eq!(
-            classify_request_outcome(S::Failed, false, &evidence(true, true, None)),
-            Some("unknown")
-        );
-        assert_eq!(
-            classify_request_outcome(S::Failed, false, &evidence(true, false, None)),
-            Some("provider")
-        );
-        let mut inference_reason = evidence(false, false, None);
-        inference_reason
-            .inference_calls
-            .push(InferenceCallEvidence {
-                call_seq: 1,
-                call_state: Some("completed".into()),
-                failure_reason: Some("503".into()),
-                prompt_tokens: None,
-                completion_tokens: None,
-                queued_at: None,
-                started_at: None,
-                ended_at: None,
-            });
-        assert_eq!(
-            classify_request_outcome(S::Failed, false, &inference_reason),
-            Some("provider")
-        );
-        assert_eq!(
-            classify_request_outcome(S::Failed, false, &evidence(false, true, None)),
-            Some("tool")
-        );
-        let mut tool_lifecycle = evidence(false, false, None);
-        tool_lifecycle.tool_calls.push(ToolCallEvidence {
-            tool_name: "t".into(),
-            status: None,
-            lifecycle_state: Some("failed".into()),
-            tool_failure_class: Some("argumentInvalid".into()),
-            started_at: None,
-            completed_at: None,
-            args: Value::Null,
-            result: Value::Null,
-        });
-        assert_eq!(
-            classify_request_outcome(S::Failed, false, &tool_lifecycle),
-            Some("tool")
-        );
-        assert_eq!(
-            classify_request_outcome(S::Failed, false, &evidence(false, false, None)),
-            Some("runtime")
-        );
-        assert_eq!(
-            classify_request_outcome(S::Dead, false, &evidence(false, false, None)),
-            Some("runtime")
-        );
-        assert_eq!(
-            classify_request_outcome(S::Superseded, false, &evidence(false, false, None)),
-            Some("runtime")
-        );
-        // Old "mystery" row: a non-runtime, non-completed state is unknown.
-        assert_eq!(
-            classify_request_outcome(S::Processing, false, &evidence(false, false, None)),
-            Some("unknown")
-        );
-    }
-
-    async fn insert_request(home: &EmbeddedHome, request_id: &str, lifecycle_state: &str) {
-        let request_id = crate::graphql::escape_graphql_string(request_id);
-        let node_did = crate::graphql::escape_graphql_string(home.did());
-        let lifecycle_state = crate::graphql::escape_graphql_string(lifecycle_state);
-        // AgentRequest SDL fields are nillable. Supply the identity and state the
-        // observer reads; do not emit an empty list.
-        let mutation = format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "observe", session_id: "s-1", content: "x", execution_origin: "interactive", lifecycle_state: "{lifecycle_state}", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#
-        );
-        let response = home.node.execute(&mutation).await;
-        assert!(response.errors.is_empty(), "{:?}", response.errors);
-    }
-
-    /// A field a query names that the schema no longer has fails here rather
-    /// than in a live run.
     #[tokio::test]
-    async fn every_query_observe_issues_is_valid_against_the_home_schema() {
-        let home = EmbeddedHome::create_temp("observe-queries").await.unwrap();
-        for query in [
-            poll_query("req-\"quoted\""),
-            evidence_query("req-\"quoted\""),
-            inference_sample_query("req-\"quoted\""),
-        ] {
-            let response = home.node.execute(&query).await;
-            assert!(response.errors.is_empty(), "{query}: {:?}", response.errors);
-        }
-        home.node.shutdown().await;
-    }
-
-    /// Every source the evidence reads, mapped out of a real home whose rows
-    /// were written by the canonical owners.
-    ///
-    /// A whole canary run exercises messages and inference calls; it never
-    /// produces a tool call or a failed request, and a field read out of the
-    /// wrong column would be invisible there. This pins all three vectors and
-    /// the failure reason.
-    #[tokio::test]
-    async fn request_evidence_maps_every_source_it_reads() {
-        use crate::lifecycle::RequestTerminalOutcome;
-        use crate::streaming::DefraStreamWriter;
-        use crate::tool_call_lifecycle::admission_fixture::{
-            claimed_signed_request, publish_accepted_on_claimed_request,
-        };
-        use crate::tool_call_lifecycle::{AwaitMode, FailureClass};
-        use gents_protocol::message::{AssistantContent, Message, Text};
-        use gents_protocol::output::TerminalOutput;
-
-        let home = EmbeddedHome::create_temp("observe-evidence").await.unwrap();
-        let did = home.did().to_owned();
-        let mut request = claimed_signed_request(
-            &home.node,
-            "req-evidence",
-            "s-evidence",
-            home.identity.as_ref(),
-            None,
-        )
-        .await;
-        let mut tool = publish_accepted_on_claimed_request(
-            home.node.clone(),
-            &mut request,
-            &did,
-            0,
-            "fs_read",
-            "call-1",
-            serde_json::json!({"path": "x"}),
-            AwaitMode::Foreground,
-            true,
-        )
-        .await
+    async fn an_expired_grace_never_invents_a_terminal_request_state() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/eval_request_outcome.json"
+        )))
         .unwrap();
-        tool.fail("denied", FailureClass::ArgumentInvalid)
+        let home = EmbeddedHome::create_temp("observe-unsettled")
             .await
             .unwrap();
-        let writer = DefraStreamWriter::new(home.node.clone(), &did, Duration::from_millis(1));
-        writer
-            .start_provider_attempt(
-                &request.request().doc_id,
-                1,
-                0,
-                "inference.2".parse().unwrap(),
-            )
-            .await;
-        let answer = writer
-            .publish_native_turn(
-                &request,
-                1,
-                0,
-                &Message::Assistant {
-                    id: Some("final".into()),
-                    content: vec![AssistantContent::Text(Text {
-                        text: "the answer".into(),
-                    })],
-                },
-            )
-            .await
-            .unwrap();
-        let request_doc_id = escape_graphql_string(&request.request().doc_id);
-        let did_literal = escape_graphql_string(&did);
-        let response = home
-            .node
-            .execute(&format!(
-                r#"mutation {{ create_InferenceCall(input: {{ request_id: "req-evidence", request_doc_id: "{request_doc_id}", node_did: "{did_literal}", call_id: "inference-1", call_kind: "inference", attempt: 0, call_seq: 3, call_state: "failed", failure_reason: "HTTP 503", prompt_tokens: 11, completion_tokens: 7, queued_at: "2026-01-01T00:00:00Z", started_at: "2026-01-01T00:00:01Z", ended_at: "2026-01-01T00:00:02Z" }}) {{ _docID }} }}"#
-            ))
-            .await;
-        assert!(response.errors.is_empty(), "{:?}", response.errors);
-        request
-            .terminalize_owned(
-                RequestTerminalOutcome::Failed,
-                TerminalOutput::Message {
-                    message_doc_id: answer.message_doc_id,
-                },
-                Some("invalid_tool_call_budget_exhausted: limit=8, used=8"),
-            )
-            .await
-            .unwrap();
-
-        let evidence = collect_request_evidence(&home.node, "req-evidence")
-            .await
-            .unwrap();
-
-        assert!(
-            evidence
-                .failure_reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("invalid_tool_call_budget_exhausted")),
-            "{:?}",
-            evidence.failure_reason
-        );
-
-        assert_eq!(evidence.tool_calls.len(), 1, "{:?}", evidence.tool_calls);
-        let tool_call = &evidence.tool_calls[0];
-        assert_eq!(tool_call.tool_name, "fs_read");
-        assert_eq!(tool_call.status.as_deref(), Some("failed"));
-        assert_eq!(tool_call.lifecycle_state.as_deref(), Some("failed"));
-        assert_eq!(
-            tool_call.tool_failure_class.as_deref(),
-            Some("argumentInvalid")
-        );
-        assert_eq!(
-            tool_call
-                .args
-                .as_str()
-                .map(|args| serde_json::from_str::<Value>(args).unwrap()),
-            Some(serde_json::json!({"path": "x"}))
-        );
-        assert!(
-            tool_call
-                .result
-                .as_str()
-                .is_some_and(|result| result.contains("denied")),
-            "{:?}",
-            tool_call.result
-        );
-        for (field, at) in [
-            ("started_at", tool_call.started_at.as_deref()),
-            ("completed_at", tool_call.completed_at.as_deref()),
-        ] {
-            assert!(at.is_some_and(|at| !at.is_empty()), "{field}: {at:?}");
-        }
-
-        assert_eq!(evidence.inference_calls.len(), 1);
-        let call = &evidence.inference_calls[0];
-        assert_eq!(
-            (call.call_seq, call.prompt_tokens, call.completion_tokens),
-            (3, Some(11), Some(7))
-        );
-        assert_eq!(call.call_state.as_deref(), Some("failed"));
-        assert_eq!(call.failure_reason.as_deref(), Some("HTTP 503"));
-        assert_eq!(call.queued_at.as_deref(), Some("2026-01-01T00:00:00Z"));
-        assert_eq!(call.started_at.as_deref(), Some("2026-01-01T00:00:01Z"));
-        assert_eq!(call.ended_at.as_deref(), Some("2026-01-01T00:00:02Z"));
-
-        assert!(evidence.responses.is_empty());
-
-        assert_eq!(
-            evidence
-                .messages
+        for state in ["pending", "processing"] {
+            let case = cases
                 .iter()
-                .map(|message| (message.role.as_str(), message.content.as_str()))
-                .collect::<Vec<_>>(),
-            [("assistant", ""), ("assistant", "the answer")],
-            "the request's assistant messages arrive in sequence order, tool results excluded"
-        );
-        assert!(
-            evidence.messages.iter().all(|message| message
-                .created_at
-                .as_deref()
-                .is_some_and(|at| !at.is_empty())),
-            "a message's created_at is its canonical header's: {:?}",
-            evidence.messages
-        );
-
-        // These are exactly the rows the classifier reads, so the mapping is
-        // pinned against what it is for: the tool budget wins over the failed
-        // inference call and the failed tool.
-        assert_eq!(
-            classify_request_outcome(RequestLifecycleState::Failed, false, &evidence),
-            Some("tool")
-        );
+                .find(|case| {
+                    case["state"] == state
+                        && case["deadline"] == true
+                        && case["request_reason"].is_null()
+                        && case["inference_reason"].is_null()
+                        && case["inference_failed"] == false
+                        && case["tool_failed"] == false
+                })
+                .unwrap();
+            let request_id = format!("req-unsettled-{state}");
+            insert_request(&home, &request_id, state).await;
+            let observed = await_terminal(&home.node, &request_id, Duration::ZERO, Duration::ZERO)
+                .await
+                .unwrap();
+            let stored = poll_request(&home.node, &request_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(stored.lifecycle_state.as_deref(), Some(state));
+            assert!(observed.interrupted_on_deadline);
+            assert_eq!(
+                serde_json::to_value(&observed).unwrap()["terminal_state"],
+                case["observed_terminal_state"]
+            );
+            assert_eq!(
+                classify_request_outcome(
+                    observed.terminal_state,
+                    observed.interrupted_on_deadline,
+                    &RequestEvidence::default()
+                ),
+                case["outcome"].as_str()
+            );
+        }
         home.node.shutdown().await;
     }
 
     #[tokio::test]
-    async fn await_terminal_returns_when_the_request_is_already_terminal() {
-        let home = EmbeddedHome::create_temp("observe").await.unwrap();
-        let request_id = "req-terminal";
-        insert_request(&home, request_id, "completed").await;
-        let observed = await_terminal(
-            &home.node,
-            request_id,
-            Duration::from_secs(5),
-            Duration::from_secs(1),
-            Duration::from_millis(50),
-        )
+    async fn await_terminal_wakes_on_the_request_change_before_its_deadline() {
+        let home = EmbeddedHome::create_temp("observe-change").await.unwrap();
+        let writer = async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            insert_request(&home, "req-later", "completed").await;
+        };
+        let (observed, ()) = tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::join!(
+                await_terminal(
+                    &home.node,
+                    "req-later",
+                    Duration::from_secs(60),
+                    Duration::ZERO,
+                ),
+                writer,
+            )
+        })
         .await
-        .unwrap();
-        assert_eq!(observed.terminal_state, RequestLifecycleState::Completed);
-        assert_eq!(observed.session_id.as_deref(), Some("s-1"));
+        .expect("the committed terminal state wakes the observer");
+        let observed = observed.unwrap();
+        assert_eq!(
+            observed.terminal_state,
+            Some(RequestLifecycleState::Completed)
+        );
         assert!(!observed.interrupted_on_deadline);
     }
 
@@ -862,14 +840,11 @@ mod tests {
             "req-stuck",
             Duration::from_millis(200),
             Duration::from_millis(300),
-            Duration::from_millis(50),
         )
         .await
         .unwrap();
         assert!(observed.interrupted_on_deadline);
-        // No runtime is running, so the observer never flips it; the state stays
-        // non-terminal and the grace expires.
-        assert_ne!(observed.terminal_state, RequestLifecycleState::Completed);
+        assert_eq!(observed.terminal_state, None);
         let request_id = crate::graphql::escape_graphql_string("req-stuck");
         let query = format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ interrupt_requested_at }} }}"#
@@ -911,7 +886,6 @@ mod tests {
             "req-stuck",
             Duration::from_millis(200),
             Duration::from_millis(300),
-            Duration::from_millis(50),
             &hook,
         )
         .await

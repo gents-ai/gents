@@ -3,12 +3,10 @@ import Proofs.Basic
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.List.Basic
 
-/-! Pairing scope templates. AgentSession is the single durable session
-document. Ordinary
-transcript/client routes never carry credential-bearing documents; backend and
-OAuth credentials ride only a route whose grant carries an explicit
-operator/runtime ACP authorization. Template names are not evidence of that
-authorization. -/
+/-! Pairing scope templates. Ordinary transcript/client routes never carry
+credential-bearing documents; backend and OAuth credentials ride only a route
+whose grant carries an explicit operator/runtime ACP authorization. Template
+names are not evidence of that authorization. -/
 
 namespace ScopeTemplates
 
@@ -71,16 +69,12 @@ structure Template where
 
 abbrev Catalog := List Template
 
-/-- Canonical transcript artifacts rooted in AgentSession. -/
 def transcriptCollections : List String :=
   ["AgentRequest", "AgentMessage", "AgentToolCall", "AgentOutputSegment",
    "AgentSession", "CompactionEntry"]
 
-/-- Configuration reachable from Agent -> AgentContext / InferenceProfile
-and its referenced settings and documents: Tools, CompactionConfig, sampling,
-execution, retry policy, MCP registries, skills, datastore surfaces, agent
-targets, chain keys and eth tools. Excludes credential-bearing documents by
-construction, so ordinary client/conversation transport cannot carry them. -/
+/-- Excludes credential-bearing documents, so ordinary client/conversation
+transport cannot carry them. -/
 def reachableConfigKinds : List ConfigDocuments.Collection :=
   [.agent, .agentContext, .compaction, .tools, .agentTarget,
    .inferenceProfile, .inferenceSampling, .inferenceExecution,
@@ -90,15 +84,11 @@ def reachableConfigKinds : List ConfigDocuments.Collection :=
 def agentConfigCollections : List String :=
   reachableConfigKinds.map ConfigDocuments.Collection.collectionName
 
-/-- The full operator configuration plane adds the credential-bearing backend
-document. Existing DID/ACP admission must authorize its operator/runtime
-route; this template model describes selection, not authorization. -/
+/-- Credential-bearing; neither belongs in ordinary client/conversation
+replication. Names are not evidence of authorization. -/
 def operatorConfigCollections : List String :=
   agentConfigCollections ++ ["InferenceBackend"]
 
-/-- Documents carrying credentials. `InferenceBackend` holds API-key material
-and `OAuthCredential` holds node login/refresh credentials; neither
-belongs in ordinary client/conversation replication. -/
 def credentialCollections : List String := ["InferenceBackend", "OAuthCredential"]
 
 def conversationCollections : List String :=
@@ -108,11 +98,11 @@ def clientTranscriptCollections : List String :=
   transcriptCollections ++ ["MailboxItem"]
 
 def clientOwnerProjectionCollections : List String :=
-  ["NodeReadiness"]
+  ["NodeReadiness", "GoalObservation"]
 
 def clientToRuntimeCollections : List String :=
   clientTranscriptCollections ++
-    ["PeerEndpoint", "SessionHydrationRequest", "AgentSessionInputEdit"]
+    ["PeerEndpoint", "SessionHydrationRequest", "AgentSessionInputEdit", "AgentSessionGoalControl"]
 
 def clientControlPlaneCollections : List String :=
   agentConfigCollections ++
@@ -129,23 +119,14 @@ def clientRouteCollections : RouteDirection → List String
 
 def machineCollections : List String :=
   conversationCollections ++
-    ["MailboxItem", "SessionHydrationRequest", "AgentSessionInputEdit", "NodeDirectoryEntry"]
+    ["MailboxItem", "SessionHydrationRequest", "AgentSessionInputEdit", "AgentSessionGoalControl", "NodeDirectoryEntry"]
 
-/-- A remote `agent_new` is an ordinary Peer AgentRequest authored on the
-caller node with `node_did = target` and `requester_did = caller`. The
-coordinator leg (caller → host) therefore carries only that request, selected
-by the target's `node_did`; no tool-call row is needed to name the host. -/
 def agentTargetCallerCollections : List String :=
   ["AgentRequest"]
 
-/-- The host leg (host → caller) returns the caused request, its session and
-its transcript, selected by the caller's `requester_did`, so the result reaches
-the originating session. The host's AgentToolCall rows are host-local execution
-records and stay on the host, as do results, compaction and configuration. -/
 def agentTargetHostCollections : List String :=
   ["AgentRequest", "AgentSession", "AgentOutputSegment", "AgentMessage"]
 
-/-- The eager client index retains its existing requester scope. -/
 def clientIndexCollections : List String :=
   ["AgentSession", "MailboxItem"]
 
@@ -162,6 +143,7 @@ def machineRules : List CollectionRule :=
     [ { collection := "MailboxItem", field := "requester_did", source := .peerDid }
     , { collection := "SessionHydrationRequest", field := "requester_did", source := .peerDid }
     , { collection := "AgentSessionInputEdit", field := "requester_did", source := .peerDid }
+    , { collection := "AgentSessionGoalControl", field := "requester_did", source := .peerDid }
     , { collection := "NodeDirectoryEntry", field := "source_did", source := .homeDid } ]
 
 def agentTargetCallerRules : List CollectionRule :=
@@ -225,9 +207,6 @@ def appCollectionsTemplate : Template :=
   , scope := .unscoped
   , delivery := .replicate }
 
-/-- Bring-your-own app collections are admitted only outside the protocol
-catalog. This keeps the extensible app data plane disjoint from schemas whose
-migration compatibility is owned by the runtime and bundled clients. -/
 def admitAppCollections
     (protocolCatalog requested : Finset String) : Option (Finset String) :=
   if requested.Nonempty ∧ Disjoint requested protocolCatalog

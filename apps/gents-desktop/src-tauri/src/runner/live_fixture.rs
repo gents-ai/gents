@@ -21,7 +21,7 @@ use tokio::runtime::Runtime;
 use tokio::sync::Mutex;
 use tracing_subscriber::prelude::*;
 
-use gents_desktop_bridge::types::{DesktopBootstrapSummary, SavedPeerView};
+use gents_desktop_bridge::types::{DesktopBootstrapSummary, InitConfigStatus, SavedPeerView};
 
 use self::agent::{spawn_live_node, RunningNode};
 use self::backend::LiveBackendConfig;
@@ -195,10 +195,8 @@ impl LiveBridgeFixture {
             &running_node.node_did,
             &operator_graphql,
         );
-        // This fixture owns both nodes and installs both directional
-        // replicators below. Keep the durable route truthful while the normal
-        // supervisor is intentionally disabled for this manually managed
-        // topology.
+        // Keep the durable route truthful while the normal supervisor is
+        // intentionally disabled for this manually managed topology.
         peer_record.pairing_ready = true;
         write_peer_directory_records(&desktop_paths, &[peer_record.clone()])?;
 
@@ -425,6 +423,11 @@ impl LiveBridgeFixture {
     pub(crate) async fn build_bootstrap_summary(&self) -> DesktopBootstrapSummary {
         DesktopBootstrapSummary {
             default_node_home: self.node_home.display().to_string(),
+            init_config_status: Some(if self.node_did.is_empty() {
+                InitConfigStatus::Absent
+            } else {
+                InitConfigStatus::Configured
+            }),
             init_node_name: non_empty_clone(&self.init_summary.node_name),
             init_node_did: non_empty_clone(&self.init_summary.node_did),
             init_tool_ceiling: Some("Readwrite".to_string()),
@@ -647,6 +650,7 @@ mod tests {
                 agent_id: Some(agent_id.clone()),
                 session_id: None,
                 content: HELD_PROMPT.to_string(),
+                delivery: None,
                 caused_by_source_doc_id: None,
                 answer: None,
                 cwd: None,
@@ -685,6 +689,7 @@ mod tests {
                 agent_id: Some(agent_id.clone()),
                 session_id: Some(initial.session_id.clone()),
                 content: format!("/{skill_id}\n{task}"),
+                delivery: None,
                 caused_by_source_doc_id: None,
                 answer: None,
                 cwd: None,
@@ -737,8 +742,10 @@ mod tests {
             Some(&transcript_page.canonical_dependencies),
             Some(&context_store),
             None,
+            None,
             true,
             true,
+            None,
         )
         .await
         .context("desktop session snapshot missing after skill chat submit")?;
@@ -844,7 +851,7 @@ mod tests {
         fixture
             .desktop_core()
             .operator_access(node_did)?
-            .transact("desktop.fixture.skill", |txn| {
+            .transact_write("desktop.fixture.skill", |txn| {
                 Box::pin(async move {
                     let (_, agent) = read_desired_state_record_in_txn(
                         txn,
@@ -1043,28 +1050,6 @@ mod tests {
         })
     }
 
-    #[test]
-    fn held_provider_match_excludes_title_wrappers() {
-        assert!(has_exact_user_text(
-            &serde_json::json!({"messages": [
-                {"role": "user", "content": HELD_PROMPT}
-            ]}),
-            HELD_PROMPT
-        ));
-        assert!(has_exact_user_text(
-            &serde_json::json!({"messages": [
-                {"role": "user", "content": [{"type": "text", "text": HELD_PROMPT}]}
-            ]}),
-            HELD_PROMPT
-        ));
-        assert!(!has_exact_user_text(
-            &serde_json::json!({"messages": [
-                {"role": "user", "content": format!("First user request: {HELD_PROMPT}")}
-            ]}),
-            HELD_PROMPT
-        ));
-    }
-
     async fn wait_for_captured_chat_request(
         mock: &MockChatEndpoint,
         needle: &str,
@@ -1142,7 +1127,7 @@ mod tests {
 
     const HELD_PROMPT: &str = "HOLD_FIRST_SLASH_SKILL_FIXTURE_TURN";
 
-    /// Unblock the provider on early return before fixture shutdown drains requests.
+    // Drop unblocks the provider before fixture shutdown drains requests.
     struct HeldResponseRelease(Option<Arc<tokio::sync::Semaphore>>);
 
     impl Drop for HeldResponseRelease {

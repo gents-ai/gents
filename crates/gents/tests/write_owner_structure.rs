@@ -1,6 +1,3 @@
-//! AST fences for the canonical DefraDB write (#1418) and read (#1670) owners,
-//! and for the Rig provider-client boundary (#438).
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use syn::visit::{self, Visit};
@@ -18,45 +15,12 @@ const READ_OWNER_FILES: &[&str] = &[
     "crates/gents/src/graphql.rs",
 ];
 
-/// Production files that still call `EmbeddedNode` GraphQL execution directly,
-/// with their current site counts. This is a syntactic ratchet over direct node
-/// access, not complete access enforcement: receivers are recognized from
-/// declared `EmbeddedNode` types, the `node` naming convention, and local
-/// aliases of those. A new file or a higher count fails, and so does a lower
-/// count until the entry is lowered or removed. Migrate sites to the
-/// `config_client`/`graphql` owners; never raise.
 #[rustfmt::skip]
 const NODE_EXECUTE_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-migration/src/materialize.rs", 1),
-    ("crates/gents/src/backend_registry.rs", 1),
-    ("crates/gents/src/background_completion/datetime_fields.rs", 1),
-    ("crates/gents/src/background_completion/notification_delivery.rs", 2),
-    ("crates/gents/src/background_completion/side_effects.rs", 1),
-    ("crates/gents/src/background_tools.rs", 2),
-    ("crates/gents/src/callback/scan.rs", 3),
-    ("crates/gents/src/completion_factory.rs", 1),
-    ("crates/gents/src/eth/submit.rs", 2),
-    ("crates/gents/src/graph_pipeline/run.rs", 1),
-    ("crates/gents/src/health_checker.rs", 1),
-    ("crates/gents/src/hook/persistence/helpers.rs", 1),
-    ("crates/gents/src/lifecycle/background_wake_recovery.rs", 1),
-    ("crates/gents/src/lifecycle/claim.rs", 1),
-    ("crates/gents/src/lifecycle/materialize.rs", 1),
-    ("crates/gents/src/lifecycle/queue/coalescing.rs", 1),
-    ("crates/gents/src/lifecycle/recovery.rs", 2),
-    ("crates/gents/src/oauth_credential.rs", 3),
-    ("crates/gents/src/registry.rs", 1),
-    ("crates/gents/src/session/observations.rs", 1),
-    ("crates/gents/src/session/query.rs", 1),
-    ("crates/gents/src/tool_call_lifecycle/recovery.rs", 3),
 ];
 
-const NODE_ONLY_METHODS: &[&str] = &[
-    "execute_request",
-    "execute_request_with_retry",
-    "execute_with_retry",
-    "runner",
-];
+const NODE_ONLY_METHODS: &[&str] = &["execute_as", "execute_request", "runner"];
 
 const FORBIDDEN_FUNCTIONS: &[&str] = &[
     "begin_apply_txn",
@@ -76,7 +40,6 @@ const FORBIDDEN_METHODS: &[&str] = &[
     "commit_txn",
     "rollback_txn",
     "execute_request_in_txn",
-    "execute_with_retry",
     "begin_apply_txn",
 ];
 
@@ -261,7 +224,7 @@ fn production_defradb_writes_have_one_owner() {
     }
     assert!(
         violations.is_empty(),
-        "production DefraDB writes bypass ConfigAccess::write/transact:\n{}",
+        "production DefraDB writes bypass ConfigAccess::write/transact_write:\n{}",
         violations.join("\n")
     );
 }
@@ -375,8 +338,6 @@ fn test_module_paths(file: &Path, items: &[syn::Item], output: &mut Vec<PathBuf>
     test_module_paths_in(parent, &module_directory(file), items, output);
 }
 
-/// `#[path]` resolves against the file's directory at the top level and
-/// against the inline module directory inside `mod name { ... }`.
 fn test_module_paths_in(
     path_base: &Path,
     directory: &Path,
@@ -451,8 +412,6 @@ fn return_mentions_embedded_node(output: &syn::ReturnType) -> bool {
     matches!(output, syn::ReturnType::Type(_, ty) if mentions_embedded_node(ty))
 }
 
-/// Names whose declared type is `EmbeddedNode` (possibly behind references or
-/// smart pointers), plus the workspace convention of naming node handles `node`.
 struct NodeNames {
     fields: BTreeSet<String>,
     accessors: BTreeSet<String>,
@@ -730,7 +689,8 @@ fn read_fence_counts_direct_node_execution() {
         "impl S { fn f(&self, q: &str) { let db = &self.node; db.execute(q); } }",
         "impl EmbeddedNodeExt for EmbeddedNode { fn f(&self, q: &str) { self.execute(q); } }",
         "fn f(x: &X) { x.runner(); }",
-        "fn f(x: &X, q: &str, p: P) { x.execute_with_retry(q, p); }",
+        "fn f(x: &X, context: &C, q: &str) { x.execute_as(context, q); }",
+        "fn f(x: &X, request: R) { x.execute_request(request); }",
     ] {
         assert_eq!(snippet_sites(source), 1, "{source}");
     }
@@ -829,8 +789,6 @@ fn dependency_reachability_resolves_renamed_packages() {
 
 const OAUTH_CREDENTIAL_OWNER: &str = "crates/gents/src/oauth_credential.rs";
 
-/// Credential pickers replaced by the resolver in `oauth_credential.rs`
-/// (#2117). Any production use of these names is a second pick path.
 const REMOVED_OAUTH_PICKERS: &[&str] = &[
     "lookup_oauth_credential",
     "oauth_credential_query",
@@ -838,7 +796,6 @@ const REMOVED_OAUTH_PICKERS: &[&str] = &[
     "has_enabled_oauth_credential",
 ];
 
-/// Owner functions that return `OAuthCredential` rows without picking one.
 const OAUTH_ROW_READERS: &[&str] = &[
     "list_oauth_credentials",
     "list_oauth_credentials_on",
@@ -850,19 +807,10 @@ const OAUTH_ROW_READERS: &[&str] = &[
     "lookup_oauth_credential_by_doc_id",
 ];
 
-/// Production calls to `OAUTH_ROW_READERS` and reads of the runtime view's
-/// `oauth_credentials` field outside the owner, per file. Neither may pick an
-/// account (a `find` or `next` over the rows); picks go through the resolver.
-/// The counts are a syntactic ratchet like `NODE_EXECUTE_ALLOWLIST`: a new file
-/// or a higher count fails, and so does a lower count until the entry is
-/// lowered. Never raise.
 #[rustfmt::skip]
 const OAUTH_ROW_READ_ALLOWLIST: &[(&str, usize)] = &[
-    // Reachability probe and the account list view (resolver order).
-    ("crates/gents-desktop-bridge/src/tauri_commands/inference_setup.rs", 2),
-    // Loads the runtime view (its write into `oauth_credentials` sits in a macro, unseen here).
+    ("crates/gents-desktop-bridge/src/accounts.rs", 2),
     ("crates/gents/src/agent/document_view/load.rs", 1),
-    // Readiness picks through the resolver over the view's rows.
     ("crates/gents/src/agent/document_view/mod.rs", 1),
 ];
 
@@ -872,15 +820,10 @@ struct OAuthPickVisitor {
     reads: usize,
 }
 
-/// An `OAuthCredential` read or mutation: the name, then arguments or a
-/// selection set (`{{` in a format string) across any whitespace. A format
-/// placeholder such as `OAuthCredential {id}` is not one.
 static RAW_OAUTH_QUERY: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(r"OAuthCredential\s*(\(|\{[{\s])").expect("raw query pattern")
 });
 
-/// The string literals in macro tokens, decoded and joined, so escapes and
-/// `concat!` pieces read as the text the macro builds.
 fn macro_strings(mut cursor: syn::buffer::Cursor, strings: &mut String) {
     while let Some((_, next)) = cursor.token_tree() {
         if let Some((literal, _)) = cursor.literal() {
@@ -1024,8 +967,6 @@ fn oauth_pick_fence_flags_pickers_raw_queries_and_reads() {
         ("fn f(v: &V) { v.oauth_credentials.values().find(|r| r.enabled); }", 0, 1),
         ("fn f(n: &N) { lookup_oauth_credential_by_id(n, \"id\"); load_oauth_credential_for_discovery(); }", 0, 1),
         ("#[cfg(test)] mod tests { fn f(n: &N) { lookup_oauth_credential(n); list_oauth_credentials(n); } }", 0, 0),
-        // Spacing, an escaped line break, `concat!` and a bare selection set
-        // still read rows; a format placeholder does not.
         (r#"const Q: &str = "query { OAuthCredential (filter: {}) { _docID } }";"#, 1, 0),
         (r#"fn f() -> String { format!("{{ OAuthCredential \n (filter: {{}}) {{ _docID }} }}") }"#, 1, 0),
         (r#"const Q: &str = concat!("query { OAuthCredential", "(filter: {}) { _docID } }");"#, 1, 0),
@@ -1038,9 +979,6 @@ fn oauth_pick_fence_flags_pickers_raw_queries_and_reads() {
     }
 }
 
-/// The modules that own Rig's types: the loop's conversion and provider-input
-/// boundaries, the loop that drives the provider client, and their `gents`
-/// re-exports. A path that starts with one of these is part of the owner.
 const RIG_OWNER_MODULES: &[&str] = &[
     "crates/gents-loop/src/rig_compat.rs",
     "crates/gents-loop/src/provider_input",
@@ -1050,10 +988,6 @@ const RIG_OWNER_MODULES: &[&str] = &[
     "crates/gents/src/agent/loop_stream",
 ];
 
-/// Production files outside [`RIG_OWNER_MODULES`] that still name the `rig`
-/// crate, mostly provider transport adapters implementing Rig's HTTP client
-/// traits or building Rig provider clients. A new file fails, and so does a
-/// listed file that no longer names Rig until its entry is removed. Never add.
 #[rustfmt::skip]
 const RIG_PATH_ALLOWLIST: &[&str] = &[
     "crates/gents-loop/src/claude_messages_body.rs",
@@ -1076,7 +1010,6 @@ struct RigPathVisitor {
     sites: usize,
 }
 
-/// An owner names a file, or a module whose `.rs` file and directory it owns.
 fn owned_by(relative: &str, owner: &str) -> bool {
     relative == owner
         || relative
@@ -1102,7 +1035,6 @@ fn starts_with_rig(path: &syn::Path) -> bool {
             .is_some_and(|first| first.ident == "rig")
 }
 
-/// Whether macro tokens hold a `rig::` path.
 fn macro_names_rig(mut cursor: syn::buffer::Cursor) -> bool {
     while !cursor.eof() {
         if let Some((inside, _, _, next)) = cursor.any_group() {

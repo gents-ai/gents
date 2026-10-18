@@ -27,14 +27,11 @@ const read = (target: string) =>
     fallbackOutput: null,
   });
 
-/* the distinct workers gathered, in the order their first call came */
 const gathered = (tools: RenderedToolCallView[]) => [
   ...new Set(gatherWorkers(tools).values()),
 ];
 
 describe("gathering a worker", () => {
-  /* a worker's steps are scattered through a turn; this is the one place
-     a row is deliberately moved past another */
   it("gathers one worker's scattered steps, in order", () => {
     const first = worker("start", "Implementer", "s1");
     const second = worker("message", "Implementer", "s1");

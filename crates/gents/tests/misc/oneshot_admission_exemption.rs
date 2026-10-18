@@ -1,18 +1,3 @@
-//! Pins the `// exemption:` decision in `gents::oneshot`: one-shot completion
-//! calls do not route through the daemon's `AdmissionRegistry`.
-//!
-//! Admission enforces a per-backend concurrency ceiling built from the
-//! backend document's `max_concurrent`/`max_queue_depth`/`probe_status`
-//! (`BackendAdmissionConfig`) and requires a registry that has been
-//! `reconcile()`-d with that config — only the daemon's runtime reconciler
-//! ever drives that. If a future change plugged one-shot's model into an
-//! `AdmissionRegistry` without also reconciling it, every completion call
-//! would fail immediately with "BackendGone: backend admission controller is
-//! not active" instead of running — which is exactly what this test would
-//! catch: it runs a real one-shot call against a mock backend with nothing in
-//! the process ever calling `AdmissionRegistry::reconcile`, and asserts it
-//! still succeeds.
-
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -35,7 +20,7 @@ async fn oneshot_completes_without_backend_admission_reconciliation() -> Result<
     );
     behavior.backend_endpoint = mock_endpoint.endpoint().to_string();
     bind_agent_backend(
-        node.as_ref(),
+        &node,
         behavior.node_did(),
         &behavior.agent_id,
         "backend-oneshot-exempt",

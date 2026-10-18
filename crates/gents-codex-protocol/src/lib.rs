@@ -1,9 +1,3 @@
-//! Codex app-server JSON-RPC wire vocabulary used by the Gents shim.
-//!
-//! These types track the workspace's pinned Codex revision. Only transport DTOs
-//! live here; upstream server helpers and schema generators are deliberately
-//! excluded from the shipped Gents dependency graph.
-
 mod core_types;
 mod jsonrpc_lite;
 mod protocol;

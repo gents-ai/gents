@@ -9,7 +9,6 @@ import { renderIn, testApp } from "./app-fixture";
 const list = vi.fn();
 const add = vi.fn();
 const remove = vi.fn();
-/* every folder command answers with the list as it now stands */
 const answering = (dirs: { path: string; access: string }[]) => {
   for (const command of [list, add, remove]) command.mockResolvedValue({ dirs });
 };
@@ -28,6 +27,18 @@ const show = () =>
 describe("AllowedFoldersPanel", () => {
   beforeEach(() => {
     for (const command of [list, add, remove]) command.mockReset();
+  });
+
+  it("wraps a long folder path beside its buttons, whole in its title", async () => {
+    const path =
+      "/Users/someone/Projects/a-very-long-project-name/with/nested/folders/all-the-way-down";
+    answering([{ path, access: "read" }]);
+    show();
+    const label = await screen.findByTitle(path);
+    expect(label.className).toContain("break-all");
+    expect(
+      screen.getByRole("button", { name: "Remove" }).parentElement!.className,
+    ).toContain("shrink-0");
   });
 
   it("says none are added and that the working folder is readable", async () => {

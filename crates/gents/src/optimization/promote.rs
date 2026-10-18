@@ -1,17 +1,3 @@
-//! Promotion and revert: the operator's two verbs.
-//!
-//! Both run in one transaction that writes only the target document. There
-//! is no force flag: on drift the transaction rolls back with the live node
-//! untouched, a second transaction journals the refusal, and the job is
-//! `Stale`. Nothing reverts on its own, and a revert ends the job.
-//!
-//! Spec section 7 rebuilds the patch from the live target and checks it
-//! against the journal. Here the retained checkpoint pack is verified in place
-//! (`verified_checkpoint`) and must read back the journaled text, the patch is
-//! built from the live target document, and the digest the write leaves on
-//! the live target is asserted equal to the one the patch predicts before it
-//! is journaled (ruling P-N8). Nothing is materialized on disk.
-
 use anyhow::Result;
 
 use crate::config_client::{
@@ -28,7 +14,6 @@ use crate::optimization::target::{
     Closure, FrozenDocument,
 };
 
-/// What a promotion did, and what it replaced.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Promotion {
     pub target_digest: String,
@@ -36,7 +21,6 @@ pub struct Promotion {
     pub previous_digest: String,
 }
 
-/// Why an operator's verb did not run. `reason` is a closed vocabulary.
 #[derive(Debug)]
 pub struct PromoteRefused {
     pub reason: &'static str,
@@ -62,8 +46,6 @@ fn refused(reason: &'static str, detail: impl Into<String>) -> anyhow::Error {
     })
 }
 
-/// The closure moved under the job. Carried out of the transaction so the
-/// refusal can be journaled after the rollback.
 #[derive(Debug)]
 struct ClosureDrift(Vec<DriftedRef>);
 
@@ -75,9 +57,6 @@ impl std::fmt::Display for ClosureDrift {
 
 impl std::error::Error for ClosureDrift {}
 
-/// Both ways a promotion learns the closure moved: the explicit comparison,
-/// which also catches a document added since the freeze, and the transaction's
-/// own digest preconditions, which catch a concurrent edit.
 fn drift_of(error: &anyhow::Error) -> Option<Vec<DriftedRef>> {
     if let Some(drift) = error.downcast_ref::<ClosureDrift>() {
         return Some(drift.0.clone());
@@ -98,8 +77,6 @@ fn same_document(one: &FrozenDocument, other: &FrozenDocument) -> bool {
     one.collection == other.collection && one.owner == other.owner && one.id == other.id
 }
 
-/// Every frozen document that changed or vanished, then every live document
-/// the freeze did not see.
 fn between(frozen: &[FrozenDocument], live: &[FrozenDocument]) -> Vec<DriftedRef> {
     let reference = |document: &FrozenDocument| DriftedRef {
         collection: document.collection.graphql_type().to_owned(),
@@ -126,9 +103,6 @@ fn between(frozen: &[FrozenDocument], live: &[FrozenDocument]) -> Vec<DriftedRef
     drifted
 }
 
-/// The promotion's plan over the live closure: `text` on the target, guarded
-/// by the entire frozen closure, the target context's own baseline digest
-/// included, so an edit of the target itself also fails the write.
 fn promotion_plan(
     origin: &JobOrigin,
     live: &Closure,
@@ -154,9 +128,6 @@ fn promotion_plan(
     Ok((plan, promotion))
 }
 
-/// Load the job and check what both verbs require: who is asking, and what
-/// state the job is in. `by` is the launching home's DID as its caller states
-/// it; an enforced, authenticated boundary is spec 2b's.
 async fn job_in_state(
     access: &ConfigAccess,
     owner: &str,
@@ -190,13 +161,9 @@ async fn job_in_state(
 
 #[cfg(test)]
 tokio::task_local! {
-    /// Test seam between the closure's digest check and the target write:
-    /// signals the first `Notify`, then waits on the second, once.
     static BETWEEN_CHECK_AND_WRITE: std::sync::Arc<(tokio::sync::Notify, tokio::sync::Notify)>;
 }
 
-/// Write the retained checkpoint's text onto the live target, guarded by the
-/// whole frozen closure.
 pub async fn promote(
     access: &ConfigAccess,
     owner: &str,
@@ -221,8 +188,6 @@ pub async fn promote(
         ));
     }
 
-    // The pack the job evaluated, located through the origin (ruling R6),
-    // still digests to the journal's and holds the text about to go live.
     let origin = &job.origin;
     let checked = verified_checkpoint(origin, job_id, &retained).and_then(|path| {
         let pack = materialize_pack(
@@ -244,7 +209,7 @@ pub async fn promote(
     }
 
     let applied = access
-        .transact("optimization.promote", |txn| {
+        .transact_write("optimization.promote", |txn| {
             let (job, text, by) = (&job, &retained.text, by);
             Box::pin(async move {
                 let live = capture_closure(txn, &job.owner).await?;
@@ -257,11 +222,8 @@ pub async fn promote(
                     gate.0.notify_one();
                     gate.1.notified().await;
                 }
-                // Writes only the target; expects the entire frozen closure.
                 let (plan, promotion) = promotion_plan(&job.origin, &live, text)?;
                 apply_desired_state_plan(txn, &plan).await?;
-                // Ruling P-N8: the live target now digests to what the patch
-                // predicted, and that is the digest the journal records.
                 let written =
                     target_digest(&capture_closure(txn, &job.owner).await?, &job.origin.target)?;
                 anyhow::ensure!(
@@ -275,7 +237,6 @@ pub async fn promote(
                     previous_text: promotion.previous_text.clone(),
                     previous_digest: promotion.previous_digest.clone(),
                 };
-                // Length-guarded on the journal the state checks read.
                 append_in_txn(txn, job, &entry).await?;
                 Ok(promotion)
             })
@@ -291,7 +252,6 @@ pub async fn promote(
             let Some(drifted) = drift_of(&error) else {
                 return Err(error);
             };
-            // The write rolled back; a second transaction records why.
             let entry = JournalEntry::PromotionRefused {
                 drifted: drifted.clone(),
             };
@@ -302,8 +262,6 @@ pub async fn promote(
     }
 }
 
-/// Write `previous_text` back, expecting the target to still hold exactly what
-/// the promotion wrote. Terminal (ruling R4).
 pub async fn revert(
     access: &ConfigAccess,
     owner: &str,
@@ -333,7 +291,7 @@ pub async fn revert(
     }
 
     let result = access
-        .transact("optimization.revert", |txn| {
+        .transact_write("optimization.revert", |txn| {
             let (job, promoted_digest, previous_text, by) =
                 (&job, &promoted_digest, &previous_text, by);
             Box::pin(async move {
@@ -349,7 +307,6 @@ pub async fn revert(
                     ));
                 }
                 let restored = apply_text(&live, target, previous_text)?;
-                // Expects the digest the promotion journaled, on the target only.
                 let expectation = [FrozenDocument {
                     collection: target.field.collection(),
                     owner: target.owner.clone(),
@@ -395,14 +352,13 @@ mod tests {
 
     async fn read_closure(access: &ConfigAccess) -> Closure {
         access
-            .transact("test.read_closure", |txn| {
+            .transact_write("test.read_closure", |txn| {
                 Box::pin(async move { capture_closure(txn, OWNER).await })
             })
             .await
             .unwrap()
     }
 
-    /// The live target's text, read the way an operator would.
     async fn live_prompt(access: &ConfigAccess) -> Option<String> {
         read_closure(access)
             .await
@@ -507,7 +463,6 @@ mod tests {
         )
     }
 
-    /// Every path under `dir`, relative to it.
     fn tree(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
         let mut paths = Vec::new();
         let mut pending = vec![dir.to_path_buf()];
@@ -542,7 +497,6 @@ mod tests {
         );
         assert_eq!(state(&harness, &request.job_id).await, JobState::Promoted);
 
-        // Only the target document moved.
         let after = read_closure(harness.access()).await;
         let job = load_job(harness.access(), OWNER, &request.job_id)
             .await
@@ -554,8 +508,6 @@ mod tests {
             apply_text(&before, target, CANDIDATE_PROMPT).unwrap()
         );
 
-        // Ruling P-N8: the journaled digest is the live target's, and the one
-        // the patch of the live document predicts.
         let Some(JournalEntry::Promoted {
             by,
             target_digest: journaled,
@@ -579,7 +531,6 @@ mod tests {
         assert_eq!(previous_text, BASELINE_PROMPT);
         assert_eq!(previous_digest, &target_digest(&before, target).unwrap());
 
-        // Ruling C4: the promotion leaves nothing behind on disk.
         assert_eq!(
             tree(&job_dir(&request.jobs_dir, &request.job_id)),
             on_disk,
@@ -587,9 +538,6 @@ mod tests {
         );
     }
 
-    /// Constraint 14 and the PR 1 carry-forward: the plan expects the whole
-    /// frozen closure, the target context's own baseline digest included, so a
-    /// concurrent edit of the target itself fails the write.
     #[tokio::test]
     async fn the_promotion_plan_expects_the_target_contexts_own_baseline_digest() {
         let (harness, request) = accepting_harness("promote-plan").await;
@@ -619,7 +567,6 @@ mod tests {
             Some(baseline_digest.as_str())
         );
 
-        // The operator edits the target between the read and the write.
         harness.install(vec![operator_edit()]).await;
         let error = apply(harness.access(), &plan).await.unwrap_err();
         let stale = stale_expectation(&error).unwrap_or_else(|| panic!("{error:#}"));
@@ -639,14 +586,12 @@ mod tests {
 
     async fn apply(access: &ConfigAccess, plan: &DesiredStateApplyPlan) -> Result<()> {
         access
-            .transact("test.apply_plan", |txn| {
+            .transact_write("test.apply_plan", |txn| {
                 Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
             })
             .await
     }
 
-    /// Spec section 9: an operator's edit of the target after the job froze is
-    /// never overwritten; the promotion is refused and the job is stale.
     #[tokio::test]
     async fn an_operator_edit_of_the_target_before_promotion_refuses_it_and_survives() {
         let (harness, request) = accepting_harness("promote-edited").await;
@@ -685,7 +630,6 @@ mod tests {
         );
     }
 
-    /// Ruling R4: a revert restores the previous text and ends the job.
     #[tokio::test]
     async fn a_revert_restores_the_previous_text_and_is_terminal() {
         let (harness, request) = accepting_harness("revert-once").await;
@@ -720,11 +664,7 @@ mod tests {
         let again = promote(harness.access(), OWNER, &request.job_id, &digest, OWNER)
             .await
             .unwrap_err();
-        assert_eq!(
-            promote_refused(&again).unwrap().reason,
-            "not_ready",
-            "a further promotion is a new job"
-        );
+        assert_eq!(promote_refused(&again).unwrap().reason, "not_ready");
         assert_eq!(
             live_prompt(harness.access()).await.as_deref(),
             Some(BASELINE_PROMPT)
@@ -752,8 +692,7 @@ mod tests {
         assert_eq!(promote_refused(&error).unwrap().reason, "target_moved");
         assert_eq!(
             live_prompt(harness.access()).await.as_deref(),
-            Some("An operator wrote this by hand.\n"),
-            "the user's edit is preserved"
+            Some("An operator wrote this by hand.\n")
         );
         assert_eq!(state(&harness, &request.job_id).await, JobState::Promoted);
     }
@@ -762,7 +701,6 @@ mod tests {
     async fn a_closure_edited_after_the_freeze_refuses_the_promotion_and_marks_the_job_stale() {
         let (harness, request) = accepting_harness("promote-stale").await;
         let digest = checkpoint_digest(&harness, &request.job_id).await;
-        // A document of the frozen closure that the promotion does not write.
         harness
             .install(vec![(
                 Collection::Agent,
@@ -784,15 +722,11 @@ mod tests {
         assert!(refusal.detail.contains("Agent"), "{}", refusal.detail);
         assert_eq!(
             live_prompt(harness.access()).await.as_deref(),
-            Some(BASELINE_PROMPT),
-            "the live node is unchanged"
+            Some(BASELINE_PROMPT)
         );
         assert_eq!(state(&harness, &request.job_id).await, JobState::Stale);
     }
 
-    /// A closure edit that commits while the promotion holds its snapshot,
-    /// after the digest check and before the write, conflicts at commit: the
-    /// transaction replays, sees the drift, and refuses with the target untouched.
     #[tokio::test]
     async fn a_closure_edit_committed_between_the_check_and_the_write_refuses_the_promotion() {
         let (harness, request) = accepting_harness("promote-raced").await;
@@ -802,12 +736,12 @@ mod tests {
             std::sync::Arc::clone(&gate),
             promote(harness.access(), OWNER, &request.job_id, &digest, OWNER),
         );
-        let ConfigAccess::Local(node) = harness.access() else {
-            unreachable!("the harness is embedded")
-        };
+        let node = harness
+            .access()
+            .local_node()
+            .expect("the harness is embedded");
         let edit = async {
             gate.0.notified().await;
-            // Lands outside the process write gate, as another writer would.
             let response = node
                 .execute(
                     r#"mutation { update_Tools(filter: {tools_id: {_eq: "monitor-tools"}}, input: {display_name: "Monitor tools, renamed"}) { _docID } }"#,
@@ -816,8 +750,6 @@ mod tests {
             assert!(!response.has_errors(), "{:?}", response.errors);
             gate.1.notify_one();
         };
-        // The seam fires once; a regression that fires it again would wait on
-        // the second gate forever, so a hang is a failure, not a stall.
         let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(60), async {
             tokio::join!(promotion, edit)
         })
@@ -830,8 +762,7 @@ mod tests {
         assert!(refusal.detail.contains("Tools"), "{}", refusal.detail);
         assert_eq!(
             live_prompt(harness.access()).await.as_deref(),
-            Some(BASELINE_PROMPT),
-            "the target is untouched"
+            Some(BASELINE_PROMPT)
         );
         assert_eq!(state(&harness, &request.job_id).await, JobState::Stale);
         let job = load_job(harness.access(), OWNER, &request.job_id)
@@ -934,8 +865,6 @@ mod tests {
         );
     }
 
-    /// Spec section 9: optimization is an operator's verb, never a model's.
-    /// `self_config` is a directory module, so every file in it is scanned.
     #[test]
     fn the_model_facing_config_tool_has_no_optimization_surface() {
         for name in crate::self_config::SELF_CONFIG_TOOL_NAMES {
@@ -968,9 +897,6 @@ mod tests {
         );
     }
 
-    /// Cancelling, invalidating and deleting runs, and collecting
-    /// their directories, are the operator's verbs; no agent tool reaches the
-    /// functions behind `gents eval cancel | invalidate | rm | gc`.
     #[test]
     fn no_agent_tool_surface_reaches_the_eval_operator_verbs() {
         fn sources(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
@@ -1015,8 +941,6 @@ mod tests {
             "expected the agent tool surfaces under {}",
             root.display()
         );
-        // Qualified where a bare name is ordinary tool vocabulary: the
-        // toolset's own processes have a `request_cancel`.
         for path in files {
             let source = std::fs::read_to_string(&path).unwrap();
             for word in [

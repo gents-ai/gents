@@ -1,7 +1,3 @@
-/* The pacing of streamed text, and the two seams where it used to vanish.
-   The delivery shape is the real one: the runtime writes every
-   stream_batch_ms (1,000) and the desktop picks it up on its own clock, so
-   bursts of uneven size land about a second apart. */
 import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client";
 import { describe, expect, it } from "vitest";
 import {
@@ -25,8 +21,6 @@ import {
 
 const FRAME = 16;
 
-/* play `arrivals` (time → total length) through the reveal at 60fps and
-   record what was on screen each frame */
 function play(arrivals: [number, number][], until: number) {
   let state = initialReveal();
   let target = 0;
@@ -41,7 +35,6 @@ function play(arrivals: [number, number][], until: number) {
   return frames;
 }
 
-/* bursts as the desktop receives them: uneven sizes, 0.8–1.4s apart */
 const bursts: [number, number][] = [
   [0, 40],
   [900, 260],
@@ -61,20 +54,16 @@ describe("revealing a batched stream", () => {
 
   it("moves a few characters a frame, never a burst at once", () => {
     const steps = frames.slice(1).map((f, i) => f.shown - frames[i]!.shown);
-    /* shown as it lands, the largest step is the largest burst: 350 */
     expect(Math.max(...steps)).toBeLessThanOrEqual(8);
   });
 
   it("does not stall between bursts while the stream is still coming", () => {
-    /* from the first text to the last burst, count the longest run of
-       frames where nothing moved though more was already there */
     let idle = 0;
     let longest = 0;
     for (const f of frames.filter((f) => f.t > 100 && f.t < 5_400)) {
       idle = f.shown === f.target ? idle + 1 : 0;
       longest = Math.max(longest, idle);
     }
-    /* a burst drains a little slower than the next arrives */
     expect(longest * FRAME).toBeLessThanOrEqual(300);
   });
 
@@ -351,10 +340,6 @@ describe("the rows drawn for sent messages", () => {
     ).toEqual(["u1", "u2"]);
   });
 
-  /* A read can land between the request publishing its workspace
-     instructions and its prompt: the context row is saved, the person's
-     message is not yet. The instructions are a row of their own, never the
-     turn, so the pending turn keeps standing in for the message. */
   it("keeps the pending turn while only the request's context row is saved", () => {
     const context = userMessage({
       kind: "userMessage",

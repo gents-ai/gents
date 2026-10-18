@@ -52,7 +52,7 @@ pub fn result_docs_ready(
 }
 
 /// CallbackResult is an edge from a succeeded invocation whose result docs are
-/// complete. Succeeded-without-result is repaired by recovery.
+/// complete; recovery repairs succeeded-without-result.
 pub fn can_emit_callback_result(
     state: &str,
     journal: &[ActionJournalEntry],
@@ -112,7 +112,7 @@ pub fn plan_from_callback(
 }
 
 async fn load_planner_module(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     callback: &crate::document_config::Callback,
 ) -> Result<Option<CallbackModuleDoc>, String> {
     let crate::document_config::CallbackHandler::Module { module_id } = &callback.handler else {
@@ -284,9 +284,9 @@ pub fn resolve_action_plan_with_module(
     plan_from_callback(callback, source, module)
 }
 
-/// Denied wipes the journal only before host execution. After it started, the
-/// denial fails the invocation through the recovery owner, so an action the
-/// host may already have run is marked interrupted and never retried.
+/// Denied wipes the journal only before host execution; after it started, the
+/// denial fails the invocation so an action the host may already have run is
+/// marked interrupted and never retried.
 pub(crate) fn apply_planner_deny(invocation: &mut CallbackInvocationDoc, reason: &str) {
     let journal = decode_journal(invocation.action_journal.as_deref()).unwrap_or_default();
     if let Some(failed) = crate::workspace::recover_running(&journal) {
@@ -301,7 +301,7 @@ pub(crate) fn apply_planner_deny(invocation: &mut CallbackInvocationDoc, reason:
 }
 
 pub async fn run_owned_invocation(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     invocation: &CallbackInvocationDoc,
     callback: &crate::document_config::Callback,
     ceiling: Option<&Path>,
@@ -328,7 +328,7 @@ pub async fn run_owned_invocation(
 }
 
 async fn persist_claimed_to_running(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     invocation: &mut CallbackInvocationDoc,
 ) -> Result<()> {
     if invocation.lifecycle_state == LIFECYCLE_RUNNING {
@@ -361,9 +361,8 @@ async fn persist_claimed_to_running(
     }
 }
 
-/// Testable planner + host-executor core. Persists journal/docs via the node.
 async fn execute_running_invocation(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     invocation: &mut CallbackInvocationDoc,
     callback: &crate::document_config::Callback,
     source: &Value,
@@ -403,8 +402,8 @@ async fn execute_running_invocation(
         return super::plugin::execute(node, invocation, handler, source, plugins, journal).await;
     }
 
-    // Recovery with a stored plan must not reload/re-validate the WASM module.
-    // A missing module or empty trusted-signer set would otherwise deny() and
+    // Recovery with a stored plan must not reload/re-validate the WASM module;
+    // a missing module or empty trusted-signer set would otherwise deny() and
     // wipe an Executing journal the host may already have acted on.
     let stored = match stored_action_plan(invocation) {
         Ok(plan) => plan,
@@ -506,7 +505,8 @@ async fn execute_running_invocation(
         current_state(&journal, 0),
         Some(ActionJournalState::Validated)
     ) {
-        // Durable Executing before the adapter so recovery observes rather than re-runs.
+        // Durable Executing before the adapter so recovery observes rather
+        // than re-runs.
         advance(&mut journal, 0, ActionJournalState::Executing);
         persist_journal(node, invocation, &journal, LIFECYCLE_RUNNING, None).await?;
     }
@@ -572,7 +572,7 @@ fn memory_from_outcome(
 }
 
 pub(super) async fn persist_journal(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     invocation: &mut CallbackInvocationDoc,
     journal: &[ActionJournalEntry],
     state: &str,
@@ -607,7 +607,7 @@ async fn emit_new_plan(
 }
 
 pub(super) async fn deny(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     invocation: &mut CallbackInvocationDoc,
     reason: &str,
 ) -> Result<()> {
@@ -628,7 +628,7 @@ pub(super) async fn deny(
 }
 
 async fn succeed_then_emit_result(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     invocation: &mut CallbackInvocationDoc,
     journal: &[ActionJournalEntry],
     workspace: &IsolatedWorkspaceDoc,
@@ -670,7 +670,7 @@ async fn succeed_then_emit_result(
 }
 
 pub async fn recover_local_invocations(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     ceiling: Option<&Path>,
     plugins: &PluginExecutor,
@@ -726,10 +726,8 @@ pub async fn recover_local_invocations(
     retry_failed_plugin_invocations(node, node_did, ceiling, plugins, engine).await
 }
 
-/// Runs a failed plugin invocation again once its backoff has passed, while
-/// its callback allows more attempts and nothing it did could repeat.
 async fn retry_failed_plugin_invocations(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     ceiling: Option<&Path>,
     plugins: &PluginExecutor,
@@ -794,7 +792,7 @@ async fn retry_failed_plugin_invocations(
 }
 
 async fn execute_recovered(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     invocation: &CallbackInvocationDoc,
     callback: &crate::document_config::Callback,
     ceiling: Option<&Path>,
@@ -809,7 +807,7 @@ async fn execute_recovered(
 }
 
 pub async fn finish_succeeded_if_docs_ready(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     invocation: &CallbackInvocationDoc,
 ) -> Result<bool> {
     if !matches!(

@@ -2,10 +2,33 @@ use crate::error::BridgeError;
 use tauri::State;
 
 use crate::commands::{rename_session, send_chat_message};
-use crate::snapshot::{
-    apply_session_timeline_page_with_query, build_session_live_delta,
-    build_session_snapshot_for_node_with_transcript,
-};
+
+#[tauri::command]
+pub async fn desktop_session_goal(
+    node_did: String,
+    session_id: String,
+    state: State<'_, DesktopAppState>,
+) -> Result<Option<crate::types::SessionGoalView>, BridgeError> {
+    let Some(core) = current_core(&state) else {
+        return Ok(None);
+    };
+    crate::commands::session_goal(&core, &node_did, &session_id)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))
+}
+
+#[tauri::command]
+pub async fn desktop_goal_control(
+    request: crate::types::GoalControlRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<crate::types::GoalControlResult, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    crate::commands::control_goal(&core, request)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))
+}
+use crate::snapshot::build_session_live_delta;
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{
     ChatSendRequest, ChatSendResult, DesktopSessionSnapshot, SessionLiveDeltaView,
@@ -35,258 +58,7 @@ pub async fn desktop_session_snapshot(
     .await
 }
 
-/// The bounded session read behind `desktop_session_snapshot`.
-pub(crate) async fn session_snapshot(
-    core: &std::sync::Arc<gents_desktop_core::client::ClientCore>,
-    session_id: String,
-    node_did: Option<String>,
-    request_id: Option<String>,
-    timeline_limit: Option<usize>,
-    timeline_before_item_key: Option<String>,
-) -> Result<Option<DesktopSessionSnapshot>, BridgeError> {
-    let started = std::time::Instant::now();
-    let node_did = node_did.or_else(|| {
-        core.store()
-            .snapshot()
-            .sessions
-            .iter()
-            .find(|session| session.session_id == session_id)
-            .map(|session| session.node_did.clone())
-    });
-    let request_id = request_id.or_else(|| {
-        let store = core.store().snapshot();
-        node_did.as_deref().map_or_else(
-            || store.latest_request_id_for_session(&session_id),
-            |node_did| store.latest_request_id_for_session_for_node(&session_id, node_did),
-        )
-    });
-
-    let hydrate_started = std::time::Instant::now();
-    if let Some(node_did) = node_did.as_deref() {
-        // Its transcript reads as empty here and a hydration request would be
-        // refused, so the local header alone answers without any remote read.
-        if core
-            .session_unreadable_reason(&session_id, node_did)
-            .is_some()
-        {
-            return Ok(build_session_snapshot_for_node_with_transcript(
-                core.as_ref(),
-                Some(node_did),
-                &session_id,
-                request_id.as_deref(),
-                None,
-                None,
-                None,
-                None,
-                false,
-                false,
-            )
-            .await);
-        }
-        if let Err(error) = core
-            .ensure_session_hydration_started(&session_id, node_did)
-            .await
-        {
-            tracing::warn!(
-                target: "gents_desktop::chat",
-                node_did,
-                session_id = %session_id,
-                error = %error,
-                "session hydration request failed; rendering whatever is already local"
-            );
-        }
-    }
-    let hydrate_start_ms = hydrate_started.elapsed().as_millis() as u64;
-    let refresh_started = std::time::Instant::now();
-    if let (Some(node_did), Some(request_id)) = (node_did.as_deref(), request_id.as_deref()) {
-        if let Err(error) = core.refresh_local_request(node_did, request_id).await {
-            tracing::warn!(
-                target: "gents_desktop::chat",
-                node_did,
-                request_id,
-                error = %error,
-                "selected local request refresh failed; returning the last observed session"
-            );
-        }
-    }
-    let request_refresh_ms = refresh_started.elapsed().as_millis() as u64;
-    let transcript_started = std::time::Instant::now();
-    let node_scope = node_did
-        .as_deref()
-        .and_then(|node_did| core.transcript_node_scope(node_did));
-    let operator_access = node_did
-        .as_deref()
-        .and_then(|node_did| core.operator_graphql(node_did))
-        .map(gents::config_client::ConfigAccess::Graphql);
-    let requester_scope = {
-        let store = core.store().snapshot();
-        let session = node_did.as_deref().and_then(|node_did| {
-            store
-                .sessions
-                .iter()
-                .find(|row| row.session_id == session_id && row.node_did == node_did)
-        });
-        gents_desktop_core::client::session_transcript_requester_scope(
-            session,
-            node_did.as_deref(),
-            node_scope.as_deref(),
-            operator_access.is_some(),
-        )
-    };
-    let page_read = async {
-        match operator_access.as_ref() {
-            Some(access) => {
-                gents_desktop_core::client::load_session_transcript_page_on(
-                    access,
-                    &session_id,
-                    node_did.as_deref(),
-                    requester_scope.as_deref(),
-                    timeline_before_item_key.as_deref(),
-                    timeline_limit,
-                )
-                .await
-            }
-            None => {
-                gents_desktop_core::client::load_session_transcript_page(
-                    core.node(),
-                    &session_id,
-                    node_did.as_deref(),
-                    requester_scope.as_deref(),
-                    timeline_before_item_key.as_deref(),
-                    timeline_limit,
-                )
-                .await
-            }
-        }
-    };
-    let ownership_read = async {
-        let requests = {
-            let store = core.store().snapshot();
-            store
-                .requests
-                .iter()
-                .filter(|row| {
-                    row.doc_id.is_some()
-                        && row.session_id.as_deref() == Some(session_id.as_str())
-                        && row.node_did.as_deref() == node_did.as_deref()
-                        && row.requester_did.as_deref() == requester_scope.as_deref()
-                })
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-        match operator_access.as_ref() {
-            Some(access) => {
-                gents_desktop_core::client::load_request_prompt_ownership_on(access, &requests)
-                    .await
-            }
-            None => {
-                gents_desktop_core::client::load_request_prompt_ownership(core.node(), &requests)
-                    .await
-            }
-        }
-    };
-    let page_and_tip = async {
-        let result = if timeline_before_item_key.is_none() {
-            let context_read = async {
-                let request = request_id.as_deref().and_then(|request_id| {
-                    core.store().snapshot().session_tip_request(
-                        &session_id,
-                        node_did.as_deref(),
-                        requester_scope.as_deref(),
-                        request_id,
-                    )
-                });
-                let Some(request) = request else {
-                    return Ok(None);
-                };
-                match operator_access.as_ref() {
-                    Some(access) => {
-                        gents_desktop_core::client::load_session_tip_store_on(access, &request)
-                            .await
-                            .map(Some)
-                    }
-                    None => {
-                        gents_desktop_core::client::load_session_tip_store(core.node(), &request)
-                            .await
-                            .map(Some)
-                    }
-                }
-            };
-            let (page, context) = tokio::join!(page_read, context_read);
-            let page = page.map_err(|error| BridgeError::untyped(error.to_string()))?;
-            let context = match context {
-                Ok(store) => store,
-                Err(error) => {
-                    tracing::warn!(
-                        target: "gents_desktop::chat",
-                        session_id,
-                        error = %error,
-                        "session tip query failed; returning the bounded transcript without live ownership evidence"
-                    );
-                    None
-                }
-            };
-            (page, context)
-        } else {
-            (
-                page_read
-                    .await
-                    .map_err(|error| BridgeError::untyped(error.to_string()))?,
-                None,
-            )
-        };
-        Ok::<_, BridgeError>(result)
-    };
-    let (page_and_tip, ownership) = tokio::join!(page_and_tip, ownership_read);
-    let (transcript_page, context_store) = page_and_tip?;
-    let prompt_ownership = match ownership {
-        Ok(facts) => Some(facts),
-        Err(error) => {
-            tracing::warn!(session_id, error = %error, "request prompt ownership unavailable; suppressing unproven pending inputs");
-            None
-        }
-    };
-    let transcript_page_tip_ms = transcript_started.elapsed().as_millis() as u64;
-    let projection_started = std::time::Instant::now();
-    let context_store = context_store.map(|tip| transcript_page.store.merge_snapshot(tip));
-    let mut snapshot = build_session_snapshot_for_node_with_transcript(
-        core.as_ref(),
-        node_did.as_deref(),
-        &session_id,
-        request_id.as_deref(),
-        Some(&transcript_page.store),
-        Some(&transcript_page.canonical_dependencies),
-        context_store.as_ref(),
-        prompt_ownership.as_ref(),
-        false,
-        timeline_before_item_key.is_none(),
-    )
-    .await;
-    if let Some(snapshot) = snapshot.as_mut() {
-        apply_session_timeline_page_with_query(
-            snapshot,
-            timeline_before_item_key.as_deref(),
-            timeline_limit,
-            Some(&transcript_page),
-        )
-        .map_err(BridgeError::untyped)?;
-    }
-    let projection_ms = projection_started.elapsed().as_millis() as u64;
-    let elapsed = started.elapsed();
-    if elapsed > std::time::Duration::from_secs(1) {
-        tracing::info!(
-            target: "gents_desktop::chat",
-            session_id,
-            hydrate_start_ms,
-            request_refresh_ms,
-            transcript_page_tip_ms,
-            projection_ms,
-            elapsed_ms = elapsed.as_millis() as u64,
-            "loaded slow desktop session snapshot"
-        );
-    }
-    Ok(snapshot)
-}
+pub(crate) use crate::commands::session_snapshot;
 
 #[tauri::command]
 pub async fn desktop_session_hydration_retry(
@@ -442,7 +214,7 @@ pub async fn desktop_request_timeline(
     node_did: String,
     request_id: String,
     state: State<'_, DesktopAppState>,
-) -> Result<serde_json::Value, BridgeError> {
+) -> Result<crate::types::RequestTimelineView, BridgeError> {
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -451,7 +223,9 @@ pub async fn desktop_request_timeline(
         .request_timeline(&node_did, &request_id)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    serde_json::to_value(&timeline).map_err(|error| BridgeError::untyped(error.to_string()))
+    let value =
+        serde_json::to_value(&timeline).map_err(|error| BridgeError::untyped(error.to_string()))?;
+    serde_json::from_value(value).map_err(|error| BridgeError::untyped(error.to_string()))
 }
 
 #[tauri::command]

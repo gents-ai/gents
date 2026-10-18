@@ -1,7 +1,3 @@
-//! Recovery conformance after real native tool and session-message
-//! admissions. Faults alter only recovery observations; assistant headers and
-//! tool rows come from the production stream owner.
-
 use crate::identity::NodeIdentity;
 use crate::tool_call_lifecycle::admission_fixture::{
     complete_child, published_admission, published_session_message,
@@ -10,8 +6,9 @@ use crate::tool_call_lifecycle::admission_fixture::{
 use crate::tool_call_lifecycle::{AwaitMode, ToolCallLifecycle};
 use std::sync::Arc;
 
-/// Fixture writes to a `@branchable` collection also advance its collection
-/// head, so two back-to-back writes can conflict; retry those, bounded.
+/// Fixture writes to a `@branchable` collection also advance its
+/// collection head, so two back-to-back writes can conflict; retry those,
+/// bounded.
 async fn execute_fixture_write(node: &crate::defra_node::EmbeddedNode, mutation: &str) {
     let mut backoff = std::time::Duration::from_millis(5);
     for _ in 0..8 {
@@ -100,8 +97,6 @@ async fn completion_obligations(
     (notifications, wakes)
 }
 
-/// A missing parent replica is never evidence for terminalizing a row: native
-/// and session-message rows alike stay running until the parent is observed.
 #[tokio::test]
 async fn generated_native_missing_parent_restart_cases_defer() {
     let cases = crate::lean_vocab_test::lean_restart_disposition_cases()
@@ -175,10 +170,6 @@ fn assert_notification_reason(
     }
 }
 
-/// An `agent_new`/`agent_message` row ends only on the terminal of the
-/// request it caused. The Lean row carries the observed
-/// cause; the fixture builds exactly that premise on an accepted call whose
-/// caused request was materialized by the session-message owner.
 #[tokio::test]
 async fn generated_session_message_recovery_cases_use_accepted_call() {
     let cases = crate::lean_vocab_test::lean_recovery_sweep_cases()
@@ -197,8 +188,6 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
             .as_deref()
             .unwrap_or_else(|| panic!("{name}: session-message row carries its observed cause"));
         if cause == "causedRequestUnbound" {
-            // A running row that names no caused request: the state a crash
-            // left before start, receipt and request shared a transaction.
             let admission = published_admission(PublishedAdmissionOptions {
                 name: format!("recovery-closeout-{name}"),
                 real_identity: true,
@@ -307,9 +296,6 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
     }
 }
 
-/// A session-message row has no deadline: a restart and every settlement sweep
-/// leave it running past its stored `deadline_at`, and when the caused request
-/// ends later its result reaches the calling session exactly once.
 #[tokio::test]
 async fn caused_result_is_delivered_after_the_row_outlives_its_stored_deadline() {
     let message = published_session_message(PublishedAdmissionOptions {
@@ -386,8 +372,6 @@ async fn caused_result_is_delivered_after_the_row_outlives_its_stored_deadline()
     std::fs::remove_dir_all(&message.admission.path).expect("remove exact recovery fixture");
 }
 
-/// A running session-message row with the caused request a kill observes
-/// (Lean `Recovery.KillObservation`).
 async fn kill_fixture(observation: &str) -> (PublishedAdmission, Option<String>) {
     let options = |start_running| PublishedAdmissionOptions {
         name: format!("kill-session-message-{observation}"),
@@ -434,9 +418,6 @@ async fn kill_fixture(observation: &str) -> (PublishedAdmission, Option<String>)
     }
 }
 
-/// Lean `Recovery.killAction` over every kill observation: a kill settles from
-/// an observed terminal, waits only on a local caused request it interrupted,
-/// and otherwise cancels the row now with a cancelled notification.
 #[tokio::test]
 async fn generated_kill_cases_drive_the_session_message_kill() {
     use crate::session_message::KillOutcome;
@@ -484,10 +465,6 @@ async fn generated_kill_cases_drive_the_session_message_kill() {
     }
 }
 
-/// Lean `CausalHop.return_keeps_caller_hop` through real settlement and
-/// admission (#2065): a callee that ran at the bound returns its result to
-/// the caller at the caller's own hop, so the wake is admitted, and a native
-/// completion of the same turn rides that wake.
 #[tokio::test]
 async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
     use crate::identity::NodeIdentity;
@@ -503,7 +480,6 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
     let did = message.admission.node_did.clone();
     let session_id = message.admission.tool.session_id().to_owned();
     let caller_doc_id = message.admission.tool.request_doc_id().unwrap().to_owned();
-    // The caused request runs at hop 1, the bound; its result returns at hop 0.
     crate::document_config::ensure_node(&node, &did)
         .await
         .unwrap();
@@ -586,7 +562,6 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
     let wakes = pending_wakes(node.clone(), session_id.clone()).await;
     assert_eq!(wakes.len(), 1);
 
-    // A native process of the same turn completes afterwards and joins it.
     let caller = crate::request_binding::load_agent_request_by_doc_id(&node, &caller_doc_id)
         .await
         .unwrap()
@@ -614,7 +589,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
     .unwrap();
     assert!(!native.created_request);
     assert_eq!(pending_wakes(node.clone(), session_id.clone()).await, wakes);
-    crate::test_support::install_test_agent(node.as_ref(), &did, &caller.agent_id).await;
+    crate::test_support::install_test_agent(&node, &did, &caller.agent_id).await;
     let (admitted, row) = admit(wakes[0].clone()).await;
     assert!(admitted, "{row}");
     assert_eq!(row["request_hop"], caller.request_hop);
@@ -623,10 +598,6 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
-/// #2064 through real settlement: an `agent_new` made from a paired client's
-/// session returns its result into that session under the client's
-/// requester, at the caller's hop; a redrive is inert, and the wake is
-/// admitted, claimed and resumed in that same session.
 #[tokio::test]
 async fn a_paired_client_session_receives_its_agent_new_result() {
     let (message, mut calling) = published_session_message_with_owner(PublishedAdmissionOptions {
@@ -683,7 +654,6 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
     .unwrap();
     assert_eq!(wake.requester_did.as_deref(), Some(client.as_str()));
     assert_eq!(wake.request_hop, caller.request_hop);
-    // The calling turn ends; its session's queued result is next.
     calling
         .terminalize_owned(
             crate::lifecycle::RequestTerminalOutcome::Completed,
@@ -700,7 +670,7 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
         .await
         .unwrap();
 
-    crate::test_support::install_test_agent(node.as_ref(), &did, &caller.agent_id).await;
+    crate::test_support::install_test_agent(&node, &did, &caller.agent_id).await;
     let identity: Arc<dyn NodeIdentity> = Arc::new(
         crate::KeyIdentity::load_or_create(message.admission.path.join("test-agent.key"), None)
             .unwrap(),
@@ -792,8 +762,6 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
             )
             .await;
         }
-        // The restarted runtime's owner reads the record a crashed runtime left
-        // for a surviving test-owned process group.
         let records = tempfile::tempdir().unwrap();
         let registry = crate::BackgroundExecutionRegistry::default()
             .with_process_records(records.path().to_path_buf());
@@ -873,9 +841,6 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
     }
 }
 
-/// A live worker keeps its row until the task that started its request is
-/// deleted; then the cancellation is persisted and the worker's process
-/// stopped through the same owner.
 #[cfg(unix)]
 #[tokio::test]
 async fn generated_registered_background_task_deletion_cases_use_live_worker() {
@@ -935,8 +900,6 @@ async fn generated_registered_background_task_deletion_cases_use_live_worker() {
     let tool_doc_id = tool.doc_id().unwrap().to_owned();
     let tool_call_id = tool.tool_call_id().to_owned();
 
-    // The live worker: it owns a test process group until its token fires,
-    // then stops it, releases its record and its execution.
     let registry = crate::BackgroundExecutionRegistry::default();
     let token = tokio_util::sync::CancellationToken::new();
     let reservation = registry.reserve(tool_call_id.clone(), token.clone());

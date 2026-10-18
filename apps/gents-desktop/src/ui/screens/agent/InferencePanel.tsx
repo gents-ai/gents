@@ -1,14 +1,9 @@
-/* Inference: backends and the provider accounts that some of them need,
-   in one list. A row is a backend; its kind decides the credential
-   section. OpenAI-compatible and OpenRouter take a key or an env var;
-   ChatGPT/Codex and Grok exist only through a subscription sign-in, so
-   the account card sits in the row with connect, cancel and disconnect. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { setEnabled } from "./enabled";
 import { dependentsWarning } from "./dependents";
 import { useState } from "react";
 import { SetupScreen } from "../setup/SetupScreen";
-import { PROVIDER_VISUALS } from "../setup/InferenceSetup";
+import { isProviderId, PROVIDER_VISUALS } from "../setup/InferenceSetup";
 import type { ProviderId } from "../setup/inferenceSetupForm";
 import { toast } from "sonner";
 import type { InferenceBackendView } from "@source-inc/gents-desktop-client";
@@ -30,13 +25,15 @@ import { healthy, KINDS, SUBSCRIPTION } from "./inferenceKinds";
 import { UsageBar } from "./ProviderUsage";
 import { AccountDialogs, backendAccount, type AccountAction } from "./ProviderAccounts";
 import { BackendEditor } from "./BackendEditor";
+import { addItem, addingFrom } from "./draftItems";
+import { leave, navigate } from "@/lib/router";
 
-/* which catalog provider a configured backend belongs to */
 function providerOf(b: InferenceBackendView): ProviderId {
   switch (b.providerKind) {
     case "ChatGptCodex":
       return "openai";
     case "ClaudeCliSubscription":
+    case "AnthropicApiKey":
       return "anthropic";
     case "XaiGrokOAuth":
       return "grok";
@@ -44,16 +41,13 @@ function providerOf(b: InferenceBackendView): ProviderId {
       return "openrouter";
   }
   const host = b.endpoint ?? "";
+  if (host.replace(/\/+$/, "").toLowerCase() === "https://api.x.ai/v1") return "grok";
   if (/openai\.com/.test(host)) return "openai";
   if (/anthropic\.com/.test(host)) return "anthropic";
   if (/openrouter/.test(host)) return "openrouter";
   return "local";
 }
 
-/* The backends: the provider catalog, every provider a row. A configured
-   one shows its backend (state, switch, menu); one not set up opens the
-   provider step with it chosen. The editor sits behind the `inference`
-   route; Back from it goes to Models. */
 export function InferencePanel({
   deployment,
   item,
@@ -62,9 +56,7 @@ export function InferencePanel({
 }: {
   deployment: NodeView;
   item?: string;
-  /* rows to nest under a configured backend: its models */
   under?: (b: InferenceBackendView) => ListRow[];
-  /* profiles whose backend no longer exists, listed after the backends */
   orphans?: ListRow[];
 }) {
   const { changeConfig } = useApp().actions;
@@ -85,26 +77,26 @@ export function InferencePanel({
     providerUsage.usage.find((u) => u.backendId === backendId);
   const catalog = useSetupCatalog();
   const providers = catalog.providers;
-  /* the provider whose inputs are open, from a catalog row or Add another */
-  const [adding, setAdding] = useState<ProviderId | null>(null);
-  if (adding)
+  const adding = addingFrom(item);
+  const setAdding = (provider: ProviderId) =>
+    navigate({ ...base, item: addItem(provider) });
+  if (adding && isProviderId(adding)) {
+    const here = { ...base, item: addItem(adding) };
     return (
       <SetupScreen
         initialStep="inference"
         purpose="add-backend"
         provider={adding}
         nodeDid={deployment.nodeDid}
-        onCancel={() => setAdding(null)}
+        onCancel={() => leave(here, models)}
         onDone={() => {
-          /* back to the catalog: the new backend's row now offers Add profile */
-          setAdding(null);
+          leave(here, models);
           toast("Backend connected. Add a profile under it to use it.");
           void reload();
         }}
       />
     );
-  /* the catalog: configured backends under their provider, then the rest */
-  /* backends in the catalog's provider order, so two of one provider sit together */
+  }
   const order = (id: ProviderId) => providers.findIndex((p) => p.id === id);
   const configured = deployment.inferenceBackends
     .map((b) => ({ b, provider: providerOf(b), stored: backendAccount(accounts, b) }))
@@ -113,7 +105,6 @@ export function InferencePanel({
   const rowMeta = (b: InferenceBackendView) => {
     const sub = SUBSCRIPTION[b.providerKind ?? ""];
     const stored = backendAccount(accounts, b);
-    /* the label only where the row's title does not already say it */
     const label =
       stored?.label && stored.label !== (b.name ?? b.backendId)
         ? `${stored.label} · `
@@ -157,9 +148,11 @@ export function InferencePanel({
             children: under?.(b),
             metaLeadToggles: true,
             title: b.name ?? b.backendId,
-            /* the provider, only when the backend's name does not already say it */
             titleNote: (() => {
-              const title = providers.find((p) => p.id === provider)?.displayName ?? "";
+              const title =
+                providers.find((p) => p.id === provider)?.displayName ??
+                SUBSCRIPTION[b.providerKind ?? ""]?.title ??
+                "";
               const name = (b.name ?? b.backendId).toLowerCase();
               return name.includes(title.toLowerCase()) ||
                 name.includes(title.toLowerCase().replace(/\s+/g, ""))
@@ -168,7 +161,6 @@ export function InferencePanel({
             })(),
             meta: rowMeta(b),
             icon: <ProviderLogo kind={b.providerKind} endpoint={b.endpoint} />,
-            /* only trouble is worth a badge; a healthy backend just has its switch on */
             badge: healthy(b.probeStatus) ? undefined : (b.probeStatus ?? undefined),
             badgeTone: "bad" as const,
             trailing: (
@@ -191,7 +183,6 @@ export function InferencePanel({
                         enabled,
                       ),
                   }}
-                  /* an added account's backend goes with Remove account */
                   onDelete={
                     b.accountRef && stored
                       ? undefined
@@ -203,10 +194,12 @@ export function InferencePanel({
                   }
                   warning={dependentsWarning(deployment, "backend", b.backendId)}
                 >
-                  <DropdownMenuItem onClick={() => setAdding(provider)}>
-                    Add another{" "}
-                    {providers.find((x) => x.id === provider)?.displayName ?? "backend"}
-                  </DropdownMenuItem>
+                  {providers.some((option) => option.id === provider) && (
+                    <DropdownMenuItem onClick={() => setAdding(provider)}>
+                      Add another{" "}
+                      {providers.find((x) => x.id === provider)?.displayName}
+                    </DropdownMenuItem>
+                  )}
                   {stored && (
                     <>
                       <DropdownMenuItem
@@ -275,8 +268,6 @@ export function InferencePanel({
           </DropdownMenu>
         }
         detail={(id) => {
-          /* the list also holds profiles and providers not set up yet;
-             only a backend opens here */
           const backend = deployment.inferenceBackends.find((b) => b.backendId === id);
           if (!backend) return null;
           return (

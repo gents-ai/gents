@@ -1,19 +1,9 @@
-//! Repro + fence for #984: a P2P merge that parks a unique-index-conflicting
-//! document unindexed must not brick the next boot.
-//!
-//! DefraDB's merge path resolves live unique conflicts deterministically
-//! (`db_index::index_manager::save_resolving_unique_conflict`): the
-//! lexicographically smallest public docID keeps the index entry and the
-//! loser is persisted unindexed. Boot's eager materialization
-//! (`ensure_migrations` → `materialize_collection` → `bulk_index`) previously
-//! used strict unique saves, so the parked loser re-raised
-//! `UniqueConstraintViolation` on every subsequent boot — a foreign stale doc
-//! became a permanent poison pill requiring a full home reset.
-//!
-//! This test reproduces the exact live sequence from 2026-07-31: a re-paired
-//! client replays a stale `PeerEndpoint` doc with the same unique `did`, the
-//! home merges it gracefully, and the home must then boot again — reporting
-//! the parked doc rather than dying on it.
+//! External premises: DefraDB's merge path keeps the unique-index entry for
+//! the lexicographically smallest docID and persists the loser unindexed; boot's
+//! eager materialization must tolerate that parked loser. Node shutdown does not
+//! join the P2P pending-DAG sweep loops spawned in defra-node's `setup_p2p`, so
+//! the in-process storage lock can lag shutdown by up to one sweep interval; the
+//! OS drops the lock on real process exit.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -52,8 +42,6 @@ async fn create_endpoint(node: &EmbeddedNode, address: &str) -> String {
     indexed.into_iter().next().unwrap()
 }
 
-/// Index-backed lookup: filtering on the unique `did` resolves through the
-/// index, so only the deterministic winner is visible here.
 async fn indexed_endpoint_doc_ids(node: &EmbeddedNode) -> Vec<String> {
     let did = escape_graphql_string(CONFLICT_DID);
     let resp = node
@@ -79,7 +67,6 @@ fn scan_endpoint_doc_ids(resp: &gents::defra_node::QueryResponse) -> Vec<String>
         .unwrap_or_default()
 }
 
-/// Unfiltered scan — reads every persisted doc, indexed or parked.
 async fn scan_endpoints(node: &EmbeddedNode) -> Vec<String> {
     let resp = node
         .execute(r#"{ PeerEndpoint { _docID did address } }"#)
@@ -138,13 +125,10 @@ async fn merge_parked_unique_conflict_does_not_brick_boot() {
     let mut home = test_p2p_db("984-home").await;
     let client = test_p2p_db("984-client").await;
 
-    // Same unique `did` on both nodes, different content → distinct docIDs.
     let home_doc = create_endpoint(&home.node, "/ip4/127.0.0.1/tcp/4001").await;
     let client_doc = create_endpoint(&client.node, "/ip4/127.0.0.1/tcp/4002").await;
     assert_ne!(home_doc, client_doc, "conflict requires distinct docIDs");
 
-    // Re-paired client replays its stale endpoint into the home: the merge
-    // path parks the deterministic loser unindexed instead of failing.
     install_replicator(&client.node, &home.node).await;
 
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -160,8 +144,6 @@ async fn merge_parked_unique_conflict_does_not_brick_boot() {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
-    // The merge parked exactly one doc: the unique index resolves the did to
-    // the deterministic winner (smallest docID) while the scan sees both.
     let winner = std::cmp::min(home_doc.clone(), client_doc.clone());
     let parked = std::cmp::max(home_doc.clone(), client_doc.clone());
     assert_eq!(
@@ -170,21 +152,8 @@ async fn merge_parked_unique_conflict_does_not_brick_boot() {
         "unique index must resolve to the deterministic winner"
     );
 
-    // Release the client so the home's restart is the only live node touching
-    // the datastore (and to mirror the live incident: server restarts alone).
     client.node.shutdown().await;
 
-    // Boot. Pre-#984-fix this dies inside ensure_migrations with
-    // "eager materialization failed: PeerEndpoint: storage error: can not
-    // index a doc's field(s) that violates unique index."
-    //
-    // The reopen is retried on lock errors only: node shutdown does not join
-    // the P2P pending-DAG sweep loops (`run_pending_dag_resync`, 60s cadence,
-    // spawned untracked in defra-node's `setup_p2p`), so the coordinator —
-    // and through it the store — stays alive until the loop's next wake, and
-    // the in-process storage lock can lag shutdown by up to one sweep interval.
-    // A real process restart has no such lag (the OS drops the lock), so the
-    // retry models process exit, not a race in the code under test.
     let reopen_deadline = Instant::now() + Duration::from_secs(90);
     loop {
         match home.simulate_process_crash().await {
@@ -199,10 +168,6 @@ async fn merge_parked_unique_conflict_does_not_brick_boot() {
         }
     }
 
-    // A chain-free registry does not rescan current documents: DefraDB already
-    // maintained the unique index during merge, so boot has no conflict to
-    // tolerate or report. If a migration chain makes eager materialization
-    // necessary again, retain the original observability contract.
     let report = gents::migration::ensure_migrations(&home.node)
         .await
         .expect("ensure_migrations after boot");
@@ -234,8 +199,6 @@ async fn merge_parked_unique_conflict_does_not_brick_boot() {
         );
     }
 
-    // Nothing was lost and the deterministic pick is unchanged: both docs
-    // remain persisted, and the unique index still resolves to the winner.
     let mut docs = scan_endpoints(&home.node).await;
     docs.sort();
     let mut expected = vec![home_doc, client_doc];

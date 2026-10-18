@@ -62,8 +62,6 @@ def ordinaryToolError : PublicationObservation :=
   { waiting with waits := [{timedOutWait with reply := .argumentError, replyHandle := ""}] }
 def callerDeadlineWait : PublicationObservation :=
   { waiting with waits := [{timedOutWait with reply := .other}] }
-/-- A pending accepted wait that request terminalization cancelled before it
-started: settled, with no invocation reply. -/
 def cancelledBeforeStart : PublicationObservation :=
   { waiting with waits :=
       [{timedOutWait with reply := WaitResult.settledDiagnostic, replyHandle := "", replied := false}] }
@@ -153,10 +151,6 @@ def cases : List PublicationCase :=
 theorem explicit_cases_replay : ∀ c ∈ cases,
     publishClaimed c.before c.request c.observation c.commit = (c.expected, c.outcome) := by decide
 
-/-- The claim already exists when the wait is observed. A deferred publication
-does not consume another claim; the target ending with its completion still
-owed keeps it deferred, and once that delivery lands the same claim
-materializes its child on reconciliation. -/
 theorem claimed_wait_then_completion_reuses_claim :
     let deferred := publishClaimed claimed request waiting true
     GoalAutomation.continuationStep .unclaimed (.claim true) = .claimed ∧
@@ -165,9 +159,6 @@ theorem claimed_wait_then_completion_reuses_claim :
       publishClaimed deferred.1 request completedTool true = (published, .created) := by decide
 
 
-/-- The abandoned wrap-up keeps its claim and stays a GoalSource candidate:
-a later scan with the same evidence writes nothing, and once the evidence
-clears it still publishes nothing. -/
 theorem abandoned_wrapup_claim_stays_inert :
     let budgetRequest := {request with expectedStatus := .budgetLimited}
     publishClaimed budgetClaimed budgetRequest malformedWait true =

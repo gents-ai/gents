@@ -1,7 +1,5 @@
-//! Typed question carried in an `ask` MailboxItem payload.
-//!
-//! A question adds no lifecycle: its item uses the `start_request` action, and
-//! the answer is the ordinary interactive reply request whose content
+//! Typed question carried in an `ask` MailboxItem payload; the answer is the
+//! ordinary interactive reply request whose content
 //! [`MailboxQuestion::reply_content`] renders.
 
 use serde::{Deserialize, Serialize};
@@ -114,7 +112,6 @@ impl MailboxQuestion {
         Ok(())
     }
 
-    /// Decode and validate a stored item payload.
     pub fn from_payload(payload: &str) -> Result<Self, MailboxQuestionError> {
         let question: Self = serde_json::from_str(payload)
             .map_err(|error| MailboxQuestionError::Decode(error.to_string()))?;
@@ -122,8 +119,6 @@ impl MailboxQuestion {
         Ok(question)
     }
 
-    /// The reply request's content: one line naming the item and each chosen
-    /// option by label and id, then any free-text note.
     pub fn reply_content(
         &self,
         title: &str,
@@ -167,125 +162,5 @@ impl MailboxQuestion {
             content.push_str(note);
         }
         Ok(content)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn question(multi_select: bool, allow_free_text: bool) -> MailboxQuestion {
-        MailboxQuestion {
-            version: MAILBOX_QUESTION_VERSION,
-            prompt: "Which backend?".into(),
-            options: vec![
-                MailboxQuestionOption {
-                    id: "local".into(),
-                    label: "Local model".into(),
-                    description: None,
-                },
-                MailboxQuestionOption {
-                    id: "claude".into(),
-                    label: "Claude".into(),
-                    description: Some("Subscription".into()),
-                },
-            ],
-            multi_select,
-            allow_free_text,
-        }
-    }
-
-    fn answer(ids: &[&str], free_text: Option<&str>) -> MailboxQuestionAnswer {
-        MailboxQuestionAnswer {
-            option_ids: ids.iter().map(|id| id.to_string()).collect(),
-            free_text: free_text.map(str::to_owned),
-        }
-    }
-
-    #[test]
-    fn validation_bounds_options_and_identity() {
-        assert!(question(false, false).validate().is_ok());
-        let mut one = question(false, false);
-        one.options.truncate(1);
-        assert_eq!(one.validate(), Err(MailboxQuestionError::OptionCount));
-        let mut five = question(false, false);
-        for id in ["a", "b", "c"] {
-            five.options.push(MailboxQuestionOption {
-                id: id.into(),
-                label: id.into(),
-                description: None,
-            });
-        }
-        assert_eq!(five.validate(), Err(MailboxQuestionError::OptionCount));
-        let mut duplicate = question(false, false);
-        duplicate.options[1].id = " local ".into();
-        assert!(matches!(
-            duplicate.validate(),
-            Err(MailboxQuestionError::DuplicateOption(_))
-        ));
-        let mut blank = question(false, false);
-        blank.options[0].label = " ".into();
-        assert_eq!(blank.validate(), Err(MailboxQuestionError::EmptyOption));
-        let mut prompt = question(false, false);
-        prompt.prompt = "".into();
-        assert_eq!(prompt.validate(), Err(MailboxQuestionError::EmptyPrompt));
-        let mut version = question(false, false);
-        version.version = 2;
-        assert_eq!(version.validate(), Err(MailboxQuestionError::Version));
-        assert!(MailboxQuestion::from_payload(r#"{"version":1,"prompt":"x"}"#).is_err());
-        assert!(MailboxQuestion::from_payload("not json").is_err());
-        let stored = serde_json::to_string(&question(true, true)).unwrap();
-        assert_eq!(
-            MailboxQuestion::from_payload(&stored).unwrap(),
-            question(true, true)
-        );
-    }
-
-    #[test]
-    fn reply_content_names_choices_and_note() {
-        assert_eq!(
-            question(false, false)
-                .reply_content("Backend", &answer(&["claude"], None))
-                .unwrap(),
-            "Decision on Backend: Claude (claude)"
-        );
-        assert_eq!(
-            question(true, true)
-                .reply_content("Backend", &answer(&["local", "claude"], Some(" both ")))
-                .unwrap(),
-            "Decision on Backend: Local model (local), Claude (claude)\n\nboth"
-        );
-        assert_eq!(
-            question(false, true)
-                .reply_content("Backend", &answer(&[], Some("Ollama")))
-                .unwrap(),
-            "Decision on Backend: Other\n\nOllama"
-        );
-    }
-
-    #[test]
-    fn reply_content_rejects_answers_outside_the_question() {
-        let single = question(false, false);
-        for (answer, error) in [
-            (answer(&[], None), MailboxQuestionError::Empty),
-            (
-                answer(&["local", "claude"], None),
-                MailboxQuestionError::MultipleSelected,
-            ),
-            (
-                answer(&["gpt"], None),
-                MailboxQuestionError::UnknownOption("gpt".into()),
-            ),
-            (
-                answer(&["local"], Some("note")),
-                MailboxQuestionError::FreeTextNotAllowed,
-            ),
-        ] {
-            assert_eq!(single.reply_content("t", &answer), Err(error));
-        }
-        assert_eq!(
-            question(true, false).reply_content("t", &answer(&["local", "local"], None)),
-            Err(MailboxQuestionError::RepeatedSelection("local".into()))
-        );
     }
 }

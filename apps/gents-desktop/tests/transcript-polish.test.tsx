@@ -15,14 +15,18 @@ vi.mock("../src/ui/screens/Markdown", () => ({
 
 import { TranscriptPanel } from "../src/ui/screens/Transcript";
 import { ToolBody } from "../src/ui/screens/tool-views";
-import { diffText, lineCount, toolSummary } from "../src/ui/screens/tool-summary";
+import {
+  diffShape,
+  diffText,
+  lineCount,
+  toolSummary,
+} from "../src/ui/screens/tool-summary";
 import { activityStatus, isStopping } from "../src/ui/screens/activity-status";
 import { NO_WORKERS } from "../src/ui/screens/workers";
 import { NO_PARENT } from "../src/ui/screens/parentWork";
 import { renderIn, testApp } from "./app-fixture";
 import { liveAssistant } from "./timeline-fixture";
 
-/* the rows read the selected node from the app */
 const render = (ui: ReactElement) => renderIn(testApp(), ui);
 
 function tool(
@@ -112,6 +116,73 @@ const interruptEvidence = {
 };
 
 describe("file edit diff", () => {
+  const editWith = (
+    diff: { kind: "added" | "removed" | "context"; text: string }[],
+    created = false,
+  ) => tool({ ...edit.presentation, created, diff } as never);
+
+  it("shows a replacement as what was replaced and what replaced it", () => {
+    render(
+      <ToolBody
+        tool={editWith([
+          { kind: "removed", text: "old line" },
+          { kind: "added", text: "new line" },
+        ])}
+      />,
+    );
+    expect(screen.getByText("replaced")).toBeInTheDocument();
+    expect(screen.getByText("with")).toBeInTheDocument();
+    expect(screen.getByText("old line").closest("[data-diff]")).toHaveAttribute(
+      "data-diff",
+      "removed",
+    );
+  });
+
+  it("shows a new file as code, and an addition to a file in the added colour", () => {
+    const lines = [{ kind: "added" as const, text: "fn main() {}" }];
+    const { unmount } = render(<ToolBody tool={editWith(lines, true)} />);
+    expect(screen.getByText("new file")).toBeInTheDocument();
+    expect(screen.getByText("fn main() {}").closest("pre")).not.toHaveClass(
+      "bg-diff-added",
+    );
+    unmount();
+    render(<ToolBody tool={editWith(lines)} />);
+    expect(screen.getByText("added")).toBeInTheDocument();
+    expect(screen.getByText("fn main() {}").closest("pre")).toHaveClass(
+      "bg-diff-added",
+    );
+  });
+
+  it("keeps a unified diff's gutter, in the diff colours", () => {
+    render(<ToolBody tool={edit} />);
+    const mark = (text: string) =>
+      screen.getByText(text).closest("[data-diff]")?.querySelector("[aria-hidden]")
+        ?.textContent;
+    expect([mark("fn b() {}"), mark("fn c() {}"), mark("fn c2() {}")]).toEqual([
+      " ",
+      "\u2212",
+      "+",
+    ]);
+    expect(screen.getByText("fn c2() {}").closest("[data-diff]")).toHaveClass(
+      "bg-diff-added",
+    );
+    expect(screen.getByText("fn c() {}").closest("[data-diff]")).toHaveClass(
+      "bg-diff-removed",
+    );
+  });
+
+  it("takes the shape of the edit", () => {
+    const of = (...kinds: ("added" | "removed" | "context")[]) =>
+      diffShape(kinds.map((kind) => ({ kind })));
+    expect(of("added", "added")).toBe("addition");
+    expect(of("removed")).toBe("removal");
+    expect(of("removed", "removed", "added")).toBe("replacement");
+    expect(of("removed", "added", "removed")).toBe("unified");
+    expect(of("added", "removed")).toBe("unified");
+    expect(of("context", "added")).toBe("unified");
+    expect(of("context")).toBe("unified");
+  });
+
   it("marks added, removed and unchanged lines by kind", () => {
     const { container } = render(<ToolBody tool={edit} />);
     const kind = (text: string) =>
@@ -163,7 +234,6 @@ describe("long command output", () => {
   });
 
   it("keeps a running command's live output at its newest line until the reader scrolls up", () => {
-    /* jsdom has no ResizeObserver: this one reports the output growing */
     const observers = new Set<() => void>();
     vi.stubGlobal(
       "ResizeObserver",
@@ -194,11 +264,9 @@ describe("long command output", () => {
 
     rerender(<ToolBody tool={running("a\nb")} />);
     grow();
-    /* the foot: the bottom of the output at the bottom of the box */
     expect(viewport.scrollTop).toBe(500 - 160);
 
     act(() => {
-      /* the reader's own wheel, then the scroll it makes */
       viewport.dispatchEvent(new Event("wheel"));
       viewport.scrollTop = 0;
       viewport.dispatchEvent(new Event("scroll"));
@@ -255,6 +323,60 @@ describe("activity status", () => {
     expect(status).toHaveAttribute("role", "status");
     expect(status).toHaveTextContent("Reviewing results");
     expect(status.className).not.toContain("bg-lime");
+  });
+});
+
+describe("a folded group with a failure in it", () => {
+  const command = (key: string, failed: boolean): RenderedToolCallView => ({
+    ...tool({
+      kind: "command",
+      command: failed ? "cargo test" : "ls",
+      exitCode: failed ? 101 : 0,
+      timedOut: false,
+      failed,
+      durationMs: 10,
+      cwd: "~",
+      executionMode: "sandboxed",
+      networkMode: "disabled",
+      stdout: "",
+      stderr: "",
+      fallbackOutput: null,
+    }),
+    itemKey: key,
+  });
+  const group = (tools: RenderedToolCallView[]): RenderedTimelineItem => ({
+    kind: "toolGroup",
+    itemKey: "group",
+    messageSequence: 1,
+    tools,
+  });
+  const header = () =>
+    screen.getByRole("button", { name: /ran 2 commands/i, expanded: undefined });
+
+  it("names the failure on the header and starts open", () => {
+    render(
+      panel(
+        session({ timelineItems: [group([command("a", false), command("b", true)])] }),
+        false,
+      ),
+    );
+    const button = header();
+    expect(button).toHaveTextContent("Ran 2 commands, 1 failed");
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    expect(button).toHaveAttribute("data-failed", "true");
+  });
+
+  it("stays folded when every call worked", () => {
+    render(
+      panel(
+        session({ timelineItems: [group([command("a", false), command("b", false)])] }),
+        false,
+      ),
+    );
+    const button = header();
+    expect(button).toHaveTextContent("Ran 2 commands");
+    expect(button).not.toHaveTextContent("failed");
+    expect(button).toHaveAttribute("aria-expanded", "false");
   });
 });
 

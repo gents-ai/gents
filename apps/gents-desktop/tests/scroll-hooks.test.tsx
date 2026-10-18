@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 
 import { useFollowNewest, useScrollEdges } from "../src/ui/lib/scroll";
 
-/* a scroll area 100px tall over 500px of rows, as the kit's ScrollArea nests it */
 function Box({
   rows,
   paused = false,
@@ -33,7 +32,6 @@ function sized(viewport: HTMLElement) {
   return viewport;
 }
 
-/* sized once mounted; the hooks read the sizes each time they measure */
 function renderBox(props: Parameters<typeof Box>[0]) {
   const view = render(<Box {...props} />);
   return { view, viewport: sized(view.getByTestId("viewport")) };
@@ -60,7 +58,6 @@ describe("a capped box that follows its newest row", () => {
     const { view, viewport } = renderBox({ rows: 1 });
     scrollTo(viewport, 0);
     view.rerender(<Box rows={1} paused />);
-    /* the reader closes the step at the box's foot */
     viewport.scrollTop = 400;
     view.rerender(<Box rows={1} />);
     expect(viewport.scrollTop).toBe(400);

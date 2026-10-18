@@ -1,5 +1,4 @@
-//! Native storage premises exercised without depending on the runtime's writers.
-use defra_node::{EmbeddedNode, ExecuteRetryPolicy, QueryRequest};
+use defra_node::{EmbeddedNode, QueryRequest};
 use gents_protocol::output::{
     OutputSegment, OutputSource, OutputWriter, SegmentRun, StreamDeclaration, StreamPayload,
 };
@@ -35,10 +34,9 @@ async fn canonical_segment_create_returns_physical_identity_and_exact_json() {
         close: None,
         created_at: "2026-09-21T00:00:00Z".into(),
     };
-    let response = node.execute_request_with_retry(
+    let response = node.execute_request(
         QueryRequest::new("mutation($input: AgentOutputSegmentMutationInputArg!) { create_AgentOutputSegment(input: $input) { _docID } }")
             .with_variables(serde_json::json!({"input": segment})),
-        ExecuteRetryPolicy::default(),
     ).await;
     assert!(
         !response.has_errors(),
@@ -46,8 +44,6 @@ async fn canonical_segment_create_returns_physical_identity_and_exact_json() {
         response.errors
     );
     let data = response.data.expect("create data");
-    // Pinned DefraDB normalizes CREATE to its ADD response name. Runtime
-    // readers must use the shared mutation adapter, not hardcode create_.
     let rows = data["add_AgentOutputSegment"]
         .as_array()
         .unwrap_or_else(|| panic!("create response shape: {data}"));

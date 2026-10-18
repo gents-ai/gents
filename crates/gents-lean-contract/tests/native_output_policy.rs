@@ -1,11 +1,20 @@
-//! Compile the actual production helpers while the larger runtime migration is
-//! red. These checks do not substitute a Rust simulation for the native owner,
-//! and do not claim database/gate/timer conformance.
 #[path = "../../gents/src/session/canonical_rows.rs"]
+#[expect(
+    dead_code,
+    reason = "This target imports the production row owner to check lease policy, not every row projection."
+)]
 mod canonical_rows;
 #[path = "../../gents-loop/src/execution_policy.rs"]
+#[expect(
+    dead_code,
+    reason = "This target exercises lease admission and renewal from the shared execution-policy owner."
+)]
 mod execution_policy;
 #[path = "../../gents/src/lean_vocab_test/request_execution_lease.rs"]
+#[expect(
+    dead_code,
+    reason = "The shared decoder also serves trace and provider cases in other conformance targets."
+)]
 mod runtime_contract;
 #[path = "../../gents/src/lifecycle/terminal_binding.rs"]
 mod terminal_binding;
@@ -16,8 +25,6 @@ fn generated_active_lease_cases_drive_native_admission_and_renewal() {
         LeanRequestExecutionAction as Action, LeanRequestExecutionBoundary as Boundary,
         LeanRequestExecutionLeaseStatus as Status,
     };
-    // Decode this family's existing strict DTO, not a hand-maintained fixture.
-    // Full-snapshot decoder completeness is checked separately by runtime_snapshot.
     let snapshot: serde_json::Value =
         gents_lean_contract::load_contract_snapshot().expect("generate Lean contract");
     let cases: Vec<runtime_contract::LeanRequestExecutionLeaseCase> = serde_json::from_value(
@@ -29,8 +36,6 @@ fn generated_active_lease_cases_drive_native_admission_and_renewal() {
     .expect("strict lease cases");
     let mut exercised = std::collections::BTreeSet::new();
     for case in &cases {
-        // Boundary authorization belongs to the native transaction owner, not
-        // these pure helpers. Only exercise their explicitly modeled domain.
         if !matches!(case.pre.lease.status, Status::Active) {
             continue;
         }

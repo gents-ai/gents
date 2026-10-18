@@ -13,32 +13,14 @@ pub(super) enum ScriptedCall {
     TurnWithMidStreamError(Vec<RawStreamingChoice<()>>, CompletionError),
 }
 
-/// A `CompletionModel` whose `stream` replays one scripted call: each
-/// `stream()` pops the next [`ScriptedCall`] from the queue, letting a test
-/// drive multi-turn loops and provider failures without a provider. Once the
-/// queue is empty it yields a bare final response so the loop terminates.
 #[derive(Clone)]
 pub(super) struct ScriptedModel {
     pub(super) calls: Arc<Mutex<VecDeque<ScriptedCall>>>,
-    /// `chat_history` of every request the loop sent, in order (converted to
-    /// native at the capture boundary) — lets a test assert how the loop
-    /// threaded prior turns back to the provider.
     seen_histories: Arc<Mutex<Vec<Vec<Message>>>>,
-    /// Advertised tool names (`request.tools`) of every request the loop sent,
-    /// in order — lets a test assert the toolset is attached on every turn.
     seen_tools: Arc<Mutex<Vec<Vec<String>>>>,
-    /// Effective per-turn output caps after the provider-input budget clamp.
     seen_max_tokens: Arc<Mutex<Vec<Option<u64>>>>,
-    /// Exact request snapshots consumed by the mock transport.
     seen_requests: Arc<Mutex<Vec<CompletionRequest>>>,
-    /// When set, every turn's stream yields its scripted chunks then hangs
-    /// (never reaches EOF), simulating a provider that stalls mid-turn.
     stall_after_chunks: bool,
-    /// When true (the default), every request is claimed through
-    /// `capture_scripted_provider_request` like the real capturing transport.
-    /// When false, the model answers without ever claiming the pending
-    /// capture — a stand-in for a mis-wired provider stack that lacks
-    /// `RenderedRequestCapturingHttpClient`.
     capture_requests: bool,
     stream_entry_gate: Option<Arc<StreamEntryGate>>,
     provider_observer: Option<Arc<dyn Fn(bool) + Send + Sync>>,
@@ -80,15 +62,11 @@ impl ScriptedModel {
         self
     }
 
-    /// Model a mis-wired transport: the provider streams without claiming the
-    /// pending rendered-request capture. Test-only opt-out; the default path
-    /// keeps every normal test on the actual capture boundary.
     pub(super) fn without_capture(mut self) -> Self {
         self.capture_requests = false;
         self
     }
 
-    /// A single turn that emits `chunks` then stalls forever instead of ending.
     pub(super) fn new_stalling(chunks: Vec<RawStreamingChoice<()>>) -> Self {
         let mut model = Self::new_calls(vec![ScriptedCall::Turn(chunks)]);
         model.stall_after_chunks = true;
@@ -217,9 +195,6 @@ pub(super) fn usage_response(
     }
 }
 
-/// A usage-reporting provider double for request-wide budget behavior. It
-/// records the fully rendered input estimate and effective output ceiling at
-/// the same boundary where a real provider receives them.
 #[derive(Clone)]
 pub(super) struct UsageScriptedModel {
     turns: Arc<Mutex<VecDeque<Vec<RawStreamingChoice<UsageResponse>>>>>,
@@ -290,7 +265,6 @@ impl CompletionModel for UsageScriptedModel {
     }
 }
 
-/// A trivial tool that echoes a fixed output, for dispatch tests.
 pub(super) struct EchoTool {
     pub(super) name: String,
     pub(super) output: String,
@@ -347,8 +321,6 @@ impl ToolDyn for CountingTool {
     }
 }
 
-/// A tool whose call always returns a fixed string (used for large/managed
-/// outputs); name defaults to "echo".
 pub(super) struct FixedTool {
     pub(super) name: String,
     pub(super) output: String,
@@ -374,7 +346,6 @@ impl ToolDyn for FixedTool {
     }
 }
 
-/// Records the prompt/rag string handed to `definition`, for the rag-text test.
 pub(super) struct RecordingDefinitionTool {
     pub(super) seen_prompt: Arc<Mutex<Option<String>>>,
 }
@@ -408,7 +379,6 @@ pub(super) fn echo_tool() -> Box<dyn ToolDyn> {
     })
 }
 
-/// Script one tool-calling turn that invokes `echo`.
 pub(super) fn echo_tool_turn() -> Vec<RawStreamingChoice<()>> {
     vec![
         RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
@@ -552,10 +522,6 @@ where
     collected
 }
 
-/// Drive the generator through the same acceptance boundary as the owned
-/// daemon loop. Each yielded operation is durably folded before the generator
-/// is polled again, so `ProviderTurnReady` grants dispatch authority before a
-/// following tool call can run.
 pub(super) async fn collect_owned_scripted_stream<S>(
     stream: S,
     hook: &DefraSessionHook,
@@ -570,9 +536,6 @@ where
         .await
 }
 
-/// The same owned acceptance driver with an optional durable capture scope.
-/// Most scripted tests use the noop scope; the Claude transport fixture passes
-/// the real DefraDB scope so its replay resolver can verify the captured send.
 pub(super) async fn collect_owned_scripted_stream_with_capture_scope<S>(
     stream: S,
     hook: &DefraSessionHook,
@@ -809,13 +772,13 @@ async fn owned_test_hook_with_identity_policy(
             )
             .await
             .unwrap();
-            let result = crate::config_client::ConfigAccess::Local(node.clone())
+            let result = crate::config_client::ConfigAccess::local(node.clone())
                 .write("test.folded_request", &create.graphql_mutation().unwrap())
                 .await
                 .unwrap();
             let doc =
                 gents_protocol::graphql::extract_mutation_doc_id(&result, "AgentRequest").unwrap();
-            let loaded = crate::config_client::ConfigAccess::Local(node.clone())
+            let loaded = crate::config_client::ConfigAccess::local(node.clone())
                 .execute(&format!(
                     r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
                     crate::graphql::escape_graphql_string(&doc),

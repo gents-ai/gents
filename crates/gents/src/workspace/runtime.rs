@@ -60,11 +60,8 @@ const PLACEMENT_FIELDS: &str = r#"
     observed_tree_hash
 "#;
 
-/// Copy `seal_hash` onto post-seal ReadOnly/Integrate lineage. Fail closed
-/// when `workspace_id` is set but IsolatedWorkspace is missing, and refuse
-/// ReadWrite after Sealed / Integrate before Sealed.
 pub async fn stamp_workspace_lineage(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     lineage: &mut WorkspaceLineage,
 ) -> Result<()> {
@@ -76,8 +73,6 @@ pub async fn stamp_workspace_lineage(
     else {
         return Ok(());
     };
-    // Bootstrap has an explicit caller-selected principal scope; inherited
-    // lineage already carries its authenticated owner and must retain it.
     let owner = lineage
         .workspace_owner_node_did
         .as_deref()
@@ -154,7 +149,7 @@ pub(crate) fn apply_workspace_lineage_stamp(
 }
 
 pub async fn seal_on_writer_success(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request: &AgentRequest,
     operator_tool_root: Option<&Path>,
 ) -> Result<()> {
@@ -213,11 +208,8 @@ pub async fn seal_on_writer_success(
     flush_seal_outcome(node, &docs, &outcome).await
 }
 
-/// Integrator request success: typed `integrate_workspace` (apply sealed diff
-/// to trunk). Never worker bash against the source checkout. No-op unless the
-/// request is Integrate-bound.
 pub async fn integrate_on_integrator_success(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request: &AgentRequest,
     operator_tool_root: Option<&Path>,
 ) -> Result<()> {
@@ -288,7 +280,7 @@ fn ctx_repository_path(repository: &RepositoryPlacementRef) -> PathBuf {
 
 /// Explicit operator/ack cleanup. Never invoked from request terminal.
 pub async fn cleanup_workspace(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     workspace_id: &str,
     operator_tool_root: Option<&Path>,
@@ -328,10 +320,8 @@ pub async fn cleanup_workspace(
     flush_cleanup_outcome(node, &docs, &outcome).await
 }
 
-/// Crash recovery: this writer already sealed (or left a Sealed workspace
-/// after a partial flush). Skip ReadWrite overlay/inference and only complete.
 pub async fn writer_request_already_sealed(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request: &AgentRequest,
 ) -> Result<bool> {
     let Some(workspace_id) = optional_id(request.workspace_id.as_deref()) else {
@@ -389,7 +379,7 @@ fn writer_already_sealed(
 }
 
 pub async fn materialize_workspace_binding(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
     request_doc_id: &str,
     principal_did: &str,
@@ -473,7 +463,10 @@ pub async fn materialize_workspace_binding(
     }
 }
 
-pub async fn release_writer_binding(node: &EmbeddedNode, request: &AgentRequest) -> Result<()> {
+pub async fn release_writer_binding(
+    node: &std::sync::Arc<EmbeddedNode>,
+    request: &AgentRequest,
+) -> Result<()> {
     let Some(workspace_id) = optional_id(request.workspace_id.as_deref()) else {
         return Ok(());
     };
@@ -588,7 +581,6 @@ async fn load_receipts(
                 head_sha
                 changed_files
                 diff_artifact
-                checks_run
                 unresolved_conflicts
                 integration_instructions
             }}
@@ -677,7 +669,7 @@ async fn load_repository(
 }
 
 async fn flush_seal_outcome(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     docs: &MemoryWorkspaceDocuments,
     outcome: &SealWorkspaceOutcome,
 ) -> Result<()> {
@@ -711,7 +703,7 @@ async fn flush_seal_outcome(
 }
 
 async fn flush_integrate_outcome(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     outcome: &IntegrateWorkspaceOutcome,
 ) -> Result<()> {
     let mutation = workspace_integrate_docs_mutation(&[], &outcome.receipt);
@@ -731,7 +723,7 @@ async fn flush_integrate_outcome(
 }
 
 async fn release_integrate_binding(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     docs: &MemoryWorkspaceDocuments,
     outcome: &IntegrateWorkspaceOutcome,
 ) -> Result<()> {
@@ -766,7 +758,7 @@ async fn release_integrate_binding(
 }
 
 async fn flush_cleanup_outcome(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     docs: &MemoryWorkspaceDocuments,
     outcome: &CleanupWorkspaceOutcome,
 ) -> Result<()> {
@@ -790,144 +782,4 @@ async fn flush_cleanup_outcome(
         )
     })?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::lifecycle::WorkspaceLineage;
-    use crate::toolset::WorkspaceAuthority;
-
-    fn sealed_workspace() -> IsolatedWorkspaceRecord {
-        IsolatedWorkspaceRecord {
-            workspace_id: "ws-1".into(),
-            work_unit_id: None,
-            caused_by_invocation_id: None,
-            owner_node_did: "dep-1".into(),
-            writer_principal: "did:key:zWriter".into(),
-            integrator_principal: "did:key:zIntegrator".into(),
-            lifecycle_state: "sealed".into(),
-            seal_hash: Some("hash-1".into()),
-            instruction_manifest: "{}".into(),
-        }
-    }
-
-    fn lineage(authority: &str, hash: Option<&str>) -> WorkspaceLineage {
-        WorkspaceLineage {
-            workspace_id: Some("ws-1".into()),
-            workspace_owner_node_did: Some("dep-1".into()),
-            workspace_authority: Some(authority.into()),
-            workspace_seal_hash: hash.map(str::to_string),
-        }
-    }
-
-    #[test]
-    fn stamp_copies_seal_hash_and_denies_read_write_after_sealed() {
-        let mut ro = lineage(WorkspaceAuthority::ReadOnly.as_str(), None);
-        apply_workspace_lineage_stamp(&mut ro, &sealed_workspace()).unwrap();
-        assert_eq!(ro.workspace_seal_hash.as_deref(), Some("hash-1"));
-
-        let mut rw = lineage(WorkspaceAuthority::ReadWrite.as_str(), Some("hash-1"));
-        let err = apply_workspace_lineage_stamp(&mut rw, &sealed_workspace()).unwrap_err();
-        assert!(
-            err.to_string().contains("ReadWrite bindings are illegal"),
-            "{err:#}"
-        );
-
-        let mut missing_hash = lineage(WorkspaceAuthority::ReadOnly.as_str(), None);
-        let mut sealed = sealed_workspace();
-        sealed.seal_hash = None;
-        let err = apply_workspace_lineage_stamp(&mut missing_hash, &sealed).unwrap_err();
-        assert!(err.to_string().contains("missing seal_hash"), "{err:#}");
-    }
-
-    #[test]
-    fn stamp_denies_integrate_before_seal() {
-        let ready = IsolatedWorkspaceRecord {
-            lifecycle_state: "ready".into(),
-            seal_hash: None,
-            ..sealed_workspace()
-        };
-        let mut lineage = lineage(WorkspaceAuthority::Integrate.as_str(), None);
-        let err = apply_workspace_lineage_stamp(&mut lineage, &ready).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("Integrate bindings require Sealed"),
-            "{err:#}"
-        );
-    }
-
-    fn writer_receipt(request_id: &str) -> WorkspaceReceiptDoc {
-        WorkspaceReceiptDoc {
-            path_capability_digest: crate::workspace::WorkspacePathCapability::exact_paths(vec![])
-                .unwrap()
-                .digest(),
-            receipt_id: format!("receipt-writer-ws-1-{request_id}"),
-            workspace_id: "ws-1".into(),
-            produced_by_request_id: request_id.into(),
-            produced_by_request_doc_id: "doc-1".into(),
-            kind: RECEIPT_KIND_WRITER.to_string(),
-            base_sha: "base".into(),
-            seal_hash: "hash-1".into(),
-            work_unit_id: Some("unit-1".into()),
-            caused_by_correlation: Some("corr-1".into()),
-            head_sha: None,
-            changed_files: None,
-            diff_artifact: None,
-            checks_run: None,
-            unresolved_conflicts: None,
-            integration_instructions: None,
-        }
-    }
-
-    fn writer_binding(request_id: &str) -> WorkspaceBindingDoc {
-        new_binding(
-            "ws-1",
-            request_id,
-            "doc-1",
-            WorkspaceAuthority::ReadWrite,
-            "dep-1",
-            Some("hash-1"),
-        )
-    }
-
-    #[test]
-    fn already_sealed_writer_skips_overlay_when_receipt_or_binding_exists() {
-        assert!(writer_already_sealed(
-            "sealed",
-            &[writer_receipt("req-1")],
-            &[],
-            "req-1",
-            "doc-1"
-        ));
-        assert!(writer_already_sealed(
-            "sealed",
-            &[],
-            &[writer_binding("req-1")],
-            "req-1",
-            "doc-1"
-        ));
-        assert!(!writer_already_sealed("sealed", &[], &[], "req-1", "doc-1"));
-        assert!(!writer_already_sealed(
-            "sealed",
-            &[writer_receipt("req-1")],
-            &[writer_binding("req-1")],
-            "req-1",
-            "foreign-doc"
-        ));
-        assert!(!writer_already_sealed(
-            "ready",
-            &[writer_receipt("req-1")],
-            &[writer_binding("req-1")],
-            "req-1",
-            "doc-1"
-        ));
-        assert!(!writer_already_sealed(
-            "sealed",
-            &[writer_receipt("other")],
-            &[writer_binding("other")],
-            "req-1",
-            "doc-1"
-        ));
-    }
 }

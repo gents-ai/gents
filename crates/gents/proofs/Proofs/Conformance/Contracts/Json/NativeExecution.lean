@@ -14,9 +14,6 @@ open CanonicalOutput.Execution.Gate
 open CanonicalOutput.Execution.Gate.Cases
 open Conformance.Contracts
 
-/-- Compact native inputs. Each constructor names an existing execution-owner
-operation and its externally supplied fence values; fixture documents are the
-canonical `Execution.Examples` documents, not an encoded copy of `World`. -/
 inductive Input where
   | acceptForeground
   | acceptBackground
@@ -54,7 +51,6 @@ inductive Input where
   `Operation` and cannot be rejected by the execution owner. -/
   | replicate (record : Segment)
 
-/-- What one script step does to the modeled world. -/
 inductive Step where
   | commit (operation : Operation)
   /-- Same-task acquisition whose sibling then awaits the gate: the only poller
@@ -269,8 +265,6 @@ def recoveryItems : List RecoveryItem :=
 def lateStaleFlush : Segment :=
   { raw 102 0 1 11 with flush := some ⟨1, [⟨0, 1, none⟩], [66]⟩ }
 
-/-- Same-generation partial publication uses the same recovery presentation,
-but the live producer remains generation 7. -/
 def livePartialItem : RecoveryItem :=
   let message := recoveryMessage 200 101 0 5
   ⟨partialClose 101 0 1 5,
@@ -300,7 +294,6 @@ example : ((livePartialCases.head?.bind (·.expected)).bind List.getLast?).map
 def compactionBoundary : MessageEnvelope :=
   CanonicalOutput.Execution.Compaction.Examples.boundary
 
-/-- The four original tool-seam scripts. -/
 def toolSeamCases : List Case :=
   [ mkModelCase "pending_background_recovery_cancels_before_dispatch"
       (world 5) [.acceptBackground, .recover 2 10 8 20, .dispatch 10]
@@ -321,8 +314,6 @@ def toolSeamCases : List Case :=
         .deliverForeground, .terminalizeCompleted]
       "Native complete_raw_with_presentation closes and delivers in one transaction; use foreground_tool_completion_atomically_pairs_result for native parity." ]
 
-/-- Lease ordering: only explicit due renewal moves the deadline; output and
-dispatch do not, and a superseded writer is inert. -/
 def leaseOrderingCases : List Case :=
   [ mkModelCase "renewal_wins_before_recovery"
       (world 5) [.renew 8 10, .recover 2 10 8 20]
@@ -382,8 +373,6 @@ example : toolOutputDeadlineCases.map (fun value =>
      some (1, some 10), some (2, some 10)] := by
   native_decide
 
-/-- Four inference sources whose insertion order and JSON spelling both
-disagree with numeric `(scope, turn, attempt)` identity order. -/
 private def numericRecoveryRawA : Segment :=
   { raw 910 9 0 5 with coordinate := ⟨10, .provider 9 9 9⟩ }
 
@@ -455,7 +444,6 @@ def regressedProviderMessage : MessageEnvelope :=
       .toolCall 600 "native-call" none "child" ⟨⟨505, 1⟩, .full⟩ none none]
     createdAt := 4 }
 
-/-- Publication integrity and the tool lifecycle beyond the foreground path. -/
 def publicationCases : List Case :=
   [ mkCase "short_complete_closure_rejected_after_two_flushes"
       (world 5) [.appendRaw 1 5 providerFirstFlush, .appendRaw 1 5 providerSecondFlush,
@@ -478,8 +466,6 @@ def publicationCases : List Case :=
         .admitSpawned { spawnedAdmission with document := 602 }] with
       nativeGap := some "The native spawned-child owner derives the child document from the parent and has no candidate child-document argument; it cannot execute the modeled conflicting-document admission." } ]
 
-/-- A distinct replicated twin makes the source unreconstructable. Revocation
-must still terminate the request without discarding either fact. -/
 def integrityCases : List Case :=
   [ mkCase "corrupt_twin_revocation_cancels_pending_tool"
       (world 5) [.acceptForeground, .replicate corruptTwin, .revokeDead 1 5 8]
@@ -931,10 +917,6 @@ def casesJson : String := jsonArray (cases.map caseJson)
 
 example : cases.all (fun value => value.expected.isSome) = true := by native_decide
 
-/-- Every native seed has no durable output, transcript reservations, tool
-execution, compaction or terminal selection. Optional claim state is absent
-except for the exact title seeds produced by the typed claim/begin owners and
-bound by the signed native initializer. -/
 example : cases.all (fun value => value.seed.segments.isEmpty && value.seed.messages.isEmpty &&
     value.seed.transcript.messages.isEmpty && value.seed.transcript.toolCalls.isEmpty &&
     value.seed.transcript.inFlight == ∅ && value.seed.compactionCursor.isNone &&
@@ -945,8 +927,6 @@ example : cases.all (fun value => value.seed.segments.isEmpty && value.seed.mess
       decide (value.seed = titleClaimed ∨ value.seed = titleProcessing))) = true := by
   native_decide
 
-/-- Every script is substantive, serializable through its modeled operations,
-and produces exactly one observation for each attempted operation. -/
 example : cases.all (fun value => !value.inputs.isEmpty &&
     (value.inputs.map inputJson).all (· != "null") &&
     match value.expected with
@@ -954,8 +934,6 @@ example : cases.all (fun value => !value.inputs.isEmpty &&
     | none => false) = true := by
   native_decide
 
-/-- Cardinality alone is insufficient: exact normalized durable facts distinguish
-same-count payload and identity corruption. -/
 example :
     let original := raw 100 0 0 5
     let changedPayload := { original with flush := original.flush.map fun flush =>

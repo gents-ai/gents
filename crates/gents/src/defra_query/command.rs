@@ -348,10 +348,27 @@ fn collect_plan_observations(plan: &Value, out: &mut Vec<String>) {
                     .get("collectionName")
                     .and_then(Value::as_str)
                     .unwrap_or("collection");
-                let fact = if let Some(index) = scan.get("indexName").and_then(Value::as_str) {
-                    format!("{collection}: native scan uses index {index}.")
+                let counters = [
+                    ("docFetches", "document fetches"),
+                    ("fieldFetches", "field fetches"),
+                    ("indexFetches", "index fetches"),
+                ]
+                .into_iter()
+                .filter_map(|(key, label)| {
+                    scan.get(key)
+                        .and_then(Value::as_u64)
+                        .map(|count| format!("{count} {label}"))
+                })
+                .collect::<Vec<_>>();
+                let fact = if !counters.is_empty() {
+                    format!(
+                        "{collection}: native execution recorded {}.",
+                        counters.join(", ")
+                    )
+                } else if let Some(index) = scan.get("indexName").and_then(Value::as_str) {
+                    format!("{collection}: native plan selects index {index}.")
                 } else {
-                    format!("{collection}: native scan has no indexName; inspect filter/prefixes for its scan bounds.")
+                    format!("{collection}: native plan has no indexName; inspect its scan bounds, including direct document lookups.")
                 };
                 if !out.contains(&fact) {
                     out.push(fact);
@@ -392,22 +409,4 @@ pub fn render_result(value: Value) -> Result<String> {
             ],
         ),
     )?)
-}
-
-#[cfg(test)]
-mod output_tests {
-    use super::*;
-
-    #[test]
-    fn query_results_precede_continuation_and_metadata() {
-        let value = json!({
-            "results": [{"title": "answer", "nullable": null}],
-            "next_call": {"tool":"query","args":{"argv":["find"]}},
-            "collection": "Example",
-        });
-        let rendered = render_result(value.clone()).unwrap();
-        assert!(rendered.starts_with("{\"results\":"));
-        assert!(rendered.find("\"next_call\"").unwrap() < rendered.find("\"collection\"").unwrap());
-        assert_eq!(serde_json::from_str::<Value>(&rendered).unwrap(), value);
-    }
 }

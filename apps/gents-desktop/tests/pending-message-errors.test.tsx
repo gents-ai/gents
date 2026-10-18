@@ -1,15 +1,26 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type {
   DesktopApiAdapter,
+  DesktopSessionSnapshot,
   PendingQueueEntryView,
   PendingTurnView,
 } from "@source-inc/gents-desktop-client";
 import { createChatActions } from "../src/hooks/chatActions";
 import type { ShellProjection } from "../src/hooks/shellProjection";
-import { QueuedInputs } from "../src/ui/screens/TranscriptInputs";
+import { PendingTray } from "../src/ui/screens/PendingTray";
+import { moveDisabled, moveItem } from "./pending-tray-menu";
 import { deployment } from "./config-panel-wiring/fixtures";
 import { shellStores } from "./shell-fixture";
+import { writeSession } from "../src/hooks/sessionStore";
+import { deferred } from "./deferred";
 
 const entry = (id: string, group: string | null = "same"): PendingQueueEntryView => ({
   requestDocId: `doc-${id}`,
@@ -28,163 +39,73 @@ const turn = (row: PendingQueueEntryView): PendingTurnView => ({
   createdAt: null,
 });
 
-function deferred() {
-  let resolve!: () => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<void>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
+/* rows by request, since a row being edited shows its editor, not its text */
 function rowFor(id: string) {
   const row = screen
     .getAllByTestId("queued-input")
-    .find((node) => node.textContent?.includes(`message ${id}`));
+    .find((node) => node.dataset.requestId === id);
   if (!row) throw new Error(`no queued row for ${id}`);
   return row;
 }
 
 function rows() {
-  return screen.getAllByTestId("queued-input").map((row) => row.textContent);
+  return screen.getAllByTestId("queued-input").map((row) => row.dataset.requestId);
 }
 
 describe("pending message failed mutations and async controls", () => {
-  it("keeps the edited text visible and the controls usable after a failed save", async () => {
-    const onEdit = vi.fn().mockRejectedValueOnce(new Error("mutation failed"));
-    render(
-      <QueuedInputs queued={[turn(entry("a"))]} queue={[entry("a")]} onEdit={onEdit} />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Edit pending message" }), {
-      target: { value: "corrected instruction" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    /* the failure is reported by the action owner; the edit stays on screen */
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Save" })).toBeEnabled(),
-    );
-    expect(screen.getByRole("textbox", { name: "Edit pending message" })).toHaveValue(
-      "corrected instruction",
-    );
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Remove" })).toBeEnabled();
-    expect(rows()).toEqual([expect.stringContaining("message a")]);
-
-    /* the preserved text is what the retry sends */
-    onEdit.mockResolvedValueOnce(undefined);
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(onEdit).toHaveBeenCalledTimes(2));
-    expect(onEdit).toHaveBeenLastCalledWith({
-      expectedRequestDocIds: ["doc-a"],
-      selectedRequestDocIds: ["doc-a"],
-      messages: [{ requestDocId: "doc-a", content: "corrected instruction" }],
-    });
-    await waitFor(() =>
-      expect(
-        screen.queryByRole("textbox", { name: "Edit pending message" }),
-      ).toBeNull(),
-    );
-  });
-
-  it("disables the edit text and this row's controls while its mutation is in flight", async () => {
-    const gate = deferred();
-    const onEdit = vi.fn().mockReturnValue(gate.promise);
-    render(
-      <QueuedInputs
-        queued={[turn(entry("a")), turn(entry("b"))]}
-        queue={[entry("a"), entry("b")]}
-        onEdit={onEdit}
-      />,
-    );
-    const controls = within(rowFor("a"));
-    fireEvent.click(controls.getByRole("button", { name: "Edit" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Edit pending message" }), {
-      target: { value: "corrected instruction" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => expect(onEdit).toHaveBeenCalled());
-    expect(
-      screen.getByRole("textbox", { name: "Edit pending message" }),
-    ).toBeDisabled();
-    for (const name of ["Save", "Cancel", "Remove", "Move pending message down"]) {
-      expect(controls.getByRole("button", { name })).toBeDisabled();
-    }
-    expect(
-      controls.getByRole("button", { name: "Move pending message up" }),
-    ).toBeDisabled();
-    /* the queue itself does not react to the in-flight mutation */
-    expect(rows()).toEqual([
-      expect.stringContaining("message a"),
-      expect.stringContaining("message b"),
-    ]);
-
-    gate.resolve();
-    await waitFor(() =>
-      expect(
-        screen.queryByRole("textbox", { name: "Edit pending message" }),
-      ).toBeNull(),
-    );
-  });
-
-  it("removes no row optimistically; a refreshed snapshot removes it", async () => {
+  it("sends a removal fenced on the whole queue, holding the tray until it is answered", async () => {
     const gate = deferred();
     const onEdit = vi.fn().mockReturnValue(gate.promise);
     const view = render(
-      <QueuedInputs
+      <PendingTray
         queued={[turn(entry("a")), turn(entry("b"))]}
         queue={[entry("a"), entry("b")]}
         onEdit={onEdit}
       />,
     );
     fireEvent.click(within(rowFor("b")).getByRole("button", { name: "Remove" }));
-    await waitFor(() => expect(onEdit).toHaveBeenCalled());
     expect(onEdit).toHaveBeenCalledWith({
       expectedRequestDocIds: ["doc-a", "doc-b"],
       selectedRequestDocIds: ["doc-b"],
       messages: [],
     });
-    /* still both rows, in the observed order, in flight and after the mutation */
-    expect(rows()).toEqual([
-      expect.stringContaining("message a"),
-      expect.stringContaining("message b"),
-    ]);
-    gate.resolve();
-    await waitFor(() =>
-      expect(within(rowFor("a")).getByRole("button", { name: "Remove" })).toBeEnabled(),
-    );
-    expect(rows()).toEqual([
-      expect.stringContaining("message a"),
-      expect.stringContaining("message b"),
-    ]);
-
-    /* the refreshed session snapshot no longer lists the removed source */
+    expect(rows()).toEqual(["a", "b"]);
+    expect(within(rowFor("a")).getByRole("button", { name: "Remove" })).toBeDisabled();
+    await act(async () => gate.resolve());
     view.rerender(
-      <QueuedInputs queued={[turn(entry("a"))]} queue={[entry("a")]} onEdit={onEdit} />,
+      <PendingTray queued={[turn(entry("a"))]} queue={[entry("a")]} onEdit={onEdit} />,
     );
-    expect(rows()).toEqual([expect.stringContaining("message a")]);
-    expect(screen.queryByText("message b")).toBeNull();
+    expect(rows()).toEqual(["a"]);
+    expect(within(rowFor("a")).getByRole("button", { name: "Remove" })).toBeEnabled();
   });
 
-  it("reorders nothing optimistically; a refreshed snapshot shows the new order", async () => {
-    const gate = deferred();
-    const onEdit = vi.fn().mockReturnValue(gate.promise);
-    const view = render(
-      <QueuedInputs
+  it("leaves the queue as it was when the runtime refuses", async () => {
+    let reject!: (error: Error) => void;
+    const onEdit = vi.fn(() => new Promise<void>((_, fail) => (reject = fail)));
+    render(
+      <PendingTray
         queued={[turn(entry("a")), turn(entry("b"))]}
         queue={[entry("a"), entry("b")]}
         onEdit={onEdit}
       />,
     );
-    fireEvent.click(
-      within(rowFor("a")).getByRole("button", {
-        name: "Move pending message down",
-      }),
+    fireEvent.click(within(rowFor("a")).getByRole("button", { name: "Remove" }));
+    await act(async () => reject(new Error("mutation failed")));
+    expect(rows()).toEqual(["a", "b"]);
+    expect(within(rowFor("a")).getByRole("button", { name: "Remove" })).toBeEnabled();
+  });
+
+  it("moves from the menu, fenced on the whole queue, in the order the runtime confirms", async () => {
+    const gate = deferred();
+    const onEdit = vi.fn().mockReturnValue(gate.promise);
+    const view = render(
+      <PendingTray
+        queued={[turn(entry("a")), turn(entry("b"))]}
+        queue={[entry("a"), entry("b")]}
+        onEdit={onEdit}
+      />,
     );
-    await waitFor(() => expect(onEdit).toHaveBeenCalled());
+    fireEvent.click(await moveItem(rowFor("a"), "down"));
     expect(onEdit).toHaveBeenCalledWith({
       expectedRequestDocIds: ["doc-a", "doc-b"],
       selectedRequestDocIds: ["doc-a", "doc-b"],
@@ -193,31 +114,15 @@ describe("pending message failed mutations and async controls", () => {
         { requestDocId: "doc-a", content: "message a" },
       ],
     });
-    /* observed order holds until the refreshed snapshot arrives */
-    expect(rows()).toEqual([
-      expect.stringContaining("message a"),
-      expect.stringContaining("message b"),
-    ]);
-    gate.resolve();
-    await waitFor(() =>
-      expect(within(rowFor("a")).getByRole("button", { name: "Remove" })).toBeEnabled(),
-    );
-    expect(rows()).toEqual([
-      expect.stringContaining("message a"),
-      expect.stringContaining("message b"),
-    ]);
-
+    await act(async () => gate.resolve());
     view.rerender(
-      <QueuedInputs
-        queued={[turn(entry("b")), turn(entry("a"))]}
-        queue={[entry("b"), entry("a")]}
+      <PendingTray
+        queued={[turn(entry("b2")), turn(entry("a2"))]}
+        queue={[entry("b2"), entry("a2")]}
         onEdit={onEdit}
       />,
     );
-    expect(rows()).toEqual([
-      expect.stringContaining("message b"),
-      expect.stringContaining("message a"),
-    ]);
+    expect(rows()).toEqual(["b2", "a2"]);
   });
 
   it("cannot cross the cross-requester barrier, before or after a failed mutation", async () => {
@@ -226,45 +131,79 @@ describe("pending message failed mutations and async controls", () => {
       .mockRejectedValueOnce(new Error("mutation failed"))
       .mockResolvedValue(undefined);
     render(
-      <QueuedInputs
+      <PendingTray
         queued={[turn(entry("a")), turn(entry("b"))]}
         queue={[entry("a"), entry("barrier", null), entry("b")]}
         onEdit={onEdit}
       />,
     );
     const before = within(rowFor("a"));
-    const after = within(rowFor("b"));
-    expect(
-      before.getByRole("button", { name: "Move pending message down" }),
-    ).toBeDisabled();
-    expect(
-      after.getByRole("button", { name: "Move pending message up" }),
-    ).toBeDisabled();
+    expect(await moveDisabled(rowFor("a"), "down")).toBe(true);
+    expect(await moveDisabled(rowFor("b"), "up")).toBe(true);
 
-    /* a failed save still fences over the barrier's document */
-    fireEvent.click(before.getByRole("button", { name: "Edit" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Edit pending message" }), {
-      target: { value: "corrected instruction" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(before.getByRole("button", { name: "Remove" }));
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Save" })).toBeEnabled(),
+      expect(before.getByRole("button", { name: "Remove" })).toBeEnabled(),
     );
     expect(onEdit).toHaveBeenCalledWith({
       expectedRequestDocIds: ["doc-a", "doc-barrier", "doc-b"],
       selectedRequestDocIds: ["doc-a"],
-      messages: [{ requestDocId: "doc-a", content: "corrected instruction" }],
+      messages: [],
     });
-    expect(rows()).toEqual([
-      expect.stringContaining("message a"),
-      expect.stringContaining("message b"),
-    ]);
-    expect(
-      before.getByRole("button", { name: "Move pending message down" }),
-    ).toBeDisabled();
-    expect(
-      after.getByRole("button", { name: "Move pending message up" }),
-    ).toBeDisabled();
+    expect(rows()).toEqual(["a", "b"]);
+    expect(await moveDisabled(rowFor("a"), "down")).toBe(true);
+    expect(await moveDisabled(rowFor("b"), "up")).toBe(true);
+  });
+
+  it("says a message already reached the agent when the edit lost that race", async () => {
+    const stores = shellStores({
+      deployments: [deployment],
+      selection: { nodeDid: deployment.nodeDid, sessionId: "s1" },
+    });
+    writeSession(stores.session, {
+      sessionId: "s1",
+      nodeDid: deployment.nodeDid,
+      pendingQueue: [entry("a"), entry("b")],
+      foldedInputs: [],
+      latestRequestId: "earlier",
+    } as unknown as DesktopSessionSnapshot);
+    const refreshSession = vi.fn().mockResolvedValue({
+      sessionId: "s1",
+      nodeDid: deployment.nodeDid,
+      pendingQueue: [],
+      foldedInputs: [{ requestId: "a" }, { requestId: "b" }],
+      latestRequestId: "earlier",
+    } as unknown as DesktopSessionSnapshot);
+    const reportFailure = vi.fn();
+    const actions = createChatActions({
+      api: {
+        editPendingQueue: vi
+          .fn()
+          .mockRejectedValue(
+            new Error("The message queue changed. Refresh it and try again."),
+          ),
+      } as unknown as DesktopApiAdapter,
+      stores,
+      project: () => ({}) as ShellProjection,
+      refreshSession,
+      refreshSnapshot: vi.fn(),
+      reportFailure,
+    });
+    await expect(
+      actions.editPendingQueue({
+        nodeDid: deployment.nodeDid,
+        sessionId: "s1",
+        expectedRequestDocIds: ["doc-a", "doc-b"],
+        selectedRequestDocIds: ["doc-a", "doc-b"],
+        messages: [
+          { requestDocId: "doc-b", content: "message b" },
+          { requestDocId: "doc-a", content: "message a" },
+        ],
+      }),
+    ).rejects.toThrow();
+    expect(reportFailure).toHaveBeenCalledWith(
+      "These messages already reached the agent",
+    );
   });
 
   it("refreshes the session when the runtime rejects an edit", async () => {

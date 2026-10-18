@@ -6,8 +6,6 @@ const originalConsoleError = console.error.bind(console);
 
 afterEach(async () => {
   cleanup();
-  /* imported here rather than above, so a test can still mock what the
-     stores import (the platform, the window) */
   (await import("../src/ui/preferences")).resetPreferences();
   (await import("../src/ui/app/listViews")).resetListViews();
 });

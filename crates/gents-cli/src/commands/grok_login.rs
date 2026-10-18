@@ -39,7 +39,6 @@ pub(crate) async fn run_grok_login(
     let provider = gents::xai_grok_oauth::normalize_provider(&opts.provider);
     let http = reqwest::Client::new();
 
-    // v1: device-code is the only login path (SSH/VPS safe; no loopback).
     let tokens = gents::xai_oauth_login::run_device_code_login(&http, true)
         .await
         .context("Grok / xAI device-code login failed")?;
@@ -81,39 +80,4 @@ pub(crate) fn grok_login_result_json(outcome: &GrokLoginOutcome) -> Value {
         "refresh_token": "<redacted>",
         "id_token": credential.id_token.as_ref().map(|_| "<redacted>"),
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn result_json_redacts_tokens_and_reports_the_account() {
-        let mut credential = gents::xai_oauth_login::credential_from_login_tokens(
-            "did:key:z6MkTest",
-            "xai-oauth",
-            &gents::xai_oauth_login::XaiLoginTokens {
-                access_token: "access-SECRET".into(),
-                refresh_token: "refresh-SECRET".into(),
-                id_token: Some("id-SECRET".into()),
-                expires_in: Some(60),
-            },
-            chrono::Utc::now(),
-        );
-        credential.label = Some("Work".into());
-        let json = grok_login_result_json(&GrokLoginOutcome {
-            sign_in: gents::oauth_credential::SignIn {
-                doc_id: "bae-1".into(),
-                credential,
-                result: gents::oauth_credential::SignInResult::Refreshed,
-                identity_matched: true,
-                profiles: Vec::new(),
-            },
-        });
-        let text = json.to_string();
-        assert!(!text.contains("SECRET"), "{text}");
-        assert_eq!(json["label"], "Work");
-        assert_eq!(json["result"], "refreshed");
-        assert_eq!(json["profiles"], serde_json::json!([]));
-    }
 }

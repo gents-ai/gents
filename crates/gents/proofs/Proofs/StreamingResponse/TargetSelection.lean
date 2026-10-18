@@ -1,13 +1,5 @@
 import Proofs.StreamingResponse.State
 
-/-!
-# Live target selection
-
-`StreamingResponse.project` deliberately classifies one exact target.  This
-module owns the missing observation step which chooses that target from the
-current request generation.  It selects identity only; reconstruction,
-closure validity, writer validity and liveness remain owned by `project`.
--/
 namespace StreamingResponse
 
 open CanonicalOutput
@@ -48,8 +40,8 @@ private def headerReferencesCoordinate (records : List Segment)
     records.any fun record => record.id == reference.closeId &&
       record.coordinate == coordinate && record.writer == writer && record.close.isSome
 
-/-- Select the latest provider attempt for the exact current request generation.
-Header association is unique-or-conflict; no physical first/last winner exists. -/
+/-- Select the latest provider attempt for the exact current request generation;
+header association is unique-or-conflict with no physical first/last winner. -/
 def selectTarget (request generation : Nat) (inferenceScopes : List Nat) (records : List Segment)
     (messages : List MessageEnvelope) : TargetSelection :=
   match selectedProvider? request generation inferenceScopes records with

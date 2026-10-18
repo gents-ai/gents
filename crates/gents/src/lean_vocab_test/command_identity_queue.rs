@@ -80,6 +80,8 @@ pub(crate) struct LeanPendingUserTurnCase {
     pub(crate) name: String,
     #[serde(rename = "hasDurableUserOwner")]
     pub(crate) has_durable_user_owner: bool,
+    #[serde(rename = "retiredByAuthor")]
+    pub(crate) retired_by_author: bool,
     #[serde(rename = "unrelatedUserTurns")]
     pub(crate) unrelated_user_turns: u64,
     #[serde(rename = "expectPendingTurn")]
@@ -299,17 +301,11 @@ pub(crate) struct LeanRecoverySweepCase {
     pub(crate) deadline_audit_ref: String,
 }
 
-/// Startup restart-disposition witness (#937): the shape of one running
-/// `AgentToolCall` row and what `ToolCallLifecycle::recover_all` must do with
-/// it — terminalize with a pinned cause/terminal state (plus, for the native
-/// background interrupt, a durable notification and coalesced wake), or leave
-/// the row running.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanRestartDispositionCase {
     pub(crate) name: String,
     pub(crate) rust_function: String,
     pub(crate) await_mode: String,
-    /// The row records an `agent_new`/`agent_message` delivery.
     pub(crate) session_message: bool,
     pub(crate) parent_observation: String,
     pub(crate) deadline_expired: bool,

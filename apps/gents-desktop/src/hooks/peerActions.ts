@@ -13,11 +13,9 @@ import { clientStatus } from "./clientStore";
 type PeerActionParams = {
   api: DesktopApiAdapter;
   stores: ShellStores;
-  /** Shared single-flight start used by autostart and peer actions. */
   ensureDesktopClientStarted: () => Promise<DesktopClientSnapshot>;
   mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>;
   refreshSnapshot: () => Promise<void>;
-  /** shows a failed action to the person, once */
   reportFailure: (message: string) => void;
   selectNode: (nodeDid: string | null) => void;
 };
@@ -33,7 +31,6 @@ export function createPeerActions({
 }: PeerActionParams) {
   const setStarting = (starting: boolean) =>
     clientStatus.setStarting(stores.client, starting);
-  /** whether the client runs, as last read */
   const clientRuns = () => Boolean(stores.client.getState().snapshot?.client);
   async function initLocalRuntime(label?: string | null) {
     const clientWasRunning = clientRuns();
@@ -47,8 +44,6 @@ export function createPeerActions({
         dangerouslyOverwrite: false,
         reset: false,
       });
-      // Init durably writes the local-standard peer entry. Restarting the
-      // client is the only supported way to hydrate that trusted local route.
       await ensureDesktopClientStarted();
       selectNode(summary.nodeDid);
       return summary;
@@ -56,9 +51,7 @@ export function createPeerActions({
       if (clientWasRunning) {
         try {
           await mutateSnapshot(() => api.startDesktopClient());
-        } catch {
-          // Preserve the provisioning error that caused the rollback.
-        }
+        } catch {}
       }
       throw new Error(formatPeerConnectionError(err, "local-runtime"));
     } finally {
@@ -108,35 +101,10 @@ export function createPeerActions({
   }
 
   return {
-    /**
-     * Asks a peer for its status, with nothing stored. A failure is thrown
-     * in the peer's words, for the screen to show.
-     */
     fetchPeerStatus,
-    /**
-     * Asks the server at the address to enroll this desktop, starting the
-     * client first if it is not running, then reads the client again. A
-     * failure is thrown in the peer's words, for the screen to show.
-     */
     requestStatusEnrollment,
-    /**
-     * Provisions the local node and starts the client on its route, then
-     * selects it. A running client is stopped first and, if provisioning
-     * fails, started again. A failure is not reported here: setup shows it in
-     * its step log, with a retry.
-     */
     initLocalRuntime,
-    /**
-     * Removes a paired peer and reads the client again; when the removed node
-     * was selected, nothing is selected after. A failure is reported once,
-     * then rethrown.
-     */
     removePeer,
-    /**
-     * Saves a peer's label on this desktop and reads the client again. A
-     * failure is not reported here: the rename dialog shows it inline and
-     * stays open.
-     */
     renamePeer,
   };
 }

@@ -7,8 +7,6 @@ use std::time::Duration;
 async fn capture_scripted_request(
     request: CompletionRequest,
 ) -> Result<serde_json::Value, CompletionError> {
-    // The fake provider still crosses the production capture transport:
-    // serialize its actual input, persist it, then emit its scripted output.
     use rig::http_client::HttpClientExt;
     let dto = rig::providers::openai::completion::CompletionRequest::try_from((
         "scripted".to_owned(),
@@ -106,8 +104,7 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
             .unwrap();
     let mut behavior =
         crate::agent::PendingAgent::new("oneshot-lease").build_with_identity_for_test(identity);
-    crate::test_support::install_test_agent(node.as_ref(), behavior.node_did(), &behavior.agent_id)
-        .await;
+    crate::test_support::install_test_agent(&node, behavior.node_did(), &behavior.agent_id).await;
     behavior.model_name = "scripted".to_owned();
     behavior.stream_liveness_timeout = Duration::from_secs(1);
     behavior.deadline_duration = Duration::from_secs(60);
@@ -182,7 +179,6 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
         observations.load(Ordering::SeqCst) > 0,
         "provider must send traffic after semantic progress stops; one-shot returned {result:?}"
     );
-    // No test-driven recovery: the one-shot owner must converge before return.
     let result = node
         .execute(
             r#"{
@@ -333,12 +329,8 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
                 .unwrap();
         let mut behavior = crate::agent::PendingAgent::new("oneshot-output")
             .build_with_identity_for_test(identity);
-        crate::test_support::install_test_agent(
-            node.as_ref(),
-            behavior.node_did(),
-            &behavior.agent_id,
-        )
-        .await;
+        crate::test_support::install_test_agent(&node, behavior.node_did(), &behavior.agent_id)
+            .await;
         behavior.model_name = "scripted".into();
         behavior.stream_liveness_timeout = Duration::from_secs(60);
         behavior.deadline_duration = Duration::from_secs(120);

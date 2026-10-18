@@ -1,14 +1,11 @@
 import Proofs.GoalAutomation
 import Proofs.GraphPipeline.FailureAttribution
 
-/- IDs denote physical documents, not timestamps. Authentication is
-   established by the existing signed physical-edge validator. No new persisted
-   identity or Goal policy is introduced. Finite safety, not scheduler liveness. -/
+/- IDs denote physical documents, not timestamps. Finite safety, not scheduler
+liveness. Fuel is row count, sufficient for an acyclic unique-document graph;
+exhausted/ambiguous paths fail closed. -/
 namespace GraphPipeline.LogicalInvocation
 abbrev Doc := Nat
-/-- Existing graph ownership: receipt verification and a pinned route must
-resolve to the GraphRun/revision owner DID. DefraDB ACP and existing request
-admission own task/agent permissions; this is not another ACL projector. -/
 structure RootAuthorization where
   receiptValid : Bool
   routePinned : Bool
@@ -39,8 +36,6 @@ structure Edge where
 def parents (edges : List Edge) (child : Doc) : List Doc :=
   (edges.filter (fun e => e.authenticated && e.child == child)).map Edge.parent
 
-/-- Finite paths include their root. Fuel is row count, sufficient for an
-acyclic unique-document graph; exhausted/ambiguous paths fail closed. -/
 def rootsAt (rows : List Attempt) (edges : List Edge) : Nat → Doc → List Doc
   | 0, _ => []
   | n+1, doc =>
@@ -69,10 +64,7 @@ structure GoalEvidence where
   wrapupCompleted : Bool
   deriving DecidableEq, Repr
 
-/-- Graph observes committed Goal ownership, never replays GoalSource's decision
-inputs or retry policy. Active includes undecided and claimed publication gaps.
-The existing graph deadline bounds an unavailable Goal owner. Caller binds this
-snapshot to the canonical physical Goal and authenticated invocation. -/
+/-- Active includes undecided/claimed publication gaps. -/
 def obligation (g : GoalEvidence) : Bool :=
   g.status == .active ||
     (g.status == .budgetLimited && g.wrapupRequested && !g.wrapupCompleted)
@@ -94,8 +86,6 @@ def project (rows : List Attempt) (edges : List Edge) (root : Doc)
       else .failed tip.doc
   | _ => .invalid
 
-/-- Historical ancestry survives Goal replacement. Only matching invocation-local causal head
-binding grants the canonical Goal's continuation obligation. -/
 def associatedGoal (goal : Option GoalEvidence) (headBindingMatches : Bool) : Option GoalEvidence :=
   if headBindingMatches then goal else none
 
@@ -113,9 +103,6 @@ structure AssignmentHead where
 def AssignmentHead.eligible (head : AssignmentHead) : Bool :=
   head.member || head.authenticatedContinuation || (head.authenticRoot && head.assignmentApplied)
 
-/-- The existing signed session-head owner supplies committed request order.
-A queued Task root does not supersede the running Goal assignment. Other
-applied authentic graph roots participate only as head evidence, never ancestry. -/
 def assignmentOwnsGoal (rootAssignmentApplied : Bool) (heads : List AssignmentHead) : Bool :=
   rootAssignmentApplied && (heads.reverse.find? AssignmentHead.eligible).any AssignmentHead.member
 
@@ -134,13 +121,11 @@ theorem applied_other_root_replaces_goal_head :
 theorem pending_other_root_preserves_goal_head :
     assignmentOwnsGoal true [⟨10,true,true,true,false⟩, ⟨20,false,true,false,false⟩] = true := by decide
 
-/-- Limits count physical members, never logical chains. -/
 def projectLimited (rows : List Attempt) (edges : List Edge) (root : Doc)
     (goal : Option GoalEvidence) (resultSatisfied : Bool) (maximum : Nat) : Outcome :=
   if (members rows edges root).length > maximum then .limitExceeded
   else project rows edges root goal resultSatisfied
 
-/-- This supplies the existing first-cause owner, not a second latch. -/
 def witness : Outcome → Option Nat
   | .failed tip => some tip
   | .invalid | .limitExceeded => some 0 -- abstract contract-drift cause, not a request ID
@@ -166,8 +151,6 @@ private def complete : GoalEvidence := { active with status := .complete }
 theorem active_goal_defers_failed_root :
     project [root] [] 10 (some active) false = .outstanding := by decide
 
-/-- Actual rooted projection excludes an unrelated interactive physical row;
-its presence does not discharge the existing active Goal obligation. -/
 theorem unrelated_interactive_row_preserves_active_goal :
     project [root, ⟨30, false, some .completed⟩] [] 10 (some active) false =
       project [root] [] 10 (some active) false := by decide
@@ -194,8 +177,6 @@ theorem pending_descendant_stays_outstanding :
 theorem physical_counts_do_not_collapse :
     (members [root, child] [edge] 10).length = 2 := by decide
 
-/-- A pinned entry cannot also be a descendant, even when its parent has no
-other pinned root. This is the production owner's incoming-parent exclusion. -/
 theorem pinned_root_with_parent_rejected :
     project [⟨10, true, some .completed⟩, ⟨20, false, some .completed⟩]
       [⟨20, 10, true⟩] 10 none true = .invalid := by decide
@@ -204,10 +185,8 @@ theorem two_authenticated_roots_fail_closed :
     project [root, {root with doc := 30}, child] [edge, ⟨30,20,true⟩]
       10 none true = .invalid := by decide
 
-/-- Existing GraphRun key is the shared write witness. `children` represents
-new pending physical rows in the same transaction, not a persisted authority.
-This model assumes same-store write conflict; scans provide no phantom fence.
-Fresh unassociated Goal/root discovery is explicitly outside this refinement. -/
+/-- `children` counts new pending physical rows in the same transaction;
+same-store write conflict is assumed (scans provide no phantom fence). -/
 structure PublicationState where
   graph : FailureAttribution.Snapshot
   children : Nat

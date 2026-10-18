@@ -142,17 +142,11 @@ async fn seeded_node() -> Arc<defra_node::EmbeddedNode> {
     node
 }
 
-/// Seed a node with a row that has a deliberately long `content` field
-/// (exceeding `MAX_FIELD_STRING_BYTES`) and confirm the tool output is:
-///   - valid JSON (parseable)
-///   - `truncated: true` in the envelope
-///   - the oversized field contains the honest truncation marker
 #[tokio::test]
 async fn oversized_field_is_truncated_json_stays_valid() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
-    // Build a content string that clearly exceeds MAX_FIELD_STRING_BYTES.
     let big_content = "x".repeat(MAX_FIELD_STRING_BYTES + 5_000);
     let mutation = format!(
         r#"mutation {{
@@ -182,11 +176,9 @@ async fn oversized_field_is_truncated_json_stays_valid() {
     .await
     .expect("query must succeed");
 
-    // Must be valid JSON.
     let parsed: serde_json::Value =
         serde_json::from_str(&raw_output).expect("output must be parseable JSON after truncation");
 
-    // Envelope fields.
     assert_eq!(parsed["collection"], "AgentRequest");
     assert_eq!(parsed["truncated"], true, "truncated flag must be true");
     assert!(
@@ -194,7 +186,6 @@ async fn oversized_field_is_truncated_json_stays_valid() {
         "total_bytes must be reported"
     );
 
-    // The `content` field in the result must carry the honest marker.
     let rows = parsed["results"].as_array().expect("results array");
     assert_eq!(rows.len(), 1, "exactly one matching row");
     let content = rows[0]["content"]
@@ -273,10 +264,6 @@ async fn rejects_query_against_collection_outside_scope() {
     );
 }
 
-/// The unrestricted scope is the default for the MCP endpoint and for
-/// `gents query`, so it is the path that would otherwise hand an agent in the
-/// launching home the eval material. Both the row read and the discovery field
-/// inventory must refuse before they touch the datastore.
 #[tokio::test]
 async fn refuses_a_protected_collection_even_when_unrestricted() {
     let node = seeded_node().await;
@@ -329,10 +316,6 @@ async fn refuses_discovery_of_a_protected_collection() {
     );
 }
 
-/// Selecting a field that does not exist on the collection must produce an
-/// agent-usable diagnostic: the collection name, the invalid field, close-match
-/// suggestions, and the allowed field inventory — not just DefraDB's raw
-/// "Cannot query field" error.
 #[tokio::test]
 async fn invalid_tool_call_created_at_suggests_started_and_completed_at() {
     let node = seeded_node().await;
@@ -356,13 +339,9 @@ async fn invalid_tool_call_created_at_suggests_started_and_completed_at() {
     assert!(msg.contains("created_at"), "{msg}");
     assert!(msg.contains("started_at"), "suggestion missing: {msg}");
     assert!(msg.contains("completed_at"), "suggestion missing: {msg}");
-    // Inventory: a valid field the caller did not mention must be listed.
     assert!(msg.contains("tool_call_key"), "inventory missing: {msg}");
 }
 
-/// `AgentRequest.agent_name` (a retired field)
-/// and `AgentRequest.updated_at` (only `created_at` exists) are common
-/// operator mistakes from #592 — both must get suggestions.
 #[tokio::test]
 async fn invalid_agent_request_fields_get_suggestions() {
     let node = seeded_node().await;
@@ -402,7 +381,6 @@ async fn invalid_agent_request_fields_get_suggestions() {
     assert!(msg.contains("created_at"), "suggestion missing: {msg}");
 }
 
-/// An invalid field referenced only in the filter gets the same diagnostic.
 #[tokio::test]
 async fn invalid_filter_key_gets_diagnostics() {
     let node = seeded_node().await;
@@ -425,8 +403,6 @@ async fn invalid_filter_key_gets_diagnostics() {
     assert!(msg.contains("started_at"), "suggestion missing: {msg}");
 }
 
-/// `fields: ["*"]` is discovery mode: return the queryable field inventory
-/// (with types) instead of documents.
 #[tokio::test]
 async fn wildcard_fields_returns_field_inventory() {
     let node = seeded_node().await;
@@ -460,7 +436,6 @@ async fn wildcard_fields_returns_field_inventory() {
     assert!(!names.contains(&"_version"), "internals hidden: {names:?}");
 }
 
-/// Discovery must not advertise restricted secret fields.
 #[tokio::test]
 async fn discovery_excludes_restricted_fields() {
     let node = seeded_node().await;
@@ -491,7 +466,6 @@ async fn discovery_excludes_restricted_fields() {
     assert!(!names.contains(&"auth"), "secret leaked: {names:?}");
 }
 
-/// Discovery still honors the collection scope.
 #[tokio::test]
 async fn discovery_respects_collection_scope() {
     let node = seeded_node().await;
@@ -519,7 +493,6 @@ async fn discovery_respects_collection_scope() {
     );
 }
 
-/// Querying a collection that does not exist says so plainly.
 #[tokio::test]
 async fn unknown_collection_reports_does_not_exist() {
     let node = seeded_node().await;
@@ -563,7 +536,6 @@ async fn unknown_collection_reports_does_not_exist() {
     }
 }
 
-/// Mixing "*" with concrete fields is rejected with a pointer at discovery.
 #[tokio::test]
 async fn wildcard_mixed_with_fields_is_rejected_with_hint() {
     let node = seeded_node().await;
@@ -645,7 +617,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
             "mutation {{ add_PrivateRecord(input: {{label: \"{}\"}}) {{_docID}} }}",
             crate::graphql::escape_graphql_string(label)
         );
-        crate::config_client::ConfigAccess::transact_local(
+        crate::config_client::ConfigAccess::transact_local_write(
             &node,
             Some(::identity::Did::new(did).unwrap()),
             "seed_private_query",
@@ -657,7 +629,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
     let mut ids = std::collections::HashMap::new();
     for (did, label) in [(alice_did, "Alice-only"), (bob_did, "Bob-only")] {
         let actor = ::identity::Did::new(did).unwrap();
-        let rows = crate::config_client::ConfigAccess::transact_local(
+        let rows = crate::config_client::ConfigAccess::transact_local_write(
             &node,
             Some(actor),
             "test.private_field_ids",
@@ -707,7 +679,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
         assert_eq!(result["ranking"], "bm25");
 
         let bounded = BoundedQueryTool::new(
-            crate::config_client::ConfigAccess::Local(node.clone()),
+            crate::config_client::ConfigAccess::local(node.clone()),
             crate::document_config::QueryToolDecl {
                 tool_name: "private_records".into(),
                 collection: "PrivateRecord".into(),
@@ -754,7 +726,7 @@ async fn explain_preserves_native_plan_and_requires_explicit_execution() {
     )
     .await
     .unwrap();
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let scope = CollectionScope::restricted(vec!["PlanTicket".into()]);
     let args: QueryParams = serde_json::from_value(json!({"argv":["explain"],"collection":"PlanTicket","options":{"fields":["reference"],"filter":{"status":{"_eq":"closed"}},"limit":5}})).unwrap();
     let result = execute_command(&access, &args, &scope).await.unwrap();

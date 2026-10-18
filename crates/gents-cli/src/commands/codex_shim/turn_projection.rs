@@ -713,19 +713,12 @@ fn observe_latest_response_completion(current: &mut Option<i64>, observed: Optio
 
 #[cfg(test)]
 #[path = "../../../../gents/src/lean_vocab_test/support.rs"]
-mod lean_reasoning_contracts;
+pub(super) mod lean_reasoning_contracts;
 
 #[cfg(test)]
 pub(in crate::commands::codex_shim) mod tests {
     use gents_codex_protocol as codex;
 
-    use super::{
-        observe_latest_response_completion, reasoning_item, suppress_blank_agent_delta,
-        terminal_reasoning_backfill_allowed, ReasoningCompletionTracker,
-    };
-
-    // Observations begin after the stream cursor has selected a segment/delta.
-    // This exercises emitted protocol notifications, not cursor delta discovery.
     #[tokio::test]
     async fn generated_reasoning_projection_cases_drive_turn_projection_notifications() {
         use super::super::{CodexSidecar, ShimState};
@@ -769,8 +762,6 @@ pub(in crate::commands::codex_shim) mod tests {
                 temp.path().to_path_buf(),
                 None,
             );
-            // Current primed fixtures resume an already open item; cursor-only
-            // priming without an open item needs a stream-owner fixture.
             assert!(!case.cursor_primed || case.item_open, "{}", case.witness);
             if case.item_open {
                 projection.resume_reasoning(
@@ -779,9 +770,24 @@ pub(in crate::commands::codex_shim) mod tests {
                 );
             }
             if case.item_completed {
+                assert!(!case.item_open, "{}", case.witness);
+                let text = case.durable_text.as_deref().expect("completed reasoning");
                 projection
-                    .completed_reasoning_items
-                    .record("reasoning".to_string());
+                    .finish_reasoning(&outbound, "previous-reasoning", Some(text))
+                    .await
+                    .expect("complete previous reasoning");
+                let mut setup_events = Vec::new();
+                while let Ok(payload) = notifications.try_recv() {
+                    let notification: codex::ServerNotification =
+                        serde_json::from_str(&payload).expect("setup notification");
+                    setup_events.push(match notification {
+                        codex::ServerNotification::ItemStarted(_) => "started",
+                        codex::ServerNotification::ReasoningTextDelta(_) => "rawTextDelta",
+                        codex::ServerNotification::ItemCompleted(_) => "completed",
+                        other => panic!("unexpected setup notification: {other:?}"),
+                    });
+                }
+                assert_eq!(setup_events, ["started", "rawTextDelta", "completed"]);
             }
             if let Some(delta) = case.live_delta.as_deref() {
                 projection
@@ -827,89 +833,21 @@ pub(in crate::commands::codex_shim) mod tests {
                 case.witness
             );
             assert_eq!(completed_text, case.completed_text, "{}", case.witness);
+            if case.terminal {
+                projection
+                    .finish_reasoning(&outbound, "reasoning", case.durable_text.as_deref())
+                    .await
+                    .expect("re-observe terminal reasoning");
+                assert!(
+                    notifications.try_recv().is_err(),
+                    "terminal reasoning replayed: {}",
+                    case.witness
+                );
+            }
         }
         node.shutdown().await;
     }
 
-    #[test]
-    fn suppresses_blank_delta_that_would_open_phantom_agent_stream() {
-        assert!(suppress_blank_agent_delta("", "\n  "));
-        assert!(suppress_blank_agent_delta("  ", "\n  "));
-    }
-
-    #[test]
-    fn keeps_blank_delta_inside_visible_agent_stream() {
-        assert!(!suppress_blank_agent_delta("visible", "\n\n"));
-    }
-
-    #[test]
-    fn keeps_visible_delta() {
-        assert!(!suppress_blank_agent_delta("", "answer"));
-    }
-
-    #[test]
-    fn completed_reasoning_item_is_terminally_idempotent() {
-        let mut completed = ReasoningCompletionTracker::default();
-        assert!(!completed.contains("reasoning-1"));
-        assert!(completed.record("reasoning-1".to_string()));
-        assert!(completed.contains("reasoning-1"));
-        assert!(!completed.record("reasoning-1".to_string()));
-    }
-
-    #[test]
-    fn reset_before_terminal_suppresses_durable_backfill() {
-        assert!(terminal_reasoning_backfill_allowed(false, false));
-        assert!(terminal_reasoning_backfill_allowed(true, true));
-        assert!(!terminal_reasoning_backfill_allowed(false, true));
-    }
-
-    #[test]
-    fn final_response_completion_overwrites_prior_materialization_time() {
-        let mut completed_at_ms = None;
-        observe_latest_response_completion(&mut completed_at_ms, Some(100));
-        observe_latest_response_completion(&mut completed_at_ms, None);
-        observe_latest_response_completion(&mut completed_at_ms, Some(250));
-        assert_eq!(completed_at_ms, Some(250));
-    }
-
-    #[test]
-    fn reasoning_projection_round_trips_through_pinned_codex_protocol() {
-        let item = reasoning_item("reasoning-1", "durable reasoning");
-        let encoded = serde_json::to_value(&item).expect("encode reasoning item");
-        let decoded: codex::ThreadItem =
-            serde_json::from_value(encoded).expect("decode reasoning item");
-        assert!(matches!(
-            decoded,
-            codex::ThreadItem::Reasoning { id, summary, content }
-                if id == "reasoning-1"
-                    && summary.is_empty()
-                    && content == ["durable reasoning"]
-        ));
-
-        let notification =
-            codex::ServerNotification::ReasoningTextDelta(codex::ReasoningTextDeltaNotification {
-                thread_id: "thread-1".to_string(),
-                turn_id: "turn-1".to_string(),
-                item_id: "reasoning-1".to_string(),
-                delta: "increment".to_string(),
-                content_index: 0,
-            });
-        let encoded = serde_json::to_value(&notification).expect("encode reasoning delta");
-        let decoded: codex::ServerNotification =
-            serde_json::from_value(encoded).expect("decode reasoning delta");
-        assert!(matches!(
-            decoded,
-            codex::ServerNotification::ReasoningTextDelta(delta)
-                if delta.item_id == "reasoning-1"
-                    && delta.delta == "increment"
-                    && delta.content_index == 0
-        ));
-    }
-
-    // The Lean tool-metadata table (`Proofs/CodexShim/Projection.lean`
-    // precedence theorems) drives the REAL conversion owner:
-    // `gents_tool_item` + `tool_duration_ms` from `progress.rs`. A drift in
-    // either side (Lean table vs adapter) must fail this test.
     #[test]
     fn generated_tool_metadata_cases_drive_the_tool_item_owner() {
         use gents_codex_protocol::ThreadItem;
@@ -979,9 +917,6 @@ pub(in crate::commands::codex_shim) mod tests {
                     );
                 }
                 (Some(error), None) => {
-                    // The adapter's terminal fallback message is the only
-                    // difference from the Lean projection; a present error
-                    // with no Lean diagnostic is the documented default.
                     assert_eq!(error.message, "GENTS tool call failed", "{}", case.witness);
                 }
                 (None, expected) => {
@@ -992,9 +927,6 @@ pub(in crate::commands::codex_shim) mod tests {
                 }
             }
 
-            // Duration (CodexShim.projectedDurationMs): persisted latency
-            // first, then the timestamp difference, and never an invented
-            // value from incomplete timestamps.
             assert_eq!(
                 duration_ms,
                 case.projected_duration_ms.map(|ms| ms as i64),
@@ -1002,8 +934,6 @@ pub(in crate::commands::codex_shim) mod tests {
                 case.witness
             );
 
-            // These columns carry tool start/completion observations. The separate
-            // Lean event timestamp input is tested at the notification sender below.
             let started_ms = super::super::progress::tool_started_at_ms(&tool);
             let completed_ms = super::super::progress::tool_completed_at_ms(&tool);
             assert_eq!(
@@ -1018,11 +948,6 @@ pub(in crate::commands::codex_shim) mod tests {
         }
     }
 
-    // The Lean context-usage table drives the REAL usage owner:
-    // `thread_token_usage` (thread_projection/usage.rs). It must emit the
-    // cumulative totals and the latest-call totals as DISTINCT breakdowns and
-    // pass the model window through — never fold the latest call into the
-    // cumulative total.
     #[test]
     fn generated_context_usage_cases_drive_the_token_usage_owner() {
         use super::super::thread_projection::thread_token_usage;
@@ -1120,11 +1045,6 @@ pub(in crate::commands::codex_shim) mod tests {
         state
     }
 
-    // Terminal wire owner: `finish_turn` must complete any open reasoning
-    // item, close the agent message with the FinalAnswer phase, and emit a
-    // `TurnCompleted` notification carrying the turn timing that
-    // `set_completed_at` observed. A regression here drops the client's
-    // completed/failed distinction or invents a missing completion time.
     #[tokio::test]
     async fn finish_turn_emits_terminal_turn_with_observed_timing() {
         use tokio::sync::mpsc;
@@ -1132,7 +1052,6 @@ pub(in crate::commands::codex_shim) mod tests {
         let temp = tempfile::tempdir().expect("finish turn directory");
         let state = notification_test_state(temp.path()).await;
 
-        // Completed turn with observed timing.
         let (outbound, mut notifications) = mpsc::unbounded_channel();
         let mut projection = super::TurnProjection::new(
             &state,
@@ -1163,8 +1082,6 @@ pub(in crate::commands::codex_shim) mod tests {
         assert_eq!(turn_completed.turn.completed_at, Some(125));
         assert_eq!(turn_completed.turn.duration_ms, Some(25_000));
 
-        // Failed turn carries the failure message and never a completion time
-        // that was never observed.
         let (outbound, mut notifications) = mpsc::unbounded_channel();
         let mut projection =
             super::TurnProjection::new(&state, "thread", "turn", temp.path().to_path_buf(), None);
@@ -1194,8 +1111,6 @@ pub(in crate::commands::codex_shim) mod tests {
             "an absent failure reason must use the documented default"
         );
 
-        // An open agent message and open reasoning item are closed by the
-        // terminal notification, with the agent item carrying FinalAnswer.
         let (outbound, mut notifications) = mpsc::unbounded_channel();
         let mut projection =
             super::TurnProjection::new(&state, "thread", "turn", temp.path().to_path_buf(), None);
@@ -1205,7 +1120,6 @@ pub(in crate::commands::codex_shim) mod tests {
             .finish_turn(&outbound, codex::TurnStatus::Completed, None)
             .await
             .expect("finish turn with open items");
-        // Close the channel so the drain below terminates.
         drop(outbound);
         let mut agent_phases = Vec::new();
         let mut saw_reasoning_completed = false;
@@ -1239,12 +1153,6 @@ pub(in crate::commands::codex_shim) mod tests {
         state.node.shutdown().await;
     }
 
-    // The persisted-vs-observation event-timestamp precedence
-    // (`CodexShim.projectedEventTimestampMs`) is decided at EMIT time by
-    // `send_tool_completed`: the notification carries the persisted
-    // `completed_at` when present and falls back to `now_millis()` otherwise.
-    // A copied predicate in a test could never catch an emit-path regression
-    // (e.g. always stamping observation time), so drive the real sender.
     #[tokio::test]
     async fn tool_completion_notification_prefers_persisted_event_time() {
         use tokio::sync::mpsc;
@@ -1260,7 +1168,6 @@ pub(in crate::commands::codex_shim) mod tests {
             ..Default::default()
         };
 
-        // Persisted completion time wins over the observation time.
         tool.completed_at = Some("2026-07-23T00:00:01.250Z".to_string());
         let (outbound, mut notifications) = mpsc::unbounded_channel();
         let mut projection =
@@ -1296,9 +1203,6 @@ pub(in crate::commands::codex_shim) mod tests {
         }
         let persisted_ms = super::super::progress::timestamp_millis("2026-07-23T00:00:01.250Z")
             .expect("persisted timestamp");
-        // The started item has no persisted started_at, so it stamps the
-        // emit-time observation; the completed item must carry the persisted
-        // completion time, never the observation fallback.
         assert!(
             started_at_ms.is_some_and(|ms| (before_send..=after_send).contains(&ms)),
             "a missing started_at must fall back to the emit-time clock: {started_at_ms:?}"
@@ -1309,8 +1213,6 @@ pub(in crate::commands::codex_shim) mod tests {
             "the persisted event timestamp must precede the observation fallback"
         );
 
-        // Without any persisted event time the emit path stamps the
-        // observation time (`now_millis()`), never zero or an invented past.
         let tool = super::super::progress::GentsToolCallProgress {
             tool_call_key: "session:call".to_string(),
             tool_name: "search".to_string(),

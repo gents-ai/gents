@@ -1,5 +1,3 @@
-//! Background health checker for registered data services.
-
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -118,12 +116,6 @@ impl ServiceHealthEntry {
     }
 }
 
-/// `Reconnecting` is reachable only via `ProbeEvent::BackoffExpiry` in the
-/// Lean model; the production cycle does not emit that event today (the
-/// loop skips while backoff is active, then probes directly), so rows with
-/// `status: "reconnecting"` will only appear once the cycle is extended to
-/// bridge the gap. The persisted vocabulary covers it so future production
-/// emission needs no schema change.
 type HealthStateInternal = gents_protocol::tool_service_health::ToolServiceHealthState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,14 +157,7 @@ enum ProbeEvent {
     RegistryAbsent,
 }
 
-/// Full MCP service health snapshot exposed to operators (CLI table, desktop
-/// panel, and the persisted `ToolServiceHealthState` DefraDB row).
-///
-/// Carries the K-model fields (`failure_count`, `k_max`, `backoff_until`)
-/// that the public `HealthStatus` projection collapses. `status` is the
-/// internal `HealthStateInternal` projected to its DefraDB string
-/// vocabulary (`healthy` / `stale` / `evicted` / `reconnecting`).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct MCPServiceHealthSnapshot {
     pub service_id: String,
     pub endpoint: Option<String>,
@@ -189,12 +174,17 @@ pub struct MCPServiceHealthSnapshot {
 #[derive(Clone)]
 pub struct ServiceHealthMap {
     inner: Arc<RwLock<HashMap<String, ServiceHealthEntry>>>,
+    /// A failed or cancelled write has an ambiguous outcome. Removing the last
+    /// confirmed snapshot before awaiting it forces the next publish to name
+    /// every field. This belongs to the same owner as the live observations.
+    persisted: Arc<tokio::sync::Mutex<HashMap<(String, String), MCPServiceHealthSnapshot>>>,
 }
 
 impl ServiceHealthMap {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(RwLock::new(HashMap::new())),
+            persisted: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -215,10 +205,6 @@ impl ServiceHealthMap {
             .collect()
     }
 
-    /// Full per-service snapshot including the K-model fields. The
-    /// `snapshot()` projection drops `failure_count` / `backoff_until` /
-    /// the internal `HealthState`; this one preserves them for operator
-    /// surfaces (the desktop panel, the persisted DefraDB row).
     pub async fn snapshot_full(&self, k_max: u32) -> Vec<MCPServiceHealthSnapshot> {
         let k_max = k_max.max(1);
         self.inner
@@ -271,7 +257,7 @@ impl ServiceHealthMap {
 
 #[derive(Clone, Copy)]
 pub struct HealthPersistenceContext<'a> {
-    pub node: &'a EmbeddedNode,
+    pub node: &'a Arc<EmbeddedNode>,
     pub node_did: &'a str,
 }
 
@@ -310,7 +296,7 @@ pub fn spawn_health_checker(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let persistence = HealthPersistenceContext {
-            node: node.as_ref(),
+            node: &node,
             node_did: node_did.as_str(),
         };
         if let Err(error) = run_health_check(
@@ -339,7 +325,7 @@ pub fn spawn_health_checker(
                 }
                 _ = ticker.tick() => {
                     let persistence = HealthPersistenceContext {
-                        node: node.as_ref(),
+                        node: &node,
                         node_did: node_did.as_str(),
                     };
                     if let Err(error) = run_health_check(
@@ -384,8 +370,6 @@ async fn run_health_check(
             mcp_port: service.mcp_port.and_then(|port| u16::try_from(port).ok()),
             mcp_path: service.mcp_path.unwrap_or_default(),
             send_node_did: service.send_node_did,
-            // Configuration revisions are not service heartbeats. This probe
-            // supplies a fresh observation through the existing health owner.
             updated_at: None,
         })
         .collect();
@@ -433,15 +417,6 @@ pub async fn run_health_check_cycle(
         let previous_endpoint = previous.as_ref().and_then(|entry| entry.endpoint.clone());
         let previous_tool_count = previous.as_ref().and_then(|entry| entry.tool_count);
 
-        // The Lean model (`Proofs/MCPHealth/Transition.lean`) reaches the
-        // `Reconnecting` state via `ProbeEvent::BackoffExpiry` between an
-        // `Evicted` cycle and the next probe. The production loop does not
-        // emit that event today — it skips while backoff is active, then
-        // probes directly into `Healthy` / `Degraded` / back into `Evicted`.
-        // So persisted rows never carry `status: "reconnecting"` until the
-        // cycle is extended to bridge that gap (a future task; tracked
-        // alongside the K≥2 design pass in #303). The persisted vocabulary
-        // and the desktop panel already cover the state for that point.
         if backoff_is_active(&previous_model, now, options) {
             continue;
         }
@@ -582,7 +557,7 @@ pub async fn run_health_check_cycle(
 
     if let Some(persistence) = persistence {
         let snapshot = health_map.snapshot_full(options.failure_threshold_k).await;
-        persist_health_snapshot(&persistence, &snapshot, now).await;
+        persist_health_snapshot(&persistence, health_map, &snapshot, now).await;
         match load_persisted_service_ids(&persistence).await {
             Ok(persisted_ids) => {
                 for service_id in persisted_ids
@@ -740,90 +715,87 @@ fn classify_last_error(error: &str) -> &'static str {
 
 async fn persist_health_snapshot(
     persistence: &HealthPersistenceContext<'_>,
+    health_map: &ServiceHealthMap,
     snapshot: &[MCPServiceHealthSnapshot],
     now: DateTime<Utc>,
 ) {
+    let mut persisted = health_map.persisted.lock().await;
+    let service_ids: HashSet<_> = snapshot.iter().map(|row| row.service_id.as_str()).collect();
+    persisted.retain(|(node_did, service_id), _| {
+        node_did != persistence.node_did || service_ids.contains(service_id.as_str())
+    });
     for entry in snapshot {
-        if let Err(error) = upsert_persisted_health_state(persistence, entry, now).await {
+        let key = (persistence.node_did.to_owned(), entry.service_id.clone());
+        if persisted.get(&key) == Some(entry) {
+            continue;
+        }
+        let previous = persisted.remove(&key);
+        let mut result =
+            upsert_persisted_health_state(persistence, previous.as_ref(), entry, now).await;
+        if result.is_err() && collapse_health_state_twins(persistence, &entry.service_id).await {
+            result = upsert_persisted_health_state(persistence, None, entry, now).await;
+        }
+        if let Err(error) = result {
             tracing::warn!(
                 service_id = %entry.service_id,
                 error = %error,
                 "failed to persist ToolServiceHealthState",
             );
+        } else {
+            persisted.insert(key, entry.clone());
         }
     }
 }
 
+fn persisted_health_fields(
+    entry: &MCPServiceHealthSnapshot,
+) -> serde_json::Map<String, serde_json::Value> {
+    serde_json::json!({
+        "endpoint": entry.endpoint.as_deref().unwrap_or(""),
+        "status": entry.status,
+        "tool_count": entry.tool_count,
+        "failure_count": entry.failure_count,
+        "k_max": entry.k_max,
+        "backoff_until": entry.backoff_until,
+        "last_probe_at": entry.last_probe_at,
+        "last_seen": entry.last_seen,
+        "last_error_class": entry.last_error.as_deref().map(classify_last_error),
+        "last_error_message": entry.last_error,
+    })
+    .as_object()
+    .expect("health fields are an object")
+    .clone()
+}
+
 async fn upsert_persisted_health_state(
     persistence: &HealthPersistenceContext<'_>,
+    previous: Option<&MCPServiceHealthSnapshot>,
     entry: &MCPServiceHealthSnapshot,
     now: DateTime<Utc>,
 ) -> Result<()> {
     let service_id = escape_graphql_string(&entry.service_id);
     let node_did = escape_graphql_string(persistence.node_did);
-    let endpoint = entry.endpoint.as_deref().unwrap_or("");
-    let endpoint = escape_graphql_string(endpoint);
-    let status = escape_graphql_string(&entry.status);
-    let last_seen = entry.last_seen.to_rfc3339();
-    let last_probe_at = entry.last_probe_at.to_rfc3339();
-    let updated_at = now.to_rfc3339();
-    let tool_count_fragment = entry
-        .tool_count
-        .map(|count| count.to_string())
-        .unwrap_or_else(|| "null".to_string());
-    let backoff_until_fragment = match entry.backoff_until {
-        Some(dt) => format!(r#""{}""#, dt.to_rfc3339()),
-        None => "null".to_string(),
-    };
-    let (last_error_class, last_error_message) = match entry.last_error.as_deref() {
-        Some(error) => (
-            format!(r#""{}""#, classify_last_error(error)),
-            format!(r#""{}""#, escape_graphql_string(error)),
-        ),
-        None => ("null".to_string(), "null".to_string()),
-    };
-
+    let mut fields = persisted_health_fields(entry);
+    // `updated_at` moves on every write, so an unchanged row is skipped here;
+    // DefraDB writes no block for the other fields an update leaves unchanged.
+    if previous.map(persisted_health_fields).as_ref() == Some(&fields) {
+        return Ok(());
+    }
+    fields.insert("updated_at".into(), serde_json::json!(now));
+    let update =
+        gents_protocol::graphql::graphql_input_literal(&serde_json::Value::Object(fields.clone()))?;
+    fields.insert("service_id".into(), serde_json::json!(entry.service_id));
+    fields.insert("node_did".into(), serde_json::json!(persistence.node_did));
+    let add = gents_protocol::graphql::graphql_input_literal(&serde_json::Value::Object(fields))?;
     let mutation = format!(
         r#"mutation {{
             upsert_ToolServiceHealthState(
-                filter: {{ _and: [
-                    {{ service_id: {{ _eq: "{service_id}" }} }},
-                    {{ node_did: {{ _eq: "{node_did}" }} }}
-                ] }},
-                add: {{
-                    service_id: "{service_id}",
-                    node_did: "{node_did}",
-                    endpoint: "{endpoint}",
-                    status: "{status}",
-                    tool_count: {tool_count_fragment},
-                    failure_count: {failure_count},
-                    k_max: {k_max},
-                    backoff_until: {backoff_until_fragment},
-                    last_probe_at: "{last_probe_at}",
-                    last_seen: "{last_seen}",
-                    last_error_class: {last_error_class},
-                    last_error_message: {last_error_message},
-                    updated_at: "{updated_at}"
-                }},
-                update: {{
-                    endpoint: "{endpoint}",
-                    status: "{status}",
-                    tool_count: {tool_count_fragment},
-                    failure_count: {failure_count},
-                    k_max: {k_max},
-                    backoff_until: {backoff_until_fragment},
-                    last_probe_at: "{last_probe_at}",
-                    last_seen: "{last_seen}",
-                    last_error_class: {last_error_class},
-                    last_error_message: {last_error_message},
-                    updated_at: "{updated_at}"
-                }}
+                filter: {{ service_id: {{ _eq: "{service_id}" }}, node_did: {{ _eq: "{node_did}" }} }},
+                add: {add},
+                update: {update}
             ) {{ _docID }}
         }}"#,
-        failure_count = entry.failure_count,
-        k_max = entry.k_max,
     );
-
     crate::config_client::ConfigAccess::write_local_response(
         persistence.node,
         "health_checker.upsert_service_state",
@@ -831,6 +803,67 @@ async fn upsert_persisted_health_state(
     )
     .await?;
     Ok(())
+}
+
+/// The schema cannot make (service_id, node_did) unique, and an upsert fails
+/// on every later cycle once twins exist. Keep the row readers select (newest
+/// `updated_at`, then lowest `_docID`) and delete this node's other rows.
+/// Returns whether any twin was deleted.
+async fn collapse_health_state_twins(
+    persistence: &HealthPersistenceContext<'_>,
+    service_id: &str,
+) -> bool {
+    let service = escape_graphql_string(service_id);
+    let node_did = escape_graphql_string(persistence.node_did);
+    let query = format!(
+        r#"{{ ToolServiceHealthState(
+            filter: {{ service_id: {{ _eq: "{service}" }}, node_did: {{ _eq: "{node_did}" }} }},
+            order: [{{ updated_at: DESC }}, {{ _docID: ASC }}]
+        ) {{ _docID }} }}"#
+    );
+    let twins = match crate::graphql::graphql_with_transaction_retry(
+        persistence.node,
+        &query,
+        "load_service_health_twins",
+    )
+    .await
+    {
+        Ok(response) => response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("ToolServiceHealthState"))
+            .and_then(|rows| rows.as_array())
+            .into_iter()
+            .flatten()
+            .skip(1)
+            .filter_map(|row| row.get("_docID").and_then(|id| id.as_str()))
+            .map(|id| format!(r#""{}""#, escape_graphql_string(id)))
+            .collect::<Vec<_>>(),
+        Err(error) => {
+            tracing::warn!(service_id, error = %error, "failed to load ToolServiceHealthState twins");
+            return false;
+        }
+    };
+    if twins.is_empty() {
+        return false;
+    }
+    let mutation = format!(
+        r#"mutation {{ delete_ToolServiceHealthState(filter: {{ _docID: {{ _in: [{}] }} }}) {{ _docID }} }}"#,
+        twins.join(", ")
+    );
+    match crate::config_client::ConfigAccess::write_local_response(
+        persistence.node,
+        "health_checker.collapse_service_state_twins",
+        &mutation,
+    )
+    .await
+    {
+        Ok(_) => true,
+        Err(error) => {
+            tracing::warn!(service_id, error = %error, "failed to delete ToolServiceHealthState twins");
+            false
+        }
+    }
 }
 
 async fn delete_persisted_health_state(
@@ -877,10 +910,12 @@ async fn load_persisted_service_ids(
             }}
         }}"#
     );
-    let resp = persistence.node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!("load_persisted_service_ids failed: {:?}", resp.errors);
-    }
+    let resp = crate::graphql::graphql_with_transaction_retry(
+        persistence.node,
+        &query,
+        "load_persisted_service_ids",
+    )
+    .await?;
     let raw = resp
         .data
         .as_ref()
@@ -966,6 +1001,126 @@ mod tests {
     };
     use crate::lean_vocab_test::{lean_mcp_health_cases, LeanMcpHealthCase};
     use crate::mcp_pool::McpPool;
+
+    #[tokio::test]
+    async fn health_persistence_skips_unchanged_rows_and_only_commits_changed_fields() {
+        async fn field_commits(node: &EmbeddedNode) -> std::collections::BTreeMap<String, usize> {
+            let rows = node.execute("{ ToolServiceHealthState { _docID } }").await;
+            assert!(!rows.has_errors(), "{:?}", rows.errors);
+            let doc_id = rows.data.as_ref().unwrap()["ToolServiceHealthState"][0]["_docID"]
+                .as_str()
+                .unwrap();
+            let doc_id = crate::graphql::escape_graphql_string(doc_id);
+            let response = node
+                .execute(&format!(
+                    r#"{{ _commits(docID: "{doc_id}") {{ fieldName }} }}"#
+                ))
+                .await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+            let mut counts = std::collections::BTreeMap::new();
+            for commit in response.data.as_ref().unwrap()["_commits"]
+                .as_array()
+                .unwrap()
+            {
+                if let Some(field) = commit["fieldName"].as_str() {
+                    *counts.entry(field.to_owned()).or_default() += 1;
+                }
+            }
+            counts
+        }
+
+        let node = crate::oauth_credential::test_support::test_node().await;
+        let map = ServiceHealthMap::new();
+        let context = HealthPersistenceContext {
+            node: &node,
+            node_did: "did:key:health-owner",
+        };
+        let now = chrono::Utc::now();
+        let mut entry = super::MCPServiceHealthSnapshot {
+            service_id: "service".into(),
+            endpoint: Some("http://localhost/mcp".into()),
+            status: "healthy".into(),
+            tool_count: Some(2),
+            failure_count: 0,
+            k_max: 3,
+            backoff_until: None,
+            last_probe_at: now,
+            last_seen: now,
+            last_error: None,
+        };
+        super::persist_health_snapshot(&context, &map, &[entry.clone()], now).await;
+        let initial = field_commits(&node).await;
+        assert_eq!(initial.get("status"), Some(&1));
+
+        let later = now + ChronoDuration::seconds(30);
+        super::persist_health_snapshot(&context, &map, &[entry.clone()], later).await;
+        assert_eq!(
+            field_commits(&node).await,
+            initial,
+            "unchanged backoff observation must not write"
+        );
+
+        entry.last_probe_at = later;
+        entry.last_seen = later;
+        super::persist_health_snapshot(&context, &map, &[entry.clone()], later).await;
+        let probed = field_commits(&node).await;
+        for field in ["status", "endpoint", "tool_count", "failure_count", "k_max"] {
+            assert_eq!(
+                probed.get(field),
+                initial.get(field),
+                "unchanged {field} was rewritten"
+            );
+        }
+        for field in ["last_probe_at", "last_seen", "updated_at"] {
+            assert_eq!(
+                probed.get(field),
+                Some(&(initial[field] + 1)),
+                "fresh {field} was not published"
+            );
+        }
+
+        let unavailable = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let failed_context = HealthPersistenceContext {
+            node: &unavailable,
+            node_did: context.node_did,
+        };
+        entry.status = "stale".into();
+        entry.last_error = Some("connection refused".into());
+        super::persist_health_snapshot(&failed_context, &map, &[entry.clone()], later).await;
+        assert!(map.persisted.lock().await.is_empty());
+        unavailable.shutdown().await;
+        crate::config_client::ConfigAccess::write_local(
+            &node,
+            "test.health_repair",
+            r#"mutation { update_ToolServiceHealthState(input: {endpoint: "http://stale.invalid/mcp"}) { _docID } }"#,
+        )
+        .await
+        .unwrap();
+        let unconfirmed = field_commits(&node).await;
+        super::persist_health_snapshot(&context, &map, &[entry.clone()], later).await;
+        let repaired = field_commits(&node).await;
+        assert_eq!(
+            repaired["endpoint"],
+            unconfirmed["endpoint"] + 1,
+            "unconfirmed publish must repair every field"
+        );
+        let row = node
+            .execute("{ ToolServiceHealthState { endpoint status last_error_class } }")
+            .await;
+        assert_eq!(
+            row.data.as_ref().unwrap()["ToolServiceHealthState"][0]["endpoint"],
+            "http://localhost/mcp"
+        );
+        assert_eq!(
+            row.data.as_ref().unwrap()["ToolServiceHealthState"][0]["status"],
+            "stale"
+        );
+        assert_eq!(
+            row.data.as_ref().unwrap()["ToolServiceHealthState"][0]["last_error_class"],
+            "connection_refused"
+        );
+        node.shutdown().await;
+    }
 
     fn health_state_from_lean(case: &LeanMcpHealthCase, state: &str) -> HealthStateInternal {
         HealthStateInternal::parse(state).unwrap_or_else(|_| {
@@ -1277,7 +1432,6 @@ mod tests {
                 .clone()
         }
         let mut original_ids = Vec::new();
-        // A third cycle with fresh in-memory health must update the existing row.
         for (index, did) in [did_a, did_b, did_a].into_iter().enumerate() {
             run_health_check(
                 &node,
@@ -1335,7 +1489,6 @@ mod tests {
         }
         assert_eq!(probes.lock().unwrap().len(), 3);
 
-        // An actual registry change makes only this node's row stale.
         let response = node
             .execute(
                 r#"mutation {
@@ -1363,5 +1516,78 @@ mod tests {
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0]["node_did"], did_b);
         assert_eq!(remaining[0]["service_id"], "observability-mcp");
+    }
+
+    #[tokio::test]
+    async fn persistence_collapses_twins_to_the_row_readers_select() {
+        let node = crate::oauth_credential::test_support::test_node().await;
+        let node_did = "did:key:health-owner";
+        let mut created = std::collections::BTreeMap::<&str, Vec<String>>::new();
+        for (service, updated_at, endpoint) in [
+            ("newest", "2026-01-01T00:00:00Z", "a"),
+            ("newest", "2026-01-02T00:00:00Z", "b"),
+            ("tied", "2026-01-01T00:00:00Z", "a"),
+            ("tied", "2026-01-01T00:00:00Z", "b"),
+        ] {
+            let response = crate::config_client::ConfigAccess::write_local_response(
+                &node,
+                "test.health_twin",
+                &format!(
+                    r#"mutation {{ add_ToolServiceHealthState(input: {{service_id: "{service}", node_did: "{node_did}", status: "healthy", endpoint: "{endpoint}", updated_at: "{updated_at}"}}) {{ _docID }} }}"#
+                ),
+            )
+            .await
+            .unwrap();
+            let data = response.data.unwrap();
+            let doc_id = data["add_ToolServiceHealthState"][0]["_docID"]
+                .as_str()
+                .unwrap_or_else(|| panic!("add returned no _docID: {data}"));
+            created.entry(service).or_default().push(doc_id.to_owned());
+        }
+        let reader_order = |node: Arc<EmbeddedNode>| async move {
+            let response = node
+                .execute(
+                    r#"{ ToolServiceHealthState(order: [{ service_id: ASC }, { updated_at: DESC }, { _docID: ASC }]) { _docID service_id status } }"#,
+                )
+                .await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+            response.data.unwrap()["ToolServiceHealthState"]
+                .as_array()
+                .unwrap()
+                .clone()
+        };
+        let expected_newest = created["newest"][1].clone();
+        let expected_tied = created["tied"].iter().min().unwrap().clone();
+        let before = reader_order(node.clone()).await;
+        assert_eq!(before[0]["_docID"], expected_newest.as_str());
+        assert_eq!(before[2]["_docID"], expected_tied.as_str());
+
+        let now = chrono::Utc::now();
+        let snapshot = ["newest", "tied"].map(|service| super::MCPServiceHealthSnapshot {
+            service_id: service.into(),
+            endpoint: Some("http://localhost/mcp".into()),
+            status: "stale".into(),
+            tool_count: Some(1),
+            failure_count: 1,
+            k_max: 3,
+            backoff_until: None,
+            last_probe_at: now,
+            last_seen: now,
+            last_error: Some("connection refused".into()),
+        });
+        let map = ServiceHealthMap::new();
+        let context = HealthPersistenceContext {
+            node: &node,
+            node_did,
+        };
+        super::persist_health_snapshot(&context, &map, &snapshot, now).await;
+
+        let after = reader_order(node.clone()).await;
+        assert_eq!(after.len(), 2, "{after:?}");
+        assert_eq!(after[0]["_docID"], expected_newest.as_str());
+        assert_eq!(after[1]["_docID"], expected_tied.as_str());
+        assert!(after.iter().all(|row| row["status"] == "stale"));
+        assert_eq!(map.persisted.lock().await.len(), 2);
+        node.shutdown().await;
     }
 }

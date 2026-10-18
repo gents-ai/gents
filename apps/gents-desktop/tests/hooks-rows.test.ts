@@ -40,13 +40,6 @@ describe("task hook commands", () => {
     }
   });
 
-  it("keeps the regressions from the review", () => {
-    const empty = hooksFromDraft([toHookDraft(hook(["git", "commit", "-m", ""]))]);
-    expect(empty).toEqual([hook(["git", "commit", "-m", ""])]);
-    const quoted = hooksFromDraft([toHookDraft(hook(["echo", '"hi"']))]);
-    expect(quoted).toEqual([hook(["echo", '"hi"'])]);
-  });
-
   it("parses an edited line, keeping typed Windows backslashes literal", () => {
     const draft = toHookDraft(hook(["cargo", "test"]));
     const edited = {

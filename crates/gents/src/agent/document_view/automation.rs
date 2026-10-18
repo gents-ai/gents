@@ -1,13 +1,3 @@
-//! Canonical automation resolution for the runtime snapshot.
-//!
-//! Resolves the principal's canonical view maps (`tasks<Task>`,
-//! `schedules<Schedule>`, `triggers<Trigger>`, `event_sources<EventSource>`)
-//! into the derived runtime projections consumed by the existing trigger
-//! engine. Matching state lives on `EventSource`; the `Trigger` carries task
-//! selection, enabled state, concurrency and delivery identity only — no
-//! duplicate selector/run state and no graph model override
-//! (`Task.agent_id` is the only model selection path).
-
 use super::DocumentRuntimeView;
 use crate::runtime_snapshot::{
     ConcurrencyMode, EventTriggerFireMode, ResolvedAutomation, ResolvedEventTrigger,
@@ -15,8 +5,6 @@ use crate::runtime_snapshot::{
 };
 use std::collections::{HashMap, HashSet};
 
-/// Resolve the principal's automation documents into the derived runtime
-/// projection installed via `ResolvedRuntimeSnapshot::with_automation`.
 pub(super) fn resolve_automation(
     view: &DocumentRuntimeView,
     unavailable_agents: &HashMap<String, UnavailableAgent>,
@@ -28,9 +16,6 @@ pub(super) fn resolve_automation(
     let mut unavailable_event_triggers = HashSet::new();
     let mut unavailable_triggers = HashSet::new();
 
-    // Trigger -> Task -> agent_config is the shared entrance. First resolve every
-    // enabled trigger's task reference, then resolve schedule/event sources
-    // through it so the same admission gate applies to both consumers.
     let mut trigger_tasks: HashMap<String, ResolvedTask> = HashMap::new();
     for trigger_record in view.triggers.values() {
         let trigger = &trigger_record.value;
@@ -47,7 +32,6 @@ pub(super) fn resolve_automation(
             continue;
         }
         let Some(task_record) = view.tasks.get(task_id) else {
-            // Missing references fail; the trigger is quarantined.
             unavailable_triggers.insert(trigger_id.clone());
             continue;
         };
@@ -90,8 +74,6 @@ pub(super) fn resolve_automation(
             continue;
         };
 
-        // Canonical concurrency vocabulary; omitted/null is parallel for
-        // either source, matching the graph-edge default.
         let concurrency = trigger.concurrency.unwrap_or_default();
 
         match &trigger.source {
@@ -197,8 +179,6 @@ fn resolve_schedule_trigger(
     unavailable_schedules: &mut HashSet<String>,
 ) {
     let Some(schedule_record) = view.schedules.get(schedule_id) else {
-        // Missing references fail; the schedule is quarantined under its
-        // logical trigger_id, independently of other references to this cadence.
         tracing::warn!(
             trigger_id = %trigger_id,
             schedule_id = %schedule_id,
@@ -258,7 +238,6 @@ fn resolve_event_trigger(
     unavailable_event_triggers: &mut HashSet<String>,
 ) {
     let Some(source_record) = view.event_sources.get(event_source_id) else {
-        // Missing references fail; the trigger is quarantined.
         tracing::warn!(
             trigger_id = %trigger_id,
             event_source_id = %event_source_id,
@@ -277,7 +256,6 @@ fn resolve_event_trigger(
         .filter(|value| !value.is_empty())
         .unwrap_or("created")
         .to_string();
-    // Replicated documents must pass the same matching admission as authored ones.
     if let Err(error) = source.validate() {
         tracing::warn!(trigger_id = %trigger_id, %error,
             "event trigger quarantined: invalid event source configuration");
@@ -335,8 +313,6 @@ fn resolve_event_trigger(
     );
 }
 
-/// Projects canonical `EventGroup` configuration onto the runtime
-/// per-group fields: fixed count or source-field count, timeout and minimum.
 fn group_projection(
     source: &crate::document_config::EventSource,
 ) -> (Option<usize>, Option<String>, Option<u64>, usize) {

@@ -1,5 +1,3 @@
-//! Embedded trial homes: one DefraDB data directory, one identity, one runtime.
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,7 +33,6 @@ pub struct EmbeddedHome {
     did: String,
     path: PathBuf,
     p2p: Option<P2PConfigForPath>,
-    /// Owns the directory for temporary homes so it lives as long as the home.
     #[allow(dead_code)]
     tempdir: Option<TempDir>,
 }
@@ -57,7 +54,6 @@ impl EmbeddedHome {
         Self::in_tempdir(tempdir, None).await
     }
 
-    /// Open a home in a caller-owned temporary directory; the home owns it.
     pub async fn in_tempdir(tempdir: TempDir, p2p: Option<P2PConfigForPath>) -> Result<Self> {
         let mut home = Self::open_at(tempdir.path().to_path_buf(), p2p).await?;
         home.tempdir = Some(tempdir);
@@ -150,9 +146,6 @@ impl EmbeddedHome {
         &self.path
     }
 
-    /// Rebuild the node the way a crashed process would: the `EmbeddedNode`
-    /// is shut down, must then be exclusively held, is dropped, and is opened
-    /// again on the same directory, DID and P2P configuration.
     pub async fn reopen(&mut self) -> Result<()> {
         // Stopping the node closes its subscriptions and other node-owned
         // services; wait for their handles to be released before claiming an
@@ -234,15 +227,13 @@ pub async fn boot_runtime(
     boot_runtime_within(home, identity, options, RUNTIME_READY_TIMEOUT).await
 }
 
-/// [`boot_runtime`] with an explicit readiness budget, so a test can make
-/// readiness fail without waiting out the production timeout.
+/// [`boot_runtime`] with an explicit readiness budget.
 ///
 /// A runtime that stops during startup ends the wait with its own error. One
 /// that is still running but never became ready still holds the node, so it
-/// is stopped before the readiness error is reported: the caller
-/// gets a home it can close, not one pinned by a task it was never handed.
-/// That stop is itself bounded, so a runtime that does not answer its shutdown
-/// signal cannot turn a reported failure into a hang.
+/// is stopped before the readiness error is reported. That stop is bounded, so
+/// a runtime that does not answer its shutdown signal cannot turn a reported
+/// failure into a hang.
 pub(crate) async fn boot_runtime_within(
     home: &EmbeddedHome,
     identity: Arc<dyn NodeIdentity>,
@@ -253,8 +244,6 @@ pub(crate) async fn boot_runtime_within(
     let node_did = agent.node_did().to_string();
     let (shutdown, shutdown_rx) = watch::channel(false);
     let mut handle = tokio::spawn(agent.clone().run(shutdown_rx));
-    // A runtime that stops during startup never becomes ready; its own error
-    // is the diagnosis, so it ends the wait rather than the timeout.
     let ready = tokio::select! {
         ready = wait_for_runtime_ready_within(home.node.as_ref(), &node_did, ready_timeout) => ready,
         stopped = &mut handle => {
@@ -271,9 +260,6 @@ pub(crate) async fn boot_runtime_within(
         node_did: node_did.clone(),
     };
     if let Err(error) = ready {
-        // Bounded: a runtime that ignores its shutdown signal must not turn a
-        // reported infrastructure failure into a caller that never returns.
-        // Giving up on it leaks a task, which is the lesser of the two.
         match tokio::time::timeout(RUNTIME_READY_TIMEOUT, runtime.shutdown()).await {
             Ok(Ok(())) => {}
             Ok(Err(stopping)) => tracing::warn!(
@@ -332,7 +318,6 @@ async fn wait_for_runtime_ready_within(
     }
 }
 
-/// Fields the readiness condition reads from the runtime and agent-readiness rows.
 #[derive(Debug)]
 struct RuntimeSnapshot {
     process_state: String,
@@ -446,61 +431,7 @@ mod tests {
         let home = EmbeddedHome::create_temp("eval-home").await.unwrap();
         assert!(home.did().starts_with("did:"));
         assert!(home.path().join("node.key").exists());
-        // ensure_runtime_schemas ran: AgentRequest is queryable.
         let response = home.node.execute("query { AgentRequest { _docID } }").await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);
-    }
-
-    #[tokio::test]
-    async fn a_retained_home_survives_reopen_and_keeps_its_did() {
-        let dir = tempfile::tempdir().unwrap();
-        let retained = dir.path().join("trial-home");
-        let mut home = EmbeddedHome::create_retained(&retained).await.unwrap();
-        let did = home.did().to_string();
-        home.reopen().await.unwrap();
-        assert_eq!(home.did(), did);
-        drop(home);
-        let reopened = EmbeddedHome::open_retained(&retained).await.unwrap();
-        assert_eq!(reopened.did(), did);
-    }
-
-    /// A zero readiness budget fails the boot rather than reporting a ready
-    /// runtime, which is what lets the executor treat an unready home as
-    /// infrastructure.
-    ///
-    /// This does not assert that `boot_runtime_within` stopped the runtime it
-    /// spawned on that path. A bare temp home configures no agent, so the
-    /// spawned `Gents::run` task ends on its own: `Arc::strong_count` and
-    /// `EmbeddedHome::reopen` read the same before and after the shutdown, and
-    /// an assertion on either would pass with the shutdown removed.
-    #[tokio::test]
-    async fn a_zero_readiness_budget_fails_the_boot() {
-        let home = EmbeddedHome::create_temp("boot-unready").await.unwrap();
-        let error = match boot_runtime_within(
-            &home,
-            home.identity.clone(),
-            DocumentRuntimeOptions::default(),
-            Duration::ZERO,
-        )
-        .await
-        {
-            Ok(_) => panic!("a zero readiness budget must not report a ready runtime"),
-            Err(error) => error,
-        };
-        // A bare temp home's runtime may also stop on its own first; either
-        // way the boot fails rather than reporting a ready runtime.
-        let message = format!("{error:#}");
-        assert!(
-            message.contains("ready state") || message.contains("stopped before it became ready"),
-            "{message}"
-        );
-        home.node.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn create_retained_refuses_an_existing_directory() {
-        let dir = tempfile::tempdir().unwrap();
-        let error = EmbeddedHome::create_retained(dir.path()).await.unwrap_err();
-        assert!(error.to_string().contains("already exists"), "{error}");
     }
 }

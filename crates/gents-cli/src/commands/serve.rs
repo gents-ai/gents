@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 use crate::cli::*;
 use crate::commands::codex_shim::{bind_codex_shim, CodexShimBindArgs};
+#[cfg(unix)]
 use crate::commands::grok_shim::{bind_grok_shim, GrokShimBindArgs};
 use crate::http::router::{RuntimeActivationObservation, ServeLifecycleHandle};
 use crate::http::runtime_contract_router;
@@ -132,7 +133,7 @@ async fn wait_for_live_node_readiness(
     loop {
         let last_observation =
             match crate::commands::status::load_live_node_readiness(
-                &gents::config_client::GraphqlEndpoint::anonymous(graphql_url),
+                &gents::config_client::GraphqlEndpoint::as_principal(graphql_url, node_did),
                 node_did,
             )
                 .await
@@ -238,9 +239,6 @@ fn set_codex_shim_health(handle: &CodexShimHealthHandle, health: CodexShimHealth
     }
 }
 
-/// Apply a self-contained pack (optional `schemas/` then desired-state) to the
-/// server's live node after readiness. Rebinds placeholder DIDs to the home
-/// node so checked-in experiment packs work without hand-editing.
 async fn apply_pack_after_ready(
     node: Arc<EmbeddedNode>,
     home_dir: &Path,
@@ -262,7 +260,7 @@ async fn apply_pack_after_ready(
         root.display()
     );
 
-    let access = ConfigAccess::Local(node);
+    let access = ConfigAccess::local(node);
     let schemas = apply_pack_schemas_if_present(&access, root)
         .await
         .with_context(|| format!("pack schemas under {}", root.display()))?;
@@ -384,7 +382,6 @@ fn spawn_codex_shim_supervisor(
                         );
                     }
                     Err(error) => {
-                        // Not a document. No generation retracts it, so stop.
                         binding.settle_listen(false);
                         set_codex_shim_health(
                             &health,
@@ -559,6 +556,11 @@ async fn wait_for_embedded_http_bind(
 }
 
 async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
+    #[cfg(not(unix))]
+    anyhow::ensure!(
+        !args.grok_shim,
+        "--grok-shim requires Unix; omit it to run the server on this platform"
+    );
     args.codex_shim_public_url = args
         .codex_shim_public_url
         .as_deref()
@@ -579,7 +581,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
         .unwrap_or_else(|| default_data_dir(&home_dir));
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    let _store_lock = gents::home::lock_store(&home_dir, &data_dir)?;
+    let store_lock = gents::home::lock_store(&home_dir, &data_dir)?;
     let http_port = args.http_port.unwrap_or(crate::DEFAULT_HTTP_PORT);
     if args.http_port.is_none() && !crate::home_state::is_default_home(&home_dir) {
         tracing::warn!(
@@ -739,9 +741,6 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
         .await?
         .with_http(defra_node::HttpConfig::with_addr(http_addr).with_extra_routes(extra_routes));
     if let Some(node_identity_did) = server_identity.node_identity_did.as_ref() {
-        // The served home's node identity owns node access control, so its HTTP
-        // API admits writes, schema changes and P2P administration only from
-        // requests that identity signs.
         node_builder = node_builder
             .with_node_identity_did(node_identity_did.clone())
             .with_node_acp_enabled();
@@ -755,546 +754,570 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
             .await
             .context("building embedded DefraDB node")?,
     );
-    if let Err(error) =
-        wait_for_embedded_http_bind(http_addr, &bind_probe_path, &bind_probe_token).await
-    {
-        node.shutdown().await;
-        return Err(error);
-    }
-    // A store from an older build is refused before anything else starts, and
-    // exits with the incompatible-store status instead of a generic failure.
-    if let Err(error) = gents::migration::ensure_all_runtime_migrations(node.clone()).await {
-        node.shutdown().await;
-        return Err(gents::storage_backend::classify_store_error(
-            error, &data_dir,
-        ));
-    }
-    gents::store_key::upgrade::finish(&data_dir)?;
-    let schema = gents::agent::p2p_reconcile::read_client_replicated_schema(node.clone())
-        .await
-        .context("reading client route collection versions after migrations")?;
-    replicated_schema.set(schema).ok();
-    let enrollment_network = crate::http::enrollment::ensure_enrollment_network(
-        node.as_ref(),
-        identity.as_ref(),
-        &node_name,
-    )
-    .await
-    .context("ensuring authenticated enrollment network")?;
-    *enrollment_decisions.write().await = Some(
-        crate::http::enrollment::EnrollmentDecisionService::new(identity.clone(), node.clone()),
-    );
-    let (ready_tx, mut ready_rx) = watch::channel(ProcessLifecycleState::Uninitialized);
-    let (runnable_tx, runnable_rx) = watch::channel::<Vec<String>>(Vec::new());
-    let (configuration_tx, mut configuration_rx) =
-        watch::channel::<Option<RuntimeConfigurationObservation>>(None);
-
-    let agent = Gents::from_default_agent_documents(
-        node.clone(),
-        identity.clone(),
-        DocumentRuntimeOptions {
-            mcp_pool: McpPool::new(),
-            local_hostname: Some(local_hostname),
-            tool_ceiling,
-            plugin_home: Some(home_dir.clone()),
-            backend_health: Some(backend_health.clone()),
-            process_state_observer: Some(Arc::new(CliReadyObserver { tx: ready_tx })),
-            runtime_snapshot_observer: Some(Arc::new(CliRuntimeSnapshotObserver {
-                runnable_tx,
-                configuration_tx,
-                activation_tx,
-            })),
-            ..Default::default()
-        },
-    )
-    .await
-    .with_context(|| {
-        format!(
-            "starting gents server from {}\n{}",
-            home_dir.display(),
-            server_start_failure_hint(&home_dir)
-        )
-    })?;
-    // The store lock held above makes this runtime the only reader of these
-    // records, so a surviving background process can be proven owned.
-    let agent = agent
-        .with_background_process_records(data_dir.join("background-processes"))
-        .with_task_hook_records(data_dir.join("task-hooks"));
-    let background_execution_registry = agent.background_execution_registry();
-    let runtime_configuration_probe = agent.clone();
-    activation_runtime
-        .set(agent.clone())
-        .map_err(|_| anyhow::anyhow!("runtime activation probe was initialized twice"))?;
-
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let signal_tx = shutdown_tx.clone();
-    tokio::spawn(async move {
-        wait_for_shutdown_signal().await;
-        let _ = signal_tx.send(true);
-    });
-
-    let mut runtime = ServeRuntime::spawn(shutdown_tx, agent.run(shutdown_rx));
+    let store_access =
+        match gents::config_client::ConfigAccess::claimed_local(node.clone(), store_lock) {
+            Ok(access) => access,
+            Err(error) => {
+                node.shutdown().await;
+                return Err(error);
+            }
+        };
+    let mut runtime = ServeRuntime::new().retain_shutdown_owner(node.clone(), store_access.clone());
+    #[cfg(unix)]
     let mut grok_shim_handle = None;
-    let outcome: Result<()> = async {
-        loop {
-            if *ready_rx.borrow() == ProcessLifecycleState::Ready {
-                break;
-            }
-
-            tokio::select! {
-                changed = ready_rx.changed() => {
-                    if changed.is_err() {
-                        break;
-                    }
-                }
-                result = runtime.join() => return result,
-            }
+    let serve_result: Result<()> = async {
+        if let Err(error) =
+            wait_for_embedded_http_bind(http_addr, &bind_probe_path, &bind_probe_token).await
+        {
+            return Err(error);
         }
+        if let Err(error) = gents::migration::ensure_all_runtime_migrations(node.clone()).await {
+            return Err(gents::storage_backend::classify_store_error(
+                error, &data_dir,
+            ));
+        }
+        gents::store_key::upgrade::finish(&data_dir)?;
+        let schema = gents::agent::p2p_reconcile::read_client_replicated_schema(node.clone())
+            .await
+            .context("reading client route collection versions after migrations")?;
+        replicated_schema.set(schema).ok();
+        let enrollment_network =
+            crate::http::enrollment::ensure_enrollment_network(&node, identity.as_ref(), &node_name)
+                .await
+                .context("ensuring authenticated enrollment network")?;
+        *enrollment_decisions.write().await = Some(
+            crate::http::enrollment::EnrollmentDecisionService::new(identity.clone(), node.clone()),
+        );
+        let (ready_tx, mut ready_rx) = watch::channel(ProcessLifecycleState::Uninitialized);
+        let (runnable_tx, runnable_rx) = watch::channel::<Vec<String>>(Vec::new());
+        let (configuration_tx, mut configuration_rx) =
+            watch::channel::<Option<RuntimeConfigurationObservation>>(None);
 
-        let p2p_status = gents::identity::as_node_identity(
-            node.as_ref(),
-            load_local_server_p2p_status(node.as_ref(), args.p2p_transport, p2p_admission),
+        let agent = Gents::from_default_agent_documents(
+            node.clone(),
+            identity.clone(),
+            DocumentRuntimeOptions {
+                mcp_pool: McpPool::new(),
+                local_hostname: Some(local_hostname),
+                tool_ceiling,
+                plugin_home: Some(home_dir.clone()),
+                backend_health: Some(backend_health.clone()),
+                process_state_observer: Some(Arc::new(CliReadyObserver { tx: ready_tx })),
+                runtime_snapshot_observer: Some(Arc::new(CliRuntimeSnapshotObserver {
+                    runnable_tx,
+                    configuration_tx,
+                    activation_tx,
+                })),
+                ..Default::default()
+            },
         )
-        .await?;
-        if let Some(p2p) = node.p2p_arc() {
-            *enrollment_offer_issuer.write().await =
-                Some(crate::http::enrollment::EnrollmentOfferIssuer::new(
-                    identity.clone(),
-                    p2p,
-                    enrollment_network.network_id,
-                    identity.did().to_string(),
-                    "client".to_string(),
-                ));
-        }
-
-        let mut codex_shim_output = None;
-        let codex_shim_bind_args = CodexShimBindArgs {
-            home: home_dir.clone(),
-            fs_root: effective_tool_root.clone(),
-            node: node.clone(),
-            background_execution_registry: background_execution_registry.clone(),
-            graphql: graphql_url.clone(),
-            node_did: identity.did().to_string(),
-            agent_id: args.codex_shim_agent_id.clone(),
-            auth_token: codex_shim_auth_token,
-            bind_addr: args.codex_shim_bind_addr,
-            port: args.codex_shim_port,
-            timeout_secs: args.codex_shim_timeout_secs,
-            poll_ms: args.codex_shim_poll_ms,
-        };
-        let mut codex_shim_handle = if args.no_codex_shim {
-            None
-        } else {
-            match bind_codex_shim(codex_shim_bind_args.clone()).await {
-                Ok(bound) => {
-                    let announced = announce_codex_shim(&bound, &args);
-                    set_codex_shim_health(
-                        &codex_shim_health,
-                        CodexShimHealth::Listening {
-                            websocket: announced
-                                .get("websocket")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default()
-                                .to_string(),
-                            auth_required: bound.auth_required(),
-                            bound_node_did: bound.node_did().to_string(),
-                            bound_agent_id: bound.agent_id().to_string(),
-                        },
-                    );
-                    codex_shim_output = Some(announced);
-                    Some(bound.spawn())
-                }
-                Err(error) if error.is_dependency_missing() => {
-                    match crate::commands::codex_shim::resolve_codex_shim_agent_id(
-                        node.as_ref(),
-                        args.codex_shim_agent_id.as_deref(),
-                        identity.did(),
-                    )
-                    .await
-                    {
-                        Ok(bound_agent_id) => {
-                            tracing::warn!("Codex endpoint pending: {:#}", error.error());
-                            tracing::warn!(
-                                "The server keeps running. The shim binds by itself once agent {bound_agent_id:?} \
-                                 becomes runnable (for example after `gents config apply`) — no restart needed."
-                            );
-                            codex_shim_output = Some(json!({
-                                "pending": true,
-                                "bound_agent_id": bound_agent_id,
-                                "reason": format!("{:#}", error.error()),
-                            }));
-                            set_codex_shim_health(
-                                &codex_shim_health,
-                                CodexShimHealth::Pending {
-                                    bound_agent_id: bound_agent_id.clone(),
-                                    reason: format!("{:#}", error.error()),
-                                },
-                            );
-                            spawn_codex_shim_supervisor(
-                                codex_shim_bind_args.clone(),
-                                bound_agent_id,
-                                runnable_rx,
-                                args.codex_shim_public_url.clone(),
-                                args.codex_shim_auth_token_env.clone(),
-                                codex_shim_health.clone(),
-                            );
-                        }
-                        Err(binding_error) => {
-                            let reason = format!("{binding_error:#}");
-                            tracing::warn!("Codex endpoint disabled: {reason}");
-                            codex_shim_output = Some(json!({
-                                "disabled": true,
-                                "reason": reason,
-                            }));
-                            set_codex_shim_health(
-                                &codex_shim_health,
-                                CodexShimHealth::Disabled { reason },
-                            );
-                        }
-                    }
-                    None
-                }
-                Err(error) => {
-                    tracing::warn!("Codex endpoint disabled: {:#}", error.error());
-                    tracing::warn!(
-                        "The server keeps running without it. Fix the cause and restart, pick another port with --codex-shim-port, or silence this with --no-codex-shim."
-                    );
-                    codex_shim_output = Some(json!({
-                        "disabled": true,
-                        "reason": format!("{:#}", error.error()),
-                    }));
-                    set_codex_shim_health(
-                        &codex_shim_health,
-                        CodexShimHealth::Disabled {
-                            reason: format!("{:#}", error.error()),
-                        },
-                    );
-                    None
-                }
-            }
-        };
-
-        let configuration_before_apply =
-            match wait_for_runtime_configuration(&mut configuration_rx, None).await {
-                Ok(observation) => observation,
-                Err(error) => return Err(error),
-            };
-
-        // Optional pack apply against the same in-process node (schemas/ first,
-        // then desired-state). Uses Local access so collection registration works
-        // without a separate home open / remote schema API.
-        let applied_pack = match args.apply_root.as_ref() {
-            Some(root) => {
-                match apply_pack_after_ready(node.clone(), &home_dir, root, args.apply_prune).await {
-                    Ok(outcome) => Some(outcome),
-                    Err(error) => {
-                        return Err(error).with_context(|| {
-                            format!(
-                                "server --apply-root {} failed; the runtime was shut down rather \
-                                 than serving without the requested pack. Schema registration is \
-                                 not transactional, so schemas/ may be partially applied — fix \
-                                 the pack and restart.",
-                                root.display()
-                            )
-                        });
-                    }
-                }
-            }
-            None => None,
-        };
-
-        let readiness_fence = applied_pack
-            .as_ref()
-            .map(|outcome| PostApplyReadinessFence {
-                expected_default_agent_id: outcome.expected_default_agent_id.clone(),
-                expected_agent_ids: outcome.expected_agent_ids.clone(),
-            });
-
-        if applied_pack.is_some() {
-            // The recurring backend prober ticks immediately at runtime startup,
-            // before --apply-root introduces any new backend documents, and then
-            // waits for its normal interval. Probe the post-apply set here so a
-            // reachable backend can promote unknown -> healthy inside the same
-            // readiness fence instead of making fresh pack startup wait a full
-            // recurring interval (or time out first).
-            let probe_options = gents::BackendProberOptions::default();
-            let probe_client = reqwest::Client::builder()
-                .timeout(probe_options.probe_timeout)
-                .build()
-                .context("building post-apply backend probe client")?;
-            let probe_outcome = gents::run_backend_probe_cycle(
-                node.clone(),
-                &probe_client,
-                &backend_health,
-                &probe_options,
-                identity.did(),
+        .await
+        .with_context(|| {
+            format!(
+                "starting gents server from {}\n{}",
+                home_dir.display(),
+                server_start_failure_hint(&home_dir)
             )
-            .await;
-            tracing::debug!(
-                promoted_backends = probe_outcome.promotable.len(),
-                routing_flips = probe_outcome.flipped.len(),
-                "completed post-apply backend readiness probe"
-            );
+        })?;
+        let agent = agent
+            .with_background_process_records(data_dir.join("background-processes"))
+            .with_task_hook_records(data_dir.join("task-hooks"));
+        let background_execution_registry = agent.background_execution_registry();
+        let runtime_configuration_probe = agent.clone();
+        activation_runtime
+            .set(agent.clone())
+            .map_err(|_| anyhow::anyhow!("runtime activation probe was initialized twice"))?;
 
-            let expected_fingerprint = match runtime_configuration_probe
-                .document_runtime_configuration_fingerprint()
-                .await
-            {
-                Ok(fingerprint) => fingerprint,
-                Err(error) => {
-                    return Err(error).context("resolving applied runtime configuration");
+        let signal_tx = runtime.shutdown_tx.clone();
+        tokio::spawn(async move {
+            wait_for_shutdown_signal().await;
+            let _ = signal_tx.send(true);
+        });
+
+        let runtime_access = store_access.clone();
+        runtime.start(move |shutdown_rx| async move {
+            let _runtime_access = runtime_access;
+            agent.run(shutdown_rx).await
+        });
+        let outcome: Result<()> = async {
+            loop {
+                if *ready_rx.borrow() == ProcessLifecycleState::Ready {
+                    break;
+                }
+
+                tokio::select! {
+                    changed = ready_rx.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                    }
+                    result = runtime.join() => return result,
+                }
+            }
+
+            let p2p_status =
+                load_local_server_p2p_status(node.as_ref(), args.p2p_transport, p2p_admission)
+                    .await?;
+            if let Some(p2p) = gents::identity::node_p2p(&node) {
+                *enrollment_offer_issuer.write().await =
+                    Some(crate::http::enrollment::EnrollmentOfferIssuer::new(
+                        identity.clone(),
+                        p2p,
+                        enrollment_network.network_id,
+                        identity.did().to_string(),
+                        "client".to_string(),
+                    ));
+            }
+
+            let mut codex_shim_output = None;
+            let codex_shim_bind_args = CodexShimBindArgs {
+                home: home_dir.clone(),
+                fs_root: effective_tool_root.clone(),
+                node: node.clone(),
+                background_execution_registry: background_execution_registry.clone(),
+                graphql: graphql_url.clone(),
+                node_did: identity.did().to_string(),
+                agent_id: args.codex_shim_agent_id.clone(),
+                auth_token: codex_shim_auth_token,
+                bind_addr: args.codex_shim_bind_addr,
+                port: args.codex_shim_port,
+                timeout_secs: args.codex_shim_timeout_secs,
+                poll_ms: args.codex_shim_poll_ms,
+            };
+            let mut codex_shim_handle = if args.no_codex_shim {
+                None
+            } else {
+                match bind_codex_shim(codex_shim_bind_args.clone()).await {
+                    Ok(bound) => {
+                        let announced = announce_codex_shim(&bound, &args);
+                        set_codex_shim_health(
+                            &codex_shim_health,
+                            CodexShimHealth::Listening {
+                                websocket: announced
+                                    .get("websocket")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_string(),
+                                auth_required: bound.auth_required(),
+                                bound_node_did: bound.node_did().to_string(),
+                                bound_agent_id: bound.agent_id().to_string(),
+                            },
+                        );
+                        codex_shim_output = Some(announced);
+                        Some(bound.spawn())
+                    }
+                    Err(error) if error.is_dependency_missing() => {
+                        match crate::commands::codex_shim::resolve_codex_shim_agent_id(
+                            node.as_ref(),
+                            args.codex_shim_agent_id.as_deref(),
+                            identity.did(),
+                        )
+                        .await
+                        {
+                            Ok(bound_agent_id) => {
+                                tracing::warn!("Codex endpoint pending: {:#}", error.error());
+                                tracing::warn!(
+                                    "The server keeps running. The shim binds by itself once agent {bound_agent_id:?} \
+                                     becomes runnable (for example after `gents config apply`) — no restart needed."
+                                );
+                                codex_shim_output = Some(json!({
+                                    "pending": true,
+                                    "bound_agent_id": bound_agent_id,
+                                    "reason": format!("{:#}", error.error()),
+                                }));
+                                set_codex_shim_health(
+                                    &codex_shim_health,
+                                    CodexShimHealth::Pending {
+                                        bound_agent_id: bound_agent_id.clone(),
+                                        reason: format!("{:#}", error.error()),
+                                    },
+                                );
+                                spawn_codex_shim_supervisor(
+                                    codex_shim_bind_args.clone(),
+                                    bound_agent_id,
+                                    runnable_rx,
+                                    args.codex_shim_public_url.clone(),
+                                    args.codex_shim_auth_token_env.clone(),
+                                    codex_shim_health.clone(),
+                                );
+                            }
+                            Err(binding_error) => {
+                                let reason = format!("{binding_error:#}");
+                                tracing::warn!("Codex endpoint disabled: {reason}");
+                                codex_shim_output = Some(json!({
+                                    "disabled": true,
+                                    "reason": reason,
+                                }));
+                                set_codex_shim_health(
+                                    &codex_shim_health,
+                                    CodexShimHealth::Disabled { reason },
+                                );
+                            }
+                        }
+                        None
+                    }
+                    Err(error) => {
+                        tracing::warn!("Codex endpoint disabled: {:#}", error.error());
+                        tracing::warn!(
+                            "The server keeps running without it. Fix the cause and restart, pick another port with --codex-shim-port, or silence this with --no-codex-shim."
+                        );
+                        codex_shim_output = Some(json!({
+                            "disabled": true,
+                            "reason": format!("{:#}", error.error()),
+                        }));
+                        set_codex_shim_health(
+                            &codex_shim_health,
+                            CodexShimHealth::Disabled {
+                                reason: format!("{:#}", error.error()),
+                            },
+                        );
+                        None
+                    }
                 }
             };
-            if expected_fingerprint != configuration_before_apply.fingerprint {
-                let published = match wait_for_runtime_configuration(
-                    &mut configuration_rx,
-                    Some(expected_fingerprint.as_str()),
-                )
-                .await
-                {
+
+            let configuration_before_apply =
+                match wait_for_runtime_configuration(&mut configuration_rx, None).await {
                     Ok(observation) => observation,
                     Err(error) => return Err(error),
                 };
-                if published.generation <= configuration_before_apply.generation {
-                    anyhow::bail!(
-                        "runtime published changed configuration without advancing generation: {} -> {}",
-                        configuration_before_apply.generation,
-                        published.generation,
-                    );
+
+            let applied_pack = match args.apply_root.as_ref() {
+                Some(root) => {
+                    match apply_pack_after_ready(node.clone(), &home_dir, root, args.apply_prune).await {
+                        Ok(outcome) => Some(outcome),
+                        Err(error) => {
+                            return Err(error).with_context(|| {
+                                format!(
+                                    "server --apply-root {} failed; the runtime was shut down rather \
+                                     than serving without the requested pack. Schema registration is \
+                                     not transactional, so schemas/ may be partially applied — fix \
+                                     the pack and restart.",
+                                    root.display()
+                                )
+                            });
+                        }
+                    }
                 }
-            }
-        }
+                None => None,
+            };
 
-        // `--apply-root` can replace the default agent and advance the runtime
-        // generation. Report and persist only the post-apply authoritative
-        // snapshot; pre-apply configuration is never reused as readiness evidence.
-        let readiness = match wait_for_live_node_readiness(
-            &graphql_url,
-            identity.did(),
-            readiness_fence.as_ref(),
-        )
-        .await
-        {
-            Ok(readiness) => readiness,
-            Err(error) => return Err(error),
-        };
-        let default_agent_id = readiness.snapshot.default_agent_id.clone();
-        let runnable_agents = readiness
-            .snapshot
-            .agents
-            .iter()
-            .filter(|entry| entry.state == AgentReadinessState::Ready)
-            .map(|entry| json!({ "agent_id": entry.agent_id }))
-            .collect::<Vec<_>>();
-        let unavailable_agents = readiness
-            .snapshot
-            .agents
-            .iter()
-            .filter_map(|entry| {
-                entry.reason.map(|reason| {
-                    json!({
-                        "agent_id": entry.agent_id,
-                        "reason": reason,
-                        "message": reason.public_message(),
-                    })
-                })
-            })
-            .collect::<Vec<_>>();
-        let readiness_status = if unavailable_agents.is_empty() {
-            "ready"
-        } else {
-            "degraded"
-        };
-        let node_readiness = serde_json::to_value(&readiness.snapshot)
-            .context("serializing durable node readiness")?;
-        let pack_apply = applied_pack.map(|outcome| outcome.report);
+            let readiness_fence = applied_pack
+                .as_ref()
+                .map(|outcome| PostApplyReadinessFence {
+                    expected_default_agent_id: outcome.expected_default_agent_id.clone(),
+                    expected_agent_ids: outcome.expected_agent_ids.clone(),
+                });
 
-        write_runtime_state(
-            &home_dir,
-            &StoredRuntimeState {
-                home: home_dir.to_string_lossy().to_string(),
-                graphql: graphql_url.clone(),
-                node_name: node_name.clone(),
-                node_did: identity.did().to_string(),
-                default_agent_id: default_agent_id.clone(),
-                p2p_transport: p2p_status
-                    .get("p2p_transport")
-                    .and_then(Value::as_str)
-                    .unwrap_or(P2pTransportArg::None.as_str())
-                    .to_string(),
-                p2p_peer_id: p2p_status
-                    .get("p2p_peer_id")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned),
-                p2p_listen_addresses: p2p_status
-                    .get("p2p_listen_addresses")
-                    .and_then(Value::as_array)
-                    .map(|rows| {
-                        rows.iter()
-                            .filter_map(Value::as_str)
-                            .map(ToOwned::to_owned)
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-                p2p_admission: p2p_admission_state,
-            },
-        )?;
-        // Local discovery reads runtime.json, so /status reports ready only after
-        // it names this process.
-        serve_lifecycle.mark_ready();
-
-        // The Grok TUI leader socket is opt-in: stock Grok attaches to it as the
-        // pager client. Binding follows pack apply and readiness fencing so a
-        // fresh home can receive the selected agent in this invocation.
-        let grok_shim_socket_path = args
-            .grok_shim
-            .then(|| resolve_grok_shim_socket_path(args.grok_shim_socket_path.as_deref()));
-        if let Some(socket_path) = grok_shim_socket_path.as_ref() {
-            match bind_grok_shim(GrokShimBindArgs {
-                background_executions: background_execution_registry.clone(),
-                node: node.clone(),
-                actor: identity::Did::new(identity.did().to_owned())
-                    .context("server node DID is not ACP-addressable")?,
-                graphql: graphql_url.clone(),
-                agent_id: args.grok_shim_agent_id.clone(),
-                node_did: identity.did().to_string(),
-                node_name: node_name.clone(),
-                socket_path: socket_path.clone(),
-            })
-            .await
-            {
-                Ok(handle) => grok_shim_handle = Some(handle),
-                Err(error) => {
-                    tracing::error!(
-                        socket = %socket_path.display(),
-                        error = %format!("{error:#}"),
-                        "Grok TUI endpoint disabled: the leader could not bind"
-                    );
-                }
-            }
-        }
-        let grok_shim_output = grok_shim_socket_path.as_ref().map(|socket_path| {
-            let bound = grok_shim_handle.is_some();
-            json!({
-                "socket": socket_path,
-                "bound": bound,
-            })
-        });
-
-        let output = json!({
-            "status": "serving",
-            "node_readiness": node_readiness,
-            "readiness_status": readiness_status,
-            "home": home_dir,
-            "node_name": node_name,
-            "node_did": identity.did(),
-            "default_agent_id": default_agent_id,
-            "tool_ceiling": format_tool_ceiling(effective_tool_ceiling),
-            "tool_root": effective_tool_root,
-            "runnable_agents": runnable_agents,
-            "unavailable_agents": unavailable_agents,
-            "graphql": graphql_url,
-            "p2p_transport": p2p_status.get("p2p_transport").cloned().unwrap_or(Value::String(default_p2p_transport())),
-            "p2p_peer_id": p2p_status.get("p2p_peer_id").cloned().unwrap_or(Value::Null),
-            "p2p_listen_addresses": p2p_status.get("p2p_listen_addresses").cloned().unwrap_or_else(|| json!([])),
-            "p2p_admission": p2p_status.get("p2p_admission").cloned().unwrap_or(Value::Null),
-            "codex_shim": codex_shim_output,
-            "grok_shim": grok_shim_output,
-            "apply_root": pack_apply,
-        });
-        print_json(&output)?;
-        if args.p2p_transport == P2pTransportArg::Iroh {
-            if let Some(admission) = output.get("p2p_admission") {
-                tracing::info!(
-                    "P2P admission: pending_dags={} push_tasks={} dag_fetches={} rate_burst={} rate/s={}",
-                    admission
-                        .get("max_pending_dags")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(0),
-                    admission
-                        .get("max_concurrent_push_tasks")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(0),
-                    admission
-                        .get("max_concurrent_dag_fetches")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(0),
-                    admission
-                        .get("rate_limit_burst")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(0),
-                    admission
-                        .get("rate_limit_rate")
-                        .and_then(serde_json::Value::as_f64)
-                        .unwrap_or(0.0),
+            if applied_pack.is_some() {
+                let probe_options = gents::BackendProberOptions::default();
+                let probe_client = reqwest::Client::builder()
+                    .timeout(probe_options.probe_timeout)
+                    .build()
+                    .context("building post-apply backend probe client")?;
+                let probe_outcome = gents::run_backend_probe_cycle(
+                    node.clone(),
+                    &probe_client,
+                    &backend_health,
+                    &probe_options,
+                    identity.did(),
+                )
+                .await;
+                tracing::debug!(
+                    promoted_backends = probe_outcome.promotable.len(),
+                    routing_flips = probe_outcome.flipped.len(),
+                    "completed post-apply backend readiness probe"
                 );
-            }
-            tracing::info!(
-                "gents server is running with IROH P2P. Press Ctrl-C to stop. For the desktop demo, run `gents-desktop init`, launch `gents-desktop`, wait for `replication: subscriptions armed`, then chat."
-            );
-        } else {
-            tracing::info!("gents server is running local-only. Press Ctrl-C to stop.");
-        }
 
-        if let Some(handle) = codex_shim_handle.as_mut() {
-            tokio::select! {
-                result = runtime.join() => result,
-                result = handle => {
-                    match result {
-                        Ok(result) => result.context("Codex shim task failed"),
-                        Err(error) => Err(anyhow::anyhow!("joining Codex shim task: {error}")),
+                let expected_fingerprint = match runtime_configuration_probe
+                    .document_runtime_configuration_fingerprint()
+                    .await
+                {
+                    Ok(fingerprint) => fingerprint,
+                    Err(error) => {
+                        return Err(error).context("resolving applied runtime configuration");
+                    }
+                };
+                if expected_fingerprint != configuration_before_apply.fingerprint {
+                    let published = match wait_for_runtime_configuration(
+                        &mut configuration_rx,
+                        Some(expected_fingerprint.as_str()),
+                    )
+                    .await
+                    {
+                        Ok(observation) => observation,
+                        Err(error) => return Err(error),
+                    };
+                    if published.generation <= configuration_before_apply.generation {
+                        anyhow::bail!(
+                            "runtime published changed configuration without advancing generation: {} -> {}",
+                            configuration_before_apply.generation,
+                            published.generation,
+                        );
                     }
                 }
             }
-        } else {
-            runtime.join().await
+
+            let readiness = match wait_for_live_node_readiness(
+                &graphql_url,
+                identity.did(),
+                readiness_fence.as_ref(),
+            )
+            .await
+            {
+                Ok(readiness) => readiness,
+                Err(error) => return Err(error),
+            };
+            let default_agent_id = readiness.snapshot.default_agent_id.clone();
+            let runnable_agents = readiness
+                .snapshot
+                .agents
+                .iter()
+                .filter(|entry| entry.state == AgentReadinessState::Ready)
+                .map(|entry| json!({ "agent_id": entry.agent_id }))
+                .collect::<Vec<_>>();
+            let unavailable_agents = readiness
+                .snapshot
+                .agents
+                .iter()
+                .filter_map(|entry| {
+                    entry.reason.map(|reason| {
+                        json!({
+                            "agent_id": entry.agent_id,
+                            "reason": reason,
+                            "message": reason.public_message(),
+                        })
+                    })
+                })
+                .collect::<Vec<_>>();
+            let readiness_status = if unavailable_agents.is_empty() {
+                "ready"
+            } else {
+                "degraded"
+            };
+            let node_readiness = serde_json::to_value(&readiness.snapshot)
+                .context("serializing durable node readiness")?;
+            let pack_apply = applied_pack.map(|outcome| outcome.report);
+
+            write_runtime_state(
+                &home_dir,
+                &StoredRuntimeState {
+                    home: home_dir.to_string_lossy().to_string(),
+                    graphql: graphql_url.clone(),
+                    node_name: node_name.clone(),
+                    node_did: identity.did().to_string(),
+                    default_agent_id: default_agent_id.clone(),
+                    p2p_transport: p2p_status
+                        .get("p2p_transport")
+                        .and_then(Value::as_str)
+                        .unwrap_or(P2pTransportArg::None.as_str())
+                        .to_string(),
+                    p2p_peer_id: p2p_status
+                        .get("p2p_peer_id")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                    p2p_listen_addresses: p2p_status
+                        .get("p2p_listen_addresses")
+                        .and_then(Value::as_array)
+                        .map(|rows| {
+                            rows.iter()
+                                .filter_map(Value::as_str)
+                                .map(ToOwned::to_owned)
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    p2p_admission: p2p_admission_state,
+                },
+            )?;
+            serve_lifecycle.mark_ready();
+
+            #[cfg(unix)]
+            let grok_shim_output = {
+                let grok_shim_socket_path = args
+                    .grok_shim
+                    .then(|| resolve_grok_shim_socket_path(args.grok_shim_socket_path.as_deref()));
+                if let Some(socket_path) = grok_shim_socket_path.as_ref() {
+                    match bind_grok_shim(GrokShimBindArgs {
+                        background_executions: background_execution_registry.clone(),
+                        node: node.clone(),
+                        actor: identity::Did::new(identity.did().to_owned())
+                            .context("server node DID is not ACP-addressable")?,
+                        graphql: graphql_url.clone(),
+                        agent_id: args.grok_shim_agent_id.clone(),
+                        node_did: identity.did().to_string(),
+                        node_name: node_name.clone(),
+                        socket_path: socket_path.clone(),
+                    })
+                    .await
+                    {
+                        Ok(handle) => grok_shim_handle = Some(handle),
+                        Err(error) => {
+                            tracing::error!(
+                                socket = %socket_path.display(),
+                                error = %format!("{error:#}"),
+                                "Grok TUI endpoint disabled: the leader could not bind"
+                            );
+                        }
+                    }
+                }
+                grok_shim_socket_path.as_ref().map(|socket_path| {
+                    let bound = grok_shim_handle.is_some();
+                    json!({
+                        "socket": socket_path,
+                        "bound": bound,
+                    })
+                })
+            };
+            #[cfg(not(unix))]
+            let grok_shim_output: Option<Value> = None;
+
+            let output = json!({
+                "status": "serving",
+                "node_readiness": node_readiness,
+                "readiness_status": readiness_status,
+                "home": home_dir,
+                "node_name": node_name,
+                "node_did": identity.did(),
+                "default_agent_id": default_agent_id,
+                "tool_ceiling": format_tool_ceiling(effective_tool_ceiling),
+                "tool_root": effective_tool_root,
+                "runnable_agents": runnable_agents,
+                "unavailable_agents": unavailable_agents,
+                "graphql": graphql_url,
+                "p2p_transport": p2p_status.get("p2p_transport").cloned().unwrap_or(Value::String(default_p2p_transport())),
+                "p2p_peer_id": p2p_status.get("p2p_peer_id").cloned().unwrap_or(Value::Null),
+                "p2p_listen_addresses": p2p_status.get("p2p_listen_addresses").cloned().unwrap_or_else(|| json!([])),
+                "p2p_admission": p2p_status.get("p2p_admission").cloned().unwrap_or(Value::Null),
+                "codex_shim": codex_shim_output,
+                "grok_shim": grok_shim_output,
+                "apply_root": pack_apply,
+            });
+            print_json(&output)?;
+            if args.p2p_transport == P2pTransportArg::Iroh {
+                if let Some(admission) = output.get("p2p_admission") {
+                    tracing::info!(
+                        "P2P admission: pending_dags={} push_tasks={} dag_fetches={} rate_burst={} rate/s={}",
+                        admission
+                            .get("max_pending_dags")
+                            .and_then(serde_json::Value::as_u64)
+                            .unwrap_or(0),
+                        admission
+                            .get("max_concurrent_push_tasks")
+                            .and_then(serde_json::Value::as_u64)
+                            .unwrap_or(0),
+                        admission
+                            .get("max_concurrent_dag_fetches")
+                            .and_then(serde_json::Value::as_u64)
+                            .unwrap_or(0),
+                        admission
+                            .get("rate_limit_burst")
+                            .and_then(serde_json::Value::as_u64)
+                            .unwrap_or(0),
+                        admission
+                            .get("rate_limit_rate")
+                            .and_then(serde_json::Value::as_f64)
+                            .unwrap_or(0.0),
+                    );
+                }
+                tracing::info!(
+                    "gents server is running with IROH P2P. Press Ctrl-C to stop. For the desktop demo, run `gents-desktop init`, launch `gents-desktop`, wait for `replication: subscriptions armed`, then chat."
+                );
+            } else {
+                tracing::info!("gents server is running local-only. Press Ctrl-C to stop.");
+            }
+
+            if let Some(handle) = codex_shim_handle.as_mut() {
+                tokio::select! {
+                    result = runtime.join() => result,
+                    result = handle => {
+                        match result {
+                            Ok(result) => result.context("Codex shim task failed"),
+                            Err(error) => Err(anyhow::anyhow!("joining Codex shim task: {error}")),
+                        }
+                    }
+                }
+            } else {
+                runtime.join().await
+            }
         }
+        .await;
+        outcome
     }
     .await;
-    let runtime_result = runtime.finish(outcome).await;
 
-    // Production shutdown is explicit and awaited. Dropping the handle is an
-    // emergency abort path; awaiting here lets the leader publish its shutdown
-    // frames, drain connection state, unlink the socket, and release the lock
-    // before `serve` returns.
-    if let Some(handle) = grok_shim_handle.as_mut() {
-        if let Err(error) = handle.shutdown().await {
-            if runtime_result.is_ok() {
-                return Err(error).context("shutting down the Grok shim leader");
+    let runtime_result = runtime.finish(serve_result).await;
+
+    #[cfg(unix)]
+    let runtime_result = {
+        let mut grok_shutdown_error = None;
+        if let Some(handle) = grok_shim_handle.as_mut() {
+            if let Err(error) = handle.shutdown().await {
+                if runtime_result.is_ok() {
+                    grok_shutdown_error = Some(error.context("shutting down the Grok shim leader"));
+                } else {
+                    tracing::warn!(
+                        error = %format!("{error:#}"),
+                        "Grok shim leader shutdown also failed while the server was exiting with an error"
+                    );
+                }
             }
-            tracing::warn!(
-                error = %format!("{error:#}"),
-                "Grok shim leader shutdown also failed while the server was exiting with an error"
-            );
         }
-    }
+        grok_shutdown_error.map_or(runtime_result, Err)
+    };
+    runtime.shutdown_node().await;
     runtime_result
 }
 
-/// The spawned runtime and the sender that asks it to drain.
-///
-/// Every exit after spawn goes through [`ServeRuntime::finish`]. Aborting or
-/// detaching the task would skip `run_agent`'s shutdown epilogue, leaving
-/// agent readiness at `ready`, received turns unflushed and detached
-/// children still firing.
 struct ServeRuntime {
+    executor: tokio::runtime::Handle,
     shutdown_tx: watch::Sender<bool>,
+    shutdown_rx: Option<watch::Receiver<bool>>,
     handle: Option<tokio::task::JoinHandle<Result<()>>>,
+    shutdown_owner: Option<(
+        Arc<gents::defra_node::EmbeddedNode>,
+        gents::config_client::ConfigAccess,
+    )>,
 }
 
 impl ServeRuntime {
-    fn spawn<F>(shutdown_tx: watch::Sender<bool>, run: F) -> Self
-    where
-        F: std::future::Future<Output = Result<()>> + Send + 'static,
-    {
+    fn new() -> Self {
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
         Self {
+            executor: tokio::runtime::Handle::current(),
             shutdown_tx,
-            handle: Some(tokio::spawn(run)),
+            shutdown_rx: Some(shutdown_rx),
+            handle: None,
+            shutdown_owner: None,
         }
     }
 
-    /// Waits for the runtime to exit on its own. Cancel-safe, so it can race
-    /// other exits in `select!`; once joined, later calls return `Ok(())`.
+    fn start<F, Fut>(&mut self, run: F)
+    where
+        F: FnOnce(watch::Receiver<bool>) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Result<()>> + Send + 'static,
+    {
+        let shutdown_rx = self
+            .shutdown_rx
+            .take()
+            .expect("ServeRuntime can only start once");
+        self.handle = Some(tokio::spawn(run(shutdown_rx)));
+    }
+
+    fn retain_shutdown_owner(
+        mut self,
+        node: Arc<gents::defra_node::EmbeddedNode>,
+        access: gents::config_client::ConfigAccess,
+    ) -> Self {
+        self.shutdown_owner = Some((node, access));
+        self
+    }
+
+    async fn shutdown_node(&mut self) {
+        if let Some((node, access)) = self.shutdown_owner.take() {
+            shutdown_claimed_node(node, access).await;
+        }
+    }
+
     async fn join(&mut self) -> Result<()> {
         let Some(handle) = self.handle.as_mut() else {
             return Ok(());
@@ -1304,9 +1327,7 @@ impl ServeRuntime {
         joined.context("joining gents runtime task")?
     }
 
-    /// Signals shutdown, awaits the runtime's drain and reports both the
-    /// serve outcome and the drain result.
-    async fn finish(mut self, outcome: Result<()>) -> Result<()> {
+    async fn finish(&mut self, outcome: Result<()>) -> Result<()> {
         self.shutdown_tx.send_replace(true);
         let drained = self.join().await;
         match (outcome, drained) {
@@ -1316,6 +1337,42 @@ impl ServeRuntime {
                 Err(error.context(format!("runtime shutdown also failed: {drain_error:#}")))
             }
         }
+    }
+}
+
+impl Drop for ServeRuntime {
+    fn drop(&mut self) {
+        self.shutdown_tx.send_replace(true);
+        let handle = self.handle.take();
+        if let Some((node, access)) = self.shutdown_owner.take() {
+            let _cleanup = self.executor.spawn(async move {
+                if let Some(handle) = handle {
+                    if let Err(error) = handle.await {
+                        tracing::warn!(
+                            error = %error,
+                            "gents runtime task failed to join during cancelled serve shutdown"
+                        );
+                    }
+                }
+                shutdown_claimed_node(node, access).await;
+            });
+        }
+    }
+}
+
+async fn shutdown_claimed_node(
+    node: Arc<gents::defra_node::EmbeddedNode>,
+    access: gents::config_client::ConfigAccess,
+) {
+    let shutdown = tokio::spawn(async move {
+        node.shutdown().await;
+        drop(access);
+    });
+    if let Err(error) = shutdown.await {
+        tracing::warn!(
+            error = %error,
+            "gents node shutdown task failed to join"
+        );
     }
 }
 
@@ -1505,8 +1562,6 @@ fn resolve_server_p2p_config(
         rate_limit_rate,
         max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
         max_pending_dags,
-        // Verified merges already fan out to explicit downstream replicators.
-        // Do not serialize the merge loop behind optional gossip rebroadcast.
         rebroadcast_on_merge: false,
     }))
 }
@@ -1596,7 +1651,7 @@ async fn load_local_server_p2p_status(
             "p2p_admission": admission,
         })),
         P2pTransportArg::Iroh => {
-            let p2p = node.p2p().ok_or_else(|| {
+            let p2p = gents::identity::node_p2p(node).ok_or_else(|| {
                 anyhow::anyhow!(
                     "P2P transport was requested but is not available on the embedded node"
                 )
@@ -1605,7 +1660,7 @@ async fn load_local_server_p2p_status(
                 .local_peer_id()
                 .await
                 .context("loading local P2P peer id from the embedded node")?;
-            let listen_addresses = wait_for_p2p_listen_addresses(p2p).await?;
+            let listen_addresses = wait_for_p2p_listen_addresses(p2p.as_ref()).await?;
             let connected_peers = p2p
                 .connected_peers()
                 .await
@@ -1661,12 +1716,7 @@ fn display_shim_host(host: IpAddr) -> String {
     }
 }
 
-/// Resolve the Grok TUI leader socket path.
-///
-/// An explicit `--grok-shim-socket-path` wins. Otherwise the leader binds
-/// under `$XDG_RUNTIME_DIR/gents/grok.sock`, falling back to
-/// `/tmp/gents-grok.sock` when no runtime dir is set (the same
-/// platform-neutral default the leader server's tests use as a short root).
+#[cfg(unix)]
 pub(crate) fn resolve_grok_shim_socket_path(explicit: Option<&Path>) -> PathBuf {
     if let Some(path) = explicit {
         return path.to_path_buf();
@@ -1695,8 +1745,6 @@ mod grok_shim_tests {
         }
     }
 
-    /// A home key an older build wrote with ambient (0644) permissions stops
-    /// the runtime with the insecure-key exit status, not a generic crash.
     #[cfg(unix)]
     #[test]
     fn an_older_insecure_home_key_exits_with_the_insecure_key_status() {
@@ -1726,85 +1774,11 @@ mod grok_shim_tests {
             0o644
         );
     }
-
-    #[test]
-    fn grok_shim_flags_default_off() {
-        let args = parse_server(&[]);
-        assert!(!args.grok_shim);
-        assert!(args.grok_shim_socket_path.is_none());
-        assert!(args.grok_shim_agent_id.is_none());
-    }
-
-    #[test]
-    fn grok_shim_socket_flags_require_the_shim_flag() {
-        // The socket path and agent override only make sense with the shim.
-        assert!(
-            Cli::try_parse_from(["gents", "server", "--grok-shim-socket-path", "/tmp/g.sock"])
-                .is_err()
-        );
-        assert!(Cli::try_parse_from(["gents", "server", "--grok-shim-agent-id", "b"]).is_err());
-    }
-
-    #[test]
-    fn grok_shim_flags_parse_with_the_shim_flag() {
-        let args = parse_server(&[
-            "--grok-shim",
-            "--grok-shim-socket-path",
-            "/tmp/leader.sock",
-            "--grok-shim-agent-id",
-            "agent-a",
-        ]);
-        assert!(args.grok_shim);
-        assert_eq!(
-            args.grok_shim_socket_path.as_deref(),
-            Some(Path::new("/tmp/leader.sock"))
-        );
-        assert_eq!(args.grok_shim_agent_id.as_deref(), Some("agent-a"));
-    }
-
-    #[test]
-    fn explicit_socket_path_wins_over_the_runtime_dir_default() {
-        assert_eq!(
-            resolve_grok_shim_socket_path(Some(Path::new("/tmp/custom.sock"))),
-            PathBuf::from("/tmp/custom.sock")
-        );
-    }
-
-    #[test]
-    fn socket_path_falls_back_to_tmp_without_a_runtime_dir() {
-        // `XDG_RUNTIME_DIR` is not guaranteed in a test process; assert the
-        // fallback shape only when the variable is actually unset so the test
-        // never depends on the host environment.
-        if std::env::var_os("XDG_RUNTIME_DIR").is_none() {
-            assert_eq!(
-                resolve_grok_shim_socket_path(None),
-                PathBuf::from("/tmp/gents-grok.sock")
-            );
-        }
-    }
 }
 
 #[cfg(test)]
 mod shim_host_tests {
     use super::*;
-    use crate::cli::{Cli, Command};
-    use clap::Parser;
-
-    fn parse_server(extra: &[&str]) -> ServeArgs {
-        let mut argv = vec!["gents", "server"];
-        argv.extend_from_slice(extra);
-        let cli = Cli::try_parse_from(argv).expect("server should parse");
-        match cli.command {
-            Command::Server(args) => args,
-            _ => panic!("expected `server`"),
-        }
-    }
-
-    #[test]
-    fn ipv6_shim_hosts_are_bracketed() {
-        assert_eq!(display_shim_host("::1".parse().unwrap()), "[::1]");
-        assert_eq!(display_shim_host("127.0.0.1".parse().unwrap()), "127.0.0.1");
-    }
 
     #[tokio::test]
     async fn embedded_http_probe_rejects_an_unrelated_listener() {
@@ -1830,306 +1804,5 @@ mod shim_host_tests {
 
         server.abort();
         let _ = server.await;
-    }
-
-    #[test]
-    fn public_shim_url_requires_a_root_wss_endpoint_with_explicit_port() {
-        assert_eq!(
-            normalize_codex_shim_public_url("wss://agent.example:443/").unwrap(),
-            "wss://agent.example:443/"
-        );
-        assert!(normalize_codex_shim_public_url("ws://agent.example:9292/").is_err());
-        assert!(normalize_codex_shim_public_url("wss://agent.example/").is_err());
-        assert!(normalize_codex_shim_public_url("wss://agent.example:443/rpc").is_err());
-    }
-
-    #[test]
-    fn shim_auth_token_env_is_trimmed_and_required() {
-        assert_eq!(
-            read_codex_shim_auth_token_with("GENTS_TOKEN", |_| Ok(" secret ".to_string())).unwrap(),
-            "secret"
-        );
-        assert!(read_codex_shim_auth_token_with("GENTS_TOKEN", |_| Ok(" ".to_string())).is_err());
-        assert!(read_codex_shim_auth_token_with("GENTS_TOKEN", |_| {
-            Err(std::env::VarError::NotPresent)
-        })
-        .is_err());
-    }
-
-    #[test]
-    fn shim_launch_command_references_the_token_environment_variable() {
-        assert_eq!(
-            codex_shim_launch_command(
-                "wss://agent.example:443/",
-                Some("GENTS_REMOTE_TOKEN")
-            ),
-            "gents codex --remote wss://agent.example:443/ --remote-auth-token-env GENTS_REMOTE_TOKEN"
-        );
-    }
-
-    #[test]
-    fn server_parses_remote_shim_security_flags() {
-        let args = parse_server(&[
-            "--codex-shim-auth-token-env",
-            "GENTS_REMOTE_TOKEN",
-            "--codex-shim-public-url",
-            "wss://agent.example:443/",
-        ]);
-        assert_eq!(
-            args.codex_shim_auth_token_env.as_deref(),
-            Some("GENTS_REMOTE_TOKEN")
-        );
-        assert_eq!(
-            args.codex_shim_public_url.as_deref(),
-            Some("wss://agent.example:443/")
-        );
-    }
-
-    #[test]
-    fn server_p2p_config_uses_upstream_admission_defaults() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let args = parse_server(&[]);
-
-        let config = resolve_server_p2p_config(tempdir.path(), &args)
-            .expect("resolve p2p config")
-            .expect("p2p enabled");
-
-        assert!(
-            !config.rebroadcast_on_merge,
-            "merge delivery must not wait for gossip"
-        );
-        assert_eq!(config.max_pending_dags, p2p::sync::DEFAULT_MAX_PENDING_DAGS);
-        assert_eq!(
-            config.max_concurrent_push_tasks,
-            p2p::sync::DEFAULT_MAX_CONCURRENT_PUSH_TASKS
-        );
-        assert_eq!(
-            config.max_concurrent_dag_fetches,
-            p2p::sync::DEFAULT_MAX_CONCURRENT_DAG_FETCHES
-        );
-        assert_eq!(config.rate_limit_burst, p2p::sync::DEFAULT_RATE_LIMIT_BURST);
-        assert_eq!(config.rate_limit_rate, p2p::sync::DEFAULT_RATE_LIMIT_RATE);
-    }
-
-    #[test]
-    fn server_p2p_config_uses_admission_overrides() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let args = parse_server(&[
-            "--p2p-max-pending-dags",
-            "222",
-            "--p2p-max-concurrent-push-tasks",
-            "16",
-            "--p2p-max-concurrent-dag-fetches",
-            "11",
-            "--p2p-rate-limit-burst",
-            "333",
-            "--p2p-rate-limit-rate",
-            "44.5",
-        ]);
-
-        let config = resolve_server_p2p_config(tempdir.path(), &args)
-            .expect("resolve p2p config")
-            .expect("p2p enabled");
-
-        assert_eq!(config.max_pending_dags, 222);
-        assert_eq!(config.max_concurrent_push_tasks, 16);
-        assert_eq!(config.max_concurrent_dag_fetches, 11);
-        assert_eq!(config.rate_limit_burst, 333);
-        assert_eq!(config.rate_limit_rate, 44.5);
-    }
-
-    #[test]
-    fn server_p2p_config_rejects_degenerate_admission_values() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-
-        let zero_pending = parse_server(&["--p2p-max-pending-dags", "0"]);
-        assert!(resolve_server_p2p_config(tempdir.path(), &zero_pending).is_err());
-
-        let zero_push = parse_server(&["--p2p-max-concurrent-push-tasks", "0"]);
-        assert!(resolve_server_p2p_config(tempdir.path(), &zero_push).is_err());
-
-        let zero_rate = parse_server(&["--p2p-rate-limit-rate", "0"]);
-        assert!(resolve_server_p2p_config(tempdir.path(), &zero_rate).is_err());
-
-        let negative_rate = parse_server(&["--p2p-rate-limit-rate=-1.0"]);
-        assert!(resolve_server_p2p_config(tempdir.path(), &negative_rate).is_err());
-
-        // tokio::Semaphore::new panics above MAX_PERMITS (usize::MAX >> 3).
-        let huge_push = parse_server(&["--p2p-max-concurrent-push-tasks", &usize::MAX.to_string()]);
-        assert!(resolve_server_p2p_config(tempdir.path(), &huge_push).is_err());
-
-        let over_gauge = ((i64::MAX as u128) + 1).to_string();
-        let huge_pending = parse_server(&["--p2p-max-pending-dags", &over_gauge]);
-        assert!(resolve_server_p2p_config(tempdir.path(), &huge_pending).is_err());
-    }
-
-    #[test]
-    fn activation_observer_keeps_exact_channels_and_ignores_older_callbacks() {
-        let (runnable_tx, _) = watch::channel(Vec::new());
-        let (configuration_tx, _) = watch::channel(None);
-        let (activation_tx, activation_rx) =
-            watch::channel(RuntimeActivationObservation::default());
-        let observer = CliRuntimeSnapshotObserver {
-            runnable_tx,
-            configuration_tx,
-            activation_tx,
-        };
-
-        gents::RuntimeSnapshotObserver::on_router_generation_activated(&observer, 4, "desired");
-        gents::RuntimeSnapshotObserver::on_event_sources_reconciled(
-            &observer,
-            4,
-            "desired",
-            Ok(()),
-        );
-        assert!(activation_rx.borrow().successful_for(4, "desired"));
-
-        gents::RuntimeSnapshotObserver::on_event_sources_reconciled(
-            &observer,
-            3,
-            "old",
-            Err("old failure"),
-        );
-        gents::RuntimeSnapshotObserver::on_router_generation_activated(&observer, 3, "old");
-        let observed = activation_rx.borrow();
-        assert!(observed.successful_for(4, "desired"));
-        assert!(!observed.successful_for(3, "old"));
-    }
-
-    #[test]
-    fn activation_observer_retains_matching_event_failure() {
-        let (runnable_tx, _) = watch::channel(Vec::new());
-        let (configuration_tx, _) = watch::channel(None);
-        let (activation_tx, activation_rx) =
-            watch::channel(RuntimeActivationObservation::default());
-        let observer = CliRuntimeSnapshotObserver {
-            runnable_tx,
-            configuration_tx,
-            activation_tx,
-        };
-        gents::RuntimeSnapshotObserver::on_router_generation_activated(&observer, 8, "desired");
-        gents::RuntimeSnapshotObserver::on_event_sources_reconciled(
-            &observer,
-            8,
-            "desired",
-            Err("seed failed"),
-        );
-        let observed = activation_rx.borrow();
-        assert!(matches!(observed.event.as_ref(), Some((8, _, Err(_)))));
-        assert!(!observed.successful_for(8, "desired"));
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn server_entrypoint_raises_inherited_soft_limit_before_opening_home() {
-        const CHILD: &str = "GENTS_SERVER_FD_LIMIT_TEST_CHILD";
-        if std::env::var_os(CHILD).is_some() {
-            let mut limits = libc::rlimit {
-                rlim_cur: 0,
-                rlim_max: 0,
-            };
-            // SAFETY: limits points to writable storage for one rlimit value.
-            assert_eq!(
-                unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limits) },
-                0
-            );
-            let hard = limits.rlim_max;
-            limits.rlim_cur = 256.min(hard);
-            // SAFETY: the test lowers its own soft limit within the hard limit.
-            assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limits) }, 0);
-
-            let home = tempfile::tempdir().unwrap();
-            let args = parse_server(&[
-                "--home",
-                home.path().to_str().unwrap(),
-                "--no-codex-shim",
-                "--http-port",
-                "0",
-            ]);
-            let error = serve(args).await.unwrap_err();
-            assert!(error.to_string().contains("--http-port 0 is not supported"));
-
-            // SAFETY: limits remains valid writable storage.
-            assert_eq!(
-                unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limits) },
-                0
-            );
-            assert_eq!(limits.rlim_cur, 65_536.min(hard));
-            assert_eq!(limits.rlim_max, hard);
-            return;
-        }
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "commands::serve::shim_host_tests::server_entrypoint_raises_inherited_soft_limit_before_opening_home",
-                "--nocapture",
-            ])
-            .env(CHILD, "1")
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-}
-
-#[cfg(test)]
-mod serve_runtime_tests {
-    use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    /// A runtime that drains only when asked, like `Gents::run`, and fails
-    /// its drain so the test can see both errors.
-    fn draining_runtime(drained: Arc<AtomicBool>) -> ServeRuntime {
-        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
-        ServeRuntime::spawn(shutdown_tx, async move {
-            shutdown_rx.wait_for(|stop| *stop).await.map(drop)?;
-            drained.store(true, Ordering::SeqCst);
-            anyhow::bail!("injected drain failure")
-        })
-    }
-
-    #[tokio::test]
-    async fn post_spawn_error_signals_awaits_and_keeps_both_errors() {
-        let drained = Arc::new(AtomicBool::new(false));
-        let runtime = draining_runtime(drained.clone());
-        let error = runtime
-            .finish(Err(anyhow::anyhow!("injected post-spawn failure")))
-            .await
-            .expect_err("a post-spawn failure cannot become success");
-        assert!(drained.load(Ordering::SeqCst), "runtime was not drained");
-        let rendered = format!("{error:#}");
-        assert!(
-            rendered.contains("injected post-spawn failure")
-                && rendered.contains("injected drain failure"),
-            "an error was swallowed: {rendered}"
-        );
-    }
-
-    #[tokio::test]
-    async fn clean_exit_surfaces_the_drain_error() {
-        let drained = Arc::new(AtomicBool::new(false));
-        let error = draining_runtime(drained.clone())
-            .finish(Ok(()))
-            .await
-            .expect_err("a drain failure cannot become clean shutdown");
-        assert!(drained.load(Ordering::SeqCst), "runtime was not drained");
-        assert!(format!("{error:#}").contains("injected drain failure"));
-    }
-
-    #[tokio::test]
-    async fn a_runtime_that_already_exited_is_reported_once() {
-        let (shutdown_tx, _shutdown_rx) = watch::channel(false);
-        let mut runtime = ServeRuntime::spawn(shutdown_tx, async {
-            anyhow::bail!("runtime failed on its own")
-        });
-        let outcome = runtime.join().await;
-        let error = runtime
-            .finish(outcome)
-            .await
-            .expect_err("the runtime failure must survive finish");
-        assert_eq!(format!("{error:#}"), "runtime failed on its own");
     }
 }

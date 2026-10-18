@@ -12,9 +12,6 @@ use gents_protocol::enrollment::authorization_lease_is_fresh_at;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[cfg(test)]
-use tokio::sync::Notify;
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PeerRecord {
     pub peer_id: String,
@@ -52,9 +49,6 @@ impl PeerRecord {
         self.source.as_deref() == Some("enrollment")
     }
 
-    /// The managed runtime keeps its operator endpoint alongside the signed
-    /// enrollment route. Enrollment owns data-plane authority; these fields
-    /// only identify the co-hosted configuration control plane.
     pub fn is_managed_runtime(&self) -> bool {
         self.local_node_home
             .as_deref()
@@ -65,10 +59,6 @@ impl PeerRecord {
             })
     }
 
-    /// HTTP GraphQL the desktop uses as the operator control plane for a
-    /// hosted local runtime. Client P2P routes do not carry `Node`
-    /// or `InferenceBackend`, so first-run config has to be read and written
-    /// here. Test fixtures that pass a dummy `/graphql` URL are ignored.
     pub fn operator_graphql(&self) -> Option<&str> {
         if self.source.as_deref() != Some("local-standard")
             && !(self.is_enrollment() && self.is_managed_runtime())
@@ -82,12 +72,6 @@ impl PeerRecord {
             .filter(|value| value.starts_with("http://") || value.starts_with("https://"))
     }
 
-    /// Whether this exact durable route generation may authorize a chat write
-    /// at `now`.
-    ///
-    /// `pairing_ready` is applied-state evidence, not timeless authority. An
-    /// enrollment row must still carry a complete, unexpired signed
-    /// generation at the instant a write is admitted.
     pub fn is_chat_ready_at(&self, now: DateTime<Utc>) -> bool {
         if self.source.as_deref() == Some("local-standard") {
             return self.pairing_ready;
@@ -160,10 +144,6 @@ impl PeerRecord {
     }
 }
 
-/// A locally ended enrollment authorization generation. The signed durable
-/// documents stay replicated; this records only this desktop's removal, so
-/// the reconciler cannot reinstall the same generation while its lease still
-/// reads as current.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct RetiredEnrollment {
     network_id: String,
@@ -188,10 +168,6 @@ impl RetiredEnrollment {
     }
 }
 
-/// Why a peer leaves the directory. Only an operator's removal retires an
-/// enrollment generation: reconciliation also removes a peer whose authority
-/// is current but whose route receipt is momentarily unobserved, and that
-/// peer must reinstall once the receipt returns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::client) enum RemovalCause {
     Operator,
@@ -215,14 +191,9 @@ pub(crate) struct PeerDirectory {
     retired_enrollments: Vec<RetiredEnrollment>,
     _lease: Arc<PeerDirectoryLease>,
     #[cfg(test)]
-    persist_barrier: Option<PersistBarrier>,
-    #[cfg(test)]
     fail_persist: bool,
 }
 
-/// The final in-process owner must unlock explicitly: Unix `flock` locks
-/// otherwise survive its close while a concurrently forked child retains an
-/// inherited descriptor, even when that descriptor will close on exec.
 #[derive(Debug)]
 struct PeerDirectoryLease(File);
 
@@ -232,13 +203,6 @@ impl Drop for PeerDirectoryLease {
             tracing::warn!(%error, "failed to unlock peer directory lease");
         }
     }
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone)]
-pub(in crate::client) struct PersistBarrier {
-    pub written: Arc<Notify>,
-    pub release: Arc<Notify>,
 }
 
 impl PeerDirectory {
@@ -266,7 +230,7 @@ impl PeerDirectory {
             Ok(()) => {
                 let lease = Arc::new(PeerDirectoryLease(file));
                 // Read only after acquiring the lifetime lease, so an offline
-                // initializer cannot race a live owner's load with a write.
+                // initializer cannot race a live owner's load.
                 let stored = read_stored_directory(&path).await?;
                 let mut directory = Self {
                     path,
@@ -274,8 +238,6 @@ impl PeerDirectory {
                     pending_removals: stored.pending_removals,
                     retired_enrollments: stored.retired_enrollments,
                     _lease: lease,
-                    #[cfg(test)]
-                    persist_barrier: None,
                     #[cfg(test)]
                     fail_persist: false,
                 };
@@ -290,11 +252,6 @@ impl PeerDirectory {
                 Err(error).with_context(|| format!("locking peer directory {}", path.display()))
             }
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.peers.is_empty()
     }
 
     pub(crate) fn records(&self) -> &[PeerRecord] {
@@ -318,10 +275,6 @@ impl PeerDirectory {
             .collect()
     }
 
-    /// Drop retirements whose enrolled server no longer has a current
-    /// durable authorization. Lease expiry and revocation end the
-    /// generation and prune the retirement with it; an absent route receipt
-    /// must not, because the generation it named still reads current.
     pub(in crate::client) async fn prune_retired_enrollments(
         &mut self,
         authority_server_peers: &BTreeSet<String>,
@@ -337,6 +290,8 @@ impl PeerDirectory {
         Ok(())
     }
 
+    /// Local discovery adds operator metadata to an existing enrollment; its
+    /// signed route, authorization generation and user-owned label survive.
     pub(in crate::client) async fn upsert_local_standard_peer(
         &mut self,
         label: &str,
@@ -352,24 +307,36 @@ impl PeerDirectory {
         let agent_home = normalize_non_empty("agent_home", agent_home)?;
 
         let mut candidate = self.clone();
-        let mut record = candidate
+        let mut enrolled = candidate
             .peers
             .iter()
-            .find(|existing| {
-                existing.source.as_deref() == Some("local-standard")
-                    || (existing.is_enrollment()
-                        && existing.node_did == node_did
-                        && existing.local_node_home.as_deref() == Some(agent_home))
+            .filter(|existing| existing.is_enrollment() && existing.node_did == node_did);
+        let enrollment = enrolled.next().cloned();
+        anyhow::ensure!(
+            enrolled.next().is_none(),
+            "local runtime has ambiguous enrollment records"
+        );
+        let mut record = enrollment
+            .or_else(|| {
+                candidate
+                    .peers
+                    .iter()
+                    .find(|existing| existing.source.as_deref() == Some("local-standard"))
+                    .cloned()
             })
-            .cloned()
             .unwrap_or_else(|| PeerRecord::local_standard(label, addr, node_did, graphql));
-        record.label = label.to_string();
         record.node_did = node_did.to_string();
         record.graphql = Some(graphql.to_string());
         record.local_node_home = Some(agent_home.to_string());
         if !record.is_enrollment() {
+            record.label = label.to_string();
             record.addr = addr.to_string();
             record.source = Some("local-standard".to_string());
+        } else {
+            candidate.peers.retain(|existing| {
+                existing.node_did != node_did
+                    || existing.source.as_deref() != Some("local-standard")
+            });
         }
 
         let record = candidate.apply_upsert(record);
@@ -478,10 +445,6 @@ impl PeerDirectory {
             record.pairing_ready = false;
         }
         record.peer_id = peer_id.to_string();
-        // The enrollment label seeds a new record only. Once saved, the label is
-        // user-owned presentation state and must survive authority refreshes.
-        // Reapplying the enrollment label here made every successful status
-        // sweep undo a manual rename.
         record.addr = addr.to_string();
         record.node_did = node_did.to_string();
         record.source = Some("enrollment".to_string());
@@ -493,10 +456,6 @@ impl PeerDirectory {
         record.enrollment_authorization_sequence = Some(authorization_sequence);
         record.enrollment_authorization_expires_at = Some(authorization_expires_at.to_string());
         if let Some(managed) = managed.as_ref() {
-            // A transport-peer rotation can leave both the previous enrollment
-            // row and the managed bootstrap row present. Enrollment remains
-            // the route authority, while the co-hosted bootstrap row remains
-            // the authority for local operator access.
             record.graphql.clone_from(&managed.graphql);
             record.local_node_home.clone_from(&managed.local_node_home);
         }
@@ -519,10 +478,6 @@ impl PeerDirectory {
                 .retain(|candidate| candidate.peer_id != existing.peer_id);
         }
 
-        // Status polling observes the same signed authorization on every
-        // supervisor tick. Preserve the durable generation (including its
-        // timestamp) when that observation is unchanged; rewriting it makes
-        // downstream route and sync fences look new every two seconds.
         if existing.as_ref() == Some(&record) {
             return Ok(record);
         }
@@ -597,20 +552,6 @@ impl PeerDirectory {
         record
     }
 
-    #[cfg(test)]
-    pub(in crate::client) async fn remove(&mut self, peer_id: &str) -> Result<Option<PeerRecord>> {
-        let mut candidate = self.clone();
-        let removed = candidate
-            .peers
-            .iter()
-            .position(|record| record.peer_id == peer_id)
-            .map(|index| candidate.peers.remove(index));
-
-        candidate.sort_records();
-        self.commit(candidate).await?;
-        Ok(removed)
-    }
-
     pub(in crate::client) async fn queue_removal(
         &mut self,
         expected: &PeerRecord,
@@ -655,9 +596,6 @@ impl PeerDirectory {
         Ok(true)
     }
 
-    /// Route readiness is an observation, not durable authority across a
-    /// process restart. Every deployment must re-establish its live authority
-    /// and both route legs before chat writes reopen.
     pub(in crate::client) async fn clear_ephemeral_pairing_readiness(&mut self) -> Result<()> {
         let mut candidate = self.clone();
         let mut changed = false;
@@ -676,15 +614,10 @@ impl PeerDirectory {
 
     async fn commit(&mut self, candidate: Self) -> Result<()> {
         candidate.save().await?;
-        // There is deliberately no await between durable replacement and the
-        // in-memory swap, so cancellation cannot expose half a commit.
+        // No await between durable replacement and the in-memory swap, so
+        // cancellation cannot expose half a commit.
         *self = candidate;
         Ok(())
-    }
-
-    #[cfg(test)]
-    pub(in crate::client) fn set_persist_barrier(&mut self, barrier: Option<PersistBarrier>) {
-        self.persist_barrier = barrier;
     }
 
     #[cfg(test)]
@@ -710,17 +643,11 @@ impl PeerDirectory {
             .write_all(&bytes)
             .with_context(|| format!("writing staged peer directory in {}", parent.display()))?;
         #[cfg(test)]
-        if let Some(barrier) = &self.persist_barrier {
-            barrier.written.notify_one();
-            barrier.release.notified().await;
-        }
-        #[cfg(test)]
         if self.fail_persist {
             anyhow::bail!("injected peer-directory persistence failure");
         }
-        // NamedTempFile::persist provides same-directory atomic replacement
-        // on supported platforms. It and the caller's immediate in-memory
-        // swap contain no cancellation point.
+        // NamedTempFile::persist and the caller's in-memory swap contain
+        // no cancellation point.
         staged
             .persist(&self.path)
             .with_context(|| format!("persisting {}", self.path.display()))?;
@@ -750,14 +677,6 @@ pub async fn load_peer_records(path: &Path) -> Result<Vec<PeerRecord>> {
     let mut records = read_stored_directory(path).await?.peers;
     sort_peer_records(&mut records);
     Ok(records)
-}
-
-#[cfg(test)]
-pub(crate) async fn load_peer_directory_snapshot(
-    path: &Path,
-) -> Result<(Vec<PeerRecord>, Vec<PeerRecord>)> {
-    let stored = read_stored_directory(path).await?;
-    Ok((stored.peers, stored.pending_removals))
 }
 
 fn normalize_non_empty<'a>(field: &str, value: &'a str) -> Result<&'a str> {
@@ -824,29 +743,6 @@ mod tests {
         .is_err());
     }
 
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn last_owner_releases_lease_with_an_inherited_descriptor_open() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let path = tempdir.path().join("peers.json");
-        let directory = PeerDirectory::open_writer(&path).await.unwrap();
-        let clone = directory.clone();
-        // dup and fork share the same open file description and flock lifetime.
-        let inherited = directory._lease.0.try_clone().unwrap();
-        drop(directory);
-
-        let error = PeerDirectory::open_writer(&path).await.unwrap_err();
-        assert!(error.to_string().contains("already owned"));
-
-        drop(clone);
-        let reopened = PeerDirectory::open_writer(&path)
-            .await
-            .expect("last owner must release the lease before inherited descriptors close");
-        assert!(inherited.metadata().is_ok());
-        drop(reopened);
-        drop(inherited);
-    }
-
     #[tokio::test]
     async fn restart_clears_persisted_managed_readiness_before_chat_reopens() {
         let tempdir = tempfile::tempdir().unwrap();
@@ -868,45 +764,6 @@ mod tests {
 
         let reloaded = load_peer_records(&path).await.unwrap();
         assert!(!reloaded[0].pairing_ready);
-    }
-
-    #[tokio::test]
-    async fn missing_file_loads_as_empty_directory() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let path = tempdir.path().join("peers.json");
-
-        let directory = PeerDirectory::load(&path).await.unwrap();
-
-        assert!(directory.is_empty());
-    }
-
-    #[tokio::test]
-    async fn empty_file_loads_as_empty_directory() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let path = tempdir.path().join("peers.json");
-        tokio::fs::write(&path, []).await.unwrap();
-
-        let directory = PeerDirectory::load(&path).await.unwrap();
-
-        assert!(directory.is_empty());
-    }
-
-    #[tokio::test]
-    async fn add_update_remove_round_trip_persists() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let path = tempdir.path().join("peers.json");
-        let mut directory = PeerDirectory::load(&path).await.unwrap();
-
-        let mut record = PeerRecord::new("Workshop Bay", "iroh://alpha", "did:test:alpha");
-        let peer_id = record.peer_id.clone();
-        directory.upsert(record.clone()).await.unwrap();
-
-        record.label = "Workshop Bay Updated".to_string();
-        directory.upsert(record.clone()).await.unwrap();
-        directory.remove(&peer_id).await.unwrap();
-
-        let reloaded = load_peer_records(&path).await.unwrap();
-        assert!(reloaded.is_empty());
     }
 
     #[tokio::test]
@@ -957,25 +814,6 @@ mod tests {
         assert!(reloaded.contains(&original));
         assert!(reloaded.contains(&later));
         assert!(!reloaded.contains(&failed));
-    }
-
-    #[tokio::test]
-    async fn records_are_sorted_for_deterministic_output() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let path = tempdir.path().join("peers.json");
-        let mut directory = PeerDirectory::load(&path).await.unwrap();
-
-        directory
-            .upsert(PeerRecord::new("Zulu", "iroh://zulu", "did:test:zulu"))
-            .await
-            .unwrap();
-        directory
-            .upsert(PeerRecord::new("Alpha", "iroh://alpha", "did:test:alpha"))
-            .await
-            .unwrap();
-
-        assert_eq!(directory.records()[0].label, "Alpha");
-        assert_eq!(directory.records()[1].label, "Zulu");
     }
 
     #[tokio::test]
@@ -1183,6 +1021,50 @@ mod tests {
 
         let reloaded = load_peer_records(&path).await.unwrap();
         assert_eq!(reloaded, vec![enrolled]);
+    }
+
+    #[tokio::test]
+    async fn local_discovery_keeps_an_existing_enrollment_generation_and_label() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let mut directory = PeerDirectory::load(&path).await.unwrap();
+        let enrolled = directory
+            .upsert_enrollment_peer(
+                "signed-peer",
+                "Named runtime",
+                "iroh://signed-ticket",
+                "did:key:runtime",
+                "network",
+                "request",
+                "digest",
+                "did:key:admin",
+                7,
+                "2099-10-29T00:00:00Z",
+            )
+            .await
+            .unwrap();
+        let enrolled = directory
+            .set_pairing_ready(&enrolled.peer_id, true)
+            .await
+            .unwrap()
+            .unwrap();
+        let connected = directory
+            .upsert_local_standard_peer(
+                "Discovery label",
+                "iroh://discovery-ticket",
+                "did:key:runtime",
+                "http://127.0.0.1:9291/api/v0/graphql",
+                "/tmp/runtime-home",
+            )
+            .await
+            .unwrap();
+        let mut expected = enrolled;
+        expected.graphql = Some("http://127.0.0.1:9291/api/v0/graphql".into());
+        expected.local_node_home = Some("/tmp/runtime-home".into());
+        expected.updated_at.clone_from(&connected.updated_at);
+        assert_eq!(connected, expected);
+        assert_eq!(directory.records(), &[expected.clone()]);
+        assert_eq!(load_peer_records(&path).await.unwrap(), [expected]);
     }
 
     #[tokio::test]

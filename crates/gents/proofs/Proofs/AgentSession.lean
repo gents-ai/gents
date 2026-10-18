@@ -54,6 +54,23 @@ structure Document where
   provenance : Option Provenance := none
   observation : Option Observation := none
   deriving DecidableEq, Repr
+
+/-- Creation reserves immutable scope and agent selection. Reuse preserves
+the complete document, including closed state and presentation metadata. -/
+def ensure? (existing : Option Document) (requested : Document) : Option Document :=
+  match existing with
+  | none => some requested
+  | some current =>
+      if current.scope = requested.scope ∧ current.agent = requested.agent then some current
+      else none
+
+theorem ensure_existing_preserves_document (current requested : Document)
+    (scope : current.scope = requested.scope) (agent : current.agent = requested.agent) :
+    ensure? (some current) requested = some current := by simp [ensure?, scope, agent]
+
+theorem ensure_cannot_rebind_agent (current requested : Document)
+    (agent : current.agent ≠ requested.agent) : ensure? (some current) requested = none := by
+  simp [ensure?, agent]
 /-- Authoritative query projection, not another writable request/index. -/
 structure RequestFact where
   purpose : RequestPurpose
@@ -62,7 +79,6 @@ structure RequestFact where
   createdAt : Time
   observed : RequestObservation
   deriving DecidableEq, Repr
-/-- Logical request ID breaks timestamp ties. -/
 def newer (a b : RequestFact) : Bool :=
   a.createdAt > b.createdAt ||
     (a.createdAt == b.createdAt && a.observed.requestId > b.observed.requestId)
@@ -93,7 +109,6 @@ theorem newest_member (rows : List RequestFact) (r : RequestFact)
       · simp only [Option.some.injEq] at h; subst r
         exact List.mem_cons_of_mem _ (ih hn)
 
-/-- Every selected row dominates all candidates in canonical timestamp/ID order. -/
 theorem newest_maximal (rows : List RequestFact) (r : RequestFact)
     (h : newest rows = some r) : ∀ candidate ∈ rows,
       candidate.createdAt < r.createdAt ∨
@@ -145,7 +160,6 @@ theorem newest_maximal (rows : List RequestFact) (r : RequestFact)
           omega
         · exact hb candidate he
 
-/-- Filtering candidates cannot change a retained canonical winner. -/
 theorem newest_filter_preserves (rows : List RequestFact) (r : RequestFact)
     (p : RequestFact → Bool) (h : newest rows = some r) (hr : p r = true) :
     newest (rows.filter p) = some r := by
@@ -301,7 +315,6 @@ theorem published_tool_activity (s : Document) (o : Observation)
       { s with observation := some { o with latest := some r.observed, activity := max now o.activity } } := by
   simp [toolActivity, refresh, ho, hl, observedRequest, hp, hs, hb]
 
-/-- Stale event lifecycle payloads have no influence on the projection. -/
 theorem refresh_ignores_event_state (s : Document) (rows : List RequestFact)
     (event : RequestObservation) (state : RequestState) (now : Time) :
     refresh s rows { event with state } now = refresh s rows event now := rfl

@@ -21,8 +21,6 @@ use crate::agent::{
 use crate::identity::RuntimeNode;
 use crate::tool_surface::AgentToolConfig;
 
-// The view is already scoped; check again at reference resolution so a foreign
-// record cannot satisfy a reference even in an independently constructed view.
 macro_rules! owned_doc {
     ($map:expr, $id:expr, $owner:expr) => {{
         (|| -> anyhow::Result<_> {
@@ -43,8 +41,8 @@ macro_rules! owned_doc {
     }};
 }
 
-/// A agent_config on a backend this build cannot run is unavailable, not pending:
-/// no arriving document repairs it.
+/// An agent_config on a backend this build cannot run is unavailable, not
+/// pending: no arriving document repairs it.
 #[derive(Debug, thiserror::Error)]
 #[error("backend {backend_id} has provider kind {kind} this build does not know")]
 struct UnknownKindBackend {
@@ -64,7 +62,7 @@ impl AgentResolutionError {
 }
 
 pub(crate) async fn resolve_document_runtime_snapshot_from_view(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     context: &DocumentResolveContext,
     view: &DocumentRuntimeView,
 ) -> Result<ResolvedRuntimeSnapshot> {
@@ -185,7 +183,6 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                         let mut selected = tool_selection_from_document(tools)?;
                         let merged = super::merge_surface_tools(tools, view)?;
                         selected.query_tools = merged.query_tools;
-                        // Canonical surfaces own all datastore write declarations.
                         selected.write_tools = merged.write_tools;
                         selected.surface_of_tool = merged.surface_of_tool;
                         let eth = super::expand_eth_tools(tools, view)?;
@@ -459,12 +456,11 @@ struct SelectedInferenceDocuments<'a> {
     retry_policy: Option<&'a crate::document_config::InferenceRetryPolicy>,
 }
 
-/// Resolve the documents one inference selection names, without judging them.
-/// Only a failure here can be repaired by a document arriving, so this is what
-/// the control watcher's visibility gate may wait on; `resolve_inference`'s
-/// advertised-model, credential and structural validation can be permanently
-/// false for an agent the router never selects, and the snapshot reports
-/// that per agent as an `UnavailableAgent` instead of blocking.
+/// Resolves the documents one inference selection names, without judging
+/// them: only a failure here can be repaired by a document arriving, so this
+/// is what the control watcher's visibility gate may wait on; the deeper
+/// validation in `resolve_inference` is reported per agent as an
+/// `UnavailableAgent` instead of blocking.
 fn select_inference_documents<'a>(
     view: &'a DocumentRuntimeView,
     id: &str,
@@ -614,10 +610,8 @@ mod advertised_context_override_tests {
     }
 }
 
-// The runtime configuration fingerprint is compared across independently
-// resolved views. Every collection map is keyed/sorted by the projector;
-// skills are the one value vector embedded in ResolvedAgent's Debug value, so
-// canonicalize it before both prompt construction and fingerprinting.
+// Skills are the one value vector embedded in ResolvedAgent's Debug value;
+// canonicalize before both prompt construction and fingerprinting.
 pub(super) fn sorted_skills(view: &DocumentRuntimeView) -> Vec<crate::skills::Skill> {
     let mut skills = view
         .skills

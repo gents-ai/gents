@@ -22,7 +22,6 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
     let cases = crate::lean_vocab_test::lean_queue_management_cases();
     assert!(!cases.is_empty());
     let mut exercised = Vec::new();
-    // Each model freshness value has two native TTL encodings; both must bind.
     for (case, variant) in cases.iter().flat_map(|case| [(case, 0), (case, 1)]) {
         let LeanQueueManagementOperation::Replace {
             caller,
@@ -42,8 +41,6 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
             .collect::<Vec<_>>();
         let selected =
             &originals[(*offset).min(originals.len())..(offset + count).min(originals.len())];
-        // The native API generates fresh identities and derives positions itself;
-        // forged identity/slot cases belong to admission, not this API's inputs.
         if replacements.iter().any(|replacement| {
             originals
                 .iter()
@@ -119,8 +116,6 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
                     .unwrap();
                 let mut mutation = create.graphql_mutation().unwrap();
                 if ttl(entry) == Some("malformed") {
-                    // Malformed TTLs cannot be canonically signed. Insert an adversarial
-                    // signature-mismatched row directly; never mutate immutable fields.
                     mutation = mutation.replacen(
                         "create_AgentRequest(input: {",
                         "create_AgentRequest(input: { valid_until: \"malformed\",",
@@ -178,7 +173,7 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
             Some(2) => "did:test:fold-foreign-requester",
             _ => panic!("unsupported caller in {}", case.name),
         };
-        let access = ConfigAccess::Local(db.node.clone());
+        let access = ConfigAccess::local(db.node.clone());
         let state_query = format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID content input admission_signature lifecycle_state valid_until }} }}"#,
             escape_graphql_string(&session_id),
@@ -186,6 +181,44 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
         let snapshot = pending_user_queue(&access, db.node_did(), &session_id, caller_did)
             .await
             .unwrap();
+        let mut observed = snapshot
+            .entries
+            .iter()
+            .map(|entry| entry.request_doc_id.clone())
+            .collect::<Vec<_>>();
+        let mut expected_order = observed.clone();
+        if let Some(head) = case.before.active {
+            observed.push(bound[&head].clone());
+            expected_order.insert(0, bound[&head].clone());
+        }
+        observed.reverse();
+        let projection = pending_user_queue_projection(
+            &access,
+            db.node_did(),
+            &session_id,
+            caller_did,
+            &observed,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            projection.arrival_order, expected_order,
+            "{}: arrival order includes claimed requests",
+            case.name
+        );
+        assert_eq!(
+            projection
+                .pending
+                .entries
+                .iter()
+                .map(|entry| &entry.request_doc_id)
+                .collect::<Vec<_>>(),
+            snapshot
+                .entries
+                .iter()
+                .map(|entry| &entry.request_doc_id)
+                .collect::<Vec<_>>()
+        );
         for original in selected.iter().filter(|entry| !entry.fresh) {
             let entry = snapshot
                 .entries

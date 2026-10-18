@@ -6,10 +6,6 @@ namespace CanonicalOutput.Execution
 
 open RequestExecutionLease
 
-/-- Read-only guidance for a scheduled renewal attempt. `notDue` is an early
-poll, `rereadDeadline` means this generation is still live but the caller's CAS
-value is stale, and `lost` means the caller must stop acting as owner. The
-transition remains the authoritative decision. -/
 inductive RenewalEligibility where
   | due
   | notDue (dueAt : Time)
@@ -135,11 +131,6 @@ def acceptedMessageValid (world : World) (generation : Generation)
     | .ok _ => true
     | .error _ => false
 
-/-- A provider acceptance cannot smuggle in an unrelated request-owned source.
-All payload-bearing blocks in this provider message name the closure committed
-by the same transaction. Empty messages remain valid for an empty Complete
-source. Authored and tool-delivery messages use their separate publication
-owners; they are not admitted through this transition. -/
 def acceptedSourceBound (world : World) (generation : Generation)
     (closing : Segment) (message : MessageEnvelope) : Bool :=
   closing.coordinate.request == world.requestId &&
@@ -189,9 +180,6 @@ def physicalRunning (world : World) (document : DocId) : Bool :=
   | some tool => tool.context.state == .running
   | none => false
 
-/-- A pending row is not permission to start. The authoritative tool document
-must still be pending and free of the uncertainty handoff marker at the
-shared-state admission boundary. -/
 def executionAdmitted (world : World) (document : DocId) : Bool :=
   match ownedToolByDocument? world document with
   | some tool => tool.context.state == .pending && tool.stuckSince.isNone
@@ -206,8 +194,6 @@ def transcriptToolByDocument? (world : World) (document : DocId) :
 def toolHandedOff (tool : OwnedTool) : Bool :=
   tool.stuckSince.isSome || tool.context.awaitMode == .background
 
-/-- Structural ownership for already-published lifecycle work. Conflicting
-segment bytes do not erase ownership, but ambiguous message metadata does. -/
 def directAcceptedHeaderMetadataBindsTool (world : World) (tool : OwnedTool) : Bool :=
   match (world.messages.filter fun message =>
       message.header.request == some tool.requestDoc &&
@@ -343,10 +329,6 @@ def runningReceiptSourceBound (world : World) (tool : OwnedTool) : Bool :=
             (match closing.coordinate.source with | .authored _ => true | _ => false) &&
             closing.writer == .tool tool.document)
 
-/-- Lifecycle-only projection used for terminal acknowledgements. It retains
-exact physical/header ownership and transcript state but deliberately does not
-reconstruct already-published result payloads, whose later corruption cannot
-wedge a real host/tool acknowledgement. -/
 def toolLifecycleProjectionCoherent (world : World) : Bool :=
   (world.toolContexts.map (fun tool => tool.document)).Nodup &&
     world.toolContexts.all (fun tool =>
@@ -370,13 +352,6 @@ def toolLifecycleProjectionCoherent (world : World) : Bool :=
           tool.acceptedSequence == row.messageSequence
       | none => false)
 
-/-- The physical document is the join key. Logical identifiers inside the
-tool context never substitute for the accepted request/header binding. In
-addition to lifecycle coherence, every published result key has exact canonical
-authority; pending rows cannot carry results. A running result remains the
-exact invocation receipt after an explicit foreground reattachment: current
-await mode controls parent blocking, while `runningReceiptSourceBound` retains
-the immutable receipt provenance. -/
 def toolProjectionCoherent (world : World) : Bool :=
   toolLifecycleProjectionCoherent world && world.toolContexts.all (fun tool =>
     match tool.provenance, transcriptToolByDocument? world tool.document with
@@ -389,8 +364,6 @@ def toolProjectionCoherent (world : World) : Bool :=
     | .spawnedBackground _, none | .pluginEffect _ _, none => true
     | _, _ => false)
 
-/-- A result key is delivery only when its unique transcript result row is
-backed by the canonical user/tool-result message for this physical document. -/
 def canonicalToolDelivered (world : World) (tool : OwnedTool) : Bool :=
   match transcriptToolByDocument? world tool.document with
   | none => false
@@ -502,7 +475,6 @@ def pluginEffectPresent (world : World) (admission : PluginEffectAdmission) : Bo
       (transcriptToolByDocument? world admission.document).isNone
   | none => false
 
-/-- Effect retries belong to a live invocation, not durable workflow resumption. -/
 def pluginEffectInvocationValid (world : World) (generation : Generation)
     (admission : PluginEffectAdmission) : Bool :=
   (RequestExecutionLease.step? world.lease
@@ -593,8 +565,6 @@ def eligibleOwnedAssistantMetadataExists (world : World) : Bool :=
       message.header.session == world.sessionId && message.header.role == .assistant &&
       terminalPublicationEligible message.header.publication
 
-/-- Exceptional policy revocation resolves only immutable header identity.
-Conflicting payload bytes remain visible and are neither selected nor repaired. -/
 def terminalSelectionMetadataValid (world : World)
     (selection : TerminalSelection) : Bool :=
   match selection with

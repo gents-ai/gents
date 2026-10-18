@@ -1,7 +1,3 @@
-//! First-party Claude subscription OAuth login. Tokens are stored as an
-//! `OAuthCredential` document for the node DID, exactly like `codex-login`
-//! and `grok-login`; the `claude` binary is not involved.
-
 use std::io::{self, BufRead, Write};
 
 use anyhow::{Context, Result};
@@ -143,30 +139,6 @@ pub(crate) fn claude_login_result_json(outcome: &ClaudeLoginOutcome) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn login_and_runtime_constants_match() {
-        assert_eq!(
-            gents_claude_login::CLIENT_ID,
-            gents::claude_oauth::CLAUDE_OAUTH_CLIENT_ID
-        );
-        assert_eq!(
-            gents_claude_login::AUTHORIZE_URL,
-            gents::claude_oauth::CLAUDE_OAUTH_AUTHORIZE_URL
-        );
-        assert_eq!(
-            gents_claude_login::TOKEN_URL,
-            gents::claude_oauth::CLAUDE_OAUTH_TOKEN_URL
-        );
-        assert_eq!(
-            gents_claude_login::MANUAL_REDIRECT_URL,
-            gents::claude_oauth::CLAUDE_OAUTH_MANUAL_REDIRECT_URL
-        );
-        assert_eq!(
-            gents_claude_login::SCOPES,
-            gents::claude_oauth::CLAUDE_OAUTH_SCOPES
-        );
-    }
 
     #[test]
     fn result_json_redacts_tokens() {

@@ -282,9 +282,9 @@ def cursorCases : List String :=
    { name := "latest_only_busy_requires_receipt", mode := .latestOnly, busy := true, checkpointCommit := some true },
    { name := "latest_only_later_receipt_cannot_skip_gap", mode := .latestOnly, entry := arrival 3 "c", admissionCommit := some true, checkpointCommit := some true }].map cursorCase
 
-/-- Drives a callback-binding consumer through the shared cursor owner. Its
-receipts are `CallbackInvocation`s; `editAfterAdmission` edits the admitted
-document and admits it again under the new source version. -/
+
+
+
 structure CallbackCursorScenario where
   name : String
   seedHead : Nat := 1
@@ -410,6 +410,31 @@ def selfCases : List String :=
     ("listed_owner", jsonString lo), ("listed_session", jsonString ls),
     ("current", toString (isCurrent co cs lo ls))]
 
+def deliveryOptionCases : List String := do
+  let kind ← [.manual, .schedule, .event]
+  let emit ← [false, true]
+  let concurrency ← [.parallel, .serial, .queuedSerial, .latestOnly]
+  let target ← [false, true]
+  pure <| object [
+    ("kind", jsonString kind.toDefraDB), ("emit_outcome", toString emit),
+    ("concurrency", jsonString (match concurrency with
+      | .parallel => "parallel" | .serial => "serial"
+      | .queuedSerial => "queued_serial" | .latestOnly => "latest_only")),
+    ("target_existing", toString target),
+    ("allowed", toString (Triggers.deliveryOptionsAllowed kind emit concurrency target))]
+
+def latestAdmissionCases : List String :=
+  let old := { fire "old" with emitOutcome := false, identity := { identity "owner-a" "old" with collection := "Schedule" } }
+  let next := { old with identity := { old.identity with document := "next" } }
+  let pre := admit {} old
+  [("invalid_target_preserves_pending", pre, false),
+   ("valid_target_replaces_pending", pre, true),
+   ("duplicate_preserves_later_work", admit (admit pre next)
+      { old with identity := { old.identity with document := "later" } }, true)].map fun (name, before, allowed) =>
+    object [("name", jsonString name), ("pre", stateJson before),
+      ("fire", fireJson next), ("destination_allowed", toString allowed),
+      ("post", stateJson (admitLatest before next allowed))]
+
 def casesJson : String := object [
   ("admissions", jsonArray admissionCases), ("queues", jsonArray queueCases),
   ("observed_claims", jsonArray observedClaimCases),
@@ -418,6 +443,8 @@ def casesJson : String := object [
   ("cursors", jsonArray cursorCases),
   ("callback_cursors", jsonArray callbackCursorCases),
   ("identities", jsonArray identityCases), ("sessions", jsonArray sessionCases),
+  ("delivery_options", jsonArray deliveryOptionCases),
+  ("latest_admissions", jsonArray latestAdmissionCases),
   ("self_sessions", jsonArray selfCases)]
 
 example : (admit (admit {} (fire "a")) (fire "a")).requests.length = 1 := by native_decide

@@ -5,9 +5,6 @@ use super::canonical_output::{
     LeanCanonicalMessage, LeanCanonicalSegment, LeanPayloadSpec, LeanReconstructedMessage,
 };
 
-/// Concrete canonical facts plus controlled projection/estimation observations.
-/// The token observations are injectable native-boundary inputs, not measured
-/// provider serialization or an alternate tokenizer.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCanonicalCompactionInput {
@@ -29,8 +26,8 @@ pub(crate) struct LeanCanonicalCompactionInput {
 #[derive(Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCanonicalCompactionObservation {
-    /// None means reconstruction failed before the projection callback ran.
-    /// Some(empty) is a successful callback with an empty native list.
+    /// None: reconstruction failed before the projection callback; Some(empty):
+    /// a successful callback with an empty native list.
     pub(crate) initial_native: Option<Vec<LeanReconstructedMessage>>,
     pub(crate) rebuilt_checkpoint: Option<u64>,
     pub(crate) rebuilt_native: Option<Vec<LeanReconstructedMessage>>,

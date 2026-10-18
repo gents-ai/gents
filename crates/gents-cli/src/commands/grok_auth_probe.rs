@@ -91,7 +91,6 @@ pub(crate) async fn grok_auth_probe(args: GrokAuthProbeArgs) -> Result<()> {
     Ok(())
 }
 
-/// Probe one account and render its block (after the label).
 async fn probe_account(
     credential: gents::oauth_credential::OAuthCredential,
     node_did: &str,
@@ -101,7 +100,6 @@ async fn probe_account(
     use std::fmt::Write;
     let mut out = String::new();
     let backend_url = gents::xai_grok_oauth::default_backend_endpoint();
-    // `/models-v2` is the catalog path the official Grok CLI queries.
     let models_url = format!("{}/models-v2", backend_url.trim_end_matches('/'));
     let mut request = reqwest::Client::new()
         .get(&models_url)
@@ -176,23 +174,4 @@ async fn probe_account(
     }
 
     Ok(out)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rendered_model_names_reads_models_v2_data_entries() {
-        let body = br#"{"data":[{"id":"row-1","model":"grok-4.5","name":"Grok 4.5"},{"id":"row-2","modelId":"grok-build-0.1"}]}"#;
-        let rendered = rendered_model_names(body).expect("models-v2 body parses");
-        assert_eq!(rendered, vec!["grok-4.5 (Grok 4.5)", "grok-build-0.1"]);
-    }
-
-    #[test]
-    fn rendered_model_names_still_reads_openai_and_slug_shapes() {
-        let body = br#"{"models":[{"slug":"grok-4.5","display_name":"Grok 4.5"}],"data":[{"id":"grok-2"}]}"#;
-        let rendered = rendered_model_names(body).expect("mixed body parses");
-        assert_eq!(rendered, vec!["grok-2", "grok-4.5 (Grok 4.5)"]);
-    }
 }

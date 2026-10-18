@@ -3,7 +3,6 @@
 /**
  * Exactly one configured source per trigger. Source documents can be reused;
  * each trigger retains its own delivery identity and runtime observations.
- * Manual task invocation remains supported by the existing manual source and
- * does not require a persisted Trigger document.
+ * Manual task invocation does not require a persisted Trigger document.
  */
 export type TriggerSource = { "kind": "schedule", schedule_id: string, } | { "kind": "event", event_source_id: string, };

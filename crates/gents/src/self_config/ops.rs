@@ -1,12 +1,3 @@
-//! DID-parameterized self-configuration core (#654).
-//!
-//! Transport-agnostic operations behind the model-facing `config` command
-//! tools: every write is a transactional read-modify-write on one owned
-//! document, merged through the Lean-fenced patch layer
-//! (`config_client::patch`), validated wholesale, and executed under the
-//! node DID so DefraDB ACP is the authorization boundary. A future MCP
-//! surface wraps this same core with a DID from the incoming call.
-
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -37,9 +28,6 @@ pub(super) struct MissingConfigDocument {
 #[derive(Debug, thiserror::Error)]
 pub(super) struct MissingAgent {
     pub agent_id: String,
-    /// Agent IDs whose slug or display name equals the requested ID
-    /// ignoring case. Never resolved implicitly: display names are mutable
-    /// and not unique.
     pub suggestions: Vec<String>,
 }
 
@@ -57,15 +45,11 @@ impl std::fmt::Display for MissingAgent {
     }
 }
 
-/// How a self-config write lands: config documents are watched by the control
-/// reconciler; a committed patch applies at the next generation swap, not to
-/// the in-flight turn. Surfaced in tool descriptions and result payloads.
 pub const EFFECT_TIMING_NOTE: &str = "Committed changes are picked up by the runtime reconciler \
      (typically within a few seconds) and apply to requests dispatched after \
      the resulting generation swap; the current turn keeps its existing \
      configuration.";
 
-/// Self-configuration executor for one agent of one node.
 #[derive(Clone)]
 pub struct SelfConfigCore {
     node: Arc<EmbeddedNode>,
@@ -77,18 +61,11 @@ pub struct SelfConfigCore {
     held_grants: OperatorGrants,
 }
 
-/// Outcome of an applied (or previewed) patch. Field order is the order the
-/// model reads the receipt: outcome, what changed, what happens next, then
-/// identifiers.
 #[derive(Debug, serde::Serialize)]
 pub struct PatchOutcome {
     pub committed: bool,
     pub collection: &'static str,
-    /// The target document's logical ID.
     pub target_id: String,
-    /// The agent the command targeted. A command without an explicit
-    /// agent targets the invoking one, so the receipt names it rather than
-    /// leaving that default implicit.
     pub agent_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<Value>,
@@ -129,9 +106,6 @@ fn connection_view(
     }
 }
 
-/// Agent anchor loaded fresh per call, so a prior `config agent` edit
-/// re-pointing `context_id`/`inference_profile_id` is
-/// honored by the next call.
 pub(crate) struct AgentAnchor {
     pub(crate) doc: Map<String, Value>,
     pub(crate) context: Map<String, Value>,
@@ -176,9 +150,9 @@ impl SelfConfigCore {
         self
     }
 
-    /// The operator grants the invoking agent holds, from its resolved
-    /// self-config tool configuration. Sibling cores built for a
-    /// catalog-authorized target carry the invoker's grants, never the target's.
+    /// The operator grants the invoking agent holds. Sibling cores built for
+    /// a catalog-authorized target carry the invoker's grants, never the
+    /// target's.
     pub fn with_held_grants(mut self, held: OperatorGrants) -> Self {
         self.held_grants = held;
         self
@@ -189,9 +163,7 @@ impl SelfConfigCore {
     }
 
     /// Preserve the invoking agent as the recoverability anchor while a
-    /// catalog-authorized command targets a sibling agent. Candidate reads
-    /// still incorporate a shared document being patched, so edits to shared
-    /// inference configuration cannot indirectly lock out the invoker.
+    /// catalog-authorized command targets a sibling agent.
     pub(crate) fn with_lockout_agent_id(mut self, agent_id: String) -> Self {
         self.lockout_agent_id = agent_id;
         self
@@ -221,16 +193,11 @@ impl SelfConfigCore {
         self.node.clone()
     }
 
-    pub(crate) fn node(&self) -> &EmbeddedNode {
-        &self.node
-    }
-
     pub(crate) fn identity(&self) -> Result<Did> {
         Did::new(self.node_did.clone())
             .map_err(|error| anyhow!("node DID is not ACP-addressable: {error}"))
     }
 
-    /// Load and ownership-check the agent anchor inside the transaction.
     pub(crate) async fn load_agent_anchor(&self, txn: &ConfigApplyTxn<'_>) -> Result<AgentAnchor> {
         let Some((_doc_id, doc)) =
             read_owned_doc(txn, SelfConfigTarget::Agent, &self.node_did, &self.agent_id).await?
@@ -297,20 +264,13 @@ impl SelfConfigCore {
         })
     }
 
-    /// The write operation: load owned doc → merge patch → validate → publish
-    /// the canonical candidate through the common desired-state owner → commit; abort wholesale on any failure.
-    ///
-    /// `resolve_unique` maps the agent anchor to the target document's
-    /// unique value (e.g. `tools_id` for the tools category).
-    /// `allow_create` permits upsert-create (automation only); `on_create`
-    /// injects identity/link fields the patch surface deliberately excludes.
     pub(crate) async fn apply(&self, request: ApplyRequest<'_>) -> Result<PatchOutcome> {
         ensure_admissible(request.target, &request.patch)?;
 
         let identity = self.identity()?;
         let this = self;
         let request = &request;
-        let outcome = ConfigAccess::transact_local(
+        let outcome = ConfigAccess::transact_local_write(
             &self.node,
             Some(identity),
             "self_config.apply",
@@ -515,7 +475,6 @@ impl SelfConfigCore {
         Ok(())
     }
 
-    /// The invoker's Tools as committed, before this candidate.
     async fn stored_lockout_tools(&self, txn: &ConfigApplyTxn<'_>) -> Result<Map<String, Value>> {
         let owner = self.node_did();
         let read = |target, id: String| async move {
@@ -535,14 +494,12 @@ impl SelfConfigCore {
         read(SelfConfigTarget::Tools, field(&context, "tools_id")?).await
     }
 
-    /// Preview: merge + validate in memory, return the diff. Nothing
-    /// is written; the consistent-snapshot transaction remains read-only.
     pub(crate) async fn preview(&self, request: ApplyRequest<'_>) -> Result<PatchOutcome> {
         ensure_admissible(request.target, &request.patch)?;
         let identity = self.identity()?;
         let this = self;
         let request = &request;
-        ConfigAccess::transact_local(
+        ConfigAccess::transact_local_readonly(
             &self.node,
             Some(identity),
             "self_config.preview",
@@ -628,7 +585,6 @@ impl SelfConfigCore {
     }
 }
 
-/// Focused convenience over canonical Tools groups, not a separate config type.
 pub fn apply_tool_grant_selection(
     tools: &mut Tools,
     enable_lsp: Option<bool>,
@@ -659,8 +615,6 @@ pub fn apply_tool_grant_selection(
     }
 }
 
-/// Pure admission fence for the focused sibling network selection. The
-/// canonical Tools writer remains [`apply_tool_grant_selection`].
 pub fn validate_tool_network_selection(network_mode: Option<CommandNetworkMode>) -> Result<()> {
     anyhow::ensure!(
         network_mode.is_none_or(|mode| mode == CommandNetworkMode::Disabled),
@@ -669,9 +623,6 @@ pub fn validate_tool_network_selection(network_mode: Option<CommandNetworkMode>)
     Ok(())
 }
 
-/// Per-call plumbing for one category patch. Boxed closures keep the core's
-/// write operation single-sourced while each tool supplies target resolution,
-/// validation, creation defaults, and its slice of the no-lockout guard.
 pub(crate) struct ApplyRequest<'a> {
     pub(crate) target: SelfConfigTarget,
     pub(crate) patch: SelfConfigPatch,
@@ -683,7 +634,6 @@ pub(crate) struct ApplyRequest<'a> {
         Box<dyn Fn(&str, &mut Map<String, Value>) -> Result<()> + Send + Sync + 'a>,
     pub(crate) normalize: NormalizeFn<'a>,
     pub(crate) validate: ValidateFn<'a>,
-    /// Invoker-only no-lockout slice over (stored, candidate) target documents.
     pub(crate) guard: Box<
         dyn Fn(&AgentAnchor, &Map<String, Value>, &Map<String, Value>) -> Result<()>
             + Send
@@ -733,9 +683,6 @@ impl<'a> ApplyRequest<'a> {
     }
 }
 
-/// Decode a merged document projection into a typed document for structural
-/// validation. The error names the field path and its advertised shape, not
-/// the Rust type serde expected there.
 pub(crate) fn decode_merged<T: serde::de::DeserializeOwned>(
     collection: &str,
     merged: &Map<String, Value>,
@@ -758,9 +705,7 @@ pub(crate) fn decode_merged<T: serde::de::DeserializeOwned>(
     })
 }
 
-/// Lean `SelfConfig.keepsReach`: the invoking agent stays enabled and keeps
-/// the Engineer tag it had, which routes agent-request protection and desktop
-/// reachability to the Engineer.
+/// Lean `SelfConfig.keepsReach`.
 pub fn guard_agent_keeps_reach(
     stored: &Map<String, Value>,
     candidate: &Map<String, Value>,
@@ -784,10 +729,7 @@ pub fn guard_agent_keeps_reach(
     Ok(())
 }
 
-/// Lean `SelfConfig.keepsControl`: the invoker's candidate Tools keep its
-/// self-config tool on and keep the agents group, the no-lockout guard and the
-/// `tools` category it already had. This is the only lockout protection on its
-/// own Tools (#1796); operator grants are bounded separately by
+/// Lean `SelfConfig.keepsControl`; operator grants are bounded separately by
 /// [`guard_tools_keep_grants`].
 pub fn guard_tools_keep_control(
     stored: &Map<String, Value>,
@@ -832,8 +774,7 @@ pub fn guard_tools_keep_control(
 }
 
 /// Operator-managed grants carried by a Tools document (Lean
-/// `SelfConfig.Grants`). Self-configuration keeps each grant within its own
-/// bound ([`guard_tools_keep_grants`]); operator writes are not bounded by it.
+/// `SelfConfig.Grants`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OperatorGrants {
     /// `self_config.enable_pack_install`.
@@ -841,9 +782,6 @@ pub struct OperatorGrants {
 }
 
 impl OperatorGrants {
-    /// Project the grants from a Tools document. An absent or null
-    /// `self_config` group carries none; a group that does not decode as
-    /// [`SelfConfigTools`] is an error, so the guard fails closed.
     pub fn from_tools_json(tools: &Map<String, Value>) -> Result<Self> {
         let config = match tools.get("self_config") {
             None | Some(Value::Null) => SelfConfigTools::default(),
@@ -855,20 +793,16 @@ impl OperatorGrants {
         })
     }
 
-    /// Lean `Grants.boundedBy`: whether each grant `self` carries stays within
-    /// its own bound. Pack installation is held-bounded: carried by `stored` or
-    /// held by `held`.
+    /// Lean `Grants.boundedBy`: pack installation is held-bounded: carried by
+    /// `stored` or held by `held`.
     pub fn bounded_by(&self, stored: &Self, held: &Self) -> bool {
         !self.pack_install || stored.pack_install || held.pack_install
     }
 }
 
-/// Lean `SelfConfig.keepsGrants`: a self-config write is accepted when each
-/// operator-managed grant of the candidate stays within its own bound against
-/// the Tools document it replaces, so pack installation is raised only up to
-/// what the invoking agent holds; a write that raises nothing is accepted
-/// whatever it holds. `stored` is `None` when no document is replaced. Unlike
-/// [`guard_tools_keep_control`] this always runs, from the validate slot.
+/// Lean `SelfConfig.keepsGrants`; `stored` is `None` when no document is
+/// replaced. Unlike [`guard_tools_keep_control`] this always runs, from the
+/// validate slot.
 pub fn guard_tools_keep_grants(
     held: &OperatorGrants,
     stored: Option<&Map<String, Value>>,
@@ -886,11 +820,7 @@ pub fn guard_tools_keep_grants(
     Ok(())
 }
 
-/// Lean `SelfConfig.reselectionKeepsGrants`: the Tools a Context or Agent
-/// newly selects are bounded like a Tools write from the previously selected
-/// Tools; with no previous selection (a new Context, a clone's copy) like a
-/// Tools write over a document with no grant. Selecting no Tools carries no
-/// grant.
+/// Lean `SelfConfig.reselectionKeepsGrants`.
 pub fn reselection_keeps_grants(
     held: &OperatorGrants,
     before: Option<&Map<String, Value>>,
@@ -902,13 +832,9 @@ pub fn reselection_keeps_grants(
     }
 }
 
-/// The native side of Lean `SelfConfig.chainKeepsGrants`: resolve the Tools a
-/// Context or Agent selected before and selects after this write, through
-/// owner-scoped reads in the write's own transaction, and decide through
-/// [`reselection_keeps_grants`]. An unchanged selection passes without reads
-/// (Lean `chain_unchanged_selection_keeps_grants`); a reference to a missing
-/// document resolves to no Tools and is refused by the reference validator
-/// with its own message.
+/// The native side of Lean `SelfConfig.chainKeepsGrants`. An unchanged
+/// selection passes without reads (Lean
+/// `chain_unchanged_selection_keeps_grants`).
 pub(crate) async fn guard_reselection_keeps_grants_in_txn(
     txn: &ConfigApplyTxn<'_>,
     core: &SelfConfigCore,
@@ -987,10 +913,6 @@ async fn context_tools_in_txn(
     }
 }
 
-/// Lean `SelfConfig.authGuard`: the model may not introduce or change a raw
-/// API key, and a node-OAuth candidate keeps the stored account reference
-/// (none for a non-OAuth backend). A stored or candidate `auth` that does not
-/// decode is rejected.
 pub fn guard_backend_auth(
     stored: &Map<String, Value>,
     candidate: &Map<String, Value>,
@@ -1018,9 +940,8 @@ pub fn guard_backend_auth(
     }
     Ok(())
 }
-/// Lean `SelfConfig.backendChoiceAllowed`: whether a model selection may move
-/// from the `current` backend (none on create) to `next`.
-/// `default_account` is `next`'s provider default account (Lean `dflt`).
+/// Lean `SelfConfig.backendChoiceAllowed`; `default_account` is `next`'s
+/// provider default account (Lean `dflt`).
 pub fn guard_backend_choice(
     current: Option<&crate::InferenceBackend>,
     next: &crate::InferenceBackend,
@@ -1041,8 +962,6 @@ pub fn guard_backend_choice(
     );
     Ok(())
 }
-/// [`guard_backend_choice`] over the owner's stored backends, inside the
-/// write transaction; `current_backend_id` is `None` on create.
 pub(crate) async fn guard_backend_choice_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
@@ -1070,9 +989,6 @@ pub(crate) async fn guard_backend_choice_in_txn(
     };
     guard_backend_choice(current.as_ref(), &next, default_account.as_deref())
 }
-/// Compaction summaries run on the compaction's profile, else the agent's
-/// (`CompactionConfig::inference_profile_id`). An agent `context_id` or a
-/// context `compaction_id` edit that moves that backend is a pick too.
 pub(crate) async fn guard_compaction_choice_in_txn(
     txn: &ConfigApplyTxn<'_>,
     target: SelfConfigTarget,
@@ -1141,7 +1057,6 @@ pub(crate) async fn guard_compaction_choice_in_txn(
     let (current, next) = (backend(current).await?, backend(next).await?);
     guard_backend_choice_in_txn(txn, &owner, Some(&current), &next).await
 }
-/// The backend an owned profile selects.
 pub(crate) async fn profile_backend_id(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,

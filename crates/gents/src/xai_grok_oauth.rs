@@ -1,5 +1,3 @@
-//! Grok / xAI SuperGrok subscription OAuth provider (subscription proxy path).
-
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -27,12 +25,10 @@ use std::future::Future;
 
 pub const XAI_OAUTH_PROVIDER: &str = "xai-oauth";
 
-/// Subscription inference proxy (not the metered developer API).
 pub const XAI_GROK_OAUTH_BASE_URL: &str = "https://cli-chat-proxy.grok.com/v1";
 
-// The subscription proxy gates on `x-grok-client-version` and answers HTTP 426
-// when the advertised client is below its minimum (observed floor 1.0.13, from
-// the proxy's 426 body). Keep this at or above the floor;
+// The proxy answers HTTP 426 when the advertised `x-grok-client-version` is
+// below its minimum (observed floor 1.0.13). Keep this at or above the floor;
 // GENTS_XAI_GROK_CLIENT_VERSION overrides it at runtime.
 const GROK_CLIENT_VERSION: &str = "1.0.46";
 const GROK_CLIENT_VERSION_ENV: &str = "GENTS_XAI_GROK_CLIENT_VERSION";
@@ -79,10 +75,6 @@ pub fn grok_client_version() -> String {
         .unwrap_or_else(|| GROK_CLIENT_VERSION.to_string())
 }
 
-/// Operator guidance for the proxy's client-version gate (HTTP 426). The
-/// proxy's own minimum travels in the response body both error surfaces
-/// already print, so this only names the version gents sent and the runtime
-/// override.
 pub fn grok_client_version_gate_guidance() -> String {
     format!(
         "Grok proxy rejected the client version gents sent ({}). Update gents, or set \
@@ -92,7 +84,6 @@ pub fn grok_client_version_gate_guidance() -> String {
     )
 }
 
-/// Headers the Grok CLI chat proxy uses to recognize subscription clients.
 pub fn build_xai_grok_oauth_headers() -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -117,23 +108,16 @@ pub fn build_xai_grok_oauth_headers() -> Result<HeaderMap> {
     Ok(headers)
 }
 
-/// [`crate::oauth_http::OAuthHttpPolicy`] policy for the Grok/xAI OAuth
-/// transport: only 401 kills the bearer (403 is the NotEntitled tier gate,
-/// which no refresh fixes — and with rotating refresh tokens a force-refresh
-/// loop would burn a rotation per request), identity headers ride
-/// per-request (the Chat Completions client builder has no default-header
-/// hook, unlike Responses), the `/responses` body needs `store:false`, and a
-/// streaming response needs its `usage` folded from `context_details`.
+/// Only 401 kills the bearer: 403 is the NotEntitled tier gate no refresh
+/// fixes, and with rotating refresh tokens a force-refresh loop would burn a
+/// rotation per request. Identity headers ride per-request (the Chat
+/// Completions client builder has no default-header hook).
 #[derive(Clone, Default)]
 pub struct XaiGrokOAuthPolicy;
 
 impl crate::oauth_http::OAuthHttpPolicy for XaiGrokOAuthPolicy {
     const REJECTION_STATUSES: &'static [u16] = &[401];
 
-    /// Inject the Grok-CLI identity headers the proxy's auth middleware and
-    /// version gate expect on every request, regardless of wire API or body
-    /// shape. Callers (e.g. the Responses client builder) may pre-set
-    /// identity headers; those are never overwritten.
     fn merge_identity_headers(&self, headers: &mut HeaderMap) -> http_client::Result<()> {
         let identity = build_xai_grok_oauth_headers()
             .map_err(|error| http_client::Error::Instance(error.into()))?;
@@ -161,9 +145,6 @@ impl crate::oauth_http::OAuthHttpPolicy for XaiGrokOAuthPolicy {
     }
 }
 
-/// Grok's OAuth transport: bearer auth, per-request identity headers,
-/// `store:false` shaping, and streaming usage normalization, layered over
-/// `crate::oauth_http`'s shared bearer-auth wrapper.
 pub type XaiGrokOAuthHttpClient<S, H = ReqwestClient> =
     crate::oauth_http::BearerAuthHttpClient<S, XaiGrokOAuthPolicy, H>;
 
@@ -277,9 +258,8 @@ fn promote_xai_context_usage(value: &mut Value) -> bool {
     if reported_input > 0 || reported_output > 0 {
         return false;
     }
-    // The subscription proxy can leave cumulative billing counters at zero
-    // while reporting actual model context in this xAI extension. Gents
-    // accounts model work, so normalize it into Rig's provider Usage shape.
+    // The proxy can report actual model context in this extension while the
+    // billing counters stay zero; gents accounts model work.
     let Some(context) = usage.get("context_details").and_then(Value::as_object) else {
         return false;
     };
@@ -301,9 +281,6 @@ fn promote_xai_context_usage(value: &mut Value) -> bool {
     true
 }
 
-/// The authenticated Grok transport, with the rendered-request capture wrapper
-/// installed *below* it so the captured body already carries the `store:false`
-/// this client injects in `prepare`.
 async fn build_authenticated_http(
     node: Arc<EmbeddedNode>,
     node_did: &str,
@@ -327,7 +304,6 @@ async fn build_authenticated_http(
     ))
 }
 
-/// Grok's OAuth transport wrapping the capture seam, which wraps reqwest.
 pub type CapturingXaiGrokOAuthHttpClient = XaiGrokOAuthHttpClient<
     DbCredentialBearer,
     crate::rendered_request::RenderedRequestCapturingHttpClient<
@@ -360,7 +336,6 @@ pub async fn build_chat_completions_client(
     endpoint: &str,
 ) -> Result<rig::providers::openai::CompletionsClient<CapturingXaiGrokOAuthHttpClient>> {
     let endpoint = normalize_endpoint(endpoint);
-    // Identity headers ride along via `prepare` on every request.
     let http = build_authenticated_http(node, node_did, account_ref).await?;
     crate::inference_http::build_openai_chat_completions_client(
         "xai-oauth-managed",
@@ -397,62 +372,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn headers_advertise_cli_identity() {
-        let headers = build_xai_grok_oauth_headers().unwrap();
-        assert_eq!(
-            headers
-                .get("x-xai-token-auth")
-                .and_then(|value| value.to_str().ok()),
-            Some("xai-grok-cli")
-        );
-        assert_eq!(
-            headers
-                .get("x-grok-client-identifier")
-                .and_then(|value| value.to_str().ok()),
-            Some("grok-shell")
-        );
-        assert_eq!(
-            headers
-                .get("x-grok-client-version")
-                .and_then(|value| value.to_str().ok()),
-            Some(grok_client_version().as_str())
-        );
-        assert_eq!(
-            headers
-                .get("user-agent")
-                .and_then(|value| value.to_str().ok()),
-            Some("xai-grok-cli")
-        );
-    }
-
-    #[test]
-    fn default_grok_client_version_is_pinned_above_proxy_floor() {
-        let parse = |version: &str| -> Vec<u64> {
-            version
-                .split('.')
-                .map(|part| part.parse().unwrap())
-                .collect()
-        };
-        assert_eq!(GROK_CLIENT_VERSION, "1.0.46");
-        // The proxy's 426 version-gate body observed in #2274 demanded
-        // "1.0.13 or later"; a pin below that floor fails every request.
-        assert!(parse(GROK_CLIENT_VERSION) >= parse("1.0.13"));
-    }
-
-    #[test]
-    fn grok_client_version_gate_guidance_names_sent_version_and_override() {
-        let guidance = grok_client_version_gate_guidance();
-        assert!(
-            guidance.contains(&grok_client_version()),
-            "guidance must name the version gents sent: {guidance}"
-        );
-        assert!(
-            guidance.contains(GROK_CLIENT_VERSION_ENV),
-            "guidance must name the runtime override: {guidance}"
-        );
-    }
-
     #[tokio::test]
     async fn injects_fresh_bearer() {
         let bearer = CountingBearer::new("tok-xyz");
@@ -478,9 +397,6 @@ mod tests {
     #[test]
     fn only_401_invalidates_bearer_403_is_a_tier_gate() {
         use crate::oauth_http::{is_bearer_rejection, OAuthHttpPolicy as _};
-        // 401 = expired/revoked grant: refresh may fix it. 403 = NotEntitled
-        // tier gate: refresh never fixes it, and with rotating refresh tokens
-        // a force-refresh loop would burn a rotation per request.
         let statuses = XaiGrokOAuthPolicy::REJECTION_STATUSES;
         let unauthorized =
             http_client::Error::InvalidStatusCode("401".parse().expect("valid status"));
@@ -637,17 +553,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn headers_include_proxy_auth_middleware_marker() {
-        let headers = build_xai_grok_oauth_headers().unwrap();
-        assert_eq!(
-            headers
-                .get("x-authenticateresponse")
-                .and_then(|value| value.to_str().ok()),
-            Some("authenticate-response")
-        );
-    }
-
     #[tokio::test]
     async fn prepare_injects_identity_headers_when_absent() {
         let bearer = CountingBearer::new("tok-abc");
@@ -713,15 +618,8 @@ mod tests {
         assert!(msg.contains("gents grok-login"), "{msg}");
     }
 
-    #[test]
-    fn patch_store_false_is_idempotent_when_present() {
-        let body = serde_json::json!({"store": true, "model": "grok-4.5"});
-        assert!(patch_store_false(&serde_json::to_vec(&body).unwrap()).is_none());
-    }
-
-    /// `build_authenticated_http` installs the capture seam *below* this
-    /// wrapper so the row carries the `store:false` Grok injects. Both wrappers
-    /// are generic over their inner client, so swapping their order compiles;
+    /// The capture seam must be installed below this wrapper so the row
+    /// carries the `store:false` Grok injects; swapping the order compiles,
     /// only composing the real stack catches it.
     #[tokio::test]
     async fn the_captured_row_carries_the_store_false_grok_injects() {

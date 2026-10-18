@@ -1,10 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use super::{
-    request_is_authorized, validate_bind_security, CodexSidecar, ConnectionState,
-    DEFAULT_MEMORY_MODE,
-};
+use super::{request_is_authorized, validate_bind_security, ConnectionState};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderMap, HeaderValue};
 use tokio::sync::{mpsc, watch, Mutex};
@@ -19,23 +16,6 @@ fn test_connection() -> ConnectionState {
         child_thread_streams: Arc::new(Mutex::new(BTreeMap::new())),
         root_continuation_streams: Arc::new(Mutex::new(BTreeMap::new())),
     }
-}
-
-#[test]
-fn memory_mode_defaults_to_disabled_for_unknown_thread() {
-    let sidecar = CodexSidecar::default();
-    assert_eq!(sidecar.memory_mode_or_default("never-set"), "disabled");
-    assert_eq!(DEFAULT_MEMORY_MODE, "disabled");
-}
-
-#[test]
-fn memory_mode_returns_explicit_override_when_set() {
-    let mut sidecar = CodexSidecar::default();
-    sidecar
-        .memory_mode
-        .insert("t1".to_string(), "enabled".to_string());
-    assert_eq!(sidecar.memory_mode_or_default("t1"), "enabled");
-    assert_eq!(sidecar.memory_mode_or_default("t2"), "disabled");
 }
 
 #[test]

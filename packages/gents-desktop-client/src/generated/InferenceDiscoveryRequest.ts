@@ -2,14 +2,4 @@
 import type { InferenceAuthMethod } from "./InferenceAuthMethod.js";
 import type { InferenceProviderId } from "./InferenceProviderId.js";
 
-export type InferenceDiscoveryRequest = { requestKey: string, nodeDid: string, provider: InferenceProviderId, authMethod: InferenceAuthMethod, endpoint: string,
-/**
- * Ephemeral connection input. It is consumed for this request and is
- * never reflected into a response or desktop snapshot.
- */
-apiKey: string | null,
-/**
- * The account a subscription backend names; absent is the provider's
- * original account.
- */
-accountRef?: string | null, };
+export type InferenceDiscoveryRequest = { requestKey: string, nodeDid: string, provider: InferenceProviderId, authMethod: InferenceAuthMethod, endpoint: string, apiKey: string | null, accountRef?: string | null, };

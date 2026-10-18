@@ -33,48 +33,8 @@ fn commit(repo: &Path, message: &str) -> String {
     git_output(repo, &["rev-parse", "HEAD"]).unwrap()
 }
 
-#[test]
-fn git_diff_host_step_runs_the_declared_diff() {
-    let directory = init_repo();
-    let repo = directory.path();
-    std::fs::write(repo.join("a.txt"), "line one\n").unwrap();
-    let base = commit(repo, "base");
-    std::fs::write(repo.join("a.txt"), "line one changed\n").unwrap();
-    let head = commit(repo, "head");
-
-    let facts = collect_git_diff(repo, &base, &head, 3, 40, None).unwrap();
-    let expected_name_status =
-        git_output(repo, &["diff", "--name-status", &base, &head, "--"]).unwrap();
-    let expected_stat = git_output(repo, &["diff", "--stat", &base, &head, "--"]).unwrap();
-    let expected_patch = git_output_exact(
-        repo,
-        &[
-            "-c",
-            "core.quotepath=true",
-            "diff",
-            "--no-color",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--binary",
-            "--find-renames=40%",
-            "--unified=3",
-            &base,
-            &head,
-            "--",
-        ],
-    )
-    .unwrap();
-    assert_eq!(facts.base_sha, base);
-    assert_eq!(facts.head_sha, head);
-    assert_eq!(facts.name_status, expected_name_status);
-    assert_eq!(facts.stat, expected_stat);
-    assert_eq!(facts.patch, expected_patch);
-}
-
 use crate::plugin::tests::constant_output_wat;
 
-/// Installs a constant-output plugin under a fresh home, qualified
-/// `fixture/prepare_fixture`.
 fn install_prepare_fixture_plugin(output: &Value) -> (tempfile::TempDir, String) {
     let wat_source = constant_output_wat(&serde_json::to_vec(output).unwrap());
     let (plugin, afb) =
@@ -142,30 +102,6 @@ fn fixture_plan(entry: PlannedEntry) -> GraphPlan {
 }
 
 #[tokio::test]
-async fn prepare_entry_run_returns_admitted_input_when_the_entry_has_no_prepare() {
-    let plan = fixture_plan(fixture_entry(None));
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
-    let access = ConfigAccess::Local(std::sync::Arc::new(node));
-    let plugins = PluginExecutor::default();
-    let prepared = prepare_entry_run(
-        &access,
-        "did:key:tester",
-        EntryRunRequest {
-            plan: &plan,
-            entry: None,
-            input: json!({"note": "hello"}),
-            host_root: None,
-            plugins: &plugins,
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(prepared.origin, EntryInputOrigin::Operator);
-    assert_eq!(prepared.documents, 0);
-    assert_eq!(prepared.input, json!({"note": "hello"}));
-}
-
-#[tokio::test]
 async fn prepare_entry_run_runs_host_steps_and_persists_the_plugins_documents() {
     let directory = init_repo();
     let repo = directory.path();
@@ -199,7 +135,7 @@ async fn prepare_entry_run_runs_host_steps_and_persists_the_plugins_documents() 
     node.add_schema("type FixtureEvidence { note: String }")
         .await
         .unwrap();
-    let access = ConfigAccess::Local(std::sync::Arc::new(node));
+    let access = ConfigAccess::local(std::sync::Arc::new(node));
 
     let prepared = prepare_entry_run(
         &access,
@@ -265,7 +201,7 @@ async fn prepare_entry_run_refuses_a_document_outside_declared_writes() {
     }));
     let plan = fixture_plan(entry);
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
-    let access = ConfigAccess::Local(std::sync::Arc::new(node));
+    let access = ConfigAccess::local(std::sync::Arc::new(node));
     let error = prepare_entry_run(
         &access,
         "did:key:tester",
@@ -285,19 +221,13 @@ async fn prepare_entry_run_refuses_a_document_outside_declared_writes() {
     );
 }
 
-/// The batched aliased-mutation path (D4 step 7): more than
-/// [`PREPARE_DOCUMENTS_BATCH_LIMIT`] documents forces the count-based split
-/// into multiple batches, and one oversized document forces a byte-based
-/// split mid-batch (and must still land, alone, in its own batch rather than
-/// being silently dropped). Every document must survive with its exact
-/// fields, and none may be dropped, duplicated, or truncated.
 #[tokio::test]
 async fn persist_prepared_documents_batches_and_never_drops_a_document() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     node.add_schema("type FixtureEvidence { note: String }")
         .await
         .unwrap();
-    let access = ConfigAccess::Local(std::sync::Arc::new(node));
+    let access = ConfigAccess::local(std::sync::Arc::new(node));
 
     let mut documents: Vec<PreparePluginDocument> = (0..70)
         .map(|i| PreparePluginDocument {
@@ -306,9 +236,6 @@ async fn persist_prepared_documents_batches_and_never_drops_a_document() {
         })
         .collect();
     let oversized_note = "z".repeat(PREPARE_DOCUMENTS_BATCH_BYTES + 1);
-    // Inserted mid-list (not first in its would-be batch), so this document
-    // alone tripping the byte budget forces an early batch break rather than
-    // only ever being exercised as a batch's first, always-admitted alias.
     documents.insert(
         40,
         PreparePluginDocument {

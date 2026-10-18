@@ -11,19 +11,6 @@
   }
 }
 
-/* The kit's spinner swaps a braille glyph every 100 ms, and monospace fonts
-   lack braille: each glyph comes from a fallback font, and in WebKit every
-   swap laid the page out again and stepped a scroller following its foot
-   back 2 px. Contained, a swap cannot reach the layout around it. A
-   spinner's own size utilities still apply over this. */
-@layer components {
-  [data-slot="ascii-loader"] {
-    height: 1em;
-    overflow: hidden;
-    contain: strict;
-  }
-}
-
 html,
 body,
 #root {
@@ -33,8 +20,8 @@ body,
   overflow: hidden;
 }
 
-/* Windows uses a web window bar. macOS and Linux reserve native chrome
-   outside the webview, so viewport units describe usable content only. */
+/* macOS and Linux reserve native chrome outside the webview; only Windows
+   uses a web window bar. */
 .titlebar-drag-region {
   display: none;
 }
@@ -74,23 +61,24 @@ body,
   ) {
   pointer-events: auto;
 }
-
-.startup-ellipsis::after {
-  content: "";
-  animation: startup-ellipsis 1.2s steps(4, end) infinite;
+@keyframes tray-row-leave {
+  from {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+  to {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
 }
 
-@keyframes startup-ellipsis {
-  0% {
-    content: "";
-  }
-  25% {
-    content: ".";
-  }
-  50% {
-    content: "..";
-  }
-  75% {
-    content: "...";
-  }
+/* The kit's scroll area always carries a horizontal bar, and at a page zoom
+   a viewport's content rounds a pixel wider than the viewport and shows it.
+   An area scrolls sideways only when it says so with data-scroll-x. */
+[data-slot="scroll-area"]:not([data-scroll-x]) > [data-slot="scroll-area-viewport"] {
+  overflow-x: hidden !important;
+}
+[data-slot="scroll-area"]:not([data-scroll-x])
+  > [data-slot="scroll-area-scrollbar"][data-orientation="horizontal"] {
+  display: none;
 }

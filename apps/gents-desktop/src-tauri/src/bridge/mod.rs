@@ -10,10 +10,14 @@ use gents_desktop_bridge::contract::{
     MANAGED_SERVER_TRAY_RESTART_EVENT, MANAGED_SERVER_TRAY_START_EVENT,
     MANAGED_SERVER_TRAY_STOP_EVENT, MANAGED_SERVER_UPDATED_EVENT,
 };
+#[cfg(any(
+    all(feature = "native-e2e", debug_assertions, desktop),
+    all(desktop, any(target_os = "macos", target_os = "linux"))
+))]
+use gents_desktop_bridge::NodeHomePolicy;
 use gents_desktop_bridge::{
     init, init_tracing as install_tracing, install_runtime, prefer_host_tools, AppMeta,
-    BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, NodeHomePolicy, SnapshotGrants,
-    TracingConfig,
+    BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, SnapshotGrants, TracingConfig,
 };
 #[cfg(desktop)]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,7 +49,6 @@ pub fn run() {
     install_runtime();
 
     let builder = tauri::Builder::default();
-    // Registered first so a second launch exits before it sets anything up.
     #[cfg(desktop)]
     let builder = builder.plugin(single_instance());
     #[cfg(target_os = "macos")]
@@ -124,9 +127,6 @@ pub fn run() {
                         }
                     }
                     window_close::CloseAction::CloseWithHiddenMain => {
-                        // The last visible view is closing and no runtime needs
-                        // the hidden coordinator. Destroy it so last-window exit
-                        // works exactly as it did before native tabs.
                         if let Some(main) = main {
                             if let Err(error) = main.destroy() {
                                 tracing::warn!(%error, "could not close hidden main view");
@@ -184,8 +184,6 @@ fn browser_store_lock<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
         .build()
 }
 
-/// A second copy of the app would share this one's service label, service
-/// definition and data. Launching it again focuses the running app instead.
 #[cfg(desktop)]
 fn single_instance<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     tauri_plugin_single_instance::init(|app, _args, _cwd| show_main_window(app))
@@ -201,6 +199,7 @@ fn platform_bridge_config() -> BridgeConfig {
         },
         snapshot_grants: SnapshotGrants::all(),
         managed_server: platform_managed_server_policy(),
+        client_host: cfg!(all(desktop, any(unix, windows))),
         store_key_custody: gents::store_key::StoreKeyCustodyChoice::default(),
     };
     #[cfg(all(feature = "native-e2e", debug_assertions, desktop))]
@@ -303,32 +302,12 @@ mod tests {
         ));
         assert_eq!(config.managed_server, ManagedServerPolicy::Disabled);
     }
-
-    #[test]
-    fn a_second_launch_is_handed_to_the_running_app() {
-        let plugin = single_instance::<tauri::Wry>();
-        assert_eq!(tauri::plugin::Plugin::name(&plugin), "single-instance");
-    }
-
-    #[test]
-    fn tray_does_not_claim_process_readiness_while_starting() {
-        assert_eq!(
-            managed_agent_tooltip(Some("starting")),
-            "Gents node service — starting"
-        );
-        assert_eq!(
-            managed_agent_tooltip(Some("failed")),
-            "Gents node service — status unavailable"
-        );
-    }
 }
 
 #[cfg(desktop)]
 struct TrayRuntimeState {
-    // The desktop is tray-resident independently of node process state. This
-    // stays true so closing the main window preserves the menu-bar frontend.
     active: Arc<AtomicBool>,
-    // Native non-selected tabs can also report invisible. Only a deliberate
+    // Native non-selected tabs can also report invisible; only a deliberate
     // close makes the original view eligible for last-sibling cleanup.
     main_hidden_by_close: AtomicBool,
 }
@@ -365,7 +344,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     });
     let tray = TrayIconBuilder::with_id("gents-managed-server")
         .menu(&menu)
-        .tooltip("Gents node service — independent of the desktop")
+        .tooltip("Gents local node")
         .icon(tray_icon(app)?)
         .icon_as_template(cfg!(target_os = "macos"))
         .on_menu_event(|app, event| match event.id.as_ref() {

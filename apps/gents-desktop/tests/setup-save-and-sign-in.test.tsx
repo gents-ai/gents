@@ -13,8 +13,6 @@ import { createDesktopUiHarness } from "./ui-harness/desktopHarness";
 
 const NODE_DID = "did:key:z6MkBombadilNode";
 
-/* The harness adapter without a managed runtime to gate on, with every call
-   observable. */
 function setup(
   overrides: Partial<DesktopApiAdapter> = {},
   harness = createDesktopUiHarness({ scenario: "empty-fleet" }),
@@ -215,6 +213,93 @@ describe("setup provider sign-in", () => {
   });
 });
 
+describe("a connected account in setup", () => {
+  const claude = (enabled = true) => ({
+    credentialId: "credential-claude",
+    nodeDid: NODE_DID,
+    provider: "claude-subscription",
+    accountId: "me@example.com",
+    planType: null,
+    accessTokenExpiresAt: "2099-01-01T00:00:00Z",
+    lastRefresh: null,
+    enabled,
+    pendingSave: false,
+  });
+  const openConnected = async (overrides: Partial<DesktopApiAdapter> = {}) => {
+    const setUp = setup({
+      listProviderAccounts: vi.fn().mockResolvedValue([claude()]),
+      ...overrides,
+    });
+    renderIn(
+      setUp.app,
+      <SetupScreen initialStep="inference" nodeDid={NODE_DID} onDone={vi.fn()} />,
+    );
+    await userEvent.click(await screen.findByTestId("setup-provider-anthropic"));
+    expect(await screen.findByText("Connected as me@example.com")).toBeVisible();
+    return setUp;
+  };
+
+  it("can set the account aside to sign in with another", async () => {
+    const { api } = await openConnected();
+    await userEvent.click(screen.getByRole("button", { name: "Use another account" }));
+    expect(await screen.findByRole("button", { name: "Sign in" })).toBeVisible();
+    expect(screen.queryByText("Connected as me@example.com")).not.toBeInTheDocument();
+    expect(api.claudeLogin).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await waitFor(() => expect(api.claudeLogin).toHaveBeenCalledTimes(1));
+  });
+
+  it("finds models through the account signed in after the first was set aside", async () => {
+    const harness = createDesktopUiHarness({ scenario: "empty-fleet" });
+    const discover = vi.fn(
+      harness.adapter.discoverInferenceModels.bind(harness.adapter),
+    );
+    const work = {
+      ...claude(),
+      credentialId: "credential-work",
+      accountId: "work@example.com",
+      accountRef: "acct-2",
+      label: "Work",
+    };
+    const accounts = vi.fn().mockResolvedValue([claude()]);
+    const { app } = setup(
+      {
+        listProviderAccounts: accounts,
+        discoverInferenceModels: discover,
+        claudeLogin: vi.fn().mockResolvedValue({
+          docId: "credential-doc",
+          credentialId: "credential-work",
+          nodeDid: NODE_DID,
+          provider: "claude-subscription",
+          accountId: "work@example.com",
+          chatgptPlanType: null,
+          isFedramp: false,
+          accessTokenExpiresAt: "2099-01-01T00:00:00Z",
+          enabled: true,
+          signIn: { result: "added", label: "Work", accountRef: "acct-2", hint: null },
+        }),
+      },
+      harness,
+    );
+    renderIn(
+      app,
+      <SetupScreen initialStep="inference" nodeDid={NODE_DID} onDone={vi.fn()} />,
+    );
+    await userEvent.click(await screen.findByTestId("setup-provider-anthropic"));
+    expect(await screen.findByText("Connected as me@example.com")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Use another account" }));
+    accounts.mockResolvedValue([claude(), work]);
+    await userEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+    const find = await screen.findByRole("button", { name: /find models/i });
+    discover.mockClear();
+    await userEvent.click(find);
+    await waitFor(() => expect(discover).toHaveBeenCalled());
+    expect(discover).toHaveBeenLastCalledWith(
+      expect.objectContaining({ accountRef: "acct-2" }),
+    );
+  });
+});
+
 describe("the provider catalog", () => {
   it("offers to read the catalog again after a failed read, and then goes on", async () => {
     const harness = createDesktopUiHarness({ scenario: "empty-fleet" });
@@ -244,6 +329,120 @@ describe("the provider catalog", () => {
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByText("Account connected")).toBeVisible();
   });
+});
+
+describe.each(["onboarding", "add-backend"] as const)("%s API-key setup", (purpose) => {
+  it.each([
+    {
+      provider: "anthropic" as const,
+      subscription: "claude-subscription",
+      signIn: "Claude sign-in",
+      keyOption: "Anthropic API key",
+      endpoint: "https://api.anthropic.com/v1",
+      kind: "AnthropicApiKey",
+      wire: null,
+      model: "claude-sonnet-5",
+    },
+    {
+      provider: "grok" as const,
+      subscription: "xai-oauth",
+      signIn: "Grok sign-in",
+      keyOption: "xAI API key",
+      endpoint: "https://api.x.ai/v1",
+      kind: "OpenAiCompatible",
+      wire: "responses",
+      model: "grok-4.6",
+    },
+  ])(
+    "discovers and saves $keyOption without the subscription account",
+    async (choice) => {
+      const harness = createDesktopUiHarness({ scenario: "empty-fleet" });
+      const initialized = await harness.adapter.initLocalStandardRuntime({
+        label: "Forge",
+        dangerouslyOverwrite: false,
+        reset: false,
+      });
+      const discover = vi.fn(
+        harness.adapter.discoverInferenceModels.bind(harness.adapter),
+      );
+      const { api, app } = setup(
+        {
+          discoverInferenceModels: discover,
+          listProviderAccounts: vi.fn().mockResolvedValue([
+            {
+              credentialId: "credential-work",
+              nodeDid: initialized.nodeDid,
+              provider: choice.subscription,
+              accountId: "work@example.com",
+              accountRef: "acct-work",
+              planType: null,
+              accessTokenExpiresAt: "2099-01-01T00:00:00Z",
+              lastRefresh: null,
+              enabled: true,
+              pendingSave: false,
+            },
+          ]),
+        },
+        harness,
+      );
+      const onDone = vi.fn();
+      renderIn(
+        app,
+        <SetupScreen
+          initialStep="inference"
+          purpose={purpose}
+          provider={choice.provider}
+          nodeDid={initialized.nodeDid}
+          onCancel={vi.fn()}
+          onDone={onDone}
+        />,
+      );
+      const user = userEvent.setup();
+      const method = await screen.findByRole("combobox", { name: "Connection method" });
+      expect(method).toHaveTextContent(choice.signIn);
+      await user.click(method);
+      await user.click(await screen.findByRole("option", { name: choice.keyOption }));
+      expect(screen.getByLabelText("Endpoint")).toHaveValue(choice.endpoint);
+      expect(screen.queryByText(/Connected as/)).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Sign in" })).not.toBeInTheDocument();
+      const connect = screen.getByRole("button", { name: "Connect and find models" });
+      expect(connect).toBeDisabled();
+      await user.type(screen.getByLabelText("API key"), "test-api-key");
+      await user.click(connect);
+      await user.click(await screen.findByRole("option", { name: choice.model }));
+      expect(discover).toHaveBeenCalledWith(
+        expect.objectContaining({
+          nodeDid: initialized.nodeDid,
+          provider: choice.provider,
+          authMethod: "api_key",
+          endpoint: choice.endpoint,
+          apiKey: "test-api-key",
+          accountRef: null,
+        }),
+      );
+      await user.click(screen.getByTestId("setup-save-inference"));
+      await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+      expect(api.applyConfigComponents).toHaveBeenCalledTimes(1);
+      expect(api.applyConfigComponents).toHaveBeenCalledWith({
+        document: expect.objectContaining({
+          inference_backends: [
+            expect.objectContaining({
+              provider_kind: choice.kind,
+              openai_wire_api: choice.wire,
+              endpoint: choice.endpoint,
+              auth: { kind: "api_key", key: "test-api-key" },
+            }),
+          ],
+        }),
+      });
+      expect(api.codexLogin).not.toHaveBeenCalled();
+      expect(api.claudeLogin).not.toHaveBeenCalled();
+      expect(api.grokLogin).not.toHaveBeenCalled();
+      expect(
+        screen.queryByText(/test-api-key|credential-work|acct-work/),
+      ).not.toBeInTheDocument();
+    },
+  );
 });
 
 describe("add another account", () => {
@@ -456,10 +655,6 @@ describe("add another account", () => {
 });
 
 describe("setup save", () => {
-  /* #2068: the runtime confirms the rebound default agent only after it
-     reconciles, starts the slot and replicates readiness back. A confirmation
-     that lands after the old five-second budget must still complete the first
-     save. */
   it("completes on the first click when readiness arrives after five seconds", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let appliedAt: number | null = null;

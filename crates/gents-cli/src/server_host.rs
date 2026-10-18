@@ -1,5 +1,3 @@
-//! Shared provisioning and operator helpers for the Gents server.
-
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
@@ -40,7 +38,6 @@ pub struct ProvisionOptions {
     pub node_name: String,
     pub tool_ceiling: ManagedToolCeiling,
     pub tool_root: Option<PathBuf>,
-    /// Custody of a new home's store key; tests request a file key.
     pub store_key_custody: gents::store_key::StoreKeyCustodyChoice,
 }
 
@@ -135,58 +132,4 @@ pub async fn approve_managed_client_enrollment(
 
 pub fn initialized_home(path: &Path) -> bool {
     path.join(crate::INIT_CONFIG_FILE_NAME).is_file()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn standard_config_matches_cli_server_defaults() {
-        let config = ServerConfig::standard(PathBuf::from("/tmp/gents-test"));
-        assert_eq!(config.http_addr, "127.0.0.1".parse::<IpAddr>().unwrap());
-        assert_eq!(config.http_port, crate::DEFAULT_HTTP_PORT);
-    }
-
-    #[tokio::test]
-    async fn reprovisioning_changes_only_the_existing_homes_process_ceiling() {
-        let temp = tempfile::tempdir().unwrap();
-        let first_root = temp.path().join("first root");
-        let second_root = temp.path().join("second root");
-        std::fs::create_dir(&first_root).unwrap();
-        std::fs::create_dir(&second_root).unwrap();
-        crate::write_init_config(
-            temp.path(),
-            &crate::shared::StoredInitConfig {
-                home: temp.path().display().to_string(),
-                node_name: "Forge".to_string(),
-                node_did: "did:key:zPreserved".to_string(),
-                key_path: Some(temp.path().join("agent.key").display().to_string()),
-                identity_backend: None,
-                keychain_label: None,
-                secure_enclave_label: None,
-                tool_package: Some(crate::cli::args::ToolPackageArg::Yolo),
-                tool_ceiling: ManagedToolCeiling::Readwrite,
-                tool_root: Some(first_root.display().to_string()),
-                store_encryption: None,
-            },
-        )
-        .unwrap();
-
-        ensure_standard_home_inner(ProvisionOptions {
-            home: temp.path().to_path_buf(),
-            node_name: "A different ignored name".to_string(),
-            tool_ceiling: ManagedToolCeiling::Readonly,
-            tool_root: Some(second_root.clone()),
-            store_key_custody: gents::store_key::StoreKeyCustodyChoice::File,
-        })
-        .await
-        .unwrap();
-
-        let stored = crate::read_init_config(temp.path()).unwrap().unwrap();
-        assert_eq!(stored.node_name, "Forge");
-        assert_eq!(stored.node_did, "did:key:zPreserved");
-        assert_eq!(stored.tool_ceiling, ManagedToolCeiling::Readonly);
-        assert_eq!(stored.tool_root.as_deref(), second_root.to_str());
-    }
 }

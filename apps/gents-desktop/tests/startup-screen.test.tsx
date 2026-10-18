@@ -13,16 +13,12 @@ import App from "../src/App";
 import { StartupScreen } from "../src/components/StartupScreen";
 import { renderIn, testApp } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
+import { deferred } from "./deferred";
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
+const shownStep = (text: string) =>
+  waitFor(() => expect(screen.getByTestId("startup-step")).toHaveTextContent(text), {
+    timeout: 2_000,
   });
-  return { promise, reject, resolve };
-}
 
 const savedPeer = {
   peerId: deployment.peerId,
@@ -37,6 +33,10 @@ function snapshot(configured: boolean, running: boolean): DesktopClientSnapshot 
   return {
     bootstrap: {
       ...bootstrap,
+      initConfigStatus: configured ? "configured" : "absent",
+      ...(configured
+        ? {}
+        : { initNodeName: null, initNodeDid: null, nodeHomeExists: false }),
       savedPeers: configured ? [savedPeer] : [],
     },
     client: running
@@ -62,6 +62,7 @@ function snapshot(configured: boolean, running: boolean): DesktopClientSnapshot 
           peerIssueCount: 0,
           rowCount: 42,
           approxSerializedBytes: 2048,
+          operatorConfigAuthoritativeNodeDids: configured ? [deployment.nodeDid] : [],
           deployments: [deployment],
         }
       : null,
@@ -104,6 +105,19 @@ function bridge(
 }
 
 describe("desktop startup screen", () => {
+  it("explains an unreadable saved node config and offers a retry", () => {
+    const app = testApp();
+    renderIn(app, <StartupScreen configurationPending initConfigStatus="unreadable" />);
+
+    expect(screen.getByTestId("startup-configuration-pending")).toHaveTextContent(
+      "Unable to read saved node settings",
+    );
+    expect(screen.getByTestId("startup-configuration-pending")).toHaveTextContent(
+      "The saved node settings could not be read. Try again to reload them.",
+    );
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
   it("names local-agent observation instead of misreporting a configuration read", async () => {
     const status = deferred<ManagedServerStatus>();
     const base = bridge(
@@ -124,11 +138,12 @@ describe("desktop startup screen", () => {
       />,
     );
 
-    expect(screen.getByTestId("startup-screen")).toHaveTextContent(
-      "Checking the background node",
+    expect(screen.getByTestId("startup-step")).toHaveTextContent(
+      "Starting your local node",
     );
-    expect(screen.getByTestId("startup-screen")).toHaveTextContent(
-      "Check local nodeWorking",
+    expect(screen.getByText("Starting your local node")).toHaveAttribute(
+      "data-state",
+      "active",
     );
     expect(base.api.fetchDesktopSnapshot).not.toHaveBeenCalled();
 
@@ -177,8 +192,6 @@ describe("desktop startup screen", () => {
       expect(screen.getByTestId("setup-screen")).toBeInTheDocument();
     });
     expect(screen.queryByTestId("startup-retry")).not.toBeInTheDocument();
-    // Restoration probes once; the expanded local card also resolves its
-    // default root without blocking entry to the first-run screen.
     await waitFor(() => {
       expect(managedServerStatus).toHaveBeenCalledTimes(2);
     });
@@ -222,9 +235,7 @@ describe("desktop startup screen", () => {
 
     initial.resolve(snapshot(true, false));
     await waitFor(() => expect(startDesktopClient).toHaveBeenCalledTimes(1));
-    expect(screen.getByTestId("startup-screen")).toHaveTextContent(
-      "Starting the secure client",
-    );
+    await shownStep("Starting the secure client");
     expect(screen.queryByTestId("setup-screen")).not.toBeInTheDocument();
 
     started.resolve(snapshot(true, true));
@@ -277,6 +288,10 @@ describe("desktop startup screen", () => {
     const localOnly: DesktopClientSnapshot = {
       bootstrap: {
         ...bootstrap,
+        initConfigStatus: "absent",
+        initNodeName: null,
+        initNodeDid: null,
+        nodeHomeExists: false,
         clientStateExists: false,
         savedPeers: [{ ...savedPeer, source: "local-standard" }],
       },
@@ -330,6 +345,10 @@ describe("desktop startup screen", () => {
     const localOnly: DesktopClientSnapshot = {
       bootstrap: {
         ...bootstrap,
+        initConfigStatus: "absent",
+        initNodeName: null,
+        initNodeDid: null,
+        nodeHomeExists: false,
         clientStateExists: false,
         savedPeers: [{ ...savedPeer, source: "local-standard" }],
       },
@@ -358,9 +377,7 @@ describe("desktop startup screen", () => {
     );
 
     await waitFor(() => expect(startDesktopClient).toHaveBeenCalledTimes(1));
-    expect(screen.getByTestId("startup-screen")).toHaveTextContent(
-      "Starting the secure client",
-    );
+    await shownStep("Starting the secure client");
     started.resolve(snapshot(true, true));
     await waitFor(() => {
       expect(screen.queryByTestId("startup-screen")).not.toBeInTheDocument();
@@ -368,8 +385,6 @@ describe("desktop startup screen", () => {
   });
 
   it("starts the client again when a retry follows a failed start", async () => {
-    /* the client stays stopped until a start succeeds; each read repeats
-       the same stopped client, so nothing about the read itself changes */
     let running = false;
     const fetchDesktopSnapshot = vi.fn(async () => snapshot(true, running));
     const startDesktopClient = vi

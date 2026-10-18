@@ -13,6 +13,8 @@ use gents::collection::Collection;
 use gents::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyPlan,
 };
+#[cfg(test)]
+use std::sync::Arc;
 
 pub async fn apply_plan(
     access: &ConfigAccess,
@@ -20,7 +22,7 @@ pub async fn apply_plan(
     plan: DesiredStateApplyPlan,
 ) -> Result<()> {
     access
-        .transact(operation, |txn| {
+        .transact_write(operation, |txn| {
             let plan = &plan;
             Box::pin(async move {
                 apply_desired_state_plan(txn, plan).await?;
@@ -32,11 +34,11 @@ pub async fn apply_plan(
 
 #[cfg(test)]
 pub async fn apply_plan_local(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     operation: &'static str,
     plan: DesiredStateApplyPlan,
 ) -> Result<()> {
-    ConfigAccess::transact_local(node, None, operation, |txn| {
+    ConfigAccess::transact_local_write(node, None, operation, |txn| {
         let plan = &plan;
         Box::pin(async move {
             apply_desired_state_plan(txn, plan).await?;
@@ -59,7 +61,7 @@ pub async fn delete_scoped_document(
         id.to_owned(),
     )])?;
     access
-        .transact(operation, |txn| {
+        .transact_write(operation, |txn| {
             let plan = &plan;
             Box::pin(async move {
                 let existed = read_desired_state_record_in_txn(txn, collection, node_did, id)
@@ -74,7 +76,7 @@ pub async fn delete_scoped_document(
 
 #[cfg(test)]
 pub async fn delete_scoped_document_local(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     operation: &'static str,
     collection: Collection,
     node_did: &str,
@@ -85,7 +87,7 @@ pub async fn delete_scoped_document_local(
         node_did.to_owned(),
         id.to_owned(),
     )])?;
-    ConfigAccess::transact_local(node, None, operation, |txn| {
+    ConfigAccess::transact_local_write(node, None, operation, |txn| {
         let plan = &plan;
         Box::pin(async move {
             let existed = read_desired_state_record_in_txn(txn, collection, node_did, id)
@@ -101,7 +103,9 @@ pub async fn delete_scoped_document_local(
 pub use behavior::{delete_agent_context_on, delete_agent_on, upsert_agent_on};
 pub use inference::{delete_inference_backend_on, upsert_inference_backend_on};
 pub use principal::{
-    apply_config_components_on, patch_config_components_on, set_default_agent_on, upsert_node_on,
+    apply_config_components_on, patch_config_components_on, read_backend_authentication_on,
+    read_config_editor_on, save_backend_authentication_on, save_config_editor_on,
+    set_default_agent_on, upsert_node_on, ConfigEditorDocument, ConfigEditorRevision,
 };
 pub use profile::{delete_inference_profile_on, upsert_inference_profile_on};
 pub use skill::{delete_skill_on, upsert_skill_on};

@@ -4,7 +4,7 @@ use anyhow::Context;
 
 #[cfg(test)]
 pub(crate) async fn create_session_with_id(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     session_id: &str,
     agent_id: &str,
     node_did: &str,
@@ -14,7 +14,7 @@ pub(crate) async fn create_session_with_id(
 
 #[cfg(test)]
 pub(crate) async fn create_session_with_agent_id(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     session_id: &str,
     node_did: &str,
     agent_id: &str,
@@ -24,28 +24,33 @@ pub(crate) async fn create_session_with_agent_id(
 
 #[cfg(test)]
 async fn create_session_with_agent_id_and_requester_did(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     session_id: &str,
     node_did: &str,
     agent_id: &str,
     requester_did: Option<&str>,
 ) -> Result<()> {
-    crate::config_client::ConfigAccess::transact_local(node, None, "session.create", move |txn| {
-        Box::pin(async move {
-            ensure_session_in_txn(
-                txn,
-                session_id,
-                node_did,
-                agent_id,
-                requester_did,
-                None,
-                None,
-                &chrono::Utc::now().to_rfc3339(),
-            )
-            .await?;
-            Ok::<bool, anyhow::Error>(true)
-        })
-    })
+    crate::config_client::ConfigAccess::transact_local_write(
+        node,
+        None,
+        "session.create",
+        move |txn| {
+            Box::pin(async move {
+                ensure_session_in_txn(
+                    txn,
+                    session_id,
+                    node_did,
+                    agent_id,
+                    requester_did,
+                    None,
+                    None,
+                    &chrono::Utc::now().to_rfc3339(),
+                )
+                .await?;
+                Ok::<bool, anyhow::Error>(true)
+            })
+        },
+    )
     .await
     .map(|_| ())
 }
@@ -53,7 +58,7 @@ async fn create_session_with_agent_id_and_requester_did(
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn ensure_session_with_agent_id_and_requester_did(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     session_id: &str,
     node_did: &str,
     agent_id: &str,
@@ -69,13 +74,6 @@ pub(crate) async fn ensure_session_with_agent_id_and_requester_did(
     .await
 }
 
-/// Create-or-preserve the single durable session document inside the caller's
-/// transaction. Scope is exact: agent, session label, requester (absence is
-/// its own scope, not a wildcard) and the agent binding must agree with any
-/// existing document; duplicate rows under one label fail instead of being
-/// silently picked. An existing matching document is preserved untouched —
-/// creation time, title, tags, provenance and observation all stay.
-/// Does not reopen a closed session; the claim-time resume owner does that.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn ensure_session_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
@@ -173,9 +171,8 @@ pub(crate) async fn ensure_session_in_txn(
             .clone(),
     );
     if crate::graphql::single_mutation_document(&created, "create_AgentSession")?.is_none() {
-        // The create may have raced a concurrent publisher; revalidate scope
-        // through the same preserved-document contract so a colliding writer
-        // cannot silently win with a different binding.
+        // Revalidate scope through the same preserved-document contract so a
+        // colliding writer cannot silently win with a different binding.
         let response = txn.execute(&query).await?;
         let rows = response
             .get("data")
@@ -207,11 +204,6 @@ pub(crate) async fn ensure_session_in_txn(
     Ok(true)
 }
 
-/// Claim-time resume owner for a reused session inside the caller's
-/// transaction. Reopening clears `closed_at` without resetting creation time,
-/// title, tags or provenance, and advances the observation activity
-/// monotonically (`max(now, old)`). Returns whether a closed session was
-/// actually reopened. Scope is exact, mirroring `ensure_session_in_txn`.
 pub(crate) async fn reopen_session_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     session_id: &str,
@@ -230,8 +222,6 @@ pub(crate) async fn reopen_session_in_txn(
         session.node_did,
         node_did.trim()
     );
-    // Exact requester scope: absent requester scope is its own scope, not a
-    // wildcard, and never widens to match a caller.
     match (
         session.requester_did.as_deref(),
         requester_did.map(str::trim),
@@ -251,57 +241,73 @@ pub(crate) async fn reopen_session_in_txn(
         (None, None) => {}
     }
     let was_closed = session.closed_at.is_some();
-    patch_session_in_txn(
-        txn,
-        &row.doc_id,
-        serde_json::json!({
-            "closed_at": null,
-            "observation": touched_observation(&row, now),
-        }),
-    )
-    .await?;
+    if was_closed {
+        patch_session_in_txn(
+            txn,
+            &row.doc_id,
+            serde_json::json!({
+                "closed_at": null,
+                "observation": touched_observation(&row, now),
+            }),
+        )
+        .await?;
+    }
     Ok(was_closed)
 }
 
-/// Close the session through its existing owner: reread inside a transaction,
-/// set `closed_at`, advance activity, and preserve identity, creation time,
-/// title, provenance, tags and the current observation preview/latest request.
+pub(crate) async fn touch_session_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    row: &super::rows::SessionOwnerRow,
+    now: &str,
+) -> Result<()> {
+    patch_session_in_txn(
+        txn,
+        &row.doc_id,
+        serde_json::json!({ "observation": touched_observation(row, now) }),
+    )
+    .await
+}
+
 pub async fn close_session(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     chrono::DateTime::parse_from_rfc3339(&now).context("invalid session closed_at")?;
-    crate::config_client::ConfigAccess::transact_local(node, None, "session.close", move |txn| {
-        let now = now.clone();
-        Box::pin(async move {
-            let Some(row) =
-                load_agent_session_row_in_txn(txn, node_did, session_id, requester_did).await?
-            else {
-                anyhow::bail!("closing session: no AgentSession for session_id={session_id}");
-            };
-            if row.session.closed_at.is_some() {
-                return Ok::<(), anyhow::Error>(());
-            }
-            patch_session_in_txn(
-                txn,
-                &row.doc_id,
-                serde_json::json!({
-                    "closed_at": now,
-                    "observation": touched_observation(&row, &now),
-                }),
-            )
-            .await?;
-            tracing::info!(session_id = %session_id, "session closed");
-            Ok(())
-        })
-    })
+    crate::config_client::ConfigAccess::transact_local_write(
+        node,
+        None,
+        "session.close",
+        move |txn| {
+            let now = now.clone();
+            Box::pin(async move {
+                let Some(row) =
+                    load_agent_session_row_in_txn(txn, node_did, session_id, requester_did).await?
+                else {
+                    anyhow::bail!("closing session: no AgentSession for session_id={session_id}");
+                };
+                if row.session.closed_at.is_some() {
+                    return Ok::<(), anyhow::Error>(());
+                }
+                patch_session_in_txn(
+                    txn,
+                    &row.doc_id,
+                    serde_json::json!({
+                        "closed_at": now,
+                        "observation": touched_observation(&row, &now),
+                    }),
+                )
+                .await?;
+                tracing::info!(session_id = %session_id, "session closed");
+                Ok(())
+            })
+        },
+    )
     .await
 }
 
-/// Bare scope/identity fields plus `_docID` for in-transaction reads.
 pub(super) const SESSION_SCOPE_FIELDS: &str = "session_id node_did requester_did agent_id \
 created_at closed_at title provenance observation tags _docID";
 
@@ -311,7 +317,21 @@ pub async fn load_agent_session_row_in_txn(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Option<super::rows::SessionOwnerRow>> {
-    let scope = session_scope_filter(node_did, session_id, requester_did);
+    Ok(load_agent_session_owner_in_txn(txn, node_did, session_id)
+        .await?
+        .filter(|row| row.session.requester_did.as_deref() == requester_did))
+}
+
+pub(crate) async fn load_agent_session_owner_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+) -> Result<Option<super::rows::SessionOwnerRow>> {
+    let scope = format!(
+        r#"node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}"#,
+        escape_graphql_string(node_did),
+        escape_graphql_string(session_id),
+    );
     let query = format!(
         r#"{{
             AgentSession(filter: {{ {scope} }}) {{
@@ -333,8 +353,6 @@ pub async fn load_agent_session_row_in_txn(
     rows.first().map(decode_session_row).transpose()
 }
 
-/// `max(now, old)` activity value; an absent observation falls back to the
-/// session's creation time, matching the Lean `touch` model.
 pub(super) fn touch_activity_value(row: &super::rows::SessionOwnerRow, now: &str) -> String {
     let old = row
         .session
@@ -351,7 +369,6 @@ pub(super) fn touch_activity_value(row: &super::rows::SessionOwnerRow, now: &str
     }
 }
 
-/// Preserve the observed request and preview while advancing only activity.
 pub(super) fn touched_observation(
     row: &super::rows::SessionOwnerRow,
     now: &str,
@@ -396,14 +413,21 @@ pub(super) async fn patch_session_in_txn(
 }
 
 pub(crate) async fn max_sequence(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<u32> {
-    crate::config_client::ConfigAccess::transact_local(node, None, "session.max_sequence", |txn| {
-        Box::pin(async move { max_sequence_in_txn(txn, session_id, node_did, requester_did).await })
-    })
+    crate::config_client::ConfigAccess::transact_local_readonly(
+        node,
+        None,
+        "session.max_sequence",
+        |txn| {
+            Box::pin(
+                async move { max_sequence_in_txn(txn, session_id, node_did, requester_did).await },
+            )
+        },
+    )
     .await
 }
 

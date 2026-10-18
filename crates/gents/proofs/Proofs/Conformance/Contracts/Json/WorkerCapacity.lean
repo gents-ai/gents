@@ -1,8 +1,6 @@
 import Proofs.CanonicalOutput.Execution.WorkerCapacity
 import Proofs.Conformance.Contracts.Json.Helpers
 
-/-! Executable request-worker operations. Expectations are evaluations of the
-same owner functions used in the scheduler proof, not copied fixture results. -/
 namespace Conformance.WorkerCapacityContracts
 
 open CanonicalOutput.Execution.WorkerCapacity

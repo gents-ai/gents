@@ -2,14 +2,6 @@ import Proofs.CanonicalOutput.Execution.BackgroundGate
 import Proofs.CanonicalOutput.Execution.RestartRecovery
 import Proofs.CanonicalOutput.Execution.ToolDeliveryCases
 
-/-!
-# Canonical background continuation integration cases
-
-These cases exercise the composed owners rather than manufacturing a durable
-notification or queue state as evidence of success.  Physical AgentRequest
-documents remain distinct from logical queue request ids throughout.
--/
-
 namespace CanonicalOutput.Execution.ContinuationCases
 
 open CanonicalOutput.Execution.Examples
@@ -24,10 +16,6 @@ def activeWakeQueue : SessionQueue.SessionQueueState :=
 def terminalWakeQueue : SessionQueue.SessionQueueState :=
   { wakeQueue with terminal := {wakeEntry.requestId} }
 
-/-- One complete shared-owner trace: accepted provider intent, dispatch,
-immediate background receipt, parent completion, caused-request terminal close,
-atomic notification+wake publication, claim, and exact replay after both
-claim and finish. -/
 def wakeContinuationTrace : Option Bool := do
   let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage
     [sessionMessageAdmission]).toOption
@@ -70,8 +58,6 @@ def wakeContinuationTrace : Option Bool := do
 theorem accepted_background_completion_claims_and_replays_after_finish :
     wakeContinuationTrace = some true := by native_decide
 
-/-- An authenticated row identity cannot turn a fresh publication into replay
-after its logical wake has already become active or terminal. -/
 def freshNotificationCannotAttachToConsumedWake : Option Bool := do
   let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage
     [sessionMessageAdmission]).toOption
@@ -146,10 +132,6 @@ def restartReadyWorld : Option World := do
   let backgrounded ← (changeToolControl dispatched 7 600 .background).toOption
   (ToolDelivery.appendToolOutput backgrounded 600 restartRawOutput).toOption
 
-/-- The restart adapter consumes an exact physical binding.  A live process
-cannot be recovered, and the same legacy logical context cannot select another
-physical document.  The valid orphan path closes and then publishes/enqueues
-through the same shared owners as a normal late completion. -/
 def restartRecoveryCases : Option Bool := do
   let withOutput ← restartReadyWorld
   let tool ← ownedToolByDocument? withOutput 600
@@ -178,8 +160,6 @@ def restartGateInput : Option (World × RestartRecovery.RestartBinding) := do
   let held ← Gate.acquire (Gate.initial ready) 1 true
   pure ({ held with queue := wakeQueue }, restartBinding tool.context)
 
-/-- The application boundary commits the wake queue as well as output, admits
-only the current holder, and does not turn parent expiry into orphan evidence. -/
 def restartGateCase : Option Bool := do
   let (before, binding) ← restartGateInput
   let notificationBinding := wakeBinding restartNotification

@@ -18,7 +18,6 @@ pub enum MutationKind {
     Edit,
 }
 
-/// File-tool hook that talks only to already-Ready pooled clients.
 #[derive(Clone)]
 pub struct LspWritethrough {
     pool: LspPool,
@@ -30,8 +29,6 @@ impl LspWritethrough {
         Self { pool, config }
     }
 
-    /// Notify an already-Ready client. Never starts a server. Never invokes
-    /// Biome/SwiftLint single-shot adapters.
     pub async fn after_mutation(&self, path: &Path) -> Option<String> {
         let format = self
             .after_mutation_under_lock(path, MutationKind::Write)
@@ -42,8 +39,7 @@ impl LspWritethrough {
         merge_notes(format, diag)
     }
 
-    /// `didChange` plus optional format-on-write. Caller must already hold the
-    /// path's file-mutation lock; this path never acquires it.
+    // Caller must already hold the path's file-mutation lock; this never acquires it.
     pub async fn after_mutation_under_lock(
         &self,
         path: &Path,
@@ -95,7 +91,7 @@ impl LspWritethrough {
         }
     }
 
-    /// Diagnostics wait must happen after the file-mutation lock is released.
+    // Must run after the file-mutation lock is released.
     pub async fn diagnostics_after_unlock(
         &self,
         path: &Path,

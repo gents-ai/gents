@@ -1,17 +1,17 @@
-/* The node itself: editable node fields and identity/runtime facts. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { isLocalNode } from "@/lib/firstRun";
 import { DraftActions, RefRow, SwitchRow, TagsRow, TextRow } from "./editors";
 import { useDraft } from "./draft";
-import { Fact, Group, Row } from "./rows";
+import { Fact, Group, PathFact, Row } from "./rows";
 import { LocalServer } from "./LocalServer";
 import { AgentCard } from "./AgentCard";
 import { saveDefault } from "./BehaviorsPanel";
 import { useApp } from "@/app/AppContext";
-import { useBootstrap } from "@/hooks/useClient";
+import { useBootstrap, useNodeReach } from "@/hooks/useClient";
 
 export function AgentPanel({ deployment }: { deployment: NodeView }) {
   const bootstrap = useBootstrap();
+  const reach = useNodeReach(deployment);
   const { changeConfig } = useApp().actions;
   const agent = deployment.node;
   const agents = deployment.agents.map((b) => ({
@@ -28,8 +28,6 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
       tags: deployment.nodeConfig?.tags ?? [],
     },
     async (next) => {
-      /* a new default lands with its enablement first; the node's other
-         fields then save against an already valid default */
       if (next.defaultAgentId !== agent.defaultAgentId)
         await saveDefault(changeConfig, deployment, next.defaultAgentId);
       await changeConfig("saveNodeConfig", {
@@ -55,11 +53,11 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
   return (
     <div>
       <AgentCard deployment={deployment} />
-      <Group title="Agent details">
+      <Group title="Node details">
         <TextRow
           id="agent-name"
           label="Display name"
-          description="How this agent is named across the desktop."
+          description="How this node is named across the desktop."
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
           error={d.problems.displayName}
@@ -83,7 +81,7 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
         <SwitchRow
           id="agent-enabled"
           label="Enabled"
-          description="A disabled agent accepts no requests."
+          description="A disabled node accepts no requests."
           checked={d.draft.enabled}
           onChange={(v) => d.set("enabled", v)}
         />
@@ -107,14 +105,21 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
         >
           <Fact mono>{agent.nodeDid}</Fact>
         </Row>
-        <Row label="Install name">
-          <Fact>{bootstrap?.initNodeName}</Fact>
-        </Row>
-        <Row label="Tool ceiling" description="The most any agent on this node may do.">
-          <Fact>{bootstrap?.initToolCeiling ?? "not configured"}</Fact>
-        </Row>
+        {reach.local && (
+          <>
+            <Row label="Install name">
+              <Fact>{bootstrap?.initNodeName}</Fact>
+            </Row>
+            <Row
+              label="Tool ceiling"
+              description="The most any agent on this node may do."
+            >
+              <Fact>{reach.ceiling ?? "not configured"}</Fact>
+            </Row>
+          </>
+        )}
         <Row label="Tool root" description="The directory tools are confined to.">
-          <Fact mono>{bootstrap?.initToolRoot ?? "not configured"}</Fact>
+          <PathFact path={reach.root} local={reach.local} />
         </Row>
         <Row label="Peer" description="Where the node's runtime runs.">
           <Fact mono>{deployment.peerId}</Fact>

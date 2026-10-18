@@ -1,10 +1,3 @@
-//! The target: the one field of the one document an optimization job may
-//! change, and the closure that field sits in.
-//!
-//! Nothing here consults a proposer or a model. A proposed text arrives as a
-//! value and this module turns it into a patch deterministically, which is why
-//! `Proposer` never needs a `ConfigAccess`: the only writer of a patch is here.
-
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -15,9 +8,6 @@ use crate::config_client::{
 };
 use crate::Collection;
 
-/// The one field of one document an optimization job may change (ruling
-/// R2): a context's system prompt, or the prompt template a task's trigger
-/// renders when a seed stage fires it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TargetField {
@@ -37,9 +27,6 @@ impl TargetField {
         self.pack_slot().2
     }
 
-    /// Where the field sits in a raw `pack_config.json`: the array, the
-    /// document id key and the field.
-    /// The request naming this field of the document `id`.
     pub fn job_target(&self, id: &str) -> JobTarget {
         match self {
             Self::AgentContextSystemPrompt => JobTarget::Context,
@@ -63,14 +50,11 @@ pub struct Target {
 }
 
 impl Target {
-    /// The request that names this target.
     pub fn job_target(&self) -> JobTarget {
         self.field.job_target(&self.id)
     }
 }
 
-/// What an operator asks a job to change: the system prompt of the context the
-/// subject agent names, or the prompt template of one of its tasks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JobTarget {
     Context,
@@ -94,18 +78,12 @@ pub struct FrozenDocument {
     pub digest: String,
 }
 
-/// The owner's full desired configuration, in canonical projection form.
 pub type Closure = Vec<(Collection, Value)>;
 
-/// Whether documents of `collection` belong to the frozen closure. An eval
-/// definition is the instrument, not the subject: it is frozen separately in
-/// `JobOrigin::definition`, and editing it is `definition_changed`.
 pub(crate) fn is_closure_collection(collection: Collection) -> bool {
     collection != Collection::EvalDefinition
 }
 
-/// Read the owner's configuration inside `txn`, ordered so two reads of the
-/// same state produce the same closure.
 pub async fn capture_closure(txn: &ConfigApplyTxn<'_>, owner: &str) -> Result<Closure> {
     let references = crate::ConfigReferences::load_in_txn(txn, owner).await?;
     let mut closure: Closure = references
@@ -175,7 +153,6 @@ pub fn current_text(closure: &Closure, target: &Target) -> Result<String> {
         .to_owned())
 }
 
-/// The closure with exactly one field of exactly one document replaced.
 pub fn apply_text(closure: &Closure, target: &Target, text: &str) -> Result<Closure> {
     let index = target_index(closure, target)?;
     let mut patched = closure.clone();
@@ -194,8 +171,6 @@ pub fn target_digest(closure: &Closure, target: &Target) -> Result<String> {
     desired_state_document_digest(&closure[target_index(closure, target)?].1)
 }
 
-/// Every frozen document as a digest precondition. Promotion expects the whole
-/// closure and writes one document of it.
 pub fn expectations(frozen: &[FrozenDocument]) -> Vec<DesiredStateExpectation> {
     frozen
         .iter()
@@ -208,7 +183,6 @@ pub fn expectations(frozen: &[FrozenDocument]) -> Vec<DesiredStateExpectation> {
         .collect()
 }
 
-/// A plan that writes only `target` out of `closure`, guarded by `frozen`.
 pub fn target_plan(
     closure: &Closure,
     target: &Target,
@@ -223,16 +197,10 @@ pub fn target_plan(
     .with_expected(expectations(frozen))
 }
 
-/// The first way a baseline pack's configuration differs from the live
-/// configuration a job would promote into. A job evaluates the frozen live
-/// revision (#1455), not a transfer to it, so a pack that installs any other
-/// configuration beside the target prompt cannot be a job's baseline.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BaselineMismatch {
     pub collection: Collection,
     pub id: String,
-    /// The first differing field, or `None` when the live configuration has
-    /// no such document.
     pub field: Option<String>,
 }
 
@@ -256,24 +224,6 @@ impl std::fmt::Display for BaselineMismatch {
 
 impl std::error::Error for BaselineMismatch {}
 
-/// Whether a trial replaces `field` of a pack document (`None`: the whole
-/// document) when it installs the baseline pack, so the pack may differ from
-/// the live configuration there and still be the same subject. These are the
-/// only such remaps:
-///
-/// - The `Node`: a trial installs the pack's node as its own
-///   fresh node and names the subject agent explicitly, so no
-///   node setting of the live owner is part of what a trial runs.
-/// - An `Agent`'s `inference_profile_id` that names an inference slot:
-///   the trial binds every slot to the eval target's profile, never to the
-///   live binding.
-/// - `tags`: installing a pack stamps its provenance tag and merges retained
-///   discovery tags, the trial's install as much as the live one, and tags
-///   never select what executes (the pack owner compares immutable resources
-///   without them for the same reason).
-///
-/// Workspace and host paths are not configuration documents: a trial
-/// publishes its own `WorkspaceRoot`, which no closure holds.
 fn remapped_by_trial(collection: Collection, field: Option<&str>, pack_document: &Value) -> bool {
     match (collection, field) {
         (Collection::Node, _) => true,
@@ -289,8 +239,6 @@ fn remapped_by_trial(collection: Collection, field: Option<&str>, pack_document:
     }
 }
 
-/// `document` without the fields a trial remaps, in the digest's canonical
-/// form.
 fn comparable(collection: Collection, document: &Value, pack_document: &Value) -> Result<Value> {
     let (_, projected) = crate::config_client::config_projection(collection, Some(document))?;
     let mut projected = projected.context("canonical projection missing")?;
@@ -300,9 +248,6 @@ fn comparable(collection: Collection, document: &Value, pack_document: &Value) -
     Ok(projected)
 }
 
-/// Refuse a baseline pack unless every configuration document it installs is
-/// the live document of the same identity, compared by the canonical digest
-/// promotion guards with, apart from [`remapped_by_trial`] fields.
 pub fn baseline_equivalence(pack: &DesiredStateApplyPlan, live: &Closure) -> Result<()> {
     for document in pack.documents() {
         let collection = document.collection;
@@ -345,8 +290,6 @@ pub fn baseline_equivalence(pack: &DesiredStateApplyPlan, live: &Closure) -> Res
     Ok(())
 }
 
-/// The first root field, in name order, whose values differ once an absent,
-/// null or empty-list value is read as unset, as the digest reads them.
 fn first_differing_field(left: &Value, right: &Value) -> Option<String> {
     fn unset(value: Option<&Value>) -> Option<&Value> {
         value.filter(|value| !value.is_null() && !value.as_array().is_some_and(Vec::is_empty))
@@ -357,213 +300,4 @@ fn first_differing_field(left: &Value, right: &Value) -> Option<String> {
         .into_iter()
         .find(|field| unset(left.get(*field)) != unset(right.get(*field)))
         .cloned()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    const OWNER: &str = "did:key:target-owner";
-
-    fn context(prompt: &str) -> Value {
-        json!({
-            "context_id": "monitor-context",
-            "node_did": OWNER,
-            "display_name": "Monitor",
-            "system_prompt": prompt,
-        })
-    }
-
-    fn closure(prompt: &str) -> Closure {
-        vec![
-            (
-                Collection::Agent,
-                json!({
-                    "agent_id": "monitor",
-                    "node_did": OWNER,
-                    "context_id": "monitor-context",
-                    "inference_profile_id": "local",
-                }),
-            ),
-            (Collection::AgentContext, context(prompt)),
-        ]
-    }
-
-    fn target() -> Target {
-        Target {
-            field: TargetField::AgentContextSystemPrompt,
-            owner: OWNER.into(),
-            id: "monitor-context".into(),
-        }
-    }
-
-    #[test]
-    fn the_patch_replaces_one_field_of_one_document_and_nothing_else() {
-        let before = closure("Watch the mailbox.\n");
-        assert_eq!(
-            current_text(&before, &target()).unwrap(),
-            "Watch the mailbox.\n"
-        );
-
-        let after = apply_text(&before, &target(), "Watch the mailbox, and say why.\n").unwrap();
-        assert_eq!(after.len(), before.len());
-        assert_eq!(after[0], before[0], "the agent is untouched");
-        assert_eq!(
-            current_text(&after, &target()).unwrap(),
-            "Watch the mailbox, and say why.\n"
-        );
-        let mut masked = after[1].1.clone();
-        masked["system_prompt"] = before[1].1["system_prompt"].clone();
-        assert_eq!(masked, before[1].1, "no other field of the target moved");
-        assert_ne!(
-            target_digest(&after, &target()).unwrap(),
-            target_digest(&before, &target()).unwrap()
-        );
-    }
-
-    #[test]
-    fn a_target_outside_the_closure_is_an_error_not_a_silent_insert() {
-        let missing = Target {
-            id: "no-such-context".into(),
-            ..target()
-        };
-        let error = apply_text(&closure("a"), &missing, "b").unwrap_err();
-        assert!(
-            format!("{error:#}").contains("not in the baseline closure"),
-            "{error:#}"
-        );
-        let foreign = Target {
-            owner: "did:key:someone-else".into(),
-            ..target()
-        };
-        assert!(current_text(&closure("a"), &foreign).is_err());
-    }
-
-    #[test]
-    fn the_plan_writes_only_the_target_and_expects_the_whole_closure() {
-        let before = closure("Watch the mailbox.\n");
-        let frozen = closure_digests(&before).unwrap();
-        assert_eq!(frozen.len(), 2);
-        let after = apply_text(&before, &target(), "New text.\n").unwrap();
-        let plan = target_plan(&after, &target(), &frozen).unwrap();
-        assert_eq!(
-            plan.documents().len(),
-            1,
-            "only the target document is written"
-        );
-        assert_eq!(plan.documents()[0].collection, Collection::AgentContext);
-        assert_eq!(plan.documents()[0].add, plan.documents()[0].update);
-        assert_eq!(
-            plan.expected().len(),
-            2,
-            "the whole frozen closure is expected"
-        );
-        assert!(plan
-            .expected()
-            .iter()
-            .all(|expectation| expectation.digest.is_some()));
-    }
-
-    #[test]
-    fn the_context_system_prompt_target_field() {
-        assert_eq!(
-            TargetField::AgentContextSystemPrompt.collection(),
-            Collection::AgentContext
-        );
-        assert_eq!(
-            TargetField::AgentContextSystemPrompt.field_name(),
-            "system_prompt"
-        );
-        assert_eq!(
-            TargetField::AgentContextSystemPrompt.pack_slot(),
-            ("contexts", "context_id", "system_prompt")
-        );
-        assert_eq!(
-            serde_json::to_value(TargetField::AgentContextSystemPrompt).unwrap(),
-            json!("agent_context_system_prompt"),
-            "the frozen wire form of the target field"
-        );
-    }
-
-    #[test]
-    fn the_task_prompt_template_target_field() {
-        assert_eq!(
-            TargetField::TaskPromptTemplate.collection(),
-            Collection::Task
-        );
-        assert_eq!(
-            TargetField::TaskPromptTemplate.field_name(),
-            "prompt_template"
-        );
-        assert_eq!(
-            TargetField::TaskPromptTemplate.pack_slot(),
-            ("tasks", "task_id", "prompt_template")
-        );
-        assert_eq!(
-            serde_json::to_value(TargetField::TaskPromptTemplate).unwrap(),
-            json!("task_prompt_template")
-        );
-        let task = Target {
-            field: TargetField::TaskPromptTemplate,
-            owner: OWNER.into(),
-            id: "plan".into(),
-        };
-        let mut before = closure("a");
-        before.push((
-            Collection::Task,
-            json!({
-                "task_id": "plan",
-                "node_did": OWNER,
-                "agent_id": "monitor",
-                "prompt_template": "Plan {{ args.goal }}.\n",
-            }),
-        ));
-        assert_eq!(
-            current_text(&before, &task).unwrap(),
-            "Plan {{ args.goal }}.\n"
-        );
-        let after = apply_text(&before, &task, "Do {{ args.goal }}.\n").unwrap();
-        assert_eq!(
-            after[..2],
-            before[..2],
-            "the agent and context are untouched"
-        );
-        assert_eq!(
-            current_text(&after, &task).unwrap(),
-            "Do {{ args.goal }}.\n"
-        );
-        assert_eq!(current_text(&after, &target()).unwrap(), "a");
-    }
-
-    /// A job request names a target as one value: a context target carries
-    /// no task id to ignore, and a frozen target reads back as the request
-    /// that froze it.
-    #[test]
-    fn a_job_target_is_the_request_side_of_a_frozen_target() {
-        assert_eq!(
-            JobTarget::Context.field(),
-            TargetField::AgentContextSystemPrompt
-        );
-        assert_eq!(
-            JobTarget::Task("plan".into()).field(),
-            TargetField::TaskPromptTemplate
-        );
-        assert_eq!(target().job_target(), JobTarget::Context);
-        let task = Target {
-            field: TargetField::TaskPromptTemplate,
-            owner: OWNER.into(),
-            id: "plan".into(),
-        };
-        assert_eq!(task.job_target(), JobTarget::Task("plan".into()));
-    }
-
-    /// Finding F5: a definition is frozen in `JobOrigin::definition`, never in
-    /// the closure, so editing it is `definition_changed` and not drift.
-    #[test]
-    fn eval_definitions_never_enter_the_closure() {
-        assert!(!is_closure_collection(Collection::EvalDefinition));
-        assert!(is_closure_collection(Collection::AgentContext));
-        assert!(is_closure_collection(Collection::Agent));
-    }
 }

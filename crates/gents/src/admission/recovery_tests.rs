@@ -4,8 +4,8 @@ use serde_json::Value;
 
 const NODE_DID: &str = "did:test:inference-recovery-cas";
 
-async fn fixture(initial_state: &str) -> (EmbeddedNode, StaleInferenceCallRow) {
-    let node = EmbeddedNode::builder().build().await.unwrap();
+async fn fixture(initial_state: &str) -> (std::sync::Arc<EmbeddedNode>, StaleInferenceCallRow) {
+    let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
     crate::schema::ensure_runtime_schemas(&node).await.unwrap();
     let state = escape_graphql_string(initial_state);
     let response = node
@@ -119,7 +119,6 @@ fn pending_call(call_id: &str) -> super::super::controller::PendingCallMetadata 
 #[tokio::test]
 async fn recovery_winner_rejects_late_running_persistence() {
     let (node, snapshot) = fixture("queued").await;
-    let node = std::sync::Arc::new(node);
     assert!(
         recover_inference_call_row(&node, &snapshot, InferenceRecoveryOutcome::Cancelled)
             .await
@@ -129,12 +128,80 @@ async fn recovery_winner_rejects_late_running_persistence() {
     let call = super::super::controller::InferenceCallRecord::without_controller(pending_call(
         "recovery-cas-call",
     ));
+    assert!(super::super::persistence::persist_existing_call_running(
+        node.clone(),
+        &call,
+        &snapshot.doc_id,
+    )
+    .await
+    .is_err());
+    assert_eq!(stored_call(&node).await, terminal);
+}
+
+#[tokio::test]
+async fn physical_call_updates_preserve_identity_and_state_predicates() {
+    use super::super::controller::InferenceCallRecord;
+    use super::super::persistence::{
+        persist_call_queued, persist_existing_call_running, persist_existing_call_terminal,
+    };
+    use gents_loop::rig_compat::CachedInputTokensObservation;
+
+    let (node, snapshot) = fixture("queued").await;
+    let call = InferenceCallRecord::without_controller(pending_call("recovery-cas-call"));
+    let other = InferenceCallRecord::without_controller(pending_call("other-call"));
+    let other_doc = persist_call_queued(node.clone(), &other).await.unwrap();
     assert!(
-        super::super::persistence::persist_existing_call_running(node.clone(), &call)
+        persist_existing_call_running(node.clone(), &call, &other_doc)
             .await
             .is_err()
     );
-    assert_eq!(stored_call(&node).await, terminal);
+    assert!(persist_existing_call_terminal(
+        node.clone(),
+        &call,
+        &other_doc,
+        "cancelled",
+        None,
+        None,
+        CachedInputTokensObservation::NotAvailable,
+    )
+    .await
+    .is_err());
+
+    persist_existing_call_running(node.clone(), &call, &snapshot.doc_id)
+        .await
+        .unwrap();
+    persist_existing_call_terminal(
+        node.clone(),
+        &call,
+        &snapshot.doc_id,
+        "completed",
+        None,
+        None,
+        CachedInputTokensObservation::NotAvailable,
+    )
+    .await
+    .unwrap();
+    assert!(
+        persist_existing_call_running(node.clone(), &call, &snapshot.doc_id)
+            .await
+            .is_err()
+    );
+    let response = crate::config_client::ConfigAccess::local(node)
+        .execute("{ InferenceCall { call_id call_state } }")
+        .await
+        .unwrap();
+    let rows = response["data"]["InferenceCall"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        assert_eq!(
+            row["call_state"],
+            if row["call_id"] == "recovery-cas-call" {
+                "completed"
+            } else {
+                "queued"
+            },
+        );
+    }
 }
 
 /// Exercise the real queued acquisition path: losing the durable start must
@@ -302,7 +369,7 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
     let blocker_entered = gate_entered.clone();
     let blocker_release = release_gate.clone();
     let blocker = tokio::spawn(async move {
-        crate::config_client::ConfigAccess::transact_local(
+        crate::config_client::ConfigAccess::transact_local_write(
             &blocker_node,
             None,
             "test.admission.abort_finalizer_gate_blocker",
@@ -387,7 +454,6 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
 #[tokio::test]
 async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
     let (node, snapshot) = fixture("running").await;
-    let node = std::sync::Arc::new(node);
     assert!(
         recover_inference_call_row(&node, &snapshot, InferenceRecoveryOutcome::Failed)
             .await
@@ -405,6 +471,7 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
     super::super::persistence::persist_existing_call_terminal(
         node.clone(),
         &call,
+        &snapshot.doc_id,
         "completed",
         None,
         Some(usage),
@@ -433,10 +500,10 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
         74,
         "recovery must not discard observed usage on restart"
     );
-    // A replayed late write may not create an additional row or charge twice.
     super::super::persistence::persist_existing_call_terminal(
         node.clone(),
         &call,
+        &snapshot.doc_id,
         "completed",
         None,
         Some(usage),

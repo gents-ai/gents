@@ -5,12 +5,8 @@ use crate::lifecycle::queue::goal_continuation_identity;
 use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit};
 use serde_json::json;
 
-/// The reported reset, in seconds after 2030-01-01T00:00:00Z.
 const T: i64 = 3600;
 
-/// An opted-in Goal stopped by `PARENT`, whose call of `kind` on Claude
-/// account A started at 0 and reported a reset; B is another enabled account.
-/// Both connected at -1.
 struct Reset {
     f: Fixture,
     accounts: ClaudeAccounts,
@@ -49,9 +45,6 @@ impl Reset {
         .unwrap();
     }
 
-    /// `request_id` failed on a call of `kind` started at `started` that
-    /// reported `reset_at`, and the Goal is usage-limited on it, as the goal
-    /// source leaves it.
     async fn limit(&self, request_id: &str, kind: &str, started: i64, reset_at: Option<i64>) {
         let failure = usage_limit(reset_at);
         self.f
@@ -79,7 +72,6 @@ impl Reset {
         .await;
     }
 
-    /// Move `profile` alone to account B.
     async fn move_to_b(&self, profile: &str) {
         crate::config_client::switch_profile_account(
             &self.accounts.access,
@@ -100,7 +92,6 @@ impl Reset {
             .unwrap()
     }
 
-    /// A resume at `now` that reads the Goal afresh, as after a restart.
     async fn resume(&self, now: i64) -> Option<GoalResumeReceipt> {
         self.resume_with(&self.goal().await, now).await
     }
@@ -111,7 +102,6 @@ impl Reset {
             .unwrap()
     }
 
-    /// Nothing resumed, even long after the reset.
     async fn waits(&self) {
         assert!(self.resume(T).await.is_none());
         assert!(self.resume(10 * T).await.is_none());
@@ -123,7 +113,6 @@ impl Reset {
 #[tokio::test]
 async fn resumes_once_at_the_reset() {
     let reset = Reset::new("inference", Some(T)).await;
-    // One rescan's Goal row, held across the calls.
     let goal = reset.goal().await;
     assert!(reset.resume_with(&goal, T - 1).await.is_none());
     assert!(reset.f.children().await.is_empty());
@@ -155,8 +144,6 @@ async fn a_held_row_waits_once_the_opt_in_is_off() {
 #[tokio::test]
 async fn a_held_row_waits_for_the_latest_reset() {
     let reset = Reset::new("inference", Some(T)).await;
-    // A rescan's row names reset T; meanwhile the Goal resumed and its
-    // child stopped on a limit that resets at 3T.
     let goal = reset.goal().await;
     let first = reset.resume(T).await.expect("first resume");
     reset
@@ -170,7 +157,6 @@ async fn a_held_row_waits_for_the_latest_reset() {
 #[tokio::test]
 async fn resumes_after_a_compaction_limit() {
     let reset = Reset::new("compaction", Some(T)).await;
-    // The compaction profile served the call; the inference profile may move.
     reset.move_to_b(PROFILE).await;
     assert!(reset.resume(T - 1).await.is_none());
     let receipt = reset.resume(T).await.expect("resumed at the reset");
@@ -207,7 +193,6 @@ async fn waits_after_the_profile_moved() {
 #[tokio::test]
 async fn waits_for_a_sign_in_after_the_limited_call() {
     let reset = Reset::new("inference", Some(T)).await;
-    // The backend's account connected after the call started: another sign-in.
     connect_accounts_at(&reset.f, 1).await;
     reset.waits().await;
 }
@@ -233,7 +218,7 @@ async fn waits_after_the_account_was_removed() {
     reset
         .accounts
         .access
-        .transact("test.remove_account", |txn| {
+        .transact_write("test.remove_account", |txn| {
             Box::pin(crate::oauth_credential::remove_account_in_txn(
                 txn, did, credential,
             ))
@@ -256,8 +241,6 @@ async fn waits_after_the_backend_was_disabled() {
     )
     .await;
 
-    // The executable reset model has account availability but no separate
-    // backend-enabled fact; this regression records the native preflight gap.
     assert!(reset.resume(T).await.is_none());
     assert_eq!(reset.f.goal_status().await, "usage_limited");
     assert!(reset.f.children().await.is_empty());
@@ -277,7 +260,6 @@ async fn restart_before_and_after_the_reset() {
 async fn repeat_limit_schedules_at_its_new_reset() {
     let reset = Reset::new("inference", Some(T)).await;
     let first = reset.resume(T).await.expect("first resume");
-    // The child stops on a new limit with a later reset.
     reset
         .limit(&first.request_id, "inference", T, Some(3 * T))
         .await;
@@ -290,7 +272,6 @@ async fn repeat_limit_schedules_at_its_new_reset() {
             .unwrap()
             .request_id
     );
-    // That child stops again reporting the same reset: no resume.
     reset
         .limit(&second.request_id, "inference", 3 * T, Some(3 * T))
         .await;

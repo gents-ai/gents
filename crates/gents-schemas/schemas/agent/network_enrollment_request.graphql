@@ -1,5 +1,5 @@
-# Candidate-authored immutable request bound to one signed status offer and one
-# authenticated transport identity. The request itself grants nothing.
+# Candidate-authored immutable request bound to one signed status offer and
+# one authenticated transport identity; the request itself grants nothing.
 type NetworkEnrollmentRequest @branchable {
     protocol_version: Int @immutable
     request_id: String @index(unique: true) @immutable

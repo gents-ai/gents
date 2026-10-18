@@ -6,8 +6,8 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 mod lean_vocab_test;
 
 use lean_vocab_test::{
-    lean_desktop_client_shell_cases, lean_live_overlay_cases,
-    lean_request_lifecycle_operator_ui_cases, lean_transcript_cases,
+    lean_client_session_queue_order_cases, lean_desktop_client_shell_cases,
+    lean_live_overlay_cases, lean_request_lifecycle_operator_ui_cases, lean_transcript_cases,
 };
 
 fn session(requester_did: Option<&str>) -> AgentSession {
@@ -79,7 +79,6 @@ fn lean_requester(id: usize) -> Option<String> {
     (id != 1).then(|| format!("did:test:requester-{id}"))
 }
 
-/// The native rows a `SessionTurn.Row` list stands for, in arrival order.
 fn lean_session_rows(
     session_id: &str,
     rows: &[lean_vocab_test::LeanSessionTurnRow],
@@ -91,15 +90,20 @@ fn lean_session_rows(
             let owner = row
                 .folded_into
                 .map(|doc| rows.iter().find(|candidate| candidate.doc == doc));
-            let lifecycle = match (row.state.as_str(), row.folded_into) {
-                ("unclaimed", _) => RequestLifecycleState::Pending,
-                ("active", _) => RequestLifecycleState::Processing,
-                ("terminal", Some(_)) => RequestLifecycleState::Superseded,
-                ("terminal", None) => RequestLifecycleState::Completed,
-                (other, _) => panic!("unsupported Lean row state {other:?}"),
+            let lifecycle = match (row.state.as_str(), row.folded_into, row.completed) {
+                ("unclaimed", _, _) => RequestLifecycleState::Pending,
+                ("active", _, _) => RequestLifecycleState::Processing,
+                ("terminal", Some(_), _) => RequestLifecycleState::Superseded,
+                ("terminal", None, true) => RequestLifecycleState::Completed,
+                ("terminal", None, false) => RequestLifecycleState::Failed,
+                (other, _, _) => panic!("unsupported Lean row state {other:?}"),
             };
             AgentRequestRow {
-                purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+                purpose: Some(if row.public_input {
+                    gents_protocol::request_admission::RequestPurpose::Normal
+                } else {
+                    gents_protocol::request_admission::RequestPurpose::TitleAudit
+                }),
                 doc_id: Some(format!("doc-{}", row.doc)),
                 request_id: contract_request_id(row.request),
                 node_did: Some(CONTRACT_NODE.into()),
@@ -111,6 +115,7 @@ fn lean_session_rows(
                 execution_origin: Some("interactive".into()),
                 created_at: Some(format!("2026-04-21T12:00:{index:02}Z")),
                 retry_parent_request: row.retry_parent.map(contract_request_id),
+                retry_parent_request_doc_id: row.retry_parent_doc.map(|doc| format!("doc-{doc}")),
                 superseded_by_request: owner.map(|owner| {
                     owner.map_or("req-missing".into(), |o| contract_request_id(o.request))
                 }),
@@ -215,10 +220,18 @@ fn request_ids_for_docs(rows: &[AgentRequestRow], docs: &[usize]) -> Vec<String>
 #[test]
 fn session_snapshot_binds_generated_session_turn_cases() {
     let cases = lean_vocab_test::lean_client_session_turn_cases();
-    assert_eq!(cases.len(), 13);
+    assert_eq!(cases.len(), 22);
     for case in cases {
         let rows = lean_session_rows("session-1", &case.rows);
         let newest = rows.last().expect("case has rows");
+        let refs = rows.iter().collect::<Vec<_>>();
+        let answer = gents_desktop_core::client::request_answer_owner(&refs, newest);
+        assert_eq!(
+            answer.doc_id,
+            Some(format!("doc-{}", case.expected_answer_doc)),
+            "{}",
+            case.name
+        );
         let store = ClientStore::from_rows(ClientStoreRows {
             sessions: vec![contract_session(
                 "session-1",
@@ -259,6 +272,132 @@ fn session_snapshot_binds_generated_session_turn_cases() {
                 .collect::<Vec<_>>(),
             "{}",
             case.name
+        );
+
+        let read_docs = case
+            .expected_read_docs
+            .iter()
+            .map(|doc| format!("doc-{doc}"))
+            .collect::<std::collections::HashSet<_>>();
+        let newest_requester = case.rows.last().expect("generated case has rows").requester;
+        for row in case
+            .rows
+            .iter()
+            .filter(|row| row.requester == newest_requester)
+        {
+            if !read_docs.contains(&format!("doc-{}", row.doc)) {
+                assert!(
+                    row.completed
+                        && row.public_input
+                        && row.authored_input_materialized
+                        && row.retry_parent_doc.is_none(),
+                    "{} omitted a request without the modeled durable-prompt premise: {row:?}",
+                    case.name
+                );
+            }
+        }
+        let bounded_rows = rows
+            .iter()
+            .filter(|row| {
+                row.doc_id
+                    .as_ref()
+                    .is_some_and(|doc| read_docs.contains(doc))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            bounded_rows.len(),
+            case.expected_read_docs.len(),
+            "{} read closure has each expected physical row once",
+            case.name
+        );
+        let bounded_refs = bounded_rows.iter().collect::<Vec<_>>();
+        assert_eq!(
+            gents_desktop_core::client::request_answer_owner(&bounded_refs, newest).doc_id,
+            answer.doc_id,
+            "{} bounded read closure retains the modeled answer owner",
+            case.name
+        );
+        let bounded_store = ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![contract_session(
+                "session-1",
+                newest.requester_did.clone(),
+                Some(newest),
+            )],
+            requests: bounded_rows,
+            ..ClientStoreRows::default()
+        });
+        let bounded = build_session_snapshot_from_store(&bounded_store, "session-1", None)
+            .expect("bounded dependency closure retains the session projection");
+        assert_eq!(
+            bounded.latest_request_id, snapshot.latest_request_id,
+            "{}",
+            case.name
+        );
+        assert_eq!(bounded.turn_state, snapshot.turn_state, "{}", case.name);
+        assert_eq!(
+            bounded
+                .queued_turns
+                .iter()
+                .map(|turn| &turn.request_doc_id)
+                .collect::<Vec<_>>(),
+            snapshot
+                .queued_turns
+                .iter()
+                .map(|turn| &turn.request_doc_id)
+                .collect::<Vec<_>>(),
+            "{} physical queue owners survive the generated read closure",
+            case.name
+        );
+        assert_eq!(
+            serde_json::to_value(&bounded.queued_turns).unwrap(),
+            serde_json::to_value(&snapshot.queued_turns).unwrap(),
+            "{} queue output survives the generated read closure",
+            case.name
+        );
+        assert_eq!(
+            serde_json::to_value(&bounded.folded_inputs).unwrap(),
+            serde_json::to_value(&snapshot.folded_inputs).unwrap(),
+            "{} complete fold output survives the generated read closure",
+            case.name
+        );
+    }
+}
+
+#[test]
+fn session_queue_order_matches_native_arrival_model_after_claim() {
+    for case in lean_client_session_queue_order_cases() {
+        let modeled: Vec<lean_vocab_test::LeanSessionTurnRow> =
+            serde_json::from_value(case["rows"].clone()).unwrap();
+        let rows = lean_session_rows("session-1", &modeled);
+        let store = ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![contract_session(
+                "session-1",
+                rows.last().unwrap().requester_did.clone(),
+                rows.last(),
+            )],
+            requests: rows.clone(),
+            ..Default::default()
+        });
+        let mut snapshot = build_session_snapshot_from_store(&store, "session-1", None).unwrap();
+        let docs = |field: &str| {
+            case[field]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|id| format!("doc-{}", id.as_u64().unwrap()))
+                .collect::<Vec<_>>()
+        };
+        super::super::session::order_queued_turns(&mut snapshot, &docs("arrivals"));
+        assert_eq!(
+            snapshot
+                .queued_turns
+                .iter()
+                .filter_map(|turn| turn.request_doc_id.clone())
+                .collect::<Vec<_>>(),
+            docs("expected"),
+            "{}",
+            case["name"]
         );
     }
 }
@@ -598,9 +737,6 @@ fn session_snapshot_live_overlay_consumes_generated_contract_cases() {
         };
         let mut request = request("req-2", lifecycle);
         request.doc_id = Some("req-2".into());
-        // `has_durable_owner` is the timeline's materialized user-message
-        // owner, not provider-source liveness. A supplied live output already
-        // carries the current execution owner.
         request.execution_generation = case
             .live_output_available
             .then(|| "generation-1".to_string());
@@ -969,9 +1105,6 @@ fn session_snapshot_projects_failed_request_reason_without_response_storage() {
     assert!(snapshot.retry_eligibility.eligible);
 }
 
-/// A request refused before claim never publishes a transcript row; once the
-/// app stops tracking it, the session observation the runtime advanced at the
-/// refusal is the only fact anchoring the failed turn, its reason and Retry.
 #[test]
 fn refused_latest_request_observation_keeps_the_failed_turn_reason_retry_and_prompt_visible() {
     let refusal_reason =
@@ -999,11 +1132,7 @@ fn refused_latest_request_observation_keeps_the_failed_turn_reason_retry_and_pro
         None,
     )
     .expect("snapshot");
-    assert_eq!(
-        snapshot.latest_request_id.as_deref(),
-        Some("req-2"),
-        "the observation, not row order, anchors the post-tracking latest request"
-    );
+    assert_eq!(snapshot.latest_request_id.as_deref(), Some("req-2"),);
     assert_eq!(snapshot.turn_state.as_deref(), Some("failed"));
     let outcome = snapshot.latest_request_outcome.expect("request outcome");
     assert_eq!(outcome.failure_reason.as_deref(), Some(refusal_reason));
@@ -1016,8 +1145,7 @@ fn refused_latest_request_observation_keeps_the_failed_turn_reason_retry_and_pro
         snapshot
             .timeline_items
             .iter()
-            .any(|item| matches!(item, RenderedTimelineItem::PendingUserTurn { request_id, .. } if request_id == "req-2")),
-        "the timeline keeps a user-turn stand-in for the refused request"
+            .any(|item| matches!(item, RenderedTimelineItem::PendingUserTurn { request_id, .. } if request_id == "req-2"))
     );
 }
 

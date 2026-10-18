@@ -87,9 +87,6 @@ pub(super) struct BashArgs {
     pub args: Vec<String>,
     #[serde(default)]
     pub cwd: Option<String>,
-    // None means "apply the tool's configured default" — resolution happens
-    // at call time so the applied value always matches the advertised schema
-    // default and the background lifetime budget (#985).
     #[serde(default)]
     pub timeout_secs: Option<u64>,
     #[serde(default)]

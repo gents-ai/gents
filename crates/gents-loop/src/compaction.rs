@@ -8,17 +8,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::provider_input::ProviderInputProfile;
 
-/// Output budget for the internal compaction summary completion — independent
-/// of the user turn's `max_output_tokens` (#1017).
 pub const DEFAULT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS: usize = 32_768;
 pub const MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS: usize = 32_768;
-/// Most file paths rendered per list in the formatted compaction summary.
 pub const DEFAULT_COMPACTION_SUMMARY_FILE_LIST_MAX: usize = 100;
 pub const MAX_COMPACTION_SUMMARY_FILE_LIST_MAX: usize = 1_000;
 
-// pub, not private: gents' own compaction test suite reaches these through
-// `crate::compaction::{history, summary}` (a private submodule in this crate
-// is invisible to a dependent crate's own test build).
 #[path = "compaction_history.rs"]
 pub mod history;
 #[path = "compaction_summary.rs"]
@@ -92,24 +86,11 @@ pub struct ReductionOptions {
     pub tool_result_max_chars: usize,
     pub keep_recent_tokens: usize,
     pub mode: ReductionMode,
-    /// Maximum provider-view prefix the reducer may summarize. `Some(0)`
-    /// fails closed: the required continuation starts at the first row.
     pub max_compacted_prefix_messages: Option<usize>,
-    /// Output budget for the internal summary completion. Deliberately
-    /// independent of the user turn's max_output_tokens (#1017).
     pub summary_max_output_tokens: usize,
-    /// Most file paths rendered per list in the formatted summary.
     pub summary_file_list_max: usize,
-    /// The claimed deadline of the request this compaction serves. The
-    /// compactor's stored config is daemon-lifetime and carries no deadline,
-    /// so this is the only path by which the internal retry ladder's
-    /// deadline fail-fast can engage (#1016); `None` leaves recovery bounded
-    /// only by the ladder itself.
     pub deadline: Option<chrono::DateTime<chrono::Utc>>,
-    /// Request-scoped provider budget shared with the outer owned loop. This
-    /// is crate-private because callers cannot safely mint or replace it.
     pub aggregate_token_budget: Option<crate::loop_stream::AggregateTokenBudget>,
-    /// Effective request seed shared with every provider call in the request.
     pub sampling_seed: Option<i64>,
 }
 
@@ -129,9 +110,6 @@ impl Default for ReductionOptions {
     }
 }
 
-/// Proof-carrying admission for the input-driven threshold gate. The reducer
-/// cannot be called from production without a value constructed by the one
-/// equality-sensitive decision owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReductionAdmission {
     input_tokens: usize,
@@ -203,8 +181,6 @@ pub fn reduction_decision<C>(
     }
 }
 
-/// Apply a scope-independent reduction decision exactly once. Invalid or empty
-/// prefixes fail closed instead of being clamped into a different boundary.
 pub fn apply_reduction_decision<T, C>(
     mut source: Vec<T>,
     decision: ReductionDecision<C>,
@@ -235,8 +211,6 @@ pub enum CompactionStrategy {
     StripThenSummarize,
 }
 
-/// Canonical runtime behavior after accepting the durable configuration
-/// vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReductionMode {
     StripOnly,
@@ -282,10 +256,6 @@ pub struct ReductionResult {
     pub files_modified: Vec<String>,
 }
 
-/// Provider-view repair precedes the formal threshold/reduction decision and
-/// carries no durable checkpoint. Keeping it outside `ReductionOutcome`
-/// prevents an admitted reduction from fabricating the model's `NotNeeded`
-/// decision while still allowing tool-result stripping to rescue a request.
 #[derive(Debug, Clone)]
 enum ReductionResultState {
     ProviderViewRepaired { messages: Vec<Message> },
@@ -371,9 +341,6 @@ impl ExactReduction<'_> {
     }
 }
 
-/// An [`ExactReduction`] re-expressed over the native-order association rows
-/// it was ordered from. A durable checkpoint stores these rows beside their
-/// persisted block indices, which only stay aligned with the unordered content.
 #[derive(Debug, Clone)]
 pub struct AssociationReduction {
     compacted_prefix: Vec<Message>,
@@ -440,12 +407,6 @@ pub struct ProviderReductionEngine<M: ProviderModel> {
 
 impl<M: ProviderModel> ProviderReductionEngine<M> {
     pub fn new(model: Arc<M>, mut config: crate::loop_stream::LoopConfig) -> Self {
-        // Compaction is an internal, non-persisting sub-completion, not a user
-        // execution origin; it must not inherit the parent's retry ladder (which
-        // for scheduled origins is a deadline-less 5s/30s/120s backoff that would
-        // block inline compaction for minutes) (#648). But it has no caller-level
-        // retry either, so zero recovery made one empty provider turn abort the
-        // whole user request: use the bounded immediate internal budget (#1016).
         config.retry_policy = crate::completion_retry::CompletionRetryPolicy::internal_immediate();
         Self {
             model,
@@ -469,8 +430,6 @@ impl<M: ProviderModel> ProviderReductionEngine<M> {
         self
     }
 
-    /// Compute the one retention policy used by both session-entry and
-    /// between-turn compaction with this compactor's provider projection.
     pub fn retention_target(
         &self,
         configured_keep_recent: usize,
@@ -493,9 +452,6 @@ impl<M: ProviderModel> ProviderReductionEngine<M> {
         ))
     }
 
-    // pub, not `#[cfg(test)]`: gents' own compaction test suite injects a
-    // fixed clock through this, and a cfg(test) item in this crate is
-    // invisible to a dependent crate's own test build.
     pub fn with_now(
         mut self,
         now: Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>,
@@ -536,17 +492,11 @@ impl<M: ProviderModel> ReductionEngine for ProviderReductionEngine<M> {
                 .estimate_message_request(&messages)
                 .context("projecting original compaction input")?;
 
-            // Narrow once to the canonical provider view. Every downstream split,
-            // checkpoint, durable count, and returned suffix is expressed in this
-            // one coordinate system; callers never reconstruct it from a scalar.
             let (stripped_messages, stripped_activity) = provider_view(counter.profile(), messages);
 
             let stripped_token_estimate = counter
                 .estimate_message_request(&stripped_messages)
                 .context("projecting normalized compaction input")?;
-            // Admission owns the complete provider-input threshold decision. The
-            // reducer receives only eligible work and never rechecks a narrower
-            // history-only estimate.
             if matches!(options.mode, ReductionMode::StripOnly) {
                 return Ok(ReductionResult {
                     state: ReductionResultState::provider_view_repaired(stripped_messages),
@@ -564,11 +514,6 @@ impl<M: ProviderModel> ReductionEngine for ProviderReductionEngine<M> {
                 options.max_compacted_prefix_messages,
             )?;
             if old_messages.is_empty() {
-                // Provider-view stripping is itself a useful non-durable repair.
-                // The caller rebuilds and projects the complete request before it
-                // decides whether that repair satisfied the threshold. If the
-                // provider-visible estimate did not improve, the indivisible
-                // canonical view cannot fit this admitted reduction.
                 let state = if stripped_token_estimate < original_token_estimate {
                     ReductionResultState::provider_view_repaired(stripped_messages)
                 } else {
@@ -586,25 +531,15 @@ impl<M: ProviderModel> ReductionEngine for ProviderReductionEngine<M> {
                 });
             }
 
-            // The transcript is untrusted source material. Put the summarization
-            // contract in the system layer so an unfinished user/tool workflow in
-            // `prepared_history` cannot outrank it and turn the internal completion
-            // into a continuation of the old task. The final user message is
-            // deliberately neutral; it carries no executable transcript content.
+            // Treat transcript messages as untrusted; instructions stay in the system layer.
             let mut summary_config = self.config.clone();
             summary_config.context_window = context_window;
             summary_config.preamble = Some(compaction_prompt().to_string());
             summary_config.context_message = None;
             summary_config.tool_choice = None;
             summary_config.turn_compactor = None;
-            // The summary is a documentless auxiliary request. It carries
-            // historical provider content but no current request's physical
-            // replay authority or provider-turn coordinate.
             summary_config.replay = crate::loop_stream::LoopReplayInput::default();
             summary_config.max_turns = 0;
-            // The summary completion has its own output budget, deliberately
-            // independent of the user turn's max_output_tokens (#1017): a large
-            // turn budget must not let the model balloon the internal summary.
             let configured_summary_max_output_tokens = options
                 .summary_max_output_tokens
                 .clamp(1, MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS)
@@ -619,8 +554,6 @@ impl<M: ProviderModel> ReductionEngine for ProviderReductionEngine<M> {
                     .sampling_seed
                     .map(|seed| serde_json::json!({ "seed": seed })),
             );
-            // Both deadlines are hard stops when present; recovery must respect
-            // the earlier one.
             summary_config.deadline = match (options.deadline, summary_config.deadline) {
                 (Some(from_options), Some(from_config)) => Some(from_options.min(from_config)),
                 (from_options, from_config) => from_options.or(from_config),
@@ -630,9 +563,6 @@ impl<M: ProviderModel> ReductionEngine for ProviderReductionEngine<M> {
                     ContinuationCheckpoint,
                 >());
 
-            // Roll the selected old prefix entirely in memory. Each successful step
-            // feeds its checkpoint into the next bounded pair-safe chunk; the daemon
-            // persists only the one final result after this function returns.
             let FileActivity {
                 files_read,
                 files_modified,
@@ -643,10 +573,7 @@ impl<M: ProviderModel> ReductionEngine for ProviderReductionEngine<M> {
             let mut chunk_pair_closed = Vec::new();
             let mut chunk_can_dispatch = Vec::new();
             while consumed < old_messages.len() {
-                // Every rolling step is a fresh owned loop. Its retry controller
-                // checks the deadline after a failed attempt, so guard the initial
-                // attempt here as well: a prior chunk may have consumed the shared
-                // request deadline while producing a valid checkpoint.
+                // A prior chunk may have consumed the shared request deadline
                 if deadline_elapsed(summary_config.deadline, self.now.as_ref()) {
                     return Err(ReductionError::DeadlineElapsed.into());
                 }
@@ -801,12 +728,6 @@ async fn largest_fitting_summary_chunk<M: ProviderModel>(
             options,
         )
         .await?;
-        // Do not pack a summary request all the way to the raw context edge:
-        // doing so is technically dispatchable but can reduce a structured
-        // checkpoint to a one-token output allowance. The rolling summary
-        // budget reserves the configured summary ceiling whenever it can
-        // coexist with input. The owned loop still applies the dynamic output
-        // clamp immediately before dispatch.
         if estimate <= input_budget
             && crate::provider_input::budget::can_dispatch(
                 estimate,
@@ -886,8 +807,6 @@ async fn summarize_checkpoint<M: ProviderModel>(
     summary_config: crate::loop_stream::LoopConfig,
     now: Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>,
 ) -> Result<ContinuationCheckpoint> {
-    // Candidate construction is asynchronous. Re-check at the actual owned
-    // loop boundary so expiry during projection cannot leak one provider call.
     if deadline_elapsed(summary_config.deadline, now.as_ref()) {
         return Err(ReductionError::DeadlineElapsed.into());
     }
@@ -999,21 +918,6 @@ pub fn sanitize_history_for_provider(
     )
 }
 
-/// The single canonical narrowing from the durable transcript to the provider
-/// view: stub tool-result payloads, then drop unpaired calls and orphaned
-/// results and select the provider's assistant content order.
-///
-/// Both sides of compaction's prefix accounting index *this* list. The
-/// compaction writer records `messages_compacted` against it and the request
-/// reader drops that many rows from it; measuring in one space and dropping in
-/// another was defect 3 of #993.
-///
-/// `Compaction.providerView_idempotent` models the grouped provider view.
-/// Claude's native-preserved order stage and its composed call/result
-/// sanitation are modeled by `PromptAssembly.Content.normalizeFor` and
-/// `PromptAssembly.Provider.sanitizeForProviderGlobalFor_idempotent` under that
-/// owner's explicit coherence/unique-call premises. The latter does not prove
-/// the separate tool-result stubbing stage or arbitrary repeated call IDs.
 pub fn provider_view(
     profile: ProviderInputProfile,
     messages: Vec<Message>,
@@ -1022,10 +926,6 @@ pub fn provider_view(
     (sanitize_history_for_provider(profile, stripped), activity)
 }
 
-/// The same provider projection as [`provider_view`], retaining the exact input
-/// row index through every stripping, pairing, and order-selection stage.
-/// Consumers may attach sidecars by this emitted index; they must not recover
-/// row provenance by comparing provider IDs or normalized message bytes.
 pub fn provider_view_with_sources(
     profile: ProviderInputProfile,
     messages: Vec<Message>,
@@ -1036,13 +936,6 @@ pub fn provider_view_with_sources(
     (sanitized, activity)
 }
 
-/// [`provider_view_with_sources`] before the provider order stage: Lean
-/// `Provider.sanitizeForProviderGlobalFor .nativePreserved`. Replay sources and
-/// persisted block indices are carried on this view, which only filters blocks,
-/// so every retained row keeps its native order and increasing indices. The
-/// provider order is applied once at the send boundary
-/// (`Provider.sanitizeForProviderGlobalFor_orders_association_view`); its rows
-/// are the same as the ordered view's.
 pub fn association_view_with_sources(
     messages: Vec<Message>,
 ) -> (Vec<history::SourcedMessage>, FileActivity) {
@@ -1051,8 +944,6 @@ pub fn association_view_with_sources(
     (pair_sourced(stripped), activity)
 }
 
-/// The entry/repair sanitizer without tool-result stubbing, over the same
-/// native-order association view as [`association_view_with_sources`].
 pub fn sanitize_association_with_sources(messages: Vec<Message>) -> Vec<history::SourcedMessage> {
     pair_sourced(history::source_messages(messages))
 }
@@ -1068,14 +959,6 @@ fn sanitize_sourced(
     history::normalize_assistant_content_order_sourced(profile, pair_sourced(sourced))
 }
 
-/// Find the inclusive canonical message cursor that denotes a provider-view
-/// prefix of exactly `provider_prefix_len` messages.
-///
-/// The canonical projection carries each retained message's raw source index,
-/// which identifies the one possible raw boundary for a provider prefix. That
-/// candidate is then independently projected on both sides to establish the
-/// runtime witness for `Compaction.CursorDenotes`. The work is linear in the
-/// transcript rather than re-projecting every possible split.
 pub fn compacted_through_sequence(
     profile: ProviderInputProfile,
     rows: &[(u32, Message)],
@@ -1115,9 +998,6 @@ pub fn compacted_through_sequence(
     }
 }
 
-/// Resolve the session-specific raw cursor for one exact provider reduction.
-/// Persistence-specific prefix offsets are contained here; request assembly
-/// and the shared reducer deal only in canonical provider views.
 pub fn session_cursor_for_reduction(
     profile: ProviderInputProfile,
     rows: &[(u32, Message)],
@@ -1158,21 +1038,10 @@ pub fn session_cursor_for_reduction(
     }))
 }
 
-/// Greatest `j <= limit` at which no tool call is awaiting its result — the
-/// index [`ReductionEngine::reduce`] retreats its token-budget split to.
-///
-/// Re-exported so the generated conformance cases can check the production
-/// boundary against `Compaction.pairSafeBoundary`.
 pub fn pair_safe_boundary(messages: &[Message], limit: usize) -> usize {
     history::pair_safe_boundary(messages, limit)
 }
 
-/// The real split [`ReductionEngine::reduce`] performs: everything before the
-/// boundary is summarized, everything from it is retained.
-///
-/// Exported so the generated conformance cases can sweep budgets against the
-/// live splitter rather than only against [`pair_safe_boundary`] — otherwise a
-/// change that stopped *calling* the boundary would slip through.
 pub fn split_for_summary(
     messages: Vec<Message>,
     keep_recent_tokens: usize,
@@ -1184,12 +1053,6 @@ pub fn split_for_summary(
     history::split_messages_for_summary_with_counter(messages, keep_recent_tokens, &counter)
 }
 
-/// Runtime counterpart of Lean `PromptView.safeToReduce`. Canonical loading
-/// has already reconstructed the selected immutable headers and payloads, so
-/// reduction requires an ordinary turn boundary and a fixpoint of the pairing
-/// and drop stages (`sanitizeTurn`). The provider content order is not part
-/// of stability: a completed native `[reasoning, text]` row on a grouped wire
-/// is reordered only at the send boundary and is a stable prefix.
 pub fn safe_to_reduce(messages: &[Message]) -> bool {
     let Some(last) = messages.last() else {
         return false;

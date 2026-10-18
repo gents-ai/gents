@@ -1,7 +1,3 @@
-//! Exercises the production transaction adapter's commit/discard lifecycle.
-//! This recorder does not establish atomic configuration snapshot publication;
-//! that requires the runtime installer to implement ApplyReconcile.publish.
-
 use super::*;
 use axum::{extract::State, routing::post, Json, Router};
 use serde_json::json;
@@ -24,7 +20,6 @@ impl RecordingGraphqlState {
     fn committed_state(&self) -> Vec<String> {
         self.committed.lock().expect("committed lock").clone()
     }
-
     fn tx_lifecycle_counts(&self) -> (u64, u64, u64) {
         (
             self.tx_begin_count.load(Ordering::SeqCst),
@@ -130,7 +125,7 @@ async fn config_apply_txn_round_trip_against_recorder() {
     let access = ConfigAccess::graphql(graphql);
     let recorder_in_tx = recorder.clone();
     access
-        .transact("test.config_apply.round_trip", move |txn| {
+        .transact_write("test.config_apply.round_trip", move |txn| {
             let recorder_in_tx = recorder_in_tx.clone();
             Box::pin(async move {
                 txn.execute(
@@ -156,7 +151,7 @@ async fn config_apply_txn_discard_leaves_committed_empty() {
     let (graphql, recorder) = start_recording_graphql().await;
     let access = ConfigAccess::graphql(graphql);
     let result: Result<()> = access
-        .transact("test.config_apply.discard", move |txn| {
+        .transact_write("test.config_apply.discard", move |txn| {
             Box::pin(async move {
                 txn.execute(
                     "mutation { doc_0: create_Task(input: { task_id: \"task-a\" }) { _docID } }",

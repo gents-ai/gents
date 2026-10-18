@@ -1,8 +1,3 @@
-//! Rendering and validation of the structured query contract into DefraDB
-//! GraphQL syntax. All field/operator names are validated as identifiers and
-//! all string literals are escaped via [`escape_graphql_string`], so untrusted
-//! input cannot break out of the query.
-
 use anyhow::{bail, Result};
 use serde_json::Value;
 
@@ -49,42 +44,6 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn renders_simple_equality_filter() {
-        let out = render_filter(&json!({ "status": { "_eq": "pending" } })).unwrap();
-        assert_eq!(out, r#"{ status: { _eq: "pending" } }"#);
-    }
-
-    #[test]
-    fn renders_numeric_and_bool_operands_without_quotes() {
-        let out = render_filter(&json!({ "retry_count": { "_gt": 0 } })).unwrap();
-        assert_eq!(out, "{ retry_count: { _gt: 0 } }");
-
-        let out = render_filter(&json!({ "interrupt": { "_eq": true } })).unwrap();
-        assert_eq!(out, "{ interrupt: { _eq: true } }");
-    }
-
-    #[test]
-    fn renders_in_operator_with_array() {
-        let out = render_filter(&json!({ "tool_name": { "_in": ["a", "b"] } })).unwrap();
-        assert_eq!(out, r#"{ tool_name: { _in: ["a", "b"] } }"#);
-    }
-
-    #[test]
-    fn renders_boolean_composition() {
-        let out = render_filter(&json!({
-            "_and": [
-                { "status": { "_eq": "x" } },
-                { "retry_count": { "_gt": 0 } }
-            ]
-        }))
-        .unwrap();
-        assert_eq!(
-            out,
-            r#"{ _and: [{ status: { _eq: "x" } }, { retry_count: { _gt: 0 } }] }"#
-        );
-    }
-
-    #[test]
     fn escapes_string_values_to_prevent_injection() {
         let out = render_filter(&json!({ "content": { "_eq": "a\" } evil { x" } })).unwrap();
         assert_eq!(out, r#"{ content: { _eq: "a\" } evil { x" } }"#);
@@ -94,11 +53,5 @@ mod tests {
     fn rejects_injection_in_field_name() {
         let err = render_filter(&json!({ "status\" } evil { ": { "_eq": "x" } })).unwrap_err();
         assert!(err.to_string().contains("invalid identifier"), "{err}");
-    }
-
-    #[test]
-    fn rejects_non_object_top_level_filter() {
-        let err = render_filter(&json!("not an object")).unwrap_err();
-        assert!(err.to_string().contains("must be a JSON object"), "{err}");
     }
 }

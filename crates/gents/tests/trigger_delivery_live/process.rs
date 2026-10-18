@@ -217,10 +217,6 @@ fn retained_keys(state: &Value) -> Result<BTreeMap<String, String>> {
         .collect()
 }
 
-/// The parent kills only Child handles it just spawned. Stores and evidence
-/// remain in a retained temporary directory and source documents carry test tags.
-/// Crashes here occur before admission (disabled cursor) and after confirmed
-/// terminal commit. In-transaction fault boundaries belong to L3 owner tests.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "real inference/process crash: GENTS_TRIGGER_DELIVERY_LIVE=1 and both delivery endpoints"]
 async fn real_process_crashes_recover_disabled_and_offline_arrivals_exactly_once() -> Result<()> {
@@ -301,7 +297,7 @@ async fn delivery_crash_child() -> Result<()> {
     };
     let db = support::test_db_from_home(home);
     let owner = db.node_identity.did().to_owned();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     if phase == "seed" {
         let endpoints = [
             std::env::var("GENTS_DELIVERY_ENDPOINT_1")?,

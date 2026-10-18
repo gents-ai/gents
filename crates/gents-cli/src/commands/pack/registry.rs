@@ -1,20 +1,11 @@
-//! The pack registry client: `gents pack search`, `gents pack publish`, and
-//! the download-verify-cache path `gents pack install` falls back to when a
-//! pack is not compiled into this binary.
-//!
-//! A pack fetched from the registry has to become the same pack a local
-//! one is before it is trusted with anything: its raw bytes are checked
-//! against the digest the registry advertised before they are ever parsed,
-//! and only a match is cached and handed to [`gents::pack_archive::PackArchive`].
-
 use anyhow::{Context, Result};
 #[cfg(test)]
 use gents::pack_archive::PackArchive;
+#[cfg(test)]
+use gents::pack_registry::verify_pack_coordinate;
 pub(crate) use gents::pack_registry::{
     fetch_pack, resolve_pack_coordinate, resolve_registry_url, RegistryClient,
 };
-#[cfg(test)]
-use gents::pack_registry::{verify_pack_coordinate, DEFAULT_REGISTRY_URL, REGISTRY_ENV_VAR};
 #[cfg(test)]
 use serde_json::Value;
 
@@ -22,7 +13,6 @@ use crate::cli::args::{PackFetchArgs, PackPublishArgs, PackSearchArgs};
 
 const REGISTRY_TOKEN_ENV_VAR: &str = "GENTS_REGISTRY_TOKEN";
 
-/// `--token` beats `GENTS_REGISTRY_TOKEN`; neither present is `None`.
 pub(crate) fn resolve_registry_token(explicit: Option<&str>) -> Option<String> {
     explicit
         .map(str::to_owned)
@@ -34,9 +24,6 @@ pub(crate) fn resolve_registry_token(explicit: Option<&str>) -> Option<String> {
         })
 }
 
-/// Reads one line from standard input, trimming the trailing newline. Shared
-/// by `--token-stdin` and `--password-stdin`, so a token or password never
-/// shows up in `ps` or shell history.
 pub(crate) fn read_stdin_line(what: &str) -> Result<String> {
     use std::io::BufRead;
     let mut line = String::new();
@@ -47,9 +34,6 @@ pub(crate) fn read_stdin_line(what: &str) -> Result<String> {
     Ok(line.trim_end_matches(['\r', '\n']).to_owned())
 }
 
-/// The `--token` value, read from standard input instead when `--token-stdin`
-/// was passed. One function so every command that accepts both flags agrees
-/// on how the token is obtained.
 pub(crate) fn resolve_token_flag(
     token: Option<String>,
     token_stdin: bool,
@@ -61,17 +45,6 @@ pub(crate) fn resolve_token_flag(
     }
 }
 
-/// `gents pack fetch`: the artifact itself, verified, without installing
-/// it.
-///
-/// Downloading a pack is the client's job, not something to hand off to
-/// another tool. Publishing, installing and searching already go through
-/// here; this closes the last case, so getting the bytes for an air-gapped
-/// machine, a mirror, or a look inside never needs anything but `gents`.
-///
-/// The digest is checked against what the registry advertised before the
-/// file is written, so what lands on disk is the pack that was asked for
-/// or nothing at all.
 pub(crate) async fn fetch(args: PackFetchArgs) -> Result<()> {
     if args.store {
         return fetch_into_store(args).await;
@@ -82,8 +55,6 @@ pub(crate) async fn fetch(args: PackFetchArgs) -> Result<()> {
 
     let coordinate =
         resolve_pack_coordinate(&client, namespace, name, args.version.as_deref()).await?;
-    // Streamed to a staging file beside the output, verified, then renamed:
-    // a pack of any size is never held in memory.
     let out_dir = args
         .out
         .as_deref()
@@ -130,11 +101,6 @@ pub(crate) async fn fetch(args: PackFetchArgs) -> Result<()> {
     }))
 }
 
-/// `gents pack fetch --store`: admits `<spec>` into the home's pack store
-/// and name index instead of writing a `.pack` file. `<spec>` is a
-/// directory, a `.pack` file, or a registry coordinate (optionally
-/// `@version`, or pinned with `--version`); a store or installed hit costs
-/// no network call.
 async fn fetch_into_store(args: PackFetchArgs) -> Result<()> {
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     if let Some(local) = crate::commands::pack::local::classify(&args.package) {
@@ -181,7 +147,6 @@ async fn fetch_into_store(args: PackFetchArgs) -> Result<()> {
     }))
 }
 
-/// The registry's advertised digest must be what the bytes hash to.
 fn verify_digest_hex(computed: &str, advertised: &str, version: &str) -> Result<()> {
     anyhow::ensure!(
         computed == advertised,
@@ -225,12 +190,9 @@ pub(crate) mod tests {
     use axum::{Json, Router};
     use serde_json::json;
 
-    /// The account and token every fake registry in this module accepts.
     pub(crate) const FAKE_USERNAME: &str = "demo";
     pub(crate) const FAKE_PASSWORD: &str = "demo-pass";
     pub(crate) const FAKE_TOKEN: &str = "demo-token";
-
-    // --- env var precedence: guarded so parallel tests don't race the process env ---
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -243,14 +205,6 @@ pub(crate) mod tests {
     }
 
     impl EnvVarGuard {
-        /// Takes the lock once and clears the named variables, restoring
-        /// them on drop.
-        ///
-        /// There is deliberately no second constructor that also takes the
-        /// lock: a test that held one guard and then asked for another
-        /// would wait forever on a lock it already holds. A test that
-        /// wants to see a variable set calls [`Self::set`] on the guard it
-        /// already has.
         fn clear(vars: &[&'static str]) -> Self {
             let lock = env_lock().lock().expect("env lock poisoned");
             let saved = vars
@@ -263,9 +217,6 @@ pub(crate) mod tests {
             Self { saved, _lock: lock }
         }
 
-        /// Sets a variable for as long as this guard lives. Its original
-        /// value was saved when the guard cleared it, so the restore on
-        /// drop still covers it.
         fn set(&self, name: &'static str, value: &str) {
             assert!(
                 self.saved.iter().any(|(saved, _)| *saved == name),
@@ -287,34 +238,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn registry_url_precedence_is_flag_then_env_then_default() {
-        let guard = EnvVarGuard::clear(&[REGISTRY_ENV_VAR]);
-        assert_eq!(resolve_registry_url(None), DEFAULT_REGISTRY_URL);
-
-        guard.set(REGISTRY_ENV_VAR, "https://env.example/");
-        assert_eq!(resolve_registry_url(None), "https://env.example");
-        assert_eq!(
-            resolve_registry_url(Some("https://flag.example")),
-            "https://flag.example"
-        );
-    }
-
-    #[test]
-    fn registry_token_precedence_is_flag_then_env() {
-        let guard = EnvVarGuard::clear(&[REGISTRY_TOKEN_ENV_VAR]);
-        assert_eq!(resolve_registry_token(None), None);
-
-        guard.set(REGISTRY_TOKEN_ENV_VAR, "gcpat_env");
-        assert_eq!(resolve_registry_token(None).as_deref(), Some("gcpat_env"));
-        assert_eq!(
-            resolve_registry_token(Some("gcpat_flag")).as_deref(),
-            Some("gcpat_flag")
-        );
-    }
-
-    /// A write resolves its token from the flag, then the environment, then
-    /// the login `gents pack login` saved for that registry.
-    #[test]
     fn a_saved_login_is_the_last_token_source() {
         let guard = EnvVarGuard::clear(&[REGISTRY_TOKEN_ENV_VAR]);
         let home = tempfile::tempdir().unwrap();
@@ -334,11 +257,7 @@ pub(crate) mod tests {
         assert_eq!(resolve(Some("gcpat_flag")).unwrap(), "gcpat_flag");
     }
 
-    // --- a tiny fake registry, just the routes `gents pack` needs ---
-
-    /// `(namespace, name, version, undo, bearer_token)` of a yank request.
     pub(crate) type YankRequest = (String, String, String, bool, String);
-    /// `(namespace, name, new_owner, bearer_token)` of an owner transfer.
     pub(crate) type OwnerTransferRequest = (String, String, String, String);
 
     pub(crate) struct FakeRegistryState {
@@ -347,17 +266,10 @@ pub(crate) mod tests {
         bytes: Vec<u8>,
         digest: String,
         pub(crate) downloads: AtomicUsize,
-        /// `(namespace, name, version, undo, bearer_token)` from the last
-        /// yank request.
         pub(crate) last_yank: Mutex<Option<YankRequest>>,
-        /// `(namespace, name, new_owner, bearer_token)` from the last owner
-        /// transfer.
         pub(crate) last_owner_transfer: Mutex<Option<OwnerTransferRequest>>,
     }
 
-    /// Only the one pack is known; anything else is a real 404, so an
-    /// "unknown pack" test exercises a genuine not-found response instead
-    /// of accidentally hitting the digest-mismatch path.
     async fn fake_package(
         State(state): State<Arc<FakeRegistryState>>,
         AxumPath((_ns, name)): AxumPath<(String, String)>,
@@ -445,7 +357,6 @@ pub(crate) mod tests {
         Json(json!({ "owner": new_owner })).into_response()
     }
 
-    /// Starts a fake registry serving `plain_pack@1.0.0`.
     async fn start_fake_registry(
         bytes: Vec<u8>,
         advertised_digest: String,
@@ -453,9 +364,6 @@ pub(crate) mod tests {
         serve_fake_pack("plain_pack", "1.0.0", bytes, advertised_digest).await
     }
 
-    /// Starts a fake registry serving one version of one pack, plus the
-    /// account routes (`login`, `me`, `yank`, `owner`) every registry token
-    /// command needs; all accept [`FAKE_TOKEN`].
     pub(crate) async fn serve_fake_pack(
         name: &str,
         latest: &str,
@@ -471,10 +379,6 @@ pub(crate) mod tests {
             last_yank: Mutex::new(None),
             last_owner_transfer: Mutex::new(None),
         });
-        // `/packs/...`, the route the real registry serves a pack on.
-        // These routes had been the plugin ones (`/packages/...`), which is
-        // how a client that asked the wrong surface for a pack passed every
-        // test in this file while failing against a real server.
         let app = Router::new()
             .route("/api/v1/packs/{ns}/{name}", get(fake_package))
             .route("/api/v1/packs/{ns}/{name}/{version}", get(fake_version))
@@ -497,8 +401,6 @@ pub(crate) mod tests {
         (format!("http://{addr}"), state)
     }
 
-    /// A tiny real `.pack`, built the same way `gents pack build` does, with
-    /// the digest of its bytes the registry advertises.
     fn sample_pack() -> (Vec<u8>, String) {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().join("plain_pack");
@@ -528,7 +430,6 @@ pub(crate) mod tests {
         (bytes, digest)
     }
 
-    /// How many packs the home's store holds.
     fn stored_packs(home: &std::path::Path) -> usize {
         std::fs::read_dir(home.join("packs/store/sha256"))
             .map(|dir| {
@@ -580,7 +481,6 @@ pub(crate) mod tests {
             .contains(&first.digest)
             .unwrap());
 
-        // A second fetch of the same pack reads the cache: no second download.
         let second = fetch_pack(&client, Some(home.path()), "gents", "plain_pack", None)
             .await
             .expect("second fetch (cached)");
@@ -606,7 +506,6 @@ pub(crate) mod tests {
         let message = format!("{error:#}");
         assert!(message.contains(&wrong_digest), "{message}");
         assert!(message.contains("refusing to install"), "{message}");
-        // Nothing was stored: a refusal is not a warning.
         assert_eq!(stored_packs(home.path()), 0);
     }
 

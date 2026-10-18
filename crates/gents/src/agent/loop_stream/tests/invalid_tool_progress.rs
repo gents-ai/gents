@@ -21,7 +21,6 @@ impl ToolDyn for InvalidProgressProbe {
                 "invalidArguments" => FailureClass::ArgumentInvalid,
                 "policyDenied" => FailureClass::PolicyDenied,
                 "ordinaryFailure" => FailureClass::ToolReturnedError,
-                // Successful arbitrary output must never impersonate typed failure.
                 "success" => return Ok(r#"{"failure_class":"policyDenied","ok":false}"#.into()),
                 other => panic!("unknown fixture outcome {other}"),
             };
@@ -96,7 +95,10 @@ async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
         assert_eq!(error.is_some(), ending.is_some(), "{name}: {error:?}");
         match (ending, error) {
             (Some("invalidExhausted"), Some(error)) => {
-                assert!(error.contains("invalid_tool_call_budget_exhausted:"), "{error}")
+                assert!(
+                    error.contains("invalid_tool_call_budget_exhausted:"),
+                    "{error}"
+                )
             }
             (Some("repeatedFailure"), Some(error)) => {
                 assert!(error.contains(REPEATED_TOOL_FAILURE_PREFIX), "{error}")
@@ -171,9 +173,6 @@ async fn invalid_tool_budget_closes_eighth_result_and_cancels_accepted_ninth() {
         if batched {
             chunks.push(invalid_progress_call(8, "success"));
         }
-        // Canonical publication accepts the whole provider turn before any
-        // dispatch. Budget exhaustion must retain the eighth result and account
-        // for an accepted ninth call without executing it.
         chunks.push(RawStreamingChoice::FinalResponse(()));
         let model = ScriptedModel::new(chunks);
         let stream = run_loop_stream(

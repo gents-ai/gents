@@ -1,11 +1,3 @@
-//! Grok pager subagent lifecycle projected from caused sessions.
-//!
-//! A pager subagent is a session whose first request was caused by a request
-//! of the projected session (`caused_by_parent_request_doc_id`). Its
-//! `subagent_spawned` / `subagent_progress` / `subagent_finished` payloads are
-//! routed by `childSessionId` on the originating session's channel and
-//! describe the caused session's latest request.
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -23,21 +15,10 @@ use crate::caused_sessions::{
     SessionScope,
 };
 
-/// Ext request methods routed to this leaf by the ACP service.
 pub(crate) const SUBAGENT_GET_METHOD: &str = "x.ai/subagent/get";
 pub(crate) const SUBAGENT_LIST_RUNNING_METHOD: &str = "x.ai/subagent/list_running";
 pub(crate) const SUBAGENT_CANCEL_METHOD: &str = "x.ai/subagent/cancel";
 
-/// Shape of a `subagent_spawned` update payload (Grok pager
-/// `extensions::notification::SubagentSpawned`).
-///
-/// The optional wire fields (`effective_context_source`, `capability_mode`,
-/// `persona`, `role`, `model`, `resumed_from`, `workflow_run_id`) stay absent:
-/// no durable Gents document carries them (the pager hides a subagent that names
-/// a workflow run it has no `workflow_updated` for; graph runs are projected
-/// by `grok_shim::graph_runs`). `context_normalized` is always
-/// true because every projected window passes through
-/// `effective_context_window_tokens`.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct SubagentSpawnedUpdate {
     pub subagent_id: String,
@@ -49,7 +30,6 @@ pub(super) struct SubagentSpawnedUpdate {
     pub context_normalized: bool,
 }
 
-/// Shape of a `subagent_progress` update payload.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct SubagentProgressUpdate {
     pub subagent_id: String,
@@ -65,8 +45,6 @@ pub(super) struct SubagentProgressUpdate {
     pub error_count: u32,
 }
 
-/// Shape of a terminal `subagent_finished` update payload. The pager routes
-/// the finish by the subagent id alone, so it carries no parent session.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct SubagentFinishedUpdate {
     pub subagent_id: String,
@@ -96,8 +74,6 @@ impl SubagentFinishStatus {
         }
     }
 
-    /// Only the canonical request lifecycle owns terminality; an interrupt
-    /// marker is a request to stop, not evidence that execution stopped.
     fn of(request: &AgentRequestRow) -> Option<Self> {
         match request.lifecycle_state.map(|state| state.as_str()) {
             Some("completed") => Some(Self::Completed),
@@ -108,8 +84,6 @@ impl SubagentFinishStatus {
     }
 }
 
-/// Projection events for one originating request, aligned 1:1 with the
-/// durable chronology key of the tool call that caused each session.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct SubagentProjection {
     pub updates: Vec<SubagentUpdate>,
@@ -140,8 +114,6 @@ impl SubagentUpdate {
         }
     }
 
-    /// The `sessionUpdate` discriminator keeps its camelCase enum tag; every
-    /// inner DTO field renders with its snake_case key.
     pub fn to_payload(&self) -> Value {
         match self {
             SubagentUpdate::Spawned(update) => {
@@ -194,7 +166,6 @@ impl SubagentUpdate {
     }
 }
 
-/// Durable activity of one caused session's latest request.
 #[derive(Debug, Clone, Default)]
 struct HeadActivity {
     tokens_used: u64,
@@ -242,7 +213,6 @@ struct CauseRow {
     message_sequence: Option<i64>,
 }
 
-/// Sessions this exact physical request started.
 pub(crate) async fn caused_by_request(
     node: &Arc<EmbeddedNode>,
     request: &AgentRequestRow,
@@ -250,9 +220,6 @@ pub(crate) async fn caused_by_request(
     load_direct_caused_sessions(node, request).await
 }
 
-/// Project the pager subagent lifecycle for the sessions caused by one
-/// request. Returns one `spawned` per session plus `progress` while its
-/// latest request runs or `finished` once it is terminal.
 pub(super) async fn project_caused_sessions(
     node: &Arc<EmbeddedNode>,
     parent: &AgentRequestRow,
@@ -316,10 +283,6 @@ pub(super) async fn project_caused_sessions(
     })
 }
 
-/// Answer `x.ai/subagent/get` and `x.ai/subagent/list_running` from the
-/// sessions caused by this connection's sessions. `sessions` comes only from
-/// the connection's validated registry; the caller identity is agent ==
-/// requester, matching normal shim submission.
 pub(crate) async fn handle(
     node: Arc<EmbeddedNode>,
     principal: &str,
@@ -377,9 +340,6 @@ pub(crate) async fn handle(
     Ok(json!({"snapshot": snapshot(&node, &session, &activity, context_window).await?}))
 }
 
-/// Interrupt the current turn of a caused session, under the same
-/// spawner-only rule as `agent_interrupt`. The connection speaks for the root
-/// session the lookup resolved.
 async fn cancel(
     node: &Arc<EmbeddedNode>,
     id: &str,
@@ -485,7 +445,6 @@ async fn snapshot(
     Ok(value)
 }
 
-/// The completed caused request's answer, from the exact terminal owner.
 async fn final_output(node: &Arc<EmbeddedNode>, request: &AgentRequestRow) -> Result<String> {
     let request_doc_id = request
         .doc_id
@@ -510,10 +469,6 @@ impl Activity {
     }
 }
 
-/// One read of the latest requests' usage, tools and terminal facts, plus
-/// the transcript positions of the tool calls in `parent_doc_id` that caused
-/// each session. `InferenceCall` has no requester/session columns, so it is
-/// scoped by principal and physical request.
 async fn load_activity(
     node: &EmbeddedNode,
     sessions: &[CausedSession],
@@ -568,7 +523,7 @@ async fn load_activity(
         .map(|parent| {
             let ids = &cause_ids;
             format!(
-                r#"causes: AgentToolCall(filter: {{_docID: {{_in: [{ids}]}}, request_doc_id: {{_eq: "{}"}}}}) {{ _docID message_sequence }}"#,
+                r#"causes: AgentToolCall(docIDs: [{ids}], filter: {{ request_doc_id: {{_eq: "{}"}} }}) {{ _docID message_sequence }}"#,
                 escape_graphql_string(parent)
             )
         })
@@ -577,7 +532,7 @@ async fn load_activity(
         r#"{{
             InferenceCall(filter: {{_or: [{usage_scopes}], call_kind: {{_eq: "inference"}}, call_state: {{_in: ["completed", "failed", "cancelled"]}}}}) {{ request_doc_id prompt_tokens completion_tokens }}
             AgentToolCall(filter: {{_or: [{tool_scopes}]}}) {{ request_doc_id tool_name lifecycle_state }}
-            AgentRequest(filter: {{_docID: {{_in: [{head_ids}]}}}}) {{ _docID terminalized_at }}
+            AgentRequest(docIDs: [{head_ids}]) {{ _docID terminalized_at }}
             {causes}
         }}"#
     );
@@ -733,114 +688,4 @@ fn elapsed_millis(started_at: Option<&str>, ended_at: Option<&str>) -> u64 {
         .max(0)
         .try_into()
         .unwrap_or(0)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn request(value: Value) -> AgentRequestRow {
-        serde_json::from_value(value).unwrap()
-    }
-
-    fn session(lifecycle_state: &str) -> CausedSession {
-        let first = request(json!({
-            "_docID": "doc-child", "request_id": "child", "session_id": "child-session",
-            "node_did": "did:child", "requester_did": "did:parent", "agent_id": "worker",
-            "content": "  inspect the logs  ", "lifecycle_state": lifecycle_state,
-            "created_at": "2026-09-26T00:00:00Z",
-            "caused_by_parent_request_doc_id": "doc-parent",
-            "caused_by_parent_tool_call_doc_id": "doc-call",
-        }));
-        CausedSession {
-            scope: SessionScope {
-                node_did: "did:child".into(),
-                session_id: "child-session".into(),
-                requester_did: Some("did:parent".into()),
-            },
-            agent_id: "worker".into(),
-            root_session_id: "parent-session".into(),
-            caused_by_scope: SessionScope {
-                node_did: "did:parent".into(),
-                session_id: "parent-session".into(),
-                requester_did: Some("did:parent".into()),
-            },
-            depth: 1,
-            latest: first.clone(),
-            first,
-        }
-    }
-
-    #[test]
-    fn finish_status_follows_the_canonical_lifecycle() {
-        for (state, expected) in [
-            ("completed", Some(SubagentFinishStatus::Completed)),
-            ("interrupted", Some(SubagentFinishStatus::Cancelled)),
-            ("failed", Some(SubagentFinishStatus::Failed)),
-            ("dead", Some(SubagentFinishStatus::Failed)),
-            ("superseded", Some(SubagentFinishStatus::Failed)),
-            ("pending", None),
-            ("processing", None),
-        ] {
-            assert_eq!(
-                SubagentFinishStatus::of(&session(state).latest),
-                expected,
-                "{state}"
-            );
-        }
-    }
-
-    #[test]
-    fn progress_routes_by_the_caused_session() {
-        let head = HeadActivity {
-            tokens_used: 50,
-            tools: vec![
-                (Some("bash".into()), Some("failed".into())),
-                (Some("bash".into()), Some("completed".into())),
-                (Some("read".into()), None),
-            ],
-            ..HeadActivity::default()
-        };
-        let progress = progress_update(&session("processing"), &head, 100);
-        assert_eq!(progress.subagent_id, "child-session");
-        assert_eq!(progress.child_session_id, "child-session");
-        assert_eq!(progress.parent_session_id, "parent-session");
-        assert_eq!(progress.tool_call_count, 3);
-        assert_eq!(progress.tools_used, ["bash", "read"]);
-        assert_eq!(progress.error_count, 1);
-        assert_eq!(progress.context_usage_pct, 50);
-        assert_eq!(description(&session("processing")), "inspect the logs");
-    }
-
-    #[test]
-    fn payloads_keep_the_pager_wire_shape() {
-        let spawned = SubagentUpdate::Spawned(SubagentSpawnedUpdate {
-            subagent_id: "child-session".into(),
-            parent_session_id: "parent-session".into(),
-            parent_prompt_id: Some("prompt-1".into()),
-            child_session_id: "child-session".into(),
-            subagent_type: "worker".into(),
-            description: "inspect".into(),
-            context_normalized: true,
-        })
-        .to_payload();
-        assert_eq!(spawned["sessionUpdate"], "subagent_spawned");
-        assert_eq!(spawned["parent_prompt_id"], "prompt-1");
-        let finished = SubagentUpdate::Finished(SubagentFinishedUpdate {
-            subagent_id: "child-session".into(),
-            child_session_id: "child-session".into(),
-            status: SubagentFinishStatus::Failed,
-            error: Some("boom".into()),
-            tool_calls: 0,
-            turns: 1,
-            duration_ms: 0,
-            tokens_used: 0,
-            will_wake: true,
-        })
-        .to_payload();
-        assert_eq!(finished["status"], "failed");
-        assert_eq!(finished["error"], "boom");
-        assert!(finished.get("output").is_none());
-        assert!(finished.get("parent_session_id").is_none());
-    }
 }

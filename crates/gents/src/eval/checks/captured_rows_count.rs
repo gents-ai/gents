@@ -1,5 +1,3 @@
-//! `captured_rows_count`: how many rows a documents capture holds.
-
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -7,20 +5,8 @@ use crate::eval::checks::{Check, CheckDescription, CheckVerdict};
 use crate::eval::runner::executor::{CaptureResult, StageEvidence};
 use crate::eval::OutcomeKind;
 
-/// Params: `{ "name": "<capture name>", "min": <u64>, "max": <u64 | null | absent> }`.
-/// Passes when `min <= rows <= max`, with no upper bound when `max` is absent.
-///
-/// The `reason_code` in `raw` is the contract on the pass path: `in_range`
-/// when the count satisfies the params, `below_min` under `min`, `above_max`
-/// over `max`. Those three are the only outcomes that say anything about the
-/// subject; everything else this check emits (`missing_capture`,
-/// `bad_params`) is about the grader. A verdict about the subject also
-/// carries `capture`, `observed` and `expected: {min, max}`, which
-/// [`crate::eval::checks::verdict_detail`] renders.
 pub struct CapturedRowsCount;
 
-/// The capture a check ref's params name and the row range they require, or
-/// `None` when they do not parse or no count can satisfy them.
 pub fn required_rows(params: &Value) -> Option<(String, u64, Option<u64>)> {
     let params: Params = serde_json::from_value(params.clone()).ok()?;
     if params.max.is_some_and(|max| max < params.min) {
@@ -78,9 +64,6 @@ impl Check for CapturedRowsCount {
             Ok(params) => params,
             Err(error) => return grader("bad_params", error.to_string(), None),
         };
-        // A range no count can satisfy is a mistake in the case, not a failure
-        // of the subject: every trial would score zero and read as evidence
-        // that the subject did the wrong thing.
         if let Some(max) = params.max.filter(|max| *max < params.min) {
             return grader(
                 "bad_params",
@@ -141,7 +124,6 @@ impl Check for CapturedRowsCount {
     }
 }
 
-/// The subject produced the wrong number of rows.
 fn failed(reason_code: &str, detail: String, params: &Params, rows: u64) -> CheckVerdict {
     CheckVerdict {
         kind: OutcomeKind::ModelAcceptance,
@@ -151,7 +133,6 @@ fn failed(reason_code: &str, detail: String, params: &Params, rows: u64) -> Chec
     }
 }
 
-/// A verdict about the subject names what it counted and against what.
 fn observed(mut raw: Value, params: &Params, rows: u64) -> Value {
     if let Some(object) = raw.as_object_mut() {
         object.insert("capture".into(), json!(params.name));
@@ -164,8 +145,6 @@ fn observed(mut raw: Value, params: &Params, rows: u64) -> Value {
     raw
 }
 
-/// The check itself could not reach a verdict, which is no evidence about the
-/// subject, so it carries no feedback: its detail names the check's params.
 fn grader(reason_code: &str, detail: String, rows: Option<u64>) -> CheckVerdict {
     CheckVerdict {
         kind: OutcomeKind::Grader,
@@ -186,7 +165,6 @@ mod tests {
     use crate::eval::OutcomeKind;
     use serde_json::json;
 
-    /// One completed stage whose `items` capture holds `rows`.
     fn stage(rows: Vec<Value>) -> StageEvidence {
         let mut evidence = ScriptedExecutor::passed_evidence("did:x", "s1", "items", rows);
         evidence.stages.remove(0)
@@ -250,8 +228,6 @@ mod tests {
         assert_eq!(verdict.feedback, None);
     }
 
-    /// A grader verdict is no evidence about the subject, and its message
-    /// carries the check's params, so neither reaches the proposer.
     #[test]
     fn a_grader_verdict_carries_no_feedback() {
         let verdict = CapturedRowsCount
@@ -292,8 +268,6 @@ mod tests {
         assert_eq!(verdict.raw["count"], Value::Null);
     }
 
-    /// A range no count can satisfy would otherwise fail the subject on every
-    /// trial of the case, which is evidence about the case's author.
     #[test]
     fn a_max_below_the_min_is_bad_params_and_never_a_model_failure() {
         for rows in [vec![], vec![json!({})], vec![json!({}), json!({})]] {
@@ -308,7 +282,6 @@ mod tests {
             );
             assert_eq!(verdict.raw["reason_code"], "bad_params");
         }
-        // The boundary is still a usable range: exactly `min` rows pass.
         let verdict = CapturedRowsCount.evaluate(
             &json!({"name": "items", "min": 1, "max": 1}),
             &stage(vec![json!({})]),

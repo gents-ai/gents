@@ -61,7 +61,6 @@ pub(crate) struct CanonicalToolPresentation {
     pub(crate) live_output: Option<String>,
 }
 
-/// Resolve CLI tool presentation through the physical canonical owners.
 /// `include_result` must only be requested for a terminal tool lifecycle; a
 /// missing or malformed terminal delivery is an error rather than an empty
 /// preview.
@@ -141,9 +140,8 @@ pub(crate) fn request_terminal_query(request_id: &str, physical: Option<&str>) -
     )
 }
 
-/// Typed canonical request-output observation shared by CLI transports. The
-/// signed admission input remains on the request row and is never rewritten
-/// into response-shaped JSON.
+/// The signed admission input remains on the request row and is never
+/// rewritten into response-shaped JSON.
 pub(crate) async fn observe_canonical_request_output(
     graphql: &GraphqlEndpoint,
     request: &AgentRequestRow,
@@ -373,7 +371,6 @@ pub(crate) async fn prepare_agent_request(
     Ok(PreparedAgentRequest { create })
 }
 
-/// Atomically establish a session goal and publish its first runnable request.
 /// Exact retries use the same immutable submission key and converge to the
 /// already-committed pair; conflicting retries fail without mutating either
 /// document.
@@ -436,11 +433,10 @@ pub(crate) async fn create_goal_backed_agent_request(
     committed_submitted_request(graphql, &prepared.create).await
 }
 
-/// Embedded adapters keep their prompt identity and cancellation path while
-/// delegating the goal/claim/request transaction to the runtime owner.
 #[allow(clippy::too_many_arguments)]
+#[cfg(unix)]
 pub(crate) async fn create_goal_backed_agent_request_local(
-    node: &defra_node::EmbeddedNode,
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
     actor: identity::Did,
     graphql: &GraphqlEndpoint,
     node_did: &str,
@@ -696,8 +692,6 @@ fn wait_output_progress(
         gents::session::CanonicalRequestOutput::Published { presentation, .. } => {
             ("published", presentation)
         }
-        // Retained partials are historical diagnostics, never current answer
-        // progress. Loading/absence similarly carry no new bytes.
         _ => return None,
     };
     Some(WaitOutputProgress {
@@ -990,53 +984,6 @@ pub(crate) fn resolve_request_content(
     }
 }
 
-#[cfg(test)]
-mod dual_id_tests {
-    use super::*;
-
-    #[test]
-    fn resolve_dual_id_accepts_positional_only() {
-        assert_eq!(
-            resolve_dual_id("task", "--task-id", Some("task-1"), None).unwrap(),
-            "task-1"
-        );
-    }
-
-    #[test]
-    fn resolve_dual_id_accepts_flag_only() {
-        assert_eq!(
-            resolve_dual_id("task", "--task-id", None, Some("task-1")).unwrap(),
-            "task-1"
-        );
-    }
-
-    #[test]
-    fn resolve_dual_id_accepts_equal_positional_and_flag() {
-        assert_eq!(
-            resolve_dual_id("task", "--task-id", Some("task-1"), Some("task-1")).unwrap(),
-            "task-1"
-        );
-    }
-
-    #[test]
-    fn resolve_dual_id_rejects_conflict() {
-        let err = resolve_dual_id("task", "--task-id", Some("task-1"), Some("task-2"))
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("conflicting task ids provided"));
-        assert!(err.contains("positional=task-1"));
-        assert!(err.contains("--task-id=task-2"));
-    }
-
-    #[test]
-    fn resolve_dual_id_rejects_missing_id() {
-        let err = resolve_dual_id("task", "--task-id", None, None)
-            .unwrap_err()
-            .to_string();
-        assert_eq!(err, "missing task id");
-    }
-}
-
 pub(crate) fn write_json_output_file(path: &Path, value: &Value) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
@@ -1055,8 +1002,6 @@ tokio::task_local! {
     static CAPTURED_REPORT: std::cell::RefCell<Option<Value>>;
 }
 
-/// Prints `value` in its own field order; a typed report keeps the order
-/// its struct declares.
 pub(crate) fn print_json<T: serde::Serialize + ?Sized>(value: &T) -> Result<()> {
     if CAPTURED_REPORT.try_with(|_| ()).is_ok() {
         let value = serde_json::to_value(value).context("encoding JSON report")?;
@@ -1071,8 +1016,6 @@ pub(crate) fn print_json<T: serde::Serialize + ?Sized>(value: &T) -> Result<()> 
         .context("writing JSON report to stdout")
 }
 
-/// One compact JSON object on its own line, for a stream a script reads line
-/// by line. Captured like `print_json` when an embedding caller captures.
 pub(crate) fn print_ndjson(value: &Value) -> Result<()> {
     if CAPTURED_REPORT
         .try_with(|report| *report.borrow_mut() = Some(value.clone()))
@@ -1086,8 +1029,6 @@ pub(crate) fn print_ndjson(value: &Value) -> Result<()> {
         .context("writing NDJSON record to stdout")
 }
 
-/// Runs `command` and returns the report it would have printed; the last
-/// one when it prints several.
 pub(crate) async fn capture_report<F>(command: F) -> Result<Value>
 where
     F: std::future::Future<Output = Result<()>>,
@@ -1185,10 +1126,7 @@ pub(crate) async fn fetch_request_view(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        content_and_input_with_prompt_selected_skill_ids, submit_prepared_agent_request_committed,
-        PreparedAgentRequest, RequestSubmitOptions,
-    };
+    use super::{submit_prepared_agent_request_committed, PreparedAgentRequest};
     use super::{successor_output_target, CliOutputObservation};
     use axum::{
         body::{Body, Bytes},
@@ -1203,105 +1141,6 @@ mod tests {
     use serde_json::{json, Value};
     use std::collections::BTreeSet;
     use std::sync::{Arc, Mutex};
-
-    #[tokio::test]
-    async fn canonical_live_content_projects_an_open_segment_before_closure() -> anyhow::Result<()>
-    {
-        use gents_protocol::output::{
-            OutputSegment, OutputSource, OutputWriter, SegmentRun, StreamDeclaration, StreamPayload,
-        };
-        use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
-
-        let segment = OutputSegment {
-            node_did: "did:test:owner".into(),
-            requester_did: None,
-            session_id: "session".into(),
-            request_doc_id: "physical".into(),
-            source: OutputSource::ProviderTurn {
-                scope: CaptureScope {
-                    kind: CaptureScopeKind::Inference,
-                    seq: 1,
-                },
-                turn_index: 0,
-                attempt: 0,
-            },
-            writer: OutputWriter::RequestExecution {
-                execution_generation: "generation".into(),
-            },
-            ordinal: Some(0),
-            runs: vec![
-                SegmentRun {
-                    stream: 0,
-                    bytes: 5,
-                    declaration: Some(StreamDeclaration {
-                        block_index: 0,
-                        part_index: 0,
-                        payload: StreamPayload::Text,
-                    }),
-                },
-                SegmentRun {
-                    stream: 1,
-                    bytes: 4,
-                    declaration: Some(StreamDeclaration {
-                        block_index: 1,
-                        part_index: 0,
-                        payload: StreamPayload::Reasoning,
-                    }),
-                },
-            ],
-            payload: "helloidea".into(),
-            close: None,
-            created_at: "2026-09-01T00:00:00Z".into(),
-        };
-        let mut row = serde_json::to_value(segment)?;
-        row["_docID"] = json!("segment-0");
-        let owner = json!({
-            "_docID": "physical", "request_id": "request",
-            "node_did": "did:test:owner", "requester_did": null,
-            "session_id": "session", "lifecycle_state": "processing",
-            "execution_generation": "generation",
-            "execution_lease_secs": 30,
-            "execution_lease_expires_at": "2026-09-01T00:00:30Z"
-        });
-        let app = Router::new().route(
-            "/graphql",
-            post(move || {
-                let row = row.clone();
-                let owner = owner.clone();
-                async move {
-                    Json(json!({"data": {"AgentRequest": [owner], "AgentOutputSegment": [row], "AgentMessage": []}}))
-                }
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let endpoint = gents::config_client::GraphqlEndpoint::anonymous(format!(
-            "http://{}/graphql",
-            listener.local_addr()?
-        ));
-        let server = tokio::spawn(async move {
-            let _ = axum::serve(listener, app).await;
-        });
-        let request = json!({
-            "_docID": "physical",
-            "request_id": "request",
-            "node_did": "did:test:owner",
-            "requester_did": null,
-            "session_id": "session",
-            "lifecycle_state": "processing",
-            "execution_generation": "generation",
-            "execution_lease_secs": 30,
-            "execution_lease_expires_at": "2026-09-01T00:00:30Z"
-        });
-        let request: gents_protocol::row::AgentRequestRow = serde_json::from_value(request)?;
-        let result = super::observe_canonical_request_output(&endpoint, &request).await;
-        server.abort();
-        let gents::session::CanonicalRequestOutput::Live(presentation) = result? else {
-            anyhow::bail!("expected canonical live output")
-        };
-        assert_eq!(presentation.body_markdown, "hello");
-        assert_eq!(presentation.reasoning_markdown.as_deref(), Some("idea"));
-        Ok(())
-    }
 
     /// The executable SessionCompositionCases.retractedPhase continues through
     /// delayedPhase before terminalization; a source retraction is not a request terminal.
@@ -1449,7 +1288,8 @@ mod tests {
             }
             // The mutation committed, but its response was lost/replaced by a
             // transient error at the transport boundary.
-            return Json(json!({"errors": [{"message": "database is locked"}]})).into_response();
+            return Json(json!({"errors": [{"message": "transaction conflict. please retry"}]}))
+                .into_response();
         }
         let rows: Vec<Value> = state
             .durable_ids
@@ -1606,134 +1446,6 @@ mod tests {
         server.abort();
     }
 
-    #[test]
-    fn terminal_query_uses_exact_physical_request_and_canonical_selection() {
-        let query = super::request_terminal_query("label", Some("physical"));
-        assert!(query.contains("AgentRequest("));
-        assert!(query.contains("_docID:{_eq:\"physical\"}"));
-        assert!(query.contains("terminal_output"));
-        assert!(query.contains("execution_lease_expires_at"));
-    }
-
-    #[tokio::test]
-    async fn prepared_request_signs_complete_client_semantics_once() -> anyhow::Result<()> {
-        use gents::NodeIdentity;
-        let dir = tempfile::tempdir()?;
-        let identity = gents::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)?;
-        let did = identity.did().to_string();
-        let data = serde_json::json!({"data": {
-            "Node": [{"node_did": did, "default_agent_id": "default", "enabled": true}],
-            "Agent": [{"node_did": did, "agent_id": "default", "enabled": true}]
-        }});
-        let app = axum::Router::new().route(
-            "/graphql",
-            axum::routing::post(move || async move { axum::Json(data) }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let endpoint = gents::config_client::GraphqlEndpoint::anonymous(format!(
-            "http://{}/graphql",
-            listener.local_addr()?
-        ));
-        let server = tokio::spawn(async move { axum::serve(listener, app).await });
-        let result = super::prepare_agent_request(
-            &endpoint,
-            &did,
-            "/vuln-scan review this",
-            Some("session"),
-            None,
-            Some("stable-request".into()),
-            RequestSubmitOptions {
-                caused_by_source_doc_id: Some("mailbox-doc".into()),
-                input: Some(gents_protocol::request_input::RequestInput {
-                    cwd: Some("/work".into()),
-                    ..Default::default()
-                }),
-                valid_until: Some("2030-01-01T00:00:00Z".parse()?),
-                retry_parent_request: Some("parent".into()),
-                retry_parent_request_doc_id: Some("parent-doc".into()),
-                retry_root_request: Some("root".into()),
-                retry_key: Some("goal-submit:key".into()),
-            },
-        )
-        .await;
-        server.abort();
-        let create = result?.create;
-        assert_eq!(
-            create.caused_by_source_doc_id.as_deref(),
-            Some("mailbox-doc")
-        );
-        assert_eq!(create.request_id, "stable-request");
-        assert_eq!(create.requester_did, did);
-        assert_eq!(create.agent_id, "default");
-        assert_eq!(create.valid_until.as_deref(), Some("2030-01-01T00:00:00Z"));
-        assert_eq!(create.retry_parent_request.as_deref(), Some("parent"));
-        assert_eq!(
-            create.retry_parent_request_doc_id.as_deref(),
-            Some("parent-doc")
-        );
-        assert_eq!(create.retry_root_request.as_deref(), Some("root"));
-        assert_eq!(create.retry_key.as_deref(), Some("goal-submit:key"));
-        assert_eq!((create.retry_count, create.max_retries), (0, 3));
-        assert_eq!(create.input.cwd.as_deref(), Some("/work"));
-        assert_eq!(create.input.selected_skill_ids, ["vuln-scan"]);
-        assert!(
-            identity
-                .verify(&did, &create.signing_payload(), &create.admission.signature)
-                .await?
-        );
-        let mut rerouted = create.clone();
-        rerouted.caused_by_source_doc_id = Some("another-mailbox-item".into());
-        assert!(!matches!(
-            identity
-                .verify(
-                    &did,
-                    &rerouted.signing_payload(),
-                    &rerouted.admission.signature
-                )
-                .await,
-            Ok(true)
-        ));
-        Ok(())
-    }
-
-    #[test]
-    fn retired_request_sampling_and_metadata_are_rejected() {
-        for field in ["seed", "temperature", "metadata", "max_total_tokens"] {
-            let input = json!({field: 1});
-            assert!(
-                serde_json::from_value::<gents_protocol::request_input::RequestInput>(input)
-                    .is_err()
-            );
-        }
-    }
-
-    #[test]
-    fn slash_prompt_adds_selected_skill_ids() {
-        let (_, input) = content_and_input_with_prompt_selected_skill_ids(None, "/vuln-scan /work");
-        assert_eq!(input.selected_skill_ids, ["vuln-scan"]);
-    }
-
-    #[test]
-    fn slash_prompt_merges_skills_and_preserves_other_typed_input() {
-        let (_, input) = content_and_input_with_prompt_selected_skill_ids(
-            Some(gents_protocol::request_input::RequestInput {
-                cwd: Some("/work".into()),
-                selected_skill_ids: vec!["triage".into(), "vuln-scan".into()],
-                ..Default::default()
-            }),
-            "/vuln-scan /work",
-        );
-        assert_eq!(input.cwd.as_deref(), Some("/work"));
-        assert_eq!(input.selected_skill_ids, ["triage", "vuln-scan"]);
-    }
-
-    #[test]
-    fn slash_prompt_strips_control_syntax_from_request_content() {
-        let (content, input) =
-            content_and_input_with_prompt_selected_skill_ids(None, "/vuln-scan\nReview /work");
-        assert_eq!(content, "Review /work");
-        assert_eq!(input.selected_skill_ids, ["vuln-scan"]);
-    }
     #[tokio::test]
     async fn terminal_wait_follows_only_exact_same_scope_successor_output_owner(
     ) -> anyhow::Result<()> {

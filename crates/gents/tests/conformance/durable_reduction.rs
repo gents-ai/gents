@@ -79,7 +79,7 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
     assert!(!cases.is_empty(), "Lean emitted no durable-reduction cases");
 
     for case in cases {
-        let node = EmbeddedNode::builder().build().await.unwrap();
+        let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
         gents::ensure_runtime_schemas(&node).await.unwrap();
         let request_doc_id = format!("request-doc-{}", case.request_doc_id);
         let key = reduction_key(
@@ -204,9 +204,6 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
             Ok(row) if prior_doc_id.as_deref() == Some(row.doc_id.as_str()) => "idempotent",
             Ok(_) => "fresh",
             Err(error) if !case.pair_closed => {
-                // The only pair-open failure is the creation precondition
-                // itself; attributing any other error to `pair_open` would
-                // conflate transport noise with an integrity guarantee.
                 assert!(
                     error.to_string().contains("open tool-call/result pair"),
                     "{}: pair_open must be the pair-closure creation precondition, not another failure",
@@ -237,18 +234,12 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
             case.name
         );
         if !case.pair_closed {
-            // Valid-store premise for recovery: only projections admitted by
-            // the creation owner (pair-closed facts) can ever be restored. An
-            // open-pair reduction leaves nothing in the durable store, so
-            // recovery must not resurrect its checkpoint (`active_checkpoint_pair_closed`).
             assert!(
                 !loaded.iter().any(|row| row.reduction_key == key),
                 "{}: recovery may only restore projections from a pair-closed store",
                 case.name
             );
         }
-        // Persist/load exercise the durable fact owner. No provider send is
-        // issued here, so this test cannot establish the emitted send fence.
 
         let cited_keys = |cites: bool| cites.then(|| vec![key.clone()]).unwrap_or_default();
         let inference_provenance = if case.inference_supported {

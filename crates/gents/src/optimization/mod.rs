@@ -1,12 +1,3 @@
-//! Configuration optimization (#1455), a consumer of the eval core contract.
-//! `policy` is the pure promotion decision, `target` freezes the owner's
-//! configuration closure and builds the guarded single-field patch, and `job`
-//! is the `OptimizationJob` document: a frozen origin and a length-guarded,
-//! append-only journal from which the job's state is derived. `subject`
-//! materializes the baseline subject pack and each candidate derived from it.
-//! `show` projects a job's journal and recomputes each decision from its runs.
-//! `promote` holds the operator's two verbs, `promote` and `revert`.
-
 pub mod driver;
 pub mod evidence;
 pub mod gate;

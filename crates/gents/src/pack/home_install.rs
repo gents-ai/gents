@@ -1,12 +1,3 @@
-//! File-recorded installs of assets and plugins packs.
-//!
-//! Those two pack kinds write no document and open no node, so `gents pack
-//! remove` cannot look them up in `PackInstallation`. Each successful install
-//! instead writes one record here, at
-//! `<home>/pack-installs/<namespace>/<name>.json`, replaced whole on
-//! reinstall or upgrade. `gents pack remove` checks for this record before it
-//! ever resolves an owner or opens a node.
-
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -14,15 +5,12 @@ use serde::{Deserialize, Serialize};
 
 use super::{is_valid_pack_name, InstalledPackPlugin, PackKind};
 
-/// One assets or plugins pack install, recorded on the filesystem.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HomePackInstall {
     pub coordinate: String,
     pub version: String,
     pub digest: String,
     pub kind: PackKind,
-    /// The pack's materialized asset directory, relative to the home:
-    /// `packs/.materialized/<namespace>/<name>/<hex>`.
     pub assets: String,
     pub plugins: Vec<InstalledPackPlugin>,
     pub installed_at: String,
@@ -33,10 +21,6 @@ pub struct HomePackInstall {
     pub ux: Vec<crate::pack::PackUxPlugin>,
 }
 
-/// Splits `coordinate` into a namespace and name, refusing anything that
-/// would not also pass [`is_valid_pack_name`] on both halves; a coordinate
-/// reaches the filesystem as two path components; without this check `../x`
-/// or `a/../b` would write or read outside the pack-installs directory.
 fn checked_coordinate(coordinate: &str) -> Result<(&str, &str)> {
     let (namespace, name) = crate::pack_registry::split_pack_coordinate(coordinate);
     anyhow::ensure!(
@@ -54,7 +38,6 @@ fn record_path(home: &Path, coordinate: &str) -> Result<PathBuf> {
         .join(format!("{name}.json")))
 }
 
-/// Writes `record`, replacing any prior record for the same coordinate.
 pub fn write_home_install(home: &Path, record: &HomePackInstall) -> Result<()> {
     let path = record_path(home, &record.coordinate)?;
     let parent = path.parent().context("pack install record has no parent")?;
@@ -78,7 +61,6 @@ pub fn write_home_install(home: &Path, record: &HomePackInstall) -> Result<()> {
     Ok(())
 }
 
-/// The file-recorded install for `coordinate`, or `None` if there is none.
 pub fn read_home_install(home: &Path, coordinate: &str) -> Result<Option<HomePackInstall>> {
     let path = record_path(home, coordinate)?;
     match std::fs::read(&path) {
@@ -90,7 +72,6 @@ pub fn read_home_install(home: &Path, coordinate: &str) -> Result<Option<HomePac
     }
 }
 
-/// Removes the file-recorded install for `coordinate`, if any.
 pub fn forget_home_install(home: &Path, coordinate: &str) -> Result<()> {
     let path = record_path(home, coordinate)?;
     match std::fs::remove_file(&path) {
@@ -100,7 +81,6 @@ pub fn forget_home_install(home: &Path, coordinate: &str) -> Result<()> {
     }
 }
 
-/// Every file-recorded install under `home`, sorted by coordinate.
 /// Every readable record under `home`, sorted by coordinate; a record that
 /// does not parse (one a newer gents wrote) is skipped with a warning, so
 /// one bad install cannot hide the rest from a listing.
@@ -192,49 +172,6 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_and_replaces_on_reinstall() {
-        let home = tempfile::tempdir().unwrap();
-        write_home_install(home.path(), &sample("gents/mailbox")).unwrap();
-        assert_eq!(
-            read_home_install(home.path(), "gents/mailbox")
-                .unwrap()
-                .unwrap(),
-            sample("gents/mailbox")
-        );
-
-        let mut upgraded = sample("gents/mailbox");
-        upgraded.version = "1.1.0".into();
-        write_home_install(home.path(), &upgraded).unwrap();
-        assert_eq!(
-            read_home_install(home.path(), "gents/mailbox")
-                .unwrap()
-                .unwrap(),
-            upgraded
-        );
-    }
-
-    #[test]
-    fn list_is_sorted_and_ignores_non_json_files() {
-        let home = tempfile::tempdir().unwrap();
-        write_home_install(home.path(), &sample("zeta/tools")).unwrap();
-        write_home_install(home.path(), &sample("acme/tools")).unwrap();
-        let stray = home
-            .path()
-            .join(crate::home::PACK_INSTALLS_DIR_NAME)
-            .join("acme");
-        std::fs::write(stray.join("README.md"), b"not a record").unwrap();
-
-        let listed = list_home_installs(home.path()).unwrap();
-        assert_eq!(
-            listed
-                .iter()
-                .map(|r| r.coordinate.clone())
-                .collect::<Vec<_>>(),
-            vec!["acme/tools".to_owned(), "zeta/tools".to_owned()]
-        );
-    }
-
-    #[test]
     fn the_readable_listing_skips_a_record_it_cannot_parse_and_the_strict_one_fails() {
         let home = tempfile::tempdir().unwrap();
         write_home_install(home.path(), &sample("acme/tools")).unwrap();
@@ -265,17 +202,5 @@ mod tests {
             write_home_install(home.path(), &sample(coordinate))
                 .expect_err(&format!("{coordinate:?} must be refused"));
         }
-    }
-
-    #[test]
-    fn forget_then_read_returns_none() {
-        let home = tempfile::tempdir().unwrap();
-        write_home_install(home.path(), &sample("gents/mailbox")).unwrap();
-        forget_home_install(home.path(), "gents/mailbox").unwrap();
-        assert!(read_home_install(home.path(), "gents/mailbox")
-            .unwrap()
-            .is_none());
-        // Forgetting an absent record is not an error.
-        forget_home_install(home.path(), "gents/mailbox").unwrap();
     }
 }

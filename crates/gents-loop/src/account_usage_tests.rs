@@ -243,7 +243,6 @@ fn endpoint_grok_percent_and_period_end() {
 
 #[test]
 fn endpoint_grok_period_without_percent_is_zero_used() {
-    // Hypothesis until a live Grok read: proto3 JSON omits a zero percent.
     let body = json!({ "config": { "currentPeriod": {
         "start": "2026-09-28T00:00:00Z",
         "end": "2026-10-05T00:00:00Z"
@@ -260,7 +259,6 @@ fn endpoint_grok_legacy_shape_is_malformed() {
 
 #[test]
 fn endpoint_openrouter_capped_key_window_and_next_reset() {
-    // 2026-09-30 is a Wednesday.
     let cases = [
         ("daily", rfc("2026-10-01T00:00:00Z")),
         ("weekly", rfc("2026-10-05T00:00:00Z")),

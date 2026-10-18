@@ -276,8 +276,7 @@ try {
       { cwd: appRoot, env, log: buildLog },
     );
   }
-  // Cargo validation can replace target/debug executables during the restart.
-  // This run must keep using the exact binaries whose setup it exercised.
+  // Keep using the exact binaries whose setup this run exercised.
   for (const name of ["gents", "gents-desktop-tauri"]) {
     const source =
       name === "gents" && process.env.GENTS_BIN

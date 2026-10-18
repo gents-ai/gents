@@ -18,7 +18,7 @@ const BUSY = {
   configureInference: "Opening…",
 };
 
-export function LoadingStatus() {
+export function LoadingStatus({ overlay = false }: { overlay?: boolean }) {
   const status = useView((view) => view.loadingStatus);
   const {
     stores,
@@ -47,11 +47,12 @@ export function LoadingStatus() {
       setBusy(false);
     }
   };
-  return (
+  const card = (
     <div
       role={status.phase === "failed" ? "alert" : "status"}
       className={cn(
-        "mb-3 flex items-center gap-3 rounded-2xl border px-4 py-3",
+        "flex items-center gap-3 rounded-2xl border px-4 py-3",
+        overlay ? "h-full" : "mb-3",
         status.phase === "failed"
           ? "border-destructive/30 bg-destructive/5"
           : "border-border/60 bg-raised",
@@ -70,5 +71,12 @@ export function LoadingStatus() {
         </Button>
       )}
     </div>
+  );
+  return overlay ? (
+    <div className="[grid-area:1/1]" data-testid="composer-blocker">
+      {card}
+    </div>
+  ) : (
+    card
   );
 }

@@ -1,5 +1,3 @@
-//! The rig boundary for this crate: the loop's conversions from `gents-loop`,
-//! plus the admission wrapper that makes an admitted call a rig model.
 pub use gents_loop::rig_compat::*;
 
 use async_stream::try_stream;
@@ -41,7 +39,6 @@ fn admitted_call_error(error: AdmittedCallError<CompletionError>) -> CompletionE
     }
 }
 
-/// Rig's model trait names the client its models are made from.
 #[derive(Clone)]
 pub(crate) struct AdmittedCompletionClient<C> {
     inner: C,
@@ -53,8 +50,6 @@ impl<C: ProviderClient> CompletionClient for AdmittedCompletionClient<C> {
     type CompletionModel = AdmittedCompletionModel<C::CompletionModel>;
 }
 
-/// Build `model_name` from `client`, admitted through the backend whose
-/// connection fingerprint is `connection`.
 pub(crate) fn admitted_model<C: ProviderClient>(
     client: C,
     admission: AdmissionRegistry,
@@ -132,8 +127,8 @@ where
                             cached_input_tokens_observation(response),
                         );
                         // The owned loop charges from the terminal item, while
-                        // crash rehydrate charges from the InferenceCall row.
-                        // Persist before publishing so the two cannot diverge.
+                        // crash rehydrate charges from the InferenceCall row:
+                        // persist before publishing so the two cannot diverge.
                         finish_guard(terminal_guard).await?;
                     }
                     for choice in streamed_item_to_raw_choices(item) {

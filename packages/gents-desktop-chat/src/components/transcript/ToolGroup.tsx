@@ -4,7 +4,8 @@ import type {
   ToolPresentationView,
 } from "@source-inc/gents-desktop-client";
 import { CopyButton } from "@source-inc/gents-desktop-ui";
-import { memo } from "react";
+import { memo, useContext } from "react";
+import { TranscriptNavigationContext } from "./TranscriptNavigation.js";
 
 import { CancelCauseBadge, CancelCauseDetails } from "../cancelUx/index.js";
 import { CommandDenialToolItem } from "../commandDenial/index.js";
@@ -275,6 +276,7 @@ function ToolSummary({ tool }: { tool: RenderedToolCallView }) {
 }
 
 function ToolBody({ tool }: { tool: RenderedToolCallView }) {
+  const navigation = useContext(TranscriptNavigationContext);
   const view = tool.presentation;
   const payloadReady = tool.reconstruction.state === "ready";
   return (
@@ -292,6 +294,34 @@ function ToolBody({ tool }: { tool: RenderedToolCallView }) {
         </div>
       ) : null}
       {!payloadReady ? <ToolPayloadAvailability tool={tool} /> : null}
+      {payloadReady &&
+        navigation &&
+        (view.kind === "fileRead" || view.kind === "fileEdit") && (
+          <div className="tool-meta">
+            {(view.kind === "fileRead"
+              ? view.operation === "read_file" && view.target
+              : view.path) && (
+              <button
+                type="button"
+                onClick={() =>
+                  navigation.openFile(
+                    (view.kind === "fileRead" ? view.target : view.path)!,
+                  )
+                }
+              >
+                Open file
+              </button>
+            )}
+            {view.kind === "fileEdit" && view.path && view.diff.length > 0 && (
+              <button
+                type="button"
+                onClick={() => navigation.openDiff(view.path!, view.diff)}
+              >
+                Review excerpt
+              </button>
+            )}
+          </div>
+        )}
       {payloadReady && view.kind === "command" ? (
         <>
           {view.durationMs != null ||

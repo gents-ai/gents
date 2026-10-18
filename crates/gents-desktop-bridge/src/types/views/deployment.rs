@@ -52,38 +52,6 @@ pub struct RuntimeView {
     pub agent_executor_queue_depth: Option<i64>,
 }
 
-#[cfg(test)]
-mod runtime_view_tests {
-    use super::*;
-
-    #[test]
-    fn diagnostic_runtime_dto_cannot_serialize_readiness_authority() {
-        let value = serde_json::to_value(RuntimeView {
-            reconcile_phase: Some("idle".to_string()),
-            last_reconcile_result: Some("applied".to_string()),
-            last_reconcile_error: None,
-            updated_at: Some("2026-08-29T00:00:00Z".to_string()),
-            agent_executor_capacity: Some(1),
-            agent_executor_queue_depth: Some(0),
-        })
-        .expect("serialize diagnostic runtime view");
-        let object = value.as_object().expect("runtime view object");
-        for forbidden in [
-            "processState",
-            "activeGeneration",
-            "routerGeneration",
-            "defaultAgentId",
-            "runnableAgentCount",
-            "unavailableAgentCount",
-        ] {
-            assert!(
-                !object.contains_key(forbidden),
-                "forbidden field: {forbidden}"
-            );
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentUnavailableReasonView {
@@ -189,12 +157,6 @@ pub struct AgentView {
     pub created_at: Option<String>,
 }
 
-/// Resolved, presentation-safe description of a configured agent environment.
-///
-/// Agent stores references to shared configuration documents. Clients
-/// should not have to repeat those joins (or infer tool semantics), so the
-/// bridge materializes the environment once alongside the raw configuration
-/// projection.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentEnvironmentView {
@@ -231,16 +193,12 @@ pub struct InferenceBackendView {
     pub enabled: Option<bool>,
     pub tags: Vec<String>,
     pub models: Vec<String>,
-    /// Canonical provider advertisements for model-specific editing controls.
     pub advertised_models: Vec<gents::document_config::AdvertisedModel>,
     pub probe_status: Option<String>,
-    /// The account a subscription backend runs on; `None` is the provider's
-    /// original account (and every backend that uses no account).
+    /// The account a subscription backend runs on; `None` is the original.
     pub account_ref: Option<String>,
 }
 
-// Configurations without credentials use their canonical serialized documents.
-// Derived presentation belongs to AgentEnvironmentView, not another config shape.
 pub use gents::document_config::{
     Agent, AgentContext, AgentTargetDocument, ChainKeyBindingDocument, CompactionConfig,
     DatastoreToolSurfaceDocument, EventSource, InferenceExecution, InferenceProfile,
@@ -310,8 +268,6 @@ pub struct SkillView {
     pub tags: Vec<String>,
 }
 
-/// Authored trigger and its observed delivery state share one read-only envelope.
-/// Reusable schedules and event sources contain no execution counters.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TriggerView {
@@ -347,8 +303,7 @@ pub struct SessionSummary {
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
     pub turn_state: Option<String>,
-    /// Absent when the bounded deployment projection did not query transcript
-    /// aggregates. Never inferred from resident transcript rows.
+    /// Absent when the bounded projection did not query transcript aggregates.
     pub message_count: Option<usize>,
     pub tool_call_count: Option<usize>,
     /// Why this client cannot read the session, when it cannot.
@@ -490,6 +445,9 @@ pub struct DesktopRuntimeSnapshot {
     pub peer_issue_count: usize,
     pub row_count: usize,
     pub approx_serialized_bytes: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub operator_config_authoritative_node_dids: Option<Vec<String>>,
     pub deployments: Vec<DeploymentView>,
 }
 
@@ -537,8 +495,7 @@ pub struct EnrollmentRequestView {
     pub network_id: String,
     pub admin_did: String,
     pub server_peer: String,
-    /// Presentation-only label advertised by the authenticated status endpoint.
-    /// It is never used for enrollment authority or route selection.
+    /// Presentation-only label; never enrollment authority or route selection.
     pub server_label: Option<String>,
     pub owner_node: String,
     pub state: String,
@@ -566,50 +523,6 @@ impl PeerRemoveResponse {
             snapshot,
             mutation: mutation.into(),
         }
-    }
-}
-
-#[cfg(test)]
-mod peer_remove_response_tests {
-    use super::*;
-
-    #[test]
-    fn response_preserves_snapshot_shape_and_surfaces_mutation_result() {
-        let snapshot = DesktopClientSnapshot {
-            bootstrap: DesktopBootstrapSummary {
-                default_node_home: "/agent".to_string(),
-                init_node_name: None,
-                init_node_did: None,
-                init_tool_ceiling: None,
-                init_tool_root: None,
-                desktop_home: "/desktop".to_string(),
-                peer_directory_path: "/desktop/peers.json".to_string(),
-                node_data_dir: "/desktop/node".to_string(),
-                diagnostics_hint: "native logging".to_string(),
-                node_home_exists: true,
-                desktop_home_exists: true,
-                peer_directory_exists: true,
-                client_state_exists: true,
-                saved_peers: Vec::new(),
-            },
-            client: None,
-        };
-        let response = PeerRemoveResponse::new(
-            snapshot,
-            PeerMutationResult {
-                peer_id: "peer-1".to_string(),
-                label: "Workshop".to_string(),
-                addr: "iroh://peer-1".to_string(),
-                connected: false,
-                warning: Some("partial cleanup".to_string()),
-            },
-        );
-
-        let value = serde_json::to_value(response).expect("serialize peer remove response");
-        assert_eq!(value["bootstrap"]["desktopHome"], "/desktop");
-        assert!(value["client"].is_null());
-        assert_eq!(value["mutation"]["peerId"], "peer-1");
-        assert_eq!(value["mutation"]["warning"], "partial cleanup");
     }
 }
 

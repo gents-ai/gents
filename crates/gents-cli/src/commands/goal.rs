@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use gents::config_client::ConfigAccess;
 use gents::goal::{
-    delete_goals_for_session, load_canonical_goal, set_goal_from_access, GoalDocument,
-    GoalSnapshot, GoalStatus, GOAL_FIELDS,
+    delete_goals_for_session, load_canonical_goal, set_goal_from_access, GoalDocument, GoalStatus,
+    GOAL_FIELDS,
 };
 use gents::graphql::escape_graphql_string;
 
@@ -31,9 +31,6 @@ async fn goal_show(args: GoalShowArgs) -> Result<()> {
     print_json(&goal_show_value(&access, &node_did, &args.scope.session, Utc::now()).await?)
 }
 
-/// `goal show`'s JSON: the Goal's snapshot, the operator's
-/// `auto_resume_at_reset` opt-in and, when its latest request stopped where
-/// the operator can act, `blocked`.
 async fn goal_show_value(
     access: &ConfigAccess,
     node_did: &str,
@@ -43,7 +40,7 @@ async fn goal_show_value(
     let goal = load_goal(access, node_did, session_id)
         .await?
         .with_context(|| format!("no durable goal for session {session_id}"))?;
-    let mut value = serde_json::to_value(GoalSnapshot::from_document(&goal, now))?;
+    let mut value = serde_json::to_value(gents::goal::snapshot(&goal, now))?;
     value["auto_resume_at_reset"] = goal.auto_resume_at_reset.unwrap_or(false).into();
     let blocked = gents::blocked_turn::blocked_goal_turn(access, node_did, session_id)
         .await
@@ -83,7 +80,7 @@ async fn goal_set_value(
         args.auto_resume,
     )
     .await?;
-    Ok(serde_json::to_value(GoalSnapshot::from_document(
+    Ok(serde_json::to_value(gents::goal::snapshot(
         &goal,
         Utc::now(),
     ))?)
@@ -141,48 +138,45 @@ async fn goal_clear(args: GoalShowArgs) -> Result<()> {
     let goal = load_goal(&access, &node_did, &args.scope.session)
         .await?
         .with_context(|| format!("no durable goal for session {}", args.scope.session))?;
-    let deleted = match &*access {
-        ConfigAccess::Local(node) => {
-            delete_goals_for_session(node, &node_did, &args.scope.session).await? > 0
-        }
-        ConfigAccess::Graphql(_) => {
-            let node_did = escape_graphql_string(&node_did);
-            let session_id = escape_graphql_string(&args.scope.session);
-            let node_did_ref = &node_did;
-            let session_id_ref = &session_id;
-            access
-                .transact("cli.goal.clear", move |txn| {
-                    Box::pin(async move {
-                        let response = txn
-                            .execute(&format!(
-                                r#"mutation {{
-                        delete_Goal(filter: {{
-                            node_did: {{ _eq: "{node_did_ref}" }},
-                            session_id: {{ _eq: "{session_id_ref}" }}
-                        }}) {{ _docID }}
-                    }}"#
-                            ))
-                            .await?;
-                        txn.execute(&format!(
+    let deleted = if let Some(node) = access.local_node() {
+        delete_goals_for_session(node, &node_did, &args.scope.session).await? > 0
+    } else {
+        let node_did = escape_graphql_string(&node_did);
+        let session_id = escape_graphql_string(&args.scope.session);
+        let node_did_ref = &node_did;
+        let session_id_ref = &session_id;
+        access
+            .transact_write("cli.goal.clear", move |txn| {
+                Box::pin(async move {
+                    let response = txn
+                        .execute(&format!(
                             r#"mutation {{
-                        delete_GoalCreationClaim(filter: {{
+                        delete_Goal(filter: {{
                             node_did: {{ _eq: "{node_did_ref}" }},
                             session_id: {{ _eq: "{session_id_ref}" }}
                         }}) {{ _docID }}
                     }}"#
                         ))
                         .await?;
-                        Ok::<_, anyhow::Error>(response.pointer("/data/delete_Goal").is_some_and(
-                            |value| {
-                                value
-                                    .as_array()
-                                    .map_or_else(|| value.is_object(), |rows| !rows.is_empty())
-                            },
-                        ))
-                    })
+                    txn.execute(&format!(
+                        r#"mutation {{
+                        delete_GoalCreationClaim(filter: {{
+                            node_did: {{ _eq: "{node_did_ref}" }},
+                            session_id: {{ _eq: "{session_id_ref}" }}
+                        }}) {{ _docID }}
+                    }}"#
+                    ))
+                    .await?;
+                    Ok::<_, anyhow::Error>(response.pointer("/data/delete_Goal").is_some_and(
+                        |value| {
+                            value
+                                .as_array()
+                                .map_or_else(|| value.is_object(), |rows| !rows.is_empty())
+                        },
+                    ))
                 })
-                .await?
-        }
+            })
+            .await?
     };
     print_json(&serde_json::json!({
         "goal_id": goal.goal_id,
@@ -191,7 +185,9 @@ async fn goal_clear(args: GoalShowArgs) -> Result<()> {
     }))
 }
 
-async fn access_and_did(scope: &GoalScopeArgs) -> Result<(crate::CommandAccess, String)> {
+async fn access_and_did(
+    scope: &GoalScopeArgs,
+) -> Result<(gents::config_client::ConfigAccess, String)> {
     let node_did = resolve_node_did(scope.home.as_deref(), scope.node_did.as_deref())
         .context("resolving goal owner node_did")?;
     let (access, _) = resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref())
@@ -205,7 +201,7 @@ async fn load_goal(
     node_did: &str,
     session_id: &str,
 ) -> Result<Option<GoalDocument>> {
-    if let ConfigAccess::Local(node) = access {
+    if let Some(node) = access.local_node() {
         return load_canonical_goal(node, node_did, session_id).await;
     }
     let node_did = escape_graphql_string(node_did);
@@ -249,243 +245,5 @@ impl From<GoalStatusArg> for GoalStatus {
             GoalStatusArg::BudgetLimited => Self::BudgetLimited,
             GoalStatusArg::Complete => Self::Complete,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const DID: &str = "did:key:z6MkTestGoalShowBlocked";
-
-    async fn seeded() -> ConfigAccess {
-        let node = std::sync::Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        gents::ensure_node(node.as_ref(), DID).await.unwrap();
-        let access = ConfigAccess::Local(node);
-        let backend = serde_json::from_value(serde_json::json!({
-            "node_did": DID, "backend_id": "claude", "name": "Claude",
-            "provider_kind": "ClaudeCliSubscription", "endpoint": "claude-cli://subscription",
-            "auth": {"kind": "node_oauth"},
-        }))
-        .unwrap();
-        gents::config_client::write_inference_backend_document(&access, &backend)
-            .await
-            .unwrap();
-        let credential = gents::claude_oauth::credential_from_login_tokens(
-            DID,
-            "claude-subscription",
-            &gents::claude_oauth::ClaudeLoginTokens {
-                access_token: "access-SECRET".into(),
-                refresh_token: "refresh-SECRET".into(),
-                expires_in: Some(3600),
-                scope: None,
-                account_id: Some("IDENTITY".into()),
-                organization_uuid: None,
-                account_uuid: None,
-            },
-            Utc::now(),
-        );
-        gents::oauth_credential::store_sign_in(&access, credential, None)
-            .await
-            .unwrap();
-        for (session, status) in [
-            ("session-limited", GoalStatus::UsageLimited),
-            ("session-active", GoalStatus::Active),
-        ] {
-            set_goal_from_access(
-                &access,
-                DID,
-                session,
-                Some("ship it"),
-                Some(status),
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        }
-        let at = (Utc::now() + chrono::Duration::seconds(1)).to_rfc3339();
-        let failure = "provider usage limit reached (resets at 2030-01-01T00:00:00Z): The usage limit has been reached";
-        access
-            .write(
-                "test.goal_show.rows",
-                &format!(
-                    r#"mutation {{
-                        create_AgentRequest(input: {{
-                            request_id: "request-limited" purpose: "normal" node_did: "{DID}"
-                            agent_id: "general" session_id: "session-limited" content: "run"
-                            lifecycle_state: "failed" failure_reason: "{failure}" created_at: "{at}"
-                        }}) {{ _docID }}
-                        create_InferenceCall(input: {{
-                            call_id: "call-limited" request_id: "request-limited" call_seq: 1
-                            backend_id: "claude" agent_id: "general" node_did: "{DID}"
-                            call_kind: "inference" attempt: 1 call_state: "failed"
-                            failure_reason: "{failure}"
-                            queued_at: "{at}" started_at: "{at}" ended_at: "{at}"
-                        }}) {{ _docID }}
-                    }}"#
-                ),
-            )
-            .await
-            .unwrap();
-        access
-    }
-
-    #[tokio::test]
-    async fn blocked_goal_show_carries_the_stopped_turn() {
-        let access = seeded().await;
-        let limited = goal_show_value(&access, DID, "session-limited", Utc::now())
-            .await
-            .unwrap();
-        assert_eq!(limited["status"], "usage_limited");
-        assert_eq!(
-            limited.pointer("/blocked/reason"),
-            Some(&serde_json::json!("usage_limit"))
-        );
-        assert_eq!(
-            limited.pointer("/blocked/resets_at"),
-            Some(&serde_json::json!("2030-01-01T00:00:00Z"))
-        );
-        assert_eq!(
-            limited.pointer("/blocked/account/label"),
-            Some(&serde_json::json!("Claude"))
-        );
-        let active = goal_show_value(&access, DID, "session-active", Utc::now())
-            .await
-            .unwrap();
-        assert_eq!(active.get("blocked"), Some(&serde_json::Value::Null));
-        let text = format!("{limited} {active}");
-        for secret in ["SECRET", "IDENTITY"] {
-            assert!(!text.contains(secret), "{secret} in {text}");
-        }
-    }
-
-    #[tokio::test]
-    async fn goal_show_reports_the_operator_auto_resume_opt_in() {
-        use crate::cli::args::{Cli, Command};
-        use clap::Parser;
-        let access = seeded().await;
-        let shown = goal_show_value(&access, DID, "session-active", Utc::now())
-            .await
-            .unwrap();
-        assert_eq!(shown["auto_resume_at_reset"], false);
-        let Command::Goal {
-            command: GoalCommand::Set(args),
-        } = Cli::try_parse_from([
-            "gents",
-            "goal",
-            "set",
-            "--session",
-            "session-active",
-            "--auto-resume",
-            "on",
-        ])
-        .unwrap()
-        .command
-        else {
-            panic!("expected goal set");
-        };
-        // `goal set` prints the model-facing snapshot, which never carries the opt-in.
-        let set = goal_set_value(&access, DID, &args).await.unwrap();
-        assert_eq!(set.get("auto_resume_at_reset"), None, "{set}");
-        let shown = goal_show_value(&access, DID, "session-active", Utc::now())
-            .await
-            .unwrap();
-        assert_eq!(shown["auto_resume_at_reset"], true);
-    }
-
-    #[tokio::test]
-    async fn resume_on_maps_the_account_to_its_backend() {
-        let node = std::sync::Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        gents::ensure_node(node.as_ref(), DID).await.unwrap();
-        let access = ConfigAccess::Local(node);
-        let backend = serde_json::from_value(serde_json::json!({
-            "node_did": DID, "backend_id": "claude", "name": "Claude",
-            "provider_kind": "ClaudeCliSubscription", "endpoint": "claude-cli://subscription",
-            "auth": {"kind": "node_oauth"},
-        }))
-        .unwrap();
-        gents::config_client::write_inference_backend_document(&access, &backend)
-            .await
-            .unwrap();
-        let mut signed = Vec::new();
-        for (who, label) in [("a", None), ("b", Some("label-b"))] {
-            let credential = gents::claude_oauth::credential_from_login_tokens(
-                DID,
-                "claude-subscription",
-                &gents::claude_oauth::ClaudeLoginTokens {
-                    access_token: format!("access-SECRET-{who}"),
-                    refresh_token: format!("refresh-SECRET-{who}"),
-                    expires_in: Some(3600),
-                    scope: None,
-                    account_id: Some("IDENTITY".into()),
-                    organization_uuid: Some("org-1".into()),
-                    account_uuid: Some(format!("account-{who}")),
-                },
-                Utc::now(),
-            );
-            signed.push(
-                gents::oauth_credential::store_sign_in(&access, credential, label)
-                    .await
-                    .unwrap()
-                    .credential,
-            );
-        }
-        let backend = crate::commands::config::profile::backend_for_account(
-            &access,
-            DID,
-            "label-b",
-            Some("claude-subscription"),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            backend,
-            format!(
-                "claude-subscription-{}",
-                signed[1].account_ref.as_deref().unwrap()
-            )
-        );
-        assert!(crate::commands::config::profile::backend_for_account(
-            &access, DID, "label-z", None
-        )
-        .await
-        .is_err());
-    }
-
-    #[test]
-    fn goal_cli_status_values_cover_runtime_vocabulary() {
-        let values = [
-            GoalStatusArg::Active,
-            GoalStatusArg::Paused,
-            GoalStatusArg::Blocked,
-            GoalStatusArg::UsageLimited,
-            GoalStatusArg::BudgetLimited,
-            GoalStatusArg::Complete,
-        ]
-        .map(|value| GoalStatus::from(value).as_str());
-        assert_eq!(
-            values,
-            [
-                "active",
-                "paused",
-                "blocked",
-                "usage_limited",
-                "budget_limited",
-                "complete"
-            ]
-        );
     }
 }

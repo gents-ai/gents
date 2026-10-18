@@ -1,16 +1,6 @@
-//! The baseline subject pack and the candidate packs derived from it.
-//!
-//! A candidate is the baseline pack with exactly one field changed: the system
-//! prompt of the context the subject agent names, or the prompt template of
-//! a task of that agent. When the pack keeps that text in a sidecar asset —
-//! the shape every pack in this repository uses — the change is one file's
-//! bytes and nothing else, which is what makes the structural gate's "only the
-//! target moved" check a file comparison.
-//!
-//! Both packs are ordinary directory packs, so the runner takes them through
-//! `CellSource::Directory` with no special case. They are loaded and digested
-//! by the runner's own pack loader, so the digest the optimizer records is the
-//! digest the runner freezes.
+//! Both packs are ordinary directory packs loaded and digested by the runner's
+//! own pack loader, so the digest the optimizer records is the digest the
+//! runner freezes.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -18,7 +8,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-use crate::document_config::{EvalDefinition, EvalSplit, PackConfig, TriggerSource};
+use crate::document_config::{
+    EvalDefinition, EvalSplit, EventSource, PackConfig, Trigger, TriggerSource,
+};
 use crate::eval::runner::freeze::{load_pack, write_pack_files};
 use crate::eval::runner::CellSource;
 use crate::optimization::target::{JobTarget, TargetField};
@@ -35,19 +27,13 @@ pub struct MaterializedPack {
     pub digest: String,
     pub config: PackConfig,
     pub manifest: PackManifest,
-    /// Every declared asset, keyed by its path relative to `dir`.
     pub files: BTreeMap<String, Vec<u8>>,
     pub agent_id: String,
     pub target: TargetField,
-    /// The context the subject agent names, or the task being optimized.
     pub target_id: String,
-    /// The declared asset the target document reads its text from, when the
-    /// pack stores it as a sidecar rather than inline.
     pub prompt_asset: Option<String>,
 }
 
-/// Read the pack at `dir` as the subject of `agent_id`, optimizing the
-/// agent's context or, for a task target, that task.
 pub fn materialize_pack(
     dir: &Path,
     owner: &str,
@@ -109,44 +95,49 @@ pub(crate) fn missing_task_seed_splits(
     let JobTarget::Task(task_id) = target else {
         return Vec::new();
     };
-    let task_enabled = config
-        .tasks
-        .iter()
-        .any(|task| task.task_id == *task_id && task.enabled);
-    let collections: Vec<&str> = config
-        .triggers
-        .iter()
-        .filter(|trigger| trigger.enabled && trigger.task_id == *task_id)
-        .filter_map(|trigger| match &trigger.source {
-            TriggerSource::Event { event_source_id } => Some(event_source_id),
-            TriggerSource::Schedule { .. } => None,
-        })
-        .flat_map(|id| {
-            config.event_sources.iter().filter_map(move |source| {
-                (source.event_source_id == *id
-                    && source.event_kind.as_deref().unwrap_or("created") == "created")
-                    .then_some(source.source_collection.as_str())
-            })
-        })
+    let collections: Vec<&str> = task_seed_routes(config, task_id)
+        .map(|(_, source)| source.source_collection.as_str())
         .collect();
     [EvalSplit::Train, EvalSplit::Validation]
         .into_iter()
         .filter(|split| {
-            !task_enabled
-                || !definition.cases.iter().any(|case| {
-                    case.split == *split
-                        && case.stages.iter().any(|stage| {
-                            stage
-                                .seed
-                                .as_ref()
-                                .is_some_and(|seed| collections.contains(&seed.collection.as_str()))
-                        })
-                })
+            !definition.cases.iter().any(|case| {
+                case.split == *split
+                    && case.stages.iter().any(|stage| {
+                        stage
+                            .seed
+                            .as_ref()
+                            .is_some_and(|seed| collections.contains(&seed.collection.as_str()))
+                    })
+            })
         })
         .collect()
 }
 
-/// The raw target field of `target_id`'s document in `pack_config.json`.
+pub(crate) fn task_seed_routes<'a>(
+    config: &'a PackConfig,
+    task_id: &'a str,
+) -> impl Iterator<Item = (&'a Trigger, &'a EventSource)> {
+    let enabled = config
+        .tasks
+        .iter()
+        .any(|task| task.task_id == task_id && task.enabled);
+    config
+        .triggers
+        .iter()
+        .filter(move |trigger| enabled && trigger.enabled && trigger.task_id == task_id)
+        .flat_map(move |trigger| {
+            config.event_sources.iter().filter_map(move |source| {
+                let TriggerSource::Event { event_source_id } = &trigger.source else {
+                    return None;
+                };
+                (source.event_source_id == *event_source_id
+                    && source.event_kind.as_deref().unwrap_or("created") == "created")
+                    .then_some((trigger, source))
+            })
+        })
+}
+
 fn raw_target<'a>(
     raw: &'a mut Value,
     target: TargetField,
@@ -239,10 +230,6 @@ pub fn baseline_text(pack: &MaterializedPack) -> Result<String> {
 /// Write the baseline's declared assets into `dir` with the target's text
 /// replaced by `text`, and read the result back as a pack.
 ///
-/// A sidecar asset holds `text` byte for byte, since sidecars are never
-/// interpolated. An inline prompt is written in its escaped form
-/// ([`interpolate::escape`]) so that the loader reads back exactly `text`.
-///
 /// `dir` is created; an existing one is refused rather than written over, so a
 /// round can never evaluate a directory another round left behind.
 pub fn materialize_candidate(
@@ -298,12 +285,9 @@ pub(crate) mod tests {
     const OWNER: &str = "did:key:subject-owner";
     pub(crate) use crate::eval::runner::freeze::tests::FIXTURE_PROMPT;
 
-    /// The eval runner's own fixture pack: a manifest, a README, the canonical
-    /// config bundle and one agent sidecar holding [`FIXTURE_PROMPT`].
     pub(crate) fn write_fixture_pack(root: &Path) {
         crate::eval::runner::freeze::tests::write_fixture_pack(root, "Off");
     }
-
     pub(crate) fn context_pack(dir: &Path) -> Result<MaterializedPack> {
         materialize_pack(dir, OWNER, "monitor", &JobTarget::Context)
     }
@@ -399,9 +383,6 @@ pub(crate) mod tests {
         }
     }
 
-    /// The fixture pack with one task of the monitor agent, its prompt
-    /// template in a sidecar or inline in `pack_config.json`, fired by an
-    /// event trigger whose source has no group.
     pub(crate) fn write_task_fixture_pack(root: &Path, inline: bool) {
         write_fixture_pack(root);
         let manifest_path = root.join("manifest.json");
@@ -474,7 +455,6 @@ pub(crate) mod tests {
         assert_eq!(baseline_text(&candidate).unwrap(), text);
         assert_eq!(candidate.target_id, "plan");
 
-        // The same pack as a context subject leaves the task alone.
         let context = context_pack(&baseline_dir).unwrap();
         assert_eq!(context.target_id, "monitor-context");
         assert_eq!(baseline_text(&context).unwrap(), FIXTURE_PROMPT);
@@ -502,9 +482,6 @@ pub(crate) mod tests {
         );
     }
 
-    /// A sidecar two fields read would change both documents in a trial,
-    /// while promotion writes only the target; a shared sidecar the target
-    /// does not read never changes.
     #[test]
     fn only_a_target_sidecar_referenced_from_two_fields_is_an_error() {
         let dirs = tempfile::tempdir().unwrap();
@@ -565,8 +542,7 @@ pub(crate) mod tests {
 
         assert_eq!(
             baseline.files.keys().collect::<Vec<_>>(),
-            candidate.files.keys().collect::<Vec<_>>(),
-            "a candidate declares exactly the baseline's assets"
+            candidate.files.keys().collect::<Vec<_>>()
         );
         let differing: Vec<&String> = baseline
             .files
@@ -579,10 +555,7 @@ pub(crate) mod tests {
             baseline_text(&candidate).unwrap(),
             "Watch the mailbox, and say why.\n"
         );
-        assert_ne!(
-            candidate.digest, baseline.digest,
-            "one changed byte is a new pack"
-        );
+        assert_ne!(candidate.digest, baseline.digest);
         assert!(candidate_dir.join("manifest.json").exists());
     }
 
@@ -597,18 +570,12 @@ pub(crate) mod tests {
             .unwrap();
         let two = materialize_candidate(&baseline, OWNER, "New text.\n", &dirs.path().join("two"))
             .unwrap();
-        assert_eq!(
-            one.digest, two.digest,
-            "the digest is over content, not location"
-        );
+        assert_eq!(one.digest, two.digest);
 
         let same =
             materialize_candidate(&baseline, OWNER, FIXTURE_PROMPT, &dirs.path().join("same"))
                 .unwrap();
-        assert_eq!(
-            same.digest, baseline.digest,
-            "rewriting the prompt with its own text is the baseline pack"
-        );
+        assert_eq!(same.digest, baseline.digest);
     }
 
     #[test]
@@ -621,8 +588,6 @@ pub(crate) mod tests {
         assert!(format!("{error:#}").contains("no-such-agent"), "{error:#}");
     }
 
-    /// The same pack with the prompt inline in `pack_config.json` and no
-    /// sidecar asset, for the structural gate's inline branch.
     pub(crate) fn write_inline_fixture_pack(root: &Path) {
         write_fixture_pack(root);
         std::fs::remove_file(root.join("agents/monitor/system_prompt.md")).unwrap();
@@ -655,8 +620,6 @@ pub(crate) mod tests {
         assert_ne!(candidate.digest, baseline.digest);
     }
 
-    /// An inline prompt is written into `pack_config.json`, which the loader
-    /// interpolates; the candidate must still evaluate exactly the text.
     #[test]
     fn an_inline_prompt_with_dollar_signs_loads_back_as_itself() {
         let text = "Home is ${HOME}, pay $$5, and ${GENTS_T21_SURELY_UNSET}.\n";

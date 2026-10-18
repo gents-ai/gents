@@ -69,8 +69,7 @@ pub(crate) fn observe_dirty_base(source: &Path) -> Result<DirtyBase> {
     })
 }
 
-/// Truncate porcelain at a UTF-8 char boundary so a multibyte filename
-/// cannot panic CreateWorkspace before EffectObserved.
+/// Truncate porcelain at a UTF-8 char boundary; a multibyte filename must not panic.
 pub(crate) fn bound_dirty_base_summary(porcelain: &str) -> String {
     if porcelain.len() <= DIRTY_BASE_SUMMARY_LIMIT {
         return porcelain.to_string();
@@ -124,7 +123,7 @@ pub(crate) fn observe_effect(
     }
 }
 
-/// Create the worktree (and optional artifact clones). Never deletes `dest`.
+/// Never deletes `dest`.
 pub(crate) fn provision(
     source: &Path,
     dest: &Path,
@@ -172,12 +171,8 @@ pub(crate) fn observed_tree_hash(dest: &Path) -> Result<String> {
     git_output(dest, &["rev-parse", "HEAD^{tree}"])
 }
 
-/// Hash-only observation for read bindings. Authorization captures below also
-/// bind the immutable base and validate the actual Git tree delta.
-///
 /// Dropping the future kills Git's process group through the managed host
-/// process owner, so request cancellation does not wait for a large tree; the
-/// temporary index leaves the workspace's own index untouched.
+/// process owner; the temporary index leaves the workspace's own index untouched.
 pub(crate) async fn working_tree_hash(dest: &Path) -> Result<String> {
     let tmp = tempfile::Builder::new()
         .prefix("gents-ws-index")
@@ -234,7 +229,7 @@ async fn managed_git_with_index(cwd: &Path, index: &Path, args: &[&str]) -> Resu
             stdout_truncated: true,
             ..
         } => bail!(
-            "git {} output exceeded {MANAGED_GIT_OUTPUT_BYTE_CAP} bytes",
+            "git {} output capture was incomplete (capture limit {MANAGED_GIT_OUTPUT_BYTE_CAP} bytes or post-exit drain cutoff)",
             args.join(" ")
         ),
         ManagedExecOutcome::Exited { stderr, .. } => bail!(
@@ -261,8 +256,6 @@ fn capture_working_tree(dest: &Path) -> Result<String> {
         .tempdir()
         .context("creating temporary git index for seal")?;
     let index = tmp.path().join("index");
-    // Seed tracked entries before overlaying the working tree so ignored
-    // tracked files are preserved instead of becoming spurious deletions.
     git_run_with_index(dest, &index, &["read-tree", "HEAD"])?;
     git_run_with_index(dest, &index, &["add", "-A", "--"])?;
     git_output_with_index(dest, &index, &["write-tree"])
@@ -274,8 +267,8 @@ pub(crate) struct SealSnapshot {
     pub changed_files: Vec<String>,
 }
 
-/// Capture once, then use only immutable Git objects for names and bytes.
-/// In particular, worker commits cannot redefine the admitted base.
+/// Worker commits cannot redefine the admitted base: capture once, then use
+/// only immutable Git objects for names and bytes.
 pub(crate) fn capture_seal_snapshot(
     dest: &Path,
     identity: &LogicalWorkspaceIdentity,
@@ -384,10 +377,8 @@ pub(crate) fn validate_tree_delta(
             }
         }
     }
-    // Unchanged entries are observations, not new capability grants. Check
-    // only aliases involving changed prefixes, against BOTH complete trees.
-    // Opaque components cannot alias admitted UTF-8 components, but their
-    // valid ancestors still participate in the alias check.
+    // Unchanged entries are observations, not new capability grants; check only
+    // aliases involving changed prefixes, against both complete trees.
     for revision in [base, tree] {
         let args = ["ls-tree", "-r", "-z", "--name-only", revision];
         let bytes = git_output_bytes_inner(git_command(repo, &args), repo, &args)?;
@@ -400,8 +391,7 @@ pub(crate) fn validate_tree_delta(
             .filter_map(|path| match std::str::from_utf8(path) {
                 Ok(path) => Some(path),
                 Err(error) => {
-                    // Keep complete UTF-8 ancestors before the first opaque
-                    // component (e.g. Src/<opaque> still observes Src).
+                    // Keep complete UTF-8 ancestors before the first opaque component.
                     let valid = &path[..error.valid_up_to()];
                     let separator = valid.iter().rposition(|byte| *byte == b'/')?;
                     std::str::from_utf8(&valid[..separator]).ok()
@@ -412,8 +402,6 @@ pub(crate) fn validate_tree_delta(
     Ok(())
 }
 
-/// Read instruction files from `base_sha` blobs. Never reads the live worktree.
-/// Missing paths are omitted; any other `git show` failure fails closed.
 pub(crate) fn capture_instruction_manifest(repo: &Path, base_sha: &str) -> Result<String> {
     let mut files = Vec::new();
     for path in DEFAULT_INSTRUCTION_PATHS {
@@ -457,7 +445,6 @@ pub(crate) struct IntegrateEffect {
     pub head_sha: String,
     pub changed_files: Vec<String>,
     pub diff: Vec<u8>,
-    /// Set when a new commit object was created but trunk `HEAD` was not moved.
     pub pending_head: bool,
 }
 
@@ -465,8 +452,7 @@ pub(crate) fn integrate_commit_message(seal_hash: &str) -> String {
     format!("gents: integrate workspace seal {seal_hash}")
 }
 
-/// Apply the sealed worktree diff onto an isolated index and `commit-tree`.
-/// Does **not** move trunk `HEAD` — the caller writes a durable receipt first.
+/// Does not move trunk `HEAD` — the caller writes a durable receipt first.
 pub(crate) fn prepare_integrate_commit(
     trunk: &Path,
     worktree: &Path,
@@ -521,8 +507,6 @@ pub(crate) fn prepare_integrate_commit(
     })
 }
 
-/// Recovery can verify immutable objects without the old checkout. Reconstruct
-/// the expected result on the recorded parent and compare the commit tree.
 pub(crate) fn verify_integrate_commit(
     trunk: &Path,
     commit: &str,
@@ -548,8 +532,6 @@ pub(crate) fn verify_integrate_commit(
     ];
     let diff = git_output_bytes_inner(git_command(trunk, &args), trunk, &args)?;
     if diff.is_empty() {
-        // Empty integration never owns a ref or checkout mutation. Its receipt
-        // acknowledges a commit already in trunk, not an arbitrary candidate.
         if !commit_is_in_trunk(trunk, commit) {
             bail!("empty integration receipt does not name an existing trunk commit");
         }
@@ -601,7 +583,7 @@ fn diff_is_empty(diff: &[u8]) -> bool {
 }
 
 /// Point trunk `HEAD` at a commit created by [`prepare_integrate_commit`]
-/// without rewriting the default index (operator staged files stay put).
+/// without rewriting the default index.
 ///
 /// `update-ref` is CAS from the pending commit's parent so later trunk
 /// commits are not rewound. `HEAD == commit` still applies path updates
@@ -748,11 +730,6 @@ fn commit_tree_from_isolated_index(trunk: &Path, diff: &[u8], seal_hash: &str) -
     git_output_inner(cmd, trunk, &["commit-tree"])
 }
 
-/// Remove the worker tree. Never deletes the source checkout. Idempotent when
-/// `dest` is already gone. Not called implicitly on request terminal.
-///
-/// `expected` is the host-chosen dest from `(workspace_id, branch)`. Mismatch
-/// and ancestor-of-source leftovers refuse `remove_dir_all`.
 pub(crate) fn cleanup_workspace_tree(
     source: &Path,
     dest: &Path,
@@ -826,7 +803,6 @@ pub(crate) fn cleanup_workspace_tree(
                 anyhow!("git worktree remove left {} in place", expected.display())
             }));
         }
-        // ProvisionFailed leftover at the exact host-chosen dest: not a worktree.
         fs::remove_dir_all(&expected)
             .with_context(|| format!("removing leftover workspace {}", expected.display()))?;
         let _ = git_run(&source, &["worktree", "prune"]);
@@ -885,7 +861,6 @@ fn seal_marker_path(dest: &Path) -> Result<PathBuf> {
     Ok(PathBuf::from(git_dir).join(SEAL_FILE_NAME))
 }
 
-/// Resolve a validated immutable base commit to its tree, never compare a commit ID to a tree ID.
 pub(crate) fn base_tree_hash(source: &Path, base_sha: &str) -> Result<String> {
     let commit = resolve_base_sha(source, base_sha)?;
     git_output(
@@ -1085,7 +1060,6 @@ fn add_worktree(source: &Path, dest: &Path, branch: &str, base_sha: &str) -> Res
     Ok(())
 }
 
-/// Resume-safe: copies missing dest dirs, leaves existing dest dirs in place.
 pub(crate) fn clone_artifacts(source: &Path, dest: &Path, artifacts: &[String]) -> Result<()> {
     for relative in artifacts {
         let rel = relative.trim_end_matches('/');

@@ -128,7 +128,6 @@ fn targets_are_literal_and_never_hold_inline_keys() {
         format!("{error:#}").contains("NodeOAuth targets are not supported for fresh-node evals"),
         "{error:#}"
     );
-    // `${PATH}` is set in every test process; a literal target must not expand it.
     assert!(InferenceTarget::decode(
         "t".into(),
         backend(

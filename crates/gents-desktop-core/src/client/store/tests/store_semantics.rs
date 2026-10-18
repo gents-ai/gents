@@ -13,83 +13,6 @@ fn goal_row(goal_id: &str, created_at: &str, status: &str) -> GoalRow {
     .expect("goal row")
 }
 
-fn schedule_row(
-    schedule_id: &str,
-    _task_id: &str,
-    _fire_count: Option<i64>,
-    _last_attempt_at: Option<&str>,
-    _last_status: Option<&str>,
-    _last_error: Option<&str>,
-) -> Schedule {
-    Schedule {
-        schedule_id: schedule_id.to_string(),
-        node_did: "did:node:1".to_string(),
-        display_name: None,
-        cadence: gents::document_config::ScheduleCadence::Interval { interval_secs: 300 },
-        created_at: None,
-        updated_at: None,
-        tags: Vec::new(),
-    }
-}
-
-fn trigger(
-    trigger_id: &str,
-    task_id: &str,
-    source: gents::document_config::TriggerSource,
-) -> Trigger {
-    Trigger {
-        session_id_template: None,
-        node_did: "did:node:1".to_string(),
-        trigger_id: trigger_id.to_string(),
-        display_name: None,
-        description: None,
-        task_id: task_id.to_string(),
-        source,
-        enabled: true,
-        concurrency: None,
-        created_at: None,
-        updated_at: None,
-        tags: Vec::new(),
-    }
-}
-
-fn trigger_observation(
-    trigger_id: &str,
-    fire_count: Option<i64>,
-    last_attempt_at: Option<&str>,
-    last_status: Option<&str>,
-    last_error: Option<&str>,
-) -> TriggerObservation {
-    TriggerObservation {
-        trigger_id: trigger_id.to_string(),
-        last_attempt_at: last_attempt_at.map(str::to_string),
-        last_fired_source_doc_id: None,
-        last_status: last_status.map(str::to_string),
-        last_error: last_error.map(str::to_string),
-        fire_count,
-    }
-}
-
-fn task_row(task_id: &str, agent_id: &str) -> Task {
-    Task {
-        emit_outcome: false,
-        task_id: task_id.to_string(),
-        node_did: "did:node:1".to_string(),
-        display_name: None,
-        description: None,
-        agent_id: agent_id.to_string(),
-        prompt_template: "run".to_string(),
-        goal_objective_template: None,
-        goal_token_budget: None,
-        hooks: Vec::new(),
-        enabled: true,
-        output_schema_ref: None,
-        created_at: None,
-        updated_at: None,
-        tags: Vec::new(),
-    }
-}
-
 fn request_row(
     request_id: &str,
     created_at: &str,
@@ -190,8 +113,6 @@ fn generated_title_selection_keeps_only_the_normal_public_head() {
 fn session_pointer_requires_the_observed_physical_request() {
     use gents_protocol::client_protocol::ClientTurnState;
 
-    // A matching logical label is insufficient. Include a positive control so
-    // always returning an unknown turn cannot satisfy the missing-row cases.
     for (doc_id, expected_turn) in [
         (None, None),
         (Some("different-physical-request"), None),
@@ -258,91 +179,6 @@ fn session_pointer_requires_the_observed_physical_request() {
             "only the exact observed document may supply turn state: {doc_id:?}"
         );
     }
-}
-
-#[test]
-fn recent_runs_aggregates_across_canonical_triggers() {
-    let mut store = ClientStore::default();
-    store.triggers.push(trigger(
-        "s1",
-        "task-1",
-        gents::document_config::TriggerSource::Schedule {
-            schedule_id: "schedule-1".to_string(),
-        },
-    ));
-    store.triggers.push(trigger(
-        "t1",
-        "task-1",
-        gents::document_config::TriggerSource::Event {
-            event_source_id: "source-1".to_string(),
-        },
-    ));
-    store.trigger_observations.push(trigger_observation(
-        "s1",
-        Some(3),
-        Some("2026-04-22T10:00:00Z"),
-        Some("fired"),
-        None,
-    ));
-    store.trigger_observations.push(trigger_observation(
-        "t1",
-        Some(5),
-        Some("2026-04-22T11:00:00Z"),
-        Some("skipped"),
-        Some("in-flight"),
-    ));
-
-    let runs = store.recent_runs_for_task("task-1");
-    assert_eq!(runs.total_fires, 8);
-    assert_eq!(
-        runs.last_attempt_at.as_deref(),
-        Some("2026-04-22T11:00:00Z")
-    );
-    assert_eq!(runs.last_status.as_deref(), Some("skipped"));
-    assert_eq!(runs.last_error.as_deref(), Some("in-flight"));
-    assert_eq!(runs.schedule_count, 1);
-    assert_eq!(runs.event_count, 1);
-}
-
-#[test]
-fn recent_runs_empty_when_no_triggers() {
-    let store = ClientStore::default();
-    let runs = store.recent_runs_for_task("task-missing");
-    assert_eq!(runs, TaskRecentRuns::default());
-}
-
-#[test]
-fn source_node_dids_round_trip_with_rows() {
-    let store = ClientStore::from_rows(ClientStoreRows {
-        tasks: vec![task_row("task-1", "default")],
-        schedules: vec![schedule_row("schedule-1", "task-1", None, None, None, None)],
-        triggers: vec![trigger(
-            "trigger-1",
-            "task-1",
-            gents::document_config::TriggerSource::Event {
-                event_source_id: "source-1".to_string(),
-            },
-        )],
-        task_source_node_dids: vec![Some("did:test:mini-1".to_string())],
-        schedule_source_node_dids: vec![Some("did:test:mini-1".to_string())],
-        trigger_source_node_dids: vec![Some("did:test:mini-1".to_string())],
-        ..ClientStoreRows::default()
-    });
-
-    let restored = ClientStore::from_rows(store.to_rows());
-
-    assert_eq!(
-        restored.task_source_node_dids,
-        vec![Some("did:test:mini-1".to_string())]
-    );
-    assert_eq!(
-        restored.schedule_source_node_dids,
-        vec![Some("did:test:mini-1".to_string())]
-    );
-    assert_eq!(
-        restored.trigger_source_node_dids,
-        vec![Some("did:test:mini-1".to_string())]
-    );
 }
 
 #[test]

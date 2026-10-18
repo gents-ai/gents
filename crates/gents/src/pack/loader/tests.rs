@@ -205,16 +205,9 @@ fn graph_fixture_loads_slot_authoring_and_literal_prompt_assets() {
     }
 }
 
-/// Every fixture pack that ships a config loads it cleanly, matching the
-/// pack loader's own installation path. Enumerated from the fixtures
-/// directory (shared with [`crate::pack_archive::tests`]'s digest test) so a
-/// new fixture is covered without either test keeping its own hand-written
-/// name list.
 #[test]
 fn every_fixture_pack_that_ships_a_config_loads_it_cleanly() {
     for name in crate::support::fixtures::fixture_pack_names() {
-        // The copy carries a built stand-in for each plugin artifact the
-        // fixture declares; the repository holds none.
         let (_guard, copy) = crate::test_support::fixture_pack_copy(&name, &json!({}));
         let root = copy;
         let manifest: PackManifest =
@@ -223,7 +216,7 @@ fn every_fixture_pack_that_ships_a_config_loads_it_cleanly() {
         crate::pack::validate_manifest(&manifest.name, &manifest)
             .unwrap_or_else(|error| panic!("{name} manifest: {error:#}"));
         if manifest.config.is_none() {
-            continue; // an assets-kind pack ships no config to load
+            continue;
         }
         load_pack_config(
             &manifest,
@@ -255,8 +248,6 @@ fn eval_config(cases: Value) -> Value {
     }]})
 }
 
-/// A sidecar case whose prompt would fail interpolation if it were
-/// interpolated: `NOT_INTERPOLATED` is unset.
 const SIDECAR_CASE: &str = r#"{"case_id":"one","split":"train","stages":[{"stage_id":"s","prompt":"literal ${NOT_INTERPOLATED}","deadline_secs":60,"checks":[{"check":"finding_count","params":{"count":1},"tier":"acceptance"}]}]}"#;
 
 fn load_eval(manifest: &PackManifest, config: Value) -> Result<PackConfig> {
@@ -400,7 +391,6 @@ fn a_plugin_node_runs_the_packs_own_artifact() {
             max_attempts: None,
         }
     );
-    // An author's pin that matches the shipped artifact is kept.
     plugin_pack_config(json!({"kind":"plugin","plugin":"lint","digest":shipped_digest()})).unwrap();
 }
 
@@ -413,7 +403,6 @@ fn a_plugin_node_the_pack_cannot_run_is_refused() {
     )
     .unwrap_err();
     assert!(format!("{wrong_pin:#}").contains("the pack ships"));
-    // A plugin from outside the pack keeps its author's coordinate and pin.
     let external = plugin_pack_config(json!({"kind":"plugin","plugin":"other/tool"})).unwrap();
     assert_eq!(
         external.graph_capabilities[0].target,

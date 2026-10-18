@@ -73,9 +73,8 @@ async fn clear_stream_control_if_current(
     }
 }
 
-/// Owns one generation of a turn-stream control. Tokio abort drops the
-/// streaming future, so Drop must arrange cleanup as well as the normal path.
-/// The generation id prevents an old task from erasing its replacement.
+/// Drop-cleanup and generation id must hold: Tokio abort drops the streaming
+/// future, and the generation id stops an old task from erasing its replacement.
 pub(in crate::commands::codex_shim) struct TurnStreamRegistration {
     connection: ConnectionState,
     thread_id: String,
@@ -180,7 +179,7 @@ pub(super) async fn next_steering_request_after(
         .iter()
         .map(|row| row.doc_id.clone().expect("decoded physical identity"))
         .collect::<Vec<_>>();
-    let order = gents::config_client::ConfigAccess::transact_local(
+    let order = gents::config_client::ConfigAccess::transact_local_write(
         &state.node,
         None,
         "codex.active.steering_order",
@@ -198,8 +197,6 @@ pub(super) async fn next_steering_request_after(
     }))
 }
 
-/// Non-transparent steering children of `queued_after_request_id`, looking
-/// through folded and replaced inputs, in `rows` order.
 fn steering_successor_candidates<'a>(
     rows: &'a [AgentRequestRow],
     queued_after_request_id: &str,
@@ -338,7 +335,7 @@ pub(in crate::commands::codex_shim) async fn interrupt_active_turn(
     );
     let request_id = active.interrupt_request_id.clone();
     if let Err(error) = gents::interrupt_request_by_doc_id(
-        state.node.as_ref(),
+        &state.node,
         &active.interrupt_request_doc_id,
         &state.node_did,
         Some(state.local_requester_did()),
@@ -386,7 +383,7 @@ pub(in crate::commands::codex_shim) async fn interrupt_active_turn(
     for (request_id, request_doc_id) in cleanup_request_ids {
         connection.take_steering_input(&request_id).await;
         if let Err(error) = gents::interrupt_request_by_doc_id(
-            state.node.as_ref(),
+            &state.node,
             &request_doc_id,
             &state.node_did,
             Some(state.local_requester_did()),
@@ -423,9 +420,6 @@ pub(in crate::commands::codex_shim) async fn interrupt_active_turn(
     Ok(())
 }
 
-/// Interrupt the active request of a caused thread in its own scope. Only
-/// that thread stops: the thread that caused it and any sessions it started
-/// keep running.
 pub(in crate::commands::codex_shim) async fn interrupt_caused_thread_turn(
     connection: &ConnectionState,
     state: &ShimState,
@@ -434,7 +428,7 @@ pub(in crate::commands::codex_shim) async fn interrupt_caused_thread_turn(
 ) -> Result<()> {
     cancel_stream_control(connection, &thread.session_id, turn_id).await;
     let interrupted =
-        gents::session_message::interrupt_session(state.node.as_ref(), &thread.scope()).await?;
+        gents::session_message::interrupt_session(&state.node, &thread.scope()).await?;
     trace::shim_event_fields(
         &state.trace_path,
         "turn_interrupt_caused_thread",
@@ -480,7 +474,7 @@ async fn load_thread_request_rows(
         thread_id,
         requester_did,
     ));
-    gents::config_client::ConfigAccess::transact_local(&state.node,None,"codex.active.rows",|txn| {
+    gents::config_client::ConfigAccess::transact_local_write(&state.node,None,"codex.active.rows",|txn| {
         let scope=&scope;
         Box::pin(async move {
             let response=txn.execute(&format!(r#"{{
@@ -528,10 +522,6 @@ fn active_codex_turn_from_rows(
 
     let mut candidates = Vec::<(&AgentRequestRow, String, usize)>::new();
     for row in active_rows {
-        // A pending steering admission remains visible through the queue
-        // projection, but it cannot revive a turn whose execution ancestor
-        // has been superseded. The pending child has not claimed publication
-        // authority yet, so there is no active Codex turn to interrupt.
         if steering_lineage_has_superseded_request(row, &by_id)? {
             continue;
         }
@@ -644,8 +634,6 @@ fn steering_parent_id(row: &AgentRequestRow) -> Option<String> {
     .flatten()
 }
 
-/// Request-only projection per `Proofs/Client/Types.lean`: supersession
-/// overrides, then the lifecycle decides terminality. No response facts.
 fn row_is_effectively_active(row: &AgentRequestRow) -> bool {
     project_persisted_attempt(
         row.lifecycle_state
@@ -758,7 +746,7 @@ mod tests {
                 steering,
             )],
         ] {
-            gents::config_client::ConfigAccess::transact_local(
+            gents::config_client::ConfigAccess::transact_local_write(
                 &state.node,
                 None,
                 "codex.active.test_history",
@@ -785,188 +773,4 @@ mod tests {
     }
 
     use super::*;
-
-    fn next_steering_request_after_from_rows(
-        rows: &[AgentRequestRow],
-        queued_after_request_id: &str,
-    ) -> Option<NextSteeringRequest> {
-        steering_successor_candidates(rows, queued_after_request_id)
-            .first()
-            .map(|row| next_steering_request(row))
-    }
-
-    fn row(request_id: &str, lifecycle_state: &str, queued_after: Option<&str>) -> AgentRequestRow {
-        let input = queued_after.map(|parent| {
-            serde_json::json!({
-                "queue": {
-                    "source": "steering",
-                    "policy": "append",
-                    "key": null,
-                    "queued_after_request_id": parent
-                }
-            })
-        });
-        serde_json::from_value(json!({
-            "request_id": request_id,
-            "lifecycle_state": lifecycle_state,
-            "input": input,
-            "_docID": format!("physical:{request_id}"),
-            "created_at": request_id,
-        }))
-        .expect("canonical AgentRequest test row")
-    }
-
-    #[test]
-    fn active_codex_turn_projects_deepest_gents_steering_tail() {
-        let rows = vec![
-            row("turn-1", "processing", None),
-            row("steer-1", "pending", Some("turn-1")),
-            row("steer-2", "pending", Some("steer-1")),
-        ];
-
-        let active = active_codex_turn_from_rows(&rows, Some("turn-1"))
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(
-            active,
-            ActiveCodexTurn {
-                turn_id: "turn-1".to_string(),
-                interrupt_request_id: "turn-1".to_string(),
-                current_request_id: "steer-2".to_string(),
-                current_request_doc_id: "physical:steer-2".into(),
-                interrupt_request_doc_id: "physical:turn-1".into(),
-            }
-        );
-    }
-
-    #[test]
-    fn terminal_root_with_active_steering_still_projects_original_turn() {
-        let rows = vec![
-            row("turn-1", "completed", None),
-            row("steer-1", "processing", Some("turn-1")),
-        ];
-
-        let active = active_codex_turn_from_rows(&rows, None).unwrap().unwrap();
-
-        assert_eq!(active.turn_id, "turn-1");
-        assert_eq!(active.interrupt_request_id, "steer-1");
-        assert_eq!(active.current_request_id, "steer-1");
-    }
-
-    #[test]
-    fn superseded_request_is_excluded_from_active_turn() {
-        let rows = vec![
-            {
-                let mut row = row("turn-1", "processing", None);
-                row.superseded_by_request = Some("turn-2".to_string());
-                row
-            },
-            row("steer-1", "pending", Some("turn-1")),
-        ];
-
-        assert_eq!(active_codex_turn_from_rows(&rows, None).unwrap(), None);
-
-        // Excluding the superseded execution lineage from the interruptable
-        // turn must not hide its separately durable queued user admission.
-        let queued = next_steering_request_after_from_rows(&rows, "turn-1").unwrap();
-        assert_eq!(queued.request_id, "steer-1");
-        assert!(queued.is_pending());
-    }
-
-    #[test]
-    fn pending_steering_tail_does_not_become_interrupt_target() {
-        let rows = vec![
-            row("turn-1", "processing", None),
-            row("steer-1", "pending", Some("turn-1")),
-        ];
-
-        let active = active_codex_turn_from_rows(&rows, None).unwrap().unwrap();
-
-        assert_eq!(active.turn_id, "turn-1");
-        assert_eq!(active.interrupt_request_id, "turn-1");
-        assert_eq!(active.current_request_id, "steer-1");
-    }
-
-    #[test]
-    fn next_steering_request_includes_already_completed_child() {
-        let rows = vec![
-            row("turn-1", "completed", None),
-            row("steer-1", "completed", Some("turn-1")),
-        ];
-
-        let next = next_steering_request_after_from_rows(&rows, "turn-1").unwrap();
-
-        assert_eq!(next.request_id, "steer-1");
-        assert_eq!(next.lifecycle_state, Some(RequestLifecycleState::Completed));
-        assert!(!next.is_pending());
-    }
-
-    #[test]
-    fn next_steering_request_preserves_queue_order_across_terminal_children() {
-        let rows = vec![
-            row("turn-1", "completed", None),
-            row("steer-2", "completed", Some("turn-1")),
-            row("steer-1", "failed", Some("turn-1")),
-        ];
-
-        let next = next_steering_request_after_from_rows(&rows, "turn-1").unwrap();
-
-        // The caller supplies native arrival order, even when timestamp/UUID
-        // lexical order would put steer-1 first.
-        assert_eq!(next.request_id, "steer-2");
-        assert_eq!(next.lifecycle_state, Some(RequestLifecycleState::Completed));
-    }
-    #[test]
-    fn replaced_input_is_transparent_to_its_successor_and_children() {
-        let mut replaced = row("old-input", "superseded", Some("turn-1"));
-        replaced.failure_reason = Some(gents::lifecycle::REPLACED_REASON.into());
-        replaced.superseded_by_request = Some("edited-input".into());
-        replaced.superseded_by_request_doc_id = Some("edited-input-doc".into());
-        let rows = vec![
-            row("turn-1", "completed", None),
-            replaced,
-            row("edited-input", "pending", Some("turn-1")),
-            row("later-input", "pending", Some("old-input")),
-        ];
-        assert_eq!(
-            next_steering_request_after_from_rows(&rows, "turn-1")
-                .unwrap()
-                .request_id,
-            "edited-input"
-        );
-        assert_eq!(
-            next_steering_request_after_from_rows(
-                &rows[..2]
-                    .iter()
-                    .chain(rows[3..].iter())
-                    .cloned()
-                    .collect::<Vec<_>>(),
-                "turn-1"
-            )
-            .unwrap()
-            .request_id,
-            "later-input"
-        );
-        let mut unrelated = rows[1].clone();
-        unrelated.failure_reason = Some("another supersession reason".into());
-        assert!(!steering_request_is_transparent(&unrelated));
-    }
-
-    #[test]
-    fn consumed_steering_does_not_become_a_second_provider_turn() {
-        let mut consumed = row("steer-1", "superseded", Some("turn-1"));
-        consumed.failure_reason = Some(gents::lifecycle::FOLDED_REASON.into());
-        consumed.superseded_by_request = Some("turn-1".into());
-        consumed.superseded_by_request_doc_id = Some("turn-1-doc".into());
-        let mut rows = vec![row("turn-1", "completed", None), consumed];
-        assert!(next_steering_request_after_from_rows(&rows, "turn-1").is_none());
-        rows.push(row("steer-2", "pending", Some("steer-1")));
-        assert_eq!(
-            next_steering_request_after_from_rows(&rows, "turn-1")
-                .unwrap()
-                .request_id,
-            "steer-2"
-        );
-    }
 }

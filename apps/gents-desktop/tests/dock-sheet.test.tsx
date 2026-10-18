@@ -6,7 +6,6 @@ import { DockSheet } from "../src/ui/app/ShellDock";
 import type { ShellLayout } from "../src/ui/app/useShellLayout";
 import { renderIn, testApp } from "./app-fixture";
 
-/* an open dock, shown as a sheet until the window is wide enough to dock it */
 const layout = (docked: boolean, closeDock: () => void) =>
   ({ docked, dockOpen: true, closeDock }) as unknown as ShellLayout;
 const route = { name: "sessions" } as const;

@@ -1,5 +1,3 @@
-//! Why a request stopped, read from its durable rows.
-
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit};
@@ -18,7 +16,6 @@ use crate::oauth_credential::{
 use crate::request_admission::SIGNED_REQUEST_FIELDS;
 use crate::Collection;
 
-/// The failed inference call that ended a request.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct FailedCall {
     pub(crate) backend_id: Option<String>,
@@ -29,8 +26,6 @@ pub(crate) struct FailedCall {
     pub(crate) started_at: Option<String>,
 }
 
-/// Why a turn stopped where the operator can act: a usage limit, or an
-/// account that cannot serve.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BlockedReason {
@@ -44,27 +39,19 @@ pub enum BlockedReason {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BlockedAccount {
     pub label: String,
-    /// The sign-in provider, else the backend's provider kind.
     pub provider: String,
 }
 
-/// A stopped turn: the reason, the account and profile it ran on, the
-/// agents that profile serves, the reported reset and the command that
-/// moves the profile.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BlockedTurn {
     pub reason: BlockedReason,
     pub account: Option<BlockedAccount>,
     pub profile: Option<String>,
     pub agents_on_profile: Vec<String>,
-    /// `None` when the provider reported no reset.
     pub resets_at: Option<DateTime<Utc>>,
     pub switch_command: Option<String>,
 }
 
-/// The blocked value of a request, from one configuration snapshot, the
-/// node's accounts, the request row and its last failed call. A call
-/// that started before its account's sign-in connected names no account.
 pub(crate) fn blocked_turn_from(
     references: &ConfigReferences,
     accounts: &[AccountSummary],
@@ -158,8 +145,6 @@ pub(crate) fn blocked_turn_from(
     })
 }
 
-/// The profile of `agent_id` that served `call`'s kind, while it is still
-/// on the call's backend; a sibling left there did not serve the call.
 pub(crate) fn served_profile(
     references: &ConfigReferences,
     agent_id: &str,
@@ -192,8 +177,6 @@ fn named(backend: &InferenceBackend, serving: ServingAccount) -> BlockedAccount 
     }
 }
 
-/// Why `request_id` stopped, if it stopped where the operator can act.
-/// An unknown request is an error.
 pub async fn blocked_turn(
     access: &ConfigAccess,
     node_did: &str,
@@ -210,9 +193,6 @@ pub async fn blocked_turn(
     ))
 }
 
-/// What [`blocked_turn_from`] reads for `request_id`: the node's
-/// accounts, then one configuration snapshot, the request row and its last
-/// failed call. An unknown request is an error.
 pub(crate) async fn stopped_request(
     access: &ConfigAccess,
     node_did: &str,
@@ -243,7 +223,6 @@ pub(crate) async fn stopped_request(
     Ok((accounts, references, request, call))
 }
 
-/// [`blocked_turn`] for the latest request of `session_id`'s canonical Goal.
 pub async fn blocked_goal_turn(
     access: &ConfigAccess,
     node_did: &str,
@@ -260,8 +239,6 @@ pub async fn blocked_goal_turn(
     }))
 }
 
-/// `session_id`'s canonical Goal with one configuration snapshot, the Goal's
-/// latest request and that request's last failed call.
 pub(crate) async fn goal_stopped_in_txn(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
@@ -290,7 +267,6 @@ pub(crate) async fn goal_stopped_in_txn(
     Ok(Some((goal, references, request, call)))
 }
 
-/// `node_did`'s requests matching `filter`, newest first.
 async fn requests_in_txn(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
@@ -324,9 +300,8 @@ async fn stopped_in_txn(
     Ok((references, request, call))
 }
 
-/// The request's latest failed call by `ended_at`. A call retried with a
-/// higher `attempt` can end before a later call of another kind (compaction)
-/// that actually stopped the request.
+/// The request's latest failed call by `ended_at`; a retried call with a
+/// higher `attempt` can end before a later compaction call that stopped it.
 pub(crate) async fn last_failed_call_in_txn(
     txn: &ConfigApplyTxn<'_>,
     request_id: &str,

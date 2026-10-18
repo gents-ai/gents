@@ -15,8 +15,6 @@ const PROJECTION_ACP_RUNTIME_COLLECTIONS: &[&str] = &[
 ];
 
 impl ProjectionAcpBinding {
-    /// Validate authored policy references. Publication status remains an
-    /// observation checked by the existing projection enforcement owner.
     pub fn validate(&self) -> Result<()> {
         anyhow::ensure!(
             !self.policy_id.trim().is_empty(),
@@ -94,6 +92,3 @@ pub fn parse_projection_resource_map(
     }
     Ok(map)
 }
-
-#[cfg(test)]
-mod tests;

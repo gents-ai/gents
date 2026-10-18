@@ -145,7 +145,9 @@ export async function loadRuntimeUxPlugin(
     if (uxPluginRecords()[meta.id]?.status !== "loaded") host.dispose();
     return meta.id;
   } catch (error) {
-    console.error(`[ux-plugins] runtime load failed (${options.origin})`, error);
+    /* the row carries the failure; the console line is a developer aid, and
+       a navigation that aborts the runtime fetch mid-load is not an error */
+    console.warn(`[ux-plugins] runtime load failed (${options.origin})`, error);
     publishUxPlugin({
       id: options.origin,
       name: options.origin,

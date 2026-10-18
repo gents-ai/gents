@@ -24,7 +24,7 @@ use serde::Deserialize;
 use super::super::mutations::{self, PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
 use super::super::observe::ObservedStore;
 use super::super::peer_directory::PeerRecord;
-use super::super::query::{load_chat_patch, load_chat_patch_on};
+use super::super::query::load_chat_patch;
 use super::super::store::{ClientStore, ClientStoreRows};
 use super::bootstrap::normalize_required;
 use super::p2p_ops;
@@ -35,23 +35,225 @@ use crate::client::peer_directory::RemovalCause;
 
 const REQUEST_PATCH_SIGNATURE_CAPACITY: usize = 2_048;
 
+fn request_patch_cache_reusable(
+    memoized: bool,
+    same_signature: bool,
+    fence_accepted: bool,
+    rows_current: bool,
+) -> bool {
+    memoized && same_signature && fence_accepted && rows_current
+}
+
+#[cfg(test)]
+mod request_patch_publication_tests {
+    use super::request_patch_cache_reusable;
+    use crate::client::observe::ObservedStore;
+    use crate::client::store::{ClientStore, ClientStoreRows};
+    use gents_protocol::request_lifecycle::RequestLifecycleState;
+    use gents_protocol::row::AgentRequestRow;
+
+    fn request_row(state: &str) -> AgentRequestRow {
+        AgentRequestRow {
+            doc_id: Some("request-doc".to_owned()),
+            request_id: "request".to_owned(),
+            node_did: Some("did:test:node".to_owned()),
+            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+            lifecycle_state: Some(match state {
+                "pending" => RequestLifecycleState::Pending,
+                "processing" => RequestLifecycleState::Processing,
+                other => panic!("unknown test state {other}"),
+            }),
+            ..AgentRequestRow::default()
+        }
+    }
+
+    fn request_patch(row: AgentRequestRow) -> ClientStore {
+        ClientStore::from_rows(ClientStoreRows {
+            requests: vec![row],
+            ..ClientStoreRows::default()
+        })
+    }
+
+    #[test]
+    fn cached_rows_must_match_physical_rows_at_the_current_fence() {
+        let (store, _) = ObservedStore::new(request_patch(request_row("pending")));
+        let patch = request_patch(request_row("pending"));
+        let captured = store.capture_read();
+        assert_eq!(
+            store.current_request_patch_read_status(&captured, &patch),
+            (true, true)
+        );
+
+        store.merge_chat_patch(request_patch(request_row("processing")));
+        let captured = store.capture_read();
+        assert_eq!(
+            store.current_request_patch_read_status(&captured, &patch),
+            (true, false),
+            "a current fence does not make an old physical request row current"
+        );
+    }
+
+    #[test]
+    fn generated_publication_cases_drive_request_patch_cache_admission() {
+        let snapshot: serde_json::Value =
+            gents_lean_contract::load_contract_snapshot().expect("Lean contract snapshot");
+        let fixture = &snapshot["client_request_patch_publication_cases"];
+        for case in fixture["reuse"].as_array().expect("reuse cases") {
+            assert_eq!(
+                request_patch_cache_reusable(
+                    case["memoized"].as_bool().expect("memoized state"),
+                    case["same_signature"]
+                        .as_bool()
+                        .expect("signature comparison"),
+                    case["fence_accepted"].as_bool().expect("publication fence"),
+                    case["rows_current"]
+                        .as_bool()
+                        .expect("physical row comparison"),
+                ),
+                case["expected_reuse"].as_bool().expect("Lean result"),
+                "{}",
+                case["name"].as_str().expect("case name")
+            );
+        }
+        for case in fixture["fresh_read"].as_array().expect("fresh-read cases") {
+            let (store, _) = ObservedStore::new(ClientStore::from_rows(ClientStoreRows::default()));
+            let captured = store.capture_read();
+            let fence_accepted = case["fence_accepted"].as_bool().expect("fence expectation");
+            if !fence_accepted {
+                store.merge_chat_patch(request_patch(request_row("processing")));
+            }
+            let published = case["patch_available"]
+                .as_bool()
+                .expect("fresh patch availability")
+                .then(|| {
+                    store.merge_chat_patch_at_read(&captured, request_patch(request_row("pending")))
+                })
+                .flatten()
+                .is_some();
+            let action = match (case["patch_available"].as_bool().unwrap(), published) {
+                (false, false) => "no_patch",
+                (true, true) => "merge_fresh",
+                (true, false) => "reject_candidate",
+                (false, true) => panic!("missing patch was published"),
+            };
+            assert_eq!(
+                action,
+                case["expected_action"].as_str().expect("Lean action"),
+                "{}",
+                case["name"].as_str().expect("case name")
+            );
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RefreshedRequestProjection {
+    pub requests: Vec<AgentRequestRow>,
+    pub requester_did: Option<String>,
+    pub selected_request_id: Option<String>,
+    pub published_version: Option<u64>,
+}
+
+/// A committed submission is acknowledged independently of replica refresh.
+/// Returning a read error here would invite a second durable submission.
+async fn observe_submitted_request(
+    store: &ObservedStore,
+    receipt: SubmittedRequest,
+    refresh: impl std::future::Future<Output = Result<u64>>,
+) -> SubmittedRequest {
+    store.set_focused_request_id(Some(receipt.request_id.clone()));
+    if let Err(error) = refresh.await {
+        store.request_resync(Some(&receipt.node_did));
+        tracing::warn!(
+            node_did = %receipt.node_did,
+            session_id = %receipt.session_id,
+            request_id = %receipt.request_id,
+            error = %error,
+            "submitted request awaits local projection refresh"
+        );
+    }
+    receipt
+}
+
+/// A validated applied receipt is the command result. The local projection is
+/// a separate replica observation; if it is unavailable, the selected-session
+/// refresh and normal observer path reconcile it without inviting replay.
+async fn merge_accepted_edit_projection(
+    access: &ConfigAccess,
+    store: &ObservedStore,
+    receipt: gents_protocol::session_input_edit::SessionInputEditReceipt,
+    selected_doc_ids: &[String],
+    node_did: &str,
+    session_id: &str,
+    requester_did: &str,
+) -> gents_protocol::session_input_edit::SessionInputEditReceipt {
+    let result = async {
+        let mut doc_ids = selected_doc_ids.to_vec();
+        doc_ids.extend(receipt.request_doc_ids.iter().cloned());
+        let mut unique = std::collections::HashSet::with_capacity(doc_ids.len());
+        doc_ids.retain(|doc_id| unique.insert(doc_id.clone()));
+        if doc_ids.is_empty() {
+            return anyhow::Result::<()>::Ok(());
+        }
+        let captured = store.capture_read();
+        let rows = crate::client::load_request_documents_on(access, &doc_ids).await?;
+        for row in &rows {
+            anyhow::ensure!(
+                row.node_did.as_deref() == Some(node_did)
+                    && row.session_id.as_deref() == Some(session_id)
+                    && row.requester_did.as_deref() == Some(requester_did),
+                "pending edit request patch crossed its node, session, or requester scope"
+            );
+        }
+        let patch = ClientStore::from_rows(ClientStoreRows {
+            requests: rows,
+            ..ClientStoreRows::default()
+        });
+        if store.merge_chat_patch_at_read(&captured, patch).is_none() {
+            store.request_resync(Some(node_did));
+            anyhow::bail!("accepted edit projection read became stale before publication");
+        }
+        anyhow::Result::<()>::Ok(())
+    }
+    .await;
+    if let Err(error) = result {
+        tracing::warn!(
+            command_id = %receipt.command_id,
+            node_did,
+            session_id,
+            error = %error,
+            "accepted pending edit awaits local projection refresh"
+        );
+    }
+    receipt
+}
+
+fn find_request_in_scope(
+    rows: &[AgentRequestRow],
+    request_id: &str,
+    node_did: Option<&str>,
+) -> Result<Option<AgentRequestRow>> {
+    let mut matches = rows.iter().filter(|row| {
+        row.request_id == request_id
+            && node_did.is_none_or(|did| row.node_did.as_deref() == Some(did))
+    });
+    let Some(row) = matches.next() else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        matches.next().is_none(),
+        "request {request_id} is ambiguous across node scopes"
+    );
+    Ok(Some(row.clone()))
+}
+
 fn request_in_scope(
     rows: &[AgentRequestRow],
     request_id: &str,
     node_did: Option<&str>,
 ) -> Result<AgentRequestRow> {
-    let mut matches = rows.iter().filter(|row| {
-        row.request_id == request_id
-            && node_did.is_none_or(|did| row.node_did.as_deref() == Some(did))
-    });
-    let row = matches
-        .next()
-        .with_context(|| format!("request {request_id} not found"))?;
-    anyhow::ensure!(
-        matches.next().is_none(),
-        "request {request_id} is ambiguous across node scopes"
-    );
-    Ok(row.clone())
+    find_request_in_scope(rows, request_id, node_did)?
+        .with_context(|| format!("request {request_id} not found"))
 }
 
 fn required_peer_generation<'a>(name: &str, value: Option<&'a str>) -> Result<&'a str> {
@@ -127,22 +329,6 @@ fn chat_patch_signature(patch: &ClientStore) -> (usize, usize, u64) {
     }
 }
 
-fn request_patch_is_current(
-    current: &ClientStore,
-    patch: &ClientStore,
-    node_did: &str,
-    request_id: &str,
-) -> bool {
-    let request_value = |store: &ClientStore| {
-        store
-            .requests
-            .iter()
-            .find(|row| row.request_id == request_id && row.node_did.as_deref() == Some(node_did))
-            .and_then(|row| serde_json::to_value(row).ok())
-    };
-    request_value(current).is_some_and(|current| request_value(patch) == Some(current))
-}
-
 fn agent_id_for_write(requested_agent_id: Option<&str>) -> Option<String> {
     requested_agent_id
         .map(str::trim)
@@ -150,7 +336,7 @@ fn agent_id_for_write(requested_agent_id: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn ensure_peer_chat_ready_at(
+pub(super) fn ensure_peer_chat_ready_at(
     node_did: &str,
     peer_record: Option<&PeerRecord>,
     now: DateTime<Utc>,
@@ -212,14 +398,10 @@ impl ClientCore {
             .await
     }
 
-    /// Dismiss an open mailbox item as the authenticated local node.
     pub async fn dismiss_mailbox_item(&self, doc_id: &str) -> Result<gents::mailbox::MailboxItem> {
-        let result = gents::mailbox::dismiss_mailbox_item(
-            self.node.as_ref(),
-            doc_id,
-            self.node_identity.did(),
-        )
-        .await;
+        let result =
+            gents::mailbox::dismiss_mailbox_item(&self.node, doc_id, self.node_identity.did())
+                .await;
         match result {
             Ok(item) => {
                 self.refresh_store().await?;
@@ -264,11 +446,8 @@ impl ClientCore {
             .request_authority(node_did, peer_record.as_ref())
             .await?;
         let agent_id = agent_id_for_write(agent_id);
-        // Chat documents originate in the client's replica and converge over
-        // DefraDB. The local-runtime HTTP endpoint is a configuration control
-        // plane; bypassing the replica here breaks the durable client contract.
         match mutations::submit_request(
-            self.node.as_ref(),
+            &self.node,
             snapshot.as_ref(),
             session_id,
             node_did,
@@ -282,9 +461,8 @@ impl ClientCore {
         .await
         {
             Ok(result) => {
-                self.store
-                    .set_focused_request_id(Some(result.request_id.clone()));
-                self.refresh_store().await?;
+                let result =
+                    observe_submitted_request(&self.store, result, self.refresh_store()).await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -298,13 +476,10 @@ impl ClientCore {
         }
     }
 
-    /// The session queue authority: a co-hosted runtime's own endpoint, since
-    /// the local replica may lag its active and pending requests, otherwise
-    /// the local replica of a pure P2P peer.
-    fn session_queue_access(&self, node_did: &str) -> ConfigAccess {
+    pub(super) fn session_queue_access(&self, node_did: &str) -> ConfigAccess {
         self.operator_graphql(node_did)
             .map(ConfigAccess::Graphql)
-            .unwrap_or_else(|| ConfigAccess::Local(self.node_arc()))
+            .unwrap_or_else(|| ConfigAccess::local(self.node_arc()))
     }
 
     pub async fn prepare_user_message_input(
@@ -313,12 +488,28 @@ impl ClientCore {
         session_id: &str,
         input: gents_protocol::request_input::RequestInput,
     ) -> Result<gents_protocol::request_input::RequestInput> {
+        self.prepare_user_message_input_with_delivery(
+            node_did,
+            session_id,
+            input,
+            gents_protocol::request_input::QueueDelivery::Steer,
+        )
+        .await
+    }
+
+    pub async fn prepare_user_message_input_with_delivery(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        input: gents_protocol::request_input::RequestInput,
+        delivery: gents_protocol::request_input::QueueDelivery,
+    ) -> Result<gents_protocol::request_input::RequestInput> {
         gents::lifecycle::prepare_user_message_input(
             &self.session_queue_access(node_did),
             node_did,
             session_id,
             input,
-            gents_protocol::request_input::QueueDelivery::Steer,
+            delivery,
         )
         .await
     }
@@ -328,17 +519,30 @@ impl ClientCore {
         node_did: &str,
         session_id: &str,
     ) -> Result<gents::lifecycle::PendingQueueSnapshot> {
+        Ok(self
+            .pending_user_queue_projection(node_did, session_id, &[])
+            .await?
+            .pending)
+    }
+
+    pub async fn pending_user_queue_projection(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        observed_doc_ids: &[String],
+    ) -> Result<gents::lifecycle::PendingQueueProjection> {
         let record = self
             .sync_state
             .records()
             .into_iter()
             .find(|record| record.node_did == node_did)
             .context("no saved deployment route owns this node")?;
-        gents::lifecycle::pending_user_queue(
+        gents::lifecycle::pending_user_queue_projection(
             &self.session_queue_access(node_did),
             node_did,
             session_id,
             &self.requester_did(&record),
+            observed_doc_ids,
         )
         .await
     }
@@ -354,6 +558,7 @@ impl ClientCore {
             .await?;
         ensure_peer_chat_ready_at(node_did, peer.as_ref(), Utc::now())?;
         let (signer, admission, _) = self.request_authority(node_did, peer.as_ref()).await?;
+        let selected_doc_ids = edit.selected_request_doc_ids.clone();
         let result = gents::lifecycle::submit_pending_user_edit(
             &self.session_queue_access(node_did),
             signer.as_ref(),
@@ -366,7 +571,20 @@ impl ClientCore {
         .await;
         match result {
             Ok(receipt) => {
-                self.refresh_store().await?;
+                let requester_did = peer
+                    .as_ref()
+                    .map(|record| self.requester_did(record))
+                    .unwrap_or_else(|| self.node_identity.did().to_string());
+                let receipt = merge_accepted_edit_projection(
+                    &self.session_queue_access(node_did),
+                    self.store.as_ref(),
+                    receipt,
+                    &selected_doc_ids,
+                    node_did,
+                    session_id,
+                    &requester_did,
+                )
+                .await;
                 self.clear_mutation_error();
                 Ok(receipt)
             }
@@ -374,9 +592,55 @@ impl ClientCore {
         }
     }
 
-    /// Reconstruct a request's persisted event timeline from the local P2P
-    /// replica. Bounded so an unavailable replica fails the panel instead of
-    /// hanging it.
+    pub async fn request_output(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        request_id: &str,
+    ) -> Result<Option<gents::session::CanonicalRequestOutput>> {
+        let node_did = normalize_required("node_did", node_did)?;
+        let session_id = normalize_required("session_id", session_id)?;
+        let request_id = normalize_required("request_id", request_id)?;
+        let Some(projection) = self
+            .refresh_local_request(node_did, session_id, Some(request_id), None, &[])
+            .await?
+        else {
+            return Ok(None);
+        };
+        let Some(row) = find_request_in_scope(&projection.requests, request_id, Some(node_did))?
+        else {
+            return Ok(None);
+        };
+        anyhow::ensure!(
+            row.session_id.as_deref() == Some(session_id),
+            "request output crossed the selected session scope"
+        );
+        let refs = projection.requests.iter().collect::<Vec<_>>();
+        let answer = super::super::store::request_answer_owner(&refs, &row);
+        anyhow::ensure!(
+            answer.node_did.as_deref() == Some(node_did)
+                && answer.session_id.as_deref() == Some(session_id)
+                && answer.requester_did == row.requester_did,
+            "request answer crossed its admitted scope"
+        );
+        if !answer.is_terminal() || gents::lifecycle::folded_into(answer).is_some() {
+            return Ok(None);
+        }
+        let access = match self.operator_graphql(node_did) {
+            Some(graphql) => ConfigAccess::Graphql(graphql),
+            None => self
+                .store_access
+                .lock()
+                .await
+                .as_ref()
+                .context("local store access is unavailable")?
+                .clone(),
+        };
+        gents::session::observe_request_output(&access, answer)
+            .await
+            .map(Some)
+    }
+
     pub async fn request_timeline(
         &self,
         node_did: &str,
@@ -384,7 +648,7 @@ impl ClientCore {
     ) -> Result<gents::run_timeline::RunTimeline> {
         normalize_required("node_did", node_did)?;
         let request_id = normalize_required("request_id", request_id)?;
-        let access = gents::config_client::ConfigAccess::Local(self.node_arc());
+        let access = gents::config_client::ConfigAccess::local(self.node_arc());
         let timeline = tokio::time::timeout(
             std::time::Duration::from_secs(15),
             gents::run_timeline_fetch::load_run_timeline(&access, request_id),
@@ -423,10 +687,7 @@ impl ClientCore {
         }
     }
 
-    /// Reload the current directory generation and synchronously fence a chat
-    /// mutation against its signed enrollment lease. Expired readiness is
-    /// durably demoted before the caller can create an AgentRequest.
-    async fn peer_record_for_chat_write(
+    pub(super) async fn peer_record_for_chat_write(
         &self,
         node_did: &str,
         now: DateTime<Utc>,
@@ -453,7 +714,7 @@ impl ClientCore {
         Ok(None)
     }
 
-    async fn request_authority(
+    pub(super) async fn request_authority(
         &self,
         node_did: &str,
         record: Option<&PeerRecord>,
@@ -522,9 +783,7 @@ impl ClientCore {
         ))
     }
 
-    /// Enrolled routes request as this desktop; a local standard runtime's
-    /// requests are its own.
-    fn requester_did(&self, record: &PeerRecord) -> String {
+    pub(super) fn requester_did(&self, record: &PeerRecord) -> String {
         if record.is_enrollment() {
             self.node_identity.did().to_string()
         } else {
@@ -535,62 +794,116 @@ impl ClientCore {
     pub async fn refresh_local_request(
         &self,
         node_did: &str,
-        request_id: &str,
-    ) -> Result<Option<u64>> {
+        session_id: &str,
+        request_id: Option<&str>,
+        fallback_request_id: Option<&str>,
+        page_request_doc_ids: &[String],
+    ) -> Result<Option<RefreshedRequestProjection>> {
         let node_did = node_did.trim();
-        let request_id = request_id.trim();
-        if node_did.is_empty() || request_id.is_empty() {
+        let session_id = session_id.trim();
+        let request_id = request_id.map(str::trim).filter(|id| !id.is_empty());
+        let fallback_request_id = fallback_request_id
+            .map(str::trim)
+            .filter(|id| !id.is_empty());
+        if node_did.is_empty() || session_id.is_empty() {
             return Ok(None);
         }
 
-        let (patch, source) = match self.operator_graphql(node_did) {
-            Some(graphql) => {
-                let access = ConfigAccess::Graphql(graphql);
-                (load_chat_patch_on(&access, request_id).await?, "operator")
-            }
+        let captured = self.store.capture_read();
+        let (access, source) = match self.operator_graphql(node_did) {
+            Some(graphql) => (ConfigAccess::Graphql(graphql), "operator"),
             None => (
-                load_chat_patch(self.node.as_ref(), request_id).await?,
+                self.store_access
+                    .lock()
+                    .await
+                    .as_ref()
+                    .context("local store access is unavailable")?
+                    .clone(),
                 "local",
             ),
         };
+        let patch = load_chat_patch(
+            &access,
+            node_did,
+            session_id,
+            request_id,
+            fallback_request_id,
+            page_request_doc_ids,
+        )
+        .await?;
         let rows = patch.row_count();
         if rows == 0 {
             return Ok(None);
         }
-        // The patch addresses durable documents by their canonical keys. Keep
-        // it untagged so the local observer and operator GraphQL path converge
-        // on the same in-memory rows.
         let signature = chat_patch_signature(&patch);
-        let cache_key = format!("{source}\0{node_did}\0{request_id}");
+        let request_projection = patch.requests.clone();
+        let requester_did = patch
+            .sessions
+            .first()
+            .and_then(|session| session.requester_did.clone());
+        let latest_request_id = patch
+            .sessions
+            .first()
+            .and_then(|session| session.observation.as_ref())
+            .and_then(|observation| observation.latest_request.as_ref())
+            .map(|latest| latest.request_id.clone());
+        let legacy_fallback_request_id = patch
+            .sessions
+            .first()
+            .filter(|session| session.observation.is_none())
+            .and_then(|_| fallback_request_id.map(str::to_owned));
+        let resolved_request_id = request_id
+            .map(str::to_owned)
+            .or_else(|| latest_request_id.clone())
+            .or(legacy_fallback_request_id);
+        let requester_key = requester_did.as_deref().unwrap_or("<null>");
+        let request_key = resolved_request_id.as_deref().unwrap_or("<none>");
+        let cache_key =
+            format!("{source}\0{node_did}\0{session_id}\0{requester_key}\0{request_key}");
         {
             let mut signatures = self.request_patch_signatures.lock().await;
-            if signatures.get(&cache_key) == Some(&signature)
-                && request_patch_is_current(
-                    self.store.snapshot().as_ref(),
-                    &patch,
-                    node_did,
-                    request_id,
-                )
-            {
-                return Ok(None);
+            let cached_signature = signatures.get(&cache_key) == Some(&signature);
+            if cached_signature {
+                let (fence_accepted, rows_current) = self
+                    .store
+                    .current_request_patch_read_status(&captured, &patch);
+                if request_patch_cache_reusable(
+                    cached_signature,
+                    true,
+                    fence_accepted,
+                    rows_current,
+                ) {
+                    return Ok(Some(RefreshedRequestProjection {
+                        requests: request_projection,
+                        requester_did,
+                        selected_request_id: resolved_request_id,
+                        published_version: None,
+                    }));
+                }
+                signatures.remove(&cache_key);
+                if !fence_accepted {
+                    self.store.request_resync(Some(node_did));
+                    return Ok(None);
+                }
             }
-            if signatures.len() >= REQUEST_PATCH_SIGNATURE_CAPACITY {
-                signatures.clear();
-            }
-            signatures.insert(cache_key, signature);
         }
 
         let (_rows, bytes, _hash) = signature;
-        let terminal = patch
-            .request_row(request_id)
+        let terminal = resolved_request_id
+            .as_deref()
+            .and_then(|request_id| patch.request_row(request_id))
             .is_some_and(|row| row.is_terminal());
-        let version = self.store.merge_chat_patch(patch);
-        // A completed agent turn may have used self-configuration tools. Most
-        // of that control plane is intentionally absent from the client P2P
-        // route (the Node document and inference credentials in particular),
-        // so the terminal request is the bounded signal to refresh the node's
-        // operator projection. This keeps the next composer/default agent
-        // current without putting GraphQL reads on every snapshot render.
+        let Some(version) = self.store.merge_chat_patch_at_read(&captured, patch) else {
+            self.store.request_resync(Some(node_did));
+            return Ok(None);
+        };
+        let mut signatures = self.request_patch_signatures.lock().await;
+        if signatures.len() >= REQUEST_PATCH_SIGNATURE_CAPACITY {
+            signatures.clear();
+        }
+        signatures.insert(cache_key, signature);
+        drop(signatures);
+        // Terminal requests refresh operator configuration because the client P2P route omits it.
         let version = if terminal {
             self.refresh_node(node_did).await?.unwrap_or(version)
         } else {
@@ -598,7 +911,7 @@ impl ClientCore {
         };
         tracing::debug!(
             target: "gents_desktop_core::replication",
-            request_id,
+            request_id = resolved_request_id.as_deref().unwrap_or_default(),
             node_did,
             version,
             rows,
@@ -607,7 +920,12 @@ impl ClientCore {
             source,
             "desktop selected request patch merged"
         );
-        Ok(Some(version))
+        Ok(Some(RefreshedRequestProjection {
+            requests: request_projection,
+            requester_did,
+            selected_request_id: resolved_request_id,
+            published_version: Some(version),
+        }))
     }
 
     pub async fn rename_session(
@@ -618,7 +936,7 @@ impl ClientCore {
     ) -> Result<()> {
         let snapshot = self.store.snapshot();
         let result = mutations::rename_session(
-            self.node.as_ref(),
+            &self.node,
             snapshot.as_ref(),
             node_did,
             self.node_identity.did(),
@@ -981,7 +1299,6 @@ impl ClientCore {
             .await
     }
 
-    /// Resolve an action's target independently of the observation filter.
     pub fn request_in_scope(
         &self,
         request_id: &str,
@@ -1009,7 +1326,7 @@ impl ClientCore {
             .request_authority(node_did, peer_record.as_ref())
             .await?;
         let result = mutations::resend_request(
-            self.node.as_ref(),
+            &self.node,
             snapshot.as_ref(),
             stale_request_id,
             node_did,
@@ -1020,9 +1337,8 @@ impl ClientCore {
         .await;
         match result {
             Ok(result) => {
-                self.store
-                    .set_focused_request_id(Some(result.request_id.clone()));
-                self.refresh_store().await?;
+                let result =
+                    observe_submitted_request(&self.store, result, self.refresh_store()).await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1064,7 +1380,7 @@ impl ClientCore {
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
         ensure_peer_chat_ready_at(node_did, peer_record.as_ref(), Utc::now())?;
-        match mutations::interrupt_request(self.node.as_ref(), request_id).await {
+        match mutations::interrupt_request(&self.node, request_id).await {
             Ok(()) => {
                 self.clear_mutation_error();
                 tracing::info!(
@@ -1093,7 +1409,7 @@ impl ClientCore {
             .request_authority(node_did, peer_record.as_ref())
             .await?;
         let result = mutations::retry_request(
-            self.node.as_ref(),
+            &self.node,
             snapshot.as_ref(),
             parent,
             &requester_did,
@@ -1103,9 +1419,8 @@ impl ClientCore {
         .await;
         match result {
             Ok(result) => {
-                self.store
-                    .set_focused_request_id(Some(result.request_id.clone()));
-                self.refresh_store().await?;
+                let result =
+                    observe_submitted_request(&self.store, result, self.refresh_store()).await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1202,8 +1517,6 @@ impl ClientCore {
             .and_then(crate::local_runtime::operator_endpoint)
     }
 
-    /// The identity of the hosted runtime serving `node_did`, which signs
-    /// that runtime's operator commands.
     pub fn operator_signer(
         &self,
         node_did: &str,
@@ -1232,7 +1545,7 @@ impl ClientCore {
             Some(_) => anyhow::bail!(
                 "managed node {node_did} has no operator GraphQL endpoint; refusing a desktop-replica configuration fallback"
             ),
-            None => Ok(ConfigAccess::Local(self.node_arc())),
+            None => Ok(ConfigAccess::local(self.node_arc())),
         }
     }
 
@@ -1241,7 +1554,7 @@ impl ClientCore {
         let result = mutations::upsert_agent_on(&access, row).await;
         match result {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(&row.node_did).await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1267,12 +1580,78 @@ impl ClientCore {
         let access = self.operator_access(node_did)?;
         match mutations::patch_config_components_on(&access, node_did, patches).await {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(node_did).await?;
                 self.clear_mutation_error();
                 Ok(())
             }
             Err(error) => Err(self.record_mutation_error("patch config components", error)),
         }
+    }
+
+    pub async fn read_config_editor(
+        &self,
+        node_did: &str,
+        target: gents::config_client::patch::SelfConfigTarget,
+        id: &str,
+    ) -> Result<mutations::ConfigEditorDocument> {
+        let access = self
+            .operator_graphql(node_did)
+            .map(ConfigAccess::Graphql)
+            .context("Connect this local runtime before editing its configuration.")?;
+        mutations::read_config_editor_on(&access, node_did, target, id).await
+    }
+
+    pub async fn read_backend_authentication(
+        &self,
+        node_did: &str,
+        id: &str,
+    ) -> Result<(mutations::ConfigEditorRevision, gents::InferenceBackend)> {
+        let access = self
+            .operator_graphql(node_did)
+            .map(ConfigAccess::Graphql)
+            .context("Connect this local runtime before changing authentication.")?;
+        mutations::read_backend_authentication_on(&access, node_did, id).await
+    }
+
+    pub async fn save_backend_authentication(
+        &self,
+        node_did: &str,
+        id: &str,
+        revision: &mutations::ConfigEditorRevision,
+        auth: &gents::document_config::BackendAuth,
+    ) -> Result<()> {
+        let access = self
+            .operator_graphql(node_did)
+            .map(ConfigAccess::Graphql)
+            .context("Connect this local runtime before changing authentication.")?;
+        mutations::save_backend_authentication_on(&access, node_did, id, revision, auth).await?;
+        if self.refresh_config_source(node_did).await.is_err() {
+            tracing::warn!("Authentication saved; client observation will resynchronize");
+            self.store.request_resync(Some(node_did));
+        }
+        Ok(())
+    }
+
+    pub async fn save_config_editor(
+        &self,
+        node_did: &str,
+        target: gents::config_client::patch::SelfConfigTarget,
+        id: &str,
+        revision: &mutations::ConfigEditorRevision,
+        content: &str,
+    ) -> Result<Option<mutations::ConfigEditorDocument>> {
+        let access = self
+            .operator_graphql(node_did)
+            .map(ConfigAccess::Graphql)
+            .context("Connect this local runtime before editing its configuration.")?;
+        let saved =
+            mutations::save_config_editor_on(&access, node_did, target, id, revision, content)
+                .await?;
+        if self.refresh_config_source(node_did).await.is_err() {
+            tracing::warn!("Configuration saved; client observation will resynchronize");
+            self.store.request_resync(Some(node_did));
+        }
+        Ok(saved)
     }
 
     pub async fn apply_config_components(
@@ -1282,7 +1661,7 @@ impl ClientCore {
         let access = self.operator_access(&document.node.node_did)?;
         match mutations::apply_config_components_on(&access, document).await {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(&document.node.node_did).await?;
                 self.clear_mutation_error();
                 Ok(())
             }
@@ -1295,7 +1674,7 @@ impl ClientCore {
         let result = mutations::upsert_node_on(&access, row).await;
         match result {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(&row.node_did).await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1313,7 +1692,7 @@ impl ClientCore {
         let access = self.operator_access(node_did)?;
         match mutations::set_default_agent_on(&access, node_did, agent_id).await {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(node_did).await?;
                 self.clear_mutation_error();
                 Ok(())
             }
@@ -1325,7 +1704,7 @@ impl ClientCore {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_inference_backend_on(&access, row).await {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(&row.node_did).await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1344,7 +1723,7 @@ impl ClientCore {
         let result = mutations::upsert_tools_on(&access, row).await;
         match result {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(&row.node_did).await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1365,7 +1744,7 @@ impl ClientCore {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_tool_service_registry_on(&access, row).await {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(&row.node_did).await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1383,7 +1762,7 @@ impl ClientCore {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_inference_profile_on(&access, row).await {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(&row.node_did).await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1401,7 +1780,7 @@ impl ClientCore {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_task_on(&access, row).await {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(&row.node_did).await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1419,7 +1798,7 @@ impl ClientCore {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_skill_on(&access, row).await {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(&row.node_did).await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1437,7 +1816,7 @@ impl ClientCore {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_schedule_on(&access, row).await {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(&row.node_did).await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1455,7 +1834,7 @@ impl ClientCore {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_trigger_on(&access, row).await {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(&row.node_did).await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1476,7 +1855,7 @@ impl ClientCore {
         let access = self.operator_access(&document.node_did)?;
         match mutations::upsert_event_source_on(&access, document).await {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(&document.node_did).await?;
                 self.clear_mutation_error();
                 Ok(())
             }
@@ -1492,7 +1871,7 @@ impl ClientCore {
                 anyhow::anyhow!("no EventSource document with event_source_id {event_source_id:?}"),
             )),
             Ok(_) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(node_did).await?;
                 self.clear_mutation_error();
                 Ok(())
             }
@@ -1503,7 +1882,7 @@ impl ClientCore {
     pub async fn fire_task_now(&self, task_row: &Task, args: serde_json::Value) -> Result<String> {
         let actor = identity::Did::new(self.node_identity.did().to_owned())
             .context("desktop node DID is not ACP-addressable")?;
-        match mutations::fire_task_now(self.node.as_ref(), actor, task_row, args).await {
+        match mutations::fire_task_now(&self.node, actor, task_row, args).await {
             Ok(doc_id) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
@@ -1536,7 +1915,7 @@ impl ClientCore {
     pub async fn fire_schedule_now(&self, row: &Schedule) -> Result<String> {
         let actor = identity::Did::new(self.node_identity.did().to_owned())
             .context("desktop node DID is not ACP-addressable")?;
-        match mutations::fire_schedule_now(self.node.as_ref(), actor, row).await {
+        match mutations::fire_schedule_now(&self.node, actor, row).await {
             Ok(doc_id) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
@@ -1609,9 +1988,8 @@ impl ClientCore {
         .await;
         match submitted {
             Ok(result) => {
-                self.store
-                    .set_focused_request_id(Some(result.request_id.clone()));
-                self.refresh_store().await?;
+                let result =
+                    observe_submitted_request(&self.store, result, self.refresh_store()).await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1628,26 +2006,26 @@ impl ClientCore {
         }
     }
 
-    /// Observe hydration for a selected session and start its first request.
-    ///
-    /// A rejected request is terminal here. Retrying it is an explicit user
-    /// action owned by [`Self::retry_session_hydration`].
     pub async fn ensure_session_hydration_started(
         &self,
         session_id: &str,
         node_did: &str,
-    ) -> Result<()> {
+    ) -> Result<(
+        gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
+        Option<String>,
+    )> {
         let session_id = normalize_required("session_id", session_id)?;
         let node_did = normalize_required("node_did", node_did)?;
         let foreign_header = self
             .session_unreadable_reason(&session_id, &node_did)
             .is_some();
-        let _transition = self.hydration_transition.lock().await;
-        let progress = self
-            .session_hydration_progress(&session_id, &node_did)
+        let (progress, detail, _) = self
+            .load_hydration_observation(&session_id, &node_did)
             .await?;
-        if !should_start_session_hydration_request(&progress, &session_id, &node_did) {
-            return Ok(());
+        if !should_start_session_hydration_request(&progress, &session_id, &node_did)
+            || foreign_header
+        {
+            return Ok((progress, detail));
         }
         let evidence = load_local_hydration_start_evidence(
             self.node.as_ref(),
@@ -1656,14 +2034,20 @@ impl ClientCore {
             &node_did,
         )
         .await?;
-        if !hydration_start_evidence_is_ready(foreign_header, &progress, &evidence) {
-            return Ok(());
+        if !hydration_start_evidence_is_ready(false, &progress, &evidence) {
+            return Ok((progress, detail));
         }
-        self.request_session_hydration(&session_id, &node_did).await
+        self.admit_session_hydration_request(
+            gents::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction::PassiveStart,
+            &session_id,
+            &node_did,
+            &progress,
+            Some(&evidence),
+        )
+        .await?;
+        self.load_hydration_status(&session_id, &node_did).await
     }
 
-    /// The requester scope this client reads a node's transcripts under:
-    /// its own node DID for an enrolled node, none otherwise.
     pub fn transcript_node_scope(&self, node_did: &str) -> Option<String> {
         self.sync_state
             .records()
@@ -1672,9 +2056,6 @@ impl ClientCore {
             .then(|| self.node_identity.did().to_string())
     }
 
-    /// Why this client cannot read a locally known session, from its
-    /// replicated header alone. `None` when it can, or when no header is
-    /// known yet.
     pub fn session_unreadable_reason(
         &self,
         session_id: &str,
@@ -1692,7 +2073,6 @@ impl ClientCore {
         )
     }
 
-    /// Derive receiver progress from durable rows for one exact target.
     pub async fn session_hydration_progress(
         &self,
         session_id: &str,
@@ -1701,8 +2081,6 @@ impl ClientCore {
         Ok(self.session_hydration_status(session_id, node_did).await?.0)
     }
 
-    /// Receiver progress plus the signed rejection detail of a refused
-    /// request, so a refusal is presented with its reason.
     pub async fn session_hydration_status(
         &self,
         session_id: &str,
@@ -1716,45 +2094,86 @@ impl ClientCore {
         self.load_hydration_status(&session_id, &node_did).await
     }
 
-    /// Explicitly restart a failed hydration attempt for one session.
     pub async fn retry_session_hydration(&self, session_id: &str, node_did: &str) -> Result<()> {
         let session_id = normalize_required("session_id", session_id)?;
         let node_did = normalize_required("node_did", node_did)?;
-        let _transition = self.hydration_transition.lock().await;
         if let Some(reason) = self.session_unreadable_reason(&session_id, &node_did) {
             bail!("{reason}");
         }
-        let (progress, _) = self.load_hydration_status(&session_id, &node_did).await?;
-        if !gents::agent::p2p_reconcile::session_hydration::can_retry_hydration(
+        let (progress, _, request) = self
+            .load_hydration_observation(&session_id, &node_did)
+            .await?;
+        if !gents::agent::p2p_reconcile::session_hydration::can_admit_hydration_request(
+            gents::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction::ExplicitRetry,
+            &request,
             &progress,
             &session_id,
             &node_did,
+            false,
+            false,
+            false,
+            false,
         ) {
             bail!("session hydration retry requires a failed attempt for the selected session");
         }
-        self.request_session_hydration(&session_id, &node_did).await
+        if !self
+            .admit_session_hydration_request(
+                gents::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction::ExplicitRetry,
+                &session_id,
+                &node_did,
+                &progress,
+                None,
+            )
+            .await?
+        {
+            bail!("session hydration retry requires a failed attempt for the selected session");
+        }
+        Ok(())
     }
 
-    async fn request_session_hydration(&self, session_id: &str, node_did: &str) -> Result<()> {
+    async fn admit_session_hydration_request(
+        &self,
+        action: gents::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction,
+        session_id: &str,
+        node_did: &str,
+        observed_progress: &gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
+        evidence: Option<&LocalHydrationStartEvidence>,
+    ) -> Result<bool> {
+        use gents::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction as Action;
+
         let session_id = normalize_required("session_id", session_id)?;
         let node_did = normalize_required("node_did", node_did)?;
+        let evidence = match action {
+            Action::PassiveStart => Some(
+                evidence.context("passive hydration admission requires local start evidence")?,
+            ),
+            Action::ExplicitRetry => {
+                anyhow::ensure!(
+                    evidence.is_none(),
+                    "explicit hydration retry does not accept passive start evidence"
+                );
+                None
+            }
+        };
         let peer_record = self
             .peer_record_for_chat_write(&node_did, Utc::now())
             .await?;
         ensure_peer_chat_ready_at(&node_did, peer_record.as_ref(), Utc::now())?;
         let request_key = format!("{}:{session_id}", self.local_peer_id());
-        let requester_did = gents::graphql::escape_graphql_string(self.node_identity.did());
+        let expected_requester_did = self.node_identity.did().to_owned();
+        let requester_did = gents::graphql::escape_graphql_string(&expected_requester_did);
         let node_did_gql = gents::graphql::escape_graphql_string(&node_did);
         let session_id_gql = gents::graphql::escape_graphql_string(&session_id);
         let request_key_gql = gents::graphql::escape_graphql_string(&request_key);
         let now = gents::graphql::escape_graphql_string(
             &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         );
-        let mutation = format!(
-            r#"mutation {{
-                upsert_SessionHydrationRequest(
-                    filter: {{ request_key: {{ _eq: "{request_key_gql}" }} }},
-                    add: {{
+        let request_query = hydration_request_admission_query(&request_key_gql);
+        let observed_progress = observed_progress.clone();
+        let mutation = match action {
+            Action::PassiveStart => format!(
+                r#"mutation {{
+                create_SessionHydrationRequest(input: {{
                         request_key: "{request_key_gql}",
                         requester_did: "{requester_did}",
                         node_did: "{node_did_gql}",
@@ -1763,8 +2182,20 @@ impl ClientCore {
                         status: "pending",
                         status_detail: "",
                         served_doc_count: 0
+                }}) {{ _docID }}
+            }}"#,
+            ),
+            Action::ExplicitRetry => format!(
+                r#"mutation {{
+                update_SessionHydrationRequest(
+                    filter: {{
+                        request_key: {{ _eq: "{request_key_gql}" }},
+                        requester_did: {{ _eq: "{requester_did}" }},
+                        node_did: {{ _eq: "{node_did_gql}" }},
+                        session_id: {{ _eq: "{session_id_gql}" }},
+                        status: {{ _eq: "rejected" }}
                     }},
-                    update: {{
+                    input: {{
                         created_at: "{now}",
                         status: "pending",
                         status_detail: "",
@@ -1775,15 +2206,93 @@ impl ClientCore {
                         processed_at: null
                     }}
                 ) {{ _docID }}
-            }}"#
-        );
-        gents::config_client::ConfigAccess::write_local(
+            }}"#,
+            ),
+        };
+        let operation = match action {
+            Action::PassiveStart => "desktop.session_hydration.admit_initial",
+            Action::ExplicitRetry => "desktop.session_hydration.retry_rejected",
+        };
+        gents::config_client::ConfigAccess::transact_local_write(
             &self.node,
-            "desktop.session_hydration.request",
-            &mutation,
+            None,
+            operation,
+            move |txn| {
+                let request_query = request_query.clone();
+                let mutation = mutation.clone();
+                let request_key = request_key.clone();
+                let expected_requester_did = expected_requester_did.clone();
+                let observed_progress = observed_progress.clone();
+                Box::pin(async move {
+                    if action == Action::PassiveStart {
+                        gents::graphql::fence_arrivals(txn, "SessionHydrationRequest").await?;
+                    }
+                    let request_response = txn.execute(&request_query).await?;
+                    let requests = transaction_rows::<HydrationAdmissionRequestRow>(
+                        &request_response,
+                        "SessionHydrationRequest",
+                    )?;
+                    anyhow::ensure!(
+                        requests.len() <= 1,
+                        "session hydration request key resolved to multiple rows"
+                    );
+                    let request = requests.first();
+                    if let Some(request) = request {
+                        request.ensure_target(&request_key, &expected_requester_did, &node_did, &session_id)?;
+                    }
+                    let request_state = match request {
+                        None => {
+                            gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Missing
+                        }
+                        Some(request) => match request.status.as_deref() {
+                            Some("pending") => {
+                                gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Pending
+                            }
+                            Some("served") => {
+                                gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Served(BTreeSet::new())
+                            }
+                            Some("rejected") => {
+                                gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Rejected(None)
+                            }
+                            Some(_) | None if action == Action::PassiveStart => {
+                                gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Pending
+                            }
+                            Some(status) => anyhow::bail!("unknown session hydration request status {status:?}"),
+                            None => anyhow::bail!("session hydration request is missing status"),
+                        },
+                    };
+                    let evidence = evidence.as_ref();
+                    if !gents::agent::p2p_reconcile::session_hydration::can_admit_hydration_request(
+                        action,
+                        &request_state,
+                        &observed_progress,
+                        &session_id,
+                        &node_did,
+                        false,
+                        evidence.is_some_and(|evidence| evidence.owned_session_present),
+                        observed_progress.merged_count > 0,
+                        evidence.is_some_and(|evidence| evidence.nonterminal_request_present),
+                    ) {
+                        return Ok(false);
+                    }
+                    let response = txn.execute(&mutation).await?;
+                    let field = match action {
+                        Action::PassiveStart => "create_SessionHydrationRequest",
+                        Action::ExplicitRetry => "update_SessionHydrationRequest",
+                    };
+                    let rows = gents::graphql::mutation_documents(&response, field)?;
+                    let changed = rows.is_some_and(|rows| !rows.is_empty());
+                    if action == Action::PassiveStart {
+                        anyhow::ensure!(
+                            changed,
+                            "initial session hydration request create returned no document"
+                        );
+                    }
+                    Ok(changed)
+                })
+            },
         )
-        .await?;
-        Ok(())
+        .await
     }
 
     async fn load_hydration_status(
@@ -1793,6 +2302,21 @@ impl ClientCore {
     ) -> Result<(
         gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
         Option<String>,
+    )> {
+        let (progress, detail, _) = self
+            .load_hydration_observation(session_id, node_did)
+            .await?;
+        Ok((progress, detail))
+    }
+
+    async fn load_hydration_observation(
+        &self,
+        session_id: &str,
+        node_did: &str,
+    ) -> Result<(
+        gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
+        Option<String>,
+        gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState,
     )> {
         let merged = load_local_hydration_documents(
             self.node.as_ref(),
@@ -1812,9 +2336,13 @@ impl ClientCore {
         .await?;
         Ok((
             gents::agent::p2p_reconcile::session_hydration::project_durable_hydration_progress(
-                session_id, node_did, merged, request,
+                session_id,
+                node_did,
+                merged,
+                request.clone(),
             ),
             detail,
+            request,
         ))
     }
 
@@ -1845,6 +2373,64 @@ struct HydrationDocIdRow {
 struct LocalHydrationStartEvidence {
     owned_session_present: bool,
     nonterminal_request_present: bool,
+}
+
+#[derive(Deserialize)]
+struct HydrationAdmissionRequestRow {
+    request_key: Option<String>,
+    requester_did: Option<String>,
+    node_did: Option<String>,
+    session_id: Option<String>,
+    status: Option<String>,
+}
+
+impl HydrationAdmissionRequestRow {
+    fn ensure_target(
+        &self,
+        request_key: &str,
+        requester_did: &str,
+        node_did: &str,
+        session_id: &str,
+    ) -> Result<()> {
+        for (field, actual, expected) in [
+            ("request_key", self.request_key.as_deref(), request_key),
+            (
+                "requester_did",
+                self.requester_did.as_deref(),
+                requester_did,
+            ),
+            ("node_did", self.node_did.as_deref(), node_did),
+            ("session_id", self.session_id.as_deref(), session_id),
+        ] {
+            anyhow::ensure!(
+                actual == Some(expected),
+                "session hydration request {field} does not match the selected target"
+            );
+        }
+        Ok(())
+    }
+}
+
+fn transaction_rows<T>(response: &serde_json::Value, field: &str) -> Result<Vec<T>>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let data = response
+        .get("data")
+        .and_then(serde_json::Value::as_object)
+        .context("hydration admission transaction omitted response data")?;
+    let rows = data
+        .get(field)
+        .with_context(|| format!("hydration admission transaction omitted {field}"))?;
+    Vec::<T>::deserialize(rows).with_context(|| format!("decode {field} transaction rows"))
+}
+
+fn hydration_request_admission_query(request_key_gql: &str) -> String {
+    format!(
+        r#"{{ SessionHydrationRequest(filter: {{ request_key: {{ _eq: "{request_key_gql}" }} }}) {{
+            request_key requester_did node_did session_id status
+        }} }}"#
+    )
 }
 
 fn should_start_session_hydration_request(
@@ -2179,150 +2765,6 @@ mod delete_source_tests {
     use serde_json::json;
 
     #[test]
-    fn request_actions_resolve_explicit_node_in_a_shared_snapshot() {
-        let rows: Vec<_> = ["did:alpha", "did:beta"]
-            .into_iter()
-            .map(|did| AgentRequestRow {
-                request_id: "same-id".into(),
-                node_did: Some(did.into()),
-                ..Default::default()
-            })
-            .collect();
-        for did in ["did:alpha", "did:beta"] {
-            assert_eq!(
-                request_in_scope(&rows, "same-id", Some(did))
-                    .unwrap()
-                    .node_did
-                    .as_deref(),
-                Some(did)
-            );
-        }
-        assert!(request_in_scope(&rows, "same-id", None)
-            .unwrap_err()
-            .to_string()
-            .contains("ambiguous"));
-        assert!(request_in_scope(&rows, "same-id", Some("did:missing")).is_err());
-    }
-
-    #[test]
-    fn hydration_documents_match_canonical_client_routable_collections() {
-        let response = defra_node::QueryResponse::success(json!({
-            "AgentRequest": [{ "_docID": "request-1" }],
-            "AgentMessage": [{ "_docID": "message-1" }],
-            "AgentOutputSegment": [{ "_docID": "segment-1" }],
-            "AgentToolCall": [{ "_docID": "tool-call-1" }],
-            "CompactionEntry": [{ "_docID": "compaction-1" }]
-        }));
-
-        assert_eq!(
-            local_hydration_documents_from_response(&response).unwrap(),
-            [
-                (SessionHydrationCollection::AgentRequest, "request-1"),
-                (SessionHydrationCollection::AgentMessage, "message-1"),
-                (SessionHydrationCollection::AgentOutputSegment, "segment-1"),
-                (SessionHydrationCollection::AgentToolCall, "tool-call-1"),
-                (SessionHydrationCollection::CompactionEntry, "compaction-1"),
-            ]
-            .into_iter()
-            .map(|(collection, doc_id)| SessionHydrationDocumentKey {
-                collection,
-                doc_id: doc_id.to_owned(),
-            })
-            .collect()
-        );
-    }
-
-    #[test]
-    fn initial_hydration_request_is_written_only_for_observed_idle_target() {
-        use gents::agent::p2p_reconcile::session_hydration::{
-            ClientHydrationPhase, ClientHydrationProgress,
-        };
-
-        let serving = ClientHydrationProgress {
-            session_id: "session-1".into(),
-            node_did: "did:node".into(),
-            phase: ClientHydrationPhase::Serving,
-            merged_count: 3,
-            served_count: Some(8),
-            ..ClientHydrationProgress::default()
-        };
-        assert!(!should_start_session_hydration_request(
-            &serving,
-            "session-1",
-            "did:node",
-        ));
-        assert!(!should_start_session_hydration_request(
-            &serving,
-            "session-2",
-            "did:node",
-        ));
-
-        let failed = ClientHydrationProgress {
-            phase: ClientHydrationPhase::Failed,
-            ..serving.clone()
-        };
-        assert!(!should_start_session_hydration_request(
-            &failed,
-            "session-1",
-            "did:node",
-        ));
-
-        let complete = ClientHydrationProgress {
-            phase: ClientHydrationPhase::Complete,
-            merged_count: 8,
-            served_count: Some(8),
-            ..serving
-        };
-        assert!(!should_start_session_hydration_request(
-            &complete,
-            "session-1",
-            "did:node",
-        ));
-        let idle = ClientHydrationProgress {
-            session_id: "session-1".into(),
-            node_did: "did:node".into(),
-            ..ClientHydrationProgress::default()
-        };
-        assert!(should_start_session_hydration_request(
-            &idle,
-            "session-1",
-            "did:node",
-        ));
-        assert!(!hydration_start_evidence_is_ready(
-            false,
-            &idle,
-            &LocalHydrationStartEvidence::default(),
-        ));
-        assert!(hydration_start_evidence_is_ready(
-            false,
-            &ClientHydrationProgress {
-                merged_count: 1,
-                ..idle.clone()
-            },
-            &LocalHydrationStartEvidence::default(),
-        ));
-        assert!(hydration_start_evidence_is_ready(
-            false,
-            &idle,
-            &LocalHydrationStartEvidence {
-                owned_session_present: true,
-                nonterminal_request_present: false,
-            },
-        ));
-        assert!(hydration_start_evidence_is_ready(
-            false,
-            &ClientHydrationProgress {
-                merged_count: 1,
-                ..idle
-            },
-            &LocalHydrationStartEvidence {
-                owned_session_present: true,
-                nonterminal_request_present: true,
-            },
-        ));
-    }
-
-    #[test]
     fn hydration_start_evidence_rejects_unknown_request_lifecycle_state() {
         let response = defra_node::QueryResponse::success(json!({
             "AgentSession": [{ "_docID": "session-1" }],
@@ -2338,41 +2780,6 @@ mod delete_source_tests {
             format!("{error:#}").contains("notARequestState"),
             "{error:#}"
         );
-    }
-
-    #[test]
-    fn initial_hydration_matches_receiver_start_truth_table() {
-        use gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress;
-        // SessionHydration.canStartInitial, including a live request with an
-        // owned header and a pending compose request without one.
-        for (owned, documents, active, expected) in [
-            (false, false, false, false),
-            (false, false, true, false),
-            (false, true, false, true),
-            (false, true, true, false),
-            (true, false, false, true),
-            (true, false, true, true),
-            (true, true, false, true),
-            (true, true, true, true),
-        ] {
-            let progress = ClientHydrationProgress {
-                merged_count: usize::from(documents),
-                ..Default::default()
-            };
-            let evidence = LocalHydrationStartEvidence {
-                owned_session_present: owned,
-                nonterminal_request_present: active,
-            };
-            assert_eq!(
-                hydration_start_evidence_is_ready(false, &progress, &evidence),
-                expected,
-                "owned={owned}, documents={documents}, active={active}"
-            );
-            assert!(
-                !hydration_start_evidence_is_ready(true, &progress, &evidence),
-                "a foreign header never starts: owned={owned}, documents={documents}, active={active}"
-            );
-        }
     }
 
     #[test]
@@ -2409,19 +2816,6 @@ mod delete_source_tests {
         record
     }
 
-    #[test]
-    fn only_the_requested_agent_is_forwarded_to_the_db_binding() {
-        let mut peer = peer_record(Some("enrollment"));
-        peer.pairing_ready = true;
-
-        ensure_peer_chat_ready_at(&peer.node_did, Some(&peer), Utc::now()).unwrap();
-        assert_eq!(agent_id_for_write(None), None);
-        assert_eq!(
-            agent_id_for_write(Some(" review ")).as_deref(),
-            Some("review")
-        );
-    }
-
     #[tokio::test(start_paused = true)]
     async fn expired_enrollment_cannot_admit_a_request_without_waiting_for_the_sweep() {
         let mut peer = peer_record(Some("enrollment"));
@@ -2444,65 +2838,6 @@ mod delete_source_tests {
         machine.pairing_template = Some("machine".to_string());
         machine.pairing_ready = true;
         assert!(peer_record_owning_node_at(&[machine], "did:key:child", Utc::now()).is_none());
-    }
-
-    #[test]
-    fn pending_enrollment_peer_rejects_chat_writes() {
-        let peer = peer_record(Some("enrollment"));
-
-        assert!(
-            ensure_peer_chat_ready_at(&peer.node_did, Some(&peer), Utc::now())
-                .unwrap_err()
-                .to_string()
-                .contains("route is not ready")
-        );
-    }
-
-    #[test]
-    fn malformed_source_and_missing_owner_reject_chat_writes() {
-        let peer = peer_record(None);
-        assert!(ensure_peer_chat_ready_at(&peer.node_did, Some(&peer), Utc::now()).is_err());
-        assert!(
-            ensure_peer_chat_ready_at("did:key:missing", None, Utc::now())
-                .unwrap_err()
-                .to_string()
-                .contains("no saved deployment route")
-        );
-    }
-
-    #[test]
-    fn local_standard_waits_for_background_pairing_before_chat() {
-        let mut peer = peer_record(Some("local-standard"));
-        assert!(ensure_peer_chat_ready_at(&peer.node_did, Some(&peer), Utc::now()).is_err());
-        peer.pairing_ready = true;
-        ensure_peer_chat_ready_at(&peer.node_did, Some(&peer), Utc::now()).unwrap();
-    }
-
-    #[test]
-    fn source_matching_distinguishes_remote_rows_from_local_rows() {
-        let sources = vec![None, Some("did:remote".to_string())];
-
-        assert!(row_matches_source(&sources, 0, "did:local", false));
-        assert!(!row_matches_source(&sources, 0, "did:remote", true));
-        assert!(row_matches_source(&sources, 1, "did:remote", true));
-        assert!(!row_matches_source(&sources, 1, "did:other", true));
-    }
-
-    #[test]
-    fn sourced_pruning_preserves_same_id_rows_and_parallel_attribution() {
-        let mut rows = vec!["shared", "shared", "other"];
-        let mut sources = vec![
-            None,
-            Some("did:remote".to_string()),
-            Some("did:remote".to_string()),
-        ];
-
-        retain_sourced_rows(&mut rows, &mut sources, "did:remote", true, |row| {
-            *row == "shared"
-        });
-
-        assert_eq!(rows, vec!["shared", "other"]);
-        assert_eq!(sources, vec![None, Some("did:remote".to_string())]);
     }
 
     #[test]
@@ -2578,4 +2913,192 @@ pub struct NetworkReplicator {
     pub collections: Vec<String>,
     pub status: Option<u8>,
     pub last_status_change: Option<String>,
+}
+
+#[cfg(test)]
+mod accepted_edit_projection_tests {
+    use super::*;
+    use gents_protocol::session_input_edit::{
+        SessionInputEditOutcome, SessionInputEditReceipt, SESSION_INPUT_EDIT_VERSION,
+    };
+
+    #[tokio::test]
+    async fn submitted_request_survives_refresh_failure_and_requests_scoped_resync() {
+        let (store, _version) = ObservedStore::new(ClientStore::default());
+        let mut wake = store.subscribe_resync_requests();
+        let receipt = SubmittedRequest {
+            request_id: "accepted-request".into(),
+            session_id: "accepted-session".into(),
+            node_did: "did:test:node".into(),
+            agent_id: Some("agent".into()),
+        };
+        let before = store.projection_revision();
+        let accepted = observe_submitted_request(&store, receipt.clone(), async {
+            anyhow::bail!("projection unavailable after commit")
+        })
+        .await;
+        assert_eq!(accepted, receipt);
+        assert!(wake.has_changed().unwrap());
+        wake.borrow_and_update();
+        assert_eq!(
+            store.take_resync_requests(),
+            (false, vec!["did:test:node".to_owned()])
+        );
+        assert_eq!(store.projection_revision(), before);
+        assert!(store.snapshot().requests.is_empty());
+    }
+
+    #[tokio::test]
+    async fn submitted_request_refresh_success_does_not_schedule_another_read() {
+        let (store, _version) = ObservedStore::new(ClientStore::default());
+        let wake = store.subscribe_resync_requests();
+        let receipt = SubmittedRequest {
+            request_id: "accepted-request".into(),
+            session_id: "accepted-session".into(),
+            node_did: "did:test:node".into(),
+            agent_id: None,
+        };
+        let accepted = observe_submitted_request(&store, receipt.clone(), async { Ok(1) }).await;
+        assert_eq!(accepted, receipt);
+        assert!(!wake.has_changed().unwrap());
+        assert_eq!(store.take_resync_requests(), (false, Vec::new()));
+    }
+
+    fn applied_receipt() -> SessionInputEditReceipt {
+        SessionInputEditReceipt {
+            version: SESSION_INPUT_EDIT_VERSION,
+            command_id: "accepted-edit".to_string(),
+            command_digest: "sha256:test".to_string(),
+            requester_did: "did:test:requester".to_string(),
+            node_did: "did:test:node".to_string(),
+            session_id: "session".to_string(),
+            outcome: SessionInputEditOutcome::Applied,
+            reason: String::new(),
+            request_doc_ids: vec!["replacement-doc".to_string()],
+            request_ids: vec!["replacement-request".to_string()],
+            processed_at: "2026-10-14T00:00:00Z".to_string(),
+            signature: vec![0; 64],
+        }
+    }
+
+    fn modeled_command_outcome(case: &serde_json::Value) -> SessionInputEditOutcome {
+        serde_json::from_value(case["command_outcome"].clone()).expect("modeled receipt outcome")
+    }
+
+    #[tokio::test]
+    async fn generated_accepted_receipt_survives_projection_refresh_failure() {
+        let contracts: serde_json::Value =
+            gents_lean_contract::load_contract_snapshot().expect("Lean contract snapshot");
+        let case = contracts["session_input_edit_client_observation_cases"]
+            .as_array()
+            .and_then(|cases| {
+                cases
+                    .iter()
+                    .find(|case| case["name"] == "applied_receipt_projection_failure")
+            })
+            .expect("modeled applied receipt with failed projection");
+        let (store, _version) = ObservedStore::new(ClientStore::default());
+        let before = store.projection_revision().store_version;
+        let receipt = applied_receipt();
+        let accepted = merge_accepted_edit_projection(
+            &ConfigAccess::Graphql(gents::config_client::GraphqlEndpoint::anonymous(
+                "invalid endpoint",
+            )),
+            store.as_ref(),
+            receipt,
+            &["selected-doc".to_string()],
+            "did:test:node",
+            "session",
+            "did:test:requester",
+        )
+        .await;
+
+        assert_eq!(
+            serde_json::to_value(accepted.outcome).expect("serialize outcome"),
+            serde_json::to_value(modeled_command_outcome(case)).expect("serialize modeled outcome")
+        );
+        assert_eq!(case["projection_fresh"], false);
+        assert_eq!(store.projection_revision().store_version, before);
+        assert!(store.snapshot().requests.is_empty());
+    }
+
+    #[tokio::test]
+    async fn incomplete_or_foreign_edit_projection_keeps_store_and_receipt() {
+        let node = Arc::new(
+            defra_node::NodeBuilder::default()
+                .build()
+                .await
+                .expect("local projection node"),
+        );
+        crate::client::schema::ensure_runtime_schemas(node.as_ref())
+            .await
+            .expect("schemas");
+        let access = ConfigAccess::local(node.clone());
+        let seed = access
+            .write(
+                "test.foreign_edit_projection_row",
+                r#"mutation {
+                    create_AgentRequest(input: {
+                        request_id: "foreign-projection-row",
+                        purpose: "normal",
+                        node_did: "did:test:other-node",
+                        requester_did: "did:test:requester",
+                        agent_id: "default",
+                        session_id: "other-session",
+                        content: "foreign row",
+                        lifecycle_state: "pending",
+                        execution_origin: "interactive",
+                        created_at: "2026-10-14T00:00:00Z"
+                    }) { _docID }
+                }"#,
+            )
+            .await
+            .expect("seed foreign row");
+        let foreign_id = seed["data"]["add_AgentRequest"][0]["_docID"]
+            .as_str()
+            .expect("physical ID")
+            .to_owned();
+        let (store, _version) = ObservedStore::new(ClientStore::default());
+        let before = store.projection_revision().store_version;
+
+        let missing = merge_accepted_edit_projection(
+            &access,
+            store.as_ref(),
+            applied_receipt(),
+            &["physically-missing".to_string()],
+            "did:test:node",
+            "session",
+            "did:test:requester",
+        )
+        .await;
+        let foreign = merge_accepted_edit_projection(
+            &access,
+            store.as_ref(),
+            applied_receipt(),
+            &[foreign_id],
+            "did:test:node",
+            "session",
+            "did:test:requester",
+        )
+        .await;
+        let mut empty_receipt = applied_receipt();
+        empty_receipt.request_doc_ids.clear();
+        empty_receipt.request_ids.clear();
+        let empty = merge_accepted_edit_projection(
+            &access,
+            store.as_ref(),
+            empty_receipt,
+            &[],
+            "did:test:node",
+            "session",
+            "did:test:requester",
+        )
+        .await;
+
+        for receipt in [missing, foreign, empty] {
+            assert_eq!(receipt.outcome, SessionInputEditOutcome::Applied);
+        }
+        assert_eq!(store.projection_revision().store_version, before);
+        assert!(store.snapshot().requests.is_empty());
+    }
 }

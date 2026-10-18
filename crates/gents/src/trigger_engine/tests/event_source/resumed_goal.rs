@@ -53,7 +53,7 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let receipt = crate::goal::resume_goal_request(
-        &crate::ConfigAccess::Local(node.clone()),
+        &crate::ConfigAccess::local(node.clone()),
         &identity,
         identity.did(),
         "resumed-event-session",
@@ -96,7 +96,7 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
     let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
     source.reconcile_subscriptions(snapshot.as_ref()).await;
     let tool = BoundedWriteTool::new(
-        crate::config_client::ConfigAccess::Local(node.clone()),
+        crate::config_client::ConfigAccess::local(node.clone()),
         WriteToolDecl {
             notification: None,
             tool_name: "write_resumed_output".into(),
@@ -117,8 +117,6 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
             output_obligation: None,
         },
     );
-    // Use the persisted resumed request at the daemon's actual tool scope seam.
-    // The tool receives no model-authored run_id and must stamp it itself.
     crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
         None,
         CancellationToken::new(),

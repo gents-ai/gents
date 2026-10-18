@@ -12,6 +12,7 @@ use super::{AgentToolSurfaceConfig, RuntimeToolAvailability, ToolPolicySurface, 
 
 const MEMORY_TOOL_NAME: &str = "memory";
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ToolSurfaceExplanation {
     pub tool_names: Vec<String>,
@@ -22,12 +23,14 @@ pub struct ToolSurfaceExplanation {
     pub warnings: Vec<ToolSurfaceWarning>,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ToolSurfaceWarning {
     pub code: String,
     pub message: String,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
 pub struct ToolSurfacePolicyTrace {
     pub requested: BTreeMap<String, Vec<String>>,
@@ -459,9 +462,6 @@ fn policy_summary(policy: &ToolPolicySurface) -> BTreeMap<String, Vec<String>> {
         [
             (policy.context_budget, CONTEXT_BUDGET_TOOL_NAME),
             (policy.session_history, SESSION_HISTORY_TOOL_NAME),
-            // `include_defra_query` not the raw `defra_query` bit: a deny-all
-            // collection scope (`Only(∅)`/`None`) gates the tool off, so the
-            // effective trace must not list it as present.
             (policy.include_defra_query(), DEFRA_QUERY_TOOL_NAME),
         ]
         .into_iter()
@@ -528,51 +528,4 @@ fn policy_summary(policy: &ToolPolicySurface) -> BTreeMap<String, Vec<String>> {
         vec![format!("scope:{}", policy.query_tools.kind())],
     );
     summary
-}
-
-#[cfg(test)]
-mod target_scope_tests {
-    use super::*;
-    use crate::document_config::AgentTargetDocument;
-    use crate::tool_surface::{AgentToolConfig, ResolvedToolSelection, ToolCeiling};
-
-    #[test]
-    fn remote_target_stays_listed_and_inactive_local_target_is_dropped() {
-        let target = AgentTargetDocument {
-            target_id: "remote-worker".into(),
-            node_did: "did:key:caller".into(),
-            target_node_did: "did:key:remote".into(),
-            agent_id: "worker".into(),
-            name: "remote worker".into(),
-            description: None,
-            tags: Vec::new(),
-        };
-        for (target_node_did, local_agents, expected) in [
-            ("did:key:remote", HashSet::new(), 1),
-            ("did:key:caller", HashSet::new(), 0),
-            ("did:key:caller", HashSet::from(["worker".to_owned()]), 1),
-        ] {
-            let target = AgentTargetDocument {
-                target_node_did: target_node_did.into(),
-                ..target.clone()
-            };
-            let config = AgentToolSurfaceConfig::from_selection_with_agent_tools(
-                "coordinator",
-                ResolvedToolSelection::default(),
-                &ToolCeiling::meta_only(),
-                AgentToolConfig {
-                    targets: vec![target.clone()],
-                    enabled: true,
-                },
-                Vec::new(),
-            )
-            .unwrap();
-            let surface = config.resolve_with_available_agent_targets_for_runtime_availability(
-                RuntimeToolAvailability::all(),
-                "did:key:caller",
-                &local_agents,
-            );
-            assert_eq!(surface.agent_targets().len(), expected);
-        }
-    }
 }

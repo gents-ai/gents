@@ -122,3 +122,84 @@ async fn window_scope_reaches_the_core_and_survives_core_recreation() {
     state.bridge.lock().unwrap().core.take();
     core.shutdown().await.expect("shutdown recreated core");
 }
+
+#[test]
+fn destroying_or_navigating_a_window_retires_only_its_prompt_subscriptions() {
+    let (_temp, state) = state();
+    state.register_window("main");
+    state.register_window("second");
+    let active = {
+        let mut bridge = state.bridge.lock().unwrap();
+        bridge
+            .approvals_prompt_subscriptions
+            .subscribe("main", "main-prompt".into());
+        bridge
+            .approvals_prompt_subscriptions
+            .subscribe("second", "second-prompt".into());
+        bridge.approvals_prompt_subscriptions.changes()
+    };
+    state.window_event("main", &tauri::WindowEvent::Focused(false));
+    assert!(state
+        .bridge
+        .lock()
+        .unwrap()
+        .approvals_prompt_subscriptions
+        .contains_window("main"));
+    state.window_event("main", &tauri::WindowEvent::Destroyed);
+    assert!(*active.borrow());
+    assert!(!state
+        .bridge
+        .lock()
+        .unwrap()
+        .approvals_prompt_subscriptions
+        .contains_window("main"));
+    state.clear_plugin_approval_subscriptions("second");
+    assert!(!*active.borrow());
+    assert!(state.bridge.lock().unwrap().has_window("second"));
+}
+
+#[tokio::test]
+async fn external_attachment_release_retains_the_current_window_scope() {
+    let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    let actions = serde_json::json!([
+        {"kind":"select", "node":null}, {"kind":"detach"}, {"kind":"select", "node":1}
+    ]);
+    let trace = contract["client_observation_scope_cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| {
+            case["initial"]["requested"] == 1
+                && case["initial"]["attachments"] == 1
+                && case["actions"] == actions
+        })
+        .expect("modeled desktop-window and external-attachment trace");
+    let expected = |index: usize| {
+        trace["expected"][index]["effective"]
+            .as_u64()
+            .map(|id| format!("did:scope:{id}"))
+    };
+    let (_temp, state) = state();
+    state.register_window("main");
+    select(&state, "main", Some("did:scope:1"));
+    let core = Arc::new(
+        ClientCore::start_with_paths_and_options(
+            state.policy.desktop_paths.clone(),
+            gents_desktop_core::client::ClientCoreOptions::local_only(),
+        )
+        .await
+        .unwrap(),
+    );
+    state.bridge.lock().unwrap().install_core(core.clone());
+    let attachment = core.observe_all_nodes().unwrap();
+    assert_eq!(core.selected_node_did(), expected(0));
+    state.register_window("second");
+    select(&state, "second", Some("did:scope:2"));
+    assert_eq!(core.selected_node_did(), expected(1));
+    drop(attachment);
+    assert_eq!(core.selected_node_did(), expected(2));
+    state.window_event("second", &tauri::WindowEvent::Destroyed);
+    assert_eq!(core.selected_node_did(), expected(3));
+    state.bridge.lock().unwrap().core.take();
+    core.shutdown().await.unwrap();
+}

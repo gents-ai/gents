@@ -1,6 +1,3 @@
-//! Refinement of CompletionRetry.InvalidToolProgress. This is an execution-local
-//! dispatch budget, not a request lifecycle or tool permission owner.
-
 use crate::tool_call_lifecycle::{FailureClass, ToolOutcome};
 
 const INVALID_TOOL_CALL_LIMIT: u8 = 8;
@@ -11,16 +8,12 @@ pub(super) struct InvalidToolProgress {
 }
 
 impl InvalidToolProgress {
-    /// Called after the existing hook accepts a dispatched outcome. Skipped
-    /// calls and asynchronous background notifications do not use this seam.
     pub(super) fn record(&mut self, outcome: &ToolOutcome) {
         if !self.exhausted() && Self::charges(outcome) {
             self.invalid_used += 1;
         }
     }
 
-    /// `InvalidToolProgress.invalid`: invalid arguments, unknown tools, and
-    /// policy denials.
     pub(super) fn charges(outcome: &ToolOutcome) -> bool {
         matches!(
             outcome,

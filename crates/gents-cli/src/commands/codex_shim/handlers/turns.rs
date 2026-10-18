@@ -55,7 +55,6 @@ pub(super) async fn handle_turn_request(
                 }),
             );
             if let Some(thread) = caused.as_ref() {
-                // The Codex user speaks for the root thread.
                 let caller = gents::session_origin::SessionScope {
                     node_did: state.node_did.to_string(),
                     session_id: thread.root_session_id.clone(),

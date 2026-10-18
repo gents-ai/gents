@@ -11,7 +11,22 @@ def validBudget : Option Int → Bool
   | none => true
   | some value => decide (0 < value ∧ value ≤ maxTokenBudget)
 
-def canonicalObjective (objective : String) : String := objective.trim
+/-- Native objective normalization uses Rust's Unicode White_Space property,
+as specified by `char::is_whitespace`, rather than Lean's ASCII whitespace.
+https://doc.rust-lang.org/std/primitive.char.html#method.is_whitespace -/
+def objectiveWhitespaceRanges : List (Nat × Nat) :=
+  [(0x9, 0xD), (0x20, 0x20), (0x85, 0x85), (0xA0, 0xA0), (0x1680, 0x1680),
+   (0x2000, 0x200A), (0x2028, 0x2029), (0x202F, 0x202F), (0x205F, 0x205F), (0x3000, 0x3000)]
+
+def objectiveWhitespace (c : Char) : Bool :=
+  objectiveWhitespaceRanges.any fun (first, last) => first ≤ c.toNat && c.toNat ≤ last
+
+def objectiveWhitespaceCodepoints : List Nat :=
+  objectiveWhitespaceRanges.flatMap fun (first, last) =>
+    (List.range (last - first + 1)).map (first + ·)
+
+def canonicalObjective (objective : String) : String :=
+  (objective.dropWhile objectiveWhitespace).dropRightWhile objectiveWhitespace
 
 structure Fingerprint where
   owner : Did
@@ -50,7 +65,7 @@ def decideCreate (request : CreateRequest) (existing : Option Fingerprint) : Cre
   if !request.goalTools || !request.goalCreate then .denied
   else if request.requestedOwner != request.caller ||
       request.requestedSession != request.currentSession then .denied
-  else if !request.objectiveNonempty || request.objective.trim.isEmpty ||
+  else if !request.objectiveNonempty || (canonicalObjective request.objective).isEmpty ||
       !validBudget request.tokenBudget then .invalid
   else match existing with
   | none => .fresh
@@ -81,7 +96,7 @@ theorem duplicate_create_is_idempotent (request : CreateRequest)
     (howner : request.requestedOwner = request.caller)
     (hsession : request.requestedSession = request.currentSession)
     (hobjective : request.objectiveNonempty = true)
-    (htrimmed : request.objective.trim.isEmpty = false)
+    (htrimmed : (canonicalObjective request.objective).isEmpty = false)
     (hbudget : validBudget request.tokenBudget = true) :
     decideCreate request (some (createFingerprint request)) = .idempotent := by
   rcases hcaps with ⟨hgoal, hcreate⟩
@@ -95,8 +110,6 @@ theorem invalid_budget_never_creates (request : CreateRequest)
   split <;> simp_all
   split <;> simp_all
 
-/-- Optional durable-goal declaration carried by a reusable Task/demo-pack.
-    A budget has meaning only when the Task also declares a goal objective. -/
 structure TaskGoalDeclaration where
   goalObjective : Option String
   goalTokenBudget : Option Int
@@ -108,10 +121,9 @@ def validTaskGoalDeclaration (declaration : TaskGoalDeclaration) : Bool :=
   | some objective =>
       !(canonicalObjective objective).isEmpty && validBudget declaration.goalTokenBudget
 
-/-- A durable trigger fire must supply a stable fire key. The runtime-facing
-    encoding is length-prefixed so the same node/Task/fire tuple
-    deterministically recovers the same session and request retry identities
-    after a crash without colliding with another node's Task. -/
+/-- The runtime-facing encoding is length-prefixed so the same node/Task/fire
+tuple deterministically recovers the same session and request retry identities
+after a crash without colliding with another node's Task. -/
 structure TaskFireIdentity where
   sessionId : String
   requestId : String
@@ -129,9 +141,8 @@ def taskFireIdentity (nodeDid taskId fireKey : String) : TaskFireIdentity :=
   , requestId := "task-goal-request:" ++ scope
   , retryKey := "task-goal-retry:" ++ scope }
 
-/-- The persisted request binding is the durable recovery witness. Goal and
-    GoalCreationClaim documents are creation-time state and may later be
-    removed without making an already-published request undiscoverable. -/
+/-- Goal and GoalCreationClaim documents are creation-time state and may later
+be removed without making an already-published request undiscoverable. -/
 structure TaskGoalRequestBinding where
   nodeDid : String
   agentId : String
@@ -166,10 +177,9 @@ structure TaskFireRecoveryDecision where
   checkpointable : Bool
   deriving DecidableEq, Repr
 
-/-- Classify the request returned by the globally deterministic request-id
-    lookup. Node DID is part of the expected identity and binding, so a
-    foreign or otherwise mismatched row conflicts rather than being recovered
-    for the local node. -/
+/-- Node DID is part of the expected identity and binding, so a foreign or
+otherwise mismatched row conflicts rather than being recovered for the local
+node. -/
 def decideTaskFireRecovery (expected : TaskGoalRequestBinding)
     (state : TaskFireRecoveryState) : TaskFireRecoveryDecision :=
   match state.request with
@@ -217,9 +227,6 @@ structure TaskPublication where
   retryKey : Option String
   deriving DecidableEq, Repr
 
-/-- Task publication is unchanged when no goal is declared. A valid goal
-    declaration switches publication to the atomic goal+request boundary and
-    carries deterministic identities for retry/reconciliation. -/
 def decideTaskPublication (declaration : TaskGoalDeclaration)
     (nodeDid taskId fireKey : String) : TaskPublication :=
   if !validTaskGoalDeclaration declaration then

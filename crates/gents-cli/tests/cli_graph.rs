@@ -1,10 +1,3 @@
-//! Checkout-independent binary acceptance for pack resolution, install, and
-//! revision-backed graph running. Every case resolves a fixture pack from
-//! its own directory (never a name this binary would have to have compiled
-//! in); an unroutable registry keeps an accidental network fallback from
-//! hanging instead of failing fast. Runtime/model execution has its own live
-//! fixture; these cases keep the package boundary honest in the ordinary CLI.
-
 mod support;
 
 use anyhow::{Context, Result};
@@ -16,9 +9,6 @@ use support::{
     spawn_server_with_ready_json,
 };
 
-/// Unroutable: a connection to it fails immediately rather than timing out,
-/// so a test that must never reach the network still runs fast if it
-/// accidentally does.
 const UNROUTABLE_REGISTRY: &str = "http://127.0.0.1:9";
 
 fn required_str<'a>(value: &'a Value, path: &[&str]) -> Result<&'a str> {
@@ -37,9 +27,6 @@ fn dir_arg(path: &std::path::Path) -> &str {
     path.to_str().expect("fixture path is not UTF-8")
 }
 
-/// No pack ships inside this binary any more: an empty home lists nothing,
-/// and a name it does not hold fails with the store/registry sentence
-/// instead of a compiled-in catalog hit.
 #[test]
 fn the_binary_embeds_no_packs() -> Result<()> {
     let temp = tempfile::tempdir()?;
@@ -122,9 +109,6 @@ fn document_pack_installs_without_seeding_and_is_idempotent() -> Result<()> {
     Ok(())
 }
 
-/// A documents pack that ships a plugin: install stores the plugin and
-/// records it, and remove takes back exactly what the install created. Every
-/// pack here is scaffolded on the fly, so this needs no fixture at all.
 #[test]
 fn a_document_pack_with_a_plugin_installs_and_removes_completely() -> Result<()> {
     let temp = tempfile::tempdir()?;
@@ -226,9 +210,6 @@ fn a_document_pack_with_a_plugin_installs_and_removes_completely() -> Result<()>
     Ok(())
 }
 
-/// Every declared inference-slot install, activate, disable/enable cycle on
-/// a graph pack resolved from its own directory: `review_graph` never
-/// shipped a plan, so this also proves fresh compilation at install time.
 #[test]
 fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating graph install tempdir")?;
@@ -326,10 +307,6 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
     Ok(())
 }
 
-/// A documents pack whose graph dependency installs into the same offline
-/// home under the one store claim the pack install holds, while a second
-/// holder of that home is still refused. The dependency is pre-stored with
-/// `pack fetch --store` first, so the whole install runs with no registry.
 #[test]
 fn offline_pack_install_with_a_graph_dependency_holds_one_store_claim() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating pack install tempdir")?;
@@ -407,8 +384,6 @@ fn offline_pack_install_with_a_graph_dependency_holds_one_store_claim() -> Resul
     Ok(())
 }
 
-/// An assets pack installs and removes with no `gents init` ever run: no
-/// node is opened for either operation.
 #[test]
 fn an_assets_pack_removes_completely_from_an_uninitialized_home() -> Result<()> {
     let temp = tempfile::tempdir()?;
@@ -469,8 +444,6 @@ fn an_assets_pack_removes_completely_from_an_uninitialized_home() -> Result<()> 
     Ok(())
 }
 
-/// A graph pack removes completely (its `GraphDefinition`/`GraphRevision`
-/// and derived triggers are gone) and reinstalls cleanly afterward.
 #[test]
 fn a_graph_pack_removes_completely_and_reinstalls() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating graph remove tempdir")?;
@@ -534,10 +507,6 @@ fn a_graph_pack_removes_completely_and_reinstalls() -> Result<()> {
     Ok(())
 }
 
-/// A documents pack's graph dependency is tracked: removing the dependency
-/// directly is refused while its dependent is installed; removing the
-/// dependent releases it; an explicit install of the same coordinate
-/// survives removing the dependent that also names it.
 #[test]
 fn a_graph_dependency_is_released_with_its_dependent() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating dependency remove tempdir")?;
@@ -622,8 +591,6 @@ fn a_graph_dependency_is_released_with_its_dependent() -> Result<()> {
         "{denial}"
     );
 
-    // An explicit install of the (now-removed) dependency survives a later
-    // removal of the dependent that names it again.
     let explicit_review_graph = [
         "pack",
         "install",
@@ -668,12 +635,6 @@ fn a_graph_dependency_is_released_with_its_dependent() -> Result<()> {
     Ok(())
 }
 
-/// `graph run` compares the installed record, not a name it trusts blindly.
-/// Corrupting the record's digest directly is out of scope for a CLI test,
-/// so this proves the coordinate lookup itself is exact: a wrong namespace
-/// names no installation record even though the plan resolves by bare name,
-/// and removing the pack (which deletes the record) is refused distinctly
-/// from a plain "not installed".
 #[test]
 fn graph_run_refuses_a_revision_that_is_not_the_installed_record() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating graph run tempdir")?;
@@ -715,11 +676,6 @@ fn graph_run_refuses_a_revision_that_is_not_the_installed_record() -> Result<()>
         ],
     )?;
 
-    // The plan is found by name alone (`review_graph` matches, whatever
-    // namespace the caller typed), but the run check reads the installed
-    // record under the exact coordinate: a wrong namespace names no such
-    // record, and must be refused there rather than silently running the
-    // revision installed under a different coordinate.
     let denial = run_cli_failure_stderr(
         tempdir.path(),
         &[
@@ -739,10 +695,6 @@ fn graph_run_refuses_a_revision_that_is_not_the_installed_record() -> Result<()>
         "a bare-namespace run must be refused by its own coordinate, not the installed one: {denial}"
     );
 
-    // Removing the pack deletes its graph definition along with the
-    // record (proven by `a_graph_pack_removes_completely_and_reinstalls`),
-    // so a run afterward is refused at the plan lookup, before the record
-    // check this test exercises above ever runs.
     run_cli_json(
         tempdir.path(),
         &["pack", "remove", "fixture/review_graph", "--home", home_arg],
@@ -765,8 +717,6 @@ fn graph_run_refuses_a_revision_that_is_not_the_installed_record() -> Result<()>
     Ok(())
 }
 
-/// A generic entry's declared `input_schema` is enforced through the CLI,
-/// independent of the compiled-in catalog this binary no longer has.
 #[test]
 fn graph_run_validates_input_against_the_entry_schema() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating schema validation tempdir")?;
@@ -787,10 +737,6 @@ fn graph_run_validates_input_against_the_entry_schema() -> Result<()> {
     let graphql = format!("http://127.0.0.1:{port}/api/v0/graphql");
     let profile = format!("{owner_did}:default-profile");
 
-    // A private copy of `review_graph` with an injected `input_schema` on
-    // its one entry: the fixture itself declares none, and this is the only
-    // pack-shaped way to exercise `admit_operator_input` end to end through
-    // the CLI without touching the checked-in fixture other tests share.
     let pack_dir = tempdir.path().join("review_graph_with_schema");
     copy_dir_all(&fixture_pack_dir("review_graph"), &pack_dir)?;
     let config_path = pack_dir.join("pack_config.json");
@@ -847,9 +793,6 @@ fn graph_run_validates_input_against_the_entry_schema() -> Result<()> {
     Ok(())
 }
 
-/// `graph run --graph-id ID --digest D` starts the active revision without a
-/// package name, refuses any other digest before a run starts, and
-/// `--output ndjson` prints the receipt as one compact line.
 #[test]
 fn graph_run_by_graph_id_is_pinned_to_the_active_digest() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating graph-id run tempdir")?;
@@ -952,11 +895,6 @@ fn graph_run_by_graph_id_is_pinned_to_the_active_digest() -> Result<()> {
     Ok(())
 }
 
-/// An entry's `git_diff` host step runs through the CLI and the pack's own
-/// prepare plugin: the pack is built (compiling its plugin), installed from
-/// a `.pack` file, and a run over a real two-commit repository persists the
-/// plugin's evidence document and starts on the plugin's input, both carrying
-/// the diff's head sha.
 #[tokio::test]
 async fn graph_run_prepares_git_diff_evidence_through_the_pack_plugin() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating prepare tempdir")?;

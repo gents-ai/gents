@@ -9,8 +9,8 @@ inductive Kind where
 def compatible (expected actual : Kind) : Bool :=
   expected == actual || (expected == .number && actual == .integer)
 
-/-- Caller input never supplies runtime-filled metadata. Missing optional fields
-remain absent; explicit null is distinct and requires a nullable schema field. -/
+/-- Caller input never supplies runtime-filled metadata; explicit null is
+distinct and requires a nullable schema field. -/
 def admits (expected : Kind) (nullable required filled : Bool)
     (actual : Option Kind) : Bool :=
   if filled then actual.isNone else
@@ -45,8 +45,6 @@ theorem nonnull_admission_preserves_kind (expected actual : Kind)
     compatible expected actual = true := by
   cases actual <;> simp_all [admits]
 
-/-- A supplied workflow correlation wins. Otherwise invocation-local correlation
-is the existing request identity, never a new notification identity. -/
 def invocationCorrelation (request supplied : Option String) : Option String :=
   match supplied.filter (fun value => value.trim != "") with
   | some value => some value

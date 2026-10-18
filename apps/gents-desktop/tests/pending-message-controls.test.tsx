@@ -4,7 +4,8 @@ import type {
   PendingQueueEntryView,
   PendingTurnView,
 } from "@source-inc/gents-desktop-client";
-import { QueuedInputs } from "../src/ui/screens/TranscriptInputs";
+import { PendingTray } from "../src/ui/screens/PendingTray";
+import { moveDisabled, moveItem } from "./pending-tray-menu";
 
 const entry = (id: string, group: string | null = "same"): PendingQueueEntryView => ({
   requestDocId: `doc-${id}`,
@@ -23,34 +24,49 @@ const turn = (row: PendingQueueEntryView, createdAt: string): PendingTurnView =>
   createdAt,
 });
 
-/** `queued` arrives in creation order, as the snapshot sorts it. */
+/** The native snapshot supplies arrival order independently of creation time. */
 function setup(
   queue: PendingQueueEntryView[],
   queued = queue.map((row, index) => turn(row, `2026-10-10T00:00:0${index}Z`)),
 ) {
   const onEdit = vi.fn().mockResolvedValue(undefined);
-  render(<QueuedInputs queued={queued} queue={queue} onEdit={onEdit} />);
+  render(<PendingTray queued={queued} queue={queue} onEdit={onEdit} />);
   return onEdit;
 }
 
 describe("pending message controls", () => {
-  it("edits text with the complete observed queue fence and physical source identity", async () => {
-    const onEdit = setup([entry("a"), entry("barrier", null), entry("b")]);
-    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
-    fireEvent.change(screen.getByRole("textbox", { name: "Edit pending message" }), {
-      target: { value: "corrected instruction" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() =>
-      expect(onEdit).toHaveBeenCalledWith({
-        expectedRequestDocIds: ["doc-a", "doc-barrier", "doc-b"],
-        selectedRequestDocIds: ["doc-a"],
-        messages: [{ requestDocId: "doc-a", content: "corrected instruction" }],
-      }),
+  it("hands a message to the composer to edit, and holds still while it is there", async () => {
+    const onBeginEdit = vi.fn();
+    const queue = [entry("a"), entry("barrier", null), entry("b")];
+    const view = render(
+      <PendingTray
+        queued={queue.map((row) => turn(row, "2026-10-10T00:00:00Z"))}
+        queue={queue}
+        onEdit={vi.fn()}
+        onBeginEdit={onBeginEdit}
+      />,
     );
-    expect(
-      screen.getAllByRole("button", { name: "Move pending message down" })[0],
-    ).toBeDisabled();
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]!);
+    expect(onBeginEdit).toHaveBeenCalledWith(entry("a"));
+    view.rerender(
+      <PendingTray
+        queued={queue.map((row) => turn(row, "2026-10-10T00:00:00Z"))}
+        queue={queue}
+        onEdit={vi.fn()}
+        editingDocId="doc-a"
+        onBeginEdit={onBeginEdit}
+      />,
+    );
+    expect(screen.getAllByTestId("queued-input")[0]).toHaveTextContent("Editing…");
+    for (const button of screen.getAllByRole("button", { name: "Remove" }))
+      expect(button).toBeDisabled();
+    for (const grip of screen.getAllByTestId("pending-grip"))
+      expect(grip.dataset.draggable).toBeUndefined();
+  });
+
+  it("offers no Edit without a composer to edit in", () => {
+    setup([entry("a")]);
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
   });
 
   it("removes only the selected pending source and preserves the whole queue fence", async () => {
@@ -67,9 +83,7 @@ describe("pending message controls", () => {
 
   it("reorders adjacent compatible sources without changing their text or observed order", async () => {
     const onEdit = setup([entry("a"), entry("b")]);
-    fireEvent.click(
-      screen.getAllByRole("button", { name: "Move pending message down" })[0],
-    );
+    fireEvent.click(await moveItem(screen.getAllByTestId("queued-input")[0]!, "down"));
     await waitFor(() =>
       expect(onEdit).toHaveBeenCalledWith({
         expectedRequestDocIds: ["doc-a", "doc-b"],
@@ -90,7 +104,7 @@ describe("pending message controls", () => {
     const second = entry("second");
     const onEdit = setup(
       [edited, second],
-      [turn(second, "2026-10-10T00:00:01Z"), turn(edited, "2026-10-10T00:00:02Z")],
+      [turn(edited, "2026-10-10T00:00:02Z"), turn(second, "2026-10-10T00:00:01Z")],
     );
     expect(screen.getAllByTestId("queued-input").map((row) => row.textContent)).toEqual(
       [
@@ -98,9 +112,7 @@ describe("pending message controls", () => {
         expect.stringContaining("message second"),
       ],
     );
-    fireEvent.click(
-      screen.getAllByRole("button", { name: "Move pending message down" })[0],
-    );
+    fireEvent.click(await moveItem(screen.getAllByTestId("queued-input")[0]!, "down"));
     await waitFor(() =>
       expect(onEdit).toHaveBeenCalledWith({
         expectedRequestDocIds: ["doc-edited", "doc-second"],
@@ -113,12 +125,36 @@ describe("pending message controls", () => {
     );
   });
 
-  it("cannot move a source across a different execution group", () => {
+  it.each(["partially", "fully"])(
+    "keeps native order when the queue was %s taken",
+    (taken) => {
+      const edited = entry("edited");
+      const second = entry("second");
+      setup(taken === "partially" ? [second] : [], [
+        turn(edited, "2026-10-10T00:00:02Z"),
+        turn(second, "2026-10-10T00:00:01Z"),
+      ]);
+      expect(
+        screen.getAllByTestId("queued-input").map((row) => row.textContent),
+      ).toEqual([
+        expect.stringContaining("message edited"),
+        expect.stringContaining("message second"),
+      ]);
+    },
+  );
+
+  it("cannot move a source across a different execution group", async () => {
     setup([entry("a"), entry("b", "other")]);
-    for (const button of screen.getAllByRole("button", {
-      name: /Move pending message/,
-    })) {
-      expect(button).toBeDisabled();
-    }
+    const [a, b] = screen.getAllByTestId("queued-input");
+    expect(await moveDisabled(a!, "down")).toBe(true);
+    expect(await moveDisabled(b!, "up")).toBe(true);
+    for (const grip of screen.getAllByTestId("pending-grip"))
+      expect(grip.dataset.draggable).toBeUndefined();
+    await moveItem(a!, "down");
+    expect(
+      screen.getByText(
+        "Messages sent with different settings can’t be reordered together.",
+      ),
+    ).toBeInTheDocument();
   });
 });

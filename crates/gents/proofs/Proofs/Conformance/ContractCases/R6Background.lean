@@ -31,9 +31,6 @@ def r6Case
   , queueKey := queueKey
   }
 
-/-- Concrete childless native-tool row used to execute the R6 lifecycle.
-The production `new_background_tool` constructor starts pending/background;
-`start_running` supplies the running/committed shape modeled here. -/
 def r6NativeToolFixture
     (awaitMode : ToolExecution.AwaitMode := .background) :
     ToolExecution.ToolCallContext :=
@@ -49,8 +46,6 @@ def r6NativeToolFixture
   , awaitMode := awaitMode
   }
 
-/-- Execute one native-tool action and project its actual post-state into the
-R6 JSON row. No caller supplies `legal`, `terminalState` or mode values. -/
 def r6NativeStepCase
     (name actionName : String)
     (pre : ToolExecution.ToolCallContext)
@@ -70,8 +65,6 @@ def r6NativeStepCase
         , terminalState := post.state.toDefraDB
       }
 
-/-- Admission is the executable numeric guard enforced by Rust before
-creating another live background row. -/
 def r6BudgetCase (name : String) (preLiveCount : Nat) :
     R6BackgroundingCase :=
   let legal := (Background.admitBackground preLiveCount).isSome
@@ -80,8 +73,6 @@ def r6BudgetCase (name : String) (preLiveCount : Nat) :
     none none
     (if legal then none else some "background_tool_budget_exceeded")
 
-/-- The R6 startup row is computed by the same total restart classifier that
-drives `ToolCallLifecycle::recover_all` conformance. -/
 def r6RestartCase : R6BackgroundingCase :=
   let row : Recovery.RestartRow :=
     { awaitMode := .background
@@ -123,8 +114,6 @@ def r6CompletionQueueCase : R6BackgroundingCase :=
     (some source.toDefraDB)
     (some (source.toDefraDB ++ ":900"))
 
-/-- The terminal → notification → coalesced wake → claimed continuation row is
-computed by the composed executable acceptance model. -/
 def r6CompletionContinuationCase : R6BackgroundingCase :=
   let accepted := BackgroundCompletion.canonicalContinuationAccepted
   let completion := BackgroundCompletion.canonicalCompletion
@@ -142,10 +131,6 @@ def r6CompletionContinuationCase : R6BackgroundingCase :=
     (some wake.source.toDefraDB)
     (wake.queueKey.map fun key => wake.source.toDefraDB ++ ":" ++ toString key)
 
-/-- These fields drive actual notification publication and failed-wake
-redrive consumers; they do not model-check a duplicate Rust reference machine.
-The Goal status is a row input only: Goals and background wakes are
-independent, so the owner functions do not read it. -/
 def r6GoalOwnerCase (name : String) (goal : Option Goals.Status) : R6BackgroundingCase :=
   let notified := BackgroundCompletion.appendNotification?
     BackgroundCompletion.canonicalCompletion BackgroundCompletion.canonicalWaitReservedTranscript
@@ -166,7 +151,6 @@ def wakeParent (wake : BackgroundCompletion.FailedWake) : AgentSession.RequestFa
     observed := ⟨101, wake.requestId, wake.ctx.state⟩ }
 def wakeSuccessor : AgentSession.RequestFact :=
   { purpose := .normal, scope := wakeSession.scope, agent := 3, createdAt := 3, observed := ⟨102, 902, .pending⟩ }
-/-- Different requester still blocks stale session-wide recovery. -/
 def newerInteractive : AgentSession.RequestFact :=
   { purpose := .normal, scope := { wakeSession.scope with requester := some 99 }, agent := 3,
     createdAt := 2, observed := ⟨103, 903, .processing⟩ }
@@ -274,7 +258,6 @@ def r6WakeFailureBoundaryCase
     (some SessionQueue.QueueSource.backgroundCompletion.toDefraDB)
     (some "background_completion:900")
 
-/-- A deliberately noncanonical queue source that `fromDefraDB?` must reject. -/
 def r6NoncanonicalQueueSourceCase : R6BackgroundingCase :=
   let noncanonical := "unrecognized_completion_source"
   let parsed := SessionQueue.QueueSource.fromDefraDB? noncanonical
@@ -313,11 +296,6 @@ def r6WaitBoundaryCase
     1 (ToolExecution.ToolCallState.toDefraDB observation.processState)
     none (some observation.reason)
 
-/-- The standalone wait observation describes why polling stopped, while the
-accepted foreground wait call remains owned by its caller request. Once that
-request's deadline is authoritative, the existing tool timeout transition
-terminalizes the wait call; it never changes the separately backgrounded
-process observed above. -/
 def r6CallerDeadlineDispatchCase : R6BackgroundingCase :=
   let observation := Background.ProcessControl.observeBoundary
     ToolExecution.ToolCallState.running .callerDeadline
@@ -336,10 +314,6 @@ def r6CallerDeadlineDispatchCase : R6BackgroundingCase :=
           terminalState := callerPost.state.toDefraDB
           result := some (ToolExecution.ToolCallState.toDefraDB observation.processState) }
 
-/-- An observational wait does not cancel the background process. The caller's
-own accepted foreground wait can nevertheless lose the request-interruption
-race through the existing Running tool cancellation transition. This case
-describes that branch, not a required winner against observer completion. -/
 def r6CallerInterruptDispatchCase : R6BackgroundingCase :=
   let observation := Background.ProcessControl.observeBoundary
     ToolExecution.ToolCallState.running .callerInterrupted
@@ -366,10 +340,6 @@ theorem r6_caller_interrupt_dispatch_uses_both_existing_owners :
     (true, "cancelled", some "running", some "caller_interrupted") := by
   rfl
 
-/-- The observer may complete its foreground wait before the caller's
-interruption sweep cancels that call. Completion belongs to the wait call;
-the observed background process remains running. This is the other possible
-owner ordering, not a rule selecting a winner. -/
 def r6CallerInterruptObserverCompletionCase : R6BackgroundingCase :=
   let observation := Background.ProcessControl.observeBoundary
     ToolExecution.ToolCallState.running .callerInterrupted
@@ -540,9 +510,6 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
   , r6CallerInterruptObserverCompletionCase
   ]
 
-/-- Pin the concrete projections while keeping their construction executable:
-changing the mode guard, native completion/cancel state, budget, restart
-classifier, or queue vocabulary changes this tuple and fails `lake build`. -/
 theorem r6BackgroundingCases_pinned :
     r6BackgroundingCases.map
         (fun witness =>
@@ -649,10 +616,6 @@ theorem r6BackgroundingCases_pinned :
       ] := by
   rfl
 
-/-- Pin ownership inputs and durable outcomes, not only the older common
-R6 fields. Goals and background wakes are independent: every emitted case
-retains its notification, enqueues the wake and allows failed-wake redrive,
-whatever the Goal status. -/
 theorem goal_owner_delivery_cases_pin_all_outcomes :
     ((r6BackgroundingCases.filter fun c => c.group == "completion_continuation_owner").map
       fun c => (c.name, c.goalStatus, c.notificationPersisted, c.wakeCreated, c.redriveAllowed)) =
@@ -665,12 +628,6 @@ theorem goal_owner_delivery_cases_pin_all_outcomes :
       , ("complete_goal_keeps_background_wake", some "complete", some true, some true, some true) ] := by
   rfl
 
-/-! ## Tool output paging witnesses (#937)
-
-Outputs are computed from `Background.ToolOutput.readSlice`; the pinned tuple
-theorem below fails at Lean build time if the slice model drifts, and the
-Rust `background_tools` unit test fails if `read_retained_output_slice`
-drifts from the emitted rows. -/
 
 def toolOutputPagingCase
     (name : String)
@@ -709,8 +666,6 @@ def toolOutputPagingCases : List ToolOutputPagingCase :=
       "Background.ToolOutput.readSlice_progress"
   ]
 
-/-- Pinned expected outputs: fails at Lean build time if `readSlice` drifts,
-    keeping the emitted rows honest rather than self-referential. -/
 theorem toolOutputPagingCases_pinned :
     toolOutputPagingCases.map
         (fun witness =>
@@ -724,7 +679,6 @@ theorem toolOutputPagingCases_pinned :
       ] := by
   rfl
 
-/-- The two contiguous pages tile the window with no gap and no overlap. -/
 theorem toolOutputPagingCases_head_and_continuation_tile :
     ∀ head ∈ toolOutputPagingCases.filter
         (fun witness => witness.name = "paging_head_page"),
@@ -745,8 +699,6 @@ def r6BackgroundTheoremWitnesses : List BackgroundTheoremWitness :=
     }
   ]
 
-/-- Full row inputs for the composed transaction gate, not a supplied isLatest
-flag. Publication output carries both successor rows and the session observation. -/
 structure WakeRowsCase where
   name : String
   session : AgentSession.Document := wakeSession

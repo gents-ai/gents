@@ -92,6 +92,7 @@ function snapshot(configured: boolean): DesktopClientSnapshot {
   return {
     bootstrap: {
       ...bootstrap,
+      initConfigStatus: configured ? "configured" : "absent",
       clientStateExists: configured,
       savedPeers: configured
         ? [
@@ -223,6 +224,7 @@ describe("a home this version cannot open", () => {
     expect(screen.getByTestId("incompatible-home-delete-paths")).toHaveTextContent(
       `${HOME}/keys/local.key`,
     );
+    expect(screen.queryByTestId("incompatible-home-planned")).not.toBeInTheDocument();
     expect(
       screen.getByTestId("incompatible-home-delete-installed-note"),
     ).toHaveTextContent("packs and plugins");
@@ -411,8 +413,6 @@ describe("setup start on a home this version cannot open", () => {
 
     await userEvent.click(next);
 
-    /* the typed refusal is the incompatible-home flow's: the home is
-       previewed for a reset, and no local agent is created over it */
     await waitFor(() => expect(resetManagedServer).toHaveBeenCalledOnce());
     expect(app.stores.client.getState().home.report).not.toBeNull();
     expect(api.initLocalStandardRuntime).not.toHaveBeenCalled();

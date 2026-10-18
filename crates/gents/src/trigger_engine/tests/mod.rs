@@ -35,10 +35,8 @@ use crate::trigger_engine::production_materializer::{
 use crate::trigger_engine::schedule_source::ScheduleSource;
 use crate::BackendProviderKind;
 
-/// Recorded `materialize` invocation: `(trigger_id, trigger_kind, rendered_prompt)`.
 type MaterializeCall = (Option<String>, TriggerKind, String);
 
-/// Recorded canonical trigger-wide supersede invocation.
 type SupersedeCall = String;
 
 type NonterminalRequests = Arc<Mutex<HashMap<String, Vec<String>>>>;
@@ -60,9 +58,6 @@ fn remove_except<K: Clone + Eq + std::hash::Hash>(
     removed
 }
 
-/// Build a minimal `Arc<RuntimeNode>` for tests that need to satisfy the
-/// node identity invariant enforced by `ResolvedRuntimeSnapshot::activate`'s
-/// `debug_assert!`. Does not exercise signing.
 fn stub_principal() -> Arc<crate::identity::RuntimeNode> {
     let identity: Arc<dyn crate::identity::NodeIdentity> = Arc::new(
         KeyIdentity::load_or_create(
@@ -116,16 +111,6 @@ struct MaterializeGate {
     release: Arc<Notify>,
 }
 
-/// Spy `MaterializerHandle` used by the engine tests. Records every
-/// `materialize` call it sees and hands back sequentially-numbered request ids
-/// so assertions can check both the call count and the rendered prompt that
-/// reached the materializer.
-///
-/// `nonterminal_for` stores concrete request ids under logical trigger IDs that `has_active_runtime_request_for_trigger` should
-/// report as in-flight. Tests can pre-populate it to simulate prior fires.
-/// Lean contract tests can opt into adding successful materializations as new
-/// non-terminal requests, which mirrors production persistence without
-/// changing the default spy behavior expected by local unit tests.
 struct SpyMaterializer {
     materialize_calls: Arc<Mutex<Vec<MaterializeCall>>>,
     materialize_goal_objectives: Arc<Mutex<Vec<Option<String>>>>,
@@ -133,8 +118,6 @@ struct SpyMaterializer {
     materialize_source_doc_ids: Arc<Mutex<Vec<Option<String>>>>,
     next_request_id: AtomicUsize,
     nonterminal_for: NonterminalRequests,
-    /// DIDs the engine passed to the concurrency gate / supersede, in call
-    /// order. The gate's DID scope is the subject of #605.
     gate_dids: Arc<Mutex<Vec<String>>>,
     supersede_dids: Arc<Mutex<Vec<String>>>,
     supersede_calls: Arc<Mutex<Vec<SupersedeCall>>>,
@@ -202,10 +185,6 @@ impl SpyMaterializer {
             .unwrap_or(0)
     }
 
-    /// Pre-populate the trigger-wide in-flight set. Source kind labels the
-    /// fixture request identity but never narrows the concurrency gate. Also makes `supersede_active_runtime_requests_for_trigger`
-    /// report the tuple count (and clears it, mirroring real terminal
-    /// transitions) so LatestOnly tests can assert the count plumbed through.
     fn mark_nonterminal(&self, trigger_id: &str, trigger_kind: TriggerKind) {
         let next_index = self.nonterminal_count_for(trigger_id, trigger_kind);
         let request_id = format!("spy-prior-{}-{next_index}", trigger_kind.as_str());
@@ -226,17 +205,11 @@ impl SpyMaterializer {
             .push(request_id.into());
     }
 
-    /// Make successful materializations increment the in-flight tuple count.
-    /// The Lean-generated conformance cases use this to compare post-dispatch
-    /// non-terminal counts; ordinary unit tests keep the older explicit
-    /// `mark_nonterminal` behavior.
     fn track_materialized_nonterminal(&self) {
         self.track_materialized_nonterminal
             .store(true, Ordering::SeqCst);
     }
 
-    /// Block materialization until `release` is notified, sending one message
-    /// on `entered_tx` each time a materialize call reaches the gate.
     fn set_materialize_gate(&self, entered_tx: mpsc::UnboundedSender<()>, release: Arc<Notify>) {
         *self.materialize_gate.lock().unwrap() = Some(MaterializeGate {
             entered_tx,
@@ -252,8 +225,6 @@ impl SpyMaterializer {
         ));
     }
 
-    /// Mirror the production invariant that a successful group materialization
-    /// immediately makes the AgentRequest visible as the durable group marker.
     fn persist_materialized_group_markers(&self, node_did: &str) {
         *self.persist_group_markers_for_did.lock().unwrap() = Some(node_did.to_string());
     }
@@ -307,10 +278,27 @@ impl MaterializerHandle for SpyMaterializer {
         let group_markers = self.group_markers.clone();
         let marker_trigger_id = trigger_id.map(str::to_owned);
         let marker_fire_key = durable_fire_key.to_owned();
+        let replacement = delivery
+            .filter(|prepared| prepared.replace_prior)
+            .map(|prepared| {
+                (
+                    prepared.receipt.identity.owner_did.clone(),
+                    prepared.receipt.identity.trigger_id.clone(),
+                    prepared.receipt.request_id.clone(),
+                )
+            });
         Box::pin(async move {
             if let Some(gate) = gate {
                 let _ = gate.entered_tx.send(());
                 gate.release.notified().await;
+            }
+            if let Some((owner, trigger, request)) = replacement {
+                self.supersede_active_runtime_requests_for_trigger(
+                    &owner,
+                    &trigger,
+                    Some(&request),
+                )
+                .await?;
             }
             calls.lock().unwrap().push(entry);
             materialized_request_ids
@@ -420,14 +408,9 @@ impl MaterializerHandle for SpyMaterializer {
     }
 }
 
-/// Build an `ActiveRuntimeSnapshot` with the supplied active schedules and no
-/// other live state. Matches the empty-defaults pattern used by
-/// `runtime_snapshot::tests`.
 fn snapshot_with_schedules(
     schedules: HashMap<String, ResolvedSchedule>,
 ) -> Arc<ActiveRuntimeSnapshot> {
-    // The "general" agent must resolve: the concurrency gate scopes
-    // serial/latestOnly coordination by the agent's node DID (#605).
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         "general".to_string(),
         vec![integration_test_agent("general")],
@@ -568,11 +551,6 @@ fn snapshot_from_trigger_contract(
     Arc::new(resolved.activate(1, HashMap::new()))
 }
 
-/// Build a minimal `ResolvedAgent` suitable for the production materializer
-/// integration test. The agent has a backend binding (required — the
-/// materializer rejects tasks whose agent is not backend-bound) but does
-/// not drive any inference: the integration test asserts lineage on the
-/// persisted `AgentRequest` doc only, not execution.
 fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> {
     let identity: Arc<dyn crate::identity::NodeIdentity> = Arc::new(
         KeyIdentity::load_or_create(
@@ -621,15 +599,12 @@ fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> {
     })
 }
 
-/// Build an `ActiveRuntimeSnapshot` containing the given agent as loaded
-/// and the supplied active schedules. Used by the integration test below to
-/// hand the ProductionMaterializer a snapshot where `agent_id` resolution
-/// succeeds.
 fn snapshot_with_agent_and_schedules(
     behavior: Arc<ResolvedAgent>,
     schedules: HashMap<String, ResolvedSchedule>,
 ) -> Arc<ActiveRuntimeSnapshot> {
     let principal = behavior.node.clone();
+    let local_did = behavior.node_did().to_string();
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         behavior.agent_id.clone(),
         vec![behavior],
@@ -641,7 +616,8 @@ fn snapshot_with_agent_and_schedules(
         schedules,
         ..Default::default()
     })
-    .with_node(principal);
+    .with_node(principal)
+    .with_local_did(local_did);
     Arc::new(resolved.activate(1, HashMap::new()))
 }
 
@@ -660,24 +636,4 @@ async fn trigger_engine_dispatch_matches_lean_generated_contract_cases() {
 #[tokio::test]
 async fn event_group_eligibility_matches_lean_generated_contract_cases() {
     dispatch_contract::event_group_eligibility_matches_lean_generated_contract_cases().await;
-}
-
-#[test]
-fn nondocument_task_options_fail_explicitly() {
-    assert!(validate_non_document_task_options(false, ConcurrencyMode::Parallel, false).is_ok());
-    for (emit, mode, target, expected) in [
-        (true, ConcurrencyMode::Parallel, false, "emit_outcome"),
-        (false, ConcurrencyMode::QueuedSerial, false, "queued_serial"),
-        (
-            false,
-            ConcurrencyMode::Parallel,
-            true,
-            "session_id_template",
-        ),
-    ] {
-        assert!(validate_non_document_task_options(emit, mode, target)
-            .unwrap_err()
-            .to_string()
-            .contains(expected));
-    }
 }

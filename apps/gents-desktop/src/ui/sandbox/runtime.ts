@@ -32,7 +32,7 @@ import {
   type WireContribution,
 } from "./protocol";
 import { setToastSink } from "./toast";
-import type { Route } from "@gents/shell";
+import type { Route } from "@/lib/router";
 
 export interface FramePort {
   post: (message: FrameToHost) => void;

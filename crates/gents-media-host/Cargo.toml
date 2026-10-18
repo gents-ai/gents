@@ -1,0 +1,23 @@
+[package]
+name = "gents-media-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Local microphone capture and speech playback for Gents clients"
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+cpal = "0.18.2"
+gents-protocol = { path = "../gents-protocol", default-features = false }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2 = "0.6.4"
+objc2-av-foundation = { version = "0.3.2", default-features = false, features = ["std", "AVCaptureDevice", "AVMediaFormat", "block2"] }

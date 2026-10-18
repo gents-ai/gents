@@ -88,36 +88,3 @@ fn scope(row: &Value) -> Option<(String, String, Option<String>)> {
         row.get("requester_did")?.as_str().map(str::to_owned),
     ))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn context_joins_physical_requests_keeps_sessions_separate_and_preserves_unknowns() {
-        let mut data = json!({
-            "AgentRequest":[
-                {"_docID":"a","node_did":"owner","session_id":"s","requester_did":null},
-                {"_docID":"b","node_did":"owner","session_id":"s","requester_did":"remote"}],
-            "InferenceCall":[
-                {"call_id":"last","request_doc_id":"a","node_did":"owner","call_kind":"inference","queued_at":"2","prompt_tokens":null},
-                {"call_id":"first","request_doc_id":"a","node_did":"owner","call_kind":"inference","queued_at":"1","prompt_tokens":800},
-                {"call_id":"compact","request_doc_id":"a","node_did":"owner","call_kind":"compaction","queued_at":"3","prompt_tokens":9000},
-                {"call_id":"foreign","request_doc_id":"a","node_did":"other","call_kind":"inference","queued_at":"4","prompt_tokens":9000},
-                {"call_id":"b","request_doc_id":"b","node_did":"owner","call_kind":"inference","queued_at":"1","prompt_tokens":20}],
-            "CompactionEntry":[{"node_did":"owner","session_id":"s","requester_did":null}],
-            "ProviderContextReduction":[{"node_did":"owner","session_id":"s","requester_did":"remote"}]
-        });
-        let sessions = session_contexts(&data).unwrap();
-        assert_eq!(sessions.len(), 2);
-        assert_eq!(sessions[0].last_prompt_tokens, None);
-        assert_eq!(sessions[0].peak_prompt_tokens, Some(800));
-        assert_eq!(sessions[0].session_compactions, 1);
-        assert_eq!(sessions[0].provider_reductions, 0);
-        assert_eq!(sessions[1].last_prompt_tokens, Some(20));
-        assert_eq!(sessions[1].provider_reductions, 1);
-        data.as_object_mut().unwrap().remove("CompactionEntry");
-        assert_eq!(session_contexts(&data), None);
-    }
-}

@@ -146,11 +146,6 @@ fn wait_for_server_exit(
     }
 }
 
-/// The per-user supervisor sends SIGTERM to the foreground `gents server`
-/// process. This deliberately signals the exact fixture PID rather than
-/// dropping its handle (which would use the test fixture's abrupt SIGKILL
-/// cleanup) so success proves the server's SIGTERM handler ran its shutdown
-/// epilogue.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_sigterm_runs_the_graceful_shutdown_path() -> Result<()> {
@@ -161,9 +156,6 @@ async fn server_sigterm_runs_the_graceful_shutdown_path() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
     let agent_name = format!("cli-sigterm-{}", Uuid::new_v4().simple());
 
-    // Point the normal runtime configuration at an unopened local port: this
-    // is a fully initialized but provider-free/degraded runtime. The test is
-    // about owned-loop shutdown, not inference.
     run_init_json(
         &home_dir,
         &[
@@ -207,10 +199,6 @@ async fn server_sigterm_runs_the_graceful_shutdown_path() -> Result<()> {
     );
     Ok(())
 }
-/// An error returned after the runtime is spawned must still run the runtime's
-/// shutdown epilogue. A closed stdout makes the post-readiness report write
-/// fail; the durable readiness row must then end at `shutdown`, not stay
-/// `ready` as it does when the runtime task is dropped with the process.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_error_after_runtime_spawn_drains_the_runtime() -> Result<()> {
@@ -252,7 +240,6 @@ async fn server_error_after_runtime_spawn_drains_the_runtime() -> Result<()> {
         ));
     support::process::configure_foreground_server_env(&mut command, &[]);
     let mut child = command.spawn().context("spawning gents server")?;
-    // Close the only reader so the readiness report hits a broken pipe.
     drop(child.stdout.take());
     let mut serve = ServeProcess {
         child,
@@ -313,8 +300,8 @@ async fn server_error_after_runtime_spawn_drains_the_runtime() -> Result<()> {
     Ok(())
 }
 
-// Covers OS process loading and Tokio startup under concurrent builds. The
-// port-zero and occupied-port checks still reject before readiness is emitted.
+// macOS process start (dyld) can take several seconds; this is a
+// process-startup budget, not an HTTP/readiness deadline.
 const SERVER_REJECTION_EXIT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -324,10 +311,6 @@ async fn server_rejects_ephemeral_http_port_before_publishing_readiness() -> Res
     fs::create_dir_all(&home_dir)?;
 
     let mut serve = spawn_server(&home_dir, 0)?;
-    // This is a process-startup budget, not an HTTP/readiness deadline. On
-    // macOS the instrumented CLI can spend several seconds in _dyld_start
-    // before main executes. Keep the semantic checks below (rejection with an
-    // actionable error and no published readiness) independent of that delay.
     let status = wait_for_server_exit(&mut serve, SERVER_REJECTION_EXIT_TIMEOUT)?;
     let (stdout, stderr) = serve.captured_output()?;
 
@@ -408,10 +391,6 @@ async fn ready_json_recovers_when_a_foreign_listener_holds_the_allocated_port() 
     )?;
 
     let stolen = allocate_port()?;
-    // Hold the reserved port for the whole test. The child's preflight bind
-    // keeps losing it, so a readiness JSON can only come from a replacement
-    // port -- a TCP-connect check would instead accept this listener and
-    // report the stolen port as ready.
     let thief =
         std::net::TcpListener::bind(("127.0.0.1", stolen)).context("holding the test port")?;
 
@@ -474,9 +453,6 @@ async fn ready_json_without_recovery_still_fails_on_a_held_port() -> Result<()> 
     Ok(())
 }
 
-/// A Secure Enclave key cannot own the served node's access control, so
-/// `gents server` refuses the home before building a node, naming the
-/// backend and the remedy.
 #[test]
 fn server_refuses_a_secure_enclave_home_before_building_a_node() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -516,12 +492,6 @@ fn server_refuses_a_secure_enclave_home_before_building_a_node() -> Result<()> {
     Ok(())
 }
 
-/// `gents server` turns on DefraDB node access control owned by the home's
-/// principal: anonymous HTTP writes are refused, the principal's signed
-/// writes and the CLI's P2P administration through the runtime state are
-/// admitted, anonymous reads and `/self` and `/sessions` keep working, and a
-/// restart of the same store keeps all of it. `/mcp` is covered by
-/// `mcp_endpoint_serves_defra_query` on the same served-home setup.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -564,19 +534,30 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
         let replicators = run_cli_json(&home_dir, &["p2p", "admin", "replicators", "list"])
             .with_context(|| format!("{phase}: CLI P2P administration over HTTP"))?;
         assert_eq!(replicators["status"], "ok", "{phase}: {replicators}");
-        // Reads stay anonymous: DefraDB's HTTP server does not gate them, and
-        // the runtime's unauthenticated read surfaces read as anonymous.
-        let rows = gents::config_client::ConfigAccess::graphql(graphql.clone())
+        let anonymous_rows = gents::config_client::ConfigAccess::graphql(graphql.clone())
             .execute(r#"{ CompactionEntry(filter: { node_did: { _eq: "did:test:nac" } }) { compaction_key } }"#)
             .await
             .with_context(|| format!("{phase}: anonymous HTTP read"))?;
         assert!(
-            rows["data"]["CompactionEntry"]
+            anonymous_rows
+                .pointer("/data/CompactionEntry")
+                .and_then(Value::as_array)
+                .is_none_or(Vec::is_empty),
+            "{phase}: anonymous HTTP read exposed the owner's row: {anonymous_rows}"
+        );
+        let owner_rows = gents::config_client::ConfigAccess::Graphql(
+            support::graphql::served_endpoint(&graphql),
+        )
+        .execute(r#"{ CompactionEntry(filter: { node_did: { _eq: "did:test:nac" } }) { compaction_key } }"#)
+        .await
+        .with_context(|| format!("{phase}: principal HTTP read"))?;
+        assert!(
+            owner_rows["data"]["CompactionEntry"]
                 .as_array()
                 .is_some_and(|rows| rows
                     .iter()
                     .any(|row| row["compaction_key"] == format!("nac-{phase}"))),
-            "{phase}: {rows}"
+            "{phase}: principal could not read its row: {owner_rows}"
         );
         for surface in ["self", "sessions"] {
             let response = reqwest::Client::new()
@@ -604,8 +585,6 @@ fn port_replacement_requires_address_in_use_for_the_requested_address() {
         &format!("Error: {context}\n\nCaused by:\n    Address already in use (os error 48)\n"),
         addr
     ));
-    // serve.rs attaches the same context to every bind failure; only
-    // address-in-use may be recovered, the rest must fail unchanged.
     assert!(!support::process::is_address_in_use(
         &format!("Error: {context}\n\nCaused by:\n    Permission denied (os error 13)\n"),
         addr
@@ -621,12 +600,10 @@ fn port_replacement_requires_address_in_use_for_the_requested_address() {
 async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
     const GROK_BEHAVIOR: &str = "port-live";
     const APPLIED_BACKEND: &str = "fresh-applied-grok-backend";
-
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     let root = tempdir.path().join("pack");
     fs::create_dir_all(&home_dir)?;
-
     let model_name = format!("mock-grok-apply-model-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockModelEndpoint::start(&model_name)?;
     let agent_name = format!("cli-grok-apply-{}", Uuid::new_v4().simple());
@@ -641,19 +618,10 @@ async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
-
-    // Export the freshly initialized home as a self-contained pack, then add
-    // the agent that only --apply-root can make available to this server
-    // invocation. The home itself deliberately still has no port-live row.
     run_cli_text(
         &home_dir,
         &["config", "export", "--root", &root.to_string_lossy()],
     )?;
-
-    // The applied agent uses a backend that does not exist when the
-    // runtime's recurring prober takes its immediate startup tick. Its
-    // exported runtime-owned health fields are deliberately absent, so the
-    // post-apply path must probe and promote it before readiness can publish.
     let config_path = root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
     let mut backend = config["inference_backends"][0].clone();
@@ -682,7 +650,6 @@ async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
         .context("agents is not an array")?
         .push(agent);
     write_json_file(&config_path, &config)?;
-
     let port = allocate_port()?;
     let socket_path = tempdir.path().join("grok.sock");
     let (mut serve, readiness) = spawn_server_with_ready_json(
@@ -703,19 +670,12 @@ async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
     )?;
     wait_for_port(port, &mut serve)?;
     let (_stdout, stderr) = serve.captured_output()?;
-
     assert_eq!(
         readiness.pointer("/apply_root/ok").and_then(Value::as_bool),
         Some(true),
         "the pack must apply before readiness: {readiness}"
     );
-    assert_eq!(
-        readiness
-            .pointer("/grok_shim/bound")
-            .and_then(Value::as_bool),
-        Some(true),
-        "the agent supplied by --apply-root must bind in the same invocation: {readiness}; stderr: {stderr}"
-    );
+    assert_eq ! (readiness . pointer ("/grok_shim/bound") . and_then (Value :: as_bool) , Some (true) , "the agent supplied by --apply-root must bind in the same invocation: {readiness}; stderr: {stderr}");
     assert_eq!(
         readiness
             .pointer("/grok_shim/socket")
@@ -726,7 +686,6 @@ async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
         socket_path.exists(),
         "the bound Grok leader must publish its socket"
     );
-
     Ok(())
 }
 
@@ -903,8 +862,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
             .context("seeding self-view fixtures")?;
     }
 
-    // Keep the local transcript fixture under the canonical header/source
-    // contract. Its visible text is no longer an AgentMessage column.
     use gents::session::canonical_rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
@@ -993,12 +950,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     )
     .await?;
 
-    // Foreign-principal rows on the same node. Every liveness and readiness
-    // projection is scoped to this server's own node DID, so none of these
-    // rows may count toward the local runtime's health, budget, or readiness
-    // series — they exist to prove the queries carry that scope. The foreign
-    // readiness row claims Ready but stays current, exercising the /metrics
-    // fleet inventory's per-DID projection.
     let foreign_readiness_snapshot = serde_json::json!({
         "format_version": gents_protocol::row::NODE_READINESS_FORMAT_VERSION,
         "process_state": "ready",
@@ -1107,10 +1058,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         "expected /status context current_estimate from latest compacted tokens: {status}"
     );
 
-    // The foreign-principal seeds above must not leak into any local
-    // projection: the runtime's own liveness excludes them (they surface only
-    // in the ignored-foreign counters), the context budget counts only the
-    // locally seeded compaction.
     assert!(
         status
             .pointer("/liveness/active_request_ids")
@@ -1167,9 +1114,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         "foreign rows must not leave /status degraded: {status}"
     );
 
-    // /healthz is where the readiness owner projects the local row: it must
-    // select readiness by this server's own DID (never a foreign row), and the
-    // foreign liveness rows may not flip its liveness check to degraded.
     let health_response = client
         .get(format!("http://127.0.0.1:{port}/healthz"))
         .send()
@@ -1352,9 +1296,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
             })),
         "expected /mcp/pool to include the seeded service and tool count: {mcp_pool}"
     );
-    // The foreign principal has its own ToolServiceHealthState row for the
-    // SAME shared registry service, stamped "unreachable". The /mcp/pool join
-    // must select the local agent's health row, not the foreign one.
     assert!(
         !mcp_pool
             .get("services")
@@ -1377,8 +1318,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         Some(0),
         "the foreign health row must not add a fleet-wide unreachable count: {mcp_pool}"
     );
-    // "unreachable" is not even a persisted raw state: if the foreign row
-    // somehow joined it would land in the unknown bucket instead.
     assert_eq!(
         mcp_pool.pointer("/totals/unknown").and_then(Value::as_i64),
         Some(0),
@@ -1441,10 +1380,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         "expected backend metrics in metrics body:\n{body}"
     );
 
-    // The readiness series is a fleet inventory: every NodeReadiness
-    // row is projected under its own DID. The foreign row (claiming Ready with
-    // a current timestamp) must appear with its own counts, and the local row
-    // must stay observed — neither row may borrow the other's identity.
     assert!(
         body.contains(&format!(
             r#"gents_runtime_runnable_agents{{node_did="did:test:foreign-cli"}} 1"#
@@ -2264,10 +2199,6 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     .await
     .context("seeding trace tool call")?;
 
-    // Canonical durable output fixture (#1571): a closed provider-turn source
-    // whose single text stream carries the answer bytes, then the transcript
-    // header referencing it, then the terminalization owner's selection
-    // stamped on the request. No retired AgentResponse or inline-content rows.
     use gents::session::canonical_rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
@@ -2358,8 +2289,6 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let message_doc_id =
         gents_protocol::graphql::extract_mutation_doc_id(&header_response, "AgentMessage")?;
 
-    // Stamp the terminalization owner's selection onto the terminal request so
-    // the canonical output owner resolves the exact header and dependencies.
     let selection = serde_json::to_value(TerminalOutput::Message {
         message_doc_id: message_doc_id.clone(),
     })?;
@@ -2442,9 +2371,6 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
         "tool lifecycle is the execution outcome owner"
     );
 
-    // Export through the canonical owner: the request row decodes strictly and
-    // the terminal selection resolves the exact header plus its dependencies —
-    // no AgentResponse shape anywhere in the trace.
     let request_response = graphql_query(
         &graphql,
         &format!(
@@ -2681,9 +2607,7 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
     );
 
     let args = serde_json::json!({
-        "argv": ["find"], "collection": "AgentToolCall",
-        "options": {"fields": ["request_id", "request_doc_id", "tool_name", "lifecycle_state"],
-        "filter": { "request_id": { "_eq": "mcp-req" } }}
+        "argv": ["fields"], "collection": "AgentToolCall"
     });
     let params =
         CallToolRequestParams::new("query").with_arguments(args.as_object().unwrap().clone());
@@ -2691,18 +2615,43 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
         .peer()
         .call_tool(params)
         .await
-        .context("call_tool defra_query")?;
+        .context("call_tool defra_query fields")?;
     let text = result
         .content
         .iter()
         .filter_map(|content| content.raw.as_text().map(|t| t.text.clone()))
         .collect::<Vec<_>>()
         .join("");
-    let payload: Value = serde_json::from_str(&text).context("MCP tool result is JSON")?;
-    assert_eq!(payload["returned_count"].as_i64(), Some(1), "{payload}");
-    let tc = &payload["results"][0];
-    assert_eq!(tc["tool_name"].as_str(), Some("query"));
-    assert_eq!(tc["request_id"].as_str(), Some("mcp-req"));
+    let payload: Value = serde_json::from_str(&text).context("MCP field inventory is JSON")?;
+    assert_eq!(payload["discovery"], true, "{payload}");
+    assert!(
+        payload["fields"]
+            .as_array()
+            .is_some_and(|fields| fields.iter().any(|field| field["name"] == "tool_name")),
+        "public schema introspection should list AgentToolCall fields: {payload}"
+    );
+
+    let protected_args = serde_json::json!({
+        "argv": ["find"], "collection": "AgentToolCall",
+        "options": {"fields": ["request_id", "request_doc_id", "tool_name", "lifecycle_state"],
+        "filter": { "request_id": { "_eq": "mcp-req" } }}
+    });
+    let params = CallToolRequestParams::new("query")
+        .with_arguments(protected_args.as_object().unwrap().clone());
+    let protected = mcp.peer().call_tool(params).await;
+    let protected_text = match protected {
+        Err(error) => error.to_string(),
+        Ok(result) => result
+            .content
+            .iter()
+            .filter_map(|content| content.raw.as_text().map(|t| t.text.clone()))
+            .collect::<Vec<_>>()
+            .join(""),
+    };
+    assert!(
+        !protected_text.contains("mcp-req"),
+        "anonymous MCP query exposed a protected AgentToolCall row: {protected_text}"
+    );
 
     let denied_args = serde_json::json!({"argv":["find"], "collection": "InferenceBackend", "options":{"fields": ["auth"]} });
     let denied_params = CallToolRequestParams::new("query")
@@ -2797,8 +2746,6 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
 
 const MCP_GRAPH_READ_TOOLS: [&str; 3] = ["list_graphs", "get_graph_run", "get_graph_result"];
 
-/// A served home whose owner key is loaded in this process, so the test can
-/// mint the owner's DefraDB bearers.
 struct McpGraphHome {
     tempdir: tempfile::TempDir,
     home: std::path::PathBuf,
@@ -2863,8 +2810,6 @@ impl McpGraphHome {
     }
 }
 
-/// Build and install the `prepared_graph` fixture, then start one run of it
-/// through `gents graph run`, as `cli_graph.rs` does; returns its run id.
 async fn start_prepared_graph_run(served: &McpGraphHome) -> Result<String> {
     let root = served.tempdir.path();
     let utf8 = |path: &std::path::Path| {
@@ -2970,7 +2915,6 @@ async fn advertised(
         .collect())
 }
 
-/// The JSON a graph read returned, or the refusal text it carried.
 async fn call_mcp_tool(
     client: &rmcp::service::RunningService<rmcp::RoleClient, ()>,
     name: &str,
@@ -3082,9 +3026,6 @@ async fn mcp_graph_tools_offer_only_the_read_tools() -> Result<()> {
     Ok(())
 }
 
-/// A run the CLI starts is readable over `/mcp` with the owner's bearer:
-/// every read is forwarded to DefraDB as the owner, and the listing names
-/// no run tool because `/mcp` offers none.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_graph_tools_read_a_cli_started_run_with_the_owner_bearer() -> Result<()> {
     let served =
@@ -3123,38 +3064,58 @@ async fn mcp_graph_tools_read_a_cli_started_run_with_the_owner_bearer() -> Resul
     Ok(())
 }
 
-/// A valid bearer for another DID reads with that DID as its subject: the
-/// listing is that DID's own, empty listing, and the run views apply their
-/// unchanged observer rule with that DID as the actor. This pins the read
-/// subject, not authorization: the graph collections declare no document
-/// policy, so DefraDB admits these reads, and the anonymous `query` tool on
-/// the same `/mcp` reads the same documents.
+/// The caller bearer selects the graph subject, and ACP keeps another DID
+/// from observing the owner's graph.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_graph_tools_take_the_subject_did_from_the_bearer() -> Result<()> {
     let served =
         McpGraphHome::start("mcp-graph-subject", &["--enable-mcp", "--mcp-graph-tools"]).await?;
     let run_id = start_prepared_graph_run(&served).await?;
+
+    let owner_bearer =
+        gents::identity::defradb_bearer_authorization(&served.owner_did, &served.audience())?;
+    let owner = served.client(Some(&owner_bearer)).await?;
+    let owner_listing = call_mcp_tool(&owner, "list_graphs", json!({}))
+        .await?
+        .map_err(|refusal| anyhow::anyhow!("owner graph listing was refused: {refusal}"))?;
+    anyhow::ensure!(
+        owner_listing["node_did"] == served.owner_did
+            && owner_listing["graphs"].as_array().is_some_and(|graphs| {
+                graphs
+                    .iter()
+                    .any(|graph| graph["active_plan"]["package"]["name"] == "prepared_graph")
+            }),
+        "owner bearer did not see its graph: {owner_listing}"
+    );
+
     let other = gents::KeyIdentity::load_or_create(served.tempdir.path().join("other.key"), None)?;
     let bearer = gents::identity::defradb_bearer_authorization(other.did(), &served.audience())?;
     let client = served.client(Some(&bearer)).await?;
-    let listed = call_mcp_tool(&client, "list_graphs", json!({}))
-        .await?
-        .map_err(|refusal| {
-            anyhow::anyhow!(
-                "DefraDB refused another DID's listing, so a non-admin bearer cannot read the graph collections: {refusal}"
-            )
-        })?;
-    anyhow::ensure!(
-        listed["node_did"] == other.did() && listed["graphs"] == json!([]),
-        "the listing is the bearer DID's own: {listed}"
-    );
+    let listed = call_mcp_tool(&client, "list_graphs", json!({})).await?;
+    match listed {
+        Err(refusal) => anyhow::ensure!(
+            !refusal.contains(&run_id) && !refusal.contains("prepared_graph"),
+            "foreign listing refusal disclosed the owner's graph: {refusal}"
+        ),
+        Ok(listing) => anyhow::ensure!(
+            listing["node_did"] == other.did()
+                && listing["graphs"].as_array().is_some_and(|graphs| {
+                    graphs
+                        .iter()
+                        .all(|graph| graph["active_plan"]["package"]["name"] != "prepared_graph")
+                }),
+            "foreign bearer saw the owner's graph: {listing}"
+        ),
+    }
     for tool in ["get_graph_run", "get_graph_result"] {
         let refused = call_mcp_tool(&client, tool, json!({"run_id": run_id})).await?;
         anyhow::ensure!(
-            matches!(&refused, Err(message) if message.contains("actor is not authorized to observe this graph run")),
-            "{tool}: the run view takes the bearer's DID as its actor: {refused:?}"
+            matches!(&refused, Err(_))
+                || refused.as_ref().is_ok_and(|view| view["run_id"] != run_id),
+            "{tool}: foreign bearer saw the owner run: {refused:?}"
         );
     }
+    let _ = owner.cancel().await;
     let _ = client.cancel().await;
     Ok(())
 }

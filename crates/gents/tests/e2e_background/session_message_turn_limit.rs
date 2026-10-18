@@ -22,10 +22,6 @@ const MODEL: &str = "e2e-session-limit-model";
 const PARENT_TOOL_CALL_ID: &str = "e2e-session-limit-tool-call";
 const PARENT_PROMPT: &str = "e2e-session-limit-parent-prompt";
 const CHILD_PROMPT: &str = "e2e-session-limit-child-prompt";
-/// Its decimal is not a prefix of the built-in default (1,000) nor of any other
-/// limit a mis-wired child could run instead, and it is low enough that the
-/// child reaches its turn limit within the eight invalid dispatches
-/// `gents_loop::loop_stream::invalid_tool_progress` allows per execution.
 const EXPLICIT_CHILD_MAX_TURNS: i64 = 3;
 /// rig's max-turns display, matched as a fixed byte string by
 /// `scripts/harbor/run_gents.sh`.
@@ -42,7 +38,7 @@ struct ChildRequestRow {
 async fn configure_session_chain(db: &TestDb) {
     let node_did = db.node_identity.did().to_string();
     configure_child_agent(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         CHILD_AGENT_ID,
         "e2e-session-limit-child-tools",
@@ -51,7 +47,7 @@ async fn configure_session_chain(db: &TestDb) {
     )
     .await;
     configure_child_agent(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         PARENT_AGENT_ID,
         "e2e-session-limit-parent-tools",
@@ -66,13 +62,17 @@ async fn configure_session_chain(db: &TestDb) {
     .await;
 }
 
-async fn bind_child_execution_max_turns(node: &EmbeddedNode, node_did: &str, max_turns: i64) {
+async fn bind_child_execution_max_turns(
+    node: &std::sync::Arc<EmbeddedNode>,
+    node_did: &str,
+    max_turns: i64,
+) {
     use gents::config_client::{
         read_desired_state_record_in_txn as read, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     use gents::Collection;
 
-    gents::config_client::ConfigAccess::transact_local(
+    gents::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "test.bind_child_execution_max_turns",
@@ -110,9 +110,6 @@ async fn bind_child_execution_max_turns(node: &EmbeddedNode, node_did: &str, max
     .expect("bind child execution limit");
 }
 
-/// The caller's completion wake may share the caller's lineage, so the started
-/// session's request is selected by its behavior rather than by taking the
-/// first row.
 async fn child_of(node: &EmbeddedNode, parent_request_id: &str) -> Option<ChildRequestRow> {
     let escaped = escape_graphql_string(parent_request_id);
     let query = format!(
@@ -233,14 +230,6 @@ async fn start_child_session(
     (child_behavior, runtime)
 }
 
-/// `gents_loop::loop_stream` guards on `current_turn > config.max_turns + 1`
-/// from a zero start, so a limit of N executes N + 2 turns: a child that
-/// completes seven turns ran under a limit of at least five, bounding the
-/// applied limit by execution rather than by reading the configuration back.
-/// The count cannot grow much further — this child has no callable tool, so
-/// every scripted turn spends one of the eight invalid dispatches
-/// `gents_loop::loop_stream::invalid_tool_progress` allows per execution, and
-/// exhausting those fails the child ahead of any turn limit.
 #[tokio::test]
 async fn started_session_without_an_execution_document_runs_past_a_low_turn_limit() {
     let db = test_db("e2e-session-limit-default").await;
@@ -281,15 +270,12 @@ async fn started_session_without_an_execution_document_runs_past_a_low_turn_limi
     runtime.runtime.shutdown().await;
 }
 
-/// `PromptError::MaxTurnsError` reports `config.max_turns`, the bound the
-/// child's own loop enforced, so the persisted failure names the applied limit
-/// and the applied provenance rather than the configuration they came from.
 #[tokio::test]
 async fn started_session_loop_enforces_its_execution_documents_turn_limit() {
     let db = test_db("e2e-session-limit-explicit").await;
     configure_session_chain(&db).await;
     bind_child_execution_max_turns(
-        db.node.as_ref(),
+        &db.node,
         &db.node_identity.did().to_string(),
         EXPLICIT_CHILD_MAX_TURNS,
     )

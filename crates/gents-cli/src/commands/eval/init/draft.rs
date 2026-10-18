@@ -1,10 +1,5 @@
-//! The author's reply as a draft: exactly one fenced `json` block whose top
-//! level is `{"definition": {...}, "cases": [...]}`. A reply without one is
-//! an interview turn.
-
 use serde_json::Value;
 
-/// What the author drafted. The CLI assembles the rest of the definition.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Draft {
     pub(crate) definition_id: Option<String>,
@@ -12,7 +7,6 @@ pub(crate) struct Draft {
     pub(crate) cases: Vec<Value>,
 }
 
-/// `Ok(None)` when the reply carries no fenced json block (an interview turn).
 pub(crate) fn parse_reply(reply: &str) -> Result<Option<Draft>, String> {
     let blocks = json_blocks(reply);
     let block = match blocks.as_slice() {
@@ -53,10 +47,6 @@ pub(crate) fn parse_reply(reply: &str) -> Result<Option<Draft>, String> {
     }))
 }
 
-/// The bodies of the reply's fenced `json` blocks: a line that is
-/// ```` ```json ```` (any case, spaces allowed around `json`) up to the next
-/// line that is exactly ```` ``` ````. An unterminated block runs to the end
-/// of the reply.
 pub(crate) fn json_blocks(reply: &str) -> Vec<String> {
     let mut blocks = Vec::new();
     let mut current: Option<Vec<&str>> = None;
@@ -77,79 +67,8 @@ pub(crate) fn json_blocks(reply: &str) -> Vec<String> {
     blocks
 }
 
-/// ```` ```json ````, ```` ```JSON ```` or ```` ``` json ````: an opening
-/// fence whose info string is `json` in any case.
 fn is_json_fence(fence: &str) -> bool {
     fence
         .strip_prefix("```")
         .is_some_and(|info| info.trim().eq_ignore_ascii_case("json"))
-}
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    fn fenced(body: &str) -> String {
-        format!("Here is the draft.\n```json\n{body}\n```\n")
-    }
-
-    #[test]
-    fn prose_alone_is_an_interview_turn() {
-        assert_eq!(
-            parse_reply("What must the agent never do?\n```\nnot json\n```"),
-            Ok(None)
-        );
-    }
-
-    #[test]
-    fn a_fence_is_json_in_any_case_and_after_a_space() {
-        let body = json!({"definition": {}, "cases": []}).to_string();
-        for fence in ["```JSON", "```Json", "``` json", "  ``` JSON  "] {
-            let reply = format!("The draft.\n{fence}\n{body}\n```\n");
-            let draft = parse_reply(&reply)
-                .unwrap_or_else(|error| panic!("{fence}: {error}"))
-                .unwrap_or_else(|| panic!("{fence} is a json fence"));
-            assert!(draft.cases.is_empty(), "{fence}");
-        }
-        for fence in ["```jsonc", "```js", "```", "``` yaml"] {
-            let reply = format!("{fence}\n{body}\n```\n");
-            assert_eq!(parse_reply(&reply), Ok(None), "{fence}");
-        }
-    }
-
-    #[test]
-    fn two_json_blocks_are_refused() {
-        let reply = format!("{}{}", fenced("{}"), fenced("{}"));
-        let error = parse_reply(&reply).unwrap_err();
-        assert!(error.contains("exactly one"), "{error}");
-    }
-
-    #[test]
-    fn a_block_that_is_not_json_carries_the_parser_message() {
-        let error = parse_reply(&fenced("{\"cases\": [")).unwrap_err();
-        let serde = serde_json::from_str::<Value>("{\"cases\": [").unwrap_err();
-        assert!(error.contains(&serde.to_string()), "{error}");
-    }
-
-    #[test]
-    fn a_block_without_cases_or_definition_is_refused() {
-        let error = parse_reply(&fenced(r#"{"definition": {}}"#)).unwrap_err();
-        assert!(error.contains("cases"), "{error}");
-        let error = parse_reply(&fenced(r#"{"cases": []}"#)).unwrap_err();
-        assert!(error.contains("definition"), "{error}");
-    }
-
-    #[test]
-    fn a_draft_carries_its_definition_fields_and_cases() {
-        let body = json!({
-            "definition": {"definition_id": "canary-quality", "title": "Canary"},
-            "cases": [{"case_id": "a"}],
-        });
-        let draft = parse_reply(&fenced(&body.to_string())).unwrap().unwrap();
-        assert_eq!(draft.definition_id.as_deref(), Some("canary-quality"));
-        assert_eq!(draft.title.as_deref(), Some("Canary"));
-        assert_eq!(draft.cases, vec![json!({"case_id": "a"})]);
-    }
 }

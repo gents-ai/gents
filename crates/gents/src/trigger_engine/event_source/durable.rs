@@ -14,28 +14,12 @@ struct CheckpointArrival {
     collection: String,
     position: String,
     source_doc_id: String,
-    /// The hydrated source document the fire was built from.
     source_document: Option<serde_json::Value>,
     generation: u64,
 }
 
-/// Retries of one unacknowledged transient failure back off from the rescan
-/// interval to this multiple of it.
 const MAX_RETRY_BACKOFF_INTERVALS: u32 = 64;
 
-/// An arrival whose fire was not acknowledged. Its cursor stays before it, so
-/// the arrival remains pending and is never skipped. Every source event (the
-/// fire's own `Trigger` runtime-field write included) re-arms durable delivery,
-/// so an unconditional re-drive would fire the same arrival without bound
-/// (#2094). A parked trigger is therefore re-driven only when the runtime
-/// snapshot generation changes or, for a transient failure, after a capped
-/// exponential backoff. A refusal (`FireResult::Rejected`) is decided by the
-/// configuration and source document, so it waits for a configuration change,
-/// an update of that source document, or a restart; other triggers keep
-/// delivering meanwhile. Update notifications of `Trigger` documents never
-/// release a park: the fire's own runtime-field write is one. Notifications
-/// are lossy, so each rescan also re-reads a refused document and releases the
-/// park when its hydrated content differs from the refused fire's.
 pub(super) struct ParkedArrival {
     position: String,
     collection: String,
@@ -47,10 +31,6 @@ pub(super) struct ParkedArrival {
 }
 
 impl EventSource {
-    /// Re-check parks held by a notified source document, so a repaired
-    /// document is retried under the same configuration. The notification may
-    /// be the document's own late creation event, so only changed content
-    /// releases a park.
     pub(super) async fn release_parked_document(&mut self, collection: &str, doc_id: &str) {
         if collection == crate::Collection::Trigger.graphql_type() {
             return;
@@ -86,8 +66,6 @@ impl EventSource {
 }
 
 impl EventSource {
-    /// Runs at most once per rescan interval: durable passes also follow
-    /// every notification, and a notified repair is released directly.
     async fn release_changed_refusals(&mut self) {
         let now = Instant::now();
         if self
@@ -110,9 +88,6 @@ impl EventSource {
             })
             .collect::<Vec<_>>();
         for (trigger_id, collection, doc_id) in refused {
-            // A document this reader no longer sees (deleted, or hidden by
-            // ACP) is released too; the arrival owner then excludes it
-            // without a fire. A failed read keeps the park.
             let Ok(current) = self.read_source_doc(&collection, &doc_id).await else {
                 continue;
             };
@@ -154,8 +129,11 @@ impl EventSource {
             Ok(super::super::FireResult::Fired { .. } | super::super::FireResult::Duplicate { .. })
         ) || matches!(&result, Ok(super::super::FireResult::Skipped { reason }) if reason == super::super::SERIAL_BUSY);
         if acknowledged {
-            let advanced =
-                ConfigAccess::transact_local(&self.node, None, "trigger.advance_arrival", |txn| {
+            let advanced = ConfigAccess::transact_local_write(
+                &self.node,
+                None,
+                "trigger.advance_arrival",
+                |txn| {
                     Box::pin(async {
                         crate::config_client::event_source_cursor::checkpoint_prefix(
                             txn,
@@ -170,8 +148,9 @@ impl EventSource {
                         )
                         .await
                     })
-                })
-                .await;
+                },
+            )
+            .await;
             self.durable_ready = advanced.as_ref().copied().unwrap_or(false);
             match advanced {
                 Ok(true) => {
@@ -324,7 +303,7 @@ impl EventSource {
         let record = match record {
             Some(record) => record,
             None => {
-                ConfigAccess::transact_local(
+                ConfigAccess::transact_local_write(
                     &self.node,
                     None,
                     "trigger.seed_arrival_cursor",
@@ -409,8 +388,6 @@ impl EventSource {
         if next != record.cursor.after {
             self.advance_arrival(&owner, trigger, next).await?;
         }
-        // The existing source timer provides the next bounded page; a source
-        // with no matching documents cannot monopolize the trigger driver.
         Ok(None)
     }
 
@@ -420,7 +397,7 @@ impl EventSource {
         trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
         position: &str,
     ) -> anyhow::Result<()> {
-        ConfigAccess::transact_local(&self.node, None, "trigger.exclude_arrival", |txn| {
+        ConfigAccess::transact_local_write(&self.node, None, "trigger.exclude_arrival", |txn| {
             Box::pin(async {
                 crate::config_client::event_source_cursor::exclude_arrival(
                     txn,

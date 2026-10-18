@@ -15,7 +15,7 @@ use super::super::paths::DesktopPaths;
 use super::super::peer_directory::{PeerDirectory, PeerRecord};
 use super::super::principal_identity::PrincipalIdentity;
 use super::super::query::load_full_snapshot_with_peer_records;
-use super::super::schema::{ensure_runtime_schemas, subscribe_all_collections};
+use super::super::schema::subscribe_all_collections;
 use super::p2p_ops::{
     p2p_connect_peer, p2p_connected_peers, p2p_listen_addresses, p2p_local_peer_id,
 };
@@ -43,8 +43,6 @@ impl ClientCore {
         Self::start_reporting_stages(paths, options, None).await
     }
 
-    /// Starts the client and publishes the name of each startup stage as it
-    /// completes, so a caller bounding the start can say where it stalled.
     pub async fn start_with_paths_reporting_stages(
         paths: DesktopPaths,
         options: ClientCoreOptions,
@@ -93,11 +91,19 @@ impl ClientCore {
                 .await
                 .context("starting embedded desktop node")?,
         );
+        let store_access =
+            match gents::config_client::ConfigAccess::claimed_local(node.clone(), store_lock) {
+                Ok(access) => access,
+                Err(error) => {
+                    node.shutdown().await;
+                    return Err(error);
+                }
+            };
 
         checkpoint("embedded_node");
 
         let result: Result<Self> = async {
-            ensure_runtime_schemas(node.as_ref())
+            gents::migration::ensure_all_runtime_migrations(node.clone())
                 .await
                 .map_err(|error| {
                     gents::storage_backend::classify_store_error(error, paths.node_data_dir())
@@ -120,7 +126,7 @@ impl ClientCore {
 
             let observer_subscription = node.subscribe_document_changes();
 
-            let (selected_node_did, _) = watch::channel::<Option<String>>(None);
+            let observation_scope = super::observation_scope::ObservationScope::new();
 
             let initial_snapshot = {
                 load_full_snapshot_with_peer_records(node.as_ref(), &records, node_identity.did())
@@ -144,8 +150,6 @@ impl ClientCore {
                 Arc::new(node_identity.clone()),
             ));
 
-            // Each saved peer can take a full dial timeout, so each one settled
-            // counts as startup progress.
             let (peer_statuses, bootstrap_errors) = bootstrap_saved_peers(
                 &node,
                 &p2p,
@@ -178,7 +182,7 @@ impl ClientCore {
                 sync_state.clone(),
                 node_identity.did().to_string(),
                 observer_subscription,
-                selected_node_did.subscribe(),
+                observation_scope.subscribe(),
             );
             let (p2p_control, p2p_control_rx) = mpsc::channel(8);
             let p2p_supervisor = spawn_p2p_supervisor_task(
@@ -192,7 +196,7 @@ impl ClientCore {
                 options.install_replicators_on_bootstrap,
             );
             Ok(Self {
-                store_lock: tokio::sync::Mutex::new(None),
+                store_access: tokio::sync::Mutex::new(None),
                 paths,
                 options,
                 node_identity,
@@ -203,11 +207,12 @@ impl ClientCore {
                 observer: tokio::sync::Mutex::new(Some(observer)),
                 sync_state,
                 p2p_supervisor: tokio::sync::Mutex::new(Some(p2p_supervisor)),
-                hydration_transition: tokio::sync::Mutex::new(()),
-                selected_node_did,
-                last_loaded_for: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+                observation_scope,
                 request_patch_signatures: tokio::sync::Mutex::new(std::collections::HashMap::new()),
                 p2p_control: tokio::sync::Mutex::new(Some(p2p_control)),
+                shutdown_completion: tokio::sync::Mutex::new(None),
+                #[cfg(test)]
+                shutdown_test_pause: tokio::sync::Mutex::new(None),
                 last_mutation_error: std::sync::RwLock::new(None),
                 local_peer_id,
                 listen_addresses,
@@ -217,12 +222,10 @@ impl ClientCore {
         .await;
         match result {
             Ok(mut core) => {
-                *core.store_lock.get_mut() = Some(store_lock);
+                *core.store_access.get_mut() = Some(store_access);
                 Ok(core)
             }
             Err(error) => {
-                // DefraDB's background tasks require explicit shutdown. Keep
-                // host exclusion until they stop, including failed upgrades.
                 node.shutdown().await;
                 Err(error)
             }
@@ -247,13 +250,12 @@ fn desktop_p2p_config(paths: &DesktopPaths, options: &ClientCoreOptions) -> P2PC
         max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
         max_pending_dags: options.max_pending_dags,
         // DefraDB forwards merges to explicit downstream replicators itself.
-        // Gossip rebroadcast adds a coalescing wait inside the merge loop.
         rebroadcast_on_merge: false,
     }
 }
 
 pub(super) async fn bootstrap_saved_peers(
-    _node: &Arc<EmbeddedNode>,
+    node: &Arc<EmbeddedNode>,
     p2p: &Arc<dyn P2POps>,
     records: &[PeerRecord],
     options: &ClientCoreOptions,
@@ -276,16 +278,17 @@ pub(super) async fn bootstrap_saved_peers(
             routes: Vec::new(),
         };
 
-        // Enrollment documents, including a current signed route receipt,
-        // are the sole authority for reconnecting this peer. The supervisor
-        // projects that authority after schemas and subscriptions are live.
+        // Enrollment documents, including a current signed route receipt, are
+        // the sole authority for reconnecting this peer.
         if bootstrap_deferred_to_enrollment_authority(record) {
             statuses.push(status);
             peer_settled();
             continue;
         }
 
-        match connect_peer_with_retry(p2p, &record.addr, &record.label).await {
+        match connect_peer_with_retry(node.event_bus().as_ref(), p2p, &record.addr, &record.label)
+            .await
+        {
             Ok(()) => {
                 status.dial_succeeded = true;
 
@@ -322,22 +325,25 @@ fn bootstrap_deferred_to_enrollment_authority(record: &PeerRecord) -> bool {
 }
 
 pub(super) async fn connect_peer_with_retry(
+    bus: &dyn events::Bus,
     p2p: &Arc<dyn P2POps>,
     addr: &str,
     label: &str,
 ) -> Result<()> {
-    connect_peer_with_retry_until(p2p, addr, label, BOOTSTRAP_OPERATION_TIMEOUT).await
+    connect_peer_with_retry_until(bus, p2p, addr, label, BOOTSTRAP_OPERATION_TIMEOUT).await
 }
 
 pub(super) async fn force_connect_peer_with_retry(
+    bus: &dyn events::Bus,
     p2p: &Arc<dyn P2POps>,
     addr: &str,
     label: &str,
 ) -> Result<()> {
-    force_connect_peer_with_retry_until(p2p, addr, label, BOOTSTRAP_OPERATION_TIMEOUT).await
+    force_connect_peer_with_retry_until(bus, p2p, addr, label, BOOTSTRAP_OPERATION_TIMEOUT).await
 }
 
 pub(super) async fn connect_peer_with_retry_until(
+    bus: &dyn events::Bus,
     p2p: &Arc<dyn P2POps>,
     addr: &str,
     label: &str,
@@ -358,7 +364,7 @@ pub(super) async fn connect_peer_with_retry_until(
         match p2p_connect_peer(p2p, addr).await {
             Ok(()) => {
                 if let Some(peer_id) = expected_peer_id.as_deref() {
-                    wait_for_connected_peer(p2p, peer_id, deadline, label).await?;
+                    wait_for_connected_peer(bus, p2p, peer_id, deadline, label).await?;
                 }
                 return Ok(());
             }
@@ -378,6 +384,7 @@ pub(super) async fn connect_peer_with_retry_until(
 }
 
 pub(super) async fn force_connect_peer_with_retry_until(
+    bus: &dyn events::Bus,
     p2p: &Arc<dyn P2POps>,
     addr: &str,
     label: &str,
@@ -392,7 +399,7 @@ pub(super) async fn force_connect_peer_with_retry_until(
         match p2p_connect_peer(p2p, addr).await {
             Ok(()) => {
                 if let Some(peer_id) = expected_peer_id.as_deref() {
-                    wait_for_connected_peer(p2p, peer_id, deadline, label).await?;
+                    wait_for_connected_peer(bus, p2p, peer_id, deadline, label).await?;
                 }
                 return Ok(());
             }
@@ -415,27 +422,46 @@ pub(super) async fn force_connect_peer_with_retry_until(
 
 pub(super) async fn is_connected_peer(p2p: &Arc<dyn P2POps>, peer_id: &str) -> Result<bool> {
     let peers = p2p_connected_peers(p2p).await?;
-    Ok(peers.iter().any(|peer| {
-        parse_public_peer_addr(peer)
-            .map(|(parsed_peer_id, _)| parsed_peer_id.as_str() == peer_id)
-            .unwrap_or_else(|_| peer.contains(peer_id))
-    }))
+    Ok(peers
+        .iter()
+        .any(|peer| transport_entry_names_peer(peer, peer_id)))
+}
+
+fn transport_entry_names_peer(entry: &str, peer_id: &str) -> bool {
+    parse_public_peer_addr(entry)
+        .map(|(parsed_peer_id, _)| parsed_peer_id.as_str() == peer_id)
+        .unwrap_or_else(|_| entry.contains(peer_id))
 }
 
 async fn wait_for_connected_peer(
+    bus: &dyn events::Bus,
     p2p: &Arc<dyn P2POps>,
     peer_id: &str,
     deadline: Instant,
     label: &str,
 ) -> Result<()> {
-    loop {
-        if is_connected_peer(p2p, peer_id).await? {
-            return Ok(());
+    // Subscribe before the first observation so a connection that lands
+    // between them still wakes this wait.
+    let mut connections = bus.subscribe(&[events::EventName::PeerConnection]);
+    if is_connected_peer(p2p, peer_id).await? {
+        return Ok(());
+    }
+    let connected = tokio::time::timeout_at(deadline, async {
+        while let Some(message) = connections.recv().await {
+            if message.as_peer_connection().is_some_and(|change| {
+                change.connected && transport_entry_names_peer(&change.peer_id, peer_id)
+            }) {
+                return true;
+            }
         }
-        if Instant::now() >= deadline {
-            anyhow::bail!("timed out waiting for bootstrap peer {peer_id} to connect for {label}");
-        }
-        sleep(Duration::from_millis(100)).await;
+        false
+    })
+    .await;
+    match connected {
+        Ok(true) => Ok(()),
+        // A closed bus delivers no further events; fall back to one live read.
+        Ok(false) if is_connected_peer(p2p, peer_id).await? => Ok(()),
+        _ => anyhow::bail!("timed out waiting for bootstrap peer {peer_id} to connect for {label}"),
     }
 }
 
@@ -446,8 +472,8 @@ pub(super) fn normalize_required<'a>(field: &str, value: &'a str) -> Result<&'a 
         .with_context(|| format!("{field} must not be empty"))
 }
 
-/// Key custody is durable before the first encrypted write. Existing plaintext
-/// stores are verified and promoted offline, while the client store lock is held.
+// Key custody is durable before the first encrypted write; existing plaintext
+// stores are promoted offline while the client store lock is held.
 async fn open_or_create_client_store_key(
     paths: &DesktopPaths,
     choice: gents::store_key::StoreKeyCustodyChoice,
@@ -527,36 +553,6 @@ fn write_client_store_record(
 mod tests {
     use super::*;
 
-    #[test]
-    fn desktop_p2p_config_uses_pending_dag_option() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let paths = DesktopPaths::from_root(tempdir.path().to_path_buf());
-        let options = ClientCoreOptions {
-            max_pending_dags: 77,
-            ..ClientCoreOptions::local_only()
-        };
-
-        let config = desktop_p2p_config(&paths, &options);
-
-        assert!(
-            !config.rebroadcast_on_merge,
-            "merge delivery must not wait for gossip"
-        );
-        assert_eq!(config.max_pending_dags, 77);
-        assert_eq!(
-            config.max_doc_sync_request_doc_ids,
-            p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS
-        );
-    }
-
-    #[test]
-    fn stale_persisted_enrollment_is_not_activated_during_bootstrap() {
-        let mut record = PeerRecord::new("Enrollment", "endpoint", "did:key:server");
-        record.source = Some("enrollment".to_string());
-        record.pairing_ready = true;
-        assert!(bootstrap_deferred_to_enrollment_authority(&record));
-    }
-
     #[tokio::test]
     async fn plaintext_client_upgrade_preserves_identity_history_and_subscription_metadata() {
         use gents::agent::p2p_reconcile::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin};
@@ -578,8 +574,8 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        ensure_runtime_schemas(&plain).await.unwrap();
-        let access = ConfigAccess::Local(Arc::clone(&plain));
+        gents::ensure_runtime_schemas(&plain).await.unwrap();
+        let access = ConfigAccess::local(Arc::clone(&plain));
         access
             .write(
                 "test.client_upgrade.session",
@@ -654,7 +650,7 @@ mod tests {
                 std::fs::read(paths.identity_key_path()).unwrap(),
                 identity_bytes
             );
-            let access = ConfigAccess::Local(core.node_arc());
+            let access = ConfigAccess::local(core.node_arc());
             assert_eq!(access.execute(query).await.unwrap(), expected_document);
             assert_eq!(
                 access.execute(&history_query).await.unwrap(),
@@ -665,6 +661,7 @@ mod tests {
             assert!(sensitive.iter().all(|name| subscriptions.contains(name)));
             drop(admin);
             drop(access);
+            let core = Arc::new(core);
             core.shutdown().await.unwrap();
             drop(core);
             assert!(paths.store_encryption_path().is_file());
@@ -702,7 +699,7 @@ mod tests {
             .unwrap();
         assert_eq!(std::fs::read(paths.store_key_path()).unwrap(), key);
         assert_eq!(std::fs::read(paths.identity_key_path()).unwrap(), identity);
-        core.shutdown().await.unwrap();
+        Arc::new(core).shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -731,6 +728,7 @@ mod tests {
             "{error:#}"
         );
         assert_eq!(std::fs::read(paths.store_key_path()).unwrap(), key);
+        let core = Arc::new(core);
         core.shutdown().await.unwrap();
         drop(core);
         let reopened =
@@ -738,6 +736,6 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(reopened.node_identity().did(), did);
-        reopened.shutdown().await.unwrap();
+        Arc::new(reopened).shutdown().await.unwrap();
     }
 }

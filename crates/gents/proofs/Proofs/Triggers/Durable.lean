@@ -29,13 +29,6 @@ structure GoalBinding where
   status : Goals.Status := .active
   deriving DecidableEq, Repr
 
-/-- Pending serial fires are ordinary persisted requests. The request claim
-owner admits only the earliest pending request for the trigger and session;
-dispatch never drops a fire merely because another request is running.
-The native receipt and outcome collections are non-branchable and their unique
-indexes arbitrate admission on this receiving node. The existing deployment
-premise is one active runtime per owner DID; this model does not claim global
-unique-index consensus between independent writers of replicated receipts. -/
 structure State where
   receipts : List Identity := []
   requests : List Request := []
@@ -45,9 +38,6 @@ structure State where
 
 def admitted (state : State) (id : Identity) : Bool := decide (id ∈ state.receipts)
 
-/-- The database transaction publishes the receipt and request together. A
-crash before commit preserves the pre-state; a crash after commit preserves
-both. Recovery repeats this same admission operation. -/
 def admit (state : State) (fire : Fire) : State :=
   if admitted state fire.identity || !Triggers.outcomeSourceAllowed fire.identity.collection fire.emitOutcome then state
   else { state with
@@ -86,9 +76,6 @@ theorem admission_has_receipt (state : State) (fire : Fire)
   · simp [admit, admitted, h, hv]
   · simp [admit, admitted, h, hv]
 
-/-- The native adapter projects authenticated rows and their receiving-node
-arrival positions into the same claim owner used here. Positional indices in
-this closed model preserve the order of its append-only admission sequence. -/
 def requestObservations (state : State) : List ClaimObservation :=
   state.requests.zipIdx.map fun (request, index) => {
     document := request.fire.identity.key
@@ -118,8 +105,6 @@ theorem admission_preserves_outcomes (state : State) (fire : Fire) :
   simp only [admit]
   split <;> rfl
 
-/-- A pre-commit crash discards all staged writes. An acknowledgement lost after
-commit is retried through the same identity, with no second request. -/
 def admitTransaction (state : State) (fire : Fire) (commit : Bool) : State :=
   if commit then admit state fire else state
 
@@ -130,9 +115,6 @@ theorem admission_crash_after_commit (state : State) (fire : Fire) :
     admitTransaction (admitTransaction state fire true) fire true =
       admitTransaction state fire true := admit_idempotent state fire
 
-/-- Temporary pauses and provider usage limits preserve the assignment's final
-outcome. The caller is notified when the Goal completes, blocks, or exhausts its
-budget; ordinary request boundaries and resumable stops cannot consume it. -/
 def goalEnded (status : Goals.Status) : Bool :=
   status == .complete || status == .blocked || status == .budgetLimited
 
@@ -170,9 +152,6 @@ def recoverOutcomes (state : State) : State :=
   { state with outcomes := state.outcomes ++
       (dueIdentities state).dedup.filter (fun id => !decide (id ∈ state.outcomes)) }
 
-/-- The persisted terminal transition deliberately leaves a recoverable gap.
-The normal owner publishes in the same transaction; imported or interrupted
-terminal publication is repaired by the existing startup recovery owner. -/
 def terminalize (state : State) (id : Identity) : State :=
   { state with requests := state.requests.map fun request =>
     if request.fire.identity == id then { request with running := false, terminal := true }
@@ -185,10 +164,6 @@ def setGoal (state : State) (id : Identity) (status : Goals.Status) : State :=
 def sameGoalSession (left right : Request) : Bool :=
   left.fire.identity.owner == right.fire.identity.owner && left.fire.session == right.fire.session
 
-/-- Replacement is explicit assignment termination, not a Goal pause. The old
-terminal boundary is published before replacing the binding; unresolved applied
-assignments then receive superseded. New Goal observations address only the new
-binding. All writes belong to the winning request claim transaction. -/
 def stageAssignment (before : State) (candidate : Request) : State :=
   let binding : GoalBinding := {
     owner := candidate.fire.identity.owner
@@ -298,8 +273,6 @@ theorem recovery_unique (state : State) (valid : state.outcomes.Nodup) :
   intro id present missing
   simpa [present] using missing.2
 
-/-- Recovery liveness is conditional on the existing startup owner being run
-successfully. Provider fairness or eventual restart is not proved by this model. -/
 theorem recovery_eventual_if_run (state : State) (request : Request) (trace : Nat → State)
     (hm : request ∈ state.requests) (hd : outcomeDue state request = true)
     (scheduled : ∃ n, trace n = recoverOutcomes state) :
@@ -388,16 +361,9 @@ theorem other_assignment_status_cannot_end_fire (state : State) (request : Reque
   apply unmatched_goal_cannot_terminate_assignment state request hg ha hr
   simp [boundGoal, bindings, different]
 
-/-- A committed terminal row without its outcome is a legal recovery input.
-No atomic publisher is hidden in terminalize, so both crash sides can be tested. -/
 theorem terminal_publication_gap (state : State) (id : Identity)
     (missing : id ∉ state.outcomes) : id ∉ (terminalize state id).outcomes := missing
 
-/-- A configured destination must resolve to a session of the same owner and
-agent, whichever requester owns it; the fire is written under that
-session's requester (`Enrollment.runtimeRequesterScope`). Being busy does not
-invalidate it; the request claim queue owns that occupancy. The chosen ID is
-fixed before either Task template is rendered. -/
 def resolveSession (id : Identity) (target : Option String)
     (ownedSameAgent : Bool) : Option String :=
   match target with
@@ -420,8 +386,6 @@ theorem concurrent_session_is_not_current (owner caller listed : String)
     (h : caller ≠ listed) : isCurrent owner caller owner listed = false := by
   simp [isCurrent, h]
 
-/-- Session observation and Task delivery use the same resolved destination,
-including when another request currently owns that session's execution lease. -/
 theorem existing_session_retained (id : Identity) (session : String)
     (h : session.isEmpty = false) : resolveSession id (some session) true = some session := by
   simp [resolveSession, h]
@@ -436,10 +400,6 @@ structure GoalAssignment where
   usageBaseline : Nat := 0
   deriving DecidableEq, Repr
 
-/-- An authenticated Task assignment advances the existing Goal controller
-epoch. Explicit task assignment may replace a completed or exhausted goal;
-model-facing create/update/resume retain their existing authority and rules.
-Prior assignment outcomes must be published before this operation commits. -/
 def assignGoal (previous : Option GoalAssignment) (sessionUsage : Nat) : GoalAssignment :=
   let fresh : Goals.State := { status := .active, blockedAudits := 0, wrapupRequested := false, wrapupCompleted := false }
   match previous with
@@ -466,5 +426,27 @@ theorem task_assignment_invalidates_previous_controller (previous : GoalAssignme
 
 theorem new_assignment_usage_baseline (usage : Nat) :
     (assignGoal none usage).usageBaseline = usage := rfl
+
+/-- Destination admission and replacement are one transaction. A rejected
+destination or replay cannot cancel previously admitted work. Execution
+revocation preserves its canonical output through the existing terminal owner. -/
+def admitLatest (state : State) (fire : Fire) (destinationAllowed : Bool) : State :=
+  if !destinationAllowed || admitted state fire.identity ||
+      !Triggers.outcomeSourceAllowed fire.identity.collection fire.emitOutcome then state
+  else recoverOutcomes { state with
+    receipts := state.receipts ++ [fire.identity]
+    requests := (state.requests.map fun request =>
+      if request.fire.identity.owner == fire.identity.owner &&
+          request.fire.identity.trigger == fire.identity.trigger && !request.terminal then
+        { request with running := false, terminal := true }
+      else request) ++ [{ fire := fire }] }
+
+theorem rejected_latest_preserves_work (state : State) (fire : Fire) :
+    admitLatest state fire false = state := by simp [admitLatest]
+
+theorem replayed_latest_preserves_work (state : State) (fire : Fire)
+    (h : admitted state fire.identity = true) :
+    admitLatest state fire true = state := by simp [admitLatest, h]
+
 
 end Triggers.Durable

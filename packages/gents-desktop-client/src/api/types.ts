@@ -1,5 +1,8 @@
 import type { PendingQueueEditRequest } from "../generated/PendingQueueEditRequest.js";
 import type { PendingQueueEditResult } from "../generated/PendingQueueEditResult.js";
+import type { GoalControlRequest } from "../generated/GoalControlRequest.js";
+import type { GoalControlResult } from "../generated/GoalControlResult.js";
+import type { SessionGoalView } from "../generated/SessionGoalView.js";
 import type { OauthProvider } from "../transport.js";
 import type { ConfigComponentsApplyRequest } from "../generated/ConfigComponentsApplyRequest.js";
 import type { ConfigComponentsPatchRequest } from "../generated/ConfigComponentsPatchRequest.js";
@@ -26,6 +29,7 @@ import type {
   AgentDeleteRequest,
   ContextDeleteRequest,
   AgentSaveRequest,
+  ChatSendRequest,
   ChatSendResult,
   CodexLoginResult,
   ClaudeLoginResult,
@@ -45,7 +49,6 @@ import type {
   InitSummary,
   InterruptRequestResult,
   MailboxItemView,
-  MailboxQuestionAnswer,
   MCPServiceHealthView,
   McpServiceProbeResult,
   NetworkStatusView,
@@ -103,6 +106,11 @@ export type ManagedServerAuthorityInput = {
 };
 
 export type DesktopApiAdapter = {
+  fetchSessionGoal: (
+    nodeDid: string,
+    sessionId: string,
+  ) => Promise<SessionGoalView | null>;
+  controlGoal: (request: GoalControlRequest) => Promise<GoalControlResult>;
   fetchDesktopSnapshot: () => Promise<DesktopClientSnapshot>;
   initLocalStandardRuntime: (request: {
     label: string;
@@ -120,13 +128,11 @@ export type DesktopApiAdapter = {
     nodeName: string,
     authority: ManagedServerAuthorityInput,
   ) => Promise<ManagedServerStatus>;
-  /** Omit `confirmation` to preview the entries the reset will retire. */
   resetManagedServer?: (
     confirmation?: string,
     disposition?: HomeResetDisposition,
     fullReset?: boolean,
   ) => Promise<ManagedServerResetResult>;
-  /** Quits the application, leaving all local state untouched. */
   quitDesktop?: () => Promise<void>;
   validateManagedServerRoot?: (path: string) => Promise<string>;
   openManagedServerLoginItems?: () => Promise<void>;
@@ -136,7 +142,6 @@ export type DesktopApiAdapter = {
   stopManagedServer?: (
     disableAutoStart: boolean,
   ) => Promise<ManagedServerStatus>;
-  /** Opens the managed runtime's DB explorer window; resolves to its URL. */
   openDbExplorer?: () => Promise<string>;
   /** Opens a URL in the person's browser. The bridge strips the packaged
    *  build's own libraries and display backend from the environment the
@@ -185,18 +190,7 @@ export type DesktopApiAdapter = {
     baseReasoningByteLen: number;
     baseReasoningHash: string;
   }) => Promise<SessionLiveDeltaView | null>;
-  sendChatMessage: (request: {
-    nodeDid: string;
-    agentId?: string | null;
-    sessionId?: string | null;
-    content: string;
-    causedBySourceDocId?: string | null;
-    /** An answer to the question on the `causedBySourceDocId` item; the
-        bridge renders the content, so `content` is empty. */
-    answer?: MailboxQuestionAnswer | null;
-    /** The folder the user works in for this chat. */
-    cwd?: string | null;
-  }) => Promise<ChatSendResult>;
+  sendChatMessage: (request: ChatSendRequest) => Promise<ChatSendResult>;
   editPendingQueue: (
     request: PendingQueueEditRequest,
   ) => Promise<PendingQueueEditResult>;
@@ -298,8 +292,6 @@ export type DesktopApiAdapter = {
     label?: string | null,
   ) => Promise<ClaudeLoginResult>;
   cancelClaudeLogin: () => Promise<void>;
-  /** Calls `onUrl` with each sign-in URL the bridge sends while a
-   *  provider's login runs; resolves to a function that stops watching. */
   watchProviderLoginUrl?: (
     provider: OauthProvider,
     onUrl: (url: string) => void,
@@ -309,8 +301,6 @@ export type DesktopApiAdapter = {
     nodeDid: string,
     credentialId: string,
   ) => Promise<void>;
-  /** Saves a sign-in the bridge holds after a failed credential save,
-   *  without repeating the browser login. `provider` is the credential kind. */
   retrySaveProviderAccount?: (
     nodeDid: string,
     provider: string,
@@ -320,16 +310,10 @@ export type DesktopApiAdapter = {
     credentialId: string,
     label: string,
   ) => Promise<void>;
-  /** Removes the account and the backends its sign-in created that no
-   *  profile uses. */
   removeProviderAccount?: (
     nodeDid: string,
     credentialId: string,
   ) => Promise<void>;
-  /** Asks the runtime to read usage (skipping accounts read in the last
-   *  five minutes), then returns each backend's stored usage. `refresh` is
-   *  true for an explicit Refresh, the only read whose failure rejects.
-   *  `provider` is a credential kind. */
   readProviderUsage?: (
     nodeDid: string,
     refresh: boolean,
@@ -376,7 +360,6 @@ export type DesktopApiAdapter = {
     plugins: PackPluginSlot[];
     profiles: PackSlotProfile[];
   }>;
-  /** the registry account signed in, or a failure when none is */
   readPackAccount: () => Promise<{ account: { username: string } }>;
   searchPacks: (
     query: string,
@@ -394,6 +377,8 @@ export type DesktopApiAdapter = {
     access: AllowedFolderAccess,
   ) => Promise<AllowedFolders>;
   removeAllowedFolder: (path: string) => Promise<AllowedFolders>;
+  subscribePluginApprovals: (token: string) => Promise<void>;
+  unsubscribePluginApprovals: (token: string) => Promise<void>;
   listPendingPluginApprovals: () => Promise<{
     requests: PluginApprovalRequest[];
   }>;
@@ -428,6 +413,8 @@ export type HostAccessCommand =
   | "listAllowedFolders"
   | "addAllowedFolder"
   | "removeAllowedFolder"
+  | "subscribePluginApprovals"
+  | "unsubscribePluginApprovals"
   | "listPendingPluginApprovals"
   | "decidePluginApproval";
 

@@ -1,5 +1,3 @@
-/* The setup flows' frame and controls: the page (or the panel when
-   embedded), its title, a choice row, the step navigation and a field. */
 import { ArrowLeft, ArrowRight, Circle, CircleCheck, Moon, Sun } from "lucide-react";
 import type { Server } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
@@ -7,6 +5,7 @@ import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { preferences, useTheme } from "@/preferences";
+import { InfoTip } from "../InfoTip";
 
 export function Frame({
   children,
@@ -40,7 +39,6 @@ export function Frame({
       data-testid="setup-screen"
     >
       <div className="px-8">
-        {/* anchored a fixed way down, not centered: a step can grow or shrink without moving its title */}
         <div className="mx-auto w-full max-w-xl pt-[10vh] pb-8">{children}</div>
         <Button
           variant="ghost"
@@ -59,7 +57,7 @@ export function Frame({
 export function Title({ children, note }: { children: React.ReactNode; note: string }) {
   return (
     <div className="mb-6">
-      <h1 className="font-heading text-2xl font-medium text-heading">{children}</h1>
+      <h1 className="font-heading text-xl font-medium text-heading">{children}</h1>
       <p className="mt-1.5 text-sm text-muted-foreground">{note}</p>
     </div>
   );
@@ -172,11 +170,28 @@ export function Nav({
 
 export function Field({
   label,
+  info,
+  htmlFor,
   children,
 }: {
   label: string;
+  info?: React.ReactNode;
+  htmlFor?: string;
   children: React.ReactNode;
 }) {
+  if (info && htmlFor) {
+    return (
+      <div className="grid gap-1">
+        <span className="flex items-center gap-1.5">
+          <label htmlFor={htmlFor} className="text-xs text-muted-foreground">
+            {label}
+          </label>
+          <InfoTip about={label}>{info}</InfoTip>
+        </span>
+        {children}
+      </div>
+    );
+  }
   return (
     <label className="grid gap-1">
       <span className="text-xs text-muted-foreground">{label}</span>

@@ -279,6 +279,11 @@ def goalCreateCases : List GoalCreateCase :=
       request := createRequest "did:a" "session-a" "", existing := none }
   , { name := "whitespace_objective_invalid",
       request := createRequest "did:a" "session-a" "   ", existing := none }
+  , { name := "unicode_whitespace_objective_invalid",
+      request := createRequest "did:a" "session-a" "\u3000\u00A0", existing := none }
+  , { name := "unicode_normalized_duplicate_idempotent",
+      request := createRequest "did:a" "session-a" "\u3000ship feature\u00A0",
+      existing := some canonical }
   , { name := "zero_budget_invalid",
       request := createRequest "did:a" "session-a" "ship" (some 0), existing := none }
   , { name := "negative_budget_invalid",

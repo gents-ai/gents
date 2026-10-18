@@ -1,5 +1,3 @@
-/* Tasks: TaskSaveRequest fields, the run facts, and a manual run with
-   JSON args. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { setEnabled } from "./enabled";
 import { dependentsWarning } from "./dependents";
@@ -12,6 +10,7 @@ import {
   AreaRow,
   DraftActions,
   FactRow,
+  LongFactRow,
   NumberRow,
   RefRow,
   SwitchRow,
@@ -45,7 +44,6 @@ export function TaskEditor({
 }: {
   deployment: NodeView;
   task: TaskView;
-  /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
 }) {
   const {
@@ -114,17 +112,13 @@ export function TaskEditor({
       },
     },
   );
-  /* the New agent dialog's resolver while it is open */
   const [newAgent, setNewAgent] = useState<((id: string | null) => void) | null>(null);
-  /* this task's triggers, and the one open beside the page */
   const myTriggers = deployment.triggers.filter(
     (x) => x.config.task_id === task.taskId,
   );
   const [besideTrigger, setBesideTrigger] = useState<string | null>(null);
   const besideTriggerView =
     deployment.triggers.find((x) => x.config.trigger_id === besideTrigger) ?? null;
-  /* a schedule or an event for this task: a dialog that writes nothing
-     until Create, then the new trigger beside the page to adjust */
   const [adding, setAdding] = useState<"schedule" | "event" | null>(null);
   const [args, setArgs] = useState("{}");
   const [lastRun, setLastRun] = useState<string | null>(null);
@@ -380,7 +374,11 @@ export function TaskEditor({
         <FactRow label="Total fires">{task.recentRuns.totalFires}</FactRow>
         <FactRow label="Last attempt">{when(task.recentRuns.lastAttemptAt)}</FactRow>
         <FactRow label="Last status">{task.recentRuns.lastStatus ?? "—"}</FactRow>
-        <FactRow label="Last error">{task.recentRuns.lastError ?? "—"}</FactRow>
+        {task.recentRuns.lastError ? (
+          <LongFactRow label="Last error">{task.recentRuns.lastError}</LongFactRow>
+        ) : (
+          <FactRow label="Last error">—</FactRow>
+        )}
         <FactRow label="Wired to">
           {task.recentRuns.scheduleCount} schedules · {task.recentRuns.eventCount}{" "}
           events
@@ -409,7 +407,7 @@ export function TaskEditor({
             value={args}
             onChange={(e) => setArgs(e.target.value)}
             rows={3}
-            className="w-96 max-md:w-full font-mono text-xs"
+            className="max-h-48 w-96 max-md:w-full font-mono text-xs"
           />
         </Row>
         {lastRun && (
@@ -435,7 +433,6 @@ export function TaskEditor({
   );
 }
 
-/* when a task runs, from its triggers, and the first reason it would not */
 function whenItRuns(deployment: NodeView, t: TaskView) {
   const triggers = deployment.triggers.filter((x) => x.config.task_id === t.taskId);
   if (t.enabled === false) return { when: "Disabled", problem: "Task is disabled" };
@@ -451,7 +448,6 @@ function whenItRuns(deployment: NodeView, t: TaskView) {
   };
 }
 
-/* the canonical document for a task view, for row edits and copies */
 function taskDocument(deployment: NodeView, t: TaskView) {
   return {
     node_did: deployment.nodeDid,

@@ -1,9 +1,3 @@
-//! Typed canonical output observation for one exact physical request.
-//!
-//! This composes the modeled live-target selector and live classifier with the
-//! exact terminal selection reader. It stores no response-shaped state and
-//! never chooses among retained partial attempts for the product answer.
-
 use anyhow::{Context, Result};
 use gents_protocol::output::live::{
     observed_request_execution_owner, project_live, select_live_target, LiveObservation,
@@ -20,16 +14,15 @@ use gents_protocol::transcript::present_message;
 use crate::config_client::ConfigAccess;
 
 use super::canonical_rows::{
-    decode_output_segment_row, decode_transcript_message_row, OutputSegmentRow,
-    TranscriptMessageRow, AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS,
+    decode_scoped_canonical_rows, decode_scoped_request_output_segments,
+    decode_transcript_message_row, request_output_facts_query, OutputSegmentRow,
+    TranscriptMessageRow,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CanonicalPresentation {
     pub body_markdown: String,
     pub reasoning_markdown: Option<String>,
-    /// Exact live-target coordinate selected by the canonical owner. Native
-    /// terminal presentations have no active source and leave this absent.
     pub selected_source: Option<CanonicalSelectedSource>,
 }
 
@@ -50,8 +43,6 @@ pub enum CanonicalRequestOutput {
     Conflicted,
     Invalid,
     Retracted,
-    /// Diagnostic history only. Callers must not present this as the current
-    /// or terminal answer.
     RetainedPartial(Vec<LiveStream>),
     Published {
         header: gents_protocol::output::TranscriptMessage,
@@ -137,15 +128,8 @@ async fn load_facts(
         .session_id
         .as_deref()
         .context("request output observation omitted session")?;
-    let scope = super::session_scope_filter(node_did, session_id, request.requester_did.as_deref());
-    let physical = crate::graphql::escape_graphql_string(request_doc_id);
     let response = access
-        .execute(&format!(
-            r#"{{
-                AgentOutputSegment(filter:{{{scope},request_doc_id:{{_eq:"{physical}"}}}}){{{AGENT_OUTPUT_SEGMENT_FIELDS}}}
-                AgentMessage(filter:{{{scope},request_doc_id:{{_eq:"{physical}"}}}}){{{AGENT_MESSAGE_FIELDS}}}
-            }}"#
-        ))
+        .execute(&request_output_facts_query(request_doc_id))
         .await?;
     anyhow::ensure!(
         response
@@ -155,26 +139,30 @@ async fn load_facts(
         "canonical request output query failed: {}",
         response.get("errors").unwrap_or(&serde_json::Value::Null)
     );
-    let segments = response
+    let segment_rows = response
         .pointer("/data/AgentOutputSegment")
         .and_then(serde_json::Value::as_array)
-        .context("canonical request output query omitted segments")?
-        .iter()
-        .map(decode_output_segment_row)
-        .collect::<Result<Vec<_>>>()?;
-    let messages = response
+        .context("canonical request output query omitted segments")?;
+    let message_rows = response
         .pointer("/data/AgentMessage")
         .and_then(serde_json::Value::as_array)
-        .context("canonical request output query omitted messages")?
-        .iter()
-        .map(decode_transcript_message_row)
-        .collect::<Result<Vec<_>>>()?;
+        .context("canonical request output query omitted messages")?;
+    let segments = decode_scoped_request_output_segments(
+        segment_rows,
+        node_did,
+        Some(session_id),
+        request.requester_did.as_deref(),
+    )?;
+    let messages = decode_scoped_canonical_rows(
+        message_rows,
+        node_did,
+        Some(session_id),
+        request.requester_did.as_deref(),
+        decode_transcript_message_row,
+    )?;
     Ok((segments, messages))
 }
 
-/// Observe canonical output for one already-selected physical request row.
-/// Request admission input remains on `AgentRequestRow`; it is never folded
-/// into this output projection.
 pub async fn observe_request_output(
     access: &ConfigAccess,
     request: &AgentRequestRow,
@@ -296,11 +284,9 @@ pub async fn observe_request_output(
         denied_segments: &[],
         dependency_denials: &[],
         owner: OwnerLiveness {
-            // This is the last durable active-owner observation, not fresh
-            // write authorization. Lease expiry/recovery is decided only by
-            // the lifecycle owner; this read projection never compares its
-            // own wall clock. A stray generation on Pending therefore cannot
-            // establish liveness.
+            // Last durable active-owner observation, not fresh write
+            // authorization; lease expiry/recovery is decided only by the
+            // lifecycle owner, never this read projection's wall clock.
             current_request: observed_request_execution_owner(request),
             live_tools: Vec::new(),
         },

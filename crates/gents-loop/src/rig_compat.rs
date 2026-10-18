@@ -4,8 +4,6 @@ use crate::error::{
 use crate::tool::ToolDefinition;
 use crate::ToolChoice;
 
-/// A provider completion model the owned loop drives. Runtime owners are
-/// generic over this bound so the provider client's traits stay here.
 pub trait ProviderModel:
     rig::completion::CompletionModel<Response: 'static, StreamingResponse: 'static> + 'static
 {
@@ -19,7 +17,6 @@ where
 {
 }
 
-/// A built provider client; `completion_model` names one [`ProviderModel`].
 pub trait ProviderClient: rig::client::CompletionClient<CompletionModel: ProviderModel> {}
 
 impl<C> ProviderClient for C
@@ -29,25 +26,15 @@ where
 {
 }
 
-/// Whether the provider's raw response carries an OpenAI Responses cache-token
-/// observation. Rig's `Usage` turns a missing `input_tokens_details` into zero,
-/// so admission must consult the raw response before persisting the nullable
-/// InferenceCall column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CachedInputTokensObservation {
-    /// The raw response is not a Responses API payload; retain Rig's behavior.
     NotAvailable,
-    /// Responses usage was present but had no cached-token detail.
     Unreported,
-    /// The provider explicitly supplied a cached-token count, including zero.
     Reported(u64),
 }
 
-/// Read cached-token presence from a serializable raw provider response.
-///
-/// The Responses final streaming item and non-streaming raw response both carry
-/// `usage.output_tokens_details`; this identifies the Responses usage shape
-/// without changing other providers' existing accounting behavior.
+/// Rig maps absent Responses cache details to zero; inspect the raw response
+/// so the durable nullable column preserves whether the provider reported it.
 pub fn cached_input_tokens_observation<T: serde::Serialize>(
     raw_response: &T,
 ) -> CachedInputTokensObservation {
@@ -488,10 +475,6 @@ pub fn from_rig_user_content(
         }),
         R::ToolResult(result) => message::UserContent::ToolResult(from_rig_tool_result(result)),
         R::Image(image) => message::UserContent::Image(from_rig_image(image)),
-        // Audio/Video/Document inbound conversions are lossy-stubbed: nothing
-        // upstream produces them on the consume seam today, and the native
-        // variants exist for outbound fidelity. Extend when a provider sends
-        // them.
         R::Audio(_) => {
             tracing::warn!("audio content discarded at the inbound rig seam (lossy stub)");
             message::UserContent::Audio(message::Audio::default())
@@ -524,7 +507,6 @@ pub fn from_rig_assistant_content(
     }
 }
 
-/// The native cause of a rig stream failure.
 pub fn loop_failure_cause(error: &rig::agent::StreamingError) -> LoopFailureCause {
     use rig::completion::{CompletionError, PromptError};
     match error {
@@ -549,7 +531,6 @@ pub fn loop_failure_cause(error: &rig::agent::StreamingError) -> LoopFailureCaus
     }
 }
 
-/// Carry a rig stream failure across the loop's output boundary.
 pub fn loop_stream_error(error: rig::agent::StreamingError) -> LoopStreamError {
     LoopStreamError::new(loop_failure_cause(&error), error)
 }
@@ -708,8 +689,6 @@ mod tests {
         assert_eq!(format!("{:#}", anyhow::Error::new(native)), expected);
     }
 
-    // ===== #589/#590: argument-shape normalization at both converter seams =====
-
     fn native_tool_call(arguments: Value) -> message::ToolCall {
         message::ToolCall {
             id: "call-1".to_string(),
@@ -736,9 +715,6 @@ mod tests {
         }
     }
 
-    /// Ingest seam (#589): nothing non-object is ever accumulated into durable
-    /// history. A wire `"[]"` (rig parses it to `Value::Array`) and a raw
-    /// corrupt string both normalize; a healthy object is untouched.
     #[test]
     fn from_rig_tool_call_normalizes_arguments_to_object_shape() {
         let object = json!({"city": "NYC"});
@@ -747,7 +723,6 @@ mod tests {
                 .function
                 .arguments,
             object,
-            "object arguments must pass through unchanged"
         );
 
         assert_eq!(
@@ -755,7 +730,6 @@ mod tests {
                 .function
                 .arguments,
             json!({}),
-            "a non-object array must never be persisted"
         );
 
         let salvaged = from_rig_tool_call(&rig_tool_call(Value::String(
@@ -763,17 +737,10 @@ mod tests {
         )))
         .function
         .arguments;
-        assert!(
-            salvaged.is_object(),
-            "the #589 corrupt raw string must not reach history as a string"
-        );
+        assert!(salvaged.is_object());
         assert_eq!(salvaged["tool_name"], "list_hosts");
     }
 
-    /// Egress seam (#590): already-poisoned durable history self-heals at
-    /// request build — the provider can never receive a non-object
-    /// `arguments`, so the deterministic template-render jam clears on the
-    /// next turn without a DB edit.
     #[test]
     fn to_rig_tool_call_normalizes_persisted_poison_on_egress() {
         let object = json!({"city": "NYC"});
@@ -782,7 +749,6 @@ mod tests {
                 .function
                 .arguments,
             object,
-            "object arguments must pass through unchanged"
         );
 
         assert_eq!(
@@ -790,26 +756,20 @@ mod tests {
                 .function
                 .arguments,
             json!({}),
-            "a persisted [] must egress as {{}}"
         );
         assert_eq!(
             to_rig_tool_call(&native_tool_call(Value::Null))
                 .function
                 .arguments,
             json!({}),
-            "persisted null args must egress as {{}}"
         );
 
-        // Amy's actual poisoned row: a Value::String of corrupt bytes.
         let healed = to_rig_tool_call(&native_tool_call(Value::String(
             crate::test_support::CORRUPT_TOOL_ARGS_589.into(),
         )))
         .function
         .arguments;
-        assert!(
-            healed.is_object(),
-            "the persisted #589 poison must egress object-shaped"
-        );
+        assert!(healed.is_object());
         assert_eq!(healed["tool_name"], "list_hosts");
     }
 }

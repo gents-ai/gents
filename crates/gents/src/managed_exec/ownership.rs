@@ -1,19 +1,10 @@
-//! Host process ownership for managed background executions.
-//!
-//! Lean: `ManagedExec.Ownership`. A managed child leads its own session and
-//! process group, so it survives the runtime. After a runtime loss the only
-//! ownership evidence is a durable host record of the leader pid, its group
-//! and its OS start identity, kept beside the runtime's exclusively locked
-//! store. A bare pid, or a group whose recorded leader is gone, proves
-//! nothing: the OS reuses both ids.
-
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-/// Lean `ManagedExec.ProcessObservation`.
+// Process-group ids are reused; termination requires the recorded leader's OS start identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProcessObservation {
     Running,
@@ -34,13 +25,11 @@ impl ProcessObservation {
         }
     }
 
-    /// Lean `ManagedExec.mayTerminate`.
     pub(crate) const fn may_terminate(self) -> bool {
         matches!(self, Self::Running)
     }
 }
 
-/// Lean `ManagedExec.StopOutcome`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessStopOutcome {
     Stopped,
@@ -67,7 +56,6 @@ impl ProcessStopOutcome {
         }
     }
 
-    /// Lean `ManagedExec.stopOutcome`.
     pub(crate) const fn from_observations(
         before: ProcessObservation,
         after: ProcessObservation,
@@ -80,7 +68,6 @@ impl ProcessStopOutcome {
         }
     }
 
-    /// Lean `ManagedExec.cancelReply`.
     pub const fn cancel_reply(self) -> CancelProcessReply {
         match self {
             Self::Stopped => CancelProcessReply::Cancelled,
@@ -90,7 +77,6 @@ impl ProcessStopOutcome {
     }
 }
 
-/// Lean `ManagedExec.CancelReply`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CancelProcessReply {
     Cancelled,
@@ -111,8 +97,6 @@ impl CancelProcessReply {
     }
 }
 
-/// Leader pid, its process group, and the OS start identity that
-/// distinguishes it from a later process reusing the same pid.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ProcessIdentity {
     pub(crate) pid: i32,
@@ -121,7 +105,7 @@ pub(crate) struct ProcessIdentity {
 }
 
 impl ProcessIdentity {
-    /// Identity of a live, non-zombie process, or `None`.
+    #[cfg(unix)]
     pub(crate) fn of_live(pid: i32) -> Option<Self> {
         let info = platform::process_info(pid)?;
         (!info.zombie).then_some(Self {
@@ -131,9 +115,6 @@ impl ProcessIdentity {
         })
     }
 
-    /// Ownership probe. `Running` requires the recorded leader to be alive
-    /// with the recorded start identity and group; a leaderless group with
-    /// live members is `Unowned` because its id may have been reused.
     pub(crate) fn observe(&self) -> ProcessObservation {
         if self.pid <= 0 || self.pgid <= 0 {
             return ProcessObservation::Unowned;
@@ -153,8 +134,6 @@ impl ProcessIdentity {
         }
     }
 
-    /// Group observation after this owner signalled a group it had proven
-    /// owned. A member that is not a zombie keeps the group running.
     fn observe_signalled_group(&self) -> ProcessObservation {
         match platform::group_has_live_member(self.pgid) {
             Some(false) => ProcessObservation::Exited,
@@ -162,7 +141,6 @@ impl ProcessIdentity {
         }
     }
 
-    /// Waits for a group this owner already signalled to empty.
     pub(crate) async fn await_signalled_group_exit(&self, wait: Duration) -> ProcessObservation {
         let deadline = tokio::time::Instant::now() + wait;
         loop {
@@ -174,8 +152,6 @@ impl ProcessIdentity {
         }
     }
 
-    /// Waits for the recorded leader to stop being a proven-owned running
-    /// process.
     pub(crate) async fn await_leader_exit(&self, wait: Duration) -> ProcessObservation {
         let deadline = tokio::time::Instant::now() + wait;
         loop {
@@ -187,9 +163,7 @@ impl ProcessIdentity {
         }
     }
 
-    /// Stops a proven-owned group: TERM, then KILL, then observe. Returns the
-    /// observations before and after; nothing is signalled unless `before`
-    /// admits termination.
+    /// Nothing is signalled unless `before` admits termination.
     pub(crate) async fn stop(&self) -> (ProcessObservation, ProcessObservation) {
         let before = self.observe();
         if !before.may_terminate() {
@@ -209,7 +183,6 @@ const POLL_INTERVAL: Duration = Duration::from_millis(25);
 const TERM_GRACE: Duration = Duration::from_millis(500);
 pub(crate) const KILL_GRACE: Duration = Duration::from_secs(2);
 
-/// Durable host record binding one background execution to its process.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ProcessRecord {
     pub(crate) tool_call_id: String,
@@ -217,7 +190,6 @@ pub(crate) struct ProcessRecord {
     pub(crate) identity: ProcessIdentity,
 }
 
-/// A durable host record, stored under its own key.
 pub(crate) trait HostRecord:
     Serialize + serde::de::DeserializeOwned + Clone + Send + 'static
 {
@@ -230,9 +202,6 @@ impl HostRecord for ProcessRecord {
     }
 }
 
-/// Durable records live in a directory of the runtime's exclusively locked
-/// store, so only that store's runtime reads them after a restart. Without a
-/// directory, records are volatile and a restart finds none.
 #[derive(Debug, Clone)]
 pub(crate) enum HostRecordStore<R> {
     Volatile(Arc<std::sync::Mutex<std::collections::HashMap<String, R>>>),
@@ -265,8 +234,7 @@ impl<R: HostRecord> HostRecordStore<R> {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Replaces the record atomically. It must survive the crash it exists
-    /// for, so the file and its directory entry are synced before returning.
+    // Sync the record and its directory entry before claiming durable ownership.
     pub(crate) fn write(&self, record: &R) -> std::io::Result<()> {
         let dir = match self {
             Self::Volatile(records) => {
@@ -344,14 +312,16 @@ impl<R: HostRecord> HostRecordStore<R> {
 
 type RecordFn = dyn Fn(ProcessIdentity) + Send + Sync;
 
-/// Task-scoped sink for the identity of each process a managed execution
-/// spawns. Only background executions install one.
 #[derive(Clone)]
-pub(crate) struct ProcessRecorder(Arc<RecordFn>);
+pub(crate) struct ProcessRecorder {
+    _record: Arc<RecordFn>,
+}
 
 impl ProcessRecorder {
     pub(crate) fn new(record: impl Fn(ProcessIdentity) + Send + Sync + 'static) -> Self {
-        Self(Arc::new(record))
+        Self {
+            _record: Arc::new(record),
+        }
     }
 }
 
@@ -366,13 +336,13 @@ where
     PROCESS_RECORDER.scope(recorder, future).await
 }
 
-/// Called by the spawner right after a child starts, before it is awaited.
+#[cfg(unix)]
 pub(super) fn record_spawned(pid: i32) {
     let Ok(recorder) = PROCESS_RECORDER.try_with(Clone::clone) else {
         return;
     };
     match ProcessIdentity::of_live(pid) {
-        Some(identity) => (recorder.0)(identity),
+        Some(identity) => (recorder._record)(identity),
         None => tracing::warn!(
             pid,
             "spawned background process exited before it was recorded"
@@ -401,7 +371,6 @@ struct ProcessInfo {
 mod platform {
     use super::ProcessInfo;
 
-    // <libproc.h> PROC_PGRP_ONLY; not exported by the libc crate.
     const PROC_PGRP_ONLY: u32 = 2;
 
     pub(super) fn process_info(pid: i32) -> Option<ProcessInfo> {
@@ -479,8 +448,6 @@ mod platform {
 
     fn stat(pid: i32) -> Option<Stat> {
         let raw = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-        // The command name may contain spaces and parentheses; fields resume
-        // after its last ')'.
         let rest = raw.get(raw.rfind(')')? + 2..)?;
         let fields = rest.split_whitespace().collect::<Vec<_>>();
         Some(Stat {
@@ -564,7 +531,7 @@ mod platform {
     pub(super) fn signal_group(_pgid: i32, _signal: i32) {}
 }
 
-/// A test-owned process group. Tests signal only groups spawned here.
+// A test-owned process group. Tests signal only groups spawned here.
 #[cfg(all(test, unix))]
 pub(crate) mod test_support {
     use super::{scope_process_recorder, ProcessIdentity, ProcessRecorder};
@@ -578,14 +545,12 @@ pub(crate) mod test_support {
     }
 
     impl OwnedTestProcess {
-        /// Spawns a long `sleep` as its own group through the managed exec
-        /// owner, forwarding its identity to `recorder`.
         pub(crate) async fn spawn(recorder: Option<ProcessRecorder>) -> Self {
             let (sender, receiver) = tokio::sync::oneshot::channel();
             let sender = std::sync::Mutex::new(Some(sender));
             let observer = ProcessRecorder::new(move |identity: ProcessIdentity| {
                 if let Some(recorder) = recorder.as_ref() {
-                    (recorder.0)(identity.clone());
+                    (recorder._record)(identity.clone());
                 }
                 if let Some(sender) = sender
                     .lock()
@@ -618,7 +583,6 @@ pub(crate) mod test_support {
             }
         }
 
-        /// Stops the group through its own managed exec owner.
         pub(crate) async fn finish(mut self) {
             self.token.cancel();
             if let Some(task) = self.task.take() {
@@ -627,8 +591,6 @@ pub(crate) mod test_support {
         }
     }
 
-    /// Produces the host observation a generated recovery case names, using
-    /// only a test-owned group recorded under `registry`.
     pub(crate) async fn process_for_generated_outcome(
         registry: &crate::hook::BackgroundExecutionRegistry,
         tool_call_id: &str,

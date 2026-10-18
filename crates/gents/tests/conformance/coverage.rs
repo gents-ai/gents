@@ -27,10 +27,6 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
 
     assert_lean_transition_is_legal("RuntimeReconcile", "applying", "idle");
     assert_lean_transition_is_legal("RuntimeReconcile", "idle", "debouncing");
-    // PairingReconcile is no longer a state-machine contract: Lean models it as
-    // resource reconciliation (ReconcileState/Transition) exported through
-    // `pairing_reconcile_cases`, and the retired idle/diverged/converged/crashed
-    // phase machine must not be re-asserted here.
     assert_lean_transition_is_legal("Persistence.failClosed", "committing", "uncommitted");
     assert_lean_transition_is_legal("Persistence.failOpen", "committing", "lost");
     assert_lean_transition_is_legal("StorageObservation.failClosed", "noMutation", "inFlight");
@@ -196,8 +192,6 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 14);
     assert_eq!(lean_queue_deadline_cases().len(), 5);
     assert_eq!(lean_recovery_sweep_cases().len(), 32);
-    // The synthetic RecoveryEquivalence contract was deleted from Lean; the
-    // recovery sweep cases above are the actual recovery guarantee.
     assert_eq!(lean_transcript_cases().len(), 11);
     assert_eq!(lean_composed_invariant_witnesses().len(), 4);
 }
@@ -241,8 +235,6 @@ async fn agent_tool_call_carries_only_generic_background_fields() {
     ] {
         assert!(names.contains(field), "AgentToolCall missing field {field}");
     }
-    // A started session is an ordinary background row: no child binding,
-    // delegation, cancel mirror or claim fence is persisted on the call.
     for field in [
         "child_request_id",
         "spawn_target_did",
@@ -282,7 +274,6 @@ fn lean_boundary_metadata_is_typed_and_reviewable() {
         "boundary.session-recovery.client-retry-surface",
         "boundary.coverage-ledger.review-discipline",
         "boundary.event-delivery.fair-substrate",
-        "boundary.event-delivery.rescan-doc-cap",
         "boundary.prompt-assembly.provider-input-sanitization",
         "boundary.model.nat-typed-ids-time",
         "boundary.p2p-backpressure.obligation-model",
@@ -481,9 +472,6 @@ fn lean_feature_matrix_covers_every_declared_required_surface() {
 #[test]
 fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     let snapshot = lean_contract_snapshot();
-    // This set records fixture groups that decoded successfully. It does not
-    // establish native consumption; only registered consumers and the ledger's
-    // consumer entries may make that claim.
     let mut emitted = BTreeSet::new();
     for (category, domain, present) in [
         (
@@ -604,6 +592,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     }
     for (category, domain, cases) in [
         (
+            "goal_edit_cases",
+            "GoalEditCases",
+            &snapshot.goal_edit_cases,
+        ),
+        (
             "artifact_mode_meet_cases",
             "ArtifactModeMeetCases",
             &snapshot.artifact_mode_meet_cases,
@@ -695,6 +688,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "GraphInvocationPublicationCases".to_string(),
         ));
     }
+    if !snapshot.goal_objective_whitespace_codepoints.is_empty() {
+        emitted.insert((
+            "goal_objective_whitespace_codepoints".to_string(),
+            "GoalObjectiveWhitespace".to_string(),
+        ));
+    }
     if !snapshot.goal_request_head_cases.is_empty() {
         emitted.insert((
             "goal_request_head_cases".to_string(),
@@ -763,8 +762,15 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     for (domain, families) in [
         (
             "Triggers.Durable",
-            &["admissions", "identities", "sessions", "self_sessions"][..],
+            &[
+                "admissions",
+                "identities",
+                "sessions",
+                "self_sessions",
+                "latest_admissions",
+            ][..],
         ),
+        ("Triggers.Types", &["delivery_options"][..]),
         ("Triggers.Queue", &["queues", "observed_claims"][..]),
         ("EventDelivery.Durable", &["cursors"][..]),
         (
@@ -985,6 +991,46 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "ManagedExecLivenessCases".to_string(),
         ));
     }
+    for field in ["revisions", "fields", "savedProjections"] {
+        assert!(snapshot.client_settings_cases[field]
+            .as_array()
+            .is_some_and(|cases| !cases.is_empty()));
+    }
+    emitted.insert(("client_settings_cases".into(), "ClientSettingsCases".into()));
+    assert!(!snapshot.client_observation_scope_cases.is_empty());
+    emitted.insert((
+        "client_observation_scope_cases".into(),
+        "ClientObservationScopeCases".into(),
+    ));
+    assert!(snapshot.client_data_publication_cases["notice_delivery"].is_object());
+    for field in ["publications", "reuse"] {
+        assert!(snapshot.client_request_patch_publication_cases[field]
+            .as_array()
+            .is_some_and(|cases| !cases.is_empty()));
+    }
+    emitted.insert((
+        "client_request_patch_publication_cases".into(),
+        "ClientRequestPatchPublicationCases".into(),
+    ));
+    assert!(!snapshot.client_request_closure_cases.is_empty());
+    assert!(!snapshot.client_request_cache_identity_cases.is_empty());
+    emitted.insert((
+        "client_data_publication_cases".into(),
+        "ClientDataNoticeDeliveryCases".into(),
+    ));
+    emitted.insert((
+        "client_request_closure_cases".into(),
+        "ClientRequestClosureCases".into(),
+    ));
+    emitted.insert((
+        "client_request_cache_identity_cases".into(),
+        "ClientRequestCacheIdentityCases".into(),
+    ));
+    assert!(!snapshot.client_session_queue_order_cases.is_empty());
+    emitted.insert((
+        "client_session_queue_order_cases".into(),
+        "ClientSessionQueueOrderCases".into(),
+    ));
     assert_eq!(
         snapshot.frontend_client_shell_case_count,
         snapshot.frontend_client_shell_cases.len(),
@@ -1117,6 +1163,15 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         for domain in ["SessionInputEditCases", "SessionInputEditRemoteCases"] {
             emitted.insert(("session_input_edit_cases".to_string(), domain.to_string()));
         }
+    }
+    if !snapshot
+        .session_input_edit_client_observation_cases
+        .is_empty()
+    {
+        emitted.insert((
+            "session_input_edit_client_observation_cases".to_string(),
+            "SessionInputEditClientObservationCases".to_string(),
+        ));
     }
     if !snapshot.queue_management_cases.is_empty() {
         emitted.insert((
@@ -1253,6 +1308,8 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "RoutingAffinityCases".to_string(),
         ));
     }
+    assert!(!snapshot.wake_input_cases.is_empty());
+    emitted.insert(("wake_input_cases".into(), "WakeInputCases".into()));
     if !snapshot.current_input_cases.is_empty() {
         emitted.insert((
             "current_input_cases".to_string(),
@@ -1578,6 +1635,39 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "GoalTransitionCases".to_string(),
         ));
     }
+    for (cases, category, domain) in [
+        (
+            &snapshot.goal_client_control_cases,
+            "goal_client_control_cases",
+            "GoalClientControlCases",
+        ),
+        (
+            &snapshot.goal_client_start_cases,
+            "goal_client_start_cases",
+            "GoalClientStartCases",
+        ),
+        (
+            &snapshot.goal_client_receipt_cases,
+            "goal_client_receipt_cases",
+            "GoalClientReceiptCases",
+        ),
+        (
+            &snapshot.goal_observation_cases,
+            "goal_observation_cases",
+            "GoalObservationCases",
+        ),
+        (
+            &snapshot.plugin_approval_cases,
+            "plugin_approval_cases",
+            "PluginApprovalCases",
+        ),
+    ] {
+        assert!(
+            !cases.is_empty(),
+            "{domain} must export its executable cases"
+        );
+        emitted.insert((category.to_owned(), domain.to_owned()));
+    }
     if !lean_goal_create_cases().is_empty() {
         emitted.insert((
             "goal_create_cases".to_string(),
@@ -1668,6 +1758,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "SessionHydrationStartCases".to_string(),
         ));
     }
+    if !snapshot.session_hydration_admission_cases.is_empty() {
+        emitted.insert((
+            "session_hydration_admission_cases".to_string(),
+            "SessionHydrationAdmissionCases".to_string(),
+        ));
+    }
     if !snapshot.enrollment_cases.is_empty() {
         emitted.insert((
             "enrollment_cases".to_string(),
@@ -1700,6 +1796,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CausalHopContract".to_string(),
         ));
     }
+    assert!(!snapshot.causal_hop_contract.session_target_cases.is_empty());
+    emitted.insert((
+        "causal_hop_contract".into(),
+        "SessionTargetAuthorityCases".into(),
+    ));
     if !snapshot.title_request_admission_cases.is_empty() {
         emitted.insert((
             "title_request_admission_cases".to_string(),
@@ -1844,6 +1945,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     ));
     for (family, domain) in [
         ("invocation", "PluginInvocationCases"),
+        ("publication", "ToolPolicy.PluginPublication"),
         ("receipt", "PluginReceiptCases"),
         ("child_admission", "PluginChildAdmissionCases"),
         ("tool_effects", "PluginEffectCases"),
@@ -1941,8 +2043,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         ledger_domains.insert((entry.category.clone(), entry.domain.clone()));
         for surface in &entry.surfaces {
             assert!(
-                // One fixture family can exercise distinct production owners.
-                // Repeating the same consumer on the same surface is still an error.
                 ledger_observations.insert((
                     entry.category.clone(),
                     entry.domain.clone(),

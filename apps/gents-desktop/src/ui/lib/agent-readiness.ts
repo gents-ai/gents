@@ -15,7 +15,6 @@ const READINESS_REASON: Record<string, string> = {
   executor_start_failed: "executor failed to start",
 };
 
-/** Preserve picker copy while delegating the readiness decision to its owner. */
 export function agentReadiness(deployment: NodeView | null, agentId: string | null) {
   const decision = selectedNodeReadinessDecision(deployment, agentId);
   if (decision.kind === "ready") return { ready: true, reason: null };

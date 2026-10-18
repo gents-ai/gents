@@ -1,11 +1,3 @@
-//! Deserialization types for the Lean optimization promotion policy rows
-//! (`Optimization.sufficient`, `noCaseRegression`, `costOk` and `decideGates` in
-//! `Proofs/Optimization.lean`, emitted as `optimization_cases` by
-//! `Proofs/Conformance/Optimization.lean`, function
-//! `Conformance.Optimization.optimizationCasesJson`). Field names and types
-//! mirror the emitted JSON exactly and decode strictly: contract drift must fail
-//! loudly here instead of being masked by serde defaults.
-
 use serde::Deserialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -91,10 +83,32 @@ pub(crate) struct LeanSeedCoverageRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanExactSeed {
+    pub(crate) case_id: String,
+    pub(crate) stage_id: String,
+    pub(crate) collection: String,
+    pub(crate) document: serde_json::Value,
+    pub(crate) rendered: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanSeedRenderingRow {
+    pub(crate) name: String,
+    pub(crate) target_task: Option<String>,
+    pub(crate) task_enabled: bool,
+    pub(crate) triggers: Vec<LeanSeedTrigger>,
+    pub(crate) sources: Vec<LeanSeedSource>,
+    pub(crate) text: String,
+    pub(crate) seeds: Vec<LeanExactSeed>,
+    pub(crate) failed_stages: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanOptimizationCases {
     pub(crate) params: LeanOptimizationParams,
     pub(crate) decisions: Vec<LeanDecisionRow>,
     pub(crate) gates: Vec<LeanGateRow>,
     pub(crate) costs: Vec<LeanCostRow>,
     pub(crate) seed_coverage: Vec<LeanSeedCoverageRow>,
+    pub(crate) seed_rendering: Vec<LeanSeedRenderingRow>,
 }

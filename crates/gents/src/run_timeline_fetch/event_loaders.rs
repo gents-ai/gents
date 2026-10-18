@@ -1,17 +1,11 @@
 use super::query_helpers::required_rows;
 use super::*;
-#[cfg(test)]
 use crate::session::load_canonical_message;
 use crate::session::{
     canonical_rows::{decode_transcript_message_row, AGENT_MESSAGE_FIELDS},
     TxnCanonicalReader,
 };
 
-/// One timeline message row assembled from an authorized canonical header
-/// resolution. The physical `AgentMessage` header doc ID is the row's identity;
-/// the strict protocol header and the reconstructed native message travel
-/// together as loaded. No string projection or logical request label is
-/// synthesized: request ownership is the header's physical `request_doc_id`.
 pub(super) async fn resolve_timeline_messages_for_session(
     access: &ConfigAccess,
     node_did: &str,
@@ -129,28 +123,32 @@ pub(super) async fn resolve_timeline_messages_for_session(
         .await
 }
 
-/// The canonical messages at one accepted sequence of an exact session scope.
-/// Duplicate headers at a sequence are returned, never silently picked.
-#[cfg(test)]
-pub(super) async fn resolve_timeline_messages_at_sequence(
+pub(super) async fn resolve_timeline_messages_at_sequences(
     access: &ConfigAccess,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-    sequence: i64,
+    sequences: &[i64],
 ) -> Result<Vec<TimelineMessageRow>> {
+    if sequences.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sequence_filter = sequences
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
     let header_doc_ids = load_message_header_ids(
         access,
         node_did,
         session_id,
         requester_did,
-        &format!(", sequence: {{ _eq: {sequence} }}"),
+        &format!(", sequence: {{ _in: [{sequence_filter}] }}"),
     )
     .await?;
     resolve_timeline_messages(access, node_did, session_id, requester_did, header_doc_ids).await
 }
 
-#[cfg(test)]
 async fn resolve_timeline_messages(
     access: &ConfigAccess,
     node_did: &str,
@@ -181,7 +179,6 @@ async fn resolve_timeline_messages(
     Ok(rows)
 }
 
-#[cfg(test)]
 async fn load_message_header_ids(
     access: &ConfigAccess,
     node_did: &str,
@@ -222,23 +219,23 @@ pub(super) async fn load_timeline_tool_observations_for_session(
     load_tool_observations(access, node_did, session_id, requester_did, "").await
 }
 
-/// Lifecycle observations for one exact physical tool document in a session
-/// scope. A document outside the scope yields no rows.
-#[cfg(test)]
-pub(super) async fn load_timeline_tool_observation(
+pub(super) async fn load_timeline_tool_observations(
     access: &ConfigAccess,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-    tool_doc_id: &str,
+    tool_doc_ids: &[String],
 ) -> Result<Vec<ToolLifecycleObservation>> {
-    let tool_doc_id = escape_graphql_string(tool_doc_id);
+    if tool_doc_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let doc_ids = gents_protocol::graphql::graphql_string_list_literal(tool_doc_ids);
     load_tool_observations(
         access,
         node_did,
         session_id,
         requester_did,
-        &format!(r#", _docID: {{ _eq: "{tool_doc_id}" }}"#),
+        &format!(r#"docIDs: {doc_ids},"#),
     )
     .await
 }
@@ -248,13 +245,14 @@ async fn load_tool_observations(
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-    extra_filter: &str,
+    extra_args: &str,
 ) -> Result<Vec<ToolLifecycleObservation>> {
     let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentToolCall(
-                filter: {{ {scope}{extra_filter} }},
+                {extra_args}
+                filter: {{ {scope} }},
                 order: {{ started_at: ASC }}
             ) {{
                 _docID
@@ -398,9 +396,6 @@ pub(super) struct ToolLifecycleObservation {
     pub(super) spawned_by_tool_call_doc_id: Option<String>,
 }
 
-/// The lifecycle row contributes status, never payload bytes. Payloads come
-/// from the already authorized, fully reconstructed session messages. An
-/// absent delivery stays absent.
 pub(super) fn resolve_tool_payloads(
     observation: ToolLifecycleObservation,
     messages: &[TimelineMessageRow],
@@ -411,10 +406,6 @@ pub(super) fn resolve_tool_payloads(
         mut row,
         spawned_by_tool_call_doc_id,
     } = observation;
-    // `status` is a nullable historical display mirror. The accepted
-    // lifecycle row is authoritative even before dispatch has installed a
-    // running state, so require that fact and project it into the derived
-    // timeline status rather than decoding a null as an invented empty value.
     let lifecycle_state = row
         .lifecycle_state
         .as_deref()
@@ -634,19 +625,12 @@ pub(super) async fn load_timeline_inference_calls_for_requests(
     Ok(ordered)
 }
 
-/// The rendered-request capture rows for one session, metadata columns only.
-/// `request_json` is deliberately never selected here — see
-/// `TimelineRenderedRequestRow`. Pre-#1059 databases have no `RenderedRequest`
-/// collection; `load_rows` reports that as an empty section, not a failed
-/// timeline.
 pub(super) async fn load_timeline_rendered_requests_for_session(
     access: &ConfigAccess,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<TimelineRenderedRequestRow>> {
-    // RenderedRequest stores absent requester authority as the required empty
-    // string, while canonical session-scoped documents represent it as null.
     let requester_did = requester_did.unwrap_or_default();
     let scope = format!(
         r#"node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }}"#,

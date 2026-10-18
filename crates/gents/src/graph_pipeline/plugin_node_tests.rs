@@ -1,7 +1,3 @@
-//! A plugin node end to end: a graph run's entry document reaches the plugin
-//! through the callback engine, and the plugin's result lands as the node's
-//! output document, correlated to the run.
-
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -88,9 +84,6 @@ async fn rows(node: &EmbeddedNode, query: &str, collection: &str) -> Vec<Value> 
     crate::graphql::rows::<Value>(&node.execute(query).await, collection).unwrap()
 }
 
-/// Publishes and starts the echo graph with its plugin node pinned to
-/// `digest`, and runs the callback engine over the echo plugin installed in a
-/// fresh home until the run settles.
 async fn run_echo_graph(
     digest: Option<&str>,
 ) -> (Arc<EmbeddedNode>, GraphRunReceipt, GraphRunView) {
@@ -213,8 +206,6 @@ async fn a_plugin_node_that_cannot_run_fails_the_run_with_its_reason() {
     node.shutdown().await;
 }
 
-/// Dispatch and recovery run separately so the artifact is restored before
-/// another attempt can consume the retry budget.
 #[tokio::test]
 async fn a_failed_plugin_node_is_retried_and_the_run_then_succeeds() {
     let (home, record) = crate::plugin::tests::executor::installed_echo();
@@ -226,8 +217,6 @@ async fn a_failed_plugin_node_is_retried_and_the_run_then_succeeds() {
     )
     .await
     .unwrap();
-    // With its artifact gone from the store, the first attempt cannot run
-    // and fails; putting it back lets the retry succeed.
     let artifact = home.path().join(format!(
         "plugins/store/{}.afb",
         record.digest.strip_prefix("sha256:").unwrap()
@@ -318,10 +307,6 @@ async fn a_failed_plugin_node_is_retried_and_the_run_then_succeeds() {
     node.shutdown().await;
 }
 
-/// A real echo invocation on a callback allowing three attempts, seeded as a
-/// plugin call cut off mid-run: running, `[Executing]`, one attempt, claimed at
-/// `claimed_at`. Returns its invocation and callback ids. The echo plugin's
-/// output document counts executions: a rerun would write one.
 async fn seed_interrupted_echo_invocation(
     claimed_at: &str,
 ) -> (
@@ -339,8 +324,6 @@ async fn seed_interrupted_echo_invocation(
     )
     .await
     .unwrap();
-    // Without its artifact the first attempt fails before the plugin runs,
-    // which leaves a real invocation to seed as interrupted.
     let artifact = home.path().join(format!(
         "plugins/store/{}.afb",
         record.digest.strip_prefix("sha256:").unwrap()
@@ -460,17 +443,14 @@ async fn assert_interrupted_invocation_not_rerun(node: &EmbeddedNode, invocation
     );
 }
 
-async fn recover(node: &EmbeddedNode, plugins: &crate::plugin::executor::PluginExecutor) {
+async fn recover(node: &Arc<EmbeddedNode>, plugins: &crate::plugin::executor::PluginExecutor) {
     crate::callback::recover_local_invocations(node, graph_test_owner(), None, plugins, None)
         .await
         .unwrap();
 }
 
-/// A plugin call cut off mid-run may already have done something outside the
-/// runtime, so recovery fails it and no retry repeats it, whatever the budget.
 #[tokio::test]
 async fn interrupted_plugin_invocation_is_not_rerun_on_recovery() {
-    // Long past any backoff, so only the journal can hold a retry back.
     let (_home, node, plugins, (invocation_id, _)) =
         seed_interrupted_echo_invocation("2020-01-01T00:00:00Z").await;
     for _ in 0..2 {
@@ -480,9 +460,6 @@ async fn interrupted_plugin_invocation_is_not_rerun_on_recovery() {
     node.shutdown().await;
 }
 
-/// Recovery that meets a disabled callback denies the cut-off call, which must
-/// still mark it interrupted: re-enabling the callback once its backoff has
-/// passed must not rerun it.
 #[tokio::test]
 async fn interrupted_plugin_invocation_on_a_disabled_callback_is_not_rerun_when_re_enabled() {
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
@@ -510,8 +487,6 @@ async fn interrupted_plugin_invocation_on_a_disabled_callback_is_not_rerun_when_
     node.shutdown().await;
 }
 
-/// A run started before the engine noticed the revision's routes still runs:
-/// its first document is live work, not history.
 #[tokio::test]
 async fn a_run_started_before_its_routes_are_noticed_still_runs() {
     let (home, record) = crate::plugin::tests::executor::installed_echo();
@@ -550,7 +525,6 @@ async fn a_run_started_before_its_routes_are_noticed_still_runs() {
     .await
     .unwrap();
 
-    // Only now does the engine start, and notice the route.
     let cancel = tokio_util::sync::CancellationToken::new();
     let engine = tokio::spawn(crate::callback::run_callback_engine(
         node.clone(),

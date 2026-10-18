@@ -6,7 +6,7 @@
    (a nav row, a header action, a directive chip) are data the shell draws;
    a page or a section is a render function that draws inside the frame. */
 import type { ReactNode } from "react";
-import type { Route } from "@gents/shell";
+import type { Route } from "@/lib/router";
 import type { Contribution } from "@/contrib/types";
 
 /** a contribution as an author writes it: provenance and id scoping are the

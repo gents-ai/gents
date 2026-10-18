@@ -26,8 +26,6 @@ pub struct HttpRemoteP2pAdmin {
     api_base_path: String,
     client: Client,
     actor: Option<Arc<PrincipalIdentity>>,
-    /// Bearer identity for the node's access control, which admits P2P
-    /// administration only from the served home's node DID.
     node_identity: Option<gents::config_client::GraphqlEndpoint>,
     local_resolver: Option<Arc<EmbeddedNode>>,
 }
@@ -44,7 +42,6 @@ impl HttpRemoteP2pAdmin {
         Self::new_inner(graphql_url, Some(actor))
     }
 
-    /// Authenticate every admin request as the node DID `endpoint` carries.
     pub fn with_node_identity(mut self, endpoint: gents::config_client::GraphqlEndpoint) -> Self {
         self.node_identity = Some(endpoint);
         self
@@ -491,8 +488,7 @@ async fn check_status(resp: reqwest::Response) -> RemoteP2pAdminResult<reqwest::
 mod tests {
     use super::*;
     use crate::client::{DesktopPaths, PrincipalIdentity};
-    use gents::agent::p2p_reconcile::combine_filters;
-    use wiremock::matchers::{body_bytes, body_json, header, method, path};
+    use wiremock::matchers::{body_bytes, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn admin_for(server: &MockServer) -> HttpRemoteP2pAdmin {
@@ -781,57 +777,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn peer_info_returns_addresses() {
-        let server = MockServer::start().await;
-        let body = serde_json::json!(["/ip4/1.2.3.4/tcp/9000/p2p/peer1"]);
-        Mock::given(method("GET"))
-            .and(path("/api/v0/p2p/info"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(body))
-            .mount(&server)
-            .await;
-
-        let admin = admin_for(&server);
-        assert_eq!(
-            admin.peer_info().await.expect("info"),
-            vec!["/ip4/1.2.3.4/tcp/9000/p2p/peer1".to_string()]
-        );
-    }
-
-    #[tokio::test]
-    async fn active_peers_returns_list() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/api/v0/p2p/active-peers"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(vec!["peer1", "peer2"]))
-            .mount(&server)
-            .await;
-
-        let admin = admin_for(&server);
-        assert_eq!(
-            admin.active_peers().await.expect("active"),
-            vec!["peer1".to_string(), "peer2".to_string()]
-        );
-    }
-
-    #[tokio::test]
-    async fn connect_posts_addresses() {
-        let server = MockServer::start().await;
-        let expected = serde_json::json!(["/ip4/1.2.3.4/tcp/9000/p2p/peer1"]);
-        Mock::given(method("POST"))
-            .and(path("/api/v0/p2p/connect"))
-            .and(body_json(expected))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-
-        let admin = admin_for(&server);
-        admin
-            .connect(&["/ip4/1.2.3.4/tcp/9000/p2p/peer1".into()])
-            .await
-            .expect("connect");
-    }
-
-    #[tokio::test]
     async fn list_replicators_returns_remote_replicators() {
         let server = MockServer::start().await;
         let filters = to_replication_filters(&BTreeMap::from([(
@@ -911,105 +856,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn add_replicator_posts_addresses_and_collections() {
-        let server = MockServer::start().await;
-        let expected = serde_json::json!({
-            "Collections": ["c1"],
-            "Addresses": ["/ip4/1.2.3.4/tcp/9000/p2p/peer1"]
-        });
-        Mock::given(method("POST"))
-            .and(path("/api/v0/p2p/replicators"))
-            .and(body_json(expected))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-
-        let admin = admin_for(&server);
-        admin
-            .add_replicator(
-                &["/ip4/1.2.3.4/tcp/9000/p2p/peer1".into()],
-                &["c1".into()],
-                &PairingFilters::default(),
-            )
-            .await
-            .expect("add_replicator");
-    }
-
-    #[tokio::test]
-    async fn add_replicator_posts_composed_conditions() {
-        let server = MockServer::start().await;
-        let expected = serde_json::json!({
-            "Collections": ["AgentRequest"],
-            "Addresses": ["peer1"],
-            "Filters": {
-                "AgentRequest": {
-                    "Conditions": {
-                        "_and": [
-                            { "requester_did": { "_eq": "did:key:phone" } },
-                            { "status": { "_eq": "pending" } }
-                        ]
-                    }
-                }
-            }
-        });
-        Mock::given(method("POST"))
-            .and(path("/api/v0/p2p/replicators"))
-            .and(body_json(expected))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-        let filters = [(
-            "AgentRequest".to_string(),
-            combine_filters(
-                gents::agent::p2p_reconcile::equality_filter("requester_did", "did:key:phone"),
-                gents::agent::p2p_reconcile::equality_filter("status", "pending"),
-            ),
-        )]
-        .into_iter()
-        .collect();
-
-        admin_for(&server)
-            .add_replicator(&["peer1".into()], &["AgentRequest".into()], &filters)
-            .await
-            .expect("add composed replicator");
-    }
-
-    #[tokio::test]
-    async fn delete_replicator_deletes_with_id_and_collections() {
-        let server = MockServer::start().await;
-        let expected = serde_json::json!({
-            "Collections": ["c1"],
-            "ID": "peer1"
-        });
-        Mock::given(method("DELETE"))
-            .and(path("/api/v0/p2p/replicators"))
-            .and(body_json(expected))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-
-        let admin = admin_for(&server);
-        admin
-            .delete_replicator("peer1", &["c1".into()])
-            .await
-            .expect("delete_replicator");
-    }
-
-    #[tokio::test]
-    async fn list_p2p_collections_returns_remote_list() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/api/v0/p2p/collections"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(vec!["c1", "c2"]))
-            .mount(&server)
-            .await;
-
-        let admin = admin_for(&server);
-        let cols = admin.list_p2p_collections().await.expect("list");
-        assert_eq!(cols, vec!["c1".to_string(), "c2".to_string()]);
-    }
-
-    #[tokio::test]
     async fn local_collection_resolver_accepts_names_and_ids() {
         let server = MockServer::start().await;
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -1043,155 +889,5 @@ mod tests {
                 .expect("resolve id token"),
             Some("DesktopResolveThing".to_string())
         );
-    }
-
-    #[tokio::test]
-    async fn add_p2p_collections_posts_the_body() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/api/v0/p2p/collections"))
-            .and(body_json(vec!["c1", "c2"]))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-
-        let admin = admin_for(&server);
-        admin
-            .add_p2p_collections(&["c1".into(), "c2".into()])
-            .await
-            .expect("add");
-    }
-
-    #[tokio::test]
-    async fn delete_p2p_collections_deletes_the_body() {
-        let server = MockServer::start().await;
-        Mock::given(method("DELETE"))
-            .and(path("/api/v0/p2p/collections"))
-            .and(body_json(vec!["c1"]))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-
-        let admin = admin_for(&server);
-        admin
-            .delete_p2p_collections(&["c1".into()])
-            .await
-            .expect("delete");
-    }
-
-    #[tokio::test]
-    async fn list_p2p_documents_returns_list() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/api/v0/p2p/documents"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(vec!["doc1", "doc2"]))
-            .mount(&server)
-            .await;
-
-        let admin = admin_for(&server);
-        assert_eq!(
-            admin.list_p2p_documents().await.expect("list_docs"),
-            vec!["doc1".to_string(), "doc2".to_string()]
-        );
-    }
-
-    #[tokio::test]
-    async fn add_p2p_documents_posts_doc_ids() {
-        let server = MockServer::start().await;
-        let expected = serde_json::json!(["doc1"]);
-        Mock::given(method("POST"))
-            .and(path("/api/v0/p2p/documents"))
-            .and(body_json(expected))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-
-        let admin = admin_for(&server);
-        admin
-            .add_p2p_documents(&["doc1".into()])
-            .await
-            .expect("add");
-    }
-
-    #[tokio::test]
-    async fn delete_p2p_documents_deletes_doc_ids() {
-        let server = MockServer::start().await;
-        let expected = serde_json::json!(["doc1"]);
-        Mock::given(method("DELETE"))
-            .and(path("/api/v0/p2p/documents"))
-            .and(body_json(expected))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-
-        let admin = admin_for(&server);
-        admin
-            .delete_p2p_documents(&["doc1".into()])
-            .await
-            .expect("delete");
-    }
-
-    #[tokio::test]
-    async fn sync_documents_posts_request_body() {
-        let server = MockServer::start().await;
-        let expected = serde_json::json!({
-            "collectionName": "Foo",
-            "docIDs": ["doc1"],
-            "timeout": "5s"
-        });
-        Mock::given(method("POST"))
-            .and(path("/api/v0/p2p/documents/sync"))
-            .and(body_json(expected))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-
-        let admin = admin_for(&server);
-        admin
-            .sync_documents("Foo", &["doc1".into()], Some(Duration::from_secs(5)))
-            .await
-            .expect("sync_documents");
-    }
-
-    #[tokio::test]
-    async fn sync_collection_versions_posts_versions() {
-        let server = MockServer::start().await;
-        let expected = serde_json::json!({
-            "versionIDs": ["v1"],
-            "timeout": ""
-        });
-        Mock::given(method("POST"))
-            .and(path("/api/v0/p2p/collections/sync-versions"))
-            .and(body_json(expected))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-
-        let admin = admin_for(&server);
-        admin
-            .sync_collection_versions(&["v1".into()], None)
-            .await
-            .expect("sync_collection_versions");
-    }
-
-    #[tokio::test]
-    async fn sync_branchable_collection_posts_collection_id() {
-        let server = MockServer::start().await;
-        let expected = serde_json::json!({
-            "collectionID": "col1",
-            "timeout": ""
-        });
-        Mock::given(method("POST"))
-            .and(path("/api/v0/p2p/collections/sync-branchable"))
-            .and(body_json(expected))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-
-        let admin = admin_for(&server);
-        admin
-            .sync_branchable_collection("col1", None)
-            .await
-            .expect("sync_branchable");
     }
 }

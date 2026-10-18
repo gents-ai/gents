@@ -1,5 +1,3 @@
-//! Atomic recovery of output owned by an expired request generation.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
@@ -170,7 +168,7 @@ fn selection_from_choice(
 }
 
 pub(super) async fn recover_expired_generation(
-    node: &defra_node::EmbeddedNode,
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
     observed: &AgentRequestRow,
     expected_generation: &str,
     expected_expiry: &str,
@@ -189,7 +187,7 @@ pub(super) async fn recover_expired_generation(
 }
 
 pub(crate) async fn recover_expired_generation_with_facts(
-    node: &defra_node::EmbeddedNode,
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
     observed: &AgentRequestRow,
     expected_generation: &str,
     expected_expiry: &str,
@@ -407,9 +405,6 @@ pub(crate) async fn recover_expired_generation_with_facts(
             let read = existing_headers.len();
             let mut headers = existing_headers;
             headers.extend(published.iter().cloned());
-            // Every recovery write to canonical output precedes this reader.
-            // Only headers read back from the store are observed; published
-            // ones are resolved by lookup.
             let mut reader = session::TxnCanonicalReader::new(txn, agent, row.requester_did.as_deref());
             reader.observe_headers(&headers[..read]);
             for header in &published {

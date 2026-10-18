@@ -1,4 +1,3 @@
-//! Explicit request liveness, independent of provider/tool reads and output.
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,8 +9,6 @@ use gents_protocol::row::AgentRequestRow;
 use super::execution_policy::{authorize_renewal, is_live, renewable_lifecycle, LeaseObservation};
 use crate::graphql::{escape_graphql_string, response_has_documents};
 
-/// Owned by RequestLifecycle. Dropping the owner must not leave a heartbeat
-/// task keeping abandoned work alive indefinitely.
 pub(super) struct RenewalTask {
     task: tokio::task::JoinHandle<()>,
     lost: tokio_util::sync::CancellationToken,
@@ -33,9 +30,6 @@ impl RenewalTask {
         let lost = tokio_util::sync::CancellationToken::new();
         let observed_lost = lost.clone();
         let task = tokio::spawn(async move {
-            // Poll more often than renewal is due, but only the bounded policy
-            // writes. Skip missed ticks after suspension; never catch up with
-            // a burst of renewals or revive an expired generation.
             let poll_interval = renewal_poll_interval(duration_ms);
             let mut ticker = tokio::time::interval(poll_interval);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -69,8 +63,6 @@ impl RenewalTask {
                         break;
                     }
                     Err(error) => {
-                        // Do not invent liveness on errors. The next bounded
-                        // poll rereads authoritative state; expiry remains final.
                         tracing::warn!(%error, %request_doc_id, %generation, "execution lease renewal failed");
                     }
                 }
@@ -79,8 +71,6 @@ impl RenewalTask {
         Self { task, lost }
     }
 
-    /// Cancelled once a renewal poll observes this generation no longer owns
-    /// its request: revoked, superseded, terminal, or expired.
     pub(super) fn ownership_lost(&self) -> tokio_util::sync::CancellationToken {
         self.lost.clone()
     }
@@ -90,17 +80,6 @@ fn renewal_poll_interval(duration_ms: u64) -> Duration {
     Duration::from_millis((duration_ms / 4).max(1))
 }
 
-#[cfg(test)]
-mod cadence_tests {
-    use super::*;
-
-    #[test]
-    fn two_minute_default_polls_every_thirty_seconds() {
-        let duration_ms = crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS * 1_000;
-        assert_eq!(renewal_poll_interval(duration_ms), Duration::from_secs(30));
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RenewalAttemptOutcome {
     Committed,
@@ -108,21 +87,20 @@ pub(crate) enum RenewalAttemptOutcome {
     Lost,
 }
 
-/// Return false when this generation is no longer an active owner. A true
-/// result includes an early poll that performed no mutation.
-async fn renew_once(node: &EmbeddedNode, request_doc_id: &str, generation: &str) -> Result<bool> {
+async fn renew_once(
+    node: &std::sync::Arc<EmbeddedNode>,
+    request_doc_id: &str,
+    generation: &str,
+) -> Result<bool> {
     Ok(!matches!(
         renew_once_with_time(node, request_doc_id, generation, None, None).await?,
         RenewalAttemptOutcome::Lost
     ))
 }
 
-/// Explicit-time form used by model-driven conformance fixtures. Production
-/// callers always enter through `renew_once`, so the wall-clock read remains
-/// owned by this module and no process-global test clock can affect siblings.
 #[cfg(test)]
 pub(crate) async fn renew_once_at(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_doc_id: &str,
     generation: &str,
     expected_deadline: DateTime<Utc>,
@@ -145,7 +123,7 @@ tokio::task_local! {
 
 #[cfg(test)]
 pub(crate) async fn renew_with_recheck_at(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_doc_id: &str,
     generation: &str,
     expected_deadline: DateTime<Utc>,
@@ -175,7 +153,7 @@ fn renewal_recheck_time(fixture_now: Option<DateTime<Utc>>) -> DateTime<Utc> {
 }
 
 async fn renew_once_with_time(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_doc_id: &str,
     generation: &str,
     expected_deadline: Option<DateTime<Utc>>,

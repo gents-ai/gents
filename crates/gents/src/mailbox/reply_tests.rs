@@ -66,8 +66,8 @@ async fn persisted_request(
     AgentRequest::try_from(record).unwrap()
 }
 
-async fn claim(node: &EmbeddedNode, request: &AgentRequest, abort: bool) -> Result<()> {
-    ConfigAccess::transact_local(node, None, "test.mailbox_reply", |txn| Box::pin(async move {
+async fn claim(node: &Arc<EmbeddedNode>, request: &AgentRequest, abort: bool) -> Result<()> {
+    ConfigAccess::transact_local_write(node, None, "test.mailbox_reply", |txn| Box::pin(async move {
         let mutation = format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "claimed" }}) {{ _docID }} }}"#,
             escape_graphql_string(&request.doc_id));
         txn.execute_local_response(&mutation).await?;
@@ -118,8 +118,14 @@ async fn signed_reply_claim_rolls_back_and_rejects_replay_and_dismissal() {
             .status,
         "open"
     );
-    // The sweep cannot consume a valid but still-unclaimed reply either.
-    assert_eq!(sweep_open_mailbox_items(&node).await.unwrap().acted, 0);
+    assert_eq!(
+        sweep_open_mailbox_items(&node, identity.did(), None)
+            .await
+            .unwrap()
+            .report
+            .acted,
+        0
+    );
     claim(&node, &request, false).await.unwrap();
     claim(&node, &request, false).await.unwrap();
     let replay = signed_reply(&node, &identity, &item, "replayed-request").await;
@@ -198,11 +204,6 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
     };
     use std::time::Duration;
 
-    // The model uses symbolic Nat/request and physical document IDs; this
-    // positive owner-sequence regression maps those to signed request rows.
-    // It calls the mailbox tool and terminal owner explicitly: it does not
-    // prove an AgentToolCall result was observed by the completion loop.
-    // The local-self admission also keeps requester and agent DIDs equal.
     let modeled = crate::lean_vocab_test::lean_contract_snapshot()
         .mailbox_handoff_cases
         .iter()
@@ -380,7 +381,6 @@ fn generated_reply_cases_drive_claim_validation() {
                 "content": "Approved", "created_at": "2026-01-01T00:00:00Z"
             })).unwrap()
         ).unwrap();
-        // Keep the empty-requester witness rather than relying on row normalization.
         request.requester_did = Some(text("requester_did").into());
         let result = reply::validate_reply_claim(
             &item,

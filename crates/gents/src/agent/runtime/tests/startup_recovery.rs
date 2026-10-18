@@ -2,9 +2,6 @@ use super::support::*;
 use super::*;
 use crate::identity::NodeIdentity;
 
-// These timeouts detect deadlocks; they are not startup latency assertions.
-// Leave enough wall-clock headroom for the package-wide suite, which runs many
-// embedded DefraDB nodes concurrently on shared CI runners.
 const STARTUP_DEADLOCK_GUARD: Duration = Duration::from_secs(30);
 
 struct RejectRouterGenerationRunWriter;
@@ -213,7 +210,7 @@ async fn run_agent_starts_when_startup_probe_discovers_selected_model() {
     let identity = Arc::new(test_identity("startup-probe-discovers-model"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_agent_backend_with_capacity_and_probe_status(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-startup-probe",
         mock_endpoint.endpoint(),
@@ -285,16 +282,13 @@ async fn run_agent_fails_when_all_agents_are_unavailable_due_to_invalid_config()
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("startup-invalid-config"));
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-invalid-config",
         "http://127.0.0.1:9/v1",
     )
     .await;
     let default_agent_id = crate::default_agent_id_for_node(identity.did());
-    // This test exercises startup handling for corrupt persisted configuration.
-    // The public writer correctly rejects the dangling reference, so inject the
-    // invalid row through the storage boundary instead.
     let context_id = format!("{default_agent_id}:context");
     let escaped_context_id = escape_graphql_string(&context_id);
     let escaped_tools_id = escape_graphql_string("missing-tools");
@@ -375,7 +369,7 @@ async fn router_generation_persistence_failure_terminates_run_agent_before_dispa
     let identity = Arc::new(test_identity("router-generation-persistence-run-agent"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-router-generation-persistence",
         mock_endpoint.endpoint(),
@@ -431,7 +425,7 @@ async fn slot_drain_failure_reaches_run_agent_after_external_shutdown() {
     let identity = Arc::new(test_identity("slot-drain-failure"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-slot-drain-failure",
         mock_endpoint.endpoint(),
@@ -490,7 +484,7 @@ async fn startup_source_persistence_exhaustion_fails_closed_and_is_the_exact_run
     let identity = Arc::new(test_identity("startup-source-persistence-exhaustion"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-startup-source-persistence",
         mock_endpoint.endpoint(),
@@ -545,8 +539,6 @@ async fn startup_source_persistence_exhaustion_fails_closed_and_is_the_exact_run
             Some(slot_runner),
         ),
     );
-    // This fixture configures one active worker; a slot runs exactly its
-    // active workers.
     let slot_worker_count = 1;
     assert_eq!(
         tokio::time::timeout(STARTUP_DEADLOCK_GUARD, slot_started_rx.recv())
@@ -644,7 +636,7 @@ async fn ready_persistence_exhaustion_is_fatal_and_never_opens_runtime_readiness
     let identity = Arc::new(test_identity("ready-persistence-exhaustion"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-ready-persistence",
         mock_endpoint.endpoint(),
@@ -721,7 +713,7 @@ async fn run_agent_starts_with_all_agents_unavailable_and_rejects_requests_at_ru
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("startup-all-unavailable"));
     bind_default_agent_backend_with_capacity_and_probe_status(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-unavailable",
         "http://127.0.0.1:9/v1",
@@ -813,7 +805,7 @@ async fn run_agent_recovers_backend_availability_without_restart() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("startup-backend-recovers"));
     bind_default_agent_backend_with_capacity_and_probe_status(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-recovers",
         "http://127.0.0.1:9/v1",
@@ -885,14 +877,12 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("shutdown-waiting-request"));
     let mock_endpoint = MockModelEndpoint::start_blocking_chat("default").unwrap();
-    // Optional title inference shares backend capacity. Give these sessions
-    // user titles so this test isolates the two foreground permit owners.
     for (session_id, agent_id) in [
         ("session-shutdown-running", "general"),
         ("session-shutdown-waiting", "code"),
     ] {
         crate::session::ensure_session_with_agent_id_and_requester_did(
-            node.as_ref(),
+            &node,
             session_id,
             identity.did(),
             agent_id,
@@ -901,7 +891,7 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
         .await
         .unwrap();
         crate::session::update_session_title_with_source(
-            node.as_ref(),
+            &node,
             identity.did(),
             Some(identity.did()),
             session_id,
@@ -912,19 +902,15 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
         .unwrap();
     }
     bind_default_agent_backend_with_capacity(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-blocked",
         mock_endpoint.endpoint(),
         1,
     )
     .await;
-    // Fresh admission re-reads canonical agent documents even when this
-    // test constructs the executable agent slots directly. Keep that
-    // authorization boundary real while isolating the capacity/shutdown
-    // property below.
-    crate::test_support::install_test_agent(node.as_ref(), identity.did(), "general").await;
-    crate::test_support::install_test_agent(node.as_ref(), identity.did(), "code").await;
+    crate::test_support::install_test_agent(&node, identity.did(), "general").await;
+    crate::test_support::install_test_agent(&node, identity.did(), "code").await;
     let agent = crate::Gents::builder()
         .node(node.clone())
         .identity(identity.clone())
@@ -957,11 +943,6 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
     )
     .await;
     wait_for_request_state(node.as_ref(), &first_request_doc_id, "processing").await;
-    // The property under test starts when the first request owns the sole
-    // backend permit. Waiting for the mock server to observe bytes adds the
-    // unrelated synchronous capture write and HTTP scheduler to test setup;
-    // under the full parallel suite that made this capacity test time out
-    // before it reached its actual assertion (#1060).
     wait_for_inference_call_state(node.as_ref(), "req-shutdown-running", "running").await;
 
     let queued_request_doc_id = create_agent_request_for_agent(

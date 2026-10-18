@@ -1,10 +1,3 @@
-//! Dependency bookkeeping on [`super::Record`]: which installed coordinates
-//! a pack is required by, and whether it was installed for its own sake.
-//!
-//! Only a graph pack may be named as a dependency
-//! (`pack::validate_pack_manifest` refuses a graph pack any dependency of
-//! its own), so releasing one never recurses into another release.
-
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
@@ -44,14 +37,6 @@ async fn update_required_by(
     Ok(())
 }
 
-/// Adds `dependent` to each of `dependencies`'s `required_by`, and, for any
-/// installed record that names `dependent` but is no longer among
-/// `dependencies` (an upgrade that stopped depending on it), drops the claim
-/// and releases the dependency outright when that empties its `required_by`
-/// and it was not installed explicitly, the same rule [`release_in_txn`]
-/// applies on an explicit removal: an upgrade must not leave an orphaned,
-/// undeletable dependency behind (nor one a failed install after this claim
-/// leaves claimed by nobody).
 pub(super) async fn claim_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
@@ -110,10 +95,6 @@ pub(super) async fn claim_in_txn(
     Ok(())
 }
 
-/// Removes `dependent` from every installed record's `required_by`, removing
-/// the dependency itself when it becomes empty and it was not installed
-/// explicitly. Returns a [`RemoveReport`] for each dependency actually
-/// removed.
 pub(super) async fn release_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,

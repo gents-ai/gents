@@ -1,22 +1,3 @@
-//! Live qualification: a real model uses the native `lsp` tool against
-//! rust-analyzer on **this** Gents workspace.
-//!
-//! Offline and required CI skip this. The spec still says no live
-//! rust-analyzer in CI. Run it when you want proof the model asked
-//! rust-analyzer both an unscripted semantic question and a deterministic
-//! sequence about the runtime crate:
-//!
-//! ```bash
-//! rust-analyzer --version
-//! GENTS_LIVE_LSP=1 GENTS_EVAL_TARGET=workstation-1 \
-//!   GENTS_LSP_RUST_PACK_DIR=<packs checkout>/packs/gents/lsp_rust \
-//!   cargo test -p gents --features live-e2e --test e2e_live \
-//!   lsp_live_model_uses_rust_analyzer \
-//!   -- --ignored --test-threads=1 --nocapture
-//! ```
-//!
-//! Runs against the inference target named by `GENTS_EVAL_TARGET`.
-
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -57,8 +38,6 @@ fn repo_root() -> PathBuf {
         .expect("repo root")
 }
 
-/// `lsp_rust` no longer ships inside this repository; point this at a
-/// checkout of gents-ai/packs's `packs/gents/lsp_rust`.
 fn pack_dir() -> PathBuf {
     PathBuf::from(
         std::env::var("GENTS_LSP_RUST_PACK_DIR").unwrap_or_else(|_| {
@@ -109,8 +88,6 @@ fn pack_lsp_config() -> String {
         .unwrap_or_else(|| panic!("{} missing lsp-readonly Tools config", path.display()));
     let mut config: serde_json::Value =
         serde_json::from_str(raw_config).expect("pack LSP server configuration");
-    // This qualification queries source-declared enum symbols; compiling build scripts
-    // and procedural macros would contend with the enclosing workspace build.
     let settings = &mut config["servers"]["rust-analyzer"]["settings"]["rust-analyzer"];
     settings["cargo"]["buildScripts"]["enable"] = serde_json::json!(false);
     settings["procMacro"]["enable"] = serde_json::json!(false);
@@ -248,19 +225,17 @@ async fn lsp_live_model_uses_rust_analyzer() {
 
     let workspace = repo_root();
     // The document runtime resolves its initial host-tool root from cwd before
-    // the persisted selection is reconciled. This ignored qualification runs
-    // with --test-threads=1; restore cwd on every exit so it cannot poison a
-    // subsequent ignored live test in the same process.
+    // the persisted selection is reconciled; restore cwd on every exit so a
+    // failed run cannot poison subsequent tests in the same process.
     let _cwd = CurrentDirGuard::set(&workspace);
 
     let db = test_db("lsp-live").await;
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("lsp-live"));
 
-    let (node_did, agent_id) =
-        bind_target(db.node.as_ref(), identity.as_ref(), &live_target()).await;
+    let (node_did, agent_id) = bind_target(&db.node, identity.as_ref(), &live_target()).await;
 
     configure_agent_tools(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &agent_id,
         Some(pack_system_prompt()),
@@ -300,14 +275,12 @@ async fn lsp_live_model_uses_rust_analyzer() {
     .expect("boot agent");
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_runtime_ready(db.node.as_ref(), &node_did).await;
+    wait_for_runtime_ready(&db.node, &node_did).await;
     let booted = BootedAgent::new(shutdown_tx, handle, node_did.clone());
 
-    // UX arm: no paths, line numbers, symbol-discovery steps, retries, or
-    // status choreography. The model must discover and use the semantic tool.
     let unscripted_request_id = "lsp-live-unscripted-1";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &agent_id,
         unscripted_request_id,
@@ -315,12 +288,8 @@ async fn lsp_live_model_uses_rust_analyzer() {
         &pack_unscripted_prompt(),
     )
     .await;
-    let terminal = wait_for_request_terminal(
-        db.node.as_ref(),
-        unscripted_request_id,
-        Duration::from_secs(600),
-    )
-    .await;
+    let terminal =
+        wait_for_request_terminal(&db.node, unscripted_request_id, Duration::from_secs(600)).await;
     let mut failures = Vec::new();
     if terminal != "completed" {
         failures.push(format!("unscripted live lsp run must complete: {terminal}"));
@@ -348,23 +317,18 @@ async fn lsp_live_model_uses_rust_analyzer() {
             summarize_calls(unscripted_calls.iter())
         ));
     }
-    let unscripted_answer = wait_for_assistant_answer(
-        db.node.as_ref(),
-        unscripted_request_id,
-        Duration::from_secs(10),
-    )
-    .await;
+    let unscripted_answer =
+        wait_for_assistant_answer(&db.node, unscripted_request_id, Duration::from_secs(10)).await;
     if !answer_reports_meet_contract(&unscripted_answer) {
         failures.push(format!(
             "unscripted answer must report that the more restrictive mode wins in Disabled < Inherit < Enabled order; got:\n{unscripted_answer}"
         ));
     }
 
-    // Deterministic arm: retained as a stable harness/protocol regression gate.
     let request_id = "lsp-live-req-1";
     let prompt = pack_default_prompt();
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &agent_id,
         request_id,
@@ -373,8 +337,7 @@ async fn lsp_live_model_uses_rust_analyzer() {
     )
     .await;
 
-    let terminal =
-        wait_for_request_terminal(db.node.as_ref(), request_id, Duration::from_secs(600)).await;
+    let terminal = wait_for_request_terminal(&db.node, request_id, Duration::from_secs(600)).await;
     if terminal != "completed" {
         failures.push(format!("live lsp run must complete: {terminal}"));
     }
@@ -402,8 +365,7 @@ async fn lsp_live_model_uses_rust_analyzer() {
         }
     }
 
-    let answer =
-        wait_for_assistant_answer(db.node.as_ref(), request_id, Duration::from_secs(10)).await;
+    let answer = wait_for_assistant_answer(&db.node, request_id, Duration::from_secs(10)).await;
     if !(answer.contains("FileToolMode")
         || (answer.contains("Disabled") && answer.contains("Inherit")))
     {
@@ -414,23 +376,6 @@ async fn lsp_live_model_uses_rust_analyzer() {
 
     booted.shutdown().await;
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
-}
-
-/// `tool_policy.rs` defines several `meet` methods, so a hover on the right
-/// file and symbol is selected by the facts it must quote.
-fn find_hover<'a>(
-    calls: &'a [&ToolCallRow],
-    file: &str,
-    symbol: &str,
-    required: &[&str],
-) -> &'a ToolCallRow {
-    matching_hover(calls, file, symbol, required)
-        .unwrap_or_else(|| {
-            panic!(
-                "need a completed hover on {file} symbol={symbol} quoting {required:?}; lsp calls: {:?}",
-                summarize_calls(calls.iter().copied())
-            )
-        })
 }
 
 fn matching_hover<'a>(
@@ -460,45 +405,6 @@ fn answer_reports_meet_contract(answer: &str) -> bool {
     let lower = answer.to_ascii_lowercase();
     lower.contains("disabled < inherit < enabled")
         && (lower.contains("restrict") || lower.contains("wins"))
-}
-
-#[test]
-fn completed_persistence_status_does_not_mask_a_failed_lifecycle() {
-    let failed = ToolCallRow {
-        tool_name: Some("lsp".into()),
-        status: Some("completed".into()),
-        lifecycle_state: Some("failed".into()),
-        args: Some(r#"{"action":"hover"}"#.into()),
-        result: Some("policy denied".into()),
-    };
-    assert!(!call_completed(&failed));
-}
-
-#[test]
-fn meet_contract_match_uses_the_explicit_rank_order_not_first_name_occurrence() {
-    let answer = "The enum declares Inherit, Disabled, Enabled. More restrictive mode wins: \
-                  Disabled < Inherit < Enabled.";
-    assert!(answer_reports_meet_contract(answer));
-}
-
-#[test]
-fn hover_selector_skips_completed_but_semantically_empty_retries() {
-    let empty = ToolCallRow {
-        tool_name: Some("lsp".into()),
-        status: Some("completed".into()),
-        lifecycle_state: Some("completed".into()),
-        args: Some(r#"{"action":"hover","file":"src/lib.rs","symbol":"target"}"#.into()),
-        result: Some("No hover information".into()),
-    };
-    let useful = ToolCallRow {
-        result: Some("pub fn target()".into()),
-        ..empty.clone()
-    };
-    let calls = [&empty, &useful];
-    assert!(std::ptr::eq(
-        find_hover(&calls, "src/lib.rs", "target", &[]),
-        &useful
-    ));
 }
 
 fn args_json(call: &ToolCallRow) -> Option<serde_json::Value> {

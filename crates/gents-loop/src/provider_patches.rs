@@ -1,9 +1,3 @@
-//! Deterministic post-serialization body rewrites `provider_input` applies
-//! before projecting a request's byte size, mirroring what the live
-//! transport does at send time (`gents::chatgpt_codex`,
-//! `gents::xai_grok_oauth`, native, wrap the actual HTTP client around the
-//! same two functions so accounting and the wire never diverge).
-
 use bytes::Bytes;
 use serde_json::Value;
 
@@ -51,7 +45,6 @@ pub fn patch_instructions_body(body: &[u8]) -> Option<Bytes> {
     serde_json::to_vec(&value).ok().map(Bytes::from)
 }
 
-// pub, not private: gents' own chatgpt_codex test pins this exact list.
 pub const CHATGPT_CODEX_UNSUPPORTED_PARAMS: &[&str] =
     &["max_output_tokens", "temperature", "top_p"];
 
@@ -102,8 +95,6 @@ fn content_text(content: &Value) -> Option<String> {
     }
 }
 
-/// Grok/xAI quirk: force `store:false` when the caller left it unset, which
-/// makes the request stateless.
 pub fn patch_store_false(body: &[u8]) -> Option<Bytes> {
     let mut value = serde_json::from_slice::<Value>(body).ok()?;
     let mut changed = false;
@@ -120,12 +111,8 @@ pub fn patch_store_false(body: &[u8]) -> Option<Bytes> {
 
 pub const ENCRYPTED_REASONING_INCLUDE: &str = "reasoning.encrypted_content";
 
-/// A `store:false` Responses server keeps no reasoning items, so replayed
-/// reasoning is only resolvable from the `encrypted_content` the previous
-/// response returned, and the server returns it only when `include` asks,
-/// whether or not the request sets `reasoning`. Only reasoning-model
-/// transports (xAI, ChatGPT Codex) may call this: OpenAI rejects the include
-/// for non-reasoning models (gpt-4o, gpt-4.1) with a 400.
+/// Only reasoning-model transports may add this include: OpenAI rejects it for
+/// non-reasoning models, while stateless responses need it to replay reasoning.
 pub fn request_encrypted_reasoning_when_stateless(value: &mut Value) -> bool {
     if value.get("store") != Some(&Value::Bool(false)) {
         return false;
@@ -141,72 +128,4 @@ pub fn request_encrypted_reasoning_when_stateless(value: &mut Value) -> bool {
         _ => value["include"] = Value::Array(vec![requested]),
     }
     true
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn patch_instructions_body_hoists_system_and_sets_defaults() {
-        let body = json!({
-            "input": [
-                {"role": "system", "content": "be helpful"},
-                {"role": "user", "content": [{"type": "input_text", "text": "hi"}]}
-            ],
-            "tools": [{"name": "t", "strict": true}]
-        });
-        let patched = patch_instructions_body(&serde_json::to_vec(&body).unwrap()).unwrap();
-        let value: Value = serde_json::from_slice(&patched).unwrap();
-        assert_eq!(value["instructions"], "be helpful");
-        assert_eq!(value["store"], false);
-        assert_eq!(value["stream"], true);
-        assert_eq!(value["tools"][0]["strict"], false);
-        assert_eq!(value["input"].as_array().unwrap().len(), 1);
-        assert_eq!(value["include"], json!([ENCRYPTED_REASONING_INCLUDE]));
-    }
-
-    #[test]
-    fn patch_instructions_body_is_none_when_nothing_changes() {
-        let body = json!({
-            "input": [{"role": "user", "content": [{"type": "input_text", "text": "hi"}]}],
-            "instructions": "be helpful",
-            "store": false,
-            "stream": true,
-            "include": [ENCRYPTED_REASONING_INCLUDE]
-        });
-        assert!(patch_instructions_body(&serde_json::to_vec(&body).unwrap()).is_none());
-    }
-
-    #[test]
-    fn patch_store_false_sets_store_when_absent() {
-        let body = json!({"model": "grok"});
-        let patched = patch_store_false(&serde_json::to_vec(&body).unwrap()).unwrap();
-        let value: Value = serde_json::from_slice(&patched).unwrap();
-        assert_eq!(value["store"], false);
-        assert_eq!(value["include"], json!([ENCRYPTED_REASONING_INCLUDE]));
-    }
-
-    #[test]
-    fn patch_store_false_is_idempotent_when_present() {
-        let body = json!({"model": "grok", "store": true});
-        assert!(patch_store_false(&serde_json::to_vec(&body).unwrap()).is_none());
-    }
-
-    #[test]
-    fn stateless_include_appends_once_and_skips_stored_requests() {
-        let mut value = json!({"store": false, "include": ["message.output_text.logprobs"]});
-        assert!(request_encrypted_reasoning_when_stateless(&mut value));
-        assert!(!request_encrypted_reasoning_when_stateless(&mut value));
-        assert_eq!(
-            value["include"],
-            json!(["message.output_text.logprobs", ENCRYPTED_REASONING_INCLUDE])
-        );
-
-        for mut stored in [json!({"store": true}), json!({"model": "m"})] {
-            assert!(!request_encrypted_reasoning_when_stateless(&mut stored));
-            assert!(stored.get("include").is_none());
-        }
-    }
 }

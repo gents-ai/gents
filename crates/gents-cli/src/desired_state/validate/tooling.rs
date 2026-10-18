@@ -1,8 +1,5 @@
 use super::super::DesiredStateManifest;
 
-// Offline checks validate authored values only. The existing apply transaction
-// validates references, expansion, collisions and obligations against the full
-// retained candidate; packs may refer to documents already installed there.
 pub(super) fn validate_surfaces(manifest: &DesiredStateManifest, errors: &mut Vec<String>) {
     for surface in &manifest.datastore_tool_surfaces {
         for entry in surface.entries.as_deref().unwrap_or(&[]) {

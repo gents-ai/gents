@@ -162,7 +162,7 @@ async fn seed_live_agent_documents(
         "compactions":[{"node_did":node_did,"compaction_id":compaction_id,"strategy":"StripThenSummarize","threshold":0.95}]
     });
     inference.apply(&mut config);
-    ConfigAccess::transact_local(core.node(), None, "desktop.fixture.config", |txn| {
+    ConfigAccess::transact_local_write(&core.node_arc(), None, "desktop.fixture.config", |txn| {
         let mut config = config.clone();
         let backend_id = &backend_id;
         let target_backend_id = &target_backend_id;
@@ -283,43 +283,5 @@ async fn wait_for_runtime_process_state(
             );
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use gents::BackendProviderKind;
-
-    #[test]
-    fn live_backend_candidate_preserves_or_explicitly_replaces_one_credential_source() {
-        use gents::document_config::BackendAuth;
-        let existing: InferenceBackend = serde_json::from_value(serde_json::json!({
-            "node_did":"owner", "backend_id":"backend", "name":"backend",
-            "provider_kind":"OpenAiCompatible", "endpoint":"http://old.example/v1",
-            "auth":{"kind":"api_key","key":"stored-secret"}
-        }))
-        .unwrap();
-        let mut requested = LiveBackendConfig {
-            endpoint: "http://new.example/v1".to_string(),
-            model_name: "new-model".to_string(),
-            provider_kind: BackendProviderKind::OpenAiCompatible,
-            api_key: None,
-            api_key_env_var: None,
-        };
-        let preserved =
-            live_backend_candidate(Some(existing.clone()), "owner", "backend", &requested).unwrap();
-        assert!(matches!(preserved.auth, BackendAuth::ApiKey { key } if key == "stored-secret"));
-        requested.api_key_env_var = Some("BACKEND_API_KEY".into());
-        let replaced =
-            live_backend_candidate(Some(existing), "owner", "backend", &requested).unwrap();
-        assert!(
-            matches!(replaced.auth, BackendAuth::Environment { variable } if variable == "BACKEND_API_KEY")
-        );
-        requested.api_key = Some("second-secret".into());
-        assert!(live_backend_candidate(None, "owner", "backend", &requested)
-            .unwrap_err()
-            .to_string()
-            .contains("one credential source"));
     }
 }

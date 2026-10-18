@@ -1,11 +1,3 @@
-//! `gents optimization`: thin commands over `gents::optimization`. A job is
-//! driven by a scripted proposer supplied as a file, or by an agent of a
-//! pack asked once per round on the served home.
-//!
-//! Refusals the library returns are re-raised with exactly their text
-//! ([`surface_refusal`]); `main` prints them and exits 1. Clap exits 2 on a
-//! usage error.
-
 use std::io::Write;
 use std::path::Path;
 
@@ -43,16 +35,12 @@ mod render;
 #[cfg(test)]
 pub(crate) mod testing;
 
-/// The structural gate's cap on a proposed text, in bytes: the default of
-/// `optimization run --max-text-bytes`.
 pub(crate) const DEFAULT_MAX_TEXT_BYTES: usize = 32 * 1024;
 
 pub(crate) async fn dispatch(command: OptimizationCommand) -> Result<()> {
     let ctx = EvalContext::resolve(command.scope()).await?;
     let executor = EmbeddedExecutor::new(gents::DocumentRuntimeOptions::default(), ctx.runs_dir());
     let registry = CheckRegistry::builtin();
-    // Only a command that hosts a loop replaces the default interrupt: a
-    // read-only command stays killable by Ctrl-C.
     let cancel = if matches!(command, OptimizationCommand::Run(_)) {
         cancel_on_ctrl_c(
             "interrupt: the job stops launching and will print the command that resumes it; interrupt again to exit now",
@@ -87,7 +75,6 @@ pub(crate) async fn execute(
     result.map_err(surface_refusal)
 }
 
-/// The driver's and the promotion's refusals verbatim, then the eval layer's.
 fn surface_refusal(error: anyhow::Error) -> anyhow::Error {
     let verbatim = job_refused(&error)
         .map(ToString::to_string)
@@ -98,9 +85,6 @@ fn surface_refusal(error: anyhow::Error) -> anyhow::Error {
     }
 }
 
-/// One proposal per round: a script shorter than `rounds` is refused here,
-/// before the job is frozen, rather than failing the job at the round it
-/// cannot answer.
 fn scripted_proposer(path: &Path, rounds: u32) -> Result<ScriptedProposer> {
     let bytes = std::fs::read(path)
         .with_context(|| format!("reading proposer script {}", path.display()))?;
@@ -121,10 +105,6 @@ fn scripted_proposer(path: &Path, rounds: u32) -> Result<ScriptedProposer> {
     ))
 }
 
-/// The proposer agent of a pack (resolved like `gents pack install`),
-/// installed into the home with its one inference slot bound to
-/// `--proposer-profile` or the default profile, asked on a fresh session of
-/// the served home.
 async fn behavior_proposer(
     ctx: &EvalContext,
     args: &OptimizationRunArgs,
@@ -138,7 +118,7 @@ async fn behavior_proposer(
     let agent_id = proposer_agent_id(pack, slot, agent)?;
     let config = pack_config(&resolved, &ctx.owner)?;
     ensure_tool_less(&config, &ctx.owner, &agent_id)?;
-    let gents::ConfigAccess::Graphql(graphql) = &*ctx.access else {
+    let gents::ConfigAccess::Graphql(graphql) = &ctx.access else {
         anyhow::bail!(
             "start `gents server` for this home and retry: an agent proposer runs on a served home"
         );
@@ -163,13 +143,6 @@ async fn behavior_proposer(
     ))
 }
 
-/// A proposer is tool-less, so a proposal draws only on the turns it is
-/// sent: the agent's tool surface, resolved from the pack's documents by
-/// the runtime's owner, names no tool, and its context names no skill (the
-/// runtime adds `load_skill` for those). The readonly ceiling narrows a host
-/// tool without removing it and needs no root; the CLI tools it filters out
-/// are counted anyway, since a server started with `--cli-tool` adds them
-/// back; and a agent target counts whichever home agent it names.
 fn ensure_tool_less(
     config: &gents::document_config::PackConfig,
     owner: &str,
@@ -237,8 +210,6 @@ fn ensure_tool_less(
     Ok(())
 }
 
-/// The session's first user turn: the subject's dossier, so a proposal
-/// names the subject's real tools and surfaces rather than guessing them.
 fn subject_preamble(subject_dir: &Path, agent_id: &str, target: &JobTarget) -> Result<String> {
     let dossier = crate::commands::eval::init::dossier::render(subject_dir, Some(agent_id))?;
     let instruction = match target {
@@ -258,8 +229,6 @@ fn subject_preamble(subject_dir: &Path, agent_id: &str, target: &JobTarget) -> R
     ))
 }
 
-/// The agent `--proposer agent:<pack>[:<agent>]` asks: the named
-/// one when the slot declares it, else the slot's only agent.
 fn proposer_agent_id(
     pack: &str,
     slot: &gents::pack::PackInferenceSlot,
@@ -301,11 +270,6 @@ async fn run(
         Some(agent) => agent.clone(),
         None => subject.default_agent()?,
     };
-    // Bonferroni: the divisor must be the number of candidates the budget
-    // allows, and the driver refuses a policy that disagrees.
-    // `defaults` is the uncalibrated policy sized to `--rounds`; a policy
-    // file is taken as written, and the driver refuses its `max_rounds` when
-    // it is not `--rounds`.
     let policy = match &args.policy {
         None | Some(PolicyArg::Defaults) => PolicyV2 {
             max_rounds: args.rounds,
@@ -345,13 +309,9 @@ async fn run(
         max_infra_retries: 1,
         breaker_threshold: default_breaker_threshold(),
         deadline_secs: None,
-        // Each stage's captures come from the definition; no request-level
-        // fallback, so a resume repeats the frozen origin exactly.
         captures: Vec::new(),
         run_options: deps.options.clone(),
     };
-    // A agent proposer installs its pack, so a job refused on its request
-    // or policy is refused first and writes nothing.
     gents::optimization::check_request(&request, &policy)?;
     let proposer: Box<dyn Proposer> = match proposer_arg {
         ProposerArg::Scripted(script) => Box::new(scripted_proposer(script, args.rounds)?),
@@ -382,14 +342,11 @@ async fn run(
     );
     let outcome = match follow(ctx, &job_id, !args.json, out, running).await {
         Ok(outcome) => outcome,
-        // Only a job that was created can be resumed.
         Err(error) => match load_job(&ctx.access, &ctx.owner, &job_id).await {
             Ok(Some(_)) => return Err(error.context(resume)),
             _ => return Err(error),
         },
     };
-    // A job left running is not a success: the view still renders, then the
-    // command fails with the resume note, so a script never reads it as done.
     let stopped = (outcome.state == JobState::Running).then_some(resume);
     let view = show_job(&ctx.access, &ctx.owner, &job_id).await?;
     if args.json {
@@ -403,7 +360,6 @@ async fn run(
     }
 }
 
-/// Drive the job, printing each journal entry as it lands.
 async fn follow<F>(
     ctx: &EvalContext,
     job_id: &str,
@@ -423,7 +379,6 @@ where
     follow_progress(print, &mut progress, running).await
 }
 
-/// The job's journal entries, printed once each in journal order.
 struct JournalProgress<'a> {
     ctx: &'a EvalContext,
     job_id: &'a str,
@@ -474,8 +429,6 @@ async fn promote(
     args: &OptimizationDigestArgs,
     out: &mut dyn Write,
 ) -> Result<()> {
-    // Read first, so a promotion that lands is never followed by an error;
-    // a job that is not there is `promote`'s to refuse.
     let policy = load_job(&ctx.access, &ctx.owner, &args.job_id)
         .await?
         .map(|job| job.origin.policy);
@@ -523,8 +476,6 @@ async fn revert(
     Ok(())
 }
 
-/// Delete `<jobs_dir>/<job_id>/`, the job's own jobs directory as its origin
-/// recorded it, when that is under this home. Its documents and runs stay.
 async fn rm(ctx: &EvalContext, args: &OptimizationRmArgs, out: &mut dyn Write) -> Result<()> {
     validate_job_id(&args.job_id)?;
     let job = load_job(&ctx.access, &ctx.owner, &args.job_id)
@@ -537,8 +488,6 @@ async fn rm(ctx: &EvalContext, args: &OptimizationRmArgs, out: &mut dyn Write) -
         args.job_id,
         dir.display()
     );
-    // Another home's directory is never this home's to delete, --force or
-    // not: the path comes from the job's document.
     let dir = crate::commands::eval::manage::job_dir_in_this_home(ctx, &job)?;
     let state = derive_state(&job.journal);
     if !args.force && !removable(&state) {
@@ -713,8 +662,6 @@ mod tests {
         assert!(message.contains("\"read_file\""), "{message}");
     }
 
-    /// What the resolved surface alone would miss: CLI tools a server started
-    /// with `--cli-tool` adds, a agent target outside the pack, and skills.
     #[test]
     fn cli_tools_a_target_outside_the_pack_or_skills_are_refused() {
         use serde_json::json;
@@ -772,7 +719,6 @@ mod tests {
         }
     }
 
-    /// A tool-less proposer pack passes the tool-less check and reaches the next one.
     #[tokio::test]
     async fn a_behavior_proposer_needs_a_served_home() {
         let fixture = Fixture::new().await;
@@ -828,9 +774,6 @@ mod tests {
         );
     }
 
-    /// The pack install writes documents, so a job the request or policy
-    /// refuses never reaches the proposer (here, the served-home check
-    /// before the install).
     #[tokio::test]
     async fn a_refused_job_is_refused_before_the_proposer_is_built() {
         let fixture = Fixture::new().await;
@@ -912,8 +855,6 @@ mod tests {
         assert_eq!(json["state"]["state"], "ready_to_promote");
         assert_eq!(json["job"]["job_id"], "job-1");
 
-        // With its definition deleted the job still shows, and no decision
-        // claims a recomputation it could not make.
         delete_definition(&fixture).await;
         let shown = optimization(&fixture, &["show", "job-1"]).await.unwrap();
         assert!(
@@ -981,7 +922,6 @@ mod tests {
             "the defaults sized to --rounds are still uncalibrated: {output}"
         );
 
-        // A file holding the uncalibrated policy says max_rounds 3.
         let path = fixture.ctx.home_dir.join("policy.json");
         std::fs::write(
             &path,
@@ -1002,7 +942,6 @@ mod tests {
         );
         assert_eq!(format!("{error:#}"), error.to_string());
 
-        // A policy other than the defaults is calibrated: no banner.
         std::fs::write(
             &path,
             serde_json::to_vec(&gents::optimization::PolicyV2 {
@@ -1053,7 +992,6 @@ mod tests {
             refusal,
             "a refusal carries no context"
         );
-        // The driver's refusal, under any context, surfaces as its own text.
         let wrapped = anyhow::Error::from(gents::optimization::JobRefused(refusal.to_owned()))
             .context("driving the job");
         assert_eq!(format!("{:#}", super::surface_refusal(wrapped)), refusal);
@@ -1142,7 +1080,6 @@ mod tests {
             "the resume froze nothing again: {journal:?}"
         );
 
-        // With --json, stdout is the view alone: the note is the error.
         let mut out = Vec::new();
         let error = execute(
             &fixture.ctx,
@@ -1311,7 +1248,6 @@ mod tests {
     #[tokio::test]
     async fn rm_keeps_running_and_ready_jobs_and_removes_a_reverted_one() {
         let fixture = Fixture::new().await;
-        // What Ctrl-C leaves: a job frozen and still running.
         let pack = fixture.pack_arg();
         let proposer = proposer_file(&fixture);
         let scripted = executor(&[]);
@@ -1354,7 +1290,6 @@ mod tests {
         assert!(forced.contains("bytes reclaimed"), "{forced}");
         assert!(!running_dir.exists());
 
-        // A job waiting to be promoted keeps its directory.
         accepted_job(&fixture, "job-1").await;
         let kept = optimization(&fixture, &["rm", "job-1"]).await.unwrap_err();
         assert!(
@@ -1363,7 +1298,6 @@ mod tests {
             "{kept:#}"
         );
 
-        // `eval rm` refuses a run a job still needs.
         let held = gents::optimization::held_runs(&fixture.ctx.access, &fixture.ctx.owner)
             .await
             .unwrap();
@@ -1379,7 +1313,6 @@ mod tests {
             )
         );
 
-        // Promoted, then reverted: removable.
         let view = gents::optimization::show(&fixture.ctx.access, &fixture.ctx.owner, "job-1")
             .await
             .unwrap();
@@ -1475,19 +1408,19 @@ mod tests {
         assert_eq!(args.max_tokens, None);
     }
 
-    /// Another home sharing the documents never removes this home's job
-    /// directory, even with --force: the path comes from the document.
     #[tokio::test]
     async fn rm_refuses_a_job_directory_that_is_not_under_this_home() {
         let fixture = Fixture::new().await;
         accepted_job(&fixture, "job-1").await;
-        let gents::ConfigAccess::Local(node) = &*fixture.ctx.access else {
-            panic!("the fixture is embedded");
-        };
+        let node = fixture
+            .ctx
+            .access
+            .local_node()
+            .expect("the fixture is embedded");
         let elsewhere = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(elsewhere.path().join("eval").join("jobs")).unwrap();
         let other_home = crate::commands::eval::EvalContext {
-            access: gents::ConfigAccess::Local(node.clone()).into(),
+            access: gents::ConfigAccess::local(node.clone()).into(),
             home_dir: elsewhere.path().to_path_buf(),
             owner: fixture.ctx.owner.clone(),
         };
@@ -1523,7 +1456,6 @@ mod tests {
                 format!("job_id {job_id:?} must be one ordinary path component"),
             );
         }
-        // Blank first, as the driver refuses a job id.
         for job_id in ["", " "] {
             let error = optimization(&fixture, &["rm", job_id, "--force"])
                 .await

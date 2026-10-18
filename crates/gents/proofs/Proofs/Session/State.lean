@@ -88,7 +88,7 @@ structure QueueEntry where
   requestId : RequestId
   createdAt : Time
   /-- Signed logical slot; ordinary requests use native arrival order. A fresh
-  replacement inherits its retired predecessor’s slot without changing issuance time. -/
+  replacement inherits its retired predecessor's slot without changing issuance time. -/
   orderKey : Time := createdAt
   delivery : QueueDelivery := .queue
   source : QueueSource
@@ -96,12 +96,10 @@ structure QueueEntry where
   queueKey : Option QueueKey
   queuedAfter : Option RequestId
   origin : ExecutionOrigin := .interactive
-  /-- The signed requester principal of the admitted request. One session queue
-  orders every requester's requests; this is that request's own authority. -/
+  /-- The signed requester principal of the admitted request. -/
   requester : Option Nat := none
   /-- Abstract identity of the request-scoped execution settings the admission
-  carries besides its content: agent, working directory, selected skills
-  and workspace binding. Equal values run under the same configuration. -/
+  carries besides its content; equal values run under the same configuration. -/
   turnContext : Nat := 0
   /-- Freshness observed through the existing TTL parser at the operation's
   boundary; absent TTL is fresh, expired or malformed TTL is not. -/
@@ -125,10 +123,6 @@ instance (entry : QueueEntry) (key : QueueKey) : Decidable (entry.coalesceWellFo
   unfold QueueEntry.coalesceWellFormed
   infer_instance
 
-/-- A user message admitted while its session was busy: an interactive user
-append queued behind an earlier request. Agent steering (`agent_message`),
-goal and background-completion continuations, and scheduled or
-trigger-sourced work are not user messages and never fold. -/
 def queuedUserMessage (entry : QueueEntry) : Prop :=
   entry.source = .user ∧ entry.policy = .append ∧ entry.origin = .interactive ∧
     entry.queuedAfter.isSome
@@ -137,11 +131,8 @@ instance (entry : QueueEntry) : Decidable entry.queuedUserMessage := by
   unfold QueueEntry.queuedUserMessage
   infer_instance
 
-/-- `candidate` may be answered by the turn `head` claims. Each folded message
-keeps its own signed admission and transcript entry; folding changes only how
-many turns run. The candidate must carry the head's own requester authority
-and execution settings, so the folded turn runs exactly what each admission
-authorized. -/
+/-- `candidate` must carry the head's own requester authority and execution
+settings, so the folded turn runs exactly what each admission authorized. -/
 def foldsInto (head candidate : QueueEntry) : Prop :=
   head.source = .user ∧ head.origin = .interactive ∧
     candidate.queuedUserMessage ∧
@@ -173,13 +164,9 @@ structure SessionQueueState where
   active : Option RequestId
   pending : List QueueEntry
   terminal : Finset RequestId
-  /-- Messages the active claim selected to answer, in queue order, that its
-  turn has not yet consumed. They wait behind the active request and return to
-  the head of the queue if its turn ends without consuming them. -/
   folding : List QueueEntry := []
   deriving DecidableEq
 
-/-- Queue execution belongs to the same exact session identity as durable sessions. -/
 def SessionQueueState.sessionId (s : SessionQueueState) : SessionId := s.scope.session
 
 instance : Repr SessionQueueState where
@@ -273,10 +260,6 @@ def drainedRequestIds (source : QueueSource) (queueKey : Option QueueKey)
       else drainedRequestIds source key rest := by
   simp [drainedRequestIds, drainedRequestIdsMatching]
 
-/-- The pending messages a claim of `head` folds: the maximal run directly
-behind it that folds into it and whose admission the claim transaction
-verified. The run stops at the first other entry, so no entry passes one that
-stays queued. Entries admitted after the claim are never part of the run. -/
 def foldRun (head : QueueEntry) (admitted : List RequestId) :
     List QueueEntry → List QueueEntry
   | [] => []
@@ -324,9 +307,6 @@ def claimHead (s : SessionQueueState) (entry : QueueEntry) (rest : List QueueEnt
     SessionQueueState :=
   { s with active := some entry.requestId, pending := rest }
 
-/-- Claim `entry` and select its fold run. The claim is the cutoff: later
-messages wait for the next turn. Selection is not consumption; nothing is
-superseded until the turn publishes the message. -/
 def claimFolding (s : SessionQueueState) (entry : QueueEntry) (rest : List QueueEntry)
     (admitted : List RequestId) : SessionQueueState :=
   let folded := foldRun entry admitted rest
@@ -336,15 +316,12 @@ def claimFolding (s : SessionQueueState) (entry : QueueEntry) (rest : List Queue
     pending := rest.drop folded.length
   }
 
-/-- The active turn publishes the next selected message as its own authored
-input before its first inference; that publication supersedes the message's
-request. Selected messages are consumed in queue order. -/
+/-- The active turn publishes the next selected message before its first
+inference; that publication supersedes the message's request. -/
 def consumeFolded (s : SessionQueueState) (entry : QueueEntry) (rest : List QueueEntry) :
     SessionQueueState :=
   { s with folding := rest, terminal := insert entry.requestId s.terminal }
 
-/-- A turn ending before it published a selected message did not answer it;
-the message returns to the head of the queue in its original order. -/
 def finishActive (s : SessionQueueState) (requestId : RequestId) : SessionQueueState :=
   { s with
     active := none
@@ -361,9 +338,8 @@ def drainAutomatedWakeups
     terminal := s.terminal ∪ drainedRequestIds source queueKey s.pending
   }
 
-/-- The observed IDs are physical row identities abstracted as queue-local request IDs.
-Only rows read by the latch transaction are eligible; an overlapping insertion
-with the same coalescing key remains pending. -/
+/-- Only rows read by the latch transaction are eligible; an overlapping
+insertion with the same coalescing key remains pending. -/
 def drainObservedAutomatedWakeups
     (s : SessionQueueState) (source : QueueSource)
     (queueKey : Option QueueKey) (observed : List RequestId) : SessionQueueState :=

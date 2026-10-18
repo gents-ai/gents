@@ -2,14 +2,9 @@ import Proofs.Eval
 import Mathlib.Data.List.Basic
 
 /-! Configuration optimization (#1455), on the eval core contract.
-
-Models what must stay outside model control: worst-case imputation of an unknown
-case-trial, the two integer-arithmetic gates over per-case paired sums, the cost
-sub-gate, the ordered decision, and the append-only job journal.
-
-Refinement boundaries: the improvement test (a paired sign-flip permutation test
-in Rust) is an abstract `Bool`; eval runs, the proposer and candidate
-construction are outside the fence. -/
+Refinement boundary: the improvement test (a paired sign-flip permutation test
+in Rust) is an abstract `Bool`; eval runs, proposer and candidate construction
+are outside the fence. -/
 namespace Optimization
 
 inductive SeedSplit where
@@ -48,12 +43,9 @@ def splitSeedsTask (taskId : String) (split : SeedSplit) (triggers : List SeedTr
   cases.any fun c => decide (c.split = split) &&
     c.seedCollections.any (fun collection => seedReachesTask taskId collection triggers sources)
 
-/-- A task-template optimization needs a seed route in both development splits.
-The pack loader has already bound owners and resolved the target task's agent.
-Only stage seeds count: fixtures precede runtime boot, and prompt stages do not
-render the target template. Filters, grouping and the contents of seed documents
-remain runtime evidence; this admission rule establishes structural reachability,
-not successful delivery. A context target has no seed requirement. -/
+/-- A task-template optimization needs a seed route in both development splits;
+only stage seeds count (fixtures precede runtime boot), and only structural
+reachability, not delivery. A context target has no seed requirement. -/
 def missingTaskSeedSplits (target : Option String) (taskEnabled : Bool)
     (triggers : List SeedTrigger) (sources : List SeedSource) (cases : List SeedCase) :
     List SeedSplit :=
@@ -90,14 +82,50 @@ theorem held_out_seed_cannot_cover_validation (task : String) (triggers : List S
     splitSeedsTask task .validation triggers sources [⟨.heldOut, collections⟩] = false := by
   simp [splitSeedsTask]
 
+structure SeedRendering where
+  caseId : String
+  stageId : String
+  collection : String
+  rendered : Bool
+  deriving DecidableEq, Repr
+
+def failedTaskSeedRenders (target : Option String) (taskEnabled : Bool)
+    (triggers : List SeedTrigger) (sources : List SeedSource)
+    (seeds : List SeedRendering) : List SeedRendering :=
+  match target with
+  | none => []
+  | some taskId => seeds.filter fun seed =>
+      taskEnabled && seedReachesTask taskId seed.collection triggers sources && !seed.rendered
+
+theorem context_has_no_seed_render_failures (enabled : Bool)
+    (triggers : List SeedTrigger) (sources : List SeedSource) (seeds : List SeedRendering) :
+    failedTaskSeedRenders none enabled triggers sources seeds = [] := rfl
+
+theorem failed_seed_is_exact_relevant_input (task : String) (enabled : Bool)
+    (triggers : List SeedTrigger) (sources : List SeedSource) (seeds : List SeedRendering)
+    (seed : SeedRendering) :
+    seed ∈ failedTaskSeedRenders (some task) enabled triggers sources seeds ↔
+      seed ∈ seeds ∧ enabled = true ∧
+        seedReachesTask task seed.collection triggers sources = true ∧ seed.rendered = false := by
+  simp [failedTaskSeedRenders, Bool.and_eq_true, Bool.not_eq_true, and_assoc]
+
+theorem admitted_seeds_all_render (task : String) (triggers : List SeedTrigger)
+    (sources : List SeedSource) (seeds : List SeedRendering) (seed : SeedRendering)
+    (hadmitted : failedTaskSeedRenders (some task) true triggers sources seeds = [])
+    (hseed : seed ∈ seeds) (hrelevant : seedReachesTask task seed.collection triggers sources = true) :
+    seed.rendered = true := by
+  cases hrendered : seed.rendered
+  · have hfailed := (failed_seed_is_exact_relevant_input task true triggers sources seeds seed).mpr
+      ⟨hseed, rfl, hrelevant, hrendered⟩
+    simp [hadmitted] at hfailed
+  · rfl
+
 inductive Arm where
   | baseline | candidate
   deriving DecidableEq, Repr
 
 def scoreBpMax : Nat := 10000
 
-/-- The score imputed to an unknown case-trial. It fails the candidate and passes
-the baseline, so an unknown can never help a candidate. -/
 def unknownBp : Arm → Nat
   | .baseline => scoreBpMax
   | .candidate => 0
@@ -109,7 +137,6 @@ theorem baseline_unknown_is_best (bp : Nat) (h : bp ≤ scoreBpMax) :
     bp ≤ unknownBp .baseline := by
   simpa [unknownBp] using h
 
-/-- One case: the number of evidence pairs and both arms' summed scores. -/
 structure CasePairs where
   pairs : Nat
   sumBaseline : Nat
@@ -119,7 +146,6 @@ structure CasePairs where
 structure Evidence where
   casesMatch : Bool
   cases : List CasePairs
-  /-- Distinct (case, trial index) keys seen in either cell. -/
   keys : Nat
   droppedBaseline : Nat
   droppedCandidate : Nat
@@ -135,13 +161,10 @@ structure Params where
   maxTokenIncreaseBp : Nat
   deriving DecidableEq, Repr
 
-/-- Bonferroni: one validation split, up to `maxRounds` candidates. -/
 def alphaEffectivePpm (p : Params) : Nat := p.alphaPpm / (max p.maxRounds 1)
 
 def absDiff (a b : Nat) : Nat := (a - b) + (b - a)
 
-/-- Gate 1. The last conjunct says the permutation test can reach significance at
-all: `2^-n ≤ alpha`, written without division. -/
 def sufficient (p : Params) (e : Evidence) : Bool :=
   e.casesMatch && !e.cases.isEmpty
     && e.cases.all (fun c => decide (p.minPairs ≤ c.pairs))
@@ -150,11 +173,9 @@ def sufficient (p : Params) (e : Evidence) : Bool :=
     && decide (absDiff e.droppedBaseline e.droppedCandidate * 10000 ≤ p.maxAsymmetryBp * e.keys)
     && decide (1000000 ≤ alphaEffectivePpm p * 2 ^ e.cases.length)
 
-/-- Gate 2a. `mean(cand) ≥ mean(base) − tol` per case, cross-multiplied by `pairs`. -/
 def noCaseRegression (p : Params) (e : Evidence) : Bool :=
   e.cases.all fun c => decide (c.sumBaseline ≤ c.sumCandidate + p.caseToleranceBp * c.pairs)
 
-/-- Gate 2b. Mean tokens per case-trial, cross-multiplied. -/
 def costOk (p : Params) (baseTokens baseTrials candTokens candTrials : Nat) : Bool :=
   decide (candTokens * baseTrials * 10000
     ≤ baseTokens * candTrials * (10000 + p.maxTokenIncreaseBp))
@@ -173,7 +194,6 @@ inductive Decision where
   | inconclusive
   deriving DecidableEq, Repr
 
-/-- The first failing gate decides. `confirm` never consults the improvement test. -/
 def decideGates (mode : Mode) (sufficient noCaseRegression costOk improves : Bool) : Decision :=
   if !sufficient then .inconclusive
   else if !noCaseRegression then .reject .caseRegression
@@ -194,8 +214,6 @@ theorem inconclusive_iff (mode : Mode) (s r c i : Bool) :
     decideGates mode s r c i = .inconclusive ↔ s = false := by
   cases mode <;> cases s <;> cases r <;> cases c <;> cases i <;> decide
 
-/-- Accept is monotone in the gate flags: if a stricter assignment accepts, so does every
-weaker one; equivalently, failing a gate can never manufacture an accept. -/
 theorem accept_monotone (mode : Mode) (s r c i s' r' c' i' : Bool)
     (hs : s' = true → s = true) (hr : r' = true → r = true)
     (hc : c' = true → c = true) (hi : i' = true → i = true)
@@ -203,7 +221,6 @@ theorem accept_monotone (mode : Mode) (s r c i s' r' c' i' : Bool)
   cases mode <;> cases s <;> cases r <;> cases c <;> cases i <;>
     cases s' <;> cases r' <;> cases c' <;> cases i' <;> simp_all [decideGates]
 
-/-- Too few cases can never be accepted, whatever the scores. -/
 theorem too_few_cases_never_accepts (mode : Mode) (p : Params) (e : Evidence) (r c i : Bool)
     (h : alphaEffectivePpm p * 2 ^ e.cases.length < 1000000) :
     decideGates mode (sufficient p e) r c i ≠ .accept := by
@@ -212,8 +229,6 @@ theorem too_few_cases_never_accepts (mode : Mode) (p : Params) (e : Evidence) (r
     right
     omega
   simp [decideGates, hs]
-
-/-! ## Job journal -/
 
 inductive Entry where
   | frozen | runStarted | proposed | structuralReject
@@ -224,7 +239,6 @@ inductive Entry where
 
 abbrev Journal := List Entry
 
-/-- Append guarded by the expected journal length (the Rust transaction check). -/
 def appendIf (expectedLen : Nat) (j : Journal) (e : Entry) : Journal :=
   if j.length = expectedLen then j ++ [e] else j
 
@@ -243,7 +257,6 @@ theorem appendIf_match (j : Journal) (e : Entry) : appendIf j.length j e = j ++ 
 
 def roundsUsed (j : Journal) : Nat := j.count .proposed
 
-/-- A round may start only while rounds remain. -/
 def propose (maxRounds : Nat) (j : Journal) : Journal :=
   if roundsUsed j < maxRounds then j ++ [.proposed] else j
 

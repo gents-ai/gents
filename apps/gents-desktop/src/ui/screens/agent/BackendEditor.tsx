@@ -1,5 +1,3 @@
-/* One backend's editor: its kind, endpoint and credential, the account a
-   subscription runs on, and its models and usage. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { dependentsWarning } from "./dependents";
 import { useEffect, useState } from "react";
@@ -16,6 +14,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
+import { Input } from "@gents/ui/components/input";
 import { setupErrorMessage } from "../../../lib/setupErrors";
 import { optionalInteger, requiredHttpUrl, str, useDraft, problemOf } from "./draft";
 import {
@@ -28,13 +27,15 @@ import {
   TagsRow,
 } from "./editors";
 import { DeleteButton } from "./ListDetail";
-import { Group, Row } from "./rows";
+import { Group, NameLinks, Row, StackedRow } from "./rows";
+import { href } from "@/lib/router";
 import { ProviderLogo } from "../ProviderLogo";
 import { useApp } from "@/app/AppContext";
 import { toastFailure } from "@/lib/failure";
 import { healthy, isSubscriptionKind, KINDS, SUBSCRIPTION } from "./inferenceKinds";
 import { UsageRows } from "./ProviderUsage";
 import { accountWarnings, AccountRows, backendAccount } from "./ProviderAccounts";
+import { errorText } from "../../../lib/errorText";
 
 export function backendSave(
   nodeDid: string,
@@ -87,12 +88,10 @@ export function BackendEditor({
   deployment: NodeView;
   backend: InferenceBackendView;
   accounts: readonly ProviderAccountView[];
-  /* this backend's usage and the read again; absent, no Usage group */
   usage?: {
     view?: BackendUsageView;
     refresh: (provider: string | null) => Promise<void>;
   };
-  /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
 }) {
   const {
@@ -122,7 +121,6 @@ export function BackendEditor({
     enabled: backend.enabled ?? true,
     tags: backend.tags,
   };
-  /* each field's value as the patch takes it; each throws its problem */
   const fieldsOf = (next: typeof saved) => ({
     name: () => {
       const name = next.name.trim();
@@ -211,10 +209,8 @@ export function BackendEditor({
     setDiscoveredModels(null);
     setProbe(null);
   }, [d.draft.providerKind, d.draft.endpoint]);
-  /* an added account's backend is deleted by removing the account */
   const removable = backend.accountRef ? backendAccount(accounts, backend) : undefined;
   const signIn = SUBSCRIPTION[backend.providerKind ?? ""];
-  /* a disabled or missing account draws no usage */
   const usable = !signIn || backendAccount(accounts, backend)?.enabled;
   const [refreshing, setRefreshing] = useState(false);
   const refreshUsage = async () => {
@@ -227,9 +223,9 @@ export function BackendEditor({
       setRefreshing(false);
     }
   };
-  const users = deployment.inferenceProfiles
-    .filter((p) => p.backend_id === backend.backendId)
-    .map((p) => p.display_name ?? p.profile_id);
+  const profiles = deployment.inferenceProfiles.filter(
+    (p) => p.backend_id === backend.backendId,
+  );
   return (
     <>
       <Group
@@ -285,9 +281,7 @@ export function BackendEditor({
                 } catch (error) {
                   if (!current()) return;
                   setProbe("probe failed");
-                  toast(
-                    `Probe failed: ${error instanceof Error ? error.message : String(error)}`,
-                  );
+                  toast(`Probe failed: ${errorText(error)}`);
                 }
               }}
             >
@@ -330,9 +324,24 @@ export function BackendEditor({
         )}
         <FactRow
           label="Used by"
-          description="Delete is blocked while an agent points here."
+          description="Delete is blocked while a profile uses it."
         >
-          {users.length ? users.join(", ") : "no agent"}
+          {profiles.length ? (
+            <NameLinks
+              items={profiles.map((p) => ({
+                key: p.profile_id,
+                name: p.display_name ?? p.profile_id,
+                href: href({
+                  name: "agent",
+                  nodeDid: deployment.nodeDid,
+                  section: "profiles",
+                  item: p.profile_id,
+                }),
+              }))}
+            />
+          ) : (
+            "No profile yet."
+          )}
         </FactRow>
       </Group>
       <Group title={subscription ? "Subscription" : "Credential"}>
@@ -428,21 +437,7 @@ export function BackendEditor({
           wide
         />
         {probe && <FactRow label="Last probe">{probe}</FactRow>}
-        <FactRow
-          label="Advertised models"
-          description="Runtime discovery owns this catalog. Select a model on a profile."
-          mono
-        >
-          {(discoveredModels ?? backend.models).length ? (
-            <span className="flex flex-col gap-1 whitespace-normal">
-              {(discoveredModels ?? backend.models).map((model) => (
-                <span key={model}>{model}</span>
-              ))}
-            </span>
-          ) : (
-            "No catalog yet — refresh models"
-          )}
-        </FactRow>
+        <AdvertisedModels models={discoveredModels ?? backend.models} />
         <NumberRow
           id={id("connect-timeout")}
           label="Connect timeout seconds"
@@ -527,5 +522,54 @@ export function BackendEditor({
         />
       )}
     </>
+  );
+}
+
+const FILTER_FROM = 8;
+
+function AdvertisedModels({ models }: { models: readonly string[] }) {
+  const [filter, setFilter] = useState("");
+  /* a refresh can shorten the catalog below the filter's threshold, which
+     hides the input; a hidden filter must not keep narrowing */
+  const needle = models.length >= FILTER_FROM ? filter.trim().toLowerCase() : "";
+  const shown = needle
+    ? models.filter((model) => model.toLowerCase().includes(needle))
+    : models;
+  const count = `${models.length} model${models.length === 1 ? "" : "s"}`;
+  return (
+    <StackedRow
+      label="Advertised models"
+      description={
+        models.length
+          ? `${count}. Runtime discovery owns this catalog; choose a model on a profile.`
+          : "No catalog yet. Refresh models to read it."
+      }
+    >
+      {models.length ? (
+        <div className="grid gap-2">
+          {models.length >= FILTER_FROM ? (
+            <Input
+              value={filter}
+              onChange={(event) => setFilter(event.target.value)}
+              placeholder="Filter models"
+              aria-label="Filter models"
+            />
+          ) : null}
+          <ul
+            aria-label="Advertised models"
+            className="max-h-56 overflow-y-auto rounded-xl border border-border/60 p-1 font-mono text-xs text-muted-foreground"
+          >
+            {shown.map((model) => (
+              <li key={model} className="truncate rounded-md px-3 py-1.5" title={model}>
+                {model}
+              </li>
+            ))}
+            {shown.length === 0 ? (
+              <li className="px-3 py-1.5 font-sans">No model matches.</li>
+            ) : null}
+          </ul>
+        </div>
+      ) : null}
+    </StackedRow>
   );
 }

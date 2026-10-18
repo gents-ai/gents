@@ -16,7 +16,6 @@ pub(crate) const SESSION: &str = "contract-session";
 pub(crate) const PARENT: &str = "contract-parent";
 pub(crate) const PROFILE: &str = "contract-behavior:inference";
 
-/// Claude accounts A (`label-a`) and B (`label-b`) of the fixture's DID.
 pub(crate) struct ClaudeAccounts {
     pub access: ConfigAccess,
     pub a: String,
@@ -51,8 +50,7 @@ impl Fixture {
             Arc::new(KeyIdentity::load_or_create(temp.path().join("target.key"), None).unwrap());
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::schema::ensure_runtime_schemas(&node).await.unwrap();
-        crate::test_support::install_test_agent(node.as_ref(), identity.did(), "contract-behavior")
-            .await;
+        crate::test_support::install_test_agent(&node, identity.did(), "contract-behavior").await;
         let goal = set_goal(
             &node,
             identity.did(),
@@ -154,7 +152,6 @@ impl Fixture {
             .await
             .unwrap();
         execute(&self.node, &create.graphql_mutation().unwrap()).await;
-        // Historical receipt recovery must not require pending admission.
         execute(&self.node, &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "completed", deadline: "2021-01-01T00:00:01Z" }}) {{ _docID }} }}"#, create.request_id)).await;
     }
     pub async fn other_request(&self, id: &str, date: &str, state: &str) {
@@ -176,11 +173,9 @@ impl Fixture {
         execute(&self.node, &create.graphql_mutation().unwrap()).await;
         execute(&self.node, &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{id}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#)).await;
     }
-    /// Sign Claude accounts A and B in, each with its backend, and put the
-    /// agent's profile on A.
     pub async fn claude_accounts(&self) -> ClaudeAccounts {
         let did = self.identity.did().to_owned();
-        let access = ConfigAccess::Local(self.node.clone());
+        let access = ConfigAccess::local(self.node.clone());
         let preset =
             preset_account_backend(&did, CLAUDE_OAUTH_PROVIDER, None, "Claude".into()).unwrap();
         write_inference_backend_document(&access, &preset)
@@ -222,7 +217,7 @@ impl Fixture {
         }])
         .unwrap();
         access
-            .transact("test.claude_accounts.profile", |txn| {
+            .transact_write("test.claude_accounts.profile", |txn| {
                 let plan = &plan;
                 Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
             })
@@ -237,7 +232,6 @@ impl Fixture {
         }
     }
 
-    /// The agent's context compacts with profile `summ` on `backend`.
     pub async fn compacts_on(&self, access: &ConfigAccess, backend: &str) {
         let did = self.identity.did();
         let documents = [
@@ -266,7 +260,7 @@ impl Fixture {
         )
         .unwrap();
         access
-            .transact("test.compacts_on", |txn| {
+            .transact_write("test.compacts_on", |txn| {
                 let plan = &plan;
                 Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
             })
@@ -282,7 +276,6 @@ impl Fixture {
             .status
     }
 
-    /// The Goal's continuation requests, newest first.
     pub async fn children(&self) -> Vec<String> {
         request_rows(&self.node)
             .await
@@ -296,8 +289,6 @@ impl Fixture {
             .collect()
     }
 
-    /// Fail `request_id` with one failed call of `kind` on `backend` that
-    /// queued, started and ended at `at`.
     pub async fn fail_with_call(
         &self,
         request_id: &str,
@@ -350,8 +341,6 @@ impl Fixture {
             let input = child.input.as_ref().unwrap();
             let queue = input.queue.as_ref().unwrap();
             let continuation = input.goal_continuation.as_ref().unwrap();
-            // Assert concrete lineage independently of prepare_goal_continuation:
-            // sharing its implementation must not hide a producer deletion.
             assert_eq!(child.node_did.as_deref(), Some(self.identity.did()));
             assert_eq!(child.requester_did.as_deref(), Some(self.identity.did()));
             assert_eq!(child.session_id.as_deref(), Some(SESSION));

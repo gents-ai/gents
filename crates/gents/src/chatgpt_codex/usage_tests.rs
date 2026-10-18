@@ -5,7 +5,6 @@ const CODEX_USAGE_HEADERS: &[(&str, &str)] = &[
     ("x-codex-primary-window-minutes", "300"),
 ];
 
-/// A signed-in Codex account for `node_did`, keyed `key` when given.
 async fn seed_codex_account(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
@@ -19,7 +18,7 @@ async fn seed_codex_account(
     )
     .await;
     let mut row = crate::oauth_credential::resolve_oauth_credential(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         node_did,
         CHATGPT_CODEX_PROVIDER,
         crate::oauth_credential::AccountPick::Reference(None),
@@ -36,9 +35,8 @@ async fn seed_codex_account(
     row
 }
 
-/// Usage keys stored for `node_did`, polled until `key` shows or 5 s pass.
 async fn usage_keys_until(node: &Arc<EmbeddedNode>, node_did: &str, key: &str) -> Vec<String> {
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         let response = access
@@ -66,7 +64,7 @@ async fn usage_wiring_codex_client_records_under_its_account_key() {
     use rig::client::CompletionClient;
     use rig::completion::CompletionModel;
     let did = "did:key:z6MkUsageWireCodexA";
-    let node = Arc::new(crate::oauth_credential::test_support::test_node().await);
+    let node = crate::oauth_credential::test_support::test_node().await;
     seed_codex_account(&node, did, Some("acct-key-a")).await;
     let url = crate::provider_http::tests::one_shot_server("200 OK", CODEX_USAGE_HEADERS, "").await;
     let client = build_responses_client(node.clone(), did, None, &url)
@@ -89,7 +87,7 @@ async fn usage_wiring_codex_key_backfill_lands_under_the_key() {
     use rig::client::CompletionClient;
     use rig::completion::CompletionModel;
     let did = "did:key:z6MkUsageWireCodexKey";
-    let node = Arc::new(crate::oauth_credential::test_support::test_node().await);
+    let node = crate::oauth_credential::test_support::test_node().await;
     let mut row = seed_codex_account(&node, did, None).await;
     let url = crate::provider_http::tests::server_for(2, "200 OK", CODEX_USAGE_HEADERS, "").await;
     let client = build_responses_client(node.clone(), did, None, &url)
@@ -129,7 +127,7 @@ async fn usage_wiring_codex_key_backfill_lands_under_the_key() {
         }))
         .unwrap();
     let stored = crate::usage_observation::usage_for_backend(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         did,
         &backend,
     )

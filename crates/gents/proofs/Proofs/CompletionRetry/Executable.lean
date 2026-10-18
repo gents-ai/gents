@@ -139,8 +139,6 @@ theorem provider_stream_malformed_case_still_enters_retraction :
       some (.retractRequired .transport "incomplete content block" 12) := by
   native_decide
 
-/-- A rejected replay never resamples the identical body: it enters the one-shot
-repair (which strips all reasoning) or, once that is spent, exhausts. -/
 theorem reasoning_rejection_cases_repair_once :
     (retryCases.drop 21).map (fun c => c.post.map (·.phase)) =
       [some (.retractRequired .reasoningRejected "invalid thinking signature" 12),

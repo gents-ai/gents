@@ -2,7 +2,6 @@ use super::*;
 use gents_protocol::request_admission::RequestPurpose;
 use gents_protocol::request_input::QueueDelivery;
 
-/// Pending normal requests of one session, in no particular order.
 pub(crate) async fn pending_rows_in_txn(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
@@ -24,7 +23,6 @@ pub(crate) async fn pending_rows_in_txn(
         .context("decode pending session requests")
 }
 
-/// Pending normal requests of one session in native arrival order.
 pub(crate) async fn pending_in_txn(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
@@ -55,7 +53,7 @@ pub(crate) async fn pending_in_txn(
 }
 
 pub(crate) async fn steering_snapshot(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     head: &AgentRequest,
     verifier: &crate::request_admission::AgentRequestAdmissionVerifier,
 ) -> Result<gents_loop::loop_stream::SteeringSnapshot> {
@@ -95,7 +93,7 @@ pub(crate) async fn steering_snapshot(
 }
 
 pub(crate) async fn steering_inputs(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     head: &AgentRequest,
     verifier: &crate::request_admission::AgentRequestAdmissionVerifier,
 ) -> Result<Vec<gents_loop::loop_stream::FoldedPrompt>> {

@@ -38,7 +38,7 @@ pub(super) async fn load_agent_catalog(
     node: &Arc<EmbeddedNode>,
     owner: &str,
 ) -> Result<agent::AgentCatalogView> {
-    ConfigAccess::transact_local(
+    ConfigAccess::transact_local_readonly(
         node,
         Some(::identity::Did::new(owner.to_owned())?),
         "self_config.agent_catalog",
@@ -93,11 +93,6 @@ pub(super) async fn agent_mutate(
     agent_apply(node, owner, args, ceiling, false).await
 }
 
-/// Publish or preview a node-owned agent operation through the canonical
-/// configuration transaction owner. The supplied identity must own the target
-/// node; HTTP access additionally retains its endpoint's DefraDB authentication.
-/// Direct prompt edits require an existing, unshared Context, so they cannot
-/// alter another Agent's instructions or write into the absent-context fallback.
 pub async fn configure_agent(
     access: &ConfigAccess,
     owner: &str,
@@ -121,7 +116,7 @@ async fn agent_apply(
     preview: bool,
 ) -> Result<String> {
     agent_apply_access(
-        &ConfigAccess::Local(node.clone()),
+        &ConfigAccess::local(node.clone()),
         owner,
         args,
         ceiling,
@@ -136,7 +131,7 @@ pub(super) async fn model_agent_preview(
     args: &ConfigureAgentParams,
 ) -> Result<String> {
     match agent_apply_access(
-        &ConfigAccess::Local(core.node_handle()),
+        &ConfigAccess::local(core.node_handle()),
         core.node_did(),
         args,
         core.process_ceiling(),
@@ -162,7 +157,7 @@ pub(super) async fn model_agent_mutate(
         "agent writes require the exact local node identity"
     );
     agent_apply_access(
-        &ConfigAccess::Local(core.node_handle()),
+        &ConfigAccess::local(core.node_handle()),
         core.node_did(),
         args,
         core.process_ceiling(),
@@ -180,22 +175,36 @@ async fn agent_apply_access(
     preview: bool,
     held: Option<&ops::OperatorGrants>,
 ) -> Result<String> {
+    let identity = Some(::identity::Did::new(owner.to_owned())?);
     match access {
-        ConfigAccess::Local(node) => {
-            ConfigAccess::transact_local(
-                node,
-                Some(::identity::Did::new(owner.to_owned())?),
-                "self_config.agent",
-                |txn| Box::pin(agent_apply_in_txn(txn, owner, args, ceiling, preview, held)),
-            )
-            .await
-        }
-        ConfigAccess::Graphql(_) => {
-            access
-                .transact("self_config.agent", |txn| {
+        ConfigAccess::Local(local) => {
+            let node = local.node();
+            if preview {
+                ConfigAccess::transact_local_readonly(node, identity, "self_config.agent", |txn| {
                     Box::pin(agent_apply_in_txn(txn, owner, args, ceiling, preview, held))
                 })
                 .await
+            } else {
+                ConfigAccess::transact_local_write(node, identity, "self_config.agent", |txn| {
+                    Box::pin(agent_apply_in_txn(txn, owner, args, ceiling, preview, held))
+                })
+                .await
+            }
+        }
+        ConfigAccess::Graphql(_) => {
+            if preview {
+                access
+                    .transact_readonly("self_config.agent", |txn| {
+                        Box::pin(agent_apply_in_txn(txn, owner, args, ceiling, preview, held))
+                    })
+                    .await
+            } else {
+                access
+                    .transact_write("self_config.agent", |txn| {
+                        Box::pin(agent_apply_in_txn(txn, owner, args, ceiling, preview, held))
+                    })
+                    .await
+            }
         }
     }
 }
@@ -311,7 +320,6 @@ async fn agent_apply_in_txn(
             if args.description.is_present() {
                 context.description = args.description.owned_value();
             }
-            // Clone tool grants into a distinct document, so later edits cannot change the source.
             let mut tools: Option<Tools> = match context.tools_id.as_deref() {
                 Some(id) => Some(serde_json::from_value(load(crate::Collection::Tools, id)?)?),
                 None => None,
@@ -378,9 +386,6 @@ async fn agent_apply_in_txn(
                     ceiling.root.as_deref(),
                 )
                 .await?;
-                // A cloned source's root is a stored grant the invoker must
-                // already hold; an explicit --root authors a fresh grant and
-                // is strictly admitted.
                 let stored_root = if args.root.is_present() {
                     None
                 } else {

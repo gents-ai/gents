@@ -1,10 +1,3 @@
-//! The agents tools. `agent_new` and `agent_message` start or continue
-//! another agent's session; both materialize one request through the
-//! session-message writer in `lifecycle::materialize`, which records the
-//! calling edge and the causal hop. Every agent is an ordinary agent addressed
-//! directly: the started session runs under its own behavior, and its result
-//! reaches the caller only as a background completion message.
-
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
@@ -16,6 +9,11 @@ use crate::graphql::escape_graphql_string;
 use crate::lifecycle::{SessionMessageCause, SessionMessageTarget};
 use crate::session_origin::SessionScope;
 use crate::tool_surface::AgentToolConfig;
+
+mod discovery;
+pub(crate) use discovery::{agent_session_list, AgentSessionListArgs};
+mod inspection;
+pub(crate) use inspection::{agent_session_read, AgentSessionReadArgs};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -45,7 +43,6 @@ pub(crate) struct AgentMessageArgs {
     pub message: Option<String>,
     #[serde(default)]
     pub task: Option<TaskBody>,
-    /// Request interruption of the current turn before queueing the message.
     #[serde(default)]
     pub interrupt: bool,
 }
@@ -91,13 +88,9 @@ impl AgentMessageArgs {
     }
 }
 
-/// How an `agent_message` reached its session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Delivery {
-    /// An idle session received a new request.
     Request,
-    /// A busy session received an agent-authored steering continuation
-    /// queued after its active request.
     Steering,
 }
 
@@ -110,17 +103,13 @@ impl Delivery {
     }
 }
 
-/// A message body rendered for its target: the content, and the Goal a Task
-/// declares, if any.
 pub(crate) struct RenderedBody {
     pub content: String,
     pub goal: Option<(String, Option<i64>)>,
 }
 
-/// The caller's `Tools.agents` group and its resolved targets, read through
-/// the request admission configuration walk. Absent tools leave it disabled.
 pub(crate) async fn load_caller_session_tools(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
 ) -> Result<AgentToolConfig> {
@@ -132,11 +121,8 @@ pub(crate) async fn load_caller_session_tools(
         .map(Option::unwrap_or_default)
 }
 
-/// Render a message body. A Task is the caller's own configuration: its
-/// prompt template is rendered with `task.input` as `args`, and its Goal
-/// declaration, if any, is rendered for the target session.
 pub(crate) async fn render_body(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     caller_node_did: &str,
     target_agent_id: &str,
     target_session_id: &str,
@@ -152,7 +138,7 @@ pub(crate) async fn render_body(
         MessageBody::Task(task) => task,
     };
     let task_id = task.task_id.trim();
-    let loaded = crate::config_client::ConfigAccess::transact_local(
+    let loaded = crate::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
         "session_message.load_task",
@@ -209,10 +195,6 @@ pub(crate) async fn render_body(
     Ok(Ok(RenderedBody { content, goal }))
 }
 
-/// Resolve the session `agent_message` addresses. The caller may address a
-/// session in its own requester scope: one of its own agent's sessions, or a
-/// session an `agent_new` started on a target that is still in its allowlist.
-/// ACP decides whether the resulting write is accepted.
 pub(crate) async fn resolve_send_target(
     node: &Arc<EmbeddedNode>,
     caller_node_did: &str,
@@ -220,7 +202,7 @@ pub(crate) async fn resolve_send_target(
     session_id: &str,
 ) -> Result<Option<SessionMessageTarget>> {
     let Some(session) = crate::session_origin::load_session(
-        &ConfigAccess::Local(node.clone()),
+        &ConfigAccess::local(node.clone()),
         session_id,
         Some(caller_node_did),
     )
@@ -228,21 +210,29 @@ pub(crate) async fn resolve_send_target(
     else {
         return Ok(None);
     };
-    let own = session.node_did == caller_node_did;
-    let started = session
-        .provenance
-        .as_ref()
-        .is_some_and(|provenance| provenance.parent_request_doc_id.is_some())
-        && tools.allows(&session.node_did, &session.agent_id);
-    Ok((own || started).then(|| SessionMessageTarget {
-        node_did: session.node_did,
-        agent_id: session.agent_id,
-        session_id: session.session_id,
-    }))
+    Ok(
+        session_target_allowed(&session, caller_node_did, tools).then(|| SessionMessageTarget {
+            node_did: session.node_did,
+            agent_id: session.agent_id,
+            session_id: session.session_id,
+        }),
+    )
 }
 
-/// The scope of a session [`resolve_send_target`] resolved: its requester is
-/// always the calling principal.
+fn session_target_allowed(
+    session: &gents_protocol::session::AgentSession,
+    caller_node_did: &str,
+    tools: &AgentToolConfig,
+) -> bool {
+    session.requester_did.as_deref() == Some(caller_node_did)
+        && (session.node_did == caller_node_did
+            || (session
+                .provenance
+                .as_ref()
+                .is_some_and(|origin| origin.parent_request_doc_id.is_some())
+                && tools.allows(&session.node_did, &session.agent_id)))
+}
+
 pub(crate) fn target_scope(caller_node_did: &str, target: &SessionMessageTarget) -> SessionScope {
     SessionScope {
         node_did: target.node_did.clone(),
@@ -263,8 +253,6 @@ enum PlannedWrite {
     },
 }
 
-/// A session-message request and how it will be delivered, decided before
-/// the tool row starts running.
 pub(crate) struct Plan {
     session_id: String,
     hop: u32,
@@ -272,7 +260,6 @@ pub(crate) struct Plan {
 }
 
 impl Plan {
-    /// The causal hop the planned request or continuation is written with.
     pub(crate) fn hop(&self) -> u32 {
         self.hop
     }
@@ -285,13 +272,8 @@ impl Plan {
     }
 }
 
-/// Plan one session-message request. An idle or remote session gets a new
-/// request; a busy local session gets a steering append queued after its
-/// active request, unless the caller interrupts that request first, in which
-/// case the message is a new request. A Task Goal is set on a local idle target session with its
-/// request in one transaction.
 pub(crate) async fn plan(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     cause: &SessionMessageCause,
     target: &SessionMessageTarget,
     rendered: RenderedBody,
@@ -325,8 +307,6 @@ pub(crate) async fn plan(
     } else {
         None
     };
-    // Lean `CausalHop.nextHop` of a cross-session cause: past the caller, and
-    // never below the addressed session's current hop.
     let own_hop = match &active {
         Some(active) => active.request_hop.max(
             crate::session::load_session_current_hop(node, &target.node_did, &target.session_id)
@@ -372,8 +352,6 @@ pub(crate) async fn plan(
             token_budget,
         }
     } else {
-        // A busy session is steered: the message is queued after its active
-        // request, which orders the queue and is not the message's origin.
         let steering = active.filter(|_| !interrupt);
         let queue = steering
             .as_ref()
@@ -413,9 +391,6 @@ pub(crate) async fn plan(
     }))
 }
 
-/// The receipt a session-message row answers its invocation with. It names
-/// the exact request the call caused; settlement and cancellation read that
-/// request's document from here.
 #[derive(Debug, Clone, serde::Serialize, Deserialize)]
 pub(crate) struct SessionMessageReceipt {
     pub ok: bool,
@@ -429,14 +404,6 @@ pub(crate) struct SessionMessageReceipt {
     pub status: String,
 }
 
-/// Start the pending row, persist its planned request and publish the
-/// receipt naming that request, all in one transaction: a running
-/// session-message row always has a receipt and a caused request.
-///
-/// An embedded commit can be durable although its result was lost, so a
-/// failed commit is decided by the durable row: a running row with its
-/// receipt was delivered, and a pending row was not. Any other observation is
-/// an error, and the row is left to recovery.
 pub(crate) async fn commit(
     node: &Arc<EmbeddedNode>,
     cause: &SessionMessageCause,
@@ -479,7 +446,7 @@ pub(crate) async fn commit(
 }
 
 async fn commit_once(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     cause: &SessionMessageCause,
     lifecycle: &mut crate::tool_call_lifecycle::ToolCallLifecycle,
     plan: Plan,
@@ -507,7 +474,7 @@ async fn commit_once(
             let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
             let (mutation, binding, create, receipt_for) =
                 (&mutation, &binding, &create, &receipt_for);
-            crate::config_client::ConfigAccess::transact_local(
+            crate::config_client::ConfigAccess::transact_local_write(
                 node,
                 None,
                 "session_message.commit_request",
@@ -543,7 +510,7 @@ async fn commit_once(
                 .context("caller DID is not ACP-addressable")?;
             let (create, objective, session_id, binding, receipt_for) =
                 (&create, &objective, &session_id, &binding, &receipt_for);
-            crate::config_client::ConfigAccess::transact_local(
+            crate::config_client::ConfigAccess::transact_local_write(
                 node,
                 Some(actor),
                 "session_message.commit_goal",
@@ -578,9 +545,6 @@ async fn commit_once(
     Ok(receipt)
 }
 
-/// The hop was planned from the target session's current hop before the
-/// transaction; a higher request committed since then would leave the message
-/// below that session's hop, so the commit refuses it instead.
 async fn ensure_planned_hop_current(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     create: &gents_protocol::request_admission::AgentRequestCreate,
@@ -604,8 +568,6 @@ async fn start_dispatch(
         .context("session-message row was altered or is no longer pending")
 }
 
-/// The receipt a session-message row published: `Ok(None)` when the row has
-/// no invocation reply, or its reply is not a session-message receipt.
 pub(crate) async fn load_receipt(
     node: &std::sync::Arc<EmbeddedNode>,
     tool_call_doc_id: &str,
@@ -614,7 +576,7 @@ pub(crate) async fn load_receipt(
     requester_did: Option<&str>,
 ) -> Result<Option<SessionMessageReceipt>> {
     let read = crate::tool_call_lifecycle::query::load_tool_call_read(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         tool_call_doc_id,
         node_did,
         session_id,
@@ -630,21 +592,12 @@ pub(crate) async fn load_receipt(
         .filter(|receipt| receipt.ok))
 }
 
-/// What a session-message row can observe of the one request it caused.
 pub(crate) enum CausedObservation {
-    /// The receipt names a request carrying the row's lineage.
     Bound(gents_protocol::row::AgentRequestRow),
-    /// The named request is not visible here yet: a peer has not replicated
-    /// it back (Lean premise on `SessionMessageRecoveryCause`).
     NotVisible,
-    /// Lean `SessionMessageRecoveryCause.causedRequestUnbound`: the receipt
-    /// is missing, or names a request that fails the row's lineage.
     Unbound(&'static str),
 }
 
-/// The one request a session-message row caused, read through the row's
-/// receipt and checked against its lineage: a session-message request, new or
-/// steering, carrying the row's full calling edge under this requester.
 pub(crate) async fn observe_caused_request(
     node: &std::sync::Arc<EmbeddedNode>,
     lifecycle: &crate::tool_call_lifecycle::ToolCallLifecycle,
@@ -707,8 +660,6 @@ pub(crate) async fn observe_caused_request(
     Ok(CausedObservation::Bound(caused))
 }
 
-/// Lean `DurableLineage.interruptAllowed`: in 0.20 an agent may interrupt
-/// another session only when the caller's session started it.
 pub fn agent_interrupt_allowed(
     caller_session: &str,
     target_session: &str,
@@ -717,15 +668,13 @@ pub fn agent_interrupt_allowed(
     target_session != caller_session && target_origin_cause == Some(caller_session)
 }
 
-/// Refusal reason when the calling session may not interrupt `target`
-/// (Lean `DurableLineage.interruptAllowed`, through the stored provenance).
 pub async fn interrupt_refusal(
     node: &Arc<EmbeddedNode>,
     caller: &SessionScope,
     target: &SessionScope,
 ) -> Result<Option<String>> {
     let started_by =
-        crate::session_origin::started_by(&ConfigAccess::Local(node.clone()), target).await?;
+        crate::session_origin::started_by(&ConfigAccess::local(node.clone()), target).await?;
     let cause = started_by
         .filter(|link| link.scope == *caller)
         .map(|link| link.scope.session_id);
@@ -735,10 +684,8 @@ pub async fn interrupt_refusal(
     )
 }
 
-/// Stop `target`'s current turn through the single-session interrupt owner.
-/// Returns the interrupted request id, or `None` when the session is idle.
 pub async fn interrupt_session(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     target: &SessionScope,
 ) -> Result<Option<String>> {
     let Some(active) = crate::interrupt::active_session_request(
@@ -764,72 +711,11 @@ pub async fn interrupt_session(
     Ok(Some(active.request_id))
 }
 
-/// A session `agent_list` reports and how the calling session relates to it.
-#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
-pub(crate) struct ReachableSession {
-    pub session_id: String,
-    pub node_did: String,
-    pub relationship: &'static str,
-    pub status: String,
-    pub can_message: bool,
-    pub can_interrupt: bool,
-}
-
-/// `agent_list`: the agents the caller may start and the sessions linked to
-/// the calling session (`gents::session_origin::lineage`).
 pub(crate) async fn agent_list(
-    node: &Arc<EmbeddedNode>,
-    caller: &crate::AgentRequest,
+    _node: &Arc<EmbeddedNode>,
+    _caller: &crate::AgentRequest,
     tools: &AgentToolConfig,
 ) -> Result<serde_json::Value> {
-    let own = SessionScope::of_request(caller);
-    let lineage = crate::session_origin::lineage(&ConfigAccess::Local(node.clone()), &own).await?;
-    let linked = lineage
-        .started_by
-        .into_iter()
-        .map(|link| (link, "started_you"))
-        .chain(
-            lineage
-                .started
-                .into_iter()
-                .map(|link| (link, "started_by_you")),
-        )
-        .chain(lineage.sent.into_iter().map(|link| (link, "messaged")))
-        .chain(
-            lineage
-                .received
-                .into_iter()
-                .map(|link| (link, "messaged_you")),
-        );
-    let mut sessions = Vec::new();
-    for (link, relationship) in linked {
-        let scope = link.scope;
-        if sessions
-            .iter()
-            .any(|entry: &ReachableSession| entry.session_id == scope.session_id)
-        {
-            continue;
-        }
-        let can_message = scope.requester_did.as_deref() == Some(caller.node_did.as_str())
-            && resolve_send_target(node, &caller.node_did, tools, &scope.session_id)
-                .await?
-                .is_some();
-        let active = crate::interrupt::active_session_request(
-            node,
-            &scope.session_id,
-            &scope.node_did,
-            scope.requester_did.as_deref(),
-        )
-        .await?;
-        sessions.push(ReachableSession {
-            session_id: scope.session_id,
-            node_did: scope.node_did,
-            relationship,
-            status: if active.is_some() { "busy" } else { "idle" }.to_owned(),
-            can_message,
-            can_interrupt: relationship == "started_by_you",
-        });
-    }
     let agents = tools
         .targets
         .iter()
@@ -842,23 +728,16 @@ pub(crate) async fn agent_list(
             })
         })
         .collect::<Vec<_>>();
-    Ok(serde_json::json!({ "ok": true, "agents": agents, "sessions": sessions }))
+    Ok(serde_json::json!({ "ok": true, "agents": agents }))
 }
 
-/// What a kill did (Lean `Recovery.KillAction`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum KillOutcome {
-    /// The caused request had already ended; the row settled from it.
     Settled,
-    /// The local caused request was interrupted; its terminal settles the row.
     Interrupting { request_id: String },
-    /// The row was cancelled now, with a cancelled completion notification.
     Cancelled,
 }
 
-/// `cancel_process` and the operator kill on a running session-message row
-/// (Lean `Recovery.killAction`). A kill never waits on a peer or on a request
-/// it cannot name: those rows are cancelled directly.
 pub(crate) async fn kill(
     node: &std::sync::Arc<EmbeddedNode>,
     lifecycle: &mut crate::tool_call_lifecycle::ToolCallLifecycle,
@@ -918,7 +797,7 @@ pub(crate) async fn kill(
     {
         let calling_request_id = calling_request_id(node, lifecycle).await?;
         crate::background_completion::append_background_tool_completion(
-            node.as_ref(),
+            &node,
             lifecycle.session_id(),
             &calling_request_id,
             lifecycle
@@ -935,8 +814,6 @@ pub(crate) async fn kill(
     Ok(KillOutcome::Cancelled)
 }
 
-/// The logical id of the request that made a session-message call, read from
-/// its physical binding when the row was not loaded with it.
 pub(crate) async fn calling_request_id(
     node: &EmbeddedNode,
     lifecycle: &crate::tool_call_lifecycle::ToolCallLifecycle,
@@ -978,11 +855,6 @@ mod hop_tests {
         }
     }
 
-    /// Lean `DurableLineage.sessionMessageWrite`: a message into an idle
-    /// session is a new request and one into a busy session steers it; both
-    /// climb past their caller without lowering the session's hop, and name
-    /// the calling request and tool call. Steering is queued after the active
-    /// request, which is never its origin.
     #[tokio::test]
     async fn generated_session_message_writes_carry_the_calling_edge() {
         let message = published_session_message(PublishedAdmissionOptions {
@@ -1074,7 +946,7 @@ mod agent_tools_tests {
     };
     use crate::tool_call_lifecycle::AwaitMode;
 
-    async fn started(
+    pub(super) async fn started(
         name: &str,
     ) -> (
         PublishedSessionMessage,
@@ -1108,11 +980,23 @@ mod agent_tools_tests {
         (message, caller, caused)
     }
 
-    /// The session a claim of `caused` materializes, with its provenance.
-    async fn materialize_session(node: &EmbeddedNode, caused: &crate::AgentRequest) {
+    async fn materialize_session(
+        node: &std::sync::Arc<EmbeddedNode>,
+        caused: &crate::AgentRequest,
+    ) {
+        materialize_session_at(node, caused, &chrono::Utc::now().to_rfc3339()).await;
+    }
+
+    async fn materialize_session_at(
+        node: &std::sync::Arc<EmbeddedNode>,
+        caused: &crate::AgentRequest,
+        created_at: &str,
+    ) {
         let caused = caused.clone();
-        ConfigAccess::transact_local(node, None, "test.materialize_session", move |txn| {
+        let created_at = created_at.to_owned();
+        ConfigAccess::transact_local_write(node, None, "test.materialize_session", move |txn| {
             let caused = caused.clone();
+            let created_at = created_at.clone();
             Box::pin(async move {
                 crate::session::ensure_session_in_txn(
                     txn,
@@ -1128,7 +1012,7 @@ mod agent_tools_tests {
                             parent_request_doc_id: Some(parent),
                             ..Default::default()
                         }),
-                    &chrono::Utc::now().to_rfc3339(),
+                    &created_at,
                 )
                 .await
             })
@@ -1147,8 +1031,6 @@ mod agent_tools_tests {
         assert!(!response.has_errors(), "{:?}", response.errors);
     }
 
-    /// Lean `DurableLineage.interruptAllowed` through `gents::session_origin`:
-    /// only the session that started a session may interrupt it.
     #[tokio::test]
     async fn only_the_starting_session_may_interrupt() {
         let (message, caller, caused) = started("agent-interrupt-permission").await;
@@ -1167,7 +1049,6 @@ mod agent_tools_tests {
             .await
             .unwrap()
             .is_some());
-        // The started session may not interrupt the session that started it.
         assert!(interrupt_refusal(&node, &target, &caller)
             .await
             .unwrap()
@@ -1176,8 +1057,6 @@ mod agent_tools_tests {
         std::fs::remove_dir_all(&message.admission.path).unwrap();
     }
 
-    /// `agent_interrupt` stops the busy session's turn; `agent_message` with
-    /// `interrupt` plans a new request rather than steering.
     #[tokio::test]
     async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
         let (message, caller, caused) = started("agent-interrupt-steer").await;
@@ -1231,10 +1110,8 @@ mod agent_tools_tests {
         std::fs::remove_dir_all(&message.admission.path).unwrap();
     }
 
-    /// `agent_list` reports the allowlist and each reachable session with its
-    /// relationship to the calling session.
     #[tokio::test]
-    async fn agent_list_reports_agents_and_reachable_sessions() {
+    async fn agent_lists_separate_targets_from_messageable_sessions() {
         let (message, caller, caused) = started("agent-list").await;
         let node = message.admission.node.clone();
         let tools = AgentToolConfig {
@@ -1252,6 +1129,10 @@ mod agent_tools_tests {
         let listed = agent_list(&node, &caller, &tools).await.unwrap();
         assert_eq!(listed["agents"][0]["agent"], "worker");
         assert_eq!(listed["agents"][0]["agent_id"], caused.agent_id);
+        assert!(listed.get("sessions").is_none());
+        let listed = agent_session_list(&node, &caller, &tools, &AgentSessionListArgs::default())
+            .await
+            .unwrap();
         let sessions = listed["sessions"].as_array().unwrap();
         assert_eq!(sessions.len(), 1, "{listed}");
         assert_eq!(sessions[0]["session_id"], caused.session_id);
@@ -1260,16 +1141,319 @@ mod agent_tools_tests {
         assert_eq!(sessions[0]["can_interrupt"], true);
         assert_eq!(sessions[0]["status"], "idle");
 
-        let from_child = agent_list(&node, &caused, &tools).await.unwrap();
+        let from_child =
+            agent_session_list(&node, &caused, &tools, &AgentSessionListArgs::default())
+                .await
+                .unwrap();
         let sessions = from_child["sessions"].as_array().unwrap();
-        assert!(
-            sessions
-                .iter()
-                .any(|session| session["session_id"] == caller.session_id
-                    && session["relationship"] == "started_you"
-                    && session["can_interrupt"] == false),
-            "{from_child}"
+        for session in sessions {
+            assert!(resolve_send_target(
+                &node,
+                &caused.node_did,
+                &tools,
+                session["session_id"].as_str().unwrap()
+            )
+            .await
+            .unwrap()
+            .is_some());
+        }
+        node.shutdown().await;
+        std::fs::remove_dir_all(&message.admission.path).unwrap();
+    }
+
+    #[test]
+    fn session_target_authority_matches_lean_owner() {
+        use gents_protocol::session::{AgentSession, SessionProvenance};
+        let cases = &crate::lean_vocab_test::lean_causal_hop_contract().session_target_cases;
+        assert_eq!(cases.len(), 16);
+        for case in cases {
+            let session = AgentSession {
+                session_id: "worker-session".to_owned(),
+                node_did: if case.same_node { "caller" } else { "peer" }.to_owned(),
+                requester_did: Some(
+                    if case.same_requester {
+                        "caller"
+                    } else {
+                        "other"
+                    }
+                    .to_owned(),
+                ),
+                agent_id: "worker".to_owned(),
+                created_at: "2026-10-14T00:00:00Z".to_owned(),
+                closed_at: None,
+                title: None,
+                tags: Vec::new(),
+                observation: None,
+                provenance: case.caused.then(|| SessionProvenance {
+                    parent_request_doc_id: Some("parent".to_owned()),
+                    ..Default::default()
+                }),
+            };
+            let tools = AgentToolConfig {
+                enabled: true,
+                targets: if case.allowed_target {
+                    vec![crate::document_config::AgentTargetDocument {
+                        target_id: "worker".to_owned(),
+                        node_did: "caller".to_owned(),
+                        target_node_did: session.node_did.clone(),
+                        agent_id: "worker".to_owned(),
+                        name: "worker".to_owned(),
+                        description: None,
+                        tags: Vec::new(),
+                    }]
+                } else {
+                    Vec::new()
+                },
+            };
+            assert_eq!(
+                session_target_allowed(&session, "caller", &tools),
+                case.expected_allowed,
+                "{case:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn session_listing_pages_by_logical_labels_and_compares_timestamp_instants() {
+        let (message, caller, caused) = started("session-list-order-and-time").await;
+        let node = message.admission.node.clone();
+        for label in ["a-worker", "z-worker", "m-worker"] {
+            let mut candidate = caused.clone();
+            candidate.session_id = label.to_owned();
+            candidate.caused_by_parent_request_doc_id = None;
+            materialize_session_at(&node, &candidate, "2026-10-13T00:00:00Z").await;
+        }
+        let tools = AgentToolConfig {
+            enabled: true,
+            targets: Vec::new(),
+        };
+        let mut args: AgentSessionListArgs = serde_json::from_value(serde_json::json!({
+            "limit": 1, "filter": {"relationship": "same_node"}
+        }))
+        .unwrap();
+        let mut ordered = Vec::new();
+        loop {
+            let page = agent_session_list(&node, &caller, &tools, &args)
+                .await
+                .unwrap();
+            ordered.extend(
+                page["sessions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|row| row["session_id"].as_str().unwrap().to_owned()),
+            );
+            args.cursor = page["next_cursor"].as_str().map(str::to_owned);
+            if args.cursor.is_none() {
+                break;
+            }
+        }
+        assert_eq!(ordered, ["z-worker", "m-worker", "a-worker"]);
+        for field in ["created_after", "updated_after"] {
+            for (time, included) in [
+                ("2026-10-12T23:59:59Z", true),
+                ("2026-10-13T00:59:59+01:00", true),
+                ("2026-10-13T00:00:00Z", false),
+                ("2026-10-13T00:00:00+00:00", false),
+                ("2026-10-13T00:00:00.001Z", false),
+                ("2026-10-12T19:00:01-05:00", false),
+            ] {
+                let mut filter = serde_json::json!({"relationship": "same_node"});
+                filter[field] = serde_json::json!(time);
+                let args = serde_json::from_value(serde_json::json!({"filter": filter})).unwrap();
+                let page = agent_session_list(&node, &caller, &tools, &args)
+                    .await
+                    .unwrap();
+                let ids = page["sessions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|row| row["session_id"].as_str().unwrap())
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    ids,
+                    if included {
+                        vec!["z-worker", "m-worker", "a-worker"]
+                    } else {
+                        Vec::new()
+                    },
+                    "{field}: {time}"
+                );
+            }
+        }
+        node.shutdown().await;
+        std::fs::remove_dir_all(&message.admission.path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
+        let (message, mut caller_owner) =
+            crate::tool_call_lifecycle::admission_fixture::published_session_message_with_owner(
+                PublishedAdmissionOptions {
+                    name: "agent-session-discovery".to_owned(),
+                    real_identity: true,
+                    await_mode: AwaitMode::Background,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let caller = caller_owner.request().clone();
+        let node = message.admission.node.clone();
+        let caused = crate::request_binding::load_agent_request_by_doc_id(
+            &node,
+            &message.caused_request_doc_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        materialize_session(&node, &caused).await;
+        let tools = AgentToolConfig {
+            enabled: true,
+            targets: Vec::new(),
+        };
+        let mut candidates = Vec::new();
+        for (name, owner, requester, parent) in [
+            (
+                "trigger-worker",
+                caller.node_did.as_str(),
+                caller.node_did.as_str(),
+                None,
+            ),
+            ("other-requester", caller.node_did.as_str(), "other", None),
+            ("remote-root", "peer", caller.node_did.as_str(), None),
+            (
+                "remote-started",
+                "peer",
+                caller.node_did.as_str(),
+                Some(caller.doc_id.clone()),
+            ),
+        ] {
+            let mut candidate = caused.clone();
+            candidate.session_id = name.to_owned();
+            candidate.node_did = owner.to_owned();
+            candidate.requester_did = Some(requester.to_owned());
+            candidate.caused_by_parent_request_doc_id = parent;
+            materialize_session(&node, &candidate).await;
+            candidates.push(candidate.session_id);
+        }
+        candidates.push(caused.session_id.clone());
+        let mut args = AgentSessionListArgs {
+            limit: Some(1),
+            ..Default::default()
+        };
+        let mut listed = std::collections::BTreeSet::new();
+        loop {
+            let page = agent_session_list(&node, &caller, &tools, &args)
+                .await
+                .unwrap();
+            for row in page["sessions"].as_array().unwrap() {
+                assert_eq!(row["can_message"], true);
+                assert!(
+                    listed.insert(row["session_id"].as_str().unwrap().to_owned()),
+                    "duplicate paged session"
+                );
+            }
+            args.cursor = page["next_cursor"].as_str().map(ToOwned::to_owned);
+            if args.cursor.is_none() {
+                break;
+            }
+        }
+        assert!(listed.contains("trigger-worker"));
+        for id in candidates {
+            assert_eq!(
+                listed.contains(&id),
+                resolve_send_target(&node, &caller.node_did, &tools, &id)
+                    .await
+                    .unwrap()
+                    .is_some(),
+                "{id}"
+            );
+        }
+        let all = agent_session_list(&node, &caller, &tools, &AgentSessionListArgs::default())
+            .await
+            .unwrap();
+        let stale = agent_session_list(
+            &node,
+            &caller,
+            &tools,
+            &AgentSessionListArgs {
+                cursor: Some("stale cursor".to_owned()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(all, stale);
+        let identity =
+            crate::KeyIdentity::load_or_create(message.admission.path.join("test-agent.key"), None)
+                .unwrap();
+        let mut worker = crate::tool_call_lifecycle::admission_fixture::claimed_signed_request_with_trigger_correlation(
+            &node, "trigger-worker-request", "correlated-worker", &identity, None,
+            Some("shard-assignment"), Some("R3a"),
+        ).await;
+        let filtered = agent_session_list(&node, &caller, &tools, &serde_json::from_value(serde_json::json!({"filter": {"caused_by_trigger_id": "shard-assignment", "caused_by_correlation": "R3a", "status": "busy"}})).unwrap()).await.unwrap();
+        assert_eq!(filtered["sessions"].as_array().unwrap().len(), 1);
+        assert_eq!(filtered["sessions"][0]["session_id"], "correlated-worker");
+        assert_eq!(filtered["sessions"][0]["relationship"], "same_node");
+        assert_eq!(
+            filtered["sessions"][0]["request_id"],
+            worker.request().request_id
         );
+        assert_eq!(filtered["sessions"][0]["lifecycle_state"], "claimed");
+        assert_eq!(filtered["sessions"][0]["can_interrupt"], false);
+        let target = resolve_send_target(&node, &caller.node_did, &tools, "correlated-worker")
+            .await
+            .unwrap()
+            .unwrap();
+        let mut send_call = crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request(
+            node.clone(), &mut caller_owner, &caller.node_did, 1, crate::toolset::AGENT_MESSAGE_TOOL_NAME, "message-trigger-worker",
+            serde_json::json!({"session_id": "correlated-worker", "message": "continue shard R3a"}), AwaitMode::Background, false,
+        ).await.unwrap();
+        let cause = crate::lifecycle::SessionMessageCause {
+            caller_node_did: caller.node_did.clone(),
+            caller_request_id: caller.request_id.clone(),
+            caller_request_doc_id: caller.doc_id.clone(),
+            caller_hop: caller.request_hop,
+            tool_call_id: send_call.tool_call_id().to_owned(),
+            tool_call_doc_id: send_call.doc_id().unwrap().to_owned(),
+            correlation: None,
+        };
+        let message_plan = plan(
+            &node,
+            &cause,
+            &target,
+            RenderedBody {
+                content: "continue shard R3a".to_owned(),
+                goal: None,
+            },
+            None,
+            false,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(message_plan.delivery(), Delivery::Steering);
+        let delivered = commit(&node, &cause, &mut send_call, message_plan, true)
+            .await
+            .unwrap();
+        assert_eq!(delivered.session_id, "correlated-worker");
+        assert_eq!(delivered.delivery.as_deref(), Some("steering"));
+        let writer = crate::streaming::DefraStreamWriter::new(
+            node.clone(),
+            &caller.node_did,
+            std::time::Duration::ZERO,
+        );
+        worker.begin_owned_execution(&writer).await.unwrap();
+        worker
+            .terminalize_owned(
+                crate::lifecycle::RequestTerminalOutcome::Interrupted,
+                gents_protocol::output::TerminalOutput::NoMessage,
+                None,
+            )
+            .await
+            .unwrap();
+        drop(caller_owner);
         node.shutdown().await;
         std::fs::remove_dir_all(&message.admission.path).unwrap();
     }

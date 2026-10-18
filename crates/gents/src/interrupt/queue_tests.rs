@@ -39,8 +39,8 @@ async fn wait_http_ready(access: &ConfigAccess) {
     .expect("real embedded HTTP GraphQL endpoint must become ready");
 }
 
-async fn insert_request(node: &EmbeddedNode, input: Value) -> String {
-    ConfigAccess::transact_local(node, None, "test.interrupt_queue.insert", |txn| {
+async fn insert_request(node: &Arc<EmbeddedNode>, input: Value) -> String {
+    ConfigAccess::transact_local_write(node, None, "test.interrupt_queue.insert", |txn| {
         let input = input.clone();
         Box::pin(async move {
             let result = txn
@@ -101,8 +101,6 @@ async fn fixture_with_http(
     crate::ensure_runtime_schemas(&node).await.unwrap();
     crate::test_support::install_test_agent(&node, &did, BEHAVIOR).await;
     let session = case.session_id.to_string();
-    // Runtime-signed background wakes use the signing DID as requester. The
-    // generated agent/requester identity pair maps to that same native DID.
     crate::session::ensure_session_with_agent_id_and_requester_did(
         &node,
         &session,
@@ -158,7 +156,7 @@ async fn fixture_with_http(
 }
 
 async fn enqueue_generated_wake(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     parent: &AgentRequest,
     case: &LeanInterruptQueueCase,
     entry: &LeanInterruptQueueEntry,
@@ -201,7 +199,7 @@ async fn enqueue_generated_wake(
 }
 
 async fn insert_generated_pending(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     parent: &AgentRequest,
     entry: &LeanInterruptQueueEntry,
     source: QueueSource,
@@ -317,7 +315,7 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
                     wait_http_ready(&access).await;
                     access
                 }
-                None => ConfigAccess::Local(node.clone()),
+                None => ConfigAccess::local(node.clone()),
             };
             let mut bound: HashMap<u64, String> = HashMap::new();
             let mut notification_bindings = Vec::new();
@@ -545,7 +543,7 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
         let expected_drained = case.expected.terminal.len();
         let interrupt = tokio::spawn(async move {
             access
-                .transact("test.http_interrupt_overlap", |txn| {
+                .transact_write("test.http_interrupt_overlap", |txn| {
                     let reached = Arc::clone(&reached_in);
                     let release = Arc::clone(&release_in);
                     let paused = Arc::clone(&paused_in);

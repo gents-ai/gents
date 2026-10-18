@@ -25,13 +25,9 @@ async fn existing_notification(
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query parent canonical notification key {message_key} failed: {:?}",
-            response.errors
-        );
-    }
+    let response =
+        crate::graphql::graphql_with_transaction_retry(node, &query, "existing_notification")
+            .await?;
     let rows = crate::graphql::rows::<serde_json::Value>(&response, "AgentMessage")?;
     anyhow::ensure!(
         rows.len() <= 1,

@@ -58,8 +58,6 @@ theorem cases_replay : ∀ c ∈ cases,
     (OperatorBaseFreeze.execute c.before c.evidence).1.workspace.state = c.expectedState ∧
     (OperatorBaseFreeze.execute c.before c.evidence).2 = c.disposition := by decide
 
-/-- A frozen operator base creates no writer receipt, so the existing integration
-owner still rejects it. No synthetic producing request is manufactured. -/
 theorem frozen_base_not_writer_integrable :
     (Workspace.PathCapability.execute
       (OperatorBaseFreeze.execute ready evidence).1 .integrate

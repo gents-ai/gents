@@ -25,8 +25,6 @@ theorem no_escalation
     (b : Agent) (p : Permission) :
     canonicalDecide g b p = g.granted b.node p := rfl
 
-/-- Node and label together identify one agent; a shared label alone
-never determines a node or a permission decision. -/
 theorem scoped_agent_key_unique
     (w : World) (hw : w.WellFormed) (b₁ b₂ : Agent)
     (h₁ : b₁ ∈ w.agents) (h₂ : b₂ ∈ w.agents)

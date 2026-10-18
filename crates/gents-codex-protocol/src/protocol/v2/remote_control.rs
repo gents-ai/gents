@@ -1,7 +1,6 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-/// Current remote-control connection status and remote identity exposed to clients.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteControlStatusChangedNotification {

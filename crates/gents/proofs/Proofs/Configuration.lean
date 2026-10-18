@@ -49,18 +49,11 @@ inductive ReasoningEffort where
   | none | minimal | low | medium | high | xhigh | max | ultra
   deriving DecidableEq, Repr
 
-/-! ## Owners and install scope -/
-
-/--
-Filling install scope: an omitted owner is filled from the install scope; an
-explicit owner must match or installation fails. No rewriting of foreign ids.
--/
 def fillOwner (scope : String) (declared : Option String) : Option String :=
   match declared with
   | none => some scope
   | some d => if d = scope then some d else none
 
-/-- Accepted owner filling is exactly omission or the declared install scope. -/
 @[simp] theorem fillOwner_ok_iff (scope : String) (declared : Option String) (owner : String) :
     fillOwner scope declared = some owner ↔
       owner = scope ∧ (declared = none ∨ declared = some scope) := by
@@ -81,8 +74,6 @@ def installOwned {α : Type} (scope : String) (declared : Option String) (payloa
     Option (Owned α) :=
   (fillOwner scope declared).map fun owner => ⟨owner, payload⟩
 
-/-- Exact admission and preservation for every canonical payload, rather than a
-special document containing only delegation IDs. -/
 theorem installOwned_ok_iff {α : Type} (scope : String) (declared : Option String)
     (payload : α) (installed : Owned α) :
     installOwned scope declared payload = some installed ↔
@@ -97,8 +88,6 @@ structure SelectedModel where
   model : String
   effort : Option ReasoningEffort
 deriving DecidableEq, Repr
-
-/-! ## Discovery is credential-scoped observation, never selection -/
 
 /-- Capability projection of one advertised model. Unknown efforts and a known
 empty effort catalog remain distinct, matching AdvertisedModel. -/
@@ -124,8 +113,6 @@ def catalogFor (owner backendId : String) (credentialScope : Option String)
   (observation.filter fun catalog => catalog.owner == owner &&
     catalog.value.nodeDid == credentialScope && catalog.value.backendId == backendId).map (·.value)
 
-/-- Exact catalog admission covers matching discovery, missing observations, and
-foreign owner/backend/credential rejection with one contract. -/
 theorem catalogFor_some_iff (owner backendId : String) (scope : Option String)
     (observation : Option (Owned DiscoveryObservation)) (catalog : DiscoveryObservation) :
     catalogFor owner backendId scope observation = some catalog ↔
@@ -140,8 +127,6 @@ theorem catalogFor_some_iff (owner backendId : String) (scope : Option String)
         by_cases hb : value.backendId = backendId <;>
         simp_all [catalogFor, Option.filter, Owned.mk.injEq] <;> aesop
 
-/-! ## Absent context and compaction defaults -/
-
 /-- Durable strategies; internal reduction modes stay in the compaction owner. -/
 inductive CompactionStrategy where
   | stripToolResults
@@ -154,12 +139,9 @@ structure CompactionConfig where
   threshold : Rat
 deriving DecidableEq, Repr
 
-/-- Runtime-default compaction: StripThenSummarize at 3/4. -/
 def defaultCompaction : CompactionConfig :=
   ⟨.stripThenSummarize, (3 / 4 : Rat)⟩
 
-/-- Omitted or null strategy inside an explicit document uses the same default
-as an absent compaction document. Threshold remains an optional authored field. -/
 def resolveCompaction (strategy : AuthoredField CompactionStrategy) (threshold : Option Rat) :
     CompactionConfig :=
   ⟨resolveDefault defaultCompaction.strategy strategy, threshold.getD defaultCompaction.threshold⟩
@@ -188,8 +170,6 @@ structure ResolvedSessionConfig where
   context : Context
   inference : SelectedModel
   deriving DecidableEq, Repr
-
-/-! ## One owned reference resolver, one composed session configuration -/
 
 structure Agent where
   contextId : Option String
@@ -227,8 +207,6 @@ inductive ResolveError where
   | missingPlugin | pluginDigestMismatch
   deriving DecidableEq, Repr
 
-/-- Shared reference lookup checks existence and ownership together. Required
-fields inside a found document cannot independently disappear. -/
 def lookupOwned {α : Type} (docs : String → String → Option (Owned α)) (scope id : String)
     (missing foreign : ResolveError) : Except ResolveError α :=
   match docs scope id with
@@ -246,8 +224,6 @@ def lookupOwned {α : Type} (docs : String → String → Option (Owned α)) (sc
     | mk owner payload =>
       by_cases ho : owner = scope <;> simp [lookupOwned, hd, ho, Owned.mk.injEq]
 
-/-- A small compositional lemma keeps resolver proofs about the reference chain,
-rather than repeated case trees for each failure branch. -/
 @[simp] theorem resolution_bind_ok_iff {α β : Type} (result : Except ResolveError α)
     (next : α → Except ResolveError β) (value : β) :
     result.bind next = .ok value ↔ ∃ x, result = .ok x ∧ next x = .ok value := by
@@ -285,8 +261,6 @@ def resolveTask (reg : Registry) (scope taskId : String) :
   if !task.enabled then .error .disabledTask
   else resolveAgent reg scope task.agentId
 
-/-- Complete characterization: a successful session has the exact context and
-inference selected by one owned enabled agent and an owned enabled backend. -/
 theorem resolveAgent_ok_iff (reg : Registry) (scope agentId : String)
     (session : ResolvedSessionConfig) :
     resolveAgent reg scope agentId = .ok session ↔
@@ -319,7 +293,6 @@ theorem omitted_agent_context_is_empty (reg : Registry) (scope id : String)
   subst found
   simpa [resolveContext, ho] using hc.symm
 
-/-- An owned enabled task delegates to exactly the common agent resolver. -/
 theorem resolveTask_owned_delegates (reg : Registry) (scope id : String) (task : Task)
     (ht : reg.tasks scope id = some ⟨scope, task⟩) (he : task.enabled = true) :
     resolveTask reg scope id = resolveAgent reg scope task.agentId := by
@@ -390,7 +363,6 @@ private theorem lookupOwned_error_cases {α : Type} {docs : String → String �
     · contradiction
     · exact Or.inr (Except.error.inj h).symm
 
-/-- A publishable default never resolves to `disabledAgent`. -/
 theorem publishable_default_not_disabled (reg : Registry) (scope id : String)
     (h : defaultAgentPublishable reg scope (some id) = true) :
     resolveAgent reg scope id ≠ .error .disabledAgent := by
@@ -466,8 +438,6 @@ def oauthLookupOwner (scope : String) : BackendAuth → Option String
 theorem oauth_uses_execution_scope (scope : String) (account : Option String) :
     oauthLookupOwner scope (.nodeOAuth account) = some scope := rfl
 
-/-- A stored OAuth sign-in: owner DID, provider kind, account reference (`none`
-is the provider's original account) and enabled flag. -/
 structure OAuthAccountRow where
   owner : String
   kind : String
@@ -492,9 +462,6 @@ theorem oauth_resolve_sound {scope kind : String} {account : Option String}
   simp only [Bool.and_eq_true, beq_iff_eq] at hp
   exact ⟨List.mem_of_find?_eq_some h, hp.1.1.1, hp.1.1.2, hp.1.2, hp.2⟩
 
-/-! ## Backend capacity defaults -/
-
-/-- Resolved backend limits; authored optional signed integers are validated below. -/
 structure BackendControls where
   connectionTimeoutSecs : Nat
   discoveryTimeoutSecs : Nat
@@ -502,7 +469,6 @@ structure BackendControls where
   queuedLimit : Nat
 deriving DecidableEq, Repr
 
-/-- Documented defaults: 10s timeout, 1 concurrent request, 100 queued. -/
 def defaultBackendControls : BackendControls := ⟨10, 10, 1, 100⟩
 
 def resolveBackendControls (connect discovery concurrent queue : Option Int) :

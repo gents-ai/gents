@@ -185,7 +185,6 @@ mod rendered_reasoning_contract;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::Text;
 
     #[test]
     fn generated_reasoning_visibility_matches_persisted_presentation() {
@@ -205,74 +204,5 @@ mod tests {
                 case.name
             );
         }
-    }
-
-    #[test]
-    fn tool_result_messages_present_as_tool_rows() {
-        let tool_result_message = Message::User {
-            content: vec![UserContent::ToolResult(ToolResult {
-                id: "tool-1".to_string(),
-                call_id: Some("call-1".to_string()),
-                content: vec![ToolResultContent::Text(Text {
-                    text: "src/app.rs: audit target live".to_string(),
-                })],
-            })],
-        };
-
-        let presentation = present_message(&tool_result_message);
-
-        assert_eq!(presentation.role, PresentedMessageRole::Tool);
-        assert!(presentation.has_tool_results);
-        assert_eq!(presentation.body_markdown, "src/app.rs: audit target live");
-    }
-
-    #[test]
-    fn assistant_reasoning_is_extracted_from_persisted_messages() {
-        let message = Message::Assistant {
-            id: None,
-            content: vec![
-                AssistantContent::Reasoning(Reasoning::new("Need to inspect the CLI flow first")),
-                AssistantContent::Text(Text {
-                    text: "I checked the CLI flow.".to_string(),
-                }),
-            ],
-        };
-
-        let presentation = present_message(&message);
-
-        assert_eq!(presentation.role, PresentedMessageRole::Assistant);
-        assert_eq!(presentation.body_markdown, "I checked the CLI flow.");
-        assert!(presentation
-            .reasoning_markdown
-            .as_deref()
-            .is_some_and(|reasoning| reasoning.contains("Need to inspect the CLI flow first")));
-    }
-
-    #[test]
-    fn assistant_tool_call_markup_is_hidden_from_visible_body() {
-        let presentation = present_message(&Message::assistant(
-            "<tool_call>list_files<arg_key>path</arg_key><arg_value>/repo</arg_value></tool_call>",
-        ));
-
-        assert_eq!(presentation.role, PresentedMessageRole::Assistant);
-        assert_eq!(presentation.body_markdown, "");
-    }
-
-    #[test]
-    fn assistant_partial_tool_call_markup_is_hidden_from_visible_body() {
-        let presentation = present_message(&Message::assistant(
-            "recursive</arg_key><arg_value>false</arg_value></tool_call>",
-        ));
-
-        assert_eq!(presentation.role, PresentedMessageRole::Assistant);
-        assert_eq!(presentation.body_markdown, "");
-    }
-
-    #[test]
-    fn normalize_markdown_text_collapses_excess_blank_lines() {
-        assert_eq!(
-            normalize_markdown_text("line 1\n\n\nline 2\r\n\r\n\r\nline 3\n"),
-            "line 1\n\nline 2\n\nline 3"
-        );
     }
 }

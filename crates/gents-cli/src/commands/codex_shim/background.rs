@@ -103,10 +103,6 @@ fn spawn_background_tool_watcher_handle(
                 let tracked = running.iter().cloned().collect::<Vec<_>>();
                 for tool_key in tracked {
                     let Some(tool) = current_tools.get(&tool_key) else {
-                        // A missing row is not a terminal observation. DefraDB can
-                        // briefly expose an incomplete replicated/query snapshot;
-                        // forgetting the key here would strand the already-emitted
-                        // Codex command item in progress forever.
                         continue;
                     };
                     if tool.request_doc_id.as_deref() != Some(request_doc_id.as_str()) {
@@ -128,7 +124,7 @@ fn spawn_background_tool_watcher_handle(
                                 );
                                 continue;
                             };
-                            let access = ConfigAccess::Local(state.node.clone());
+                            let access = ConfigAccess::local(state.node.clone());
                             let presentation =
                                 match gents::tool_call_lifecycle::load_tool_call_presentation(
                                     &access,
@@ -146,9 +142,6 @@ fn spawn_background_tool_watcher_handle(
                                     }
                                 };
                             let Some(result) = presentation.result else {
-                                // A terminal lifecycle row can precede its canonical
-                                // delivery on a replica. Empty delivered output is
-                                // represented by Some(""), not by this absence.
                                 continue;
                             };
                             let mut tool = tool.clone();
@@ -350,10 +343,9 @@ mod tests {
 
     async fn insert_segment(node: &EmbeddedNode, segment: &OutputSegment) -> String {
         let response = node
-            .execute_request_with_retry(
+            .execute_request(
                 gents::defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                     .with_variables(output_segment_create_variables(segment).unwrap()),
-                gents::defra_node::ExecuteRetryPolicy::default(),
             )
             .await;
         assert!(
@@ -371,10 +363,9 @@ mod tests {
 
     async fn insert_header(node: &EmbeddedNode, header: &TranscriptMessage) {
         let response = node
-            .execute_request_with_retry(
+            .execute_request(
                 gents::defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                     .with_variables(transcript_message_create_variables(header).unwrap()),
-                gents::defra_node::ExecuteRetryPolicy::default(),
             )
             .await;
         assert!(
@@ -603,9 +594,6 @@ mod tests {
         };
         let result_close_doc_id = insert_segment(node, &result_segment).await;
         if spawned_parent.is_some() {
-            // A spawned process owns a closed ToolExecution source, but no
-            // second provider ToolResult header. Its accepted parent is the
-            // spawn_process meta-call above.
             return;
         }
         insert_header(
@@ -766,8 +754,6 @@ mod tests {
         let node = Arc::new(
             EmbeddedNode::builder()
                 .data_path(tempdir.path().join("node"))
-                // Pin the sole durable backend explicitly so this test cannot
-                // silently drift if another backend is introduced later.
                 .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()
                 .await

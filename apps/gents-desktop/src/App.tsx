@@ -93,10 +93,8 @@ function defaultBridge(): DesktopBridge {
   };
 }
 
-/* The app, made once for the window's life, and what it does on its own. */
 function AppHost({ bridge: given }: { bridge?: DesktopBridge }) {
   const [bridge] = useState(() => given ?? defaultBridge());
-  /* a failed action is reported once, as a toast where the person is */
   const [app] = useState(() => createDesktopApp({ reportFailure: toast, ...bridge }));
   return (
     <AppProvider value={app}>
@@ -106,9 +104,6 @@ function AppHost({ bridge: given }: { bridge?: DesktopBridge }) {
   );
 }
 
-/* What the app does on its own. Its hooks follow the stores, so they live
-   in a leaf that draws nothing: their re-renders stop here instead of
-   redrawing every screen. */
 function AppReactions({ app, bridge }: { app: DesktopApp; bridge: DesktopBridge }) {
   const route = useRoute();
   useClientRuntime(app, bridge.listenToUpdates);
@@ -147,8 +142,6 @@ function AppBody() {
     </div>
   );
 
-  /* A home this version cannot open is answered before anything else,
-     whichever operation found it; the wizard restarts at welcome after. */
   if (startup.incompatibleHome.report) {
     return (
       <>
@@ -158,8 +151,6 @@ function AppBody() {
     );
   }
 
-  /* First-run owns its own starting page. Do not swap it for the global
-     startup screen or the wizard remounts at welcome after the server is up. */
   if (firstRun.phase === "active") {
     return (
       <>
@@ -194,7 +185,17 @@ function AppBody() {
     );
   }
 
-  if (!firstRun.settled) return null;
+  if (!firstRun.settled) {
+    return (
+      <>
+        {titlebar}
+        <StartupScreen
+          configurationPending
+          initConfigStatus={firstRun.initConfigStatus}
+        />
+      </>
+    );
+  }
 
   return (
     <TooltipProvider>
@@ -208,7 +209,6 @@ function AppBody() {
   );
 }
 
-/* The screen each route draws in the pane. */
 function RouteScreen({ route }: { route: Route }) {
   switch (route.name) {
     case "sessions":

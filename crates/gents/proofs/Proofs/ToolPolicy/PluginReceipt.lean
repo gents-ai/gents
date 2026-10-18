@@ -1,8 +1,5 @@
 namespace ToolPolicy.PluginReceipt
 
-/-- `gents_protocol::plugin::PluginExecutionVerdict`. `executionError` is a
-host-side failure and may be retried; `failed` is the guest's own deterministic
-failure (a non-zero exit or a trap). -/
 inductive Verdict where
   | admissionRefused | executionError | success | refused | outOfFuel
   | outOfMemory | timeout | badOutput | failed
@@ -19,9 +16,6 @@ def Verdict.spelling : Verdict → String
   | .badOutput => "bad_output"
   | .failed => "failed"
 
-/-- `evidence` stands for the host-authored fields other than output and
-verdict (coordinate, artifact and input digests, authority, limits); the native
-receipt compares them as a whole. -/
 structure Receipt where
   evidence : String
   output : Option String
@@ -38,9 +32,6 @@ def Terminal.spelling : Terminal → String
   | .timedOut => "timedOut"
   | .cancelled => "cancelled"
 
-/-- A receipt names an output only when its terminal published that output. A
-guest that returned after the outer deadline reports `timeout`; one whose
-result the host otherwise did not publish reports `executionError`. -/
 def published (terminal : Terminal) (receipt : Receipt) : Receipt :=
   match terminal with
   | .completed => receipt
@@ -70,11 +61,6 @@ def Decision.spelling : Decision → String
   | .replay => "replay"
   | .conflict => "conflict"
 
-/-- The terminal compare-and-set is the only receipt writer, so a durable
-receipt implies a terminal row. A competing terminal that committed without a
-receipt keeps the row as it is; a retry of the same terminal presents identical
-evidence. Request generation is fenced at admission, not here: recovery closes
-rows of a replaced generation through the same terminal path as any tool. -/
 def decide (terminal : Bool) (existing : Option Receipt) (receipt : Receipt) : Decision :=
   match terminal, existing with
   | false, none => .commit
@@ -89,7 +75,6 @@ structure Row where
 
 def Row.wellFormed (row : Row) : Prop := row.receipt.isSome = true → row.terminal = true
 
-/-- One terminal attempt carrying `receipt` against the durable row. -/
 def step (row : Row) (terminal : Terminal) (receipt : Receipt) : Row :=
   match decide row.terminal row.receipt (published terminal receipt) with
   | .commit => ⟨true, some (published terminal receipt)⟩

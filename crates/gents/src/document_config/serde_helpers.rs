@@ -4,8 +4,6 @@ use serde::de::{DeserializeOwned, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
-/// Treat a missing (with `serde(default)`) or null field as its canonical default.
-/// Wrong non-null types remain errors; required identities/auth must not use this.
 pub(crate) fn deserialize_default_on_null<'de, D, T>(
     deserializer: D,
 ) -> std::result::Result<T, D::Error>
@@ -95,15 +93,9 @@ where
     deserializer.deserialize_any(OptionalStringVecVisitor)
 }
 
-/// Like [`deserialize_optional_string_vec`] but yields a plain `Vec<String>`,
-/// mapping null / unit / empty-string / missing to an empty vec. DefraDB returns
-/// `null` for an unset `[String!]` field, which a bare `Vec<String>` cannot
-/// deserialize; this keeps such fields null-safe without an `Option` wrapper.
-/// Walk a JSON value that is either a list of `T` objects, a list of JSON
-/// strings encoding `T`, a single JSON string, null, or missing.
-///
-/// Shared by write-tool and surface-entry deserializers in this crate and the
-/// CLI storage walkers so the dual-shape contract cannot drift.
+/// Dual-shape JSON decoding: a list of `T` objects, a list of JSON strings
+/// encoding `T`, a single JSON string, null, or missing. Shared by write-tool
+/// and surface-entry deserializers so the contract cannot drift.
 pub fn deserialize_dual_shape<T: DeserializeOwned>(
     value: Option<Value>,
     label: &str,
@@ -160,7 +152,6 @@ where
             rows.iter()
                 .filter_map(|row| {
                     let doc_id = row.get("_docID")?.as_str()?.to_string();
-                    // Storage identity is envelope metadata, not authored config.
                     let mut payload = row.clone();
                     payload.as_object_mut()?.remove("_docID");
                     let parsed = match serde_json::from_value(payload) {
@@ -182,8 +173,7 @@ where
         .unwrap_or_default()
 }
 
-/// Installed configuration is enabled unless explicitly disabled. Missing and
-/// null agree; false remains an explicit override. Tool grants default separately.
+/// Installed configuration is enabled unless explicitly disabled.
 pub(super) fn default_enabled() -> bool {
     true
 }
@@ -200,8 +190,7 @@ pub(super) fn is_disabled(value: &bool) -> bool {
     !*value
 }
 
-/// Strict storage-envelope decoding for signing/configuration owners. A bad row
-/// must surface an error rather than disappearing from a scoped identity check.
+/// Strict storage-envelope decoding for signing/configuration owners.
 pub(super) fn try_rows_with_doc_id<T: DeserializeOwned>(
     data: Option<&Value>,
     field: &str,

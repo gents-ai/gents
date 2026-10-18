@@ -1,4 +1,5 @@
 import Proofs.Basic
+import Lean.Data.Json.Printer
 
 namespace Conformance.Contracts
 
@@ -30,19 +31,8 @@ structure StateMachineContract where
   namedTransitions : List NamedTransition := []
   deriving Repr
 
-def jsonEscapeChar : Char → String
-  | '"' => "\\\""
-  | '\\' => "\\\\"
-  | '\n' => "\\n"
-  | '\r' => "\\r"
-  | '\t' => "\\t"
-  | c => String.mk [c]
-
-def jsonEscape (s : String) : String :=
-  String.intercalate "" ((String.toList s).map jsonEscapeChar)
-
 def jsonString (s : String) : String :=
-  "\"" ++ jsonEscape s ++ "\""
+  Lean.Json.renderString s
 
 example : jsonString "a\"b\\c" = "\"a\\\"b\\\\c\"" := by native_decide
 

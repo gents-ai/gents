@@ -63,7 +63,6 @@ fn ready_snapshot_does_not_expire_without_semantic_changes() {
     assert_eq!(
         projection.agents.get("a"),
         Some(&ProjectedAgentReadiness::Ready),
-        "a lagged replica must keep last-known dispatcher readiness"
     );
     assert!(matches!(
         project_node_readiness_summary(Some(&row), "did:test:node"),
@@ -203,7 +202,6 @@ fn malformed_configured_id_preserves_all_canonical_ids_independent_of_order() {
 #[test]
 fn agent_unavailable_rejections_are_exactly_routing_messages() {
     use AgentReadinessUnavailableReason as Reason;
-    // Exhaustive: a new reason fails to compile here until `ALL` lists it.
     let ordinal = |reason: Reason| match reason {
         Reason::AgentDisabled => 0,
         Reason::RuntimeConfigurationInvalid => 1,

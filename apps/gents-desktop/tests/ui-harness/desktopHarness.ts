@@ -151,31 +151,14 @@ export type MobilePerformanceHarnessController = {
   finishStreaming(): void;
   streamUpdate(): number;
   streamBurst(count: number): number;
-  /** appends `text` to the live reply, as one update */
+
+  toolBatch(count: number, failed?: number): void;
+
   streamText(text: string): void;
-  /** how long a read of an older timeline page takes, as the bridge's do */
   setOlderPageDelay(ms: number): void;
-  /**
-   * One snapshot of a turn ending the way the bridge can deliver it: the
-   * live tail kept or dropped, the saved reply present (under its own key,
-   * as the bridge renders it) or not yet, the turn running or completed.
-   */
   endReply(step: { live: "keep" | "drop"; saved: boolean; completed: boolean }): void;
-  /**
-   * A message the person sent, as the bridge shows it: first the pending
-   * turn, then the saved prompt row, before the live tail. Every stand-in
-   * names the request by its id, as a send returns it, so the row is one
-   * from pending to saved.
-   */
   userTurn(stage: "pending" | "saved"): void;
-  /**
-   * From now on a send to the large session is accepted, under the request
-   * id `userTurn` uses, but the transcript does not show it until
-   * `userTurn` does: the moment between the bridge accepting a message and
-   * its read holding it.
-   */
   holdSends(): void;
-  /** a step the reply takes, after the live tail: running, then done */
   liveTool(state: "running" | "done"): void;
 };
 
@@ -195,7 +178,6 @@ type DesktopUiHarness = {
   sessionSync: SessionSyncHarnessController;
 };
 
-/* the request a held send to the large session is accepted under */
 const LARGE_SENT_REQUEST_ID = "6f1c2a7e-large-request-sent";
 
 export const MOBILE_PERFORMANCE_FIXTURE = {
@@ -210,8 +192,6 @@ export const MOBILE_PERFORMANCE_FIXTURE = {
   repeatedNavigationCount: 10,
 } as const;
 
-/* a patch carries canonical (snake_case) InferenceBackend fields; the view
-   the bridge projects is camelCase with tags always a list */
 function projectBackendPatch(
   backend: InferenceBackendView,
   changes: Record<string, unknown>,
@@ -647,7 +627,6 @@ export function createDesktopUiHarness(
     }, 0);
   }
 
-  /* the live reply as it last stood, for the saved message that replaces it */
   let liveReply = "";
   function appendStreamChunk() {
     streamSequence += 1;
@@ -688,15 +667,13 @@ export function createDesktopUiHarness(
       lastError: p2pStatus === "healthy" ? null : "fixture transport unavailable",
       lastFailureAt: p2pStatus === "healthy" ? null : STARTED_AT,
     };
-    // A fresh empty fleet has no home until setup provisions one. After that,
-    // the snapshot has to name the initialized agent or the config screen
-    // will not treat it as the local service.
     const freshHome = scenario === "empty-fleet" && !provisioned;
     const next: DesktopClientSnapshot = {
       bootstrap: {
         defaultNodeHome: "/tmp/gents-bombadil/agent",
         initNodeName: freshHome ? null : deployment.label,
         initNodeDid: freshHome ? null : NODE_DID,
+        initConfigStatus: freshHome ? "absent" : "configured",
         initToolCeiling: freshHome ? null : "ReadWrite",
         initToolRoot: freshHome ? null : "/tmp/gents-bombadil/workspace",
         desktopHome: "/tmp/gents-bombadil/desktop",
@@ -734,6 +711,7 @@ export function createDesktopUiHarness(
         peerIssueCount: 0,
         rowCount,
         approxSerializedBytes: rowCount * 512,
+        operatorConfigAuthoritativeNodeDids: freshHome ? [] : [NODE_DID],
         deployments,
       },
     };
@@ -849,6 +827,12 @@ export function createDesktopUiHarness(
 
   let allowedFolders: AllowedFolder[] = [];
   const adapter: DesktopApiAdapter = {
+    async fetchSessionGoal() {
+      return null;
+    },
+    async controlGoal() {
+      throw new Error("Goal controls are unavailable in this fixture.");
+    },
     async editPendingQueue() {
       throw new Error("Pending queue edits are unavailable in this fixture.");
     },
@@ -868,7 +852,6 @@ export function createDesktopUiHarness(
       provisioned = true;
       deployment = {
         ...deployment,
-        // Background pairing installs an enrollment route for the managed DID.
         source: "enrollment",
         label,
         node: { ...deployment.node, displayName: label },
@@ -899,8 +882,6 @@ export function createDesktopUiHarness(
       notify("runtime");
       return snapshot();
     },
-    /* no packs installed and no registry account; the allowed folders
-       are the ones added since the page loaded; no plugin call is asking */
     async listInstalledPacks() {
       return { packs: [] };
     },
@@ -936,6 +917,8 @@ export function createDesktopUiHarness(
     async listPendingPluginApprovals() {
       return { requests: [] };
     },
+    async subscribePluginApprovals() {},
+    async unsubscribePluginApprovals() {},
     async decidePluginApproval() {},
     /* no runtime doors in the harness: the shell lists nothing and a plugin
        that reaches the bridge is told so */
@@ -1157,6 +1140,21 @@ export function createDesktopUiHarness(
         mcpServicesOnline: true,
         surface: {
           tool_names: ["read_file", "list_files", "gents_exec"],
+          policy: {
+            requested: {
+              file_tools: ["read_file", "list_files", "write_file"],
+              meta: ["gents_exec"],
+            },
+            ceiling: { file_tools: ["read_file", "list_files"], meta: ["gents_exec"] },
+            runtime: {
+              file_tools: ["read_file", "list_files", "write_file"],
+              meta: ["gents_exec"],
+            },
+            effective: {
+              file_tools: ["read_file", "list_files"],
+              meta: ["gents_exec"],
+            },
+          },
           included: { read_file: ["ceiling allows readonly file tools"] },
           excluded: { write_file: ["ceiling is readonly"] },
           unavailable: {},
@@ -1343,8 +1341,6 @@ export function createDesktopUiHarness(
         const existing = sessions.get(request.sessionId)!;
         const nextSequence = existing.timelineItems.length + 1;
         const requestId = `request-${++requestSeq}`;
-        /* like the bridge, a message sent while the turn runs is queued
-           behind it rather than answered */
         if (
           existing.turnState === "running" ||
           existing.turnState === "waitingForClaim"
@@ -1971,7 +1967,6 @@ export function createDesktopUiHarness(
             maxConcurrent: document.max_concurrent ?? null,
             maxQueueDepth: document.max_queue_depth ?? null,
             enabled: document.enabled ?? true,
-            /* the bridge projects tags as a list, never absent */
             tags: document.tags ?? [],
             models: [],
             advertisedModels: [],
@@ -2191,13 +2186,19 @@ export function createDesktopUiHarness(
           {
             id: "anthropic" as const,
             displayName: "Anthropic",
-            description: "Use a Claude Pro or Max subscription.",
-            authMethods: ["claude_oauth" as const],
+            description:
+              "Use a Claude Pro or Max subscription, or an Anthropic API key.",
+            authMethods: ["claude_oauth" as const, "api_key" as const],
             authOptions: [
               {
                 method: "claude_oauth" as const,
                 displayName: "Claude sign-in",
                 defaultEndpoint: "claude-cli://subscription",
+              },
+              {
+                method: "api_key" as const,
+                displayName: "Anthropic API key",
+                defaultEndpoint: "https://api.anthropic.com/v1",
               },
             ],
             defaultAuthMethod: "claude_oauth" as const,
@@ -2206,13 +2207,19 @@ export function createDesktopUiHarness(
           {
             id: "grok" as const,
             displayName: "Grok",
-            description: "Use SuperGrok or an eligible X Premium+ subscription.",
-            authMethods: ["grok_oauth" as const],
+            description:
+              "Use SuperGrok, an eligible X Premium+ subscription, or an xAI API key.",
+            authMethods: ["grok_oauth" as const, "api_key" as const],
             authOptions: [
               {
                 method: "grok_oauth" as const,
                 displayName: "Grok sign-in",
                 defaultEndpoint: "https://cli-chat-proxy.grok.com/v1",
+              },
+              {
+                method: "api_key" as const,
+                displayName: "xAI API key",
+                defaultEndpoint: "https://api.x.ai/v1",
               },
             ],
             defaultAuthMethod: "grok_oauth" as const,
@@ -2280,19 +2287,33 @@ export function createDesktopUiHarness(
           request.provider === "local"
             ? "Local server"
             : request.provider === "anthropic"
-              ? "Anthropic"
+              ? request.authMethod === "api_key"
+                ? "Anthropic API"
+                : "Anthropic"
               : request.provider === "grok"
-                ? "Grok"
+                ? request.authMethod === "api_key"
+                  ? "xAI"
+                  : "Grok"
                 : "ChatGPT",
         providerKind:
           request.provider === "local"
             ? "OpenAiCompatible"
             : request.provider === "anthropic"
-              ? "ClaudeCliSubscription"
+              ? request.authMethod === "api_key"
+                ? "AnthropicApiKey"
+                : "ClaudeCliSubscription"
               : request.provider === "grok"
-                ? "XaiGrokOAuth"
+                ? request.authMethod === "api_key"
+                  ? "OpenAiCompatible"
+                  : "XaiGrokOAuth"
                 : "ChatGptCodex",
-        openaiWireApi: request.provider === "local" ? "chat_completions" : "responses",
+        openaiWireApi:
+          request.provider === "anthropic"
+            ? null
+            : request.provider === "local" ||
+                (request.provider === "grok" && request.authMethod === "grok_oauth")
+              ? "chat_completions"
+              : "responses",
         reachable: true,
         models: [
           {
@@ -2648,7 +2669,6 @@ export function createDesktopUiHarness(
               timestamp: STARTED_AT,
               reconstruction: HARNESS_READY_RECONSTRUCTION,
             };
-            /* the bridge places a saved reply before the live tail's slot */
             const tailAt = without.findIndex((item) => item.kind === "liveAssistant");
             const timelineItems = !saved
               ? without
@@ -2753,6 +2773,49 @@ export function createDesktopUiHarness(
                 ),
                 group,
               ],
+            });
+            syncSessions();
+            notify("store");
+          },
+
+          toolBatch(count, failed = 0) {
+            const session = sessions.get("session-large");
+            if (!session) {
+              throw new Error("mobile performance fixture lost session-large");
+            }
+            const at = Math.max(0, session.timelineItems.length - 2);
+            const group = {
+              kind: "toolGroup" as const,
+              itemKey: "batch-tools",
+              messageSequence: at,
+              tools: Array.from({ length: count }, (_, index) => ({
+                itemKey: `batch-exec-${index}`,
+                toolName: "gents_exec",
+                statusKind: "success",
+                reconstruction: HARNESS_READY_RECONSTRUCTION,
+                presentation: {
+                  kind: "command" as const,
+                  command: `cargo test -p gents step_${index}`,
+                  exitCode: index >= count - failed ? 101 : 0,
+                  timedOut: false,
+                  failed: index >= count - failed,
+                  durationMs: null,
+                  cwd: null,
+                  executionMode: "read_only",
+                  networkMode: "disabled",
+                  stdout: "",
+                  stderr: "",
+                  fallbackOutput: null,
+                },
+                partialOutputTail: null,
+              })),
+            };
+            const rest = session.timelineItems.filter(
+              (item) => item.itemKey !== group.itemKey,
+            );
+            sessions.set("session-large", {
+              ...session,
+              timelineItems: [...rest.slice(0, at), group, ...rest.slice(at)],
             });
             syncSessions();
             notify("store");

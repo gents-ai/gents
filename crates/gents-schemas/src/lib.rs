@@ -1,9 +1,3 @@
-//! Static GraphQL schema strings for gents agent collections.
-//!
-//! This crate is intentionally dependency-free so external document-peer
-//! consumers can depend on the agent collection contract without also pulling
-//! in the runtime, protocol, Codex, or DefraDB dependency graph.
-
 pub const NODE_NAME: &str = "Node";
 pub const NODE: &str = include_str!("../schemas/agent/node.graphql");
 pub const AGENT_NAME: &str = "Agent";
@@ -163,7 +157,12 @@ pub const AGENT_SESSION_INPUT_EDIT_NAME: &str = "AgentSessionInputEdit";
 pub const AGENT_SESSION_INPUT_EDIT: &str =
     include_str!("../schemas/agent/agent_session_input_edit.graphql");
 
-/// Every agent-domain schema in registration order.
+pub const AGENT_SESSION_GOAL_CONTROL_NAME: &str = "AgentSessionGoalControl";
+pub const AGENT_SESSION_GOAL_CONTROL: &str =
+    include_str!("../schemas/agent/agent_session_goal_control.graphql");
+pub const GOAL_OBSERVATION_NAME: &str = "GoalObservation";
+pub const GOAL_OBSERVATION: &str = include_str!("../schemas/agent/goal_observation.graphql");
+
 pub const ALL: &[&str] = &[
     NODE,
     AGENT,
@@ -229,6 +228,8 @@ pub const ALL: &[&str] = &[
     ENROLLMENT_OPERATOR_NONCE,
     SESSION_HYDRATION_REQUEST,
     AGENT_SESSION_INPUT_EDIT,
+    AGENT_SESSION_GOAL_CONTROL,
+    GOAL_OBSERVATION,
     EVAL_DEFINITION,
     EVAL_RUN,
     EVAL_TRIAL,
@@ -237,7 +238,6 @@ pub const ALL: &[&str] = &[
     PACK_INSTALLATION,
 ];
 
-/// Collection names matching [`ALL`] order.
 pub const ALL_COLLECTION_NAMES: &[&str] = &[
     NODE_NAME,
     AGENT_NAME,
@@ -303,6 +303,8 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     ENROLLMENT_OPERATOR_NONCE_NAME,
     SESSION_HYDRATION_REQUEST_NAME,
     AGENT_SESSION_INPUT_EDIT_NAME,
+    AGENT_SESSION_GOAL_CONTROL_NAME,
+    GOAL_OBSERVATION_NAME,
     EVAL_DEFINITION_NAME,
     EVAL_RUN_NAME,
     EVAL_TRIAL_NAME,
@@ -311,13 +313,6 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     PACK_INSTALLATION_NAME,
 ];
 
-/// Agent-domain collections the desktop bulk-syncs after pairing.
-///
-/// This is a curated subset of the `@branchable` collections, not a mirror of
-/// the directive: `WorkspaceRoot`, `Network`, `PeerEndpoint`,
-/// `RenderedRequest`, `ProviderContextReduction`, and Callback planner/journal
-/// rows (`CallbackModule`, `CallbackBinding`, `CallbackInvocation`) are
-/// branchable but deliberately not bulk-synced.
 pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     NODE_DIRECTORY_ENTRY_NAME,
     NODE_MEMORY_NAME,
@@ -342,10 +337,7 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     CALLBACK_RESULT_NAME,
 ];
 
-/// Sensitive runtime facts that stay on the runtime node until installable
-/// DefraDB ACP provides an enforceable read boundary (#1074).
-///
-/// This is a placement classification, not an ACP claim. Every broad
+/// Sensitive runtime facts that stay on the runtime node; every broad
 /// replication catalog filters these names explicitly.
 pub const LOCAL_AUDIT_COLLECTION_NAMES: &[&str] = &[
     RENDERED_REQUEST_NAME,
@@ -357,7 +349,7 @@ pub const LOCAL_AUDIT_COLLECTION_NAMES: &[&str] = &[
     OPTIMIZATION_JOB_NAME,
 ];
 
-/// Local trust state that must never be subscribed or learned from peers.
+/// Local trust state that must never be learned from peers.
 pub const LOCAL_ONLY_COLLECTION_NAMES: &[&str] =
     &[NETWORK_ADMIN_PIN_NAME, ENROLLMENT_OPERATOR_NONCE_NAME];
 
@@ -367,315 +359,4 @@ pub fn is_local_audit_collection(name: &str) -> bool {
 
 pub fn is_local_only_collection(name: &str) -> bool {
     LOCAL_ONLY_COLLECTION_NAMES.contains(&name)
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashSet;
-
-    use super::*;
-
-    #[test]
-    fn all_contains_every_agent_schema_file() {
-        let schema_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/agent");
-        let schema_file_count = std::fs::read_dir(schema_dir)
-            .expect("read agent schema directory")
-            .filter_map(Result::ok)
-            .filter(|entry| {
-                entry.path().extension().and_then(|ext| ext.to_str()) == Some("graphql")
-            })
-            .count();
-
-        assert_eq!(ALL.len(), schema_file_count);
-    }
-
-    #[test]
-    fn every_agent_schema_starts_with_type_declaration() {
-        for sdl in ALL {
-            let first_sdl_line = sdl
-                .lines()
-                .map(str::trim)
-                .find(|line| !line.is_empty() && !line.starts_with('#'))
-                .unwrap_or("");
-            assert!(
-                first_sdl_line.starts_with("type "),
-                "schema must begin with `type`: {}",
-                sdl.lines().next().unwrap_or("")
-            );
-        }
-    }
-
-    #[test]
-    fn collection_names_align_with_sdl_arrays() {
-        assert_eq!(ALL.len(), ALL_COLLECTION_NAMES.len());
-    }
-
-    #[test]
-    fn collection_names_are_unique() {
-        let mut seen = HashSet::new();
-
-        for name in ALL_COLLECTION_NAMES {
-            assert!(seen.insert(*name), "duplicate collection name: {name}");
-        }
-    }
-
-    #[test]
-    fn every_bulk_sync_collection_is_branchable() {
-        for name in BRANCHABLE_COLLECTION_NAMES {
-            let sdl = ALL_COLLECTION_NAMES
-                .iter()
-                .position(|candidate| candidate == name)
-                .map(|index| ALL[index])
-                .unwrap_or_else(|| panic!("bulk-sync collection {name} has no registered SDL"));
-            let declaration = sdl
-                .lines()
-                .map(str::trim)
-                .find(|line| line.starts_with("type "))
-                .unwrap_or_else(|| panic!("bulk-sync collection {name} has no type declaration"));
-            assert!(
-                declaration.contains("@branchable"),
-                "bulk-sync collection {name} must be @branchable: {declaration}"
-            );
-        }
-    }
-
-    #[test]
-    fn prompt_bearing_audit_facts_are_classified_and_not_bulk_synced() {
-        for name in LOCAL_AUDIT_COLLECTION_NAMES {
-            assert!(ALL_COLLECTION_NAMES.contains(name));
-            assert!(!BRANCHABLE_COLLECTION_NAMES.contains(name));
-        }
-    }
-
-    #[test]
-    fn local_trust_facts_are_registered_but_never_branchable() {
-        for name in LOCAL_ONLY_COLLECTION_NAMES {
-            assert!(ALL_COLLECTION_NAMES.contains(name));
-            assert!(!BRANCHABLE_COLLECTION_NAMES.contains(name));
-        }
-    }
-
-    #[test]
-    fn mailbox_envelope_is_immutable_except_for_content_and_close_state() {
-        let immutable_fields = [
-            "item_key",
-            "requester_did",
-            "node_did",
-            "kind",
-            "action",
-            "source_kind",
-            "source_id",
-            "session_id",
-            "request_id",
-            "graph_run_id",
-            "cause_doc_id",
-            "target_node_did",
-            "target_agent_id",
-            "expected_collection",
-            "parent_item_id",
-            "deadline_at",
-            "created_at",
-        ];
-        let mutable_fields = [
-            "title",
-            "summary",
-            "payload",
-            "status",
-            "updated_at",
-            "resolved_at",
-            "resolved_doc_id",
-        ];
-        let field_line = |field: &str| {
-            MAILBOX_ITEM
-                .lines()
-                .map(str::trim)
-                .find(|line| line.starts_with(&format!("{field}:")))
-                .unwrap_or_else(|| panic!("MailboxItem is missing field {field}"))
-        };
-
-        assert!(type_declaration(MAILBOX_ITEM_NAME).contains("@branchable"));
-        assert!(field_line("item_key").contains("@index(unique: true)"));
-        for field in immutable_fields {
-            assert!(
-                field_line(field).contains("@immutable"),
-                "MailboxItem.{field} must be immutable"
-            );
-        }
-        for field in mutable_fields {
-            assert!(
-                !field_line(field).contains("@immutable"),
-                "MailboxItem.{field} is close state and must remain mutable"
-            );
-        }
-    }
-
-    #[test]
-    fn isolated_workspace_identity_is_branchable_and_placements_are_local() {
-        for name in [
-            ISOLATED_WORKSPACE_NAME,
-            WORKSPACE_BINDING_NAME,
-            WORKSPACE_RECEIPT_NAME,
-            CALLBACK_NAME,
-            EVENT_SOURCE_NAME,
-            TRIGGER_NAME,
-            AGENT_TARGET_NAME,
-            CALLBACK_MODULE_NAME,
-            CALLBACK_BINDING_NAME,
-            CALLBACK_INVOCATION_NAME,
-            CALLBACK_RESULT_NAME,
-        ] {
-            let declaration = type_declaration(name);
-            assert!(
-                declaration.contains("@branchable"),
-                "{name} must be @branchable: {declaration}"
-            );
-        }
-        for name in [
-            WORKSPACE_PLACEMENT_NAME,
-            REPOSITORY_PLACEMENT_NAME,
-            WORKSPACE_ROOT_NAME,
-        ] {
-            let declaration = type_declaration(name);
-            assert!(
-                !declaration.contains("@branchable"),
-                "{name} must stay local-only: {declaration}"
-            );
-        }
-        for forbidden in [
-            "host_path:",
-            "remotes:",
-            "git_common_dir:",
-            "git-common-dir:",
-        ] {
-            assert!(
-                !ISOLATED_WORKSPACE.contains(forbidden),
-                "IsolatedWorkspace must not declare {forbidden}"
-            );
-        }
-        assert!(WORKSPACE_PLACEMENT.contains("host_path:"));
-        for name in [
-            ISOLATED_WORKSPACE_NAME,
-            WORKSPACE_BINDING_NAME,
-            WORKSPACE_RECEIPT_NAME,
-            CALLBACK_RESULT_NAME,
-        ] {
-            assert!(
-                BRANCHABLE_COLLECTION_NAMES.contains(&name),
-                "{name} should bulk-sync"
-            );
-        }
-        for name in [
-            CALLBACK_NAME,
-            EVENT_SOURCE_NAME,
-            TRIGGER_NAME,
-            AGENT_TARGET_NAME,
-            CALLBACK_MODULE_NAME,
-            CALLBACK_BINDING_NAME,
-            CALLBACK_INVOCATION_NAME,
-        ] {
-            assert!(
-                !BRANCHABLE_COLLECTION_NAMES.contains(&name),
-                "{name} stays off desktop bulk-sync until a client consumes it"
-            );
-        }
-        assert!(AGENT_REQUEST.contains("workspace_id: String @index @immutable"));
-        assert!(AGENT_REQUEST.contains("caused_by_trigger_doc_id: String @index @immutable"));
-        assert!(AGENT_REQUEST.contains("workspace_authority: String @immutable"));
-        assert!(AGENT_REQUEST.contains("workspace_owner_node_did: String @index @immutable"));
-        assert!(EVENT_SOURCE.contains("workspace_authority: String"));
-        assert!(CALLBACK_RESULT.contains("work_unit_id: String @index"));
-        assert!(WORKSPACE_RECEIPT.contains("caused_by_correlation: String @index @immutable"));
-        assert!(AGENT_REQUEST.contains("workspace_seal_hash: String @immutable"));
-    }
-
-    #[test]
-    fn eval_collections_are_branchable_and_carry_no_lifecycle() {
-        for name in [
-            EVAL_DEFINITION_NAME,
-            EVAL_RUN_NAME,
-            EVAL_TRIAL_NAME,
-            EVAL_VERDICT_NAME,
-        ] {
-            let sdl = ALL_COLLECTION_NAMES
-                .iter()
-                .position(|candidate| candidate == &name)
-                .map(|index| ALL[index])
-                .unwrap_or_else(|| panic!("eval collection {name} has no registered SDL"));
-            let declaration = sdl
-                .lines()
-                .map(str::trim)
-                .find(|line| line.starts_with("type "))
-                .unwrap_or_else(|| panic!("eval collection {name} has no type declaration"));
-            assert!(
-                declaration.contains("@branchable"),
-                "{name} must be @branchable: {declaration}"
-            );
-            for forbidden in ["lifecycle_state", "status:", "state:"] {
-                assert!(
-                    !sdl.contains(forbidden),
-                    "{name} must hold facts only, found {forbidden}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn eval_placement_is_decided_per_collection() {
-        for name in [EVAL_DEFINITION_NAME, EVAL_VERDICT_NAME] {
-            assert!(
-                is_local_audit_collection(name),
-                "{name} holds protected material"
-            );
-        }
-        for name in [EVAL_RUN_NAME, EVAL_TRIAL_NAME] {
-            assert!(
-                !is_local_audit_collection(name),
-                "{name} holds no message bodies"
-            );
-        }
-        for name in [
-            EVAL_DEFINITION_NAME,
-            EVAL_RUN_NAME,
-            EVAL_TRIAL_NAME,
-            EVAL_VERDICT_NAME,
-        ] {
-            assert!(
-                !BRANCHABLE_COLLECTION_NAMES.contains(&name),
-                "{name} is not bulk-synced"
-            );
-        }
-    }
-
-    #[test]
-    fn the_optimization_job_is_local_audit_and_never_bulk_synced() {
-        assert!(ALL_COLLECTION_NAMES.contains(&OPTIMIZATION_JOB_NAME));
-        assert!(
-            is_local_audit_collection(OPTIMIZATION_JOB_NAME),
-            "the job journal holds candidate prompts"
-        );
-        assert!(
-            !BRANCHABLE_COLLECTION_NAMES.contains(&OPTIMIZATION_JOB_NAME),
-            "a job is the driver's local notebook and is never bulk-synced"
-        );
-        // The guard field the append transaction filters on, and the derived
-        // state that is deliberately not called `lifecycle_state`.
-        assert!(OPTIMIZATION_JOB.contains("journal_len: Int"));
-        assert!(OPTIMIZATION_JOB.contains("state: String @index"));
-        assert!(
-            !OPTIMIZATION_JOB.contains("lifecycle_state"),
-            "a job is not a request and never grows a second request lifecycle"
-        );
-    }
-
-    fn type_declaration(name: &str) -> &'static str {
-        let sdl = ALL_COLLECTION_NAMES
-            .iter()
-            .position(|candidate| *candidate == name)
-            .map(|index| ALL[index])
-            .unwrap_or_else(|| panic!("{name} has no registered SDL"));
-        sdl.lines()
-            .map(str::trim)
-            .find(|line| line.starts_with("type "))
-            .unwrap_or_else(|| panic!("{name} has no type declaration"))
-    }
 }

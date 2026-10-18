@@ -1,10 +1,6 @@
-//! Opening a link from the interface in the person's own browser.
-//!
-//! The generic opener inherits this process's environment. Inside a packaged
-//! build that environment points at the package's own libraries, data
-//! directories and display backend, so the link either opens a browser that
-//! cannot load or opens nothing at all. Links go through the bridge instead,
-//! which strips the package's contributions first.
+//! Opening a link in the person's own browser. Links go through the bridge
+//! rather than a generic opener because a packaged build's environment cannot
+//! open a working browser; the bridge strips the package's contributions first.
 
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::host_browser;

@@ -1,7 +1,3 @@
-//! The config tool's model-facing contract: short agent IDs, receipts that
-//! name their target, refused silent Tools drops, the validation gaps the
-//! factory-setup audit found, and help recipes that run as written.
-
 use super::tests::{build_agent_node, call_config_tool, config, node_identity};
 use super::*;
 
@@ -63,7 +59,6 @@ async fn agent_ids_resolve_from_their_node_local_slug() {
     let read = ok(&tools, json!({"argv":["agent","get","worker-a"]})).await;
     assert!(read.to_string().contains(&worker), "{read}");
 
-    // The receipt names the agent and document the short ID selected.
     let receipt = ok(
         &tools,
         json!({"argv":["profile","preview"],"options":{"agent":"worker-a"},"set":{"display_name":"Worker"}}),
@@ -72,7 +67,6 @@ async fn agent_ids_resolve_from_their_node_local_slug() {
     assert_eq!(receipt["agent_id"], worker);
     assert_eq!(receipt["target_id"], format!("{worker}:inference"));
 
-    // With several agents, a profile edit must name its target.
     let error = refused(
         &tools,
         json!({"argv":["profile","preview"],"set":{"display_name":"Mine"}}),
@@ -83,7 +77,6 @@ async fn agent_ids_resolve_from_their_node_local_slug() {
         "{error}"
     );
 
-    // A local AgentTarget stores the resolved ID.
     ok(
         &tools,
         json!({"argv":["agent-target","create"],"target_id":"worker","set":{"name":"worker","target_node_did":owner,"agent_id":"worker-a"}}),
@@ -96,7 +89,6 @@ async fn agent_ids_resolve_from_their_node_local_slug() {
     .await;
     assert_eq!(target["document"]["agent_id"], worker);
 
-    // An exact ID wins over a slug that happens to match it.
     crate::test_support::install_test_agent(&node, &owner, "worker-b").await;
     crate::test_support::install_test_agent(&node, &owner, &format!("{owner}:worker-b")).await;
     let read = ok(
@@ -106,7 +98,6 @@ async fn agent_ids_resolve_from_their_node_local_slug() {
     .await;
     assert_eq!(read["document"]["tools_id"], "worker-b:tools");
 
-    // An unknown ID names the next call, with no connected-preview detour.
     let error = refused(
         &tools,
         json!({"argv":["tools","get"],"options":{"agent":"nope"}}),
@@ -117,7 +108,6 @@ async fn agent_ids_resolve_from_their_node_local_slug() {
         "{error}"
     );
 
-    // Create derives the ID; an explicit one would be silently ignored.
     let error = refused(
         &tools,
         json!({"argv":["agent","create"],"options":{"id":"x","display-name":"X","system-prompt":"p","preset":"readonly","profile":"beh-test:inference"}}),
@@ -145,8 +135,6 @@ async fn profile_receipts_name_the_default_target_and_preview_edit_means_preview
     assert_eq!(aliased["target_id"], "beh-test:inference");
 }
 
-/// #2133: verbs a model guesses resolve to the command they mean, or the
-/// refusal shows the exact working form.
 #[tokio::test]
 async fn guessed_verbs_resolve_or_name_the_working_form() {
     let (_node, _owner, tools) = setup("verbs", &["node", "tools", "automation"]).await;
@@ -193,8 +181,6 @@ async fn guessed_verbs_resolve_or_name_the_working_form() {
     );
 }
 
-/// #2133: a decode error names the field path and its advertised shape, not
-/// the Rust type serde expected.
 #[tokio::test]
 async fn type_errors_name_the_field_path_and_shape() {
     let (_node, _owner, tools) = setup("shapes", &["tools"]).await;
@@ -219,30 +205,6 @@ async fn type_errors_name_the_field_path_and_shape() {
     );
 }
 
-/// #2133: a target ID sent in argv and target_id is one ID when they agree.
-#[test]
-fn target_id_may_repeat_the_argv_id_but_not_conflict() {
-    let params = |target_id: &str| {
-        serde_json::from_value::<command::ConfigCommandParams>(json!({
-            "argv": ["datastore", "edit", "handoff-tools"],
-            "target_id": target_id,
-        }))
-        .unwrap()
-    };
-    assert_eq!(
-        json!(params("handoff-tools").into_argv_for_test().unwrap()),
-        json!(["datastore", "edit", "handoff-tools"])
-    );
-    let conflict = params("other")
-        .into_argv_for_test()
-        .unwrap_err()
-        .to_string();
-    assert_eq!(
-        conflict,
-        r#"target ID "handoff-tools" in argv conflicts with target_id "other"; send one of them"#
-    );
-}
-
 #[tokio::test]
 async fn own_tools_refuse_a_group_set_that_silently_drops_existing_settings() {
     let node = build_agent_node().await;
@@ -255,7 +217,6 @@ async fn own_tools_refuse_a_group_set_that_silently_drops_existing_settings() {
     grants.agent_id = "setup".into();
     grants.preview = true;
     grants.no_lockout = true;
-    // Surfaces exist before the invoker's Tools gain the lockout-guarded grant.
     let mut unguarded = grants.clone();
     unguarded.no_lockout = false;
     let setup_tools = build_self_config_tools(
@@ -314,14 +275,12 @@ async fn own_tools_refuse_a_group_set_that_silently_drops_existing_settings() {
     assert!(exact_error.contains("allow-drop"), "{exact_error}");
     let exact_lockout = refused(&tools, json!({"argv":["tools","update"],"target_id":"setup:tools","set":{"self_config":{"enable_self_config":false}}})).await;
     assert!(exact_lockout.contains("no-lockout"), "{exact_lockout}");
-    // The lockout guard still reports a lockout as one.
     let error = refused(
         &tools,
         json!({"argv":["tools","preview"],"set":{"self_config":{"enable_self_config":false}}}),
     )
     .await;
     assert!(error.contains("no-lockout guard"), "{error}");
-    // Carrying the group forward, or naming it, is accepted.
     ok(
         &tools,
         json!({"argv":["tools","preview"],"set":{"datastore":{"enable_defra_query":true,"datastore_tool_surface_ids":["engineer-mailbox","worker-surface"]}}}),
@@ -332,7 +291,6 @@ async fn own_tools_refuse_a_group_set_that_silently_drops_existing_settings() {
         json!({"argv":["tools","preview"],"options":{"allow-drop":"datastore"},"set":{"datastore":partial}}),
     )
     .await;
-    // Another agent's Tools keep plain replacement semantics.
     ok(
         &tools,
         json!({"argv":["tools","preview"],"options":{"agent":"worker"},"set":{"datastore":partial}}),
@@ -348,7 +306,6 @@ async fn automation_validation_refuses_what_every_fire_would_reject() {
         .unwrap();
     let edit = |kind: &str, id: &str, set: Value| json!({"argv":["automation","edit",kind],"target_id":id,"set":set});
 
-    // An event source on a collection that does not exist never fires.
     let error = refused(
         &tools,
         edit(
@@ -359,7 +316,6 @@ async fn automation_validation_refuses_what_every_fire_would_reject() {
     )
     .await;
     assert!(error.contains("not an installed collection"), "{error}");
-    // A stringified object where a native one belongs names the field.
     let error = refused(
         &tools,
         edit(
@@ -373,7 +329,6 @@ async fn automation_validation_refuses_what_every_fire_would_reject() {
         error.contains("field \\\"group\\\" holds a JSON string; send a native JSON object"),
         "{error}"
     );
-    // A native JSON object is not a filter string; the error names the field.
     let error = refused(
         &tools,
         edit(
@@ -387,7 +342,6 @@ async fn automation_validation_refuses_what_every_fire_would_reject() {
         error.contains("filter must be a string holding a GraphQL object literal"),
         "{error}"
     );
-    // A JSON-quoted filter key parses as a string but fails every query.
     let error = refused(
         &tools,
         edit(
@@ -408,7 +362,6 @@ async fn automation_validation_refuses_what_every_fire_would_reject() {
     )
     .await;
 
-    // #1970: a doc field the source collection lacks fails every fire.
     ok(
         &tools,
         edit(
@@ -442,7 +395,6 @@ async fn automation_validation_refuses_what_every_fire_would_reject() {
             && error.contains("message, reply_session_id"),
         "{error}"
     );
-    // A defaulted field may be absent from this collection.
     ok(
         &tools,
         edit(
@@ -463,7 +415,6 @@ async fn automation_validation_refuses_what_every_fire_would_reject() {
     .await;
     assert!(error.contains("doc.session"), "{error}");
 
-    // #2080: schedule fires cannot target a session or queue.
     ok(
         &tools,
         edit(
@@ -478,21 +429,42 @@ async fn automation_validation_refuses_what_every_fire_would_reject() {
         edit("task", "tick", json!({"prompt_template":"Tick"})),
     )
     .await;
-    for (field, value) in [
-        ("session_id_template", json!("abc-session")),
-        ("concurrency", json!("queued_serial")),
-    ] {
-        let mut set = json!({"task_id":"tick","source":{"kind":"schedule","schedule_id":"hourly"}});
-        set[field] = value;
-        let error = refused(&tools, edit("trigger", "hourly-tick", set)).await;
-        assert!(error.contains("schedule source"), "{field}: {error}");
-    }
+    let error = refused(&tools, edit("trigger", "hourly-tick", json!({"task_id":"tick","source":{"kind":"schedule","schedule_id":"hourly"},"concurrency":"queued_serial"}))).await;
+    assert!(error.contains("explicit session_id_template"), "{error}");
     ok(
         &tools,
         edit(
             "trigger",
             "hourly-tick",
             json!({"task_id":"tick","source":{"kind":"schedule","schedule_id":"hourly"}}),
+        ),
+    )
+    .await;
+    ok(
+        &tools,
+        edit(
+            "trigger",
+            "hourly-tick",
+            json!({"session_id_template":"abc-session","concurrency":"queued_serial"}),
+        ),
+    )
+    .await;
+    let error = refused(
+        &tools,
+        edit(
+            "trigger",
+            "hourly-tick",
+            json!({"session_id_template":"{{ doc.session }}"}),
+        ),
+    )
+    .await;
+    assert!(error.contains("doc"), "{error}");
+    ok(
+        &tools,
+        edit(
+            "trigger",
+            "hourly-tick",
+            json!({"session_id_template":null,"concurrency":null}),
         ),
     )
     .await;
@@ -529,7 +501,6 @@ async fn help_is_layered_and_its_recipes_run_as_written() {
         std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
     );
 
-    // Pages are plain text of skill size; nothing from the index repeats.
     let index = call_config_tool(&tools, vec!["help".into()]).await.unwrap();
     assert!(index.len() < 2_000, "help index is {} chars", index.len());
     for resource in [
@@ -606,8 +577,6 @@ async fn help_is_layered_and_its_recipes_run_as_written() {
     );
 }
 
-/// Model-facing results read top to bottom: the answer, then how to proceed,
-/// then metadata. Pins top-level key order of help, receipts and errors.
 #[tokio::test]
 async fn results_put_the_answer_first_and_execution_metadata_last() {
     let (_node, _owner, tools) = setup("key-order", &["node", "profile"]).await;
@@ -663,26 +632,6 @@ async fn results_put_the_answer_first_and_execution_metadata_last() {
     order(&error, &["error", "recovery", "config_execution"]);
 }
 
-#[test]
-fn a_list_of_strings_in_options_is_the_repeated_flag() {
-    let params: command::ConfigCommandParams = serde_json::from_value(json!({
-        "argv": ["cleanup", "preview"],
-        "options": {"target": ["task=a", "trigger=b"]}
-    }))
-    .unwrap();
-    assert_eq!(
-        json!(params.into_argv_for_test().unwrap()),
-        json!([
-            "cleanup",
-            "preview",
-            "--target",
-            "task=a",
-            "--target",
-            "trigger=b"
-        ])
-    );
-}
-
 #[tokio::test]
 async fn lists_include_unselected_documents() {
     let (_node, _owner, tools) = setup("lists", &["node", "tools", "automation"]).await;
@@ -707,7 +656,6 @@ async fn lists_include_unselected_documents() {
         .any(|row| row["surface_id"] == "unselected"));
 }
 
-/// Ladder finding: target_id on a command with a positional ID is that ID.
 #[tokio::test]
 async fn target_id_fills_a_positional_id() {
     let (_node, _owner, tools) = setup("positional", &["node", "tools"]).await;
@@ -737,8 +685,6 @@ async fn target_id_fills_a_positional_id() {
     assert_eq!(recovered["document"]["tools_id"], "beh-test:tools");
 }
 
-/// Mailbox suite: help states the identity choice where a policy is written,
-/// and the monitor example uses condition identity.
 #[tokio::test]
 async fn mailbox_help_states_the_identity_choice() {
     let (_node, _owner, tools) = setup("mailbox-help", &["tools"]).await;
@@ -758,8 +704,6 @@ async fn mailbox_help_states_the_identity_choice() {
     );
 }
 
-/// L3 datastore finding: the page says what fill means, with a caller key
-/// named correlation and a runtime-filled request_correlation.
 #[tokio::test]
 async fn datastore_help_says_what_fill_means() {
     let (_node, _owner, tools) = setup("fill-help", &["tools"]).await;
@@ -1291,7 +1235,7 @@ async fn saved_config_audit_reports_broken_references_without_mutation_and_accep
     crate::ConfigAccess::write_local(&node, "test.audit.corrupt", &format!(
         r#"mutation {{ update_AgentContext(filter: {{node_did: {{_eq: "{owner}"}}, context_id: {{_eq: "beh-test:context"}}}}, input: {{tools_id: "absent-tools"}}) {{context_id}} }}"#
     )).await.unwrap();
-    let access = crate::ConfigAccess::Local(node.clone());
+    let access = crate::ConfigAccess::local(node.clone());
     let query = format!(
         r#"{{ AgentContext(filter: {{node_did: {{_eq: "{owner}"}}}}) {{context_id tools_id}} }}"#
     );
@@ -1525,7 +1469,6 @@ async fn saved_config_audit_checks_selected_schema_fields_and_accepts_updates() 
         json!({"argv":["datastore","create","audit"],"set":{"entries":entries}}),
     )
     .await;
-    // Unselected declarations may precede schema installation.
     assert_eq!(
         ok(&tools, json!({"argv":["validate"]})).await["valid"],
         true

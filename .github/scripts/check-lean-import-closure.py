@@ -7,7 +7,6 @@ import sys
 
 
 def imports(source):
-    # Preserve newlines while removing Lean's nested block and line comments.
     header = []
     depth = 0
     i = 0

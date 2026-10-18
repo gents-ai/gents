@@ -1,11 +1,7 @@
 #!/bin/sh
-# Run Harbor while containing Docker resources to this invocation.
-#
-# Harbor normally runs `docker compose down` after every trial. If the
-# controller itself is cancelled, its shielded async cleanup can be terminated
-# with the event loop and leave task containers behind. This wrapper records
-# pre-existing Compose projects and force-removes only new Harbor task projects
-# when Harbor exits, including on INT/TERM.
+# Harbor's async cleanup can be terminated with the controller's event loop,
+# leaving task containers behind; this wrapper force-removes only new Harbor
+# Compose projects when Harbor exits, including on INT/TERM.
 set -eu
 
 : "${HARBOR_BIN:=harbor}"
@@ -38,8 +34,6 @@ cleanup_new_projects() {
 
     container_ids=$(docker ps -aq --filter "label=com.docker.compose.project=${project}")
     if [ -n "${container_ids}" ]; then
-      # Project names are derived from Harbor trial IDs. Selecting resources by
-      # the exact Compose label prevents this from touching unrelated services.
       docker rm -f ${container_ids} >/dev/null 2>&1 || true
     fi
     network_ids=$(docker network ls -q --filter "label=com.docker.compose.project=${project}")

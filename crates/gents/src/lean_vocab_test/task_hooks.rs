@@ -1,7 +1,5 @@
 use serde::Deserialize;
 
-/// `effective_timeout_secs` is resolved by the model, not authored. A host
-/// executor must consume it rather than re-deriving the default.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanTaskHook {
@@ -51,7 +49,6 @@ pub(crate) enum LeanTaskOutcome {
     Interrupted,
 }
 
-/// `Conformance.TaskHooksContracts.HookInvocation`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum LeanHookInvocation {
@@ -81,8 +78,6 @@ pub(crate) struct LeanTaskHookRunCase {
     pub(crate) after_success_attempted: Vec<LeanHookAttempt>,
     pub(crate) after_failure_attempted: Vec<LeanHookAttempt>,
     pub(crate) finally_attempted: Vec<LeanHookAttempt>,
-    /// `invocationTrace` of the modeled run, compared whole so cross-phase
-    /// order is fenced rather than per-phase slices.
     pub(crate) invocation_trace: Vec<LeanHookInvocation>,
     pub(crate) cleanup_errors: Vec<String>,
     pub(crate) expected_outcome: LeanTaskOutcome,

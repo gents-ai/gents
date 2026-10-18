@@ -15,13 +15,6 @@ export type DesktopStartupPhase =
   | "client-error"
   | "ready";
 
-/**
- * Sole decision whether startup starts the desktop client. The autostart
- * effect and the startup phase both read it, so startup waits on the client
- * only when something will start it. A local-standard peer is saved before
- * client state exists; while its runtime is not serving there is nothing to
- * connect to, and the shell must offer setup instead of waiting.
- */
 export function shouldAutoStartDesktopClient(
   snapshot: DesktopClientSnapshot,
   localServerAvailable: boolean | null,
@@ -68,8 +61,8 @@ export function projectStartupLoadingStatus(
     case "checking-managed-server":
       return {
         failed: false,
-        title: "Bringing Gents online",
-        currentLabel: "Checking the background node",
+        title: "Starting Gents",
+        currentLabel: "Starting your local node",
         managedServerState: "active",
         connectionState: "pending",
         clientState: "pending",
@@ -77,7 +70,7 @@ export function projectStartupLoadingStatus(
     case "loading-configuration":
       return {
         failed: false,
-        title: "Bringing Gents online",
+        title: "Starting Gents",
         currentLabel: "Reading saved connections",
         managedServerState: managedServerSupported ? "complete" : null,
         connectionState: "active",
@@ -86,7 +79,7 @@ export function projectStartupLoadingStatus(
     case "starting-client":
       return {
         failed: false,
-        title: "Bringing Gents online",
+        title: "Starting Gents",
         currentLabel: "Starting the secure client",
         managedServerState: managedServerSupported ? "complete" : null,
         connectionState: "complete",
@@ -122,6 +115,51 @@ export function projectStartupLoadingStatus(
   }
 }
 
+export type StartupStep = {
+  key: "node" | "connections" | "client";
+  label: string;
+  doing: string;
+  state: LoadingStepState;
+};
+
+export function startupSteps(
+  status: StartupLoadingStatus,
+  options: { remote?: boolean } = {},
+): StartupStep[] {
+  const node: StartupStep[] = status.managedServerState
+    ? [
+        options.remote
+          ? {
+              key: "node",
+              label: "Connect to server",
+              doing: "Connecting to the server",
+              state: status.managedServerState,
+            }
+          : {
+              key: "node",
+              label: "Start local node",
+              doing: "Starting your local node",
+              state: status.managedServerState,
+            },
+      ]
+    : [];
+  return [
+    ...node,
+    {
+      key: "connections",
+      label: "Load saved connections",
+      doing: "Reading saved connections",
+      state: status.connectionState,
+    },
+    {
+      key: "client",
+      label: "Start secure client",
+      doing: "Starting the secure client",
+      state: status.clientState,
+    },
+  ];
+}
+
 export type SessionLoadState = {
   phase: "idle" | "loading" | "loaded" | "failed";
   sessionId: string | null;
@@ -152,11 +190,6 @@ type SessionLoadingInput = {
   operationalState: DeploymentOperationalState | null;
 };
 
-/**
- * Sole projection for user-visible session waits. It does not invent
- * progress: every state comes from an in-flight local read, signed hydration
- * progress, the application sync owner, or runtime-authored agent readiness.
- */
 export function projectSessionLoadingStatus({
   selectedSessionId,
   selectedNodeDid,
@@ -239,8 +272,8 @@ export function projectSessionLoadingStatus({
       phase: "failed",
       title: "Session sync failed",
       detail: hydration.detail
-        ? `The agent refused the session history: ${hydration.detail}.`
-        : "The agent could not finish sending the requested session history.",
+        ? `The node refused the session history: ${hydration.detail}.`
+        : "The node could not finish sending the requested session history.",
       action: "retryHydration",
     };
   }
@@ -261,7 +294,7 @@ export function projectSessionLoadingStatus({
       layer: "sessionSync",
       phase: "loading",
       title: "Requesting session history",
-      detail: "Waiting for the enrolled agent to begin the secure transfer.",
+      detail: "Waiting for the enrolled node to begin the secure transfer.",
       action: null,
     };
   }
@@ -275,7 +308,7 @@ export function projectSessionLoadingStatus({
       phase: "blocked",
       title: "Waiting for session history",
       detail:
-        "No local messages were found yet. Waiting for the enrolled agent’s session projection.",
+        "No local messages were found yet. Waiting for the enrolled node’s session projection.",
       action: operationalState ? null : "retryLocal",
     };
   }

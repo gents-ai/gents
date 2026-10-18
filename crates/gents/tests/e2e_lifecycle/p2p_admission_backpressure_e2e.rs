@@ -1,17 +1,3 @@
-//! Multi-node e2e for #630 hub admission under a constrained push-worker bound.
-//!
-//! The TLA+ `P2PBackpressure` model makes `HealthyPeersDeliver` load-bearing on
-//! `PushWorkers` and timeout-slot release. This test exercises the shipping
-//! binding: both nodes start with `max_concurrent_push_tasks = 1` (the model's
-//! one-worker hub shape) and a real AgentRequest still converges owner → peer
-//! over PushLog. That is the operational acceptance check for the operator
-//! knobs: tight fan-out does not permanently stall healthy delivery when the
-//! peer is responsive.
-//!
-//! Out of scope here (needs defradb SyncDiagnostics export or fault injection):
-//! nonresponsive peer holding the only permit, Bitswap-stalled pending roots,
-//! gossip send-loop death.
-
 use std::time::{Duration, Instant};
 
 use gents::defra_node::EmbeddedNode;

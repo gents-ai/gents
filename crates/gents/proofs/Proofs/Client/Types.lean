@@ -66,9 +66,6 @@ def deriveAttempt : AttemptView → ClientTurnState
     | .workspaceBindingPending | .pending => .waitingForClaim
     | .claimed | .processing => .running
 
-/-- Generic client projection for a session/request head.  The effective turn
-    state is derived only from the request, while the exact request state remains
-    available for thin clients that present claim distinctions. -/
 structure ClientHeadProjection where
   turnState : ClientTurnState
   requestState : RequestState
@@ -123,8 +120,6 @@ def attemptsInObservationScope
 def retryParentIds (attempts : List KeyedAttemptView) : List String :=
   attempts.filterMap fun attempt => attempt.retryParentRequest
 
-/-- Candidate tips are exactly the scoped attempts whose ID is not named as a
-    retry parent by another scoped observation. -/
 def retryTips
     (observationScope : String)
     (attempts : List KeyedAttemptView) : List KeyedAttemptView :=

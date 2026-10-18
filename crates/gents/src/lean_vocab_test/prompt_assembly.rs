@@ -18,9 +18,6 @@ pub(crate) struct LeanCurrentInputCase {
     pub(crate) retained_indices: Vec<usize>,
 }
 
-/// One item inside a message, as emitted by `PromptAssembly.Content.Item`.
-/// `value` is the text/reasoning index for `text`/`other`, and the tool-call id
-/// for `call`.
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub(crate) struct LeanPromptAssemblyItem {
     pub(crate) item: String,
@@ -44,7 +41,6 @@ pub(crate) struct LeanPromptAssemblyAssistantOrderCase {
     pub(crate) expected_twice: Vec<LeanPromptAssemblyItem>,
 }
 
-/// One provider-bound row: the abstract transcript row plus its content.
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub(crate) struct LeanPromptAssemblyRow {
     pub(crate) role: String,
@@ -65,16 +61,12 @@ pub(crate) struct LeanPromptAssemblyModeSanitizeCase {
     pub(crate) association_indices: Vec<Vec<usize>>,
 }
 
-/// `sanitize` applied to a suffix of the input, for split-stability.
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct LeanPromptAssemblySplit {
     pub(crate) index: usize,
     pub(crate) expected: Vec<LeanPromptAssemblyRow>,
 }
 
-/// A sanitize witness from `PromptAssembly.Provider.sanitizeForProviderGlobal`.
-/// `expected`, `expected_twice`, and every `splits` entry are computed by
-/// running the Lean model, never written by hand.
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct LeanPromptAssemblySanitizeCase {
     pub(crate) name: String,
@@ -84,9 +76,6 @@ pub(crate) struct LeanPromptAssemblySanitizeCase {
     pub(crate) splits: Vec<LeanPromptAssemblySplit>,
 }
 
-/// The assembled layer order emitted from `PromptAssembly.assemble` (see
-/// `Proofs/Conformance/ContractCases/PromptAssembly.lean`); `skill_count`
-/// counts the actual skill selection, never raw references.
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct LeanPromptAssemblyLayerCase {
     pub(crate) name: String,
@@ -96,7 +85,6 @@ pub(crate) struct LeanPromptAssemblyLayerCase {
     pub(crate) slots: Vec<String>,
 }
 
-/// A tool-argument repair witness from `PromptAssembly.ToolArgs.repairArgs`.
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct LeanPromptAssemblyRepairCase {
     pub(crate) name: String,
@@ -106,7 +94,6 @@ pub(crate) struct LeanPromptAssemblyRepairCase {
     pub(crate) payload_only: bool,
 }
 
-/// A provider-input budget witness computed by `PromptAssembly.Budget`.
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct LeanPromptAssemblyBudgetCase {
     pub(crate) name: String,
@@ -123,8 +110,6 @@ pub(crate) struct LeanPromptAssemblyBudgetCase {
     pub(crate) can_dispatch: bool,
 }
 
-/// A multi-turn provider-input budget trace computed by
-/// `PromptAssembly.Budget`.
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct LeanPromptAssemblyTurnBudgetCase {
     pub(crate) name: String,
@@ -139,8 +124,6 @@ pub(crate) struct LeanPromptAssemblyTurnBudgetCase {
     pub(crate) turn_can_dispatch: Vec<bool>,
 }
 
-/// A static-overhead-aware compaction retention target computed by
-/// `PromptAssembly.Budget.compactionRetentionTarget`.
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct LeanPromptAssemblyRetentionCase {
     pub(crate) name: String,
@@ -154,8 +137,6 @@ pub(crate) struct LeanPromptAssemblyRetentionCase {
     pub(crate) rolling_summary_input_budget: usize,
 }
 
-/// A Claude `tool_use` map witness computed by
-/// `PromptAssembly.ClaudeMap.mapTurn`.
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub(crate) struct LeanPromptAssemblyClaudeMapCase {
     pub(crate) name: String,
@@ -165,8 +146,6 @@ pub(crate) struct LeanPromptAssemblyClaudeMapCase {
     pub(crate) ids: Vec<u64>,
 }
 
-/// A Claude Messages body witness computed by `ClaudeMap.systemBlocks` /
-/// `splitSystem` / `toolsField`.
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub(crate) struct LeanPromptAssemblyClaudeBodyCase {
     pub(crate) name: String,
@@ -180,7 +159,6 @@ pub(crate) struct LeanPromptAssemblyClaudeBodyCase {
     pub(crate) selected_effort: Option<String>,
 }
 
-/// A Claude Messages SSE witness computed by `ClaudeMap.runStream`.
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub(crate) struct LeanPromptAssemblyClaudeStreamCase {
     pub(crate) name: String,
@@ -190,8 +168,6 @@ pub(crate) struct LeanPromptAssemblyClaudeStreamCase {
     pub(crate) calls: Vec<String>,
 }
 
-/// Model-only Claude thinking SSE witness; both previews and sealed content
-/// come from `ClaudeMap.runContentTrace`, not from a native parser oracle.
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub(crate) struct LeanPromptAssemblyClaudeThinkingStreamCase {
     pub(crate) name: String,
@@ -289,7 +265,6 @@ pub(crate) struct LeanClaudeContentStep {
     pub(crate) sealed: Vec<LeanClaudeStreamBlock>,
 }
 
-/// Model-only continuation replay witness from reconstructed canonical native blocks.
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub(crate) struct LeanPromptAssemblyClaudeReplayCase {
     pub(crate) name: String,
@@ -315,9 +290,6 @@ pub(crate) struct LeanClaudeReasoningWitness {
     pub(crate) parts: Vec<LeanClaudeReplayInputPart>,
 }
 
-/// Selected assistant occurrences, not the complete native request. The split
-/// is measured in this projection; user and tool-result rows stay with their
-/// native assembly owner.
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanPromptAssemblyClaudeCheckpointCase {
@@ -333,8 +305,6 @@ pub(crate) struct LeanPromptAssemblyClaudeCheckpointCase {
     pub(crate) replay: Vec<Vec<LeanClaudeReplayBlock>>,
 }
 
-/// Reduction ceiling and the pair-safe prefix it admits, both derived by the
-/// compaction and Claude replay owners before any summary completion.
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanProtectedReplayCompactionCase {
@@ -454,6 +424,73 @@ pub(crate) struct LeanClaudeReplayInputPart {
     pub(crate) signature: Option<String>,
 }
 
+pub(crate) fn native_claude_reasoning_parts(
+    parts: &[LeanClaudeReplayInputPart],
+) -> Vec<gents_protocol::message::ReasoningContent> {
+    use gents_protocol::message::ReasoningContent;
+    parts
+        .iter()
+        .map(|part| {
+            let payload = String::from_utf8(part.payload.clone()).expect("reconstructed UTF-8");
+            match part.kind.as_str() {
+                "text" => ReasoningContent::Text {
+                    text: payload,
+                    signature: part.signature.clone(),
+                },
+                "redacted" => ReasoningContent::Redacted { data: payload },
+                "encrypted" => ReasoningContent::Encrypted(payload),
+                "summary" => ReasoningContent::Summary(payload),
+                other => panic!("unknown modeled reasoning part {other}"),
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn native_claude_replay_content(
+    blocks: &[LeanClaudeReplayInputBlock],
+) -> Vec<gents_protocol::message::AssistantContent> {
+    use gents_protocol::message::{
+        AssistantContent, Image, Reasoning, Text, ToolCall, ToolFunction,
+    };
+    let mut content = Vec::new();
+    for block in blocks {
+        match block.kind.as_str() {
+            "text" => content.push(AssistantContent::Text(Text {
+                text: String::from_utf8(block.payload.clone().expect("text payload"))
+                    .expect("reconstructed UTF-8"),
+            })),
+            "reasoning" => {
+                let parts =
+                    native_claude_reasoning_parts(block.parts.as_ref().expect("reasoning parts"));
+                content.push(AssistantContent::Reasoning(Reasoning {
+                    id: block.id.clone(),
+                    content: parts,
+                }));
+            }
+            "toolCall" => {
+                let arguments = String::from_utf8(block.arguments.clone().expect("arguments"))
+                    .expect("reconstructed UTF-8");
+                content.push(AssistantContent::ToolCall(ToolCall {
+                    id: block.id.clone().expect("provider tool id"),
+                    call_id: block.call_id.clone(),
+                    function: ToolFunction {
+                        name: block.name.clone().expect("tool name"),
+                        arguments: serde_json::from_str(&arguments)
+                            .expect("modeled JSON arguments"),
+                    },
+                    signature: block.signature.clone(),
+                    additional_params: block.additional_params.as_ref().map(|value| {
+                        serde_json::from_str(value).expect("modeled additional params JSON")
+                    }),
+                }));
+            }
+            "unsupportedMedia" => content.push(AssistantContent::Image(Image::default())),
+            other => panic!("unsupported modeled replay input block {other}"),
+        }
+    }
+    content
+}
+
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub(crate) struct LeanClaudeReplayBlock {
     pub(crate) kind: String,
@@ -465,7 +502,6 @@ pub(crate) struct LeanClaudeReplayBlock {
 }
 
 impl LeanClaudeReplayBlock {
-    /// The Anthropic Messages content block this modeled replay output names.
     pub(crate) fn native_json(&self) -> serde_json::Value {
         let payload = || {
             String::from_utf8(self.payload.clone().expect("replay payload"))
@@ -495,8 +531,6 @@ impl LeanClaudeReplayBlock {
     }
 }
 
-/// A request-wide token-ledger witness computed by
-/// `PromptAssembly.AggregateBudget`.
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct LeanAggregateTokenBudgetCase {
     pub(crate) request_doc_id: String,

@@ -1,12 +1,6 @@
 use super::*;
 
 impl ToolCallLifecycle {
-    /// Running mode-flip: await_mode Foreground → Background.
-    ///
-    /// Lean parity: ToolCallContext.Transition.background.
-    /// Requires Running state. Returns `ModeAlreadyBackground` if already in
-    /// Background mode. Persists the new await_mode to the row, then updates
-    /// the in-memory field on success.
     pub async fn background(&mut self) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "background")?;
         anyhow::ensure!(
@@ -45,9 +39,13 @@ impl ToolCallLifecycle {
             }}"#
         );
 
-        let response = execute_mutation_with_retry(&self.node, &mutation, "background")
-            .await
-            .context("background mutation")?;
+        let response = crate::config_client::ConfigAccess::write_local_response(
+            &self.node,
+            "background",
+            &mutation,
+        )
+        .await
+        .context("background mutation")?;
         if !response
             .data
             .as_ref()
@@ -63,13 +61,6 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
-    /// Running mode-flip: await_mode Background → Foreground.
-    ///
-    /// Lean parity: ToolCallContext.Transition.foreground.
-    /// Requires Running state. Returns `ModeAlreadyForeground` if already in
-    /// Foreground mode. Persists the new await_mode to the row, then updates
-    /// the in-memory field on success. An `agent_new`/`agent_message` row
-    /// is background-only: its result arrives only as a message.
     pub async fn foreground(&mut self) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "foreground")?;
         if self.is_session_message() {
@@ -83,8 +74,6 @@ impl ToolCallLifecycle {
             .doc_id
             .as_ref()
             .ok_or_else(|| anyhow!("foreground called before start_running persisted a row"))?;
-        // DefraDB requires DateTime fields to be re-supplied on update to
-        // avoid a type-mismatch error when re-validating the document.
         let started_at = self
             .started_at
             .ok_or_else(|| anyhow!("foreground called without started_at set"))?;
@@ -107,9 +96,13 @@ impl ToolCallLifecycle {
             }}"#
         );
 
-        let response = execute_mutation_with_retry(&self.node, &mutation, "foreground")
-            .await
-            .context("foreground mutation")?;
+        let response = crate::config_client::ConfigAccess::write_local_response(
+            &self.node,
+            "foreground",
+            &mutation,
+        )
+        .await
+        .context("foreground mutation")?;
         if !response
             .data
             .as_ref()

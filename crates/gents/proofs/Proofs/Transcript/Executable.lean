@@ -27,8 +27,6 @@ structure TranscriptCase where
   expectedStrongDrain : Bool
   deriving Repr
 
-/-! Fixture observations decide the actual transcript predicates and execute
-its mutation functions. They do not assert provider validity of durable rows. -/
 private instance (rows : List MessageRow) : Decidable (StrictlyIncreasingMessages rows) := by
   induction rows with
   | nil => simp only [StrictlyIncreasingMessages]; infer_instance
@@ -66,7 +64,7 @@ private def observedCase (name group action : String)
     (pre post : TranscriptState)
     (key : ToolResultKey) (_trace : Trace pre post) : TranscriptCase :=
   { name, group, action, actionCallIds, actionLogicalResultIds, actionPayloadHashes
-  , legal := true -- backed by the required transition trace, not a fixture assertion
+  , legal := true
   , preMessageCount := pre.messages.length
   , postMessageCount := post.messages.length
   , preToolCallCount := pre.toolCalls.length
@@ -123,8 +121,6 @@ private def firstResult := empty.appendUserMessage 1 (.toolResult 1 key)
 private def otherKey : ToolResultKey := ⟨0, 11, 20⟩
 private def secondResult := firstResult.appendUserMessage 2 (.toolResult 2 otherKey)
 
-/-- Durable orphan results remain representable; pair closure is false here,
-and provider sanitation is responsible for narrowing them before inference. -/
 def distinctResultIdsAppendDistinctRowsCase : TranscriptCase :=
   observedCase "distinct_result_ids_append_distinct_rows" "dedupe"
     "append_distinct_tool_result" [2] [11] [20] firstResult secondResult otherKey

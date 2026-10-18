@@ -1,6 +1,7 @@
 import type {
   DerivedCancelCauseView,
   RenderedTimelineItem,
+  RequestOriginView,
 } from "@source-inc/gents-desktop-client";
 import { CopyButton } from "@source-inc/gents-desktop-ui";
 import { requestProgressPresentation } from "../../chat-shell.js";
@@ -15,6 +16,7 @@ import {
 } from "./MarkdownContent.js";
 
 type UserMessage = Extract<RenderedTimelineItem, { kind: "userMessage" }>;
+type AutomatedInput = Extract<RenderedTimelineItem, { kind: "automatedInput" }>;
 type AssistantMessage = Extract<
   RenderedTimelineItem,
   { kind: "assistantMessage" }
@@ -25,7 +27,6 @@ type PendingUserTurn = Extract<
 >;
 type LiveAssistant = Extract<RenderedTimelineItem, { kind: "liveAssistant" }>;
 
-/** Render the bridge's canonical observation, never infer it from empty text. */
 function MessageAvailability({
   reconstruction,
 }: {
@@ -55,13 +56,30 @@ function MessageAvailability({
   }
 }
 
-export function UserMessageItem({ item }: { item: UserMessage }) {
+function originLabel(origin: RequestOriginView): string {
+  switch (origin.kind) {
+    case "sessionMessage":
+      return "Agent message";
+    case "trigger":
+      return "Triggered input";
+    case "goalContinuation":
+      return "Goal continuation";
+    case "backgroundCompletion":
+      return "Background result";
+  }
+}
+
+export function UserMessageItem({
+  item,
+}: {
+  item: UserMessage | AutomatedInput;
+}) {
   const content = normalizeTranscriptText(item.content);
   return (
     <div className="turn-block">
       <article className="message-card user-card">
         <div className="message-role">
-          user
+          {item.kind === "automatedInput" ? originLabel(item.origin) : "user"}
           <MessageTime value={item.timestamp} />
           {item.reconstruction.state === "ready" && content ? (
             <CopyButton className="message-copy" getText={() => content} />
@@ -120,7 +138,7 @@ export function PendingUserTurnItem({ item }: { item: PendingUserTurn }) {
     <div className="turn-block">
       <article className="message-card pending-card">
         <div className="message-role">
-          user
+          {item.origin ? originLabel(item.origin) : "user"}
           {progress ? (
             <span
               className={`request-progress${progress.animated ? " is-active" : ""}`}

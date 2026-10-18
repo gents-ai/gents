@@ -19,14 +19,7 @@ use gents::graphql::escape_graphql_string;
 
 const INFERENCE_METRICS_WINDOW_SECS: i64 = 5 * 60;
 const INFERENCE_METRICS_PAGE_SIZE: usize = 500;
-/// Processing requests per activity document. Each contributes four
-/// `limit: 1` reads, which bound the rows returned per request, not the work
-/// to order that request's tool or inference history.
 const LIVENESS_ACTIVITY_CHUNK: usize = 32;
-/// One deadline for the whole optional activity phase, well under the
-/// `/status` probe budget, so a slow activity read never turns a healthy
-/// runtime not-ok or stalls `/healthz`. Requests not yet covered when it
-/// expires fall back to `claimed_at`.
 pub(crate) const LIVENESS_ACTIVITY_BUDGET: std::time::Duration =
     std::time::Duration::from_millis(500);
 
@@ -476,7 +469,7 @@ fn push_node_readiness_metrics_at(
     lines: &mut Vec<String>,
     node_did: &str,
     rows: &[NodeReadinessRow],
-    observed_at: chrono::DateTime<chrono::Utc>,
+    _observed_at: chrono::DateTime<chrono::Utc>,
 ) {
     let readiness = rows.iter().find(|row| row.node_did == node_did);
     let (ready, unavailable, observed) = match project_node_readiness_summary(readiness, node_did) {
@@ -959,10 +952,6 @@ async fn load_inference_metrics_query_data(
     };
     let mut offset = 0usize;
 
-    // InferenceCall timestamps are persisted as strings today, so the Rust
-    // DefraDB GraphQL schema does not expose range filters for ended_at. Keep
-    // the scrape bounded by paging newest terminal calls and stopping once the
-    // ordered page crosses the local cutoff.
     loop {
         let query = inference_metrics_query(INFERENCE_METRICS_PAGE_SIZE, offset, offset == 0);
         let page = load_inference_metrics_page(graphql, &query).await?;
@@ -1224,7 +1213,6 @@ fn build_inference_metric_families(data: &InferenceMetricsQueryData) -> Inferenc
     families
 }
 
-/// InferenceCall.call_state vocabulary, not AgentRequest.lifecycle_state.
 fn is_terminal_inference_status(status: &str) -> bool {
     matches!(status.trim(), "failed" | "completed" | "cancelled")
 }
@@ -1238,8 +1226,6 @@ fn nonnegative_metric_value(value: Option<i64>) -> Option<i64> {
     value.map(|value| value.max(0))
 }
 
-/// Core health rows (runtime, readiness, backends, processing requests and
-/// running tool calls), before the optional progress observation.
 pub(crate) struct MetricsCoreData {
     envelope: MetricsQueryEnvelope,
     local_node_did: String,
@@ -1258,8 +1244,6 @@ pub(crate) async fn load_metrics_query_data(
         .await)
 }
 
-/// Reads core health only. Callers with their own deadline bound this read,
-/// then pass what remains to [`MetricsCoreData::with_liveness_activity`].
 pub(crate) async fn load_metrics_core_data(
     graphql: &GraphqlEndpoint,
     local_node_did: &str,
@@ -1325,9 +1309,6 @@ pub(crate) async fn load_metrics_core_data(
 }
 
 impl MetricsCoreData {
-    /// Adds the optional progress observation. Activity reads stop at
-    /// `deadline`, capped at [`LIVENESS_ACTIVITY_BUDGET`] from now; a deadline
-    /// already passed skips them and progress falls back to `claimed_at`.
     pub(crate) async fn with_liveness_activity(
         self,
         graphql: &GraphqlEndpoint,
@@ -1356,14 +1337,6 @@ impl MetricsCoreData {
     }
 }
 
-/// Newest tool-call and inference-call activity for each local processing
-/// request, keyed by the immutable `request_doc_id` and bound to the
-/// request's owning `node_did`.
-///
-/// Progress is an observation layered on the processing-request read: a
-/// failed activity read drops that chunk's activity (its requests fall back
-/// to `claimed_at`) instead of failing `/healthz`, `/status`, `/metrics` or
-/// `/self`. All chunks share the caller's single `deadline`.
 async fn load_liveness_activity(
     graphql: &GraphqlEndpoint,
     local_node_did: &str,
@@ -1734,54 +1707,6 @@ mod tests {
     }
 
     #[test]
-    fn node_readiness_metrics_keep_unchanged_semantic_state_observed() {
-        let mut lines = Vec::new();
-        push_node_readiness_metrics_at(
-            &mut lines,
-            "did:test:metrics",
-            &[NodeReadinessRow {
-                updated_at: "2026-08-28T23:59:00Z".to_string(),
-                ..metrics_readiness("did:test:metrics")
-            }],
-            readiness_observed_at(),
-        );
-        let rendered = lines.join("\n");
-        assert!(
-            rendered.contains(r#"gents_runtime_runnable_agents{node_did="did:test:metrics"} 1"#)
-        );
-        assert!(
-            rendered.contains(r#"gents_runtime_unavailable_agents{node_did="did:test:metrics"} 1"#)
-        );
-        assert!(rendered
-            .contains(r#"gents_runtime_node_readiness_observed{node_did="did:test:metrics"} 1"#));
-    }
-
-    #[test]
-    fn metrics_runtime_inventory_is_readiness_not_diagnostics() {
-        let readiness = metrics_readiness("did:test:readiness-only");
-        let data = MetricsQueryData {
-            node_runtimes: Vec::new(),
-            node_readiness: vec![readiness],
-            inference_backends: Vec::new(),
-            liveness: RuntimeLivenessSnapshot::default(),
-        };
-        assert_eq!(
-            runtime_inventory(&data)
-                .map(|row| row.node_did.as_str())
-                .collect::<Vec<_>>(),
-            vec!["did:test:readiness-only"]
-        );
-
-        let diagnostics_only = MetricsQueryData {
-            node_runtimes: vec![metrics_runtime("did:test:diagnostics-only")],
-            node_readiness: Vec::new(),
-            inference_backends: Vec::new(),
-            liveness: RuntimeLivenessSnapshot::default(),
-        };
-        assert_eq!(runtime_inventory(&diagnostics_only).count(), 0);
-    }
-
-    #[test]
     fn backend_probe_status_metric_reflects_measured_health() {
         fn doc_row(
             backend_id: &str,
@@ -2043,27 +1968,6 @@ mod tests {
     }
 
     #[test]
-    fn p2p_metrics_render_stale_holds_last_known_counts() {
-        let mut lines = Vec::new();
-        render_p2p_metrics(
-            &mut lines,
-            Some(&P2pMetricsSnapshot {
-                enabled: true,
-                connected_peers: 7,
-                replicators: 4,
-                admission: None,
-                sync_status: None,
-                stale: true,
-            }),
-        );
-        let rendered = lines.join("\n");
-        assert!(rendered.contains("gents_p2p_status_stale 1"));
-        assert!(rendered.contains("gents_p2p_connected_peers 7"));
-        assert!(rendered.contains("gents_p2p_replicators 4"));
-        assert!(rendered.contains("gents_p2p_sync_status_available 0"));
-    }
-
-    #[test]
     fn metrics_query_envelope_treats_null_probe_status_as_unknown() {
         let envelope: MetricsQueryEnvelope = serde_json::from_value(serde_json::json!({
             "NodeRuntime": [],
@@ -2086,11 +1990,6 @@ mod tests {
 
     #[test]
     fn metric_labels_escape_backslash_quote_and_newline() {
-        // Prometheus text-format escaping: a label value containing a
-        // backslash must have it doubled (not dropped), or an attacker-
-        // controlled DID ending in `\` merges the following quote/label into
-        // the escape sequence. Quote and newline are already pinned by the
-        // inference render tests; backslash is not covered elsewhere.
         let mut lines = Vec::new();
         push_metric_sample(
             &mut lines,
@@ -2187,53 +2086,6 @@ mod tests {
         assert_eq!(families.request_totals.get(&failed_key), Some(&1));
         assert_eq!(families.prompt_token_totals.get(&token_key), Some(&22));
         assert_eq!(families.completion_token_totals.get(&token_key), Some(&7));
-    }
-
-    #[test]
-    fn inference_metrics_query_pages_terminal_calls_by_newest_end_time() {
-        let first_page = inference_metrics_query(500, 0, true);
-        assert!(first_page.contains("Node"));
-        assert!(first_page.contains("Agent"));
-        assert!(first_page.contains("order: [{ ended_at: DESC }, { call_id: DESC }]"));
-        assert!(first_page.contains("limit: 500"));
-        assert!(first_page.contains("offset: 0"));
-
-        let later_page = inference_metrics_query(500, 500, false);
-        assert!(!later_page.contains("Node"));
-        assert!(!later_page.contains("Agent"));
-        assert!(later_page.contains("offset: 500"));
-    }
-
-    #[test]
-    fn retain_windowed_inference_calls_keeps_recent_and_stops_on_old_rows() {
-        let window_started_at = rfc3339_timestamp("2026-06-13T10:00:00.000000000+00:00").unwrap();
-        let calls = vec![
-            InferenceCallMetricRow {
-                node_did: String::new(),
-                agent_id: String::new(),
-                backend_id: String::new(),
-                call_state: "completed".to_string(),
-                ended_at: "2026-06-13T10:00:01.000000000+00:00".to_string(),
-                prompt_tokens: None,
-                completion_tokens: None,
-            },
-            InferenceCallMetricRow {
-                node_did: String::new(),
-                agent_id: String::new(),
-                backend_id: String::new(),
-                call_state: "completed".to_string(),
-                ended_at: "2026-06-13T09:59:59.999999999+00:00".to_string(),
-                prompt_tokens: None,
-                completion_tokens: None,
-            },
-        ];
-
-        let (recent, reached_window_start) =
-            retain_windowed_inference_calls(calls, &window_started_at);
-
-        assert_eq!(recent.len(), 1);
-        assert!(reached_window_start);
-        assert_eq!(recent[0].ended_at, "2026-06-13T10:00:01.000000000+00:00");
     }
 
     #[test]

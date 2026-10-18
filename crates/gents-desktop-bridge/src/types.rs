@@ -6,6 +6,19 @@ mod util;
 mod views;
 
 pub use requests::*;
+#[path = "types/goals.rs"]
+mod goals;
+pub use goals::*;
 pub(crate) use util::is_live_turn_state;
 pub use util::{normalize_optional, turn_state_label};
 pub use views::*;
+
+#[path = "types/packs.rs"]
+mod packs;
+pub use packs::*;
+
+#[path = "types/diagnostics.rs"]
+mod diagnostics;
+#[path = "types/json.rs"]
+mod json;
+pub use diagnostics::*;

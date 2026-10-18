@@ -1,7 +1,3 @@
-//! Provider-reported usage per node and provider account, kept in
-//! `ProviderAccountUsage` and never on `OAuthCredential`: every credential
-//! write reloads the runtime view.
-//!
 //! The process that hosts the embedded node and runs the provider clients is
 //! the only writer, so writes take the node rather than a `ConfigAccess`.
 //! Usage is an observation: it picks no account and gates nothing.
@@ -58,7 +54,6 @@ impl UsageAccount {
         }
     }
 
-    /// An API-key backend's account; `None` without a backend id.
     pub fn for_agent(agent: &ResolvedAgent) -> Option<Self> {
         Some(Self::Backend {
             node_did: agent.node_did().to_string(),
@@ -67,8 +62,6 @@ impl UsageAccount {
         })
     }
 
-    /// The account `backend` names for `node_did` (account = backend): a
-    /// sign-in only for node OAuth, as [`crate::oauth_credential::backend_account`].
     fn for_backend(node_did: &str, backend: &InferenceBackend) -> Self {
         match (backend.provider_kind.oauth_provider(), &backend.auth) {
             (Some(provider), BackendAuth::NodeOAuth { account_ref }) => Self::Credential {
@@ -111,13 +104,10 @@ impl StoredUsage {
     }
 }
 
-/// Stored usage as a surface shows it: visible windows with their reset
-/// countdown and age, or a note saying why there is no number.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct UsageView {
     pub windows: Vec<WindowView>,
     pub plan: Option<String>,
-    /// Only when `windows` is empty: never a percentage, never "unlimited".
     pub note: Option<&'static str>,
     pub read_at: Option<DateTime<Utc>>,
     pub read_error: Option<String>,
@@ -133,11 +123,9 @@ pub struct WindowView {
     pub source: UsageSource,
     pub observed_at: DateTime<Utc>,
     pub age_secs: i64,
-    /// Older than [`account_usage::STALE_AFTER`]: the last known value.
     pub last_known: bool,
 }
 
-/// `stored` for an account of `kind` at `now`.
 pub fn usage_view(
     stored: Option<&StoredUsage>,
     kind: crate::BackendProviderKind,
@@ -181,24 +169,15 @@ pub fn usage_view(
     }
 }
 
-/// Where an account's usage is stored.
 struct Target {
     credential_doc_id: Option<String>,
     node_did: String,
     provider: String,
-    /// Written here: the provider account key, else `reference`.
     key: String,
-    /// `ref:<account_ref or original>:<_docID>`, DID-free, for usage seen
-    /// before the key is known. The `_docID` keeps a new first sign-in after
-    /// every account was removed, which reuses the reference, apart from the
-    /// removed account.
     reference: Option<String>,
-    /// The plan the sign-in carries, for a report that has none.
     plan: Option<UsagePlan>,
 }
 
-/// `None` for a credential account with no enabled sign-in: disabled and
-/// removed accounts get no usage written or loaded.
 async fn target(access: &ConfigAccess, account: &UsageAccount) -> Result<Option<Target>> {
     match account {
         UsageAccount::Backend {
@@ -264,20 +243,15 @@ fn credential_target(
     }))
 }
 
-/// The key of usage seen before the account's key is known: DID-free, and
-/// apart from an earlier account that reused the reference.
 pub(crate) fn fallback_key(account_ref: Option<&str>, doc_id: &str) -> String {
     format!("ref:{}:{doc_id}", account_ref.unwrap_or("original"))
 }
 
 /// Deletes `node_did`'s `provider` usage rows under `keys` in the caller's
-/// transaction, for an account's remove. This is the one usage write
-/// outside the runtime (with a runtime up the CLI writes over HTTP). It is
-/// safe because a delete creates nothing, so it cannot race the unique
-/// create the runtime-only writer guards; a runtime write racing it lands
-/// before it (deleted) or after it (a row no enabled account resolves to).
-// ponytail: rows under an account's earlier key (a key change) stay behind,
-// unreachable and token-free; sweep by key prefix if row counts show.
+/// transaction, for an account's remove. Safe to race the runtime-only
+/// writer: a delete creates nothing, and a racing runtime write either
+/// lands before it (deleted) or after it (a row no enabled account
+/// resolves to).
 pub(crate) async fn delete_usage_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -317,7 +291,6 @@ fn stored_row(response: &Value) -> Result<Option<(String, StoredUsage)>> {
         return Ok(None);
     };
     let doc_id = row["_docID"].as_str().context("usage row without _docID")?;
-    // A report this build cannot read is replaced by the next observation.
     let report: UsageReport = serde_json::from_value(row["report"].clone()).unwrap_or_default();
     let read_at = row["read_at"]
         .as_str()
@@ -351,8 +324,6 @@ async fn load(access: &ConfigAccess, target: &Target) -> Result<Option<StoredUsa
     Ok(loaded.filter(|stored| !stored.report.is_empty() || stored.read_at.is_some()))
 }
 
-/// Stored usage of `account`; `None` when nothing is stored or the account
-/// has no enabled sign-in.
 pub async fn load_usage(
     access: &ConfigAccess,
     account: &UsageAccount,
@@ -363,7 +334,6 @@ pub async fn load_usage(
     }
 }
 
-/// Merge `report` into `account`'s stored usage.
 pub async fn record_usage(
     node: &Arc<EmbeddedNode>,
     account: &UsageAccount,
@@ -372,10 +342,6 @@ pub async fn record_usage(
     write(node, account, report, None).await
 }
 
-/// One read-merge-write transaction. `read` is an on-demand read's time and
-/// error; header observations leave both as stored. Unchanged values are not
-/// rewritten until the report is [`REWRITE_AFTER`] newer, which bounds
-/// updates, and their replication, to about one a minute per account.
 async fn write(
     node: &Arc<EmbeddedNode>,
     account: &UsageAccount,
@@ -385,9 +351,9 @@ async fn write(
     if report.is_empty() && read.is_none() {
         return Ok(());
     }
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     access
-        .transact("usage_observation.record", |txn| {
+        .transact_write("usage_observation.record", |txn| {
             let (report, read, access) = (report.clone(), read.clone(), &access);
             Box::pin(async move {
                 let target = match account {
@@ -458,8 +424,6 @@ async fn write(
         .await
 }
 
-/// Records the usage headers of one provider client's responses for the
-/// account that client serves.
 pub struct UsageReporter {
     node: Arc<EmbeddedNode>,
     pub(crate) account: UsageAccount,
@@ -479,9 +443,6 @@ impl UsageReporter {
     /// Parses now and writes in its own task, so a response never waits on
     /// the node's write gate. The spawned task does not inherit the caller's
     /// transaction (a task-local), so the write is never nested in it.
-    // ponytail: one task per response, unbounded; most write nothing (no
-    // rewrite of unchanged values). Coalesce per account if the write gate
-    // shows contention.
     pub(crate) fn observe(self: &Arc<Self>, headers: &HeaderMap, source: UsageSource) {
         let headers = headers
             .iter()
@@ -502,9 +463,7 @@ impl UsageReporter {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UsageTrigger {
-    /// The account list was opened.
     Open,
-    /// The user asked for fresh usage.
     Refresh,
 }
 
@@ -513,13 +472,11 @@ pub enum UsageTrigger {
 pub enum UsageRead {
     Read,
     SkippedRecent,
-    /// The provider has no usage read.
     NotReported,
     Disabled,
     Unavailable(String),
 }
 
-/// Usage endpoints that do not follow from the backend endpoint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageEndpoints {
     pub grok_billing: String,
@@ -542,14 +499,6 @@ const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 type UsageParser = fn(&Value, DateTime<Utc>) -> Option<UsageReport>;
 
-/// Reads `backend`'s usage from its provider on demand. Runs in the runtime:
-/// an OAuth account's bearer comes from the refresh owner, so an expired
-/// sign-in is renewed here like a request would renew it (one credential
-/// write, one runtime view reload). Every skip happens before any bearer is
-/// touched, so a skipped read never refreshes. Open and Refresh read alike,
-/// Claude included: an account read within `READ_SKIP_WINDOW` is skipped.
-// ponytail: the skip check is not atomic, so two concurrent Opens of one
-// account can both read upstream; add a per-account in-flight guard if it shows.
 pub async fn read_account_usage(
     node: Arc<EmbeddedNode>,
     node_did: &str,
@@ -573,7 +522,7 @@ pub async fn read_account_usage(
         },
         _ => None,
     };
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let mut account = UsageAccount::for_backend(node_did, backend);
     let Some(target) = target(&access, &account).await? else {
         return Ok(unavailable("no enabled account"));
@@ -632,8 +581,8 @@ pub async fn read_account_usage(
                         .header("anthropic-beta", crate::claude_messages::OAUTH_BETA),
                     account_usage::claude_oauth_usage,
                 ),
-                // Returned above; listed so a new kind fails to compile
-                // instead of sending its bearer to another provider.
+                // A new provider kind must fail to compile here rather than
+                // send its bearer to another provider.
                 Kind::OpenAiCompatible | Kind::OpenRouter | Kind::AnthropicApiKey => {
                     return Ok(UsageRead::NotReported);
                 }
@@ -674,8 +623,6 @@ pub async fn read_account_usage(
     }
 }
 
-/// One on-demand read's outcome for an account (`account_ref`, no
-/// `backend_id`) or an account-free backend (`backend_id`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountUsageRead {
     pub provider: String,
@@ -684,10 +631,6 @@ pub struct AccountUsageRead {
     pub outcome: UsageRead,
 }
 
-/// Reads the usage of each of `node_did`'s accounts and account-free
-/// backends once, concurrently: `provider` keeps only that provider's
-/// accounts. A disabled account gets no read; an account not on this node
-/// is left out. One account's store error never hides the others.
 pub async fn read_node_usage(
     node: Arc<EmbeddedNode>,
     node_did: &str,
@@ -696,7 +639,7 @@ pub async fn read_node_usage(
     endpoints: &UsageEndpoints,
     now: DateTime<Utc>,
 ) -> Result<Vec<AccountUsageRead>> {
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let accounts = crate::oauth_credential::list_accounts(&access, node_did).await?;
     let backends = access
         .transact_readonly("usage_observation.read_node", |txn| {
@@ -705,8 +648,6 @@ pub async fn read_node_usage(
             })
         })
         .await?;
-    // An enabled backend claims its account; an enabled account no enabled
-    // backend names is read through its provider's preset connection.
     let mut seen = std::collections::HashSet::new();
     let mut jobs = Vec::new();
     for backend in &backends {
@@ -777,8 +718,6 @@ fn unavailable(reason: &str) -> UsageRead {
     UsageRead::Unavailable(reason.to_string())
 }
 
-/// `/wham/usage` on the backend's host: the Responses base without its
-/// trailing `/codex` (default `https://chatgpt.com/backend-api/wham/usage`).
 fn codex_usage_url(endpoint: &str) -> String {
     let base = crate::chatgpt_codex::normalize_endpoint(endpoint);
     format!(
@@ -787,8 +726,6 @@ fn codex_usage_url(endpoint: &str) -> String {
     )
 }
 
-/// Stored usage of the account `backend` names for `node_did`, with the
-/// sign-in's plan when the report has none.
 pub async fn usage_for_backend(
     access: &ConfigAccess,
     node_did: &str,

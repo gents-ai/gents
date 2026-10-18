@@ -1,7 +1,3 @@
-/* Which sessions sent work into this one: the session that started it, and
-   the sender of each turn another session caused, both from the runtime's
-   lineage owner as the bridge maps it. Nothing is matched by text. Senders
-   are ordinary sessions, and none of this confers hierarchy. */
 import { useMemo } from "react";
 import type {
   LinkedSessionView,
@@ -14,18 +10,13 @@ import { scopeKey, summariesByScope, useListedScopes } from "./workers";
 
 export type Sender = {
   sessionId: string;
-  /* the sending session as the runtime lists it; null when it is not listed
-     on this deployment */
   summary: SessionSummary | null;
   agentName: string | null;
 };
 
 export type ParentWork = {
-  /* the session that started this one */
   parent: Sender | null;
-  /* the session that sent a turn's request; null for the person's own */
   sentBy: (requestId: string | null | undefined) => Sender | null;
-  /* whether any turn here was sent by another session */
   hasSenders: boolean;
 };
 

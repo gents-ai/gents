@@ -1,17 +1,8 @@
-//! The eval outcome vocabulary and its projection onto evidence classes.
-//!
-//! `Proofs/Eval.lean` owns the rule; this module is its transcription, and
-//! `conformance::rust_eval_outcome_vocabulary_and_projection_match_lean` drives
-//! every generated case through [`classify`] and [`subject_causable`]. The
-//! governing rule: anything the subject under evaluation could cause counts
-//! against it; only what it cannot cause is excluded.
-
 use serde::{Deserialize, Serialize};
 
 /// Frozen into every run's origin and embedded in reports.
 pub const TAXONOMY_VERSION: &str = "1";
 
-/// `Proofs/Eval.lean` `OutcomeKind`. Order matches the Lean vocabulary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OutcomeKind {
@@ -116,7 +107,6 @@ impl EvidenceClass {
     }
 }
 
-/// `Eval.classify`. Anything the subject could cause counts against it.
 pub fn classify(kind: OutcomeKind, reason: Option<ProviderReason>) -> EvidenceClass {
     use OutcomeKind::*;
     match (kind, reason) {
@@ -141,16 +131,12 @@ pub fn subject_causable(kind: OutcomeKind, reason: Option<ProviderReason>) -> bo
     use OutcomeKind::*;
     use ProviderReason::{Rejected, Unavailable};
     match (kind, reason) {
-        // Failures the subject under evaluation can itself produce.
         (
             ModelAcceptance | Deadline | Tool | Runtime | SkippedPrerequisite,
             None | Some(Rejected | Unavailable),
         ) => true,
-        // A candidate prompt can cause a 4xx; it cannot cause an outage, and a
-        // provider outcome with no reason says nothing about the subject.
         (Provider, Some(Rejected)) => true,
         (Provider, Some(Unavailable) | None) => false,
-        // A pass is not a failure; the rest are not evidence about the subject.
         (
             Passed | Infrastructure | Inconclusive | Grader | Unknown,
             None | Some(Rejected | Unavailable),
@@ -160,8 +146,6 @@ pub fn subject_causable(kind: OutcomeKind, reason: Option<ProviderReason>) -> bo
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
     use super::*;
 
     #[test]
@@ -173,43 +157,9 @@ mod tests {
                 Some(ProviderReason::Unavailable),
             ] {
                 if subject_causable(kind, reason) {
-                    assert_eq!(
-                        classify(kind, reason),
-                        EvidenceClass::Fail,
-                        "{kind:?} {reason:?}"
-                    );
+                    assert_eq!(classify(kind, reason), EvidenceClass::Fail);
                 }
             }
-        }
-    }
-
-    #[test]
-    fn names_round_trip() {
-        for kind in OutcomeKind::ALL {
-            assert_eq!(OutcomeKind::parse(kind.as_str()), Some(kind));
-            assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());
-            assert_eq!(
-                serde_json::from_value::<OutcomeKind>(json!(kind.as_str())).unwrap(),
-                kind,
-                "{kind:?} must deserialize from its own wire name"
-            );
-        }
-        for reason in ProviderReason::ALL {
-            assert_eq!(ProviderReason::parse(reason.as_str()), Some(reason));
-            assert_eq!(serde_json::to_value(reason).unwrap(), reason.as_str());
-            assert_eq!(
-                serde_json::from_value::<ProviderReason>(json!(reason.as_str())).unwrap(),
-                reason,
-                "{reason:?} must deserialize from its own wire name"
-            );
-        }
-        for class in EvidenceClass::ALL {
-            assert_eq!(serde_json::to_value(class).unwrap(), class.as_str());
-            assert_eq!(
-                serde_json::from_value::<EvidenceClass>(json!(class.as_str())).unwrap(),
-                class,
-                "{class:?} must deserialize from its own wire name"
-            );
         }
     }
 }

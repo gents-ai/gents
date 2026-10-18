@@ -2,8 +2,6 @@ import Proofs.Mailbox.State
 
 namespace Mailbox
 
-/-- Facts from the existing signed request admission and immutable request row.
-This model consumes a reply, not a grant to execute arbitrary host commands. -/
 structure ReplyEvidence where
   requestDocId : String
   sourceDocId : String
@@ -39,9 +37,6 @@ instance (item : Item) (envelope : ReplyEnvelope) (reply : ReplyEvidence) :
   unfold replyMatches
   infer_instance
 
-/-- Consumption belongs in the existing request-claim transaction. An already
-consumed item permits only the same request; its lifecycle owner still decides
-whether that request may resume. Dismissal/expiry never admits a reply. -/
 def claimReply? (item : Item) (envelope : ReplyEnvelope) (reply : ReplyEvidence) : Option Item :=
   if replyMatches item envelope reply then
     match item.status with

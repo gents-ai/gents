@@ -157,9 +157,6 @@ pub(crate) struct LeanCanonicalToolAdmission {
     pub(crate) await_mode: String,
 }
 
-/// A background tool spawned by an already running parent tool. It shares the
-/// lifecycle context fields of [`LeanCanonicalToolAdmission`] and additionally
-/// names the physical parent tool document that owns it.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCanonicalSpawnedToolAdmission {
@@ -268,14 +265,12 @@ pub(crate) enum LeanCanonicalExecutionOperation {
         generation: u64,
         record: LeanCanonicalSegment,
     },
-    /// Explicit due-only deadline CAS. Output and dispatch never extend the lease.
     RenewLease {
         actor: u64,
         now: u64,
         generation: u64,
         expected_deadline: u64,
     },
-    /// Guarded raw output insert. It checks the live lease but never updates it.
     AppendOutput {
         actor: u64,
         now: u64,
@@ -288,15 +283,12 @@ pub(crate) enum LeanCanonicalExecutionOperation {
         document: u64,
         record: LeanCanonicalSegment,
     },
-    /// The same guarded insert attempted by a same-task holder whose sibling
-    /// awaits the gate. The holder is unpollable, so nothing may commit.
     AppendOutputWhileSiblingWaits {
         actor: u64,
         now: u64,
         generation: u64,
         record: LeanCanonicalSegment,
     },
-    /// Accepted provider turn with caller-supplied closure, header and admissions.
     AcceptTurn {
         actor: u64,
         now: u64,
@@ -332,10 +324,11 @@ pub(crate) enum LeanCanonicalExecutionOperation {
         closing: LeanCanonicalSegment,
         message: LeanCanonicalMessage<LeanPayloadSpec>,
     },
-    /// Advance the compaction watermark across a provider-stable published prefix.
-    AdvanceCompactionCursor { actor: u64, now: u64, cursor: u64 },
-    /// Integrity revocation: terminate conflicted work without reconstructing it
-    /// and without discarding either conflicting fact.
+    AdvanceCompactionCursor {
+        actor: u64,
+        now: u64,
+        cursor: u64,
+    },
     RevokeCorrupt {
         actor: u64,
         now: u64,
@@ -344,9 +337,6 @@ pub(crate) enum LeanCanonicalExecutionOperation {
         outcome: String,
         selection: LeanTerminalSelection,
     },
-    /// A distinct immutable fact arriving by replication. It bypasses the local
-    /// mutation gate, so the native fixture must insert it as a remote merge and
-    /// never route it through the execution owner.
     DeliverReplicatedSegment {
         actor: u64,
         now: u64,
@@ -409,8 +399,6 @@ pub(crate) struct LeanCanonicalExecutionObservation {
     pub(crate) physical_tool_request: Option<u64>,
     pub(crate) lease_deadline: Option<u64>,
     pub(crate) compaction_cursor: Option<u64>,
-    /// Exact durable rows. Fixture output is deterministically ordered, while
-    /// harness comparison treats native rows as multisets with multiplicity.
     pub(crate) segments: Vec<LeanCanonicalSegment>,
     pub(crate) messages: Vec<LeanCanonicalMessage<LeanPayloadSpec>>,
 }
@@ -467,8 +455,6 @@ pub(crate) trait CanonicalExecutionAdapter {
     ) -> ExecutionFuture<'a, Result<LeanCanonicalExecutionObservation, Self::Error>>;
 }
 
-/// Initializes one native fixture and drives the entire generated script on
-/// that same handle. The adapter cannot inspect the Lean expectations.
 pub(crate) async fn assert_native_execution_case<A>(
     case: &LeanCanonicalExecutionCase,
     adapter: &mut A,
@@ -520,14 +506,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{exact_multiset_eq, LeanCanonicalExecutionCase, LeanCanonicalExecutionOperation};
-
-    #[test]
-    fn exact_multiset_comparison_is_order_independent_and_multiplicity_sensitive() {
-        assert!(exact_multiset_eq(&[1, 2, 1], &[2, 1, 1]));
-        assert!(!exact_multiset_eq(&[1, 2], &[1, 3]));
-        assert!(!exact_multiset_eq(&[1, 1], &[1, 2]));
-    }
+    use super::{LeanCanonicalExecutionCase, LeanCanonicalExecutionOperation};
 
     #[test]
     fn generated_background_accept_cases_decode_background_admissions() {

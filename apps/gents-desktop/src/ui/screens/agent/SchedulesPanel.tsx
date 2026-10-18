@@ -44,7 +44,6 @@ export function ScheduleEditor({
 }: {
   deployment: NodeView;
   schedule: Schedule;
-  /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
 }) {
   const {
@@ -88,7 +87,6 @@ export function ScheduleEditor({
       });
     },
     {
-      /* only the cadence chosen is checked */
       problems: (next) =>
         next.cadenceKind === "interval"
           ? {
@@ -298,7 +296,6 @@ export function SchedulesPanel({
         return (
           <ScheduleEditor
             key={schedule.schedule_id}
-
             deployment={deployment}
             schedule={schedule}
           />

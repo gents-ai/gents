@@ -1,9 +1,3 @@
-//! Declarative, schema-bounded single-collection write tool.
-//!
-//! The declaration owns the tool name and permitted fields; DefraDB owns their
-//! types. Each call writes one document through the configuration transaction
-//! owner and returns its canonical receipt, including runtime-filled metadata.
-
 use crate::llm::tool::ToolDefinition;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Map, Value};
@@ -63,7 +57,6 @@ impl BoundedWriteTool {
         }
     }
 
-    /// The DatastoreToolSurface that declared this tool, named by refusals.
     pub fn declared_by(mut self, surface_id: Option<String>) -> Self {
         self.surface_id = surface_id;
         self
@@ -97,13 +90,14 @@ impl BoundedWriteTool {
 
     /// The field types read from the embedded node, without I/O.
     fn field_types(&self) -> Result<std::collections::BTreeMap<String, String>> {
-        let ConfigAccess::Local(node) = &self.access else {
+        let ConfigAccess::Local(local) = &self.access else {
             bail!(
                 "collection `{}` is read over HTTP at the call",
                 self.decl.collection
             );
         };
-        let collection = node
+        let collection = local
+            .node()
             .get_collection(&self.decl.collection)?
             .ok_or_else(|| anyhow!("collection `{}` is not available", self.decl.collection))?;
         self.field_types_of(&collection)
@@ -155,10 +149,6 @@ impl BoundedWriteTool {
         args: &Map<String, Value>,
         types: &std::collections::BTreeMap<String, String>,
     ) -> Result<String> {
-        // `ensure_declaration` delegates to `WriteToolDecl::validate`, which
-        // validates the collection and every field name as GraphQL identifiers
-        // (the centralized identifier-validation boundary), so bare-identifier
-        // interpolation below is safe without a second per-site check here.
         self.ensure_declaration()?;
 
         for key in args.keys() {

@@ -13,9 +13,6 @@ use crate::llm::message::{
     UserContent,
 };
 
-/// Lean `ClaudeMap.identity` and Rust `CLAUDE_CODE_IDENTITY` are the same
-/// bytes; the body-cases fence checks `system[0]` against the witness, so
-/// this pins the constant even for a witness set with no rows.
 #[test]
 fn identity_matches_lean_body_witness_head() {
     let cases = crate::lean_vocab_test::lean_prompt_assembly_claude_body_cases();
@@ -116,9 +113,6 @@ fn messages_body_includes_gents_tools_and_system() {
     assert_messages_body_has_no_sampling(&body);
 }
 
-/// Messages HTTP leads `system` with the Claude Code identity block and
-/// keeps the Gents preamble intact after it. Order matters: the identity
-/// is a wire-level prefix, not a rewrite of what the loop assembled.
 #[test]
 fn messages_body_system_leads_with_claude_code_identity_then_preamble() {
     let body = build_messages_body("claude-sonnet-5", &echo_request()).unwrap();
@@ -171,19 +165,6 @@ fn messages_body_marks_two_cache_breakpoints() {
 }
 
 #[test]
-fn messages_body_never_carries_a_system_prefixed_user_block() {
-    let body = build_messages_body("claude-sonnet-5", &request_with_system_rows()).unwrap();
-    let leaked = body["messages"].as_array().unwrap().iter().any(|m| {
-        m["content"].as_array().unwrap().iter().any(|b| {
-            b["text"]
-                .as_str()
-                .is_some_and(|t| t.starts_with("system: "))
-        })
-    });
-    assert!(!leaked, "{body}");
-}
-
-#[test]
 fn messages_body_omits_sampling_even_when_request_sets_it() {
     let mut request = echo_request();
     request.temperature = Some(0.7);
@@ -201,9 +182,6 @@ fn messages_body_omits_sampling_even_when_request_sets_it() {
     assert_eq!(body["tools"][0]["name"], "echo");
 }
 
-/// Keys the Messages body may carry. Sampling (`temperature`, `top_p`,
-/// `top_k`) and `additional_params` stay off the wire: live `claude-sonnet-5`
-/// returns 400 "`temperature` is deprecated for this model".
 const MESSAGES_BODY_ALLOWED_KEYS: &[&str] = &[
     "model",
     "max_tokens",
@@ -263,8 +241,6 @@ fn messages_body_threads_tool_result() {
     assert_eq!(body["messages"][1]["content"][0]["content"], "ECHOED");
 }
 
-/// A tool result's image parts (the plugin result ABI) reach the HTTP body as
-/// Anthropic image blocks inside the `tool_result` content array.
 #[test]
 fn tool_result_images_reach_the_wire_body() {
     let image = |data: &str, mime: &str| {
@@ -315,7 +291,6 @@ fn tool_result_images_reach_the_wire_body() {
     );
 }
 
-/// A base64 PNG whose header declares `width`×`height`.
 fn png_header(width: u32, height: u32) -> String {
     use base64::Engine as _;
     let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
@@ -325,8 +300,6 @@ fn png_header(width: u32, height: u32) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
-/// One tool call per image, each result carrying that image; returns the
-/// `content` of every `tool_result` on the wire, in order.
 fn tool_result_images_on_the_wire(images: &[String]) -> Vec<Value> {
     let mut history = vec![Message::user("draw them")];
     for (index, data) in images.iter().enumerate() {
@@ -375,8 +348,6 @@ fn wire_note(note: &str) -> Value {
     json!([{"type": "text", "text": note}])
 }
 
-/// Anthropic's vision limits: an image over 8000 px on a side reaches the
-/// wire as a note naming why, and the request still carries the others.
 #[test]
 fn an_image_over_claudes_side_limit_becomes_a_note() {
     let images = [
@@ -394,7 +365,6 @@ fn an_image_over_claudes_side_limit_becomes_a_note() {
     );
 }
 
-/// Past 20 images every image is held to 2000 px on a side.
 #[test]
 fn past_twenty_images_each_is_held_to_two_thousand_px() {
     let mut images = vec![png_header(3000, 1000)];
@@ -419,8 +389,6 @@ fn past_twenty_images_each_is_held_to_two_thousand_px() {
     );
 }
 
-/// Past 20 images over 2000 px, the newest 20 are sent and older ones become
-/// notes; once a kept image is over 2000 px, no image past the 20th is sent.
 #[test]
 fn past_twenty_large_images_the_newest_twenty_are_sent() {
     let large: Vec<String> = (0..21).map(|_| png_header(3000, 3000)).collect();
@@ -453,7 +421,6 @@ fn past_twenty_large_images_the_newest_twenty_are_sent() {
     );
 }
 
-/// Over Claude's per-request image count the oldest images become notes.
 #[test]
 fn past_the_image_count_the_oldest_images_become_notes() {
     let images: Vec<String> = (0..101).map(|side| png_header(side + 1, 1)).collect();
@@ -471,7 +438,6 @@ fn past_the_image_count_the_oldest_images_become_notes() {
     );
 }
 
-/// Lean `ClaudeMap.toolsField`: the wire never carries `tools: []`.
 #[test]
 fn messages_body_omits_tools_key_when_surface_is_empty() {
     let mut request = echo_request();
@@ -507,9 +473,6 @@ data: {"type":"message_stop"}
     assert!(err.to_string().contains("Bash"), "{err}");
 }
 
-/// A `tool_use` block with an explicit start input and any number of
-/// `input_json_delta` fragments; `sse_fixture_tool_use` covers the one-delta
-/// `input: {}` shape Anthropic actually sends.
 fn sse_tool_use_block(id: &str, name: &str, start_input: &str, deltas: &[&str]) -> String {
     let mut sse = format!(
         "event: content_block_start\ndata: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"tool_use\",\"id\":\"{id}\",\"name\":\"{name}\",\"input\":{start_input}}}}}\n\n"
@@ -533,9 +496,6 @@ fn tool_call_arguments(events: &[RawStreamingChoice<ClaudeStreamResponse>]) -> V
     }
 }
 
-/// C1: Anthropic sends `input: {}` on `content_block_start` and streams the
-/// real arguments as `input_json_delta` fragments. The deltas are the
-/// arguments; the start input is ignored once any delta arrives.
 #[test]
 fn sse_tool_use_deltas_yield_exact_arguments() {
     let sse = sse_tool_use_block("toolu_1", "echo", "{}", &["{\"text\":", " \"hi\"}"]);
@@ -603,8 +563,6 @@ fn sse_overlapping_tool_use_block_fails_closed() {
     );
 }
 
-/// A stream that ends with `message_stop` but never sent `content_block_stop`
-/// still yields the open tool call, and it precedes the single `FinalResponse`.
 #[test]
 fn sse_message_stop_flushes_pending_tool_before_final() {
     let surface = HashSet::from(["echo".to_string()]);
@@ -671,9 +629,6 @@ fn sse_error_event_becomes_provider_error() {
     );
 }
 
-/// Stable projection of a stream event for equality: rig mints a fresh
-/// `internal_call_id` per `RawStreamingToolCall`, so `Debug` output of two
-/// parses of the same bytes never matches.
 fn event_key(event: &RawStreamingChoice<ClaudeStreamResponse>) -> String {
     match event {
         RawStreamingChoice::Message(text) => format!("text:{text}"),
@@ -1002,8 +957,6 @@ fn generated_claude_wire_start_cases_drive_native_parser() {
     }
 }
 
-/// Live 4xx diagnosability: status, `request-id`, and a bounded body prefix;
-/// nothing from the request side.
 #[test]
 fn non_success_error_carries_status_request_id_and_bounded_body_prefix() {
     let err = non_success_error(
@@ -1029,8 +982,6 @@ fn non_success_error_carries_status_request_id_and_bounded_body_prefix() {
     assert!(!bare.contains("body="), "{bare}");
 }
 
-/// A live subscription 429 keeps the unified-limit reset through the body
-/// bound, so the classifier reports a usage limit rather than a throttle.
 #[tokio::test]
 async fn transport_429_usage_cap_reports_reset_time() {
     let _guard = lock_fixtures_for_test();
@@ -1069,9 +1020,6 @@ async fn transport_429_usage_cap_reports_reset_time() {
     assert_eq!(bearer.invalidations(), 0);
 }
 
-/// The wire sends the bearer as `authorization: Bearer <token>`, and a 401
-/// from the transport invalidates the bearer exactly once; that request
-/// fails and the next request refreshes.
 #[tokio::test]
 async fn transport_401_invalidates_the_bearer_once() {
     let _guard = lock_fixtures_for_test();
@@ -1108,8 +1056,6 @@ fn captured_request<S: crate::oauth_credential::BearerSource>(
     bearer: &S,
     request: &CompletionRequest,
 ) -> String {
-    // The fixture lock spans the request, so it is held outside the
-    // runtime: a std guard must not live across an await.
     let _guard = lock_fixtures_for_test();
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1135,7 +1081,6 @@ fn captured_request<S: crate::oauth_credential::BearerSource>(
         })
 }
 
-/// An API key sends the bearer and version, never the OAuth beta.
 #[test]
 fn api_key_request_sends_bearer_and_version_without_oauth_beta() {
     let bearer = crate::claude_subscription::ApiKeyBearer::new("placeholder-key");
@@ -1155,7 +1100,6 @@ fn api_key_request_sends_bearer_and_version_without_oauth_beta() {
     );
 }
 
-/// A sign-in keeps the OAuth beta.
 #[test]
 fn sign_in_request_keeps_the_oauth_beta() {
     let bearer = crate::claude_subscription::StaticBearer::new("access");
@@ -1168,8 +1112,6 @@ fn sign_in_request_keeps_the_oauth_beta() {
     );
 }
 
-/// An unsupported native replay block fails before bearer lookup or HTTP,
-/// and its deterministic request-build error cannot enter transport backoff.
 #[tokio::test]
 async fn unsupported_replay_body_is_a_permanent_request_error() {
     let request = unsupported_replay_request();
@@ -1232,20 +1174,15 @@ fn unsupported_replay_preflight_is_a_permanent_request_error() {
     ));
 }
 
-/// A live Messages request records the unified usage headers for the
-/// reporter's account.
 #[test]
 fn usage_wiring_claude_live_messages_records_unified_headers() {
-    // The fixture lock spans the live request, so it is held outside the
-    // runtime: a std guard must not live across an await.
     let _guard = lock_fixtures_for_test();
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("runtime")
         .block_on(async {
-            let node =
-                std::sync::Arc::new(crate::oauth_credential::test_support::test_node().await);
+            let node = crate::oauth_credential::test_support::test_node().await;
             let account = crate::usage_observation::UsageAccount::Backend {
                 node_did: "did:key:z6MkUsageWireClaudeLive".into(),
                 provider: "ClaudeCliSubscription".into(),

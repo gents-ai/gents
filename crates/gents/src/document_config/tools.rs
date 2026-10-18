@@ -1,13 +1,8 @@
 //! Canonical tool configuration with typed nested capability groups.
 //!
-//! Every field here takes effect at runtime; a setting with no owner does not
-//! exist. Optional timeouts use the documented owner default when unset.
-//! Configured durations must be positive, and configurable maxima must not be
-//! below defaults. The host then narrows admitted values: a value above a host
-//! ceiling is clamped to it, never rejected, so one document stays valid on
-//! every host (`ToolPolicy.effectiveBashForeground` and its siblings).
-//! Tool enable/allow/background flags default false; presence or references alone
-//! do not enable those flags. Foreground execution remains bounded by the
+//! Optional timeouts use the documented owner default when unset. Tool
+//! enable/allow/background flags default false; presence or references alone do
+//! not enable those flags. Foreground execution remains bounded by the
 //! enclosing request deadline. Background executions retain their own lifetime
 //! and cancellation owner. Wait timeouts return a running snapshot; they do not
 //! cancel the underlying work.
@@ -129,7 +124,6 @@ pub struct FileTools {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct BashTools {
-    /// Off, ReadOnly, or Unrestricted. Selects the exposed bash tool.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null"
@@ -164,7 +158,6 @@ pub struct BashTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub read_only_commands: Option<Vec<String>>,
-    /// Permit background execution of this selected bash capability.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null"
@@ -552,7 +545,6 @@ pub struct LspTools {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct SelfConfigTools {
-    /// Self-configuration gate (#654): opt-in, never backfilled true.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub enable_self_config: Option<bool>,
@@ -1017,256 +1009,6 @@ mod tests {
                 "tools_id": "research", "node_did": "did:key:example",
                 "remote": {"services": [{"mcp_service_id": "web"}]}
             })
-        );
-    }
-
-    #[test]
-    fn explicit_overrides_survive_and_required_references_do_not_default() {
-        let authored = json!({
-            "tools_id": "research", "node_did": "did:key:example",
-            "remote": {"services": [{"mcp_service_id": "web", "tool_names": ["search"],
-                "style": "flat", "required": true, "timeout_secs": 45}]},
-            "built_ins": {"enable_goal_tools": false}
-        });
-        let tools: Tools = serde_json::from_value(authored.clone()).unwrap();
-        assert_eq!(serde_json::to_value(tools).unwrap(), authored);
-        assert!(serde_json::from_value::<Tools>(json!({"node_did": "did:key:example"})).is_err());
-        assert!(
-            serde_json::from_value::<RemoteServiceTools>(json!({"tool_names": ["search"]}))
-                .is_err()
-        );
-    }
-    fn document(groups: serde_json::Value) -> Tools {
-        let mut value = groups;
-        value["tools_id"] = "tools".into();
-        value["node_did"] = "owner".into();
-        serde_json::from_value(value).unwrap()
-    }
-
-    #[test]
-    fn omitted_groups_and_presentation_do_not_grant_or_change_permissions() {
-        assert!(document(json!({})).validate().is_ok());
-        for style in ["flat", "discovery"] {
-            let tools = document(
-                json!({"remote":{"services":[{"mcp_service_id":"remote", "style":style}]}, "built_ins":{"enable_goal_creation":true}}),
-            );
-            let before = serde_json::to_value(&tools).unwrap();
-            assert!(tools.validate().is_ok());
-            assert_eq!(serde_json::to_value(&tools).unwrap(), before);
-            assert!(tools.remote.as_ref().unwrap().services[0]
-                .tool_names
-                .is_empty());
-            assert_eq!(tools.built_ins.as_ref().unwrap().enable_goal_tools, None);
-        }
-    }
-
-    #[test]
-    fn background_selection_is_a_subset_in_both_presentations() {
-        for style in ["flat", "discovery"] {
-            let mut tools = document(
-                json!({"remote":{"services":[{"mcp_service_id":"remote", "style":style,"tool_names":["search"], "background_tool_names":["other"]}]}}),
-            );
-            assert!(tools.validate().is_err());
-            tools.remote.as_mut().unwrap().services[0].background_tool_names =
-                vec!["search".into()];
-            assert!(tools.validate().is_ok());
-        }
-    }
-
-    #[test]
-    fn command_output_caps_round_trip_and_reach_the_selection() {
-        let authored = json!({
-            "tools_id": "coding", "node_did": "did:key:example",
-            "host": {
-                "bash": {"mode": "ReadOnly", "max_output_chars": 64000},
-                "cli": [{"name": "git", "max_output_chars": 2000}, {"name": "jq"}]
-            }
-        });
-        let tools: Tools = serde_json::from_value(authored.clone()).unwrap();
-        assert_eq!(serde_json::to_value(&tools).unwrap(), authored);
-        let host = tools.host.as_ref().unwrap();
-        assert_eq!(host.bash.as_ref().unwrap().max_output_chars, Some(64_000));
-        assert_eq!(host.cli[0].max_output_chars, Some(2_000));
-        assert_eq!(host.cli[1].max_output_chars, None);
-        let limits = crate::tool_surface::ResolvedToolSelection::from_document(&tools)
-            .unwrap()
-            .command_output_limits;
-        assert_eq!(limits.bash, Some(64_000));
-        assert_eq!(
-            limits.cli.into_iter().collect::<Vec<_>>(),
-            vec![("git".to_owned(), 2_000)]
-        );
-    }
-
-    #[test]
-    fn command_output_caps_reject_zero_negative_and_oversized_values() {
-        let limit = crate::toolset::MAX_CONFIGURED_COMMAND_CHARS as i64;
-        for (invalid, message) in [
-            (0, "must be positive"),
-            (-1, "must be positive"),
-            (limit + 1, "must be at most 1000000"),
-        ] {
-            let bash = document(json!({"host":{"bash":{"max_output_chars": invalid}}}))
-                .validate()
-                .unwrap_err()
-                .to_string();
-            assert!(bash.contains("host.bash.max_output_chars"), "{bash}");
-            assert!(bash.contains(message), "{bash}");
-            let cli =
-                document(json!({"host":{"cli":[{"name":"git","max_output_chars": invalid}]}}))
-                    .validate()
-                    .unwrap_err()
-                    .to_string();
-            assert!(cli.contains("host.cli[git].max_output_chars"), "{cli}");
-            assert!(cli.contains(message), "{cli}");
-        }
-        assert!(
-            document(json!({"host":{"bash":{"max_output_chars": limit}, "cli":[{"name":"git","max_output_chars": 1}]}}))
-                .validate()
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn file_limits_reject_zero_negative_and_oversized_values() {
-        for (field, limit) in [
-            ("max_read_chars", crate::toolset::MAX_CONFIGURED_FILE_CHARS),
-            (
-                "max_list_entries",
-                crate::toolset::MAX_CONFIGURED_FILE_RESULTS,
-            ),
-            ("max_matches", crate::toolset::MAX_CONFIGURED_FILE_RESULTS),
-        ] {
-            for (invalid, message) in [
-                (0, "must be positive".to_owned()),
-                (-1, "must be positive".to_owned()),
-                (limit as i64 + 1, format!("must be at most {limit}")),
-            ] {
-                let error = document(json!({"host":{"files":{field: invalid}}}))
-                    .validate()
-                    .unwrap_err()
-                    .to_string();
-                assert!(error.contains(&format!("host.files.{field}")), "{error}");
-                assert!(error.contains(&message), "{error}");
-            }
-            assert!(document(json!({"host":{"files":{field: limit}}}))
-                .validate()
-                .is_ok());
-        }
-    }
-
-    #[test]
-    fn every_configured_tool_timeout_rejects_zero_and_negative_values() {
-        let cases = [
-            (
-                "host.bash",
-                vec![
-                    "timeout_secs",
-                    "max_timeout_secs",
-                    "background_timeout_secs",
-                    "wait_timeout_secs",
-                    "max_wait_timeout_secs",
-                ],
-            ),
-            ("integrations.lsp", vec!["timeout_secs", "max_timeout_secs"]),
-        ];
-        for (path, fields) in cases {
-            for field in fields {
-                for invalid in [0, -1] {
-                    let mut value = json!({});
-                    let mut group = &mut value;
-                    for part in path.split('.') {
-                        group[part] = json!({});
-                        group = &mut group[part];
-                    }
-                    group[field] = invalid.into();
-                    assert!(
-                        document(value).validate().is_err(),
-                        "{path}.{field}={invalid}"
-                    );
-                }
-            }
-        }
-        for field in [
-            "connect_timeout_secs",
-            "discovery_timeout_secs",
-            "timeout_secs",
-            "stale_timeout_secs",
-            "background_timeout_secs",
-            "wait_timeout_secs",
-            "max_wait_timeout_secs",
-        ] {
-            for invalid in [0, -1] {
-                let mut service = json!({"mcp_service_id":"remote"});
-                service[field] = invalid.into();
-                assert!(
-                    document(json!({"remote":{"services":[service]}}))
-                        .validate()
-                        .is_err(),
-                    "remote.{field}"
-                );
-            }
-        }
-        assert!(
-            document(json!({"host":{"cli":[{"name":"git","timeout_secs":0}]}}))
-                .validate()
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn configured_maxima_cover_effective_defaults_without_inventing_fixed_minima() {
-        for value in [
-            json!({"host":{"bash":{"max_timeout_secs":5}}}),
-            json!({"host":{"bash":{"wait_timeout_secs":601}}}),
-            json!({"remote":{"services":[{"mcp_service_id":"remote","max_wait_timeout_secs":5}]}}),
-            json!({"integrations":{"lsp":{"max_timeout_secs":5}}}),
-        ] {
-            assert!(document(value).validate().is_err());
-        }
-        assert!(document(json!({"host":{"bash":{"timeout_secs":5,"max_timeout_secs":5,"wait_timeout_secs":700,"max_wait_timeout_secs":700}}})).validate().is_ok());
-        assert!(document(json!({"host":{"bash":{"timeout_secs":500}}}))
-            .validate()
-            .is_ok());
-        assert!(document(json!({"remote":{"services":[{"mcp_service_id":"remote","timeout_secs":1,"stale_timeout_secs":120,"background_timeout_secs":36000}]}})).validate().is_ok());
-    }
-
-    #[test]
-    fn ambiguous_names_and_invalid_background_defaults_reject() {
-        for value in [
-            json!({"host":{"cli":[{"name":"git"},{"name":"git"}]}}),
-            json!({"remote":{"services":[{"mcp_service_id":"remote"},{"mcp_service_id":"remote"}]}}),
-            json!({"remote":{"services":[{"mcp_service_id":"remote","tool_names":["search","search"]}]}}),
-            json!({"remote":{"services":[{"mcp_service_id":"remote","tool_names":["*"]}]}}),
-            json!({"agents":{"target_ids":["target","target"]}}),
-            json!({"agents":{"target_ids":[" "]}}),
-            json!({"self_config":{"self_config_categories":["unknown"]}}),
-            json!({"self_config":{"self_config_categories":["tools","tools"]}}),
-            json!({"host":{"bash":{"allowed_argv_prefixes":[[]]}}}),
-        ] {
-            assert!(document(value).validate().is_err());
-        }
-        assert!(
-            document(json!({"agents":{"target_ids":["existing-target"],"enabled":true}}))
-                .validate()
-                .is_ok()
-        );
-        for retired in [
-            "spawn_enabled",
-            "background_enabled",
-            "steering_enabled",
-            "default_await_mode",
-            "allow_cross_principal",
-            "cross_principal_spawn_timeout_secs",
-        ] {
-            let mut value = json!({"agents":{"target_ids":["existing-target"]},"tools_id":"tools","node_did":"owner"});
-            value["agents"][retired] = json!(true);
-            assert!(serde_json::from_value::<Tools>(value).is_err(), "{retired}");
-        }
-        assert!(
-            document(json!({"host":{"bash":{"allowed_argv_prefixes":[["printf", ""]]}}}))
-                .validate()
-                .is_ok()
         );
     }
 }

@@ -47,11 +47,6 @@ where
     }
 }
 
-/// Collects the reconcile phases the watcher announced, in order.
-///
-/// A phase the watcher only passes through cannot be sampled from
-/// `NodeRuntime`: the durable row keeps the latest phase, and one sample costs
-/// a database round trip that can outlast the debounce interval itself.
 #[derive(Clone, Default)]
 struct ReconcilePhaseCapture {
     phases: Arc<StdMutex<Vec<String>>>,
@@ -100,13 +95,11 @@ const TEST_CONTROL_WATCHER_TIMING: ControlWatcherTiming = ControlWatcherTiming {
     idle_sleep: Duration::from_secs(60),
 };
 
-/// Names the reconcile that never arrived instead of hanging the suite. The
-/// proposal itself is the assertion; this bound only keeps a failure legible.
 const PROPOSAL_TIMEOUT: Duration = Duration::from_secs(5);
 
 async fn run_test_control_watcher(
     node: Arc<defra_node::EmbeddedNode>,
-    subscription: events::DocumentChangeSubscription,
+    subscription: ControlSubscription,
     node_did: String,
     resolve_context: DocumentResolveContext,
     proposals_tx: mpsc::Sender<ResolvedRuntimeSnapshot>,
@@ -147,7 +140,7 @@ async fn update_node_enabled(node: &defra_node::EmbeddedNode, node_did: &str, en
 }
 
 async fn write_documents(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
     operation: &'static str,
     documents: Vec<(crate::Collection, serde_json::Value)>,
 ) {
@@ -162,7 +155,7 @@ async fn write_documents(
         )
         .collect();
     let plan = crate::config_client::DesiredStateApplyPlan::new(documents).unwrap();
-    crate::config_client::ConfigAccess::transact_local(node, None, operation, |txn| {
+    crate::config_client::ConfigAccess::transact_local_write(node, None, operation, |txn| {
         let plan = &plan;
         Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
     })
@@ -177,7 +170,7 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher"));
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-control",
         "http://127.0.0.1:8111/v1",
@@ -210,11 +203,8 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     let announced_phases = phases.clone();
     let subscriber = Registry::default().with(reloads).with(phases);
 
-    // Subscribe first, then publish before the watcher future is ever polled.
-    // DefraDB subscriptions are live-only, so this deterministically guards
-    // the startup ordering that prevents a post-Ready config update from
-    // falling into the gap between readiness and watcher startup.
-    let subscription = node.subscribe_document_changes();
+    // DefraDB subscriptions are live-only.
+    let subscription = subscribe_control_changes(&node).unwrap();
     let context = serde_json::json!({
         "node_did": agent.node_did(),
         "context_id": format!("{}:context", agent.default_agent_id()),
@@ -229,8 +219,8 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         },
     ])
     .unwrap();
-    crate::config_client::ConfigAccess::transact_local(
-        node.as_ref(),
+    crate::config_client::ConfigAccess::transact_local_write(
+        &node,
         None,
         "test.context.update",
         |txn| {
@@ -295,9 +285,6 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         "a visible reconcile must quiesce instead of polling the full runtime view"
     );
 
-    // A new metadata-only write resolves to the same runtime fingerprint but
-    // still needs a proposal so the reconciler can publish its normal no-op
-    // completion. An unchanged settle retry above must remain suppressed.
     let context_id =
         crate::graphql::escape_graphql_string(&format!("{}:context", agent.default_agent_id()));
     let mutation = format!(
@@ -305,13 +292,9 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         filter: {{context_id: {{_eq: "{context_id}"}}}},
         input: {{display_name: "Retagged context"}}) {{context_id}} }}"#
     );
-    crate::config_client::ConfigAccess::write_local(
-        node.as_ref(),
-        "test.context.metadata",
-        &mutation,
-    )
-    .await
-    .unwrap();
+    crate::config_client::ConfigAccess::write_local(&node, "test.context.metadata", &mutation)
+        .await
+        .unwrap();
     let repeated = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
         .await
         .expect("metadata write must reach reconcile owner")
@@ -330,15 +313,13 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     watcher_task.await.unwrap().unwrap();
 }
 
-/// #2068: an operator's own committed write reconciles without waiting out the
-/// replicated-arrival debounce, which Setup's save confirmation cannot outlast.
 #[tokio::test]
 async fn control_watcher_reconciles_a_local_write_without_the_replication_debounce() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher-local"));
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-control",
         "http://127.0.0.1:8111/v1",
@@ -365,7 +346,7 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
         .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
-    let subscription = node.subscribe_document_changes();
+    let subscription = subscribe_control_changes(&node).unwrap();
     let watcher_task = tokio::spawn(run_control_watcher_with_timing(
         node.clone(),
         subscription,
@@ -382,7 +363,7 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
     ));
 
     write_documents(
-        node.as_ref(),
+        &node,
         "test.context.local",
         vec![(
             crate::Collection::AgentContext,
@@ -413,10 +394,6 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
     watcher_task.await.unwrap().unwrap();
 }
 
-/// #640: a measured-health flip must re-resolve the snapshot without any
-/// document changing — demoting the agent_config and marking the admission
-/// config while the backend is measured unhealthy, and restoring both after
-/// a successful probe flips the veto back.
 #[tokio::test]
 async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
     crate::test_support::enable_scoped_event_capture();
@@ -424,7 +401,7 @@ async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher-health"));
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-measured",
         "http://127.0.0.1:8113/v1",
@@ -461,7 +438,7 @@ async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
     let watcher_task = tokio::spawn(
         run_test_control_watcher(
             node.clone(),
-            node.subscribe_document_changes(),
+            subscribe_control_changes(&node).unwrap(),
             agent.node_did().to_string(),
             resolve_context,
             proposal_tx,
@@ -474,7 +451,6 @@ async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
 
     tokio::task::yield_now().await;
 
-    // The prober measured K consecutive failures: routing veto engages.
     backend_health
         .set_for_test(
             "backend-measured",
@@ -511,7 +487,6 @@ async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
         .expect("admission config for measured backend");
     assert!(config.measured_unhealthy);
 
-    // One successful probe re-promotes: routing resumes.
     backend_health
         .set_for_test(
             "backend-measured",
@@ -553,7 +528,7 @@ async fn control_watcher_recovers_after_resolve_error() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher-recover"));
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-control-recover",
         "http://127.0.0.1:8112/v1",
@@ -587,7 +562,7 @@ async fn control_watcher_recovers_after_resolve_error() {
     let watcher_task = tokio::spawn(
         run_test_control_watcher(
             node.clone(),
-            node.subscribe_document_changes(),
+            subscribe_control_changes(&node).unwrap(),
             agent.node_did().to_string(),
             resolve_context,
             proposal_tx,
@@ -601,8 +576,6 @@ async fn control_watcher_recovers_after_resolve_error() {
     tokio::task::yield_now().await;
     update_node_enabled(node.as_ref(), agent.node_did(), false).await;
 
-    // A failed resolve is the only way back to idle with an error recorded, so
-    // this is the reconcile's durable completion rather than a phase in flight.
     let failed_status =
         wait_for_runtime_reconcile_phase(node.as_ref(), agent.node_did(), "idle").await;
     assert_eq!(failed_status.active_generation, 0);
@@ -616,8 +589,6 @@ async fn control_watcher_recovers_after_resolve_error() {
 
     update_node_enabled(node.as_ref(), agent.node_did(), true).await;
 
-    // The settle retry may already return the phase to idle after proposing
-    // this fingerprint. Recovery is the queued proposal, not a transient phase.
     let snapshot = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
         .await
         .expect("a re-enabled Node must reach the reconcile owner")
@@ -634,7 +605,7 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher-tools"));
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-control-tools",
         "http://127.0.0.1:8113/v1",
@@ -664,7 +635,7 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
 
     let watcher_task = tokio::spawn(run_test_control_watcher(
         node.clone(),
-        node.subscribe_document_changes(),
+        subscribe_control_changes(&node).unwrap(),
         agent.node_did().to_string(),
         resolve_context,
         proposal_tx,
@@ -683,7 +654,7 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
     }))
     .unwrap();
     crate::config_client::write_tools_document(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &tools,
     )
     .await
@@ -713,7 +684,7 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher-settle"));
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-settle",
         "http://127.0.0.1:8114/v1",
@@ -752,10 +723,8 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
             models,
         }
     };
-    // The spare profile is published while its model is advertised; a later
-    // discovery drops that model, which leaves the profile permanently invalid.
     crate::backend_registry::record_model_catalog(
-        node.as_ref(),
+        &node,
         &backend,
         catalog(
             "2026-01-01T00:00:00Z",
@@ -777,12 +746,11 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
 
-    // Subscribe before writing: DefraDB subscriptions are live-only.
-    let subscription = node.subscribe_document_changes();
+    let subscription = subscribe_control_changes(&node).unwrap();
     let spare_agent_id = format!("{selected_agent_id}:spare");
     let spare_profile_id = format!("{spare_agent_id}:inference");
     write_documents(
-        node.as_ref(),
+        &node,
         "test.settle.spare",
         vec![
             (
@@ -806,7 +774,7 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
     )
     .await;
     crate::backend_registry::record_model_catalog(
-        node.as_ref(),
+        &node,
         &backend,
         catalog("2026-01-02T00:00:00Z", vec![advertised("default")]),
     )
@@ -842,7 +810,7 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
     let _ = shutdown_tx.send(true);
     watcher_task.await.unwrap().unwrap();
 
-    let view = crate::agent::document_view::load_document_runtime_view(node.as_ref(), &node_did)
+    let view = crate::agent::document_view::load_document_runtime_view(&node, &node_did)
         .await
         .unwrap();
     assert!(
@@ -852,8 +820,6 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
     );
 }
 
-/// Records the plugin-store install of `fixture/list_files` through the
-/// owner every install path records through: the write the watcher wakes on.
 async fn record_plugin_install(
     node: &Arc<defra_node::EmbeddedNode>,
     node_did: &str,
@@ -870,7 +836,7 @@ async fn record_plugin_install(
         dependencies: Vec::new(),
     };
     crate::pack::record_plugin_store_change(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         node_did,
         plugin_home,
         &identity.coordinate,
@@ -892,7 +858,7 @@ async fn write_tools_naming_plugin(
     }))
     .unwrap();
     crate::config_client::write_tools_document(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &tools,
     )
     .await
@@ -917,17 +883,13 @@ fn installed_record() -> crate::plugin::store::InstalledPlugin {
     .unwrap()
 }
 
-/// #2338: installing the plugin a Tools document names changes the resolved
-/// surface, so the install record's write must wake the watcher and propose a
-/// new fingerprint; a same-digest reinstall proposes the same fingerprint, so
-/// the reconciler no-ops instead of churning generations.
 #[tokio::test]
 async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_installs() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher-plugin-install"));
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-plugin-install",
         "http://127.0.0.1:8115/v1",
@@ -957,7 +919,7 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
     let (proposal_tx, mut proposal_rx) = mpsc::channel(8);
     let watcher_task = tokio::spawn(run_test_control_watcher(
         node.clone(),
-        node.subscribe_document_changes(),
+        subscribe_control_changes(&node).unwrap(),
         node_did.clone(),
         resolve_context,
         proposal_tx,
@@ -990,8 +952,6 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
         "while the plugin is missing the surface records no identity"
     );
 
-    // The install: the plugin store record, then the only document an
-    // install writes.
     crate::plugin::store::write_record(plugin_home.path(), &installed_record()).unwrap();
     record_plugin_install(&node, &node_did, plugin_home.path()).await;
     let installed = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
@@ -1004,10 +964,6 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
         "the installed plugin identity must change the resolved fingerprint"
     );
 
-    // A same-digest reinstall rewrites the same record (a fresh
-    // installed_at); the resolved identity is unchanged, so the proposal
-    // repeats the fingerprint the reconciler already holds and nothing new
-    // can apply.
     record_plugin_install(&node, &node_did, plugin_home.path()).await;
     let reinstalled = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
         .await

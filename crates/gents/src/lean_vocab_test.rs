@@ -1,11 +1,9 @@
 #[path = "lean_vocab_test/support.rs"]
 mod support;
 
+pub(crate) use support::canonical_presentation::native_adapter::native_presentation;
 pub(crate) use support::*;
 
-/// The native queue of one session: its claimed request, the active claim's
-/// selection that is still pending, the rest of the user queue in its owner's
-/// order, and the terminal requests. Every session request is exactly one.
 pub(crate) async fn native_queue_image(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     node_did: &str,
@@ -18,7 +16,7 @@ pub(crate) async fn native_queue_image(
         request_id: String,
         lifecycle_state: RequestLifecycleState,
     }
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let response = access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ request_id lifecycle_state }} }}"#,
@@ -94,12 +92,9 @@ mod task_hook_executor;
 #[path = "lean_vocab_test/task_hook_recovery.rs"]
 mod task_hook_recovery;
 
-/// Generated TaskHooks vocabulary mapped onto production types, for the
-/// crate-internal consumers.
 #[cfg(test)]
 mod task_hook_vocab {
     use super::{LeanCommandResult, LeanTaskHook};
-    /// The production phase each generated phase name encodes.
     pub(crate) fn lean_hook_phase(name: &str) -> crate::document_config::TaskHookPhase {
         use crate::document_config::TaskHookPhase;
         match name {

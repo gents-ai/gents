@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Collect production lens bytes from Cargo's emitted paths without rebuilding."""
 import hashlib
 import json
 import mmap
@@ -49,7 +48,6 @@ for output in sorted(target.glob("debug/build/gents-migration-*/output")):
             shutil.copy2(source, capture / source.name)
             artifacts.append((str(output), variable, data))
         record["lenses"].append(lens)
-    # Include the flags Cargo fingerprinted, including cached dependency inputs.
     nested = build / "out/lens-target"
     for fingerprint in nested.glob("**/.fingerprint/*/*.json"):
         saved = capture / "fingerprints" / fingerprint.relative_to(nested)
@@ -57,9 +55,6 @@ for output in sorted(target.glob("debug/build/gents-migration-*/output")):
         shutil.copy2(fingerprint, saved)
     manifest["builds"].append(record)
 
-# An emitted path alone may belong to an older build. Record which exact bytes
-# occur in each extant integration executable; retain timestamps, never label a
-# persistent-cache candidate as the executable from this run without evidence.
 for binary in sorted(target.glob("debug/deps/workspace_path_capability-*")):
     if not binary.is_file() or not os.access(binary, os.X_OK) or binary.stat().st_size == 0:
         continue

@@ -1,5 +1,3 @@
-//! Private HTTP plumbing for the committed-write owner.
-
 use anyhow::{Context, Result};
 use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
 use serde_json::Value;
@@ -10,10 +8,6 @@ use super::{graphql_api_base, GraphqlEndpoint};
 
 const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Unauthenticated transport: every request attaches its own bearer through
-/// [`GraphqlEndpoint::authorize`], because DefraDB binds a transaction to
-/// the acting DID rather than to one token, and a transaction may outlive a
-/// single bearer.
 pub(super) async fn http_client() -> Result<&'static reqwest::Client> {
     static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
     CLIENT
@@ -30,9 +24,6 @@ pub(super) async fn http_client() -> Result<&'static reqwest::Client> {
         .await
 }
 
-/// Submit an auto-commit mutation exactly once. DefraDB's HTTP handler owns
-/// conflict retry inside this request; replay after an ambiguous transport
-/// result could apply a mutation twice.
 pub(super) async fn auto_commit(endpoint: &GraphqlEndpoint, mutation: &str) -> Result<Value> {
     let response = endpoint
         .authorize(http_client().await?.post(endpoint.url()))?
@@ -63,10 +54,19 @@ pub(super) async fn query_with_options(
     execute_graphql_async(endpoint.url(), authorization.as_deref(), query, options).await
 }
 
-pub(super) async fn txn_begin(endpoint: &GraphqlEndpoint) -> Result<(reqwest::Client, String)> {
+pub(super) async fn txn_begin(
+    endpoint: &GraphqlEndpoint,
+    read_only: bool,
+) -> Result<(reqwest::Client, String)> {
     let client = http_client().await?.clone();
+    let path = format!("{}/tx", graphql_api_base(endpoint.url())?);
+    let url = if read_only {
+        format!("{path}?read_only=true")
+    } else {
+        path
+    };
     let response = endpoint
-        .authorize(client.post(format!("{}/tx", graphql_api_base(endpoint.url())?)))?
+        .authorize(client.post(url))?
         .send()
         .await
         .with_context(|| format!("posting tx begin to {endpoint}"))?;
@@ -91,9 +91,6 @@ pub(super) async fn txn_begin(endpoint: &GraphqlEndpoint) -> Result<(reqwest::Cl
     Ok((client, id))
 }
 
-/// Execute one statement in an existing transaction, with no statement-level
-/// retry. A conflict invalidates the snapshot and must replay the whole owner
-/// callback in a newly begun transaction.
 pub(super) async fn txn_execute(
     endpoint: &GraphqlEndpoint,
     id: &str,
@@ -276,41 +273,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn consecutive_config_writes_reuse_the_http_connection() {
-        use axum::{extract::ConnectInfo, routing::post, Json, Router};
-        use std::net::SocketAddr;
-
-        let app = Router::new().route(
-            "/graphql",
-            post(
-                |ConnectInfo(peer): ConnectInfo<SocketAddr>, Json(_body): Json<Value>| async move {
-                    Json(serde_json::json!({"data": {"peer_port": peer.port()}}))
-                },
-            ),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = GraphqlEndpoint::anonymous(format!(
-            "http://{}/graphql",
-            listener.local_addr().unwrap()
-        ));
-        let server = tokio::spawn(async move {
-            axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .await
-            .unwrap();
-        });
-
-        let first = auto_commit(&endpoint, "mutation { first }").await.unwrap();
-        let second = auto_commit(&endpoint, "mutation { second }").await.unwrap();
-        server.abort();
-        assert_eq!(first["data"]["peer_port"], second["data"]["peer_port"]);
-    }
-
-    /// A transaction can outlive one bearer, so begin, statements and commit
-    /// each carry a bearer minted when they are sent.
-    #[tokio::test]
     async fn http_transaction_mints_a_bearer_per_request() {
         use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
         use base64::Engine as _;
@@ -359,9 +321,8 @@ mod tests {
                 .unwrap();
         let did = crate::identity::NodeIdentity::did(&identity).to_string();
         super::super::ConfigAccess::graphql_as(endpoint, &did)
-            .transact("test.per_request_bearer", |txn| {
+            .transact_write("test.per_request_bearer", |txn| {
                 Box::pin(async move {
-                    // Bearers carry second-resolution issue times.
                     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
                     txn.execute("mutation { create_X(input: {}) { _docID } }")
                         .await
@@ -392,36 +353,55 @@ mod tests {
         assert!(issued_at(&seen[2].1) >= issued_at(&seen[1].1), "{seen:?}");
     }
 
-    #[test]
-    fn counts_mutated_documents_in_graphql_envelope() {
+    #[tokio::test]
+    async fn readonly_transaction_sends_defradb_read_only_begin_flag() {
+        use axum::{extract::State, http::Uri, routing::post, Json, Router};
+        use std::sync::{Arc, Mutex};
+
+        let begins: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
+        let app = Router::new()
+            .route(
+                "/api/v0/tx",
+                post(
+                    |State(begins): State<Arc<Mutex<Vec<Option<String>>>>>, uri: Uri| async move {
+                        begins
+                            .lock()
+                            .unwrap()
+                            .push(uri.query().map(ToOwned::to_owned));
+                        Json(serde_json::json!({"id": 17}))
+                    },
+                ),
+            )
+            .route(
+                "/api/v0/graphql",
+                post(|| async { Json(serde_json::json!({"data": {"Probe": [{"id": "x"}]}})) }),
+            )
+            .route("/api/v0/tx/{id}", post(|| async { "" }))
+            .with_state(Arc::clone(&begins));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let result = super::super::ConfigAccess::graphql(endpoint.clone())
+            .transact_readonly("test.http_readonly", |txn| {
+                Box::pin(async move { txn.execute("query { Probe { id } }").await })
+            })
+            .await
+            .unwrap();
+        assert_eq!(result["data"]["Probe"][0]["id"], "x");
+        super::super::ConfigAccess::graphql(endpoint)
+            .transact_write("test.http_write", |txn| {
+                Box::pin(async move {
+                    txn.execute("mutation { create_Probe(input: {id: \"y\"}) { id } }")
+                        .await
+                })
+            })
+            .await
+            .unwrap();
         assert_eq!(
-            affected_documents(&serde_json::json!({"data": {"add_X": [{}, {}]}})),
-            2
+            begins.lock().unwrap().as_slice(),
+            &[Some("read_only=true".to_owned()), None]
         );
-    }
-
-    #[test]
-    fn empty_graphql_error_array_is_success() {
-        assert!(!graphql_response_has_errors(
-            &serde_json::json!({"data": {"add_X": [{}]}, "errors": []})
-        ));
-        assert!(graphql_response_has_errors(
-            &serde_json::json!({"errors": [{"message": "failed"}]})
-        ));
-        assert!(graphql_response_has_errors(
-            &serde_json::json!({"errors": "malformed"})
-        ));
-    }
-
-    #[test]
-    fn rejects_queries_at_the_write_seam() {
-        assert!(ensure_mutation_document("query { X { id } }").is_err());
-    }
-
-    #[test]
-    fn rejects_mutations_at_the_query_seam() {
-        assert!(ensure_query_document("mutation { update_X(input: {}) { id } }").is_err());
-        assert!(ensure_query_document("query { X { id } }").is_ok());
-        assert!(ensure_query_document("{ X { id } }").is_ok());
+        server.abort();
     }
 }

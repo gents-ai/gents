@@ -1,6 +1,6 @@
-/* First-run is unfinished until a local node can actually run inference.
-   gents init writes a placeholder backend, so a non-empty backends list is
-   not enough; a key, OAuth, env var, or a healthy probe is. */
+// First-run is unfinished until a local node can actually run inference:
+// `gents init` writes a placeholder backend, so a non-empty backends list
+// is not enough; a key, OAuth, env var, or a healthy probe is.
 import type { NodeView } from "../../hooks/fleetStore";
 import type {
   DesktopClientSnapshot,
@@ -58,16 +58,21 @@ export function shouldRebindSetupDefault(
   return defaultProfile?.backend_id === `${deployment.nodeDid}:backend`;
 }
 
-/** The node first-run setup configured: the one this machine runs, else the
-    first listed. Setup also runs when remote nodes are already paired and
-    only this machine's node lacks inference, so the first listed node may
-    be a remote one. */
 export function nodeSetUp(snapshot: DesktopClientSnapshot) {
   const nodes = snapshot.client?.deployments ?? [];
   return (
     nodes.find((node) => isLocalNode(node, snapshot.bootstrap.initNodeDid)) ??
     nodes[0] ??
     null
+  );
+}
+
+export function configIsRead(
+  snapshot: Pick<DesktopClientSnapshot, "client">,
+  nodeDid: string | null | undefined,
+): boolean {
+  return Boolean(
+    nodeDid && snapshot.client?.operatorConfigAuthoritativeNodeDids?.includes(nodeDid),
   );
 }
 
@@ -79,4 +84,21 @@ export function needsFirstRunSetup(snapshot: DesktopClientSnapshot): boolean {
       isLocalNode(deployment, snapshot.bootstrap.initNodeDid) &&
       !inferenceIsConfigured(deployment),
   );
+}
+
+export type FirstRunPhase = "unknown" | "active" | "done";
+
+export function projectFirstRunPhase(
+  phase: FirstRunPhase,
+  snapshotReady: boolean,
+  initConfigStatus: DesktopClientSnapshot["bootstrap"]["initConfigStatus"],
+  needsSetup: boolean,
+  authoritative: boolean,
+): FirstRunPhase {
+  if (phase !== "unknown") return phase;
+  if (!snapshotReady) return "unknown";
+  if (initConfigStatus === "absent") return "active";
+  if (initConfigStatus !== "configured") return "unknown";
+  if (!authoritative) return "unknown";
+  return needsSetup ? "active" : "done";
 }

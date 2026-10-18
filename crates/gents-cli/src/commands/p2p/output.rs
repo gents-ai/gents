@@ -128,8 +128,6 @@ pub(crate) async fn load_live_http_p2p_status(
     }
 }
 
-/// GET `url` on `graphql`'s node with a bearer minted for this request: the
-/// runtime's `/status` and `/metrics` scrape this repeatedly over one client.
 async fn get_authorized_json<T: serde::de::DeserializeOwned>(
     graphql: &GraphqlEndpoint,
     url: &str,

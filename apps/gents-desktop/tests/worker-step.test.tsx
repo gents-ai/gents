@@ -11,7 +11,13 @@ import type {
 
 vi.mock("@/lib/router", () => ({ href: () => "#", navigate: vi.fn() }));
 
-import { WorkerList, WorkerStep, workerNow } from "../src/ui/screens/WorkerStep";
+import {
+  isWorkerStep,
+  WorkerList,
+  WorkerStep,
+  failureLine,
+  workerNow,
+} from "../src/ui/screens/WorkerStep";
 import {
   NO_WORKERS,
   type Reached,
@@ -22,7 +28,6 @@ import { WorkerActionsContext } from "../src/ui/screens/WorkerActions";
 import { node, renderIn, testApp } from "./app-fixture";
 import { deployment } from "./config-panel-wiring/fixtures";
 
-/* the rows read the selected node from the app */
 const render = (ui: ReactElement) => renderIn(testApp(), ui);
 
 const call = (
@@ -46,7 +51,24 @@ const call = (
     },
   }) as unknown as RenderedToolCallView;
 
-/* what the bridge sends in production: message_count is always None */
+it("keeps session discovery and inspection in ordinary tool steps", () => {
+  for (const [toolName, action] of [
+    ["agent_list", "list"],
+    ["agent_session_list", "sessions"],
+    ["agent_session_read", "read"],
+  ]) {
+    const tool = call("success");
+    tool.toolName = toolName;
+    tool.awaitMode = "foreground";
+    if (tool.presentation.kind !== "agent")
+      throw new Error("expected agent presentation");
+    tool.presentation.action = action;
+    expect(isWorkerStep(tool)).toBe(false);
+  }
+  expect(isWorkerStep(call("running", "start"))).toBe(true);
+  expect(isWorkerStep(call("success", "message"))).toBe(true);
+});
+
 const summary = (turnState: string | null): SessionSummary =>
   ({
     sessionId: "child-session",
@@ -79,7 +101,6 @@ const worker = (turnState: string | null): Worker => ({
   },
 });
 
-/* this row's call caused `request`; the session may be working on others */
 const reached = (
   request: CausedRequestView,
   s: Worker | null = worker("running"),
@@ -109,7 +130,6 @@ function renderStep(
 
 describe("an agent row", () => {
   it("shows the request this row's call caused, not the session's latest", () => {
-    /* the session is working on a later request; this call's has finished */
     expect(
       workerNow(call(), reached(caused("child-req", "completed")), Date.now()),
     ).toEqual({
@@ -157,7 +177,6 @@ describe("an agent row", () => {
   });
 
   it("stops by interrupting only the request this row's call caused", () => {
-    /* the session has moved on to a later request; Stop names this call's */
     const request = caused("child-req", "processing");
     const actions = renderStep(call("running"), reached(request));
     screen.getByRole("button", { name: "Stop Reviewer" }).click();
@@ -293,5 +312,21 @@ describe("agent list", () => {
   it("renders nothing for a session that started no other session", () => {
     const view = render(<WorkerList workers={NO_WORKERS} />);
     expect(view.container).toBeEmptyDOMElement();
+  });
+});
+
+describe("a failed call's reason", () => {
+  it("reads a JSON error's message rather than its opening brace", () => {
+    expect(
+      failureLine(
+        '{\n  "error": "session is neither this agent\'s own nor one it started"\n}',
+      ),
+    ).toBe("session is neither this agent's own nor one it started");
+    expect(failureLine('{"error": {"message": "allowed_agents: [worker]"}}')).toBe(
+      "allowed_agents: [worker]",
+    );
+    expect(failureLine('{\n  "code": 7\n}')).toBeNull();
+    expect(failureLine("plain reason\nmore")).toBe("plain reason");
+    expect(failureLine("")).toBeNull();
   });
 });

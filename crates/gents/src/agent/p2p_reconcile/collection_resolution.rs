@@ -1,5 +1,3 @@
-//! Shared embedded-node collection token resolution for P2P admin adapters.
-
 use crate::defra_node::EmbeddedNode;
 
 use super::{RemoteP2pAdminError, RemoteP2pAdminResult};

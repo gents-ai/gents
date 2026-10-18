@@ -1,9 +1,3 @@
-//! Store lock lifetime: exclusion while held, release when dropped.
-//!
-//! A forked child shares its parent's open file descriptions until exec.
-//! The fork regression serializes with every other lock assertion under
-//! `FORK_EXCLUSION` so inherited descriptors belong to its controlled fixture.
-
 use std::fs;
 use std::sync::{Mutex, MutexGuard};
 
@@ -78,8 +72,6 @@ fn every_alias_of_a_store_takes_the_same_lock() {
     );
     drop(held);
 
-    // `--data-dir .` names the current directory, which has a name once
-    // resolved.
     let current = lock_store(temp.path(), &real.join(".")).unwrap();
     assert_eq!(
         current.path(),
@@ -114,9 +106,6 @@ fn a_home_lock_without_a_store_excludes_the_store_created_later() {
     lock_store(&home, &default_data_dir(&home)).unwrap();
 }
 
-/// A forked child blocked until its release pipe closes. Dropping it
-/// closes the pipe and reaps the child, so a failed assertion neither
-/// leaves the child blocked nor leaks it.
 #[cfg(unix)]
 struct BlockedChild {
     pid: libc::pid_t,
@@ -125,7 +114,6 @@ struct BlockedChild {
 
 #[cfg(unix)]
 impl BlockedChild {
-    /// Lets the child exec and returns its wait status.
     fn release(mut self) -> libc::c_int {
         self.release_and_reap()
     }
@@ -161,9 +149,6 @@ fn a_store_outside_the_home_does_not_exclude_the_home_default_store() {
     fs::create_dir_all(&outside).unwrap();
     fs::create_dir_all(default_data_dir(&home)).unwrap();
 
-    // A server on `--data-dir <outside>` claims that directory's lock, so
-    // nothing about the home's own store may be concluded from it. Reclaiming
-    // or clearing a lock keyed on the home would act on a live server's state.
     let held = lock_store(&home, &outside).unwrap();
     assert_eq!(
         held.path(),
@@ -176,8 +161,6 @@ fn a_store_outside_the_home_does_not_exclude_the_home_default_store() {
     assert_ne!(held.path(), home_store.path());
 }
 
-/// A fork inherits the open file description. The runtime owner must unlock
-/// explicitly on drop so a child blocked before exec cannot retain its lock.
 #[cfg(unix)]
 #[test]
 fn dropping_the_store_lock_releases_it_even_before_a_forked_child_execs() {
@@ -189,8 +172,7 @@ fn dropping_the_store_lock_releases_it_even_before_a_forked_child_execs() {
     fs::create_dir_all(&data).unwrap();
     let held = lock_store(temp.path(), &data).unwrap();
 
-    // Everything the child touches is prepared before the fork: between fork
-    // and exec it may only make async-signal-safe calls.
+    // The child can make only async-signal-safe calls between fork and exec.
     let program = CString::new("/usr/bin/true").unwrap();
     let argv = [program.as_ptr(), std::ptr::null()];
     let mut go = [0; 2];
@@ -199,7 +181,6 @@ fn dropping_the_store_lock_releases_it_even_before_a_forked_child_execs() {
     if pid == 0 {
         unsafe {
             libc::close(go[1]);
-            // EOF is the release signal; anything but EINTR ends the wait.
             let mut byte = 0u8;
             while libc::read(go[0], (&mut byte as *mut u8).cast(), 1) == -1
                 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted

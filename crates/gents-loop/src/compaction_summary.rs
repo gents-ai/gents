@@ -1,14 +1,8 @@
-//! Compaction-summary prompt text and checkpoint parsing. Every item here is
-//! `pub` (not `pub(super)`), for the same reason as `compaction_history.rs`.
-
 use schemars::JsonSchema;
 use serde::Deserialize;
 
 use super::history::floor_char_boundary;
 
-/// Provider failures can embed arbitrarily large response bodies. Keep the
-/// diagnostic bounded before it flows into response documents, logs, and
-/// adapter projections.
 const ERROR_DIAGNOSTIC_MAX_BYTES: usize = 256;
 
 pub fn bounded_error_diagnostic(raw: &str) -> String {
@@ -82,16 +76,6 @@ pub fn parse_fallback_checkpoint(raw: &str) -> Result<ContinuationCheckpoint, St
     Ok(checkpoint)
 }
 
-/// Strips a `json` or untyped Markdown fence around the checkpoint object. The
-/// closing fence is optional: models sometimes emit a complete object after an
-/// opening fence and stop without closing it (#1015).
-///
-/// The fallback prompt asks for raw JSON, but this path is only reached once
-/// guided decoding has already failed — against exactly the providers that
-/// ignore that instruction — and it gets a single attempt with no retry.
-/// `serde_json::from_str` still requires the payload to be one JSON object and
-/// nothing else, so tolerating the fence does not widen into extracting an
-/// object out of prose.
 fn strip_markdown_fence(raw: &str) -> &str {
     let trimmed = raw.trim();
     let Some(body) = trimmed
@@ -113,11 +97,8 @@ fn bounded_raw_output_preview(raw: &str) -> String {
         .unwrap_or_else(|_| "\"<unavailable>\"".to_string())
 }
 
-/// Byte bound for one rendered list item. Structural paths are copied verbatim
-/// from tool arguments; an item-count cap alone cannot bound bytes (#1017).
 const SUMMARY_ITEM_MAX_BYTES: usize = 512;
 const SUMMARY_ITEM_TRUNCATION_SUFFIX: &str = "…";
-/// Defensive cap on model-authored lists; the prompt asks for ~8 items.
 const MODEL_LIST_MAX_ITEMS: usize = 8;
 const LIST_OVERFLOW_SUFFIX: &str = "(omitted from this summary)";
 
@@ -169,8 +150,6 @@ pub fn format_summary(
     files_modified: &[String],
     file_list_max: usize,
 ) -> String {
-    // Continuation state renders before the high-cardinality file lists so
-    // that head truncation (`bounded_summary`) can never erase it (#1017).
     [
         Some(format!(
             "# Continuation checkpoint\n\n## Goal\n\n{}",

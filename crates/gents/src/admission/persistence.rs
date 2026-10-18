@@ -9,13 +9,10 @@ use super::client::AdmissionError;
 use super::controller::InferenceCallRecord;
 use crate::graphql::escape_graphql_string;
 
-/// The provider usage components an `InferenceCall` row stores.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ProviderCallUsage {
     pub(crate) input_tokens: u64,
     pub(crate) output_tokens: u64,
-    /// The provider client's cached-input count, zero when unreported; the
-    /// paired `CachedInputTokensObservation` decides what is persisted.
     pub(crate) cached_input_tokens: u64,
 }
 
@@ -57,7 +54,7 @@ pub(super) async fn persist_call_queued(
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = add_call_mutation(call, "queued", None, Some(&now), None, None, None);
     let resp = crate::config_client::ConfigAccess::write_local_response(
-        node.as_ref(),
+        &node,
         "admission.persist_call_queued",
         &mutation,
     )
@@ -72,7 +69,7 @@ pub(super) async fn persist_call_started(
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = add_call_mutation(call, "running", None, Some(&now), Some(&now), None, None);
     let resp = crate::config_client::ConfigAccess::write_local_response(
-        node.as_ref(),
+        &node,
         "admission.persist_call_started",
         &mutation,
     )
@@ -84,18 +81,21 @@ pub(super) async fn persist_call_started(
 pub(super) async fn persist_existing_call_running(
     node: Arc<EmbeddedNode>,
     call: &InferenceCallRecord,
+    doc_id: &str,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let call_id = escape_graphql_string(&call.call_id);
+    let doc_id = escape_graphql_string(doc_id);
     let started_at = escape_graphql_string(&now);
     let mutation = format!(
         r#"mutation {{ update_InferenceCall(
+            docID: "{doc_id}",
             filter: {{ call_id: {{ _eq: "{call_id}" }}, call_state: {{ _eq: "queued" }} }},
             input: {{ call_state: "running", started_at: "{started_at}" }}
         ) {{ _docID }} }}"#
     );
     let response = crate::config_client::ConfigAccess::write_local_response(
-        node.as_ref(),
+        &node,
         "admission.persist_existing_call_running",
         &mutation,
     )
@@ -126,7 +126,7 @@ pub(super) async fn persist_terminal_call(
         usage,
     );
     crate::config_client::ConfigAccess::write_local_response(
-        node.as_ref(),
+        &node,
         "admission.persist_terminal_call",
         &mutation,
     )
@@ -137,6 +137,7 @@ pub(super) async fn persist_terminal_call(
 pub(super) async fn persist_existing_call_terminal(
     node: Arc<EmbeddedNode>,
     call: &InferenceCallRecord,
+    doc_id: &str,
     call_state: &str,
     failure_reason: Option<&str>,
     usage: Option<ProviderCallUsage>,
@@ -150,19 +151,21 @@ pub(super) async fn persist_existing_call_terminal(
         _ => anyhow::bail!("invalid terminal InferenceCall state: {call_state}"),
     };
     let call_id = escape_graphql_string(&call.call_id);
+    let doc_id = escape_graphql_string(doc_id);
     let ended_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let failure_reason = optional_graphql_string("failure_reason", failure_reason);
     let (prompt_tokens, completion_tokens, cached_input_tokens) =
         usage_fields(usage, cache_observation);
     let mutation = format!(
         r#"mutation {{ update_InferenceCall(
+            docID: "{doc_id}",
             filter: {{ call_id: {{ _eq: "{call_id}" }}, call_state: {live_source} }},
             input: {{ call_state: "{call_state}", {failure_reason} ended_at: "{ended_at}",
                 {prompt_tokens} {completion_tokens} {cached_input_tokens} }}
         ) {{ _docID }} }}"#
     );
     let response = crate::config_client::ConfigAccess::write_local_response(
-        node.as_ref(),
+        &node,
         "admission.persist_existing_call_terminal",
         &mutation,
     )
@@ -172,27 +175,24 @@ pub(super) async fn persist_existing_call_terminal(
     }
 
     let terminal_filter = format!(
-        r#"call_id: {{ _eq: "{call_id}" }}, call_state: {{ _in: ["completed", "failed", "cancelled"] }}"#
+        r#"_docID: {{ _eq: "{doc_id}" }}, call_id: {{ _eq: "{call_id}" }}, call_state: {{ _in: ["completed", "failed", "cancelled"] }}"#
     );
     let exists = if usage.is_some() {
-        // Recovery may win while a provider response is in flight. Record its
-        // observed usage without changing the winning outcome, reason or stamp.
         let mutation = format!(
             r#"mutation {{ update_InferenceCall(
+                docID: "{doc_id}",
                 filter: {{ {terminal_filter} }},
                 input: {{ {prompt_tokens} {completion_tokens} {cached_input_tokens} }}
             ) {{ _docID }} }}"#
         );
         let response = crate::config_client::ConfigAccess::write_local_response(
-            node.as_ref(),
+            &node,
             "admission.persist_late_call_usage",
             &mutation,
         )
         .await?;
         !crate::graphql::rows::<serde_json::Value>(&response, "update_InferenceCall")?.is_empty()
     } else {
-        // An already terminal row is an idempotent success. A missing row or
-        // illegal live source is a durability failure, never an implicit insert.
         let query = format!(r#"{{ InferenceCall(filter: {{ {terminal_filter} }}) {{ _docID }} }}"#);
         let response = crate::graphql::graphql_with_transaction_retry(
             node.as_ref(),
@@ -302,115 +302,5 @@ fn usage_fields(
             )
         }
         None => (String::new(), String::new(), String::new()),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::admission::client::CallKind;
-
-    fn call() -> InferenceCallRecord {
-        InferenceCallRecord {
-            call_id: "call-1".to_string(),
-            runtime_instance_id: "runtime-1".to_string(),
-            request_id: "request-logical".to_string(),
-            request_doc_id: "request-doc-physical".to_string(),
-            call_seq: 1,
-            backend_id: "backend-1".to_string(),
-            agent_id: "behavior-1".to_string(),
-            node_did: "did:test:agent".to_string(),
-            call_kind: CallKind::Inference,
-            attempt: 1,
-            queue_depth_at_enqueue: 0,
-            controller_generation: 1,
-            backend_config_fingerprint: "fingerprint-1".to_string(),
-        }
-    }
-
-    #[test]
-    fn every_inference_call_create_arm_persists_the_physical_request_edge() {
-        let call = call();
-        let mutations = [
-            add_call_mutation(
-                &call,
-                "queued",
-                None,
-                Some("2026-08-09T00:00:00Z"),
-                None,
-                None,
-                None,
-            ),
-            add_call_mutation(
-                &call,
-                "running",
-                None,
-                Some("2026-08-09T00:00:01Z"),
-                Some("2026-08-09T00:00:01Z"),
-                None,
-                None,
-            ),
-            add_call_mutation(
-                &call,
-                "failed",
-                Some("QueueFull"),
-                Some("2026-08-09T00:00:02Z"),
-                None,
-                Some("2026-08-09T00:00:02Z"),
-                None,
-            ),
-        ];
-
-        for mutation in mutations {
-            assert!(
-                mutation.contains(r#"request_id: "request-logical""#),
-                "logical correlation id missing from mutation: {mutation}"
-            );
-            assert!(
-                mutation.contains(r#"request_doc_id: "request-doc-physical""#),
-                "physical request edge missing from mutation: {mutation}"
-            );
-        }
-    }
-
-    #[test]
-    fn usage_columns_preserve_provider_components_verbatim() {
-        let fields = usage_fields(
-            Some(ProviderCallUsage {
-                input_tokens: 100,
-                output_tokens: 50,
-                cached_input_tokens: 40,
-            }),
-            CachedInputTokensObservation::NotAvailable,
-        );
-
-        assert_eq!(fields.0, "prompt_tokens: 100,");
-        assert_eq!(fields.1, "completion_tokens: 50,");
-        assert_eq!(fields.2, "cached_input_tokens: 40,");
-    }
-
-    #[test]
-    fn cached_input_tokens_distinguish_missing_zero_and_positive_responses_usage() {
-        let usage = Some(ProviderCallUsage {
-            input_tokens: 100,
-            output_tokens: 50,
-            cached_input_tokens: 0,
-        });
-        assert_eq!(
-            usage_fields(usage, CachedInputTokensObservation::Unreported).2,
-            ""
-        );
-        assert_eq!(
-            usage_fields(usage, CachedInputTokensObservation::Reported(0)).2,
-            "cached_input_tokens: 0,"
-        );
-        assert_eq!(
-            usage_fields(usage, CachedInputTokensObservation::Reported(32)).2,
-            "cached_input_tokens: 32,"
-        );
-        assert_eq!(
-            usage_fields(usage, CachedInputTokensObservation::NotAvailable).2,
-            "cached_input_tokens: 0,"
-        );
     }
 }

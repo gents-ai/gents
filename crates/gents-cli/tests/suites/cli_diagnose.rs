@@ -126,9 +126,6 @@ async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows()
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
-    // Keep the live assertions on the live access path. Auto-discovery intentionally
-    // falls back to local storage when its endpoint probe fails, but the server owns
-    // that store exclusively for the duration of this phase.
     let healthy = run_cli_json(&home_dir, &["diagnose", "--graphql", &graphql])?;
     assert_eq!(
         healthy
@@ -143,9 +140,6 @@ async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows()
         Some(true)
     );
 
-    // Exercise malformed live state under an unowned identity. Mutating the
-    // real row races the authoritative publisher, which may repair it before
-    // the diagnose subprocess reads it.
     let malformed_node_did = format!("did:key:malformed-diagnose-{}", Uuid::new_v4().simple());
     graphql_query(
         &graphql,

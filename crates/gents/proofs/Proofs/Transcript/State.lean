@@ -63,10 +63,6 @@ def toolResultKey? : MessageKind → Option ToolResultKey
 
 end MessageKind
 
-/-- Sequencing/pairing projection of an immutable native message header.
-`messageId` is assumed to be a fresh, genesis-validated Defra document identity
-when a publication transition enters this model. This surface does not derive
-identity from content or decide identity collisions. -/
 structure MessageRow where
   messageId : MessageId
   sessionId : SessionId
@@ -131,11 +127,7 @@ end ToolCallRow
 structure AssistantTurn where
   sessionId : SessionId
   sequence : Sequence
-  /-- Provider order, retained by the pending-row suffix and later dispatch. -/
   callIds : List ToolExecution.ToolCallId
-  /-- The canonical header owns this field. Transcript only uses it to select
-  dispatchable versus terminal tool rows; bytes and closure validity stay in
-  `CanonicalOutput`. -/
   outcome : CanonicalOutput.Outcome := .complete
   deriving DecidableEq
 
@@ -227,8 +219,6 @@ instance (s : TranscriptState) (turn : AssistantTurn) :
   unfold PublishableTurn
   infer_instance
 
-/-- A call can enter host execution only from a pending row already reserved by
-an immutable assistant header. -/
 def Dispatchable (s : TranscriptState) (callId : ToolExecution.ToolCallId) : Prop :=
   ∃ call, call ∈ s.toolCalls ∧
     call.callId = callId ∧
@@ -240,8 +230,6 @@ instance (s : TranscriptState) (callId : ToolExecution.ToolCallId) :
   unfold Dispatchable ReservedByPersistedMessage
   infer_instance
 
-/-- Filtering pending rows preserves their publication order. Dispatching the
-head therefore permits parallel startup without reordering calls. -/
 def pendingCallIds (s : TranscriptState) : List ToolExecution.ToolCallId :=
   s.toolCalls.filterMap fun call =>
     if call.state = .pending then some call.callId else none
@@ -309,9 +297,6 @@ def toolRows (turn : AssistantTurn)
     , state := state
     , resultKey := none }
 
-/-- Acceptance is one durable transaction at this abstraction boundary: the
-already-closed Complete header and every ordered tool intent appear together,
-all pending and none in flight. -/
 def publishAcceptedAssistant (s : TranscriptState) (messageId : MessageId)
     (turn : AssistantTurn) : TranscriptState :=
   { s with
@@ -325,8 +310,6 @@ def publishAcceptedAssistant (s : TranscriptState) (messageId : MessageId)
     toolCalls := s.toolCalls ++ toolRows turn .pending
   }
 
-/-- A terminal Partial header may preserve call provenance, but its rows are
-born terminal and can never satisfy `Dispatchable`. -/
 def publishPartialAssistant (s : TranscriptState) (messageId : MessageId)
     (turn : AssistantTurn) : TranscriptState :=
   { s with
@@ -397,8 +380,6 @@ def terminalizeToolCall (s : TranscriptState)
     inFlight := s.inFlight.erase callId
   }
 
-/-- Request finalization reuses the tool owner's cancel-before-dispatch policy:
-only exact accepted call identities that are still pending are cancelled. -/
 def cancelPendingOwnedCalls (s : TranscriptState)
     (owned : List (SessionId × Sequence × ToolExecution.ToolCallId)) : TranscriptState :=
   { s with toolCalls := s.toolCalls.map fun row =>

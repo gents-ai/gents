@@ -6,6 +6,8 @@ use gents::collection::Collection;
 use gents::config_client::{apply_desired_state_plan, read_desired_state_record_in_txn};
 use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::InferenceProfile;
+#[cfg(test)]
+use std::sync::Arc;
 
 pub async fn upsert_inference_profile_on(
     access: &ConfigAccess,
@@ -22,7 +24,7 @@ pub async fn upsert_inference_profile_on(
 
 #[cfg(test)]
 pub async fn upsert_inference_profile(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     document: &InferenceProfile,
 ) -> Result<()> {
     let value = serde_json::to_value(document)?;
@@ -31,7 +33,7 @@ pub async fn upsert_inference_profile(
         add: value.clone(),
         update: value,
     }])?;
-    ConfigAccess::transact_local(node, None, "desktop.profile.save", |txn| {
+    ConfigAccess::transact_local_write(node, None, "desktop.profile.save", |txn| {
         let plan = &plan;
         Box::pin(async move {
             apply_desired_state_plan(txn, plan).await?;
@@ -43,7 +45,7 @@ pub async fn upsert_inference_profile(
 
 #[cfg(test)]
 pub async fn delete_inference_profile(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     id: &str,
 ) -> Result<usize> {
@@ -90,7 +92,7 @@ mod tests {
             json!({"node_did":"did:test:owner","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}),
         )?;
         gents::config_client::write_inference_backend_document(
-            &ConfigAccess::Local(node.clone()),
+            &ConfigAccess::local(node.clone()),
             &backend,
         )
         .await?;
@@ -103,7 +105,7 @@ mod tests {
         profile.max_output_tokens = None;
         profile.node_did = "did:test:other".into();
         assert!(upsert_inference_profile(&node, &profile).await.is_err());
-        ConfigAccess::transact_local(&node, None, "test.profile.read", |txn| {
+        ConfigAccess::transact_local_write(&node, None, "test.profile.read", |txn| {
             Box::pin(async move {
                 let (_, value) = read_desired_state_record_in_txn(
                     txn,

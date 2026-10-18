@@ -1,6 +1,3 @@
-/* Database sync at a glance, in the header: a dot and the client's own
-   short label (Current, Syncing, Checking sync, Error), with the
-   diagnostics the desktop's indicator shows behind a click. */
 import type { SyncHealthView } from "@source-inc/gents-desktop-client";
 import {
   projectSyncOperationalStatus,
@@ -17,9 +14,7 @@ export function SyncHealth({
   row = false,
 }: {
   syncHealth: SyncHealthView | null;
-  /** the dot alone, for the rail; the label is still its name and in the details */
   compact?: boolean;
-  /* as a full-width row of the nav panel */
   row?: boolean;
 }) {
   const popover = useExclusivePopover();
@@ -53,10 +48,7 @@ export function SyncHealth({
         title={status.detail}
         className={cn(
           "flex shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-          row
-            ? /* a row of the nav panel: the dot in the icon slot, the label beside it */
-              "h-8 w-full rounded-lg pr-2 text-sm"
-            : "h-7 rounded-full text-xs",
+          row ? "h-8 w-full rounded-lg pr-2 text-sm" : "h-7 rounded-full text-xs",
           !row && (compact ? "w-7 justify-center" : "px-2"),
         )}
       >
@@ -70,8 +62,6 @@ export function SyncHealth({
             />
           )}
         </span>
-        {/* on phones the dot is the chip; the status is still its label and
-            in the details it opens */}
         {!compact && (
           <span className={cn(!row && "max-sm:hidden")}>{status.shortLabel}</span>
         )}

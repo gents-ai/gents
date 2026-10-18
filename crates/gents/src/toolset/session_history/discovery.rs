@@ -166,9 +166,9 @@ fn compact(row: &Value, current_session: Option<&str>, agent: &str) -> Value {
     json!({"session_id":row["session_id"],"title":row["title"]["text"],"created_at":row["created_at"],"closed_at":row["closed_at"],"agent_id":row["agent_id"],"tags":row["tags"],"node_did":row["node_did"],"requester_did":row["requester_did"],"is_current":current_session.is_some_and(|id|super::is_current_session(agent,id,row["node_did"].as_str().unwrap_or_default(),row["session_id"].as_str().unwrap_or_default())),"session_doc_id":row["_docID"]})
 }
 
-/// Bytes per `output` page. With JSON escaping the result stays below the
-/// 50 KiB model-view truncation limit for ordinary text.
 const OUTPUT_PAGE_BYTES: usize = 16_000;
+/// Search stops reading a session's headers once it has enough hits.
+const SEARCH_MESSAGE_PAGE: usize = if cfg!(test) { 1 } else { 100 };
 
 pub(super) const OUTPUT_ORDER: &[&str] = &[
     "text",
@@ -266,7 +266,7 @@ pub(super) async fn run(
         .context("sessions requires a valid running DID")?;
     let args = args.clone();
     let action = action.to_owned();
-    ConfigAccess::transact_local(
+    ConfigAccess::transact_local_readonly(
         &tool.node,
         Some(identity),
         "tool.sessions.discovery",
@@ -476,7 +476,6 @@ async fn execute(
     })
 }
 
-/// The one session row ACP lets the caller read under this ID.
 async fn authorized_session(txn: &ConfigApplyTxn<'_>, id: &str) -> Result<Value> {
     let mut session = rows(
         txn.execute(&format!(
@@ -493,9 +492,6 @@ async fn authorized_session(txn: &ConfigApplyTxn<'_>, id: &str) -> Result<Value>
     Ok(session.remove(0))
 }
 
-/// Full stored output of one tool call, paged by bytes. The model-facing
-/// result is bounded at the provider-input boundary; this reads the canonical
-/// stream behind it through the tool-call read owner.
 async fn tool_output(
     txn: &ConfigApplyTxn<'_>,
     current_session: Option<&str>,
@@ -740,39 +736,47 @@ async fn search_session(
     if resume_sequence.is_none() && matches_text(session, Some(needle)) {
         hits.push((-1, json!({"session_id":id,"session_doc_id":session["_docID"],"title":session["title"]["text"],"source":"metadata"})));
     }
-    let headers = rows(txn.execute(&format!("{{AgentMessage(filter: {{{},session_id: {{_eq: {}}}}},order: {{sequence: ASC}}) {{{}}}}}",scope(agent,requester),quoted(id),crate::session::canonical_rows::AGENT_MESSAGE_FIELDS)).await?,"AgentMessage")?;
     let mut reader = TxnCanonicalReader::new(txn, agent, requester);
-    let observed = headers
-        .iter()
-        .map(crate::session::canonical_rows::decode_transcript_message_row)
-        .collect::<Result<Vec<_>>>()?;
-    reader.observe_headers(&observed);
     let needle_lower = needle.to_lowercase();
-    for row in headers {
-        if hits.len() >= remaining {
+    let mut after = resume_sequence;
+    'pages: loop {
+        let bound = after
+            .map(|sequence| format!(",sequence: {{_gt: {sequence}}}"))
+            .unwrap_or_default();
+        let headers = rows(txn.execute(&format!("{{AgentMessage(filter: {{{},session_id: {{_eq: {}}}{bound}}},order: {{sequence: ASC}},limit: {SEARCH_MESSAGE_PAGE}) {{{}}}}}",scope(agent,requester),quoted(id),crate::session::canonical_rows::AGENT_MESSAGE_FIELDS)).await?,"AgentMessage")?;
+        let observed = headers
+            .iter()
+            .map(crate::session::canonical_rows::decode_transcript_message_row)
+            .collect::<Result<Vec<_>>>()?;
+        reader.observe_headers(&observed);
+        let exhausted = headers.len() < SEARCH_MESSAGE_PAGE;
+        for row in headers {
+            if hits.len() >= remaining {
+                break 'pages;
+            }
+            let header_id = row["_docID"].as_str().context("header ID missing")?;
+            let sequence = row["sequence"]
+                .as_i64()
+                .context("message has no sequence")?;
+            after = Some(sequence);
+            let (header, message) = reader.load_message(header_id).await?;
+            let text = gents_protocol::transcript::present_message(&message).body_markdown;
+            if let Some(position) = text.to_lowercase().find(&needle_lower) {
+                let excerpt: String = text
+                    .chars()
+                    .skip(
+                        text.to_lowercase()[..position]
+                            .chars()
+                            .count()
+                            .saturating_sub(80),
+                    )
+                    .take(240)
+                    .collect();
+                hits.push((sequence, json!({"session_id":id,"message_doc_id":header_id,"sequence":header.sequence,"excerpt":excerpt,"payload_references":header.payload_references()})));
+            }
+        }
+        if exhausted {
             break;
-        }
-        let header_id = row["_docID"].as_str().context("header ID missing")?;
-        let sequence = row["sequence"]
-            .as_i64()
-            .context("message has no sequence")?;
-        if resume_sequence.is_some_and(|after| sequence <= after) {
-            continue;
-        }
-        let (header, message) = reader.load_message(header_id).await?;
-        let text = gents_protocol::transcript::present_message(&message).body_markdown;
-        if let Some(position) = text.to_lowercase().find(&needle_lower) {
-            let excerpt: String = text
-                .chars()
-                .skip(
-                    text.to_lowercase()[..position]
-                        .chars()
-                        .count()
-                        .saturating_sub(80),
-                )
-                .take(240)
-                .collect();
-            hits.push((sequence, json!({"session_id":id,"message_doc_id":header_id,"sequence":header.sequence,"excerpt":excerpt,"payload_references":header.payload_references()})));
         }
     }
     Ok(hits)
@@ -833,7 +837,7 @@ resources:
             )
             .await
             .unwrap();
-        ConfigAccess::Local(node.clone())
+        ConfigAccess::local(node.clone())
             .add_schema(&crate::schema::AGENT_SESSION_SCHEMA.replace(
                 "type AgentSession ",
                 &format!("type AgentSession @policy(id: \"{policy}\", resource: \"sessions\") "),
@@ -841,7 +845,7 @@ resources:
             .await
             .unwrap();
         let owner_did = owner.did().to_owned();
-        let doc = ConfigAccess::transact_local(&node, Some(owner_did.parse().unwrap()), "test.sessions.acp.create", |txn| {
+        let doc = ConfigAccess::transact_local_write(&node, Some(owner_did.parse().unwrap()), "test.sessions.acp.create", |txn| {
             let did = owner_did.clone();
             Box::pin(async move {
                 let value = txn.execute(&format!("mutation {{add_AgentSession(input: {{node_did: {}, requester_did: \"different-requester\", session_id: \"shared\", agent_id: \"engineer\", created_at: \"2026-01-01T00:00:00Z\"}}) {{_docID}}}}", quoted(&did))).await?;
@@ -916,8 +920,6 @@ resources:
         .await
         .unwrap();
         let mut lifecycle = fixture.tool;
-        // Beyond the 50 KiB model view, with scalars of every UTF-8 width so
-        // page ends must back off to boundaries.
         let raw: String = (0..9_000)
             .map(|line| format!("{line:05} aé€😀\n"))
             .collect();

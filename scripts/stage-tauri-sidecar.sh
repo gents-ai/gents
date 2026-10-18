@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Stage an already-built Gents CLI using Tauri's target-suffixed sidecar name.
-# This deliberately does not build the CLI or install/register a host service.
 set -euo pipefail
 
 usage() {
@@ -9,9 +7,6 @@ Usage: stage-tauri-sidecar.sh --source PATH [--target TARGET_TRIPLE]
 
 Copies an existing gents CLI to:
   apps/gents-desktop/src-tauri/binaries/gents-<target-triple>[.exe]
-
-Tauri's bundle.externalBin entry is the unsuffixed logical name
-"binaries/gents". The Tauri CLI selects this target-suffixed staged file.
 EOF
 }
 

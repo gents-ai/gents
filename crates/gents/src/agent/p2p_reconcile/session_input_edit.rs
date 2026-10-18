@@ -1,5 +1,3 @@
-//! Runtime-owned application of signed pending-input commands.
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -8,31 +6,16 @@ use defra_node::EmbeddedNode;
 use gents_protocol::session_input_edit::{
     SessionInputEdit, SessionInputEditOutcome, SessionInputEditReceipt, SESSION_INPUT_EDIT_VERSION,
 };
-use serde::Deserialize;
-use tokio_util::sync::CancellationToken;
 
 use super::enrollment_store::GraphqlEnrollmentStore;
-use super::templates::{conjunctive_string_eq, decode_pairing_filters};
+#[cfg(test)]
+use super::session_commands::run_session_command_reconciler;
+use super::session_commands::{CommandRow, FIELDS};
 use crate::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
 use crate::graphql::escape_graphql_string;
 use crate::identity::NodeIdentity;
 
-#[derive(Deserialize)]
-struct CommandRow {
-    #[serde(rename = "_docID")]
-    doc_id: String,
-    command_id: String,
-    requester_did: String,
-    requester_peer_id: Option<String>,
-    node_did: String,
-    session_id: String,
-    intent_json: String,
-    receipt_json: Option<String>,
-}
-
-const FIELDS: &str = "_docID command_id requester_did requester_peer_id node_did session_id intent_json receipt_json";
-
-async fn verified_receipt(
+pub(super) async fn verified_receipt(
     identity: &dyn NodeIdentity,
     command: &SessionInputEdit,
     raw: Option<&str>,
@@ -59,7 +42,6 @@ async fn verified_receipt(
     Ok(Some(receipt))
 }
 
-/// Checks that hold for the command's lifetime, independent of clock and authority.
 async fn intrinsic_rejection(
     identity: &dyn NodeIdentity,
     command: &SessionInputEdit,
@@ -90,69 +72,21 @@ async fn authority_rejection(
     store: &GraphqlEnrollmentStore,
     command: &SessionInputEdit,
 ) -> Result<Option<String>> {
-    let local = command.requester_peer_id.is_none() && command.requester_did == command.node_did;
-    let mut expected_admission =
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-            &command.requester_did,
-        );
-    if !local {
-        let Some(peer) = command.requester_peer_id.as_deref() else {
-            return Ok(Some("remote edit lacks requester peer identity".into()));
-        };
-        let projection = store.load_projection_in_txn(txn).await?;
-        let Some(fence) = super::enrollment_reconcile::exact_authorization_fence(
-            &projection,
-            &command.requester_did,
-            peer,
-        )?
-        else {
-            return Ok(Some("requester enrollment is not current".into()));
-        };
-        if fence.owner_node != command.node_did {
-            return Ok(Some("enrollment targets another node".into()));
-        }
-        expected_admission =
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::enrollment(
-                &command.requester_did,
-                fence.request_id,
-                fence.request_digest,
-                fence.admin_did,
-                fence.authorization_sequence,
-                fence.authorization_expires_at,
-            );
-        for collection in ["PeerPairingDesired", "PeerPairingApplied"] {
-            crate::graphql::fence_arrivals(txn, collection).await?;
-        }
-        let peer = escape_graphql_string(peer);
-        let response = txn.execute(&format!(r#"{{
-            PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer}" }}, source: {{ _eq: "enrollment" }} }}) {{ node_did }}
-            PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer}" }} }}) {{ replicator_filter }}
-        }}"#)).await?;
-        let desired = response["data"]["PeerPairingDesired"]
-            .as_array()
-            .context("missing desired routes")?;
-        let applied = response["data"]["PeerPairingApplied"]
-            .as_array()
-            .context("missing applied routes")?;
-        let route = desired
-            .iter()
-            .any(|row| row["node_did"].as_str() == Some(command.node_did.as_str()))
-            && applied.iter().any(|row| {
-                row["replicator_filter"]
-                    .as_str()
-                    .and_then(|raw| decode_pairing_filters(raw).ok())
-                    .and_then(|filters| filters.get("AgentSessionInputEdit").cloned())
-                    .is_some_and(|filter| {
-                        conjunctive_string_eq(&filter, "requester_did")
-                            == Some(command.requester_did.as_str())
-                            && conjunctive_string_eq(&filter, "node_did")
-                                == Some(command.node_did.as_str())
-                    })
-            });
-        if !route {
-            return Ok(Some("requester edit route is not applied".into()));
-        }
-    }
+    let expected_admission = match super::session_command_authority::current_admission(
+        txn,
+        store,
+        super::session_command_authority::AuthorScope {
+            requester_did: &command.requester_did,
+            requester_peer_id: command.requester_peer_id.as_deref(),
+            node_did: &command.node_did,
+        },
+        "AgentSessionInputEdit",
+    )
+    .await?
+    {
+        Ok(admission) => admission,
+        Err(reason) => return Ok(Some(reason)),
+    };
     for replacement in &command.replacements {
         let mut actual = replacement.admission.clone();
         actual.signature.clear();
@@ -235,9 +169,6 @@ pub(crate) async fn process_command(
                 && row.session_id == command.session_id, "edit immutable scope disagrees with signed intent");
             if verified_receipt(identity.as_ref(), &command, row.receipt_json.as_deref()).await?.is_some() { return Ok(None); }
             crate::graphql::fence_arrivals(txn, "AgentSessionInputEdit").await?;
-            // Replicated unique-field collisions retain both documents, but an
-            // equality lookup on the unique field exposes only its winner; the
-            // non-unique scope index exposes every physical twin.
             let twins = txn.execute(&format!(r#"{{ AgentSessionInputEdit(filter: {{ node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}) {{ _docID command_id }} }}"#,
                 escape_graphql_string(&row.node_did), escape_graphql_string(&row.requester_did))).await?;
             let twins = twins["data"]["AgentSessionInputEdit"].as_array().context("missing command identity query")?;
@@ -281,157 +212,6 @@ pub(crate) async fn process_command(
             Ok(None)
         })
     }).await
-}
-
-#[derive(Clone, Copy)]
-enum Sweep {
-    /// Commands without any receipt; cheap enough for every tick.
-    Unanswered,
-    /// Also commands whose receipt does not verify. A replica can overwrite a
-    /// valid receipt, and only its change notification names that command, so
-    /// this runs whenever notifications may have been lost: at startup, on
-    /// resync, and on every tick once the subscription has closed.
-    Unverified,
-}
-
-async fn unanswered_commands(
-    node: &EmbeddedNode,
-    identity: &dyn NodeIdentity,
-    sweep: Sweep,
-) -> Result<Vec<String>> {
-    let (receipt_filter, fields) = match sweep {
-        Sweep::Unanswered => (", receipt_json: { _eq: null }", "_docID"),
-        Sweep::Unverified => ("", "_docID intent_json receipt_json"),
-    };
-    let response = crate::graphql::graphql_with_transaction_retry(
-        node,
-        &format!(
-            r#"{{ AgentSessionInputEdit(filter: {{ node_did: {{ _eq: "{}" }}{receipt_filter} }}) {{ {fields} }} }}"#,
-            escape_graphql_string(identity.did())
-        ),
-        "queue.signed_edits",
-    )
-    .await?;
-    if matches!(sweep, Sweep::Unanswered) {
-        #[derive(Deserialize)]
-        struct DocIdRow {
-            #[serde(rename = "_docID")]
-            doc_id: String,
-        }
-        return Ok(
-            crate::graphql::rows::<DocIdRow>(&response, "AgentSessionInputEdit")?
-                .into_iter()
-                .map(|row| row.doc_id)
-                .collect(),
-        );
-    }
-
-    #[derive(Deserialize)]
-    struct Row {
-        #[serde(rename = "_docID")]
-        doc_id: String,
-        intent_json: String,
-        receipt_json: Option<String>,
-    }
-    let mut unanswered = Vec::new();
-    for row in crate::graphql::rows::<Row>(&response, "AgentSessionInputEdit")? {
-        let answered = match serde_json::from_str::<SessionInputEdit>(&row.intent_json) {
-            Ok(command) => verified_receipt(identity, &command, row.receipt_json.as_deref())
-                .await?
-                .is_some(),
-            Err(_) => row.receipt_json.is_some(),
-        };
-        if !answered {
-            unanswered.push(row.doc_id);
-        }
-    }
-    Ok(unanswered)
-}
-
-/// Sweeps unanswered commands, processes each changed command, and retries each
-/// command deferred until its issuance at that instant.
-pub async fn run_session_input_edit_reconciler(
-    node: Arc<EmbeddedNode>,
-    identity: Arc<dyn NodeIdentity>,
-    cancel: CancellationToken,
-) -> Result<()> {
-    let collection_id = node
-        .get_collection("AgentSessionInputEdit")?
-        .context("AgentSessionInputEdit schema missing")?
-        .collection_id;
-    let mut changes = node.subscribe_document_changes();
-    let mut interval = tokio::time::interval(super::intervals::sweep_interval());
-    let mut subscription_open = true;
-    let mut deferred: HashMap<String, DateTime<Utc>> = HashMap::new();
-    let mut ids = Vec::new();
-    // Discovered commands and full sweeps that failed are owed to the next
-    // tick: unanswered-only ticks cannot rediscover a command whose invalid
-    // receipt is non-null.
-    let mut failed = Vec::new();
-    let mut full_sweep_owed = false;
-    let mut sweep = Some(Sweep::Unverified);
-    loop {
-        if let Some(sweep) = sweep {
-            match unanswered_commands(&node, identity.as_ref(), sweep).await {
-                Ok(unanswered) => {
-                    full_sweep_owed &= matches!(sweep, Sweep::Unanswered);
-                    ids.extend(unanswered);
-                }
-                Err(error) => {
-                    full_sweep_owed |= matches!(sweep, Sweep::Unverified);
-                    tracing::warn!(%error, "pending input edit sweep failed");
-                }
-            }
-        }
-        ids.sort();
-        ids.dedup();
-        for id in ids.drain(..) {
-            if cancel.is_cancelled() {
-                return Ok(());
-            }
-            match process_command(&node, &identity, &id).await {
-                Ok(Some(issued_at)) => {
-                    deferred.insert(id, issued_at);
-                }
-                Ok(None) => {
-                    deferred.remove(&id);
-                }
-                Err(error) => {
-                    deferred.remove(&id);
-                    tracing::warn!(command_doc_id = id, %error, "pending input edit could not be processed");
-                    failed.push(id);
-                }
-            }
-        }
-        let retry = deferred
-            .values()
-            .min()
-            .map(|at| (*at - Utc::now()).to_std().unwrap_or_default());
-        sweep = tokio::select! {
-            _ = cancel.cancelled() => return Ok(()),
-            _ = interval.tick() => {
-                ids.append(&mut failed);
-                Some(if subscription_open && !full_sweep_owed { Sweep::Unanswered } else { Sweep::Unverified })
-            }
-            _ = tokio::time::sleep(retry.unwrap_or_default()), if retry.is_some() => {
-                let now = Utc::now();
-                ids.extend(deferred.iter().filter(|(_, at)| **at <= now).map(|(id, _)| id.clone()));
-                None
-            }
-            event = changes.recv(), if subscription_open => match event {
-                Some(event) => {
-                    ids.extend(event.changes.into_iter()
-                        .filter(|change| change.collection_id == collection_id)
-                        .map(|change| change.doc_id));
-                    event.resync_required.then_some(Sweep::Unverified)
-                }
-                None => {
-                    subscription_open = false;
-                    Some(Sweep::Unverified)
-                }
-            },
-        };
-    }
 }
 
 #[cfg(test)]

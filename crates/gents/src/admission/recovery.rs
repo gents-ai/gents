@@ -30,7 +30,7 @@ enum InferenceRecoveryOutcome {
 
 impl InferenceCall {
     pub async fn recover_all(
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
     ) -> Result<InferenceCallRecoveryReport> {
         let rows = load_stale_inference_calls(node, node_did).await?;
@@ -159,7 +159,7 @@ fn recovery_outcome(
 }
 
 async fn recover_inference_call_row(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     row: &StaleInferenceCallRow,
     outcome: InferenceRecoveryOutcome,
 ) -> Result<bool> {
@@ -173,6 +173,7 @@ async fn recover_inference_call_row(
     let mutation = format!(
         r#"mutation {{
             update_InferenceCall(
+                docID: "{escaped_doc_id}",
                 filter: {{
                     _docID: {{ _eq: "{escaped_doc_id}" }},
                     call_state: {{ _eq: "{observed_call_state}" }}
@@ -186,9 +187,6 @@ async fn recover_inference_call_row(
         }}"#,
     );
 
-    // Recovery must consume the observed live state. InferenceCall's terminal
-    // states have no outgoing transitions; a delayed sweep cannot overwrite
-    // a completion or a later queued-to-running transition.
     let response = crate::config_client::ConfigAccess::write_local_response(
         node,
         "recover_inference_call",

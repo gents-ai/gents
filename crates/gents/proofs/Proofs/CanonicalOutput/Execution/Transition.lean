@@ -4,10 +4,6 @@ namespace CanonicalOutput.Execution
 
 open RequestExecutionLease
 
-/-- Explicit owner heartbeat. Due time, generation fencing, stale-deadline
-rejection, and the new deadline are all decided by the lease state machine.
-Unlike output operations, renewal does not inspect or reconstruct canonical
-output. -/
 def renewCore (world : World) (generation : Generation)
     (expectedDeadline : Time) : Except Error World :=
   match RequestExecutionLease.step? world.lease
@@ -66,8 +62,6 @@ def rawReplayShape (world : World) (generation : Generation) (record : Segment) 
     record.writer == .request generation && providerSource record.coordinate.source &&
     record.flush.isSome && record.close.isNone
 
-/-- Guarded raw output insert. Exact replay is identity and can be acknowledged
-after expiry; a distinct record with the same identity is never replay. -/
 def appendRawCore (world : World) (generation : Generation)
     (record : Segment) : Except Error World :=
   if segmentIdentityCollision world record then .error .identityCollision
@@ -98,8 +92,6 @@ def retractionReplayShape (world : World) (generation : Generation)
     record.writer == .request generation && providerSource record.coordinate.source &&
     record.flush.isNone && record.close == some .retracted
 
-/-- The retry boundary appends an immutable Retracted closure before control may
-return to retry policy. It does not itself choose a new provider attempt. -/
 def retractBeforeRetryCore (world : World) (generation : Generation)
     (record : Segment) : Except Error World :=
   if segmentIdentityCollision world record then .error .identityCollision
@@ -115,9 +107,6 @@ def retractBeforeRetryCore (world : World) (generation : Generation)
   | none => .error .leaseRejected
   | some lease => .ok { world with lease := lease, segments := world.segments ++ [record] }
 
-/-- Fresh publication closes the entire authoritative data extent visible at
-its gate. Reconstruction remains deliberately tolerant of later facts beyond a
-previously committed extent. -/
 def freshCompleteExtentExact (segments : List Segment) (closing : Segment) : Bool :=
   match closing.close with
   | some (.closed .complete count _) =>
@@ -143,10 +132,9 @@ def freshAuxiliaryExtentExact (segments : List Segment) (closing : Segment) : Bo
         data.all (fun record => record.createdAt ≤ closing.createdAt)
   | _ => false
 
-/-- Auxiliary capture closes under its request lease without accepting a
-message or changing transcript/tool state. Compaction and fallback use the
-parent request; title capture uses its separately admitted title request. The
-native adapter must preserve the typed capture-scope kind. -/
+/-- Auxiliary capture closes under its request lease; compaction and fallback
+use the parent request, title capture its separately admitted title request.
+The native adapter must preserve the typed capture-scope kind. -/
 def closeAuxiliaryCore (world : World) (generation : Generation)
     (closing : Segment) : Except Error World :=
   if segmentIdentityCollision world closing then .error .identityCollision
@@ -201,8 +189,6 @@ def acceptedToolsPresent (world : World) (message : MessageEnvelope) : Bool :=
         tool.acceptedSequence == message.sequence
     | none => false
 
-/-- Replay must present the same physical admissions and immutable genesis as
-the accepted transaction. -/
 def acceptedAdmissionsPresent (world : World) (admissions : List ToolAdmission) : Bool :=
   admissions.all fun admission =>
     match ownedToolByDocument? world admission.document with
@@ -215,9 +201,6 @@ def acceptedReplayPresent (world : World) (closing : Segment)
   acceptedPublicationPresent world closing message &&
     acceptedToolsPresent world message && acceptedAdmissionsPresent world admissions
 
-/-- Accepted provider turn transaction: validated Complete closure, typed native
-message, assistant transcript row and every ordered pending tool intent appear
-together before dispatch. -/
 def acceptAndPublishCore (world : World) (generation : Generation)
     (closing : Segment) (message : MessageEnvelope)
     (admissions : List ToolAdmission) :
@@ -267,9 +250,6 @@ def acceptAndPublishCore (world : World) (generation : Generation)
         else .error .transcriptRejected
 
 set_option maxHeartbeats 1000000 in
-/-- Successful acceptance is either identity replay or the single fresh atomic
-post-state constructed by the core.  This is the common elimination lemma for
-consumers of acceptance; they need not repeat its admission branch ladder. -/
 theorem acceptAndPublishCore_success_effect
     (world post : World) (generation : Generation)
     (closing : Segment) (message : MessageEnvelope)
@@ -303,8 +283,6 @@ theorem acceptAndPublishCore_success_effect
       all_goals cases h
       all_goals first | exact Or.inr ⟨_, by simp_all, rfl, by assumption⟩
 
-/-- Both replay and fresh publication establish the complete tool projection
-inside the atomic core.  Callers need not recompute it after success. -/
 theorem acceptAndPublishCore_success_toolProjectionCoherent
     (world post : World) (generation : Generation)
     (closing : Segment) (message : MessageEnvelope)
@@ -336,9 +314,6 @@ def authoredPublicationPresent (world : World) (closing : Segment)
     (message : MessageEnvelope) : Bool :=
   closing ∈ world.segments && message ∈ world.messages && authoredRowPresent world message
 
-/-- A whole authored user/system message is one transaction: dense immutable
-payload, Complete closure, and typed header. Authored sources cannot enter via
-`appendRaw`, so there is no durable unheaded authored intermediate state. -/
 def publishAuthoredCore (world : World) (generation : Generation)
     (closing : Segment) (message : MessageEnvelope) : Except Error World :=
   if segmentIdentityCollision world closing || messageIdentityCollision world message then
@@ -385,8 +360,6 @@ def appendHeaderOnlyRow (transcript : Transcript.TranscriptState)
   | .user => transcript.appendUserMessage message.header.id .ordinary
   | .system => transcript
 
-/-- Payload-free Complete assistant/user publication needs no synthetic source.
-Its header and transcript row still commit atomically behind the request gate. -/
 def publishHeaderOnlyCore (world : World) (generation : Generation)
     (message : MessageEnvelope) (admissions : List ToolAdmission) : Except Error World :=
   if messageIdentityCollision world message then .error .identityCollision
@@ -417,8 +390,6 @@ def publishHeaderOnlyCore (world : World) (generation : Generation)
       else .error .transcriptRejected
 
 set_option maxHeartbeats 1000000 in
-/-- Header-only replay and fresh publication both establish the complete tool
-projection in the core transaction. -/
 theorem publishHeaderOnlyCore_success_toolProjectionCoherent
     (world post : World) (generation : Generation)
     (message : MessageEnvelope) (admissions : List ToolAdmission)
@@ -498,9 +469,6 @@ def toolControlAction : ToolExecution.ToolCallContext.Action → Bool
   | .background | .foreground => true
   | _ => false
 
-/-- Explicit mode control for the exact accepted physical tool. It is
-generation-fenced through the request owner, and foreground reacquisition is
-forbidden after durable handoff or parent terminalization. -/
 def changeToolControlCore (world : World) (generation : Generation) (document : DocId)
     (action : ToolExecution.ToolCallContext.Action) : Except Error World :=
   if toolControlAction action = false then .error .transcriptRejected
@@ -552,10 +520,6 @@ def providerCoordinate : Coordinate → Bool
 def partialClosureBy (generation : Generation) (record : Segment) : Bool :=
   writtenBy generation record && closedPartial record
 
-/-- Provider sources that would be stranded by a generation swap: they have an
-old-generation fact and are either still open or already carry the one reusable
-Partial closure from an acknowledged-lost recovery attempt. Complete and
-Retracted sources are already decided. -/
 def recoverableCoordinates (world : World) (expected : Generation) : List Coordinate :=
   (requestCoordinates world).filter fun coordinate =>
     providerCoordinate coordinate &&
@@ -643,10 +607,6 @@ def recoveryBatchPresent (world : World) (fresh : Generation)
     (items : List RecoveryItem) : Bool :=
   world.currentGeneration? == some fresh && items.all (recoveryItemPresent world)
 
-/-- Exact lost-acknowledgement validation is independent of whether these
-coordinates remain eligible for a new recovery. It binds the old writer and
-fresh recovery header, but does not compare a replayed header timestamp with
-the current clock or reject later facts outside the committed closure extent. -/
 def recoveryReplayValid (world : World) (expected fresh : Generation)
     (items : List RecoveryItem) : Bool :=
   (recoveryCoordinates items).Nodup && world.currentGeneration? == some fresh &&
@@ -702,10 +662,6 @@ def normalCompletionToolsReady (world : World) (generation : Generation) : Bool 
           (decide (isTerminal terminal) && canonicalToolDelivered world tool)
     else true
 
-/-- A running call outlives its request's exceptional terminal: the handoff
-records uncertainty and never cancels. A request terminal is not a cancel
-signal for a session that request started; its background row keeps running
-and later delivers that session's result as a completion notification. -/
 def handoffRunningTool (world : World) (tool : OwnedTool) : OwnedTool :=
   { tool with stuckSince := some world.lease.now }
 
@@ -770,10 +726,6 @@ def preparedRecoveryWorld (world : World) (prepared : RecoveryPrepared)
       transcript := prepared.transcript }
     expected true
 
-/-- A live producer may atomically retain the text prefix of one provider
-source under its current generation before terminal request CAS. This reuses
-the recovery closure/header validator, but neither swaps generation nor
-accounts tools: it is the same producer closing its own attempt. -/
 def closePartialAndPublishCore (world : World) (generation : Generation)
     (item : RecoveryItem) : Except Error World :=
   if recoveryReplayValid world generation generation [item] then .ok world
@@ -790,10 +742,6 @@ def closePartialAndPublishCore (world : World) (generation : Generation)
           messages := prepared.messages
           transcript := prepared.transcript }
 
-/-- One gate transaction closes every unresolved keyed provider source, accounts
-every exact old-generation tool document, and only then swaps generation.
-Running effects remain running; durable cancellation/reconcile intent releases
-the crashed parent's hook without claiming a host acknowledgement. -/
 def recoverExpiredBatchCore (world : World) (expected fresh : Generation)
     (duration deadline : Time) (items : List RecoveryItem) : Except Error World :=
   if recoveryReplayValid world expected fresh items then
@@ -808,10 +756,6 @@ def recoverExpiredBatchCore (world : World) (expected fresh : Generation)
       | some lease => .ok
           { accounted with lease := lease }
 
-/-- Recovery publication, old-generation tool accounting, terminal lease CAS,
-and exact terminal selection form one transaction. This is distinct from the
-resumable `recoverExpiredBatchCore` transition. The caller supplies the
-selection; the execution owner validates it against the repaired facts. -/
 def recoverExpiredTerminalCore (world : World) (expected fresh : Generation)
     (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection)
     (items : List RecoveryItem) : Except Error World :=
@@ -828,8 +772,6 @@ def recoverExpiredTerminalCore (world : World) (expected fresh : Generation)
       | some lease => .ok
           { accounted with lease := lease, terminalSelection := some selection }
 
-/-- Final request lifecycle and exact terminal-output selection commit together.
-No latest-message fallback is available. -/
 def terminalizeCore (world : World) (generation : Generation)
     (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection) :
     Except Error World :=
@@ -848,9 +790,6 @@ def terminalizeCore (world : World) (generation : Generation)
         lease := lease
         terminalSelection := some selection }
 
-/-- Escape from post-acceptance payload corruption. This path deliberately
-uses only immutable header/tool provenance and the policy-revocation lease
-action; it never repairs, chooses, or closes conflicting output bytes. -/
 def revokeCorruptCore (world : World) (expected fresh : Generation)
     (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection) :
     Except Error World :=
@@ -916,10 +855,6 @@ def dispatch (world : World) (generation : Generation)
     toolDispatchPublicationValid post generation permit.call && toolProjectionCoherent post)
     (dispatchCore world generation permit)
 
-/-- The running accepted `spawn_process` owner creates a distinct childless
-background lifecycle row. It inherits exact request/session/sequence and
-generation ownership from that physical parent, but creates no assistant tool
-intent or transcript tool-call row of its own. -/
 def admitSpawnedBackgroundCore (world : World) (generation : Generation)
     (admission : SpawnedToolAdmission) : Except Error World :=
   if spawnedAdmissionReplayValid world admission then .ok world
@@ -987,11 +922,6 @@ def publishAuthored (world : World) (generation : Generation)
       authoredMessageValid post generation post.segments closing message)
     (publishAuthoredCore world generation closing message)
 
-/-- A reclaimed generation of the same physical request reuses an identical
-authored entry that an earlier generation of it accepted, so redriving the
-turn's input never duplicates it. Reuse writes nothing: the caller must hold
-the live lease, and any input that is not an exact accepted entry stays on
-the fenced publication path. -/
 def reuseAuthored (world : World) (current : Generation) (closing : Segment)
     (message : MessageEnvelope) : Except Error World :=
   match closing.writer with
@@ -1027,7 +957,6 @@ theorem reuseAuthored_writes_nothing (world after : World) (current : Generation
     · contradiction
   · contradiction
 
-/-- Reuse is fenced: a generation without the live lease reuses nothing. -/
 theorem reuseAuthored_requires_live_lease (world : World) (current : Generation)
     (closing : Segment) (message : MessageEnvelope)
     (h_fenced : RequestExecutionLease.step? world.lease
@@ -1042,13 +971,8 @@ theorem reuseAuthored_requires_live_lease (world : World) (current : Generation)
     · contradiction
   · contradiction
 
-/-- Authored key of the selected queued message a publication answers. -/
 def foldedAuthoredKey (requestId : RequestId) : String := "folded:" ++ toString requestId
 
-/-- New input must arrive strictly before the request deadline. This is the
-existing execution deadline boundary, not retry scheduling: a retry wake may
-fit exactly at its deadline, but no new input is accepted then. Already
-published input can still be replayed and partial audit output can be flushed. -/
 def inputPublicationBeforeDeadline (now : Time) (deadline : Option Time) : Bool :=
   match deadline with
   | none => true
@@ -1063,11 +987,6 @@ private def freshFoldedSelectionValid (world : World) (message : MessageEnvelope
     (inputPublicationBeforeDeadline world.lease.now world.retry.deadline &&
       world.queue.folding.head?.any (fun entry => foldedAuthoredKey entry.requestId == message.key))
 
-/-- The authored-publication owner. A fresh entry takes the fenced
-publication path; an accepted entry, from this or an earlier generation of
-the request, is reused under the caller's live lease. Publishing the next
-selected queued message supersedes it in the same commit
-(`SessionQueue.consumeFolded`). -/
 def publishAuthoredComposed (world : World) (generation : Generation) (closing : Segment)
     (message : MessageEnvelope) : Except Error World :=
   if authoredPublicationPresent world closing message then

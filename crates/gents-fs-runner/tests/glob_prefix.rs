@@ -1,8 +1,3 @@
-//! Fences for #729: glob prunes its walk to the pattern's literal path
-//! prefix, so `infra/services/**/*.yml` never walks unrelated siblings, and a
-//! nonexistent prefix returns immediately with a diagnostic instead of a
-//! full-tree walk that looks identical to a genuine miss.
-
 use gents_fs_runner::execute_request_with_base;
 use gents_fs_runner::protocol::{GlobArgs, NativeFsRunnerRequest};
 use serde_json::Value;
@@ -16,7 +11,6 @@ fn glob_prunes_walk_to_literal_pattern_prefix() {
     std::fs::create_dir_all(root.join("infra/services/grafana")).unwrap();
     std::fs::write(root.join("infra/services/grafana/a.yml"), "a").unwrap();
     std::fs::write(root.join("infra/services/grafana/b.yml"), "b").unwrap();
-    // A large unrelated sibling tree the pruned walk must never enter.
     std::fs::create_dir_all(root.join("bulk")).unwrap();
     for index in 0..50 {
         std::fs::write(root.join(format!("bulk/noise-{index:02}.txt")), "x").unwrap();
@@ -75,8 +69,6 @@ fn glob_fully_literal_pattern_matches_without_wide_walk() {
 
 #[test]
 fn glob_explicit_prefix_into_default_ignored_dir_is_honored() {
-    // Naming an ignored directory in the pattern is an explicit request, the
-    // same as passing it as `path` — the prefix walk enters it.
     let root = unique_root("ignored-prefix");
     std::fs::create_dir_all(root.join("target/debug")).unwrap();
     std::fs::write(root.join("target/debug/build.log"), "x").unwrap();
@@ -97,7 +89,6 @@ fn glob_prefix_cannot_escape_root() {
     std::fs::write(outside.join("secrets/key.pem"), "x").unwrap();
     std::fs::create_dir_all(&inside).unwrap();
 
-    // Base (and root) is `inside`; a `..` prefix must not walk `outside`.
     let output = execute_request_with_base(
         inside.clone(),
         None,
@@ -120,10 +111,6 @@ fn glob_prefix_cannot_escape_root() {
 
 #[test]
 fn glob_prefix_pruning_composes_with_path_argument() {
-    // The pattern is matched against base-relative display paths, so the
-    // literal prefix must resolve against the BASE, not the path argument —
-    // path="crates" + pattern="crates/..." must not double-join into
-    // crates/crates/... and report false zero matches.
     let root = unique_root("prefix-with-path");
     std::fs::create_dir_all(root.join("crates/gents/src")).unwrap();
     std::fs::write(root.join("crates/gents/src/lib.rs"), "x").unwrap();
@@ -175,8 +162,6 @@ fn glob_prefix_disjoint_from_path_returns_empty_without_walk() {
     let value: Value = serde_json::from_str(&output).unwrap();
 
     let _ = std::fs::remove_dir_all(&root);
-    // The prefix exists under base, but nothing under path can ever match:
-    // return immediately instead of walking the path subtree.
     assert_eq!(value["returned_count"], 0, "{value}");
     assert_eq!(value["pattern_prefix_exists"], true);
     assert_eq!(value["walk"]["entries_visited"], 0, "{value}");
@@ -185,10 +170,6 @@ fn glob_prefix_disjoint_from_path_returns_empty_without_walk() {
 #[cfg(unix)]
 #[test]
 fn glob_symlinked_prefix_is_reported_missing_without_walk() {
-    // The walk never follows directory symlinks, so a symlink-spelled
-    // pattern cannot match any walked display path. Pruning must not
-    // silently traverse the resolved target either — reject the prefix and
-    // report it missing.
     let root = unique_root("prefix-symlink");
     std::fs::create_dir_all(root.join("real/src")).unwrap();
     std::fs::write(root.join("real/src/a.rs"), "x").unwrap();

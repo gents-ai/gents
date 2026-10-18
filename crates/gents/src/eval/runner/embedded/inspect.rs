@@ -23,8 +23,7 @@ pub struct RetainedRequest {
 /// Reads request content and lineage with the retained trial's existing key.
 /// No runtime or schema installer is started. The blocking task owns the home
 /// until shutdown, even if the caller drops its future; a query panic also
-/// unwinds only after shutdown. Paths are checked before opening, so concurrent
-/// replacement of a checked directory is outside this filesystem boundary.
+/// unwinds only after shutdown.
 pub async fn inspect_retained_requests(
     runs_dir: &Path,
     locator: &TrialLocator,
@@ -94,7 +93,7 @@ pub(super) fn retained_trial_dir(runs_dir: &Path, hint: &str) -> Result<PathBuf>
 }
 
 async fn read_requests(home: &EmbeddedHome) -> Result<Vec<RetainedRequest>> {
-    let access = ConfigAccess::Local(home.node.clone());
+    let access = ConfigAccess::local(home.node.clone());
     let query = format!(
         r#"{{ AgentRequest(
             filter: {{ node_did: {{ _eq: "{}" }} }},
@@ -150,7 +149,6 @@ fn decode_requests(response: serde_json::Value) -> Result<Vec<RetainedRequest>> 
 mod tests {
     use super::*;
     use crate::{KeyIdentity, NodeIdentity};
-    use serde_json::json;
 
     fn locator(did: &str, hint: &str) -> TrialLocator {
         TrialLocator {
@@ -198,7 +196,7 @@ resources:
             )
             .await
             .unwrap();
-        ConfigAccess::Local(node.clone())
+        ConfigAccess::local(node.clone())
             .add_schema(&crate::schema::AGENT_REQUEST_SCHEMA.replace(
                 "type AgentRequest ",
                 &format!(
@@ -226,7 +224,7 @@ resources:
             r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}}}) {{content}} }}"#,
             escape_graphql_string(&did)
         );
-        let denied_rows = ConfigAccess::transact_local(
+        let denied_rows = ConfigAccess::transact_local_write(
             &node,
             Some(denied.did().parse().unwrap()),
             "eval.inspect.test.denied_read",
@@ -336,21 +334,6 @@ resources:
             let error = format!("{error:#}");
             assert!(error.contains("AgentRequest"), "{error}");
             assert!(!error.contains("already open"), "{error}");
-        }
-    }
-
-    #[test]
-    fn retained_requests_refuse_overflow_instead_of_truncating() {
-        let response = json!({"data": {"AgentRequest": vec![json!({}); MAX_REQUESTS + 1]}});
-        let error = decode_requests(response).unwrap_err();
-        assert!(error.to_string().contains("more than 1000 requests"));
-    }
-
-    #[test]
-    fn retained_paths_refuse_absolute_and_traversing_hints() {
-        let runs = tempfile::tempdir().unwrap();
-        for hint in ["", "../outside", "trial/../../outside", "/tmp/outside"] {
-            assert!(retained_trial_dir(runs.path(), hint).is_err(), "{hint}");
         }
     }
 

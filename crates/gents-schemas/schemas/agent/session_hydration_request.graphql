@@ -2,12 +2,10 @@
 # transcript documents to the requesting peer. This row is a request, not a
 # grant: server admission checks exact applied enrollment routes, current
 # authorization, session ownership, and every selected document's requester
-# lineage before delivery.
-#
-# `@branchable` is required because the row crosses the enrolled machine route.
+# lineage before delivery. `@branchable` is required: the row crosses the
+# enrolled machine route.
 type SessionHydrationRequest @branchable {
     request_key: String @index(unique: true) @immutable
-    # The machine-template pushback filter uses this immutable field.
     requester_did: String @index @immutable
     node_did: String @immutable
     session_id: String @immutable
@@ -16,10 +14,8 @@ type SessionHydrationRequest @branchable {
     status: String @index
     status_detail: String
     served_doc_count: Int
-    # Canonical sorted JSON array of exact {collection, doc_id} identities: the
-    # authorized closure including referenced closing records and terminally selected
-    # headers (#1571). Header/segment IDs bind immutable output; request
-    # and tool lifecycle revisions still require existing owner checks.
+    # Canonical sorted JSON array of exact {collection, doc_id} identities:
+    # the authorized closure including referenced closing records (#1571).
     served_manifest_json: String
     processed_at: DateTime
     outcome_signer_did: String

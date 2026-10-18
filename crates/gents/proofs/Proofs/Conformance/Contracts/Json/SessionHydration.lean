@@ -26,8 +26,6 @@ def hydrationRequest : SessionHydration.Request :=
 def hydrationOwnedDocument : SessionHydration.Document :=
   { collection := .agentMessage, id := 1 }
 
-/-- A separately authorized origin dependency is selected exactly even though
-its ownership is not re-derived from the target session. -/
 def hydrationOriginDependency : SessionHydration.Document :=
   { collection := .agentOutputSegment, id := 2 }
 
@@ -222,8 +220,6 @@ def sessionHydrationDecisionCases : List SessionHydrationDecisionCase :=
       pairingRequesterMatches := true, pairingNodeMatches := true, activeMember := true,
       membershipNetworkMatches := true, ownsSession := false } ]
 
-/-- Same logical session, but a different peer/request key cannot reuse the
-closure admitted for the original hydration request. -/
 def hydrationTwinCase : SessionHydrationDecisionCase :=
   { name := "twin", paired := true
   , pairingRequesterMatches := true, pairingNodeMatches := true
@@ -267,8 +263,6 @@ def deniedClosureInput (key : CanonicalOutput.Hydration.DocumentKey) :
   { hydrationClosureInput with access := hydrationClosureInput.access.map fun observation =>
       if observation.key = key then { observation with state := .denied } else observation }
 
-/-- A tool delivery retains its parent call; that parent reaches one decodable
-child, while a forged sibling and a child of an unretained parent stay out. -/
 def hydrationEffectInput : SessionHydration.ClosureInput :=
   { hydrationClosureInput with
     roots := [220]
@@ -280,7 +274,6 @@ def hydrationEffectInput : SessionHydration.ClosureInput :=
       CanonicalOutput.Hydration.Examples.forgedChild,
       CanonicalOutput.Hydration.Examples.unreachableChild] }
 
-/-- A running or undelivered parent is only a session base. -/
 def hydrationBaseParentInput : SessionHydration.ClosureInput :=
   { hydrationEffectInput with
     bases := [.toolCall 300], roots := [], messages := []
@@ -553,8 +546,6 @@ def durableManifestMatches (request : SessionHydration.DurableRequest) : Bool :=
   | none => true
   | some manifest => manifest = hydrationDocumentKeys "doc-" manifest.card
 
-/-- Reconstruct the modeled request from the exact discriminator and compact
-wire fields emitted for the selected conformance cases. -/
 def durableRequestRoundtrip (request : SessionHydration.DurableRequest) :
     SessionHydration.DurableRequest :=
   let served := durableServedCount request
@@ -617,8 +608,6 @@ structure SessionHydrationStartCase where
   hasDocuments : Bool
   nonterminalRequest : Bool
 
-/-- Every receiver-start input combination; expectations come from
-`SessionHydration.canStart`. -/
 def sessionHydrationStartCases : List SessionHydrationStartCase :=
   [false, true].flatMap fun foreignHeader =>
   [false, true].flatMap fun ownedSession =>
@@ -641,5 +630,73 @@ def sessionHydrationStartCaseJson (w : SessionHydrationStartCase) : String :=
 
 def sessionHydrationStartCasesJson : String :=
   jsonArray (sessionHydrationStartCases.map sessionHydrationStartCaseJson)
+
+structure SessionHydrationAdmissionCase where
+  name : String
+  action : SessionHydration.AdmissionAction
+  request : SessionHydration.DurableRequest
+  phase : SessionHydration.ClientPhase
+  sessionMatches : Bool
+  nodeMatches : Bool
+  foreignHeader : Bool
+  ownedSession : Bool
+  hasDocuments : Bool
+  nonterminalRequest : Bool
+
+def admissionRequestString : SessionHydration.DurableRequest → String
+  | .missing => "missing"
+  | .pending => "pending"
+  | .served _ => "served"
+  | .rejected _ => "rejected"
+
+def admissionActionString : SessionHydration.AdmissionAction → String
+  | .passiveStart => "passive_start"
+  | .explicitRetry => "explicit_retry"
+
+def admissionRequest (status : String) : SessionHydration.DurableRequest :=
+  match status with
+  | "missing" => .missing
+  | "pending" => .pending
+  | "served" => .served ∅
+  | _ => .rejected none
+
+def admissionPrev (w : SessionHydrationAdmissionCase) : SessionHydration.ClientProgress :=
+  { session := if w.sessionMatches then "session" else "other-session"
+  , node := if w.nodeMatches then "node" else "other-node"
+  , phase := w.phase }
+
+def sessionHydrationAdmissionCases : List SessionHydrationAdmissionCase :=
+  [SessionHydration.AdmissionAction.passiveStart,
+   SessionHydration.AdmissionAction.explicitRetry].flatMap fun action =>
+  ["missing", "pending", "served", "rejected"].flatMap fun status =>
+  [SessionHydration.ClientPhase.idle, .requested, .serving, .complete, .failed].flatMap fun phase =>
+  [false, true].flatMap fun sessionMatches =>
+  [false, true].flatMap fun nodeMatches =>
+  [false, true].flatMap fun foreignHeader =>
+  [(false, false, false), (false, true, true), (true, false, true), (true, true, false)].map fun (ownedSession, hasDocuments, nonterminalRequest) =>
+    { name := s!"{admissionActionString action}_{status}_{phaseString phase}_session_{sessionMatches}_node_{nodeMatches}_foreign_{foreignHeader}_owned_{ownedSession}_docs_{hasDocuments}_nonterminal_{nonterminalRequest}"
+    , action, request := admissionRequest status, phase, sessionMatches, nodeMatches, foreignHeader
+    , ownedSession, hasDocuments, nonterminalRequest }
+
+def sessionHydrationAdmissionCaseJson (w : SessionHydrationAdmissionCase) : String :=
+  let prev := admissionPrev w
+  "{"
+    ++ "\"name\":" ++ jsonString w.name ++ ","
+    ++ "\"action\":" ++ jsonString (admissionActionString w.action) ++ ","
+    ++ "\"request\":" ++ jsonString (admissionRequestString w.request) ++ ","
+    ++ "\"phase\":" ++ jsonString (phaseString w.phase) ++ ","
+    ++ "\"session_matches\":" ++ boolString w.sessionMatches ++ ","
+    ++ "\"node_matches\":" ++ boolString w.nodeMatches ++ ","
+    ++ "\"foreign_header\":" ++ boolString w.foreignHeader ++ ","
+    ++ "\"owned_session\":" ++ boolString w.ownedSession ++ ","
+    ++ "\"has_documents\":" ++ boolString w.hasDocuments ++ ","
+    ++ "\"nonterminal_request\":" ++ boolString w.nonterminalRequest ++ ","
+    ++ "\"expected_admit\":" ++ boolString
+      (SessionHydration.canAdmitRequest w.action w.request prev "session" "node"
+        w.foreignHeader w.ownedSession w.hasDocuments w.nonterminalRequest)
+    ++ "}"
+
+def sessionHydrationAdmissionCasesJson : String :=
+  jsonArray (sessionHydrationAdmissionCases.map sessionHydrationAdmissionCaseJson)
 
 end Conformance.Contracts

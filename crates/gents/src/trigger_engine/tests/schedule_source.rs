@@ -16,11 +16,6 @@ async fn read_trigger_cursor(
     results.remove(0)
 }
 
-/// Build the shared stable "general" behavior once per test process so the
-/// fixture documents are seeded with the exact owner DID the runtime source
-/// resolves from the snapshot (`snapshot.agent(...).node_did()`).
-/// `integration_test_agent` mints a fresh principal per call, so seeding
-/// needs this stable handle.
 fn schedule_test_behavior() -> Arc<ResolvedAgent> {
     static BEHAVIOR: std::sync::OnceLock<Arc<ResolvedAgent>> = std::sync::OnceLock::new();
     BEHAVIOR
@@ -28,11 +23,8 @@ fn schedule_test_behavior() -> Arc<ResolvedAgent> {
         .clone()
 }
 
-/// Seed the reusable `Schedule` cadence document. Canonical `Schedule` owns the
-/// agent and cadence configuration only; task selection, enablement,
-/// concurrency, and the runtime cursor live on the referencing `Trigger`.
 async fn create_schedule_cadence_doc(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
     owner_did: &str,
     schedule_id: &str,
     cadence: serde_json::Value,
@@ -42,7 +34,7 @@ async fn create_schedule_cadence_doc(
         "schedule_id": schedule_id,
         "cadence": cadence,
     });
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "test.schedule_cadence_fixture",
@@ -62,18 +54,8 @@ async fn create_schedule_cadence_doc(
     .unwrap();
 }
 
-/// Seed a canonical Schedule/Trigger pair with an explicit `next_run_at`
-/// cursor. Used by `ScheduleSource::next_fire` tests to seed a due (or
-/// not-yet-due) trigger without going through the full reconcile/apply
-/// pipeline.
-///
-/// The `Trigger` points at the `Schedule` via `TriggerSource::Schedule` and
-/// owns task selection, `enabled`, `concurrency`, and the runtime
-/// `next_run_at` observation; `fire_count` is seeded at 0 so the runtime's
-/// observational increment has a value to read back. Returns the created
-/// `Trigger` document id for `ResolvedSchedule.trigger_doc_id`.
 async fn create_schedule_with_next_run_at(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
     owner_did: &str,
     trigger_id: &str,
     schedule_id: &str,
@@ -95,7 +77,7 @@ async fn create_schedule_with_next_run_at(
     if let Some(next_run_at) = next_run_at {
         input["next_run_at"] = serde_json::Value::String(next_run_at.to_owned());
     }
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "test.schedule_trigger_fixture",
@@ -114,8 +96,6 @@ async fn create_schedule_with_next_run_at(
     .await
     .unwrap();
 
-    // Resolve the physical document id the runtime projection carries as
-    // `trigger_doc_id` for downstream request lineage.
     let query = format!(
         r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID }} }}"#,
         escape_graphql_string(owner_did),
@@ -135,9 +115,6 @@ async fn create_schedule_with_next_run_at(
         .to_string()
 }
 
-/// Load one owner-scoped `Trigger` row with its apply-owned configuration and
-/// runtime observations. Replaces the retired Schedule-record poll: the
-/// `next_run_at` cursor and the status/count observations live on the Trigger.
 async fn observed_trigger(
     node: &defra_node::EmbeddedNode,
     owner_did: &str,
@@ -159,8 +136,6 @@ async fn observed_trigger(
     rows[0].clone()
 }
 
-/// Load the owner-scoped `Schedule` cadence. The runtime writeback must never
-/// clobber this apply-owned configuration.
 async fn observed_schedule_cadence(
     node: &defra_node::EmbeddedNode,
     owner_did: &str,
@@ -195,7 +170,7 @@ async fn schedule_cursor_batch_matches_exact_owner_reads_and_isolates_scope_erro
     let cursor_a = "2026-08-26T00:00:00Z";
     let cursor_b = "2026-08-27T00:00:00Z";
     create_schedule_with_next_run_at(
-        node.as_ref(),
+        &node,
         &owner_a,
         "shared-trigger-id",
         "cursor-schedule-a",
@@ -206,7 +181,7 @@ async fn schedule_cursor_batch_matches_exact_owner_reads_and_isolates_scope_erro
     )
     .await;
     create_schedule_with_next_run_at(
-        node.as_ref(),
+        &node,
         owner_b,
         "shared-trigger-id",
         "cursor-schedule-b",
@@ -277,7 +252,7 @@ async fn schedule_source_stops_loading_chunks_after_first_due_trigger() {
     let owner = schedule_test_behavior().node_did().to_owned();
     let past = (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339();
     create_schedule_with_next_run_at(
-        node.as_ref(),
+        &node,
         &owner,
         &first_trigger_id,
         &first_trigger_id,
@@ -311,12 +286,6 @@ async fn schedule_source_stops_loading_chunks_after_first_due_trigger() {
 
 #[tokio::test]
 async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
-    // Seed a Trigger cursor (`next_run_at` 1s in the past) on a Trigger whose
-    // Schedule source carries the interval cadence, build a snapshot that marks
-    // the same trigger active, and assert that `ScheduleSource::next_fire`
-    // yields a matching `FireIntent` within 2 seconds. Also exercises the
-    // event_vars shape (fired_at, trigger_id, trigger_kind) the downstream
-    // materializer will see.
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
@@ -324,7 +293,7 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
     let owner_did = behavior.node_did().to_string();
     let past = (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339();
     let trigger_doc_id = create_schedule_with_next_run_at(
-        node.as_ref(),
+        &node,
         &owner_did,
         "sched-1",
         "sched-1",
@@ -393,17 +362,13 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
         "fired_at should be a string, got {:?}",
         ev["fired_at"]
     );
+    let retry = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("unacknowledged occurrence remains due")
+        .expect("schedule source remains active");
+    assert_eq!(retry.durable_fire_key, intent.durable_fire_key);
 }
 
-/// After a successful fire, the callback advances the Trigger's
-/// `next_run_at += interval`, writes `last_attempt_at`, sets
-/// `last_status = "fired"`, and bumps `fire_count` by 1. After a skipped fire
-/// on the same trigger (with a fresh intent generated from the already-
-/// advanced cursor), `last_status` must flip to `"skipped"`, `next_run_at`
-/// still advances, and `fire_count` stays put. The cursor/status/count
-/// observations live on the `Trigger`; the reusable `Schedule` cadence and the
-/// apply-owned Trigger fields (`task_id`, `enabled`, `concurrency`) must be
-/// untouched across both writes.
 #[tokio::test]
 async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
@@ -412,11 +377,9 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
     let behavior = schedule_test_behavior();
     let owner_did = behavior.node_did().to_string();
 
-    // Seed a Trigger whose cursor is already due (next_run_at 1s in the past)
-    // so next_fire() will immediately yield an intent.
     let initial_next_run_at = (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339();
     let trigger_doc_id = create_schedule_with_next_run_at(
-        node.as_ref(),
+        &node,
         &owner_did,
         "sched-1",
         "sched-1",
@@ -461,13 +424,10 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
     let mut source = ScheduleSource::new(rx, node.clone(), cancel.clone())
         .with_tick_every(Duration::from_millis(50));
 
-    // ---- Fired case ----
     let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
         .expect("next_fire timed out (fired)")
         .expect("next_fire returned None (fired)");
-    // Dispatch a synthetic Fired result into the callback. The callback spawns
-    // a background write, so poll the DB until it lands (bounded retry).
     (intent.on_result)(FireResult::Fired {
         request_id: "req-0".to_string(),
     });
@@ -488,13 +448,6 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
     let fired = fired_trigger.expect("Trigger.last_status never became \"fired\"");
     assert_eq!(fired["last_status"].as_str(), Some("fired"));
     assert_eq!(fired["fire_count"].as_i64(), Some(1));
-    // Compare as parsed DateTimes truncated to second precision rather
-    // than raw RFC3339 strings. Chrono's default `to_rfc3339()` emits
-    // microsecond precision with a `+00:00` offset; DefraDB persists and
-    // the runtime writeback normalizes to `Z` with second precision so
-    // the DateTime scalar round-trips cleanly. The parse+truncate dance
-    // makes the assertion robust to both axes of textual drift while
-    // still proving the instant advanced by exactly one interval.
     let fired_next = fired["next_run_at"]
         .as_str()
         .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
@@ -509,7 +462,6 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
         "last_attempt_at should be set after a fire: {}",
         fired
     );
-    // Apply-owned fields must not be clobbered by the runtime writeback.
     assert_eq!(fired["task_id"].as_str(), Some("task-1"));
     assert_eq!(fired["enabled"].as_bool(), Some(true));
     assert_eq!(fired["concurrency"].as_str(), Some("serial"));
@@ -518,25 +470,11 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
         Some("schedule"),
         "Trigger.source must keep pointing at the Schedule: {fired}"
     );
-    // The reusable Schedule cadence is pure configuration; the runtime
-    // writeback must not touch it.
     assert_eq!(
         observed_schedule_cadence(node.as_ref(), &owner_did, "sched-1").await,
         ScheduleCadence::Interval { interval_secs: 60 },
     );
 
-    // ---- Skipped case ----
-    // Rewind next_run_at into the past again so the source will yield another
-    // intent on the next tick. The new intent's on_result snapshot should
-    // advance relative to the *new* cursor we just persisted on the Trigger.
-    //
-    // Use `Z`/second-precision form so the written value matches what the
-    // runtime writeback produced. DefraDB's update path re-validates every
-    // existing DateTime field against the schema on every partial update,
-    // and rejects the whole mutation when any existing DateTime differs
-    // from its canonical form (see `schedule_conformance.rs` for the same
-    // quirk). We restate `last_attempt_at` using its post-writeback value
-    // so this rewind mutation passes that revalidation.
     let rewound_next_run_at =
         (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
     let escaped_owner = escape_graphql_string(&owner_did);
@@ -588,11 +526,7 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
     }
     let skipped = skipped_trigger.expect("Trigger.last_status never became \"skipped\"");
     assert_eq!(skipped["last_status"].as_str(), Some("skipped"));
-    // fire_count MUST NOT advance on skip.
     assert_eq!(skipped["fire_count"].as_i64(), Some(1));
-    // See the fired-case comment above: parse+truncate both sides so
-    // offset-suffix (`Z` vs `+00:00`) and subsecond-precision drift don't
-    // flake the test.
     let skipped_next = skipped["next_run_at"]
         .as_str()
         .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
@@ -602,7 +536,6 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
         .with_timezone(&Utc)
         .timestamp();
     assert_eq!(skipped_next, Some(expected_next_skipped));
-    // Apply-owned fields still intact.
     assert_eq!(skipped["task_id"].as_str(), Some("task-1"));
     assert_eq!(skipped["enabled"].as_bool(), Some(true));
     assert_eq!(skipped["concurrency"].as_str(), Some("serial"));
@@ -612,28 +545,17 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
     );
 }
 
-/// Cancelling the `CancellationToken` before polling `next_fire` must short-
-/// circuit the tick-sleep and return `None` promptly — much faster than the
-/// configured `tick_every`. This is the graceful-shutdown path the engine
-/// relies on: on cancel the source is expected to drain back to `None` so the
-/// outer loop can tear it down.
 #[tokio::test]
 async fn schedule_source_next_fire_honors_cancellation_token() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
-    // No schedules are needed: cancellation must be observed before the tick
-    // body ever runs the snapshot scan.
     let snapshot = snapshot_with_schedules(HashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let cancel = CancellationToken::new();
-    // Deliberately use a long tick so any wall-clock elapsed below 1s is
-    // strong evidence the select arm fired on cancel, not on sleep expiry.
     let mut source = ScheduleSource::new(rx, node.clone(), cancel.clone())
         .with_tick_every(Duration::from_secs(30));
 
-    // Cancel before calling next_fire so the select!'s cancel arm is
-    // immediately ready.
     cancel.cancel();
 
     let start = Instant::now();
@@ -653,27 +575,16 @@ async fn schedule_source_next_fire_honors_cancellation_token() {
     );
 }
 
-/// Task 39 Step 1: end-to-end assertion that a due Trigger cursor drives the
-/// `TriggerEngine` + `ScheduleSource` + `ProductionMaterializer` pipeline to
-/// enqueue an `AgentRequest` carrying `caused_by_trigger_id = <trigger_id>`
-/// and `caused_by_trigger_kind = "schedule"` within a bounded wait.
-///
-/// Runs against a real `EmbeddedNode` because the ProductionMaterializer
-/// writes via DefraDB — there is no in-memory shortcut. The test does not
-/// assert execution (no inference is wired here); it only asserts the
-/// enqueue boundary that Task 39 is restoring under the engine.
 #[tokio::test]
 async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
-    // Seed a Trigger whose cursor (next_run_at) is 1s in the past — the
-    // ScheduleSource will emit an intent on its next tick.
     let behavior = schedule_test_behavior();
     let owner_did = behavior.node_did().to_string();
     let past = (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339();
     let trigger_doc_id = create_schedule_with_next_run_at(
-        node.as_ref(),
+        &node,
         &owner_did,
         "sched-e2e",
         "sched-e2e",
@@ -684,8 +595,6 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
     )
     .await;
 
-    // Build the snapshot: one behavior loaded ("general"), one active
-    // schedule trigger pointing at a task bound to that behavior.
     let task = ResolvedTask {
         emit_outcome: false,
         task_id: "task-e2e".to_string(),
@@ -713,7 +622,6 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
     );
     let (_tx, rx) = watch::channel(snapshot);
 
-    // Wire engine + source + materializer with the same watch::Receiver.
     let cancel = CancellationToken::new();
     let materializer: Arc<dyn MaterializerHandle> =
         Arc::new(ProductionMaterializer::new(node.clone(), rx.clone()));
@@ -727,8 +635,6 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
         engine.run(vec![source], engine_cancel).await;
     });
 
-    // Poll the DB for an AgentRequest with the lineage tuple. Bounded retry;
-    // 50ms * 80 = 4s total, well within the "within N seconds" ask.
     let mut observed = None;
     for _ in 0..80 {
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -799,9 +705,6 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
         "rendered prompt template should land in AgentRequest.content: {row}"
     );
 
-    // Canonical RequestInput carries creation intent as the typed
-    // `initial_title` (source=task), not a metadata JSON bag. The title
-    // slug comes from the task's display label plus a timestamp.
     let input = row
         .get("input")
         .and_then(|value| value.as_object().cloned())
@@ -825,30 +728,14 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
     );
 }
 
-/// Regression for Finding 2: Triggers created with a null `next_run_at`
-/// cursor (the normal case for apply-path/desktop writes, which write only
-/// apply-owned fields) must still fire. Before the fix, `ScheduleSource`
-/// skipped null-cursor triggers forever, so tasks configured via the CLI or
-/// desktop never ran.
-///
-/// Expected behavior: the runtime seeds the Trigger's `next_run_at = now` on
-/// the first-seen tick, treats the same tick as due, and yields a
-/// `FireIntent` within a bounded wait (a couple of ticks).
 #[tokio::test]
 async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-
     let behavior = schedule_test_behavior();
     let owner_did = behavior.node_did().to_string();
-
-    // Create the Schedule/Trigger pair WITHOUT a next_run_at cursor — mirrors
-    // what the CLI/desktop apply writers do (they never touch runtime-owned
-    // observations). Before Finding 2 was fixed, this trigger would sit
-    // inert forever because ScheduleSource treated a null cursor as
-    // "not due, skip."
     let trigger_doc_id = create_schedule_with_next_run_at(
-        node.as_ref(),
+        &node,
         &owner_did,
         "sched-null",
         "sched-null",
@@ -858,8 +745,6 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
         "serial",
     )
     .await;
-
-    // Sanity check: the Trigger really has a null cursor right now.
     let precondition = read_trigger_cursor(node.as_ref(), &owner_did, "sched-null")
         .await
         .unwrap();
@@ -867,7 +752,6 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
         precondition.is_none(),
         "precondition: created Trigger should have null next_run_at, got {precondition:?}"
     );
-
     let task = ResolvedTask {
         emit_outcome: false,
         task_id: "task-null".to_string(),
@@ -897,10 +781,6 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
     let cancel = CancellationToken::new();
     let mut source = ScheduleSource::new(rx, node.clone(), cancel.clone())
         .with_tick_every(Duration::from_millis(50));
-
-    // With the fix: first tick seeds next_run_at = now, treats as due,
-    // yields intent. Without the fix: null is treated as "not due" on
-    // every tick and we'd time out.
     let started = Instant::now();
     let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
@@ -910,19 +790,12 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
         )
         .expect("next_fire returned None for a trigger with null next_run_at");
     let elapsed = started.elapsed();
-
     assert_eq!(intent.trigger_id.as_deref(), Some("sched-null"));
     assert_eq!(intent.trigger_kind, TriggerKind::Schedule);
-    // Upper bound is loose: we only need "much less than the 60s
-    // interval_secs" to prove first-tick seeding, not exact latency.
     assert!(
         elapsed < Duration::from_secs(2),
         "first-tick fire should land within a couple of ticks, took {elapsed:?}"
     );
-
-    // The DB should now carry a non-null cursor — either the raw
-    // seed (if on_result hasn't run) or the advanced value (if it has).
-    // Either proves seeding happened.
     let after_seed = read_trigger_cursor(node.as_ref(), &owner_did, "sched-null")
         .await
         .unwrap();
@@ -941,7 +814,7 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
     let owner_did = behavior.node_did().to_string();
 
     let trigger_doc_id = create_schedule_with_next_run_at(
-        node.as_ref(),
+        &node,
         &owner_did,
         "sched-cron-null",
         "sched-cron-null",
@@ -1036,37 +909,17 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
     );
 }
 
-/// Regression for Finding 1: `ScheduleSource::next_fire` must NOT return
-/// `None` on an idle tick. The engine's outer loop interprets `None` as
-/// source exhaustion and breaks out — a premature `None` here (e.g. from
-/// "no schedules are due right now") kills the schedule driver forever.
-///
-/// We drive the source with an empty active-schedule set and a short
-/// tick, poll `next_fire` for >200ms (4+ ticks of 50ms), then cancel and
-/// confirm that (a) we didn't get a spurious `Some(intent)` in that
-/// window, and (b) after cancel the future completes with `None` within
-/// a bounded wait. Before the fix, this test would observe `None`
-/// arriving long before the cancel and fail the timeout-before-cancel
-/// check.
 #[tokio::test]
 async fn schedule_source_next_fire_survives_idle_ticks_until_cancelled() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
-    // No active schedules: every tick will be an "idle" tick where the
-    // snapshot scan finds nothing to fire. Before Finding 1 was fixed,
-    // the first such tick would fall off the end of the function and
-    // return `None`, ending the source.
     let snapshot = snapshot_with_schedules(HashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let cancel = CancellationToken::new();
     let mut source = ScheduleSource::new(rx, node.clone(), cancel.clone())
         .with_tick_every(Duration::from_millis(50));
 
-    // Race next_fire against a 250ms sleep followed by cancel. next_fire
-    // must NOT finish before the cancel — if it does, the source
-    // prematurely exited its internal loop. After cancel, it must finish
-    // promptly with None.
     let cancel_clone = cancel.clone();
     let canceller = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(250)).await;

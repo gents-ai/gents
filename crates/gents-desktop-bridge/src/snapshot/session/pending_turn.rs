@@ -57,6 +57,9 @@ pub(super) fn build_pending_turn(
             && row.session_id.as_deref() == Some(session_id)
             && node_did.is_none_or(|node_did| request_matches_node(row, node_did))
     })?;
+    if gents::lifecycle::retired_by_author(request) {
+        return None;
+    }
     let request_input = request.input.clone().unwrap_or_default();
     if !gents::lifecycle::request_content_owns_user_projection(&request_input) {
         return None;
@@ -67,15 +70,10 @@ pub(super) fn build_pending_turn(
         .lifecycle_state
         .map(|state| state.as_str().to_string());
     let content = normalize_optional(request.content.as_deref())?;
-    // A folded row is consumed in the transaction that publishes its entry
-    // under the claiming request; a replica can hold the row first.
     let owner = gents::lifecycle::input_message_owner(request);
     if folded_into.is_some() && owner.is_none() {
         return None;
     }
-    // Pending ownership is session state, not visible-page state. A materialized
-    // user row outside the current window must still suppress the request-owned
-    // placeholder at the tip.
     let transcript = node_did.map_or_else(
         || transcript_store.transcript(session_id),
         |node_did| transcript_store.transcript_for_node(session_id, node_did),
@@ -153,5 +151,42 @@ mod retry_tests {
         assert!(build_pending_turn(&store, &store, Some("node"), "session", "parent").is_some());
         store.requests[1].session_id = Some("old-session".into());
         assert!(build_pending_turn(&store, &store, Some("node"), "session", "retry").is_some());
+    }
+
+    #[test]
+    fn a_message_its_author_retired_is_not_shown() {
+        let row =
+            |request_id: &str, state, reason: Option<&str>, by: Option<&str>| AgentRequestRow {
+                request_id: request_id.into(),
+                node_did: Some("node".into()),
+                session_id: Some("session".into()),
+                content: Some(format!("message {request_id}")),
+                lifecycle_state: Some(state),
+                failure_reason: reason.map(str::to_owned),
+                superseded_by_request: by.map(str::to_owned),
+                ..Default::default()
+            };
+        let mut store = ClientStore::default();
+        store.requests.extend([
+            row("waiting", RequestLifecycleState::Pending, None, None),
+            row(
+                "edited",
+                RequestLifecycleState::Superseded,
+                Some(gents::lifecycle::REPLACED_REASON),
+                Some("waiting"),
+            ),
+            row(
+                "removed",
+                RequestLifecycleState::Interrupted,
+                Some(gents::lifecycle::REMOVED_REASON),
+                None,
+            ),
+            row("stopped", RequestLifecycleState::Interrupted, None, None),
+        ]);
+        let shown = |id| build_pending_turn(&store, &store, Some("node"), "session", id).is_some();
+        assert!(shown("waiting"));
+        assert!(!shown("edited"));
+        assert!(!shown("removed"));
+        assert!(shown("stopped"));
     }
 }

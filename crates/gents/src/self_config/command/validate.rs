@@ -8,7 +8,7 @@ impl ConfigCommandTool {
         self.ensure_agent_catalog("validate", None)?;
         anyhow::ensure!(argv.is_empty(), "validate takes no parameters; it checks saved configuration for your authenticated node");
         let identity = self.core.identity()?;
-        let (counts, mut errors, selected_surfaces) = ConfigAccess::transact_local(
+        let (counts, mut errors, selected_surfaces) = ConfigAccess::transact_local_readonly(
             &self.node,
             Some(identity),
             "self_config.validate",
@@ -38,8 +38,8 @@ impl ConfigCommandTool {
                     }
                 }
                 if errors.is_empty() {
-                    // Revalidate the saved snapshot without publishing it. Marking every
-                    // document as a candidate also runs the owner's affected-field checks.
+                    // Marking every document as a candidate also runs the
+                    // owner's affected-field checks.
                     let plan = DesiredStateApplyPlan::new(references.documents().map(|((collection, _), value)| DesiredStateApplyDocument {
                         collection: *collection, add: value.clone(), update: value.clone(),
                     }).collect())?;
@@ -71,7 +71,7 @@ impl ConfigCommandTool {
                             crate::mailbox::validate_mailbox_write_decl(&decl)
                         } else {
                             crate::defra_write::BoundedWriteTool::new(
-                                crate::config_client::ConfigAccess::Local(self.node.clone()),
+                                crate::config_client::ConfigAccess::local(self.node.clone()),
                                 decl.clone(),
                             )
                             .ensure_well_formed()
@@ -80,7 +80,7 @@ impl ConfigCommandTool {
                     }
                     SurfaceToolDecl::Query(decl) => {
                         let result = crate::defra_query::BoundedQueryTool::new(
-                            crate::config_client::ConfigAccess::Local(self.node.clone()),
+                            crate::config_client::ConfigAccess::local(self.node.clone()),
                             decl.clone(),
                         )
                         .validate_schema()

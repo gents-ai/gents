@@ -39,9 +39,6 @@ theorem renew_preserves_canonical_output
     expectedDeadline h
   exact ⟨rfl, rfl, rfl⟩
 
-/-- Renewal admission and its resulting lease depend only on the lease owner
-state. Arbitrary canonical records—including conflicting or future-dated
-ones—cannot veto the explicit heartbeat CAS. -/
 theorem renew_lease_result_independent_of_output
     (left right : World) (generation : Generation) (expectedDeadline : Time)
     (hlease : left.lease = right.lease) :
@@ -292,10 +289,6 @@ theorem no_message_requires_no_eligible_owned_assistant
     eligibleOwnedAssistantExists world = false := by
   simpa [terminalSelectionValid] using h
 
-/-- Once the executable all-source batch has prepared and the lease gate admits
-the swap, the composed core reaches the exact atomic post-state. This is a
-reachability equation, not a scheduler-fairness or cross-process transaction
-premise. -/
 theorem prepared_batch_enables_composed_recovery
     (world : World) (prepared : RecoveryPrepared)
     (lease : RequestExecutionLease.World Generation)
@@ -333,8 +326,6 @@ theorem accounting_hands_off_running_without_claiming_stop
   simp [accountOneOwnedTool, howned, hrunning, handoffRunningTool,
     Transcript.TranscriptState.releaseParentInFlight]
 
-/-- An exceptional request terminal never changes a running call's await mode
-or state: background work, including a started session's row, keeps running. -/
 theorem handoff_preserves_mode_and_state
     (world : World) (tool : OwnedTool) :
     (handoffRunningTool world tool).context = tool.context := by

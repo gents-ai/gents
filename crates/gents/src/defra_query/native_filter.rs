@@ -22,10 +22,6 @@ struct InputField {
     type_ref: TypeRef,
 }
 
-/// The native runner can return zero for unknown COUNT filter fields instead
-/// of reporting invalid input. Its introspected input definitions and native
-/// scalar/operator codecs remain the authority for filter shape; this adapter
-/// checks that representation before any read, including write target preview.
 pub(crate) async fn validate_filter(
     access: &dyn ConfigRead,
     collection: &str,
@@ -177,7 +173,7 @@ mod tests {
                 .unwrap(),
         );
         node.add_schema("type FilterAuthor { name: String } type FilterBook { title: String score: Int tags: [String] payload: JSON author: FilterAuthor }").await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         for filter in [
             json!({"_and":[{"score":{"_geq":0}},{"author":{"name":{"_eq":"Ada"}}}]}),
             json!({"_or":[{"title":{"_like":"A%"}},{"title":{"_neq":"B"}}]}),
@@ -230,7 +226,7 @@ mod tests {
             .await
             .unwrap();
         ConfigAccess::write_local(&node,"seed_count_filter_probe","mutation { add_CountFilterProbe(input:[{name:\"ready\",score:0},{name:\"ready\",score:1}]){_docID} }").await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let native = access
             .execute("{ COUNT(CountFilterProbe:{filter:{and:[{eq:{name:\"ready\"}}]}}) }")
             .await;

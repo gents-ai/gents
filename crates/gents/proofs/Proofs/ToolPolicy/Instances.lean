@@ -117,8 +117,6 @@ theorem effective_memory_le_agent :
     (effective agent ceiling runtime).memory = true → agent.memory = true := by
   exact fun h => bool_and_left (bool_and_left h)
 
-/-- Schema administration is an explicit node-management capability, independent
-of config-document edits. DefraDB remains the schema authorization owner. -/
 theorem effective_schemaManagement_le_ceiling :
     (effective agent ceiling runtime).schemaManagement = true → ceiling.schemaManagement = true := by
   exact fun h => bool_and_right (bool_and_left h)
@@ -135,11 +133,8 @@ theorem effective_p2pMutate_le_ceiling :
     (effective agent ceiling runtime).p2pMutate = true → ceiling.p2pMutate = true := by
   exact fun h => bool_and_right (bool_and_left h)
 
-/-- A mutation grant does not expose node observations on its own. -/
 def permitsP2pMutation (surface : Surface) : Bool := surface.p2pRead && surface.p2pMutate
 
-/-- The collection grant covers removals as well as additions. An overlay replacement
-    or revoke must retain authority over every collection in both snapshots. -/
 def permitsP2pOverlayMutation (surface : Surface) (before after : List ToolId) : Bool :=
   permitsP2pMutation surface && (before ++ after).all (fun key => decide (surface.p2pCollections.permits key))
 

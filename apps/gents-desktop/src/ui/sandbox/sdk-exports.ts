@@ -37,10 +37,10 @@ export type {
 } from "./contract";
 export { useQuery, useWrite } from "./data-hooks";
 export type { QueryState, UseQueryOptions } from "./data-hooks";
-export type { Route } from "@gents/shell";
+export type { Route } from "@/lib/router";
 
 /* the app's own primitives */
-export { pathFor as href } from "@gents/shell";
+export { pathFor as href } from "@/lib/router";
 export { Hint } from "@/screens/Hint";
 export { Fact, Group, Row, StackedRow } from "@/screens/agent/rows";
 export { Button } from "@gents/ui/components/button";

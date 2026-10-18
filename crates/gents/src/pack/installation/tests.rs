@@ -7,7 +7,7 @@ const OWNER: &str = "did:key:zPackInstallOwner";
 async fn access() -> ConfigAccess {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    ConfigAccess::Local(node)
+    ConfigAccess::local(node)
 }
 
 fn config(tools: &[(&str, &str)]) -> PackConfig {
@@ -54,7 +54,7 @@ async fn edit_tools(access: &ConfigAccess, id: &str, name: &str) {
     }])
     .unwrap();
     access
-        .transact("test.edit", |txn| {
+        .transact_write("test.edit", |txn| {
             let edit = &edit;
             Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, edit).await })
         })
@@ -155,7 +155,6 @@ async fn an_edited_document_stops_an_upgrade_by_name() {
     install(&access, "1", &v1, DriftPolicy::Refuse)
         .await
         .unwrap();
-    // Reinstalling what is installed replaces nothing it should not.
     let again = install(&access, "1", &v1, DriftPolicy::Refuse)
         .await
         .unwrap();
@@ -218,9 +217,6 @@ async fn a_document_the_new_version_drops_is_removed_and_history_is_kept() {
     assert_eq!(row["history"], json!([identity("1").digest]));
 }
 
-/// A plugin-store record is no pack install: the listings skip it, `gents
-/// pack remove` refers it to `gents plugin remove`, and the removal of its
-/// last plugin deletes it.
 #[tokio::test]
 async fn a_plugin_store_record_is_not_a_pack_install() {
     let access = access().await;
@@ -263,9 +259,6 @@ async fn a_plugin_store_record_is_not_a_pack_install() {
     assert_eq!(rows["data"]["PackInstallation"], json!([]));
 }
 
-/// Over a documents install of the same coordinate, a plugin-store change
-/// keeps that install's record: its identity and documents stay, so a
-/// removal still deletes by them, and an installed name joins its plugins.
 #[tokio::test]
 async fn a_plugin_store_change_keeps_a_documents_install_record() {
     let access = access().await;
@@ -313,9 +306,6 @@ async fn a_plugin_store_change_keeps_a_documents_install_record() {
     );
 }
 
-/// A pack whose configuration is only its Node records no documents,
-/// yet is a pack install: listed, removable, and kept by plugin-store
-/// changes, unlike a plugin-store record.
 #[tokio::test]
 async fn a_documentless_pack_install_is_not_a_plugin_store_record() {
     let access = access().await;
@@ -353,7 +343,7 @@ async fn corrupt_installation_field(
     let variables = json!({ "input": Value::Object(input) });
     let variables = &variables;
     let response = access
-        .transact("test.corrupt_installation_field", |txn| {
+        .transact_write("test.corrupt_installation_field", |txn| {
             Box::pin(async move {
                 txn.execute_with_variables(
                     &format!(
@@ -373,9 +363,6 @@ async fn corrupt_installation_field(
     );
 }
 
-/// A `plugins`/`documents`/`history` field that decodes (present, not null)
-/// but does not match its expected shape must fail loudly, naming the
-/// record, rather than silently reading as an empty list.
 #[tokio::test]
 async fn a_malformed_plugins_field_fails_loudly_instead_of_reading_as_empty() {
     let access = access().await;
@@ -404,9 +391,6 @@ async fn a_malformed_plugins_field_fails_loudly_instead_of_reading_as_empty() {
     );
 }
 
-/// `list_installed_packs` reports every record's coordinate, version and
-/// digest; a record missing one must fail loudly naming the record, not
-/// silently report an empty string a caller could mistake for real data.
 #[tokio::test]
 async fn list_installed_packs_fails_loudly_on_a_malformed_record() {
     let access = access().await;
@@ -428,7 +412,6 @@ async fn list_installed_packs_fails_loudly_on_a_malformed_record() {
     );
 }
 
-/// Same as above, for `read_installed_pack`'s single-coordinate lookup.
 #[tokio::test]
 async fn read_installed_pack_fails_loudly_on_a_malformed_record() {
     let access = access().await;
@@ -452,14 +435,6 @@ async fn read_installed_pack_fails_loudly_on_a_malformed_record() {
     );
 }
 
-/// A DefraDB unique index is a single-node guarantee, not a distributed one
-/// (see [`crate::goal::delete_goals_for_session`]'s doc comment): a
-/// replicated home can still end up with two `PackInstallation` records for
-/// the same owner and coordinate. `read_installed_pack`'s `limit: 2` plus
-/// `ensure!` exists for exactly that state, so this pins it by registering
-/// the schema with its unique index dropped and creating the duplicate
-/// directly, the same way `register_config_schemas_dropping_unique_indexes`
-/// does for desired-state collections.
 #[tokio::test]
 async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
@@ -468,7 +443,7 @@ async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
         "",
     );
     node.add_schema(&schema).await.unwrap();
-    let access = ConfigAccess::Local(node);
+    let access = ConfigAccess::local(node);
 
     for digest_seed in ["1", "2"] {
         let input = json!({
@@ -498,8 +473,6 @@ async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
     );
 }
 
-// --- Dependency bookkeeping (design C) ---------------------------------
-
 async fn dependency_fixture() -> (
     Arc<defra_node::EmbeddedNode>,
     ConfigAccess,
@@ -521,7 +494,7 @@ async fn dependency_fixture() -> (
             ("verifier".into(), "grok:inference".into()),
         ]),
     };
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     (node, access, options)
 }
 
@@ -567,13 +540,11 @@ async fn a_dependency_is_released_with_its_last_non_explicit_dependent() {
     .await
     .unwrap();
 
-    // Removing the dependency directly is refused, naming the dependent.
     let error = remove_pack(&access, OWNER, "fixture/review_graph", DriftPolicy::Refuse)
         .await
         .unwrap_err();
     assert!(format!("{error:#}").contains("acme/demo"), "{error:#}");
 
-    // Removing the dependent releases its last non-explicit claim too.
     let report = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
         .await
         .unwrap();
@@ -626,9 +597,12 @@ async fn an_explicit_dependency_survives_its_dependent() {
     let rows = remaining["data"]["PackInstallation"].as_array().unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["coordinate"], "fixture/review_graph");
-    assert_eq!(rows[0]["required_by"], Value::Null);
+    assert_eq!(
+        rows[0]["required_by"],
+        Value::Null,
+        "an explicit install is never auto-released"
+    );
 
-    // Still removable directly now that nothing requires it.
     remove_pack(&access, OWNER, "fixture/review_graph", DriftPolicy::Refuse)
         .await
         .unwrap();
@@ -668,7 +642,6 @@ async fn an_upgrade_that_drops_a_dependency_releases_its_claim() {
         .unwrap();
     assert_eq!(review_graph["required_by"], json!(["acme/demo"]));
 
-    // An upgrade of acme/demo that no longer depends on review_graph.
     super::super::install_pack_documents(
         &access,
         OWNER,
@@ -690,9 +663,7 @@ async fn an_upgrade_that_drops_a_dependency_releases_its_claim() {
         !rows
             .iter()
             .any(|row| row["coordinate"] == "fixture/review_graph"),
-        "the dropped, non-explicit dependency is released outright (its own graph \
-         documents removed), the same as `gents pack remove` releases a dependency \
-         whose last dependent is removed; a dangling required_by is not enough: {rows:?}"
+        "the dropped, non-explicit dependency is released outright: {rows:?}"
     );
 }
 
@@ -710,7 +681,6 @@ async fn a_legacy_record_without_dependency_fields_reads_as_explicit() {
     .unwrap();
     activate(&access, &receipt.graph_id, &receipt.revision_digest).await;
 
-    // Simulate a record written before `explicit` existed.
     let doc_id = installation_doc_id(&access).await;
     corrupt_installation_field(&access, &doc_id, "explicit", Value::Null).await;
 
@@ -727,8 +697,6 @@ async fn a_legacy_record_without_dependency_fields_reads_as_explicit() {
         .await
         .unwrap();
 
-    // required_by is now empty, but a legacy `explicit: null` reads as
-    // `true`, so the dependency is never auto-released.
     let remaining = access
         .execute("{ PackInstallation { coordinate } }")
         .await
@@ -769,7 +737,7 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
     ])
     .unwrap();
     access
-        .transact("test.seed", |txn| {
+        .transact_write("test.seed", |txn| {
             let seed = &seed;
             Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, seed).await })
         })
@@ -808,4 +776,55 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
         json!([{"default_agent_id": "chosen"}])
     );
     assert_eq!(tools_ids(&access).await, ["pack-tools"]);
+}
+
+#[tokio::test]
+async fn a_delayed_plugin_notification_projects_the_current_home_pin() {
+    let access = access().await;
+    let home = tempfile::tempdir().unwrap();
+    let current = identity("2");
+    super::super::write_home_install(
+        home.path(),
+        &super::super::HomePackInstall {
+            coordinate: current.coordinate.clone(),
+            version: current.version.clone(),
+            digest: current.digest.clone(),
+            kind: super::super::PackKind::Plugins,
+            assets: "packs/.materialized/acme/demo/current".into(),
+            plugins: current.plugins.clone(),
+            installed_at: "2026-01-01T00:00:00Z".into(),
+            ux: Vec::new(),
+        },
+    )
+    .unwrap();
+    record_plugin_store_change(
+        &access,
+        OWNER,
+        home.path(),
+        "acme/demo",
+        Some(&identity("1")),
+    )
+    .await
+    .unwrap();
+    let response = access
+        .execute("{ PackInstallation { version digest } }")
+        .await
+        .unwrap();
+    assert_eq!(
+        response["data"]["PackInstallation"][0]["version"],
+        current.version
+    );
+    assert_eq!(
+        response["data"]["PackInstallation"][0]["digest"],
+        current.digest
+    );
+    super::super::forget_home_install(home.path(), "acme/demo").unwrap();
+    record_plugin_store_change(&access, OWNER, home.path(), "acme/demo", None)
+        .await
+        .unwrap();
+    let response = access
+        .execute("{ PackInstallation { _docID } }")
+        .await
+        .unwrap();
+    assert_eq!(response["data"]["PackInstallation"], json!([]));
 }

@@ -13,8 +13,6 @@ separate_package=""
 
 case "${suite}" in
   runtime)
-    # gents-loop is the completion loop `gents` is built on. It belongs on
-    # this shard rather than support: its tests are the runtime's own.
     packages=(gents gents-loop)
     ;;
   cli)
@@ -27,18 +25,14 @@ case "${suite}" in
       gents-desktop-core
       gents-desktop
       gents-desktop-bridge
+      gents-client-host
+      gents-media-host
       fixture-domain-plugin
       gents-fixture-host
     )
-    # Keep Tauri in its own Cargo invocation; its target surface and feature
-    # graph are substantially heavier than the reusable desktop crates.
     separate_package="gents-desktop-tauri"
     ;;
   support)
-    # The provider login crates, their shared UI, and gents-codex-protocol live
-    # here (not in `cli`) because the support shard is where their tests RUN on
-    # every event; the compile fence must cover what the test step executes.
-    # They are still built on the cli shard as ordinary gents-cli dependencies.
     packages=(
       gents-lean-contract
       gents-migration
@@ -71,11 +65,10 @@ if [[ "${mode}" != "build" ]]; then
   exit 2
 fi
 
-# The support shard deliberately reuses a target directory across checkouts.
-# Cargo's mtime fast path can otherwise accept a stale local crate when a
-# checkout adds a new module, as happened when gents-protocol became the
-# ChatGPT OAuth vocabulary owner. Preserve dependency artifacts, but always
-# rebuild workspace members in this shard with its direct rustc wrapper.
+# The support shard deliberately reuses a target directory across checkouts:
+# Cargo's mtime fast path can accept a stale local crate when a checkout adds a
+# new module. Preserve dependency artifacts, but always rebuild workspace
+# members in this shard with its direct rustc wrapper.
 if [[ "${suite}" == "support" ]]; then
   cargo clean --workspace
 fi

@@ -578,6 +578,16 @@ def caseCoverage : List CoverageEntry :=
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "trigger_delivery"
+      "Triggers.Types"
+      "trigger_engine::tests::durable_contract::durable_delivery_predicates_match_executable_lean_owners")
+      "triggers" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "trigger_delivery"
+      "Triggers.Durable"
+      "trigger_engine::tests::durable_contract::generated_latest_delivery_admission_preserves_rejected_and_replayed_work")
+      "triggers" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "trigger_delivery"
       "EventDelivery.Durable"
       "trigger_engine::tests::durable_contract::generated_arrival_checkpoints_preserve_committed_delivery_across_crashes")
       "event-delivery" [Surface.runtimeInternal]
@@ -701,6 +711,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::session_hydration::generated_session_hydration_start_cases_match_receiver_start")
       "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "session_hydration_admission_cases"
+      "SessionHydrationAdmissionCases"
+      "conformance::session_hydration::generated_session_hydration_admission_cases_match_receiver_owner")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "enrollment_cases"
       "EnrollmentCases"
       "conformance::enrollment::generated_enrollment_cases_match_production_transition_core")
@@ -802,6 +817,11 @@ def caseCoverage : List CoverageEntry :=
       "CausalHopContract"
       "conformance::enrollment::generated_causal_hop_cases_match_native_materializer")
       "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "causal_hop_contract"
+      "SessionTargetAuthorityCases"
+      "session_message::agent_tools_tests::session_target_authority_matches_lean_owner")
+      "request-lifecycle" [Surface.agentFacing]
   , tagged (followUpCoverage
       "title_request_admission_cases"
       "TitleRequestAdmissionCases"
@@ -863,6 +883,16 @@ def caseCoverage : List CoverageEntry :=
       "optimization_cases"
       "OptimizationCases"
       "optimization::driver::matrix::an_unexercised_task_target_is_refused_before_any_job_or_trial_is_created")
+      "optimization" [Surface.operatorCli]
+  , tagged (consumerCoverage
+      "optimization_cases"
+      "OptimizationCases"
+      "optimization::gate::seeds::tests::exact_seed_rendering_matches_lean")
+      "optimization" [Surface.operatorCli]
+  , tagged (consumerCoverage
+      "optimization_cases"
+      "OptimizationCases"
+      "optimization::driver::matrix::exact_seed_failures_reject_candidates_before_validation")
       "optimization" [Surface.operatorCli]
   , tagged (consumerCoverage
       "tool_policy_cases"
@@ -1058,6 +1088,36 @@ def caseCoverage : List CoverageEntry :=
       "conformance::pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "client_observation_scope_cases"
+      "ClientObservationScopeCases"
+      "client::core::observation_scope::tests::generated_attachment_traces_keep_every_frontend_observable")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "client_settings_cases"
+      "ClientSettingsCases"
+      "client::mutations::manage::principal::editor::tests::config_editor_matches_executable_lean_contract")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "client_data_publication_cases"
+      "ClientDataNoticeDeliveryCases"
+      "client::observe::projection_store::reload_tests::generated_notice_delivery_never_regresses_watchers")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "client_request_patch_publication_cases"
+      "ClientRequestPatchPublicationCases"
+      "client::core::writes::request_patch_publication_tests::generated_publication_cases_drive_request_patch_cache_admission")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "client_request_closure_cases"
+      "ClientRequestClosureCases"
+      "client::query::request_closure::tests::generated_request_closures_use_exact_database_dependencies")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "client_request_cache_identity_cases"
+      "ClientRequestCacheIdentityCases"
+      "client::store::merges::overlay_tests::generated_request_identity_cases_preserve_physical_twins_and_fold_owners")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
       "frontend_client_shell_cases"
       "FrontendClientShellCases"
       "packages/gents-desktop-chat/src/chat-shell.test.ts::projectChatShell matches generated Lean ClientShell projection contracts")
@@ -1071,6 +1131,11 @@ def caseCoverage : List CoverageEntry :=
       "client_session_turn_cases"
       "ClientSessionTurnCases"
       "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_binds_generated_session_turn_cases")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "client_session_queue_order_cases"
+      "ClientSessionQueueOrderCases"
+      "gents_desktop_bridge::snapshot::tests::session_state::session_queue_order_matches_native_arrival_model_after_claim")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerWithFollowUp
       "client_agent_readiness_cases"
@@ -1169,6 +1234,11 @@ def caseCoverage : List CoverageEntry :=
       "SessionInputEditRemoteCases"
       "e2e_runtime::session_input_edit::generated_remote_edits_replicate_signed_effect_and_receipt")
       "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "session_input_edit_client_observation_cases"
+      "SessionInputEditClientObservationCases"
+      "client::core::writes::accepted_edit_projection_tests::generated_accepted_receipt_survives_projection_refresh_failure")
+      "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "queue_management_cases"
       "QueueManagementCases"
@@ -1207,8 +1277,6 @@ def caseCoverage : List CoverageEntry :=
       "interrupt::queue_tests::generated_http_overlap_cases_preserve_cutoff"
       "Two observed-identity overlap scripts bind real HTTP transactions against embedded completion publication, including permitted pre-latch phantom survival and post-latch replay. These schedules do not prove arbitrary distributed serialization; exact native queue ordering remains unbound.")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
-  -- Inference cases include periodic cadence: startup may defer a live execution
-  -- lease, so the same existing call owner must run after later request repair.
   , tagged (consumerCoverage
       "recovery_sweep_cases"
       "RecoverySweepCases"
@@ -1230,18 +1298,12 @@ def caseCoverage : List CoverageEntry :=
       "ArtifactModeMeetCases"
       "toolset::tests::generated_artifact_mode_meet_cases_drive_command_effect_intersection")
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
-  -- Admission uses real signed requests/bindings and managed-launch policy.
-  -- Unsupported-platform coverage supplies the unavailable-host observation to
-  -- the production selector; kernel enforcement remains an external boundary.
   , tagged (boundaryCoverage
       "artifact_admission_cases"
       "ArtifactAdmissionCases"
       boundaryCommandPolicyHostExecutionAssumptionsId
       "workspace::overlay::overlay_tests::generated_artifact_admission_cases_drive_live_binding_and_launch_policy")
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
-  -- One consumer covers all five cases: real foreground/background launches
-  -- carrying the same grant, plus persistent LSP denial before pool dispatch.
-  -- The spawned-task witness does not claim durable background-bridge coverage.
   , tagged (boundaryCoverage
       "artifact_spawn_cases"
       "ArtifactSpawnCases"
@@ -1305,6 +1367,11 @@ def caseCoverage : List CoverageEntry :=
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_resource_cases"
+      "ToolPolicy.PluginPublication"
+      "pack::publication_contract_tests::generated_local_publication_survives_notification_outcomes")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "plugin_resource_cases"
       "PluginReceiptCases"
       "tool_call_lifecycle::plugin_receipt::tests::generated_receipt_commit_cases")
       "tool-policy" [Surface.runtimeInternal]
@@ -1364,6 +1431,41 @@ def caseCoverage : List CoverageEntry :=
       "goal_request_head_cases"
       "GoalRequestHeadCases"
       "goal::request_head::tests::generated_goal_request_head_cases_drive_signed_row_selector")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_edit_cases"
+      "GoalEditCases"
+      "goal::edit::contract_tests::generated_goal_edit_cases_drive_real_transactions")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_client_control_cases"
+      "GoalClientControlCases"
+      "goal::client_control::contract_tests::generated_goal_client_controls_drive_signed_commands")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_client_start_cases"
+      "GoalClientStartCases"
+      "goal::client_control::start_tests::generated_goal_starts_commit_the_session_goal_and_first_request_together")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_client_receipt_cases"
+      "GoalClientReceiptCases"
+      "goal::client_control::receipt_tests::generated_goal_receipt_traces_preserve_results_and_reject_erased_stale_intents")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_observation_cases"
+      "GoalObservationCases"
+      "goal::observation::contract_tests::generated_goal_observations_drive_signature_and_scope_validation")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "plugin_approval_cases"
+      "PluginApprovalCases"
+      "plugin::approval::contract_tests::generated_approval_traces_drive_native_queue_and_grants")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_objective_whitespace_codepoints"
+      "GoalObjectiveWhitespace"
+      "goal::edit::contract_tests::generated_goal_objective_whitespace_matches_native_character_classification")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_operator_resume_cases"
@@ -1526,21 +1628,21 @@ def caseCoverage : List CoverageEntry :=
       "CodexShimReasoningProjectionCases"
       "commands::codex_shim::turn_projection::tests::generated_reasoning_projection_cases_drive_turn_projection_notifications")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
+  , tagged (consumerCoverage
       "codex_shim_thread_status_cases"
       "CodexShimThreadStatusCases"
-      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping"
-      "Exercises the canonical persisted-attempt projector, followed by test-local phase/status mapping. Drive the gents-cli Codex shim mapping and local-interrupt override before claiming end-to-end shim projection coverage.")
-      "codex-shim" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
+      "commands::codex_shim::thread_projection::conformance::generated_thread_status_cases_drive_thread_projection")
+      "codex-shim" [Surface.api, Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "codex_shim_agent_selection_cases"
       "CodexShimAgentSelectionCases"
-      "The conformance suite's copied mappings and fixture-field assertions do not exercise the gents-cli Codex shim owner. Route these generated inputs through its production projection before claiming adapter coverage.")
+      "commands::codex_shim::thread_projection::conformance::generated_agent_selection_cases_drive_scoped_model_binding")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (followUpCoverage
+  , tagged (consumerWithFollowUp
       "codex_shim_tool_metadata_cases"
       "CodexShimToolMetadataCases"
-      "The conformance suite's copied mappings and fixture-field assertions do not exercise the gents-cli Codex shim owner. Route these generated inputs through its production projection before claiming adapter coverage.")
+      "commands::codex_shim::turn_projection::tests::generated_tool_metadata_cases_drive_the_tool_item_owner"
+      "Generated cases exercise the shipping tool-item owner for diagnostic priority and duration. Generated event-timestamp expectations still need binding to the notification sender; separate sender tests cover persisted-time precedence and clock fallback, not these generated inputs.")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
   , tagged (followUpCoverage
       "codex_shim_context_usage_cases"
@@ -1754,6 +1856,11 @@ def caseCoverage : List CoverageEntry :=
       "Binds canonical header classification and selection to CurrentInput. Full reconstructed-history regression additionally covers retaining a current-request tool result; arbitrary imported-seed reachability is not claimed.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "wake_input_cases"
+      "WakeInputCases"
+      "agent::daemon::wake_input::tests::current_wake_input_matches_lean_owner")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "prompt_assembly_cases"
       "PromptAssemblySanitizeCases"
       "conformance::prompt_assembly::generated_sanitize_cases_drive_the_production_sanitizer")
@@ -1820,7 +1927,7 @@ def caseCoverage : List CoverageEntry :=
       "prompt_assembly_cases"
       "PromptAssemblyClaudeReplayCases"
       "agent::loop_stream::tests::claude_messages_redacted_and_signed_tool_round_trip_through_owned_loop"
-      "Drives only the ordered-signed-redacted-tool case through the owned loop: its replay blocks become turn-1 SSE (thinking and signature as deltas, redacted data at block start) and the turn-2 capture must equal the modeled replay. The persisted canonical grouping of streamed reasoning is not modeled, so it is not compared to the case's blocks. Other replay cases and the thinking-stream family remain unbound through the owned loop.")
+      "Drives the streamed-signed-redacted-tool case through the owned loop: its canonical blocks become turn-1 SSE, the persisted message must retain their exact grouping and payloads, and the turn-2 capture must equal the modeled replay. Other replay cases and the thinking-stream family remain unbound through the owned loop.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "prompt_assembly_cases"

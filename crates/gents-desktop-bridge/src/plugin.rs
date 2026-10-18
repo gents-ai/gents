@@ -19,8 +19,25 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             );
             hold_desktop_process(app, &policy.desktop_paths)?;
             app.manage(DesktopAppState::new(policy));
-            // Off the setup path: reading the packaged runtime and asking the
-            // service manager for its state are both blocking.
+            let state = app.state::<DesktopAppState>();
+            if let Some(home) = state.policy.node_home.clone() {
+                let subscriptions = state
+                    .bridge
+                    .lock()
+                    .expect("desktop bridge lock poisoned")
+                    .approvals_prompt_subscriptions
+                    .changes();
+                let watch = crate::approvals_watch::spawn_plugin_approvals_watch(
+                    app.clone(),
+                    home,
+                    subscriptions,
+                );
+                state
+                    .bridge
+                    .lock()
+                    .expect("desktop bridge lock poisoned")
+                    .approvals_watch_task = Some(watch);
+            }
             let handle = app.clone();
             std::thread::spawn(move || {
                 let state = handle.state::<DesktopAppState>();
@@ -37,14 +54,34 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
                 ) {
                     tracing::warn!(
                         error = %error.message,
-                        "could not restart the agent service that predates this app"
+                        "could not restart the node service that predates this app"
+                    );
+                }
+                if let Err(error) = tauri::async_runtime::block_on(
+                    tauri_commands::managed_server::start_configured_managed_server(
+                        &handle, &state,
+                    ),
+                ) {
+                    tracing::warn!(
+                        error = %error.message,
+                        "could not start the configured local node"
                     );
                 }
             });
             Ok(())
         })
         .on_webview_ready(register_window)
+        .on_page_load(|webview, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                webview
+                    .state::<DesktopAppState>()
+                    .clear_plugin_approval_subscriptions(webview.window().label());
+            }
+        })
         .on_event(|app, event| {
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                crate::app_exit::requested(app, api, *code);
+            }
             if let tauri::RunEvent::WindowEvent { label, event, .. } = event {
                 app.state::<DesktopAppState>().window_event(label, event);
             }
@@ -72,6 +109,8 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::allowed_dirs::desktop_allowed_dirs_remove,
             tauri_commands::allowed_dirs::desktop_plugin_approvals_pending,
             tauri_commands::allowed_dirs::desktop_plugin_approval_decide,
+            tauri_commands::allowed_dirs::desktop_plugin_approval_subscribe,
+            tauri_commands::allowed_dirs::desktop_plugin_approval_unsubscribe,
             tauri_commands::lifecycle::desktop_bootstrap_summary,
             tauri_commands::e2e::desktop_native_e2e_config,
             tauri_commands::e2e::desktop_native_e2e_status,
@@ -105,6 +144,8 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::tools_explain::desktop_tool_surface_explain,
             tauri_commands::chat::desktop_chat_send,
             tauri_commands::chat::desktop_pending_queue_edit,
+            tauri_commands::chat::desktop_session_goal,
+            tauri_commands::chat::desktop_goal_control,
             tauri_commands::chat::desktop_session_rename,
             tauri_commands::chat::desktop_request_resend,
             tauri_commands::chat::desktop_request_retry,
@@ -173,8 +214,7 @@ fn register_window<R: Runtime>(webview: tauri::Webview<R>) {
         .register_window(window.label());
 }
 
-/// Takes the desktop process lock through the reset reservation, so a
-/// waiting reset is never overtaken, and holds it for the app's lifetime.
+/// Holds the process lock across the reset reservation for the app lifetime.
 fn hold_desktop_process<R: Runtime>(
     app: &tauri::AppHandle<R>,
     paths: &gents_desktop_core::client::DesktopPaths,

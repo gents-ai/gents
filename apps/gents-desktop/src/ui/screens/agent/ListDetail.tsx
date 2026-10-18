@@ -1,5 +1,3 @@
-/* A section that is a list of documents and one document's settings,
-   routed by item id: the list is the page and a row opens the editor. */
 import { Fragment, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowLeft, ChevronDown, Plus, Trash2 } from "lucide-react";
 import { Badge } from "@gents/ui/components/badge";
@@ -28,7 +26,6 @@ import { href, navigate, type Route } from "@/lib/router";
 import { Row } from "./rows";
 import { toastFailure } from "@/lib/failure";
 
-/* a row is a link to its document, or a button when it acts instead */
 function RowLink({
   onOpen,
   href,
@@ -51,7 +48,6 @@ function RowLink({
   );
 }
 
-/* one row; nested rows sit under their parent, indented, on the ground */
 function ListItem({
   row: r,
   base,
@@ -63,13 +59,10 @@ function ListItem({
   row: ListRow;
   base: Extract<Route, { name: "agent" }>;
   nested?: boolean;
-  /* the one-line layout at the list's own indent */
   compact?: boolean;
-  /* set when the row has nested rows: whether they are shown */
   expanded?: boolean;
   onToggle?: () => void;
 }) {
-  /* nested rows are one line each: name, then what it is, in the parent's shade */
   if (nested || compact) {
     return (
       <li
@@ -80,7 +73,6 @@ function ListItem({
           href={r.href ?? href({ ...base, item: r.id })}
           className={`flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left ${nested ? "pl-10" : "pl-4"}`}
         >
-          {/* nested: a 16px slot before the text, so names line up with the parent's title */}
           {nested && (
             <span className="grid size-4 shrink-0 place-items-center">{r.icon}</span>
           )}
@@ -178,38 +170,26 @@ function ListItem({
   );
 }
 
-/* past this many rows a list gets a filter */
 const FILTER_AFTER = 8;
-/* nested rows shown before a Show more row */
 const NESTED_SHOWN = 5;
 
 export type ListRow = {
   id: string;
   title: string;
-  /* a word beside the title for the one row that stands apart, such as the default */
   titleNote?: string;
   meta?: string;
   badge?: string;
   badgeTone?: "default" | "bad";
-  /* a summary of identifiers and modes, set in mono */
   metaMono?: boolean;
   icon?: ReactNode;
-  /* controls at the end of the row, outside its link */
   trailing?: ReactNode;
-  /* the document's tags, for the pack-origin filter */
   tags?: string[] | null;
-  /* a row that acts instead of opening a document (a catalog entry) */
   onOpen?: () => void;
-  /* where the row goes when not the section's own document */
   href?: string;
-  /* rows that belong to this one (a backend's models), indented beneath it */
   children?: ListRow[];
-  /* the first part of meta names the nested rows ("4 models"): clicking it shows them */
   metaLeadToggles?: boolean;
 };
 
-/* pack provenance: a document from a pack carries a
-   gents:pack:<origin> tag; lists can filter by it */
 const PACK_ORIGIN_PREFIX = "gents:pack:";
 const NOT_FROM_PACK_FILTER = "__not_from_pack__";
 export function packOrigin(tags: string[] | null | undefined): string | null {
@@ -239,24 +219,17 @@ export function ListDetail({
   onCreate?: () => void | Promise<void>;
   createLabel: string;
   empty: string;
-  /* renders the open document's editor */
   detail: (id: string) => ReactNode;
-  /* where Back goes from the editor; the list when absent */
   back?: { route: Route; label: string };
-  /* controls for the open document, at the top right beside Back */
   toolbar?: (id: string) => ReactNode;
-  /* a create control of the panel's own (a menu of kinds), instead of the plain button */
   createMenu?: ReactNode;
-  /* one line per row: name, then what it is; for lists of small documents */
   compact?: boolean;
 }) {
   const creatingRef = useRef(false);
   const [creating, setCreating] = useState(false);
   const [query, setQuery] = useState("");
   const [originFilter, setOriginFilter] = useState("all");
-  /* rows whose nested rows are shown; closed by default */
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  /* rows whose nested rows are all shown, past the first few */
   const [allNested, setAllNested] = useState<Set<string>>(() => new Set());
   const origins = useMemo(
     () =>
@@ -431,7 +404,6 @@ export function ListDetail({
   );
 }
 
-/* what a section's documents are called, for the delete wording */
 export const NOUNS: Record<string, string> = {
   agents: "agent",
   contexts: "context",
@@ -447,9 +419,6 @@ export const NOUNS: Record<string, string> = {
   automations: "automation",
 };
 
-/* The typed-name confirmation every delete goes through, from the editor's
-   Danger zone or a list row's menu. The name is always asked for; `warning`
-   says which documents lose their reference (see dependents.ts). */
 export function ConfirmDelete({
   label,
   noun,
@@ -465,11 +434,8 @@ export function ConfirmDelete({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onDelete: () => Promise<unknown>;
-  /* where to go once deleted; stays put when absent */
   after?: Route;
-  /* what else the delete leaves behind, said in the confirmation */
   warning?: string;
-  /* a document that can go with it, offered as a ticked box */
   companion?: { label: string; onDelete: () => Promise<unknown> };
 }) {
   const [typed, setTyped] = useState("");
@@ -548,9 +514,6 @@ export function ConfirmDelete({
   );
 }
 
-/* The end of an editor: a Danger zone group, set apart from the fields and
-   their Save. Its delete goes through ConfirmDelete, which always asks for
-   the document's name before it runs. */
 export function DeleteButton({
   label,
   onDelete,
@@ -563,13 +526,9 @@ export function DeleteButton({
   label: string;
   onDelete: () => Promise<unknown>;
   base: Extract<Route, { name: "agent" }>;
-  /* what is deleted, when it is not the section's document */
   noun?: string;
-  /* where to go once deleted; the list when absent */
   after?: Route;
-  /* what else the delete leaves behind, said in the confirmation */
   warning?: string;
-  /* a document that can go with it, offered as a ticked box */
   companion?: { label: string; onDelete: () => Promise<unknown> };
 }) {
   const [open, setOpen] = useState(false);

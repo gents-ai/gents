@@ -32,7 +32,6 @@ pub struct PluginExecutionAuthority {
     pub environment: PluginEnvironmentGrant,
     pub host_http: Option<PluginHttpGrant>,
     pub host_model: bool,
-    /// True only when this invocation received a live, explicitly granted tool dispatcher.
     pub host_tools: bool,
 }
 
@@ -49,9 +48,7 @@ pub enum PluginFilesystemGrant {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "source", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PluginFilesystemScope {
-    /// The roots the operator granted at install, counted.
     Installed { roots: u64 },
-    /// The one path the call named in this declared `bind_dir` input field.
     BoundInput { field: String },
 }
 
@@ -66,7 +63,6 @@ pub enum PluginEnvironmentGrant {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginHttpGrant {
-    /// None permits any public host; Some restricts requests to these entries.
     pub hosts: Option<Vec<String>>,
     pub timeout_ms: Option<u64>,
 }
@@ -75,7 +71,6 @@ pub struct PluginHttpGrant {
 #[serde(rename_all = "snake_case")]
 pub enum PluginExecutionVerdict {
     AdmissionRefused,
-    /// The host failed to run or serve the guest; a retry may succeed.
     ExecutionError,
     Success,
     Refused,
@@ -83,6 +78,5 @@ pub enum PluginExecutionVerdict {
     OutOfMemory,
     Timeout,
     BadOutput,
-    /// The guest failed on its own: a non-zero exit or a trap.
     Failed,
 }

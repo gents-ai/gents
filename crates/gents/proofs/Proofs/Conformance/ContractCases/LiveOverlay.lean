@@ -6,9 +6,6 @@ namespace Conformance.ContractCases
 structure LiveOverlayCase where
   name                : String
   liveOutputAvailable : Bool
-  /-- A published assistant owner for the exact target output source. An
-  authored prompt or an earlier provider turn in the same request is not an
-  owner of the current live prefix. -/
   hasDurableOwner     : Bool
   precedingToolCalls  : Nat
   turnTerminal        : Bool
@@ -28,6 +25,7 @@ structure RequestProgressCase where
 structure PendingUserTurnCase where
   name                : String
   hasDurableUserOwner : Bool
+  retiredByAuthor     : Bool := false
   unrelatedUserTurns  : Nat
   expectPendingTurn   : Bool
   deriving Repr
@@ -45,6 +43,11 @@ def pendingUserTurnCases : List PendingUserTurnCase :=
     , hasDurableUserOwner := true
     , unrelatedUserTurns := 7
     , expectPendingTurn := projectPendingUserTurn true }
+  , { name := "request_retired_by_its_author_is_never_shown"
+    , hasDurableUserOwner := false
+    , retiredByAuthor := true
+    , unrelatedUserTurns := 0
+    , expectPendingTurn := projectPendingUserTurn false true }
   ]
 
 def requestProgressCase

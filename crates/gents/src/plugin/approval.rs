@@ -1,17 +1,3 @@
-//! The operator's per-call answer to "Allow this plugin to read this path?".
-//!
-//! A model's plugin call that names a path outside the working folder and the
-//! allowed folders waits here when its request came from an interactive chat,
-//! including a child another plugin composes: the gate belongs to the
-//! operator, not the composition.
-//! The question is one request file in the gents home, the answer one decision
-//! file; the desktop app and `gents chat` list the pending questions and write
-//! the decision. This is operator consent within the existing host trust
-//! boundary, not isolation from shell commands running as the same OS user.
-//! Sandboxed plugins cannot access this queue. "Always allow" is applied by [`decide`]
-//! on the answering side, adding the folder to the operator's list; the
-//! waiting call only learns allow or deny.
-
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -21,13 +7,11 @@ use serde::{Deserialize, Serialize};
 use super::allowed;
 use crate::pack::BindAccess;
 
-/// How long a call waits for an answer before it gives up and fails.
+// Consent gates plugin calls inside the existing OS-user trust boundary; it does not isolate same-user shell commands.
 pub const WAIT: Duration = Duration::from_secs(10 * 60);
 
-/// How long a listener's last poll still counts as someone listening.
 const LISTENER_FRESH: Duration = Duration::from_secs(15);
 
-/// How long a call waits for a first listener before it fails for want of one.
 const LISTENER_GRACE: Duration = if cfg!(test) {
     Duration::from_millis(150)
 } else {
@@ -39,8 +23,6 @@ tokio::task_local! {
     static COMPOSED: ();
 }
 
-/// Runs `future` as an interactive chat's call when `interactive`, so a
-/// plugin call inside it may ask the operator.
 pub async fn scope_interactive<F: std::future::Future>(interactive: bool, future: F) -> F::Output {
     if interactive {
         INTERACTIVE.scope((), future).await
@@ -49,9 +31,6 @@ pub async fn scope_interactive<F: std::future::Future>(interactive: bool, future
     }
 }
 
-/// Wraps `future` for a task about to be spawned: the spawned task starts with
-/// no task-locals, so the caller's interactivity is read now and re-applied
-/// there. Every spawn on a tool call's path goes through this.
 pub fn carry_interactive<F: std::future::Future>(
     future: F,
 ) -> impl std::future::Future<Output = F::Output> {
@@ -66,14 +45,10 @@ pub fn carry_interactive<F: std::future::Future>(
     }
 }
 
-/// Whether the running call came from an interactive chat.
 pub fn interactive() -> bool {
     INTERACTIVE.try_with(|_| ()).is_ok()
 }
 
-/// Runs `future` as a child call composed by another plugin. The marker is
-/// the composed axis of `consentRoute`: the generated cases run a real
-/// composed scope and prove composition does not change the operator's gate.
 pub(crate) async fn scope_composed<F: std::future::Future>(future: F) -> F::Output {
     COMPOSED.scope((), future).await
 }
@@ -88,9 +63,6 @@ pub(crate) enum Consent {
     Deny,
 }
 
-/// Lean `ToolPolicy.PluginCalls.consentRoute`. The composed axis is the
-/// owner's input; a child another plugin composes waits on the operator like
-/// a directly issued call.
 pub(crate) fn consent_route(interactive: bool, _composed: bool) -> Consent {
     if interactive {
         Consent::Ask
@@ -99,27 +71,25 @@ pub(crate) fn consent_route(interactive: bool, _composed: bool) -> Consent {
     }
 }
 
-/// How an uncovered path in the running call reaches the operator.
 pub(crate) fn consent(interactive: bool) -> Consent {
     consent_route(interactive, composed())
 }
 
-/// One pending question.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Request {
     pub id: String,
     pub plugin: String,
-    /// The exact file or folder the call names.
     pub path: String,
-    /// The folder "always allow" remembers.
     pub folder: PathBuf,
-    /// Whether the path is a folder, so "always allow this file" is the folder.
     #[serde(default)]
     pub is_dir: bool,
     pub access: BindAccess,
     #[serde(default)]
     pub session_id: Option<String>,
     pub created_at_ms: u64,
+    /// The waiting call publishes its actual deadline, including shorter waits.
+    /// Queue entries without this field cannot be answered by this version.
+    pub expires_at_ms: u64,
 }
 
 impl Request {
@@ -129,6 +99,7 @@ impl Request {
         access: BindAccess,
         session_id: Option<String>,
     ) -> Self {
+        let created_at_ms = now_ms();
         Self {
             id: uuid::Uuid::new_v4().simple().to_string(),
             plugin: plugin.to_owned(),
@@ -137,11 +108,11 @@ impl Request {
             is_dir: resolved.is_dir,
             access,
             session_id,
-            created_at_ms: now_ms(),
+            created_at_ms,
+            expires_at_ms: created_at_ms.saturating_add(WAIT.as_millis() as u64),
         }
     }
 
-    /// The question as the operator reads it.
     pub fn prompt(&self) -> String {
         let verb = match self.access {
             BindAccess::Read => "read",
@@ -151,14 +122,10 @@ impl Request {
     }
 }
 
-/// The operator's answer to one question.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Answer {
-    /// This call only.
     Once,
-    /// This call, and the exact file from now on (the folder when the path is one).
     AlwaysPath,
-    /// This call, and the whole folder holding the path from now on.
     AlwaysFolder,
     Deny,
 }
@@ -169,13 +136,28 @@ struct Decision {
 }
 
 fn listener_file(home: &Path) -> PathBuf {
-    dir(home).join(".listening")
+    queue_dir(home).join(".listening")
 }
 
-/// Marks `home` as having someone who answers questions, by touching a file.
-fn mark_listening(home: &Path) -> Result<()> {
+pub fn prepare_listener(home: &Path) -> Result<PathBuf> {
+    let queue = queue_dir(home);
+    std::fs::create_dir_all(&queue).context("creating the approval queue")?;
+    let mark = listener_file(home);
+    if !mark.try_exists()? {
+        let file = tempfile::NamedTempFile::new_in(&queue)?;
+        file.as_file().set_modified(std::time::UNIX_EPOCH)?;
+        match file.persist_noclobber(&mark) {
+            Ok(_) => {}
+            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error).context("preparing the approval listener mark"),
+        }
+    }
+    Ok(queue)
+}
+
+pub fn mark_listening(home: &Path) -> Result<()> {
     let path = listener_file(home);
-    std::fs::create_dir_all(dir(home)).context("creating the approval queue")?;
+    prepare_listener(home)?;
     std::fs::OpenOptions::new()
         .create(true)
         .write(true)
@@ -201,16 +183,38 @@ fn now_ms() -> u64 {
         .map_or(0, |elapsed| elapsed.as_millis() as u64)
 }
 
-fn dir(home: &Path) -> PathBuf {
-    home.join(crate::home::PLUGIN_APPROVALS_DIR_NAME)
+/// Each queue format has a separate directory so an incompatible responder
+/// cannot answer current questions or advertise a listener for their waiters.
+pub fn queue_dir(home: &Path) -> PathBuf {
+    home.join(crate::home::PLUGIN_APPROVALS_DIR_NAME).join("v2")
 }
 
 fn request_file(home: &Path, id: &str) -> PathBuf {
-    dir(home).join(format!("{id}.json"))
+    queue_dir(home).join(format!("{id}.json"))
 }
 
 fn decision_file(home: &Path, id: &str) -> PathBuf {
-    dir(home).join(format!("{id}.decision"))
+    queue_dir(home).join(format!("{id}.decision"))
+}
+
+fn valid_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 128 && id.bytes().all(|c| c.is_ascii_alphanumeric())
+}
+
+fn lock(home: &Path) -> Result<crate::file_lock::FileLock> {
+    std::fs::create_dir_all(home).context("creating the approval home")?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(lock_file(home))
+        .context("opening the approval lock")?;
+    crate::file_lock::FileLock::exclusive(file).context("locking plugin approvals")
+}
+
+pub(super) fn lock_file(home: &Path) -> PathBuf {
+    home.join(crate::home::PLUGIN_APPROVALS_LOCK_FILE_NAME)
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -223,7 +227,6 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Removes a question's files whenever the waiting call ends, however it ends.
 struct Cleanup<'a> {
     home: &'a Path,
     id: &'a str,
@@ -231,24 +234,47 @@ struct Cleanup<'a> {
 
 impl Drop for Cleanup<'_> {
     fn drop(&mut self) {
+        let Ok(_lock) = lock(self.home) else {
+            tracing::warn!("could not lock plugin approvals for cleanup");
+            return;
+        };
         let _ = std::fs::remove_file(request_file(self.home, self.id));
         let _ = std::fs::remove_file(decision_file(self.home, self.id));
     }
 }
 
-/// Files `request` and waits up to `wait` for the operator; true when they
-/// allowed it.
 pub async fn ask(home: &Path, request: &Request, wait: Duration) -> Result<bool> {
-    write_atomic(
-        &request_file(home, &request.id),
-        &serde_json::to_vec(request)?,
-    )?;
+    anyhow::ensure!(valid_id(&request.id), "invalid plugin approval question id");
+    let started = tokio::time::Instant::now();
+    let now = now_ms();
+    let mut filed = request.clone();
+    filed.expires_at_ms = filed
+        .expires_at_ms
+        .min(now.saturating_add(u64::try_from(wait.as_millis()).unwrap_or(u64::MAX)));
+    anyhow::ensure!(
+        filed.created_at_ms <= now && now < filed.expires_at_ms,
+        "the plugin approval question has expired"
+    );
+    let remaining = Duration::from_millis(filed.expires_at_ms - now).min(wait);
+    let deadline = started
+        .checked_add(remaining)
+        .context("approval wait is too long")?;
+    {
+        let _lock = lock(home)?;
+        anyhow::ensure!(
+            !request_file(home, &request.id).try_exists()?
+                && !decision_file(home, &request.id).try_exists()?,
+            "the plugin approval question id is already in use"
+        );
+        write_atomic(
+            &request_file(home, &request.id),
+            &serde_json::to_vec(&filed)?,
+        )?;
+    }
     let _cleanup = Cleanup {
         home,
         id: &request.id,
     };
-    let started = tokio::time::Instant::now();
-    let deadline = started + wait;
     let mut pause = Duration::from_millis(20);
     loop {
         match std::fs::read(decision_file(home, &request.id)) {
@@ -274,31 +300,44 @@ pub async fn ask(home: &Path, request: &Request, wait: Duration) -> Result<bool>
     }
 }
 
-/// The unanswered questions, oldest first. A question older than [`WAIT`]
-/// belongs to a call that already gave up and is skipped. Listing marks the
-/// caller as listening for [`ask`].
 pub fn pending(home: &Path) -> Result<Vec<Request>> {
     mark_listening(home)?;
-    let entries = match std::fs::read_dir(dir(home)) {
+    pending_requests(home)
+}
+
+pub fn pending_requests(home: &Path) -> Result<Vec<Request>> {
+    let entries = match std::fs::read_dir(queue_dir(home)) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(error).context("listing plugin approval requests"),
     };
-    let oldest = now_ms().saturating_sub(WAIT.as_millis() as u64);
+    let now = now_ms();
     let mut requests = Vec::new();
     for entry in entries {
         let path = entry.context("listing plugin approval requests")?.path();
         if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
             continue;
         }
-        // A file removed or half-written between listing and reading is not pending.
         let Ok(bytes) = std::fs::read(&path) else {
             continue;
         };
-        let Ok(request) = serde_json::from_slice::<Request>(&bytes) else {
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
             continue;
         };
-        if request.created_at_ms >= oldest && !decision_file(home, &request.id).exists() {
+        if value.get("id").and_then(serde_json::Value::as_str)
+            != path.file_stem().and_then(|stem| stem.to_str())
+        {
+            continue;
+        }
+        let request: Request = serde_json::from_value(value).context(
+            "the plugin approval question format is unsupported or invalid; use matching runtime and client versions",
+        )?;
+        if valid_id(&request.id)
+            && path.file_stem().and_then(|stem| stem.to_str()) == Some(&request.id)
+            && request.created_at_ms <= now
+            && now < request.expires_at_ms
+            && !decision_file(home, &request.id).try_exists()?
+        {
             requests.push(request);
         }
     }
@@ -306,28 +345,41 @@ pub fn pending(home: &Path) -> Result<Vec<Request>> {
     Ok(requests)
 }
 
-/// Answers question `id`. An allow with [`Answer::AlwaysPath`] or
-/// [`Answer::AlwaysFolder`] also adds that file or folder to the operator's
-/// list, keeping any wider access it already has.
 pub fn decide(home: &Path, id: &str, answer: Answer) -> Result<()> {
-    anyhow::ensure!(
-        id.chars().all(|c| c.is_ascii_alphanumeric()),
-        "{id:?} is not a question id"
-    );
+    decide_with_clock(home, id, answer, now_ms)
+}
+
+fn decide_with_clock(
+    home: &Path,
+    id: &str,
+    answer: Answer,
+    clock: impl FnOnce() -> u64,
+) -> Result<()> {
+    anyhow::ensure!(valid_id(id), "{id:?} is not a question id");
+    let _lock = lock(home)?;
     let bytes = std::fs::read(request_file(home, id))
         .with_context(|| format!("question {id} is not waiting for an answer"))?;
     let request: Request = serde_json::from_slice(&bytes).context("the question is unreadable")?;
+    let now = clock();
+    anyhow::ensure!(
+        request.id == id,
+        "the plugin approval question identity changed"
+    );
+    anyhow::ensure!(
+        request.created_at_ms <= now && now < request.expires_at_ms,
+        "the plugin approval question has expired"
+    );
+    anyhow::ensure!(
+        !decision_file(home, id).try_exists()?,
+        "the plugin approval question was already answered"
+    );
     let remembered = match answer {
         Answer::AlwaysPath if !request.is_dir => Some(PathBuf::from(&request.path)),
         Answer::AlwaysPath | Answer::AlwaysFolder => Some(request.folder.clone()),
         Answer::Once | Answer::Deny => None,
     };
     if let Some(path) = remembered {
-        let held = allowed::list(home)?
-            .into_iter()
-            .find(|entry| entry.path == path)
-            .map(|entry| entry.access);
-        allowed::add(home, &path, request.access.max(held.unwrap_or_default()))?;
+        allowed::grant_at_least(home, &path, request.access)?;
     }
     write_atomic(
         &decision_file(home, id),
@@ -340,3 +392,7 @@ pub fn decide(home: &Path, id: &str, answer: Answer) -> Result<()> {
 #[cfg(test)]
 #[path = "approval_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "approval_contract_tests.rs"]
+mod contract_tests;

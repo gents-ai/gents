@@ -1,23 +1,12 @@
 import Proofs.GoalAutomation.OperatorResume
 
-/-! #2121: a second cause for the existing resume transaction. A usage-limited
-Goal the operator opted in may resume by itself once the reset its provider
-reported has passed. The transaction, its predecessor key and its child are
-`resume` unchanged; this file only adds the guard a timer resume must pass.
-`Request.authorized` keeps its meaning: the timer still runs the owner and
-canonical parent checks, acting as the node with the owner's identity.
-The operator cause is `resume` itself, so operator resume is untouched.
--/
 namespace GoalAutomation.OperatorResume
 
-/-- Facts a timer resume reads inside its resume transaction. Times are
-seconds on one clock. `resetAt` is the provider's absolute reset time recorded
-on the failed call that ended the latest request (`none`: no reset reported).
-`limitStartedAt` is that call's start. `profileNamesAccount` means the profile
-that served the call still selects the call's backend, and the serving sign-in
-connected before the limited call (the same sign-in). `accountEnabled` is the
-serving credential's state. `backendEnabled` is the selected backend's state.
-`now` is the resume's clock. -/
+/-- Times are seconds on one clock. `resetAt` is the provider's absolute reset
+time recorded on the failed call that ended the latest request (`none`: no
+reset reported). `limitStartedAt` is that call's start. `profileNamesAccount`
+means the profile that served the call still selects the call's backend, and
+the serving sign-in connected before the limited call (the same sign-in). -/
 structure ResetFacts where
   optedIn : Bool
   resetAt : Option Nat
@@ -28,10 +17,8 @@ structure ResetFacts where
   backendEnabled : Bool
   deriving DecidableEq, Repr
 
-/-- A timer resume is due: opted in, same account and enabled, and a reported
-reset that is later than the limited call's start and has passed. A reset no
-later than the call's start is stale and never due. There is no cap on how far
-away the reset may be. -/
+/-- A reset no later than the limited call's start is stale and never due;
+there is no cap on how far away the reset may be. -/
 def ResetFacts.due (f : ResetFacts) : Bool :=
   f.optedIn && f.profileNamesAccount && f.accountEnabled && f.backendEnabled &&
     match f.resetAt with
@@ -43,8 +30,6 @@ inductive Cause where
   | resetReached (facts : ResetFacts)
   deriving DecidableEq, Repr
 
-/-- Resume by cause. A reset cause only moves a `usageLimited` Goal, and waits
-(`deferred`) until its facts are due; then it is the same `resume`. -/
 def resumeBy (s : Snapshot) (cause : Cause) (r : Request) (commit : Bool) :
     Snapshot × Outcome :=
   match cause with

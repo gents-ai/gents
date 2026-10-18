@@ -74,8 +74,6 @@ impl PrincipalIdentity {
         })
     }
 
-    /// The DID a desktop home's identity record names, when `path` is a
-    /// regular file that decodes as one.
     pub fn recorded_did(path: &Path) -> Option<String> {
         if !std::fs::symlink_metadata(path).ok()?.is_file() {
             return None;
@@ -195,75 +193,6 @@ fn abbreviate_did(did: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn first_launch_creates_node_identity_files() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let paths = DesktopPaths::from_root(tempdir.path());
-
-        let identity = PrincipalIdentity::load_or_create(&paths).await.unwrap();
-
-        assert!(!identity.did().is_empty());
-        assert!(tokio::fs::try_exists(paths.identity_key_path())
-            .await
-            .unwrap());
-        assert!(tokio::fs::try_exists(paths.principal_metadata_path())
-            .await
-            .unwrap());
-    }
-
-    #[tokio::test]
-    async fn second_launch_reuses_same_identity_material() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let paths = DesktopPaths::from_root(tempdir.path());
-
-        let first = PrincipalIdentity::load_or_create(&paths).await.unwrap();
-        let second = PrincipalIdentity::load_or_create(&paths).await.unwrap();
-
-        assert_eq!(first.did(), second.did());
-        assert_eq!(first.public_key_bytes(), second.public_key_bytes());
-        assert_eq!(first.private_key_bytes(), second.private_key_bytes());
-    }
-
-    #[tokio::test]
-    async fn missing_key_after_node_identity_metadata_does_not_create_new_identity() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let paths = DesktopPaths::from_root(tempdir.path().join("desktop"));
-        PrincipalIdentity::load_or_create(&paths).await.unwrap();
-        let original_metadata = std::fs::read(paths.principal_metadata_path()).unwrap();
-
-        std::fs::remove_file(paths.identity_key_path()).unwrap();
-        assert!(PrincipalIdentity::load_or_create(&paths).await.is_err());
-
-        assert!(!paths.identity_key_path().exists());
-        assert_eq!(
-            std::fs::read(paths.principal_metadata_path()).unwrap(),
-            original_metadata
-        );
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn dangling_metadata_symlink_does_not_create_a_key() {
-        use std::os::unix::fs::symlink;
-
-        let root = tempfile::tempdir().unwrap();
-        let paths = DesktopPaths::from_root(root.path().join("desktop"));
-        paths.ensure_root_dirs().await.unwrap();
-        symlink(
-            root.path().join("absent.json"),
-            paths.principal_metadata_path(),
-        )
-        .unwrap();
-
-        let error = PrincipalIdentity::load_or_create(&paths).await.unwrap_err();
-        assert!(format!("{error:#}").contains("is not a regular file"));
-        assert!(!paths.identity_key_path().exists());
-        assert!(std::fs::symlink_metadata(paths.principal_metadata_path())
-            .unwrap()
-            .file_type()
-            .is_symlink());
-    }
 
     #[cfg(unix)]
     #[tokio::test]

@@ -1,7 +1,6 @@
 import { cn } from "@gents/ui/lib/utils";
 import { href } from "@/lib/router";
 
-/* official four-block symbol, currentColor */
 export function Mark({ className }: { className?: string }) {
   return (
     <svg
@@ -18,7 +17,6 @@ export function Mark({ className }: { className?: string }) {
   );
 }
 
-/** The mark as the shell draws it: a link to the agents list. */
 export function MarkLink({ className }: { className?: string }) {
   return (
     <a

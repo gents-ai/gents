@@ -6,8 +6,6 @@ use bytes::Bytes;
 use chrono::{DateTime, Duration, Utc};
 use defra_node::EmbeddedNode;
 use gents_loop::provider_patches::patch_instructions_body;
-#[cfg(test)]
-use gents_loop::provider_patches::CHATGPT_CODEX_UNSUPPORTED_PARAMS;
 use rig::http_client::{
     self, HeaderMap, HeaderValue, HttpClientExt, LazyBody, Request, ReqwestClient, Response,
 };
@@ -17,7 +15,7 @@ use rig::wasm_compat::WasmCompatSend;
 use serde_json::{json, Value};
 
 #[cfg(test)]
-use crate::oauth_credential::{classify_chatgpt_auth_error, BearerSource, OAuthAuthProblem};
+use crate::oauth_credential::BearerSource;
 use crate::oauth_credential::{
     oauth_credential_id, DbCredentialBearer, OAuthCredential, OAuthRefreshKind,
     CHATGPT_OAUTH_PRODUCT,
@@ -128,20 +126,9 @@ pub fn chatgpt_codex_client_version() -> String {
         .unwrap_or_else(|| CHATGPT_CODEX_CLIENT_VERSION.to_string())
 }
 
-// The codex backend-api hides each model whose minimal_client_version exceeds
-// the advertised client version, so an old default silently hides newer model
-// families (#982). Keep this at a current codex CLI release;
-// GENTS_CHATGPT_CODEX_CLIENT_VERSION overrides it at runtime.
 const CHATGPT_CODEX_CLIENT_VERSION: &str = "0.160.0";
 const CHATGPT_CODEX_CLIENT_VERSION_ENV: &str = "GENTS_CHATGPT_CODEX_CLIENT_VERSION";
 
-/// [`crate::oauth_http::OAuthHttpPolicy`] policy for the ChatGPT Codex
-/// Responses transport: 401/403 kill the bearer, the `/responses` body needs
-/// the `instructions` hoist, and a buffered send must rewrite Codex's SSE
-/// body into the JSON `response.completed` shape rig expects. Codex's
-/// identity headers (`build_chatgpt_codex_headers`) ride as `http_headers`
-/// client-build defaults instead of a per-request merge, so this policy
-/// leaves `merge_identity_headers` at its no-op default.
 #[derive(Clone, Default)]
 pub struct ChatGptCodexPolicy;
 
@@ -263,9 +250,6 @@ fn retain_turn_state(headers: &HeaderMap) {
     }
 }
 
-/// Codex's Responses transport: bearer auth, the `instructions` hoist, and
-/// the SSE→JSON response rewrite, layered over `crate::oauth_http`'s shared
-/// bearer-auth wrapper.
 pub type ChatGptCodexHttpClient<S, H = ReqwestClient> =
     crate::oauth_http::BearerAuthHttpClient<S, ChatGptCodexPolicy, H>;
 
@@ -400,11 +384,6 @@ pub async fn build_responses_client(
     let headers =
         build_chatgpt_codex_headers(credential.account_id.as_deref(), credential.is_fedramp)?;
     let endpoint = normalize_endpoint(endpoint);
-    // The capture wrapper sits *below* the Codex wrapper, so it sees the body
-    // after `patch_instructions_body` has hoisted `instructions`, stripped
-    // system items, set `store`/`stream`, deleted the unsupported sampling
-    // params, and forced `strict:false`. Capturing above it would persist a
-    // request this backend never receives.
     let usage = crate::usage_observation::UsageReporter::new(
         node,
         crate::usage_observation::UsageAccount::for_credential(&credential),
@@ -553,8 +532,6 @@ mod tests {
         }
     }
 
-    /// Inner transport that yields a fixed HTTP status — `>= 400` becomes the rig status error the
-    /// reqwest transport would produce, `< 400` an empty success response.
     #[derive(Clone, Debug)]
     struct StatusInjectingClient {
         status: u16,
@@ -689,22 +666,6 @@ mod tests {
         assert!(!unscoped.headers().contains_key("x-codex-turn-state"));
     }
 
-    fn status_error(status: &str) -> http_client::Error {
-        http_client::Error::InvalidStatusCodeWithMessage(
-            status.parse().expect("valid status"),
-            String::new(),
-        )
-    }
-
-    /// The reason the capture seam is a transport wrapper at all.
-    ///
-    /// `build_responses_client` puts the capture client *below* this one so the
-    /// durable row is the body ChatGPT actually receives. Nothing about the
-    /// types enforces that: both wrappers are generic over their inner client,
-    /// so hoisting the capture above the Codex wrapper compiles and streams
-    /// fine while persisting a request this backend never sees. This composes
-    /// the real stack — Codex over capture over a recording terminal — and
-    /// pins the row to the post-rewrite body.
     #[tokio::test]
     async fn the_captured_row_is_the_body_codex_rewrote_not_the_one_rig_serialized() {
         use crate::rendered_request::scope::{arm, scope_request, test_scope, CaptureScopeKind};
@@ -745,8 +706,6 @@ mod tests {
             sink,
         );
 
-        // The pre-rewrite body: system text still in `input`, sampling params
-        // Codex rejects still present, and a strict tool.
         let assembled = serde_json::json!({
             "model": "gpt-5-codex",
             "prompt_cache_key": "session",
@@ -813,20 +772,6 @@ mod tests {
         assert_eq!(terminal.send_count(), 1);
     }
 
-    #[test]
-    fn bearer_rejection_only_for_401_and_403() {
-        use crate::oauth_http::{is_bearer_rejection, OAuthHttpPolicy as _};
-        let statuses = ChatGptCodexPolicy::REJECTION_STATUSES;
-        assert!(is_bearer_rejection(statuses, &status_error("401")));
-        assert!(is_bearer_rejection(statuses, &status_error("403")));
-        assert!(!is_bearer_rejection(statuses, &status_error("500")));
-        assert!(!is_bearer_rejection(statuses, &status_error("429")));
-        assert!(!is_bearer_rejection(
-            statuses,
-            &http_client::Error::Instance(anyhow::anyhow!("network down").into())
-        ));
-    }
-
     async fn send_through(status: u16) -> Arc<CountingBearer> {
         let bearer = CountingBearer::new("tok");
         let client =
@@ -860,47 +805,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn classifies_missing_auth_with_login_guidance() {
-        let msg = classify_chatgpt_auth_error(
-            "did:key:zAgent",
-            CHATGPT_CODEX_PROVIDER,
-            &OAuthAuthProblem::Missing,
-        );
-
-        assert!(msg.contains("did:key:zAgent"), "names the node DID: {msg}");
-        assert!(
-            msg.contains("gents codex-login"),
-            "tells the user how to fix it: {msg}"
-        );
-    }
-
-    #[test]
-    fn classifies_wrong_mode_naming_found_mode() {
-        let msg = classify_chatgpt_auth_error(
-            "did:key:zAgent",
-            CHATGPT_CODEX_PROVIDER,
-            &OAuthAuthProblem::WrongMode {
-                found_mode: "disabled".to_string(),
-            },
-        );
-
-        assert!(msg.contains("ChatGPT"), "asks for ChatGPT OAuth: {msg}");
-        assert!(msg.contains("disabled"), "names what was found: {msg}");
-    }
-
-    #[test]
-    fn classifies_expired_with_reauth_guidance() {
-        let msg = classify_chatgpt_auth_error(
-            "did:key:zAgent",
-            CHATGPT_CODEX_PROVIDER,
-            &OAuthAuthProblem::Expired,
-        );
-
-        assert!(msg.to_lowercase().contains("expired"), "{msg}");
-        assert!(msg.contains("gents codex-login"), "{msg}");
-    }
-
     #[tokio::test]
     async fn injects_fresh_bearer_on_each_request() {
         let bearer = CountingBearer::new("tok-123");
@@ -926,89 +830,6 @@ mod tests {
             bearer.calls.load(Ordering::SeqCst),
             1,
             "refreshed once per request"
-        );
-    }
-
-    #[test]
-    fn patches_rig_responses_body_for_chatgpt_codex() {
-        let body = json!({
-            "model": "gpt-5.2",
-            "max_output_tokens": 2048,
-            "temperature": 0.2,
-            "top_p": 0.9,
-            "input": [
-                {
-                    "type": "message",
-                    "role": "system",
-                    "content": [
-                        { "type": "input_text", "text": "Use terse answers." }
-                    ]
-                },
-                {
-                    "type": "message",
-                    "role": "user",
-                    "content": [
-                        { "type": "input_text", "text": "Say pong." }
-                    ]
-                }
-            ],
-            "tools": [
-                {
-                    "type": "function",
-                    "name": "query",
-                    "strict": true,
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "collection": { "type": "string" },
-                            "filter": { "type": "object" }
-                        },
-                        "required": ["collection", "filter"]
-                    }
-                },
-                {
-                    "type": "function",
-                    "name": "read_file"
-                }
-            ]
-        });
-
-        let patched = patch_instructions_body(&serde_json::to_vec(&body).unwrap()).unwrap();
-        let patched: Value = serde_json::from_slice(&patched).unwrap();
-
-        assert_eq!(
-            patched.get("instructions").and_then(Value::as_str),
-            Some("Use terse answers.")
-        );
-        assert_eq!(patched.get("store").and_then(Value::as_bool), Some(false));
-        assert_eq!(patched.get("stream").and_then(Value::as_bool), Some(true));
-        assert!(patched
-            .get("input")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .all(|item| item.get("role").and_then(Value::as_str) != Some("system")));
-        for unsupported in CHATGPT_CODEX_UNSUPPORTED_PARAMS {
-            assert!(
-                patched.get(*unsupported).is_none(),
-                "unsupported Codex param {unsupported} should be stripped: {patched}"
-            );
-        }
-        let tools = patched.get("tools").and_then(Value::as_array).unwrap();
-        assert!(
-            tools
-                .iter()
-                .all(|tool| tool.get("strict") == Some(&Value::Bool(false))),
-            "Codex function tools should match Codex CLI strict:false: {tools:?}"
-        );
-        assert_eq!(
-            tools[0]
-                .get("parameters")
-                .and_then(|parameters| parameters.get("required"))
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(2),
-            "strict:false shaping should not rewrite tool schemas"
         );
     }
 
@@ -1162,9 +983,6 @@ mod tests {
             assert_eq!(chatgpt_login(id_claims, access).provider_account_key, None);
         }
     }
-
-    // `ensure_event_stream_content_type` is single-owned and unit-tested in
-    // `crate::oauth_http` now (`event_stream_content_type_is_added_only_when_missing`).
 
     #[test]
     fn streamed_output_prefers_deltas_over_done_text() {

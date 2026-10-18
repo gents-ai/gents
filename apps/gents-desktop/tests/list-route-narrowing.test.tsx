@@ -22,7 +22,6 @@ const summary = (nodeDid: string, sessionId: string) =>
     updatedAt: null,
   }) as SessionSummary;
 
-/* two nodes; the route names the second */
 const app = () =>
   testApp({
     deployments: [
@@ -32,7 +31,6 @@ const app = () =>
   });
 
 describe("a list opened on a node's route", () => {
-  /* the route would narrow the list to its node again on the way back */
   it("lets go of the node in the route when the sessions filters are cleared", async () => {
     router.navigate.mockClear();
     renderIn(app(), <SessionsScreen nodeDid="did:key:there" />);

@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+#[cfg(test)]
 use gents::config_client::GraphqlEndpoint;
 use gents::defra_query::{CollectionScope, DefraQueryParams};
 use serde_json::{json, Value};
@@ -6,6 +7,7 @@ use serde_json::{json, Value};
 use crate::cli::args::QueryArgs;
 use crate::print_json;
 
+#[cfg(test)]
 pub(crate) async fn run_defra_query(
     graphql: &GraphqlEndpoint,
     params: &DefraQueryParams,
@@ -47,7 +49,7 @@ pub(crate) async fn query(args: QueryArgs) -> Result<()> {
     let (access, _) =
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let (command, scope) = command_from_args(args)?;
-    let output = gents::defra_query::execute_command(&*access, &command, &scope).await?;
+    let output = gents::defra_query::execute_command(&access, &command, &scope).await?;
     print_json(&output)?;
     Ok(())
 }
@@ -134,11 +136,6 @@ mod tests {
         assert!(scope.ensure_allowed("OtherReport").is_err());
     }
 
-    /// `gents query` with no `--allow-collection` is the widest scope the CLI
-    /// offers, and it is the one an operator reaches for by default. A protected
-    /// collection must still be refused there, before any request leaves the
-    /// process — the endpoint below is never listening, so a refusal that named a
-    /// transport failure would not name the collection.
     fn protected_args(fields: Vec<String>) -> QueryArgs {
         QueryArgs {
             text: None,

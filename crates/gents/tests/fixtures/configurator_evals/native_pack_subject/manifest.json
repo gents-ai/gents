@@ -1,0 +1,30 @@
+{
+  "manifest_version": 1,
+  "name": "native_pack_subject",
+  "version": "0.1.0",
+  "description": "Engineer with native pack install and workspace authoring grants, shell disabled.",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "eval"
+  ],
+  "kind": "documents",
+  "assets": [
+    "README.md",
+    "agents/engineer/system_prompt.md",
+    "pack_config.json",
+    "artifacts/native_echo.pack",
+    "artifacts/native_authority.pack"
+  ],
+  "config": "pack_config.json",
+  "inference_slots": [
+    {
+      "name": "engineer",
+      "description": "Runs the Engineer.",
+      "agents": [
+        "engineer"
+      ]
+    }
+  ]
+}

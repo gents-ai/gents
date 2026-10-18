@@ -1,6 +1,3 @@
-//! Canonical committed-write owner for embedded and HTTP DefraDB access.
-
-use std::cell::Cell;
 use std::collections::HashMap;
 use std::future::Future;
 #[cfg(test)]
@@ -10,11 +7,12 @@ use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use defra_node::{EmbeddedNode, ExecuteRetryPolicy, QueryRequest};
+use defra_node::{EmbeddedNode, QueryRequest};
 use futures::future::BoxFuture;
 use identity::Did;
 use query::TransactionHandle;
 use serde_json::{json, Value};
+use tracing::{instrument::WithSubscriber, Instrument};
 
 use super::graphql;
 use super::retry;
@@ -31,133 +29,384 @@ enum TxnBackend<'a> {
         client: reqwest::Client,
     },
     Embedded {
-        node: &'a EmbeddedNode,
+        node: Arc<EmbeddedNode>,
         handle: TransactionHandle,
         identity: Option<Did>,
+        native_operations: Arc<NativeOperationTracker>,
     },
 }
 
 struct MutationWriteGate {
-    lock: Arc<tokio::sync::Mutex<()>>,
-    owner: StdMutex<Option<MutationWriteOwner>>,
+    permits: Arc<tokio::sync::Semaphore>,
+    owners: StdMutex<HashMap<u64, MutationWriteOwner>>,
     next_lease_id: AtomicU64,
+    pending_acquires: StdMutex<HashMap<u64, PendingWriteAcquire>>,
+    next_pending_acquire_id: AtomicU64,
+    store_claim: StdMutex<Option<Arc<StoreClaim>>>,
+}
+
+const MUTATION_WRITE_GATE_CAPACITY: usize = 64;
+
+struct StoreClaim {
+    node: Arc<EmbeddedNode>,
+    _lock: crate::home::StoreLock,
+}
+
+/// Embedded access plus a node-scoped store claim held across Gents-owned native operations.
+#[derive(Clone)]
+pub struct LocalConfigAccess {
+    node: Arc<EmbeddedNode>,
+    gate: Arc<MutationWriteGate>,
+}
+
+impl LocalConfigAccess {
+    pub(crate) fn new(node: Arc<EmbeddedNode>) -> Self {
+        let gate = mutation_write_gate(&node);
+        Self { node, gate }
+    }
+
+    pub(crate) fn claimed(node: Arc<EmbeddedNode>, lock: crate::home::StoreLock) -> Result<Self> {
+        let gate = mutation_write_gate(&node);
+        gate.attach_store_claim(Arc::clone(&node), lock)?;
+        Ok(Self { node, gate })
+    }
+
+    pub(crate) fn node(&self) -> &Arc<EmbeddedNode> {
+        &self.node
+    }
+
+    pub(crate) async fn run_owned<T, F, Fut>(&self, operation: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(Arc<EmbeddedNode>) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T>> + Send + 'static,
+    {
+        let node = Arc::clone(&self.node);
+        let gate = Arc::clone(&self.gate);
+        let dispatcher = tracing::dispatcher::get_default(Clone::clone);
+        let span = tracing::Span::current();
+        #[cfg(test)]
+        let local_operation_pause = LOCAL_OPERATION_PAUSE.try_with(Arc::clone).ok();
+        let (send, receive) = tokio::sync::oneshot::channel();
+        tokio::spawn(
+            async move {
+                #[cfg(test)]
+                if let Some(pause) = local_operation_pause.as_ref() {
+                    pause.reached.notify_one();
+                    pause.release.notified().await;
+                }
+                let result = operation(Arc::clone(&node)).await;
+                drop(node);
+                drop(gate);
+                #[cfg(test)]
+                if let Some(completed) = local_operation_pause
+                    .as_ref()
+                    .and_then(|pause| pause.completed.as_ref())
+                {
+                    completed.notify_one();
+                }
+                let _ = send.send(result);
+            }
+            .with_subscriber(dispatcher)
+            .instrument(span),
+        );
+        receive
+            .await
+            .context("owned embedded operation ended without a result")?
+    }
 }
 
 #[derive(Clone, Copy)]
 struct MutationWriteOwner {
-    lease_id: u64,
     operation: WriteOperation,
     acquired_at: Instant,
 }
 
+#[derive(Clone)]
+struct PendingWriteAcquire {
+    operation: WriteOperation,
+    task_id: Option<String>,
+    span_name: Option<&'static str>,
+    first_queued_at: Instant,
+    last_polled_at: Instant,
+}
+
+struct PendingWriteAcquireRegistration {
+    gate: Arc<MutationWriteGate>,
+    id: u64,
+    operation: WriteOperation,
+    registered: bool,
+}
+
+impl PendingWriteAcquireRegistration {
+    fn record_pending_poll(&mut self) {
+        let now = Instant::now();
+        let mut pending = self
+            .gate
+            .pending_acquires
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.registered = true;
+        pending
+            .entry(self.id)
+            .and_modify(|entry| entry.last_polled_at = now)
+            .or_insert_with(|| PendingWriteAcquire {
+                operation: self.operation,
+                task_id: tokio::task::try_id().map(|id| id.to_string()),
+                span_name: tracing::Span::current()
+                    .metadata()
+                    .map(|metadata| metadata.name()),
+                first_queued_at: now,
+                last_polled_at: now,
+            });
+    }
+}
+
+impl Drop for PendingWriteAcquireRegistration {
+    fn drop(&mut self) {
+        if self.registered {
+            self.gate
+                .pending_acquires
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(&self.id);
+        }
+    }
+}
+
+struct OldestPendingWriteAcquire {
+    count: usize,
+    operation: WriteOperation,
+    task_id: Option<String>,
+    span_name: Option<&'static str>,
+    wait_age: Duration,
+    last_poll_age: Duration,
+}
+
 struct MutationWriteGuard {
     gate: Arc<MutationWriteGate>,
-    _guard: tokio::sync::OwnedMutexGuard<()>,
+    _permit: tokio::sync::OwnedSemaphorePermit,
     lease_id: u64,
+}
+
+#[cfg(test)]
+pub(crate) struct MutationWriteGateFillers {
+    _guards: Vec<MutationWriteGuard>,
 }
 
 impl Drop for MutationWriteGuard {
     fn drop(&mut self) {
-        let mut owner = self
-            .gate
-            .owner
+        self.gate
+            .owners
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if owner
-            .as_ref()
-            .is_some_and(|owner| owner.lease_id == self.lease_id)
-        {
-            *owner = None;
-        }
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&self.lease_id);
     }
 }
 
 impl MutationWriteGate {
     fn new() -> Self {
         Self {
-            lock: Arc::new(tokio::sync::Mutex::new(())),
-            owner: StdMutex::new(None),
+            permits: Arc::new(tokio::sync::Semaphore::new(MUTATION_WRITE_GATE_CAPACITY)),
+            owners: StdMutex::new(HashMap::new()),
             next_lease_id: AtomicU64::new(1),
+            pending_acquires: StdMutex::new(HashMap::new()),
+            next_pending_acquire_id: AtomicU64::new(1),
+            store_claim: StdMutex::new(None),
         }
+    }
+
+    fn attach_store_claim(
+        &self,
+        node: Arc<EmbeddedNode>,
+        lock: crate::home::StoreLock,
+    ) -> Result<()> {
+        let mut claim = self
+            .store_claim
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        anyhow::ensure!(
+            claim.is_none(),
+            "embedded node already has a live store claim"
+        );
+        *claim = Some(Arc::new(StoreClaim { node, _lock: lock }));
+        Ok(())
+    }
+
+    fn store_claim(&self) -> Option<Arc<StoreClaim>> {
+        self.store_claim
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn oldest_pending_acquire(&self) -> Option<OldestPendingWriteAcquire> {
+        let now = Instant::now();
+        let pending = self
+            .pending_acquires
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let oldest = pending.values().min_by_key(|entry| entry.first_queued_at)?;
+        Some(OldestPendingWriteAcquire {
+            count: pending.len(),
+            operation: oldest.operation,
+            task_id: oldest.task_id.clone(),
+            span_name: oldest.span_name,
+            wait_age: now.saturating_duration_since(oldest.first_queued_at),
+            last_poll_age: now.saturating_duration_since(oldest.last_polled_at),
+        })
     }
 
     async fn acquire(self: &Arc<Self>, operation: WriteOperation) -> Result<MutationWriteGuard> {
         ensure_not_reentrant_embedded_write(operation)?;
+        let wait_started = Instant::now();
+        let acquire = Arc::clone(&self.permits).acquire_owned();
+        tokio::pin!(acquire);
+        let mut registration = None;
         #[cfg(test)]
-        let lock_future = {
-            let mut lock = Box::pin(Arc::clone(&self.lock).lock_owned());
-            let observation = SUCCESSFUL_MUTATION_FAULT
-                .try_with(|fault| fault.write_gate_observation.clone())
-                .ok()
-                .flatten();
-            std::future::poll_fn(move |cx| {
-                let polled = lock.as_mut().poll(cx);
+        let observation = SUCCESSFUL_MUTATION_FAULT
+            .try_with(|fault| fault.write_gate_observation.clone())
+            .ok()
+            .flatten();
+        let acquire_future = std::future::poll_fn(|cx| match acquire.as_mut().poll(cx) {
+            std::task::Poll::Pending => {
+                if registration.is_none() {
+                    let id = self.next_pending_acquire_id.fetch_add(1, Ordering::Relaxed);
+                    registration = Some(PendingWriteAcquireRegistration {
+                        gate: Arc::clone(self),
+                        id,
+                        operation,
+                        registered: false,
+                    });
+                }
+                registration
+                    .as_mut()
+                    .expect("pending acquisition is registered")
+                    .record_pending_poll();
+                #[cfg(test)]
                 if let Some(observation) = observation.as_ref() {
-                    match &polled {
-                        std::task::Poll::Pending => {
-                            if !observation.queued_fired.swap(true, Ordering::Relaxed) {
-                                observation.queued.notify_one();
-                            }
-                        }
-                        std::task::Poll::Ready(_) => {
-                            observation.acquired.store(true, Ordering::Release);
-                        }
+                    if !observation.queued_fired.swap(true, Ordering::Relaxed) {
+                        observation.queued.notify_one();
                     }
                 }
-                polled
-            })
-        };
-        #[cfg(not(test))]
-        let lock_future = Arc::clone(&self.lock).lock_owned();
+                std::task::Poll::Pending
+            }
+            std::task::Poll::Ready(permit) => {
+                registration.take();
+                #[cfg(test)]
+                if permit.is_ok() {
+                    if let Some(observation) = observation.as_ref() {
+                        observation.acquired.store(true, Ordering::Release);
+                    }
+                }
+                std::task::Poll::Ready(permit)
+            }
+        });
         let guard = match tokio::time::timeout(
             EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-            lock_future,
+            acquire_future,
         )
         .await
         {
-            Ok(guard) => guard,
+            Ok(Ok(permit)) => permit,
+            Ok(Err(error)) => {
+                return Err(anyhow::anyhow!("embedded write gate is closed: {error}"));
+            }
             Err(_) => {
-                let owner = *self
-                    .owner
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                registration.take();
+                let (active_owner_count, owner) = {
+                    let owners = self
+                        .owners
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    (
+                        owners.len(),
+                        owners
+                            .values()
+                            .copied()
+                            .min_by_key(|owner| owner.acquired_at),
+                    )
+                };
                 let (owner_operation, owner_held_ms) = owner.map_or(("unknown", 0), |owner| {
                     (
                         owner.operation.as_str(),
                         u64::try_from(owner.acquired_at.elapsed().as_millis()).unwrap_or(u64::MAX),
                     )
                 });
+                let pending = self.oldest_pending_acquire();
+                let (
+                    pending_count,
+                    oldest_wait_operation,
+                    oldest_wait_age_ms,
+                    oldest_wait_last_poll_age_ms,
+                    oldest_wait_task_id,
+                    oldest_wait_span,
+                ) = pending
+                    .as_ref()
+                    .map_or((0, "none", 0, 0, None, None), |pending| {
+                        (
+                            pending.count,
+                            pending.operation.as_str(),
+                            u64::try_from(pending.wait_age.as_millis()).unwrap_or(u64::MAX),
+                            u64::try_from(pending.last_poll_age.as_millis()).unwrap_or(u64::MAX),
+                            pending.task_id.as_deref(),
+                            pending.span_name,
+                        )
+                    });
+                let owner_status = if active_owner_count > 0 {
+                    "tracked_owners"
+                } else if pending_count > 0 {
+                    "no_tracked_owner; semaphore capacity may be reserved for a pending acquire"
+                } else {
+                    "no_tracked_owner_or_pending_acquire"
+                };
                 tracing::error!(
                     phase = "write-gate acquisition",
                     waiting_operation = operation.as_str(),
                     owner_operation,
                     owner_held_ms,
+                    active_owner_count,
+                    owner_status,
+                    pending_acquire_count = pending_count,
+                    oldest_wait_operation,
+                    oldest_wait_age_ms,
+                    oldest_wait_last_poll_age_ms,
+                    oldest_wait_task_id = oldest_wait_task_id.unwrap_or("unknown"),
+                    oldest_wait_span = oldest_wait_span.unwrap_or("unknown"),
                     timeout_ms =
                         u64::try_from(EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT.as_millis())
                             .unwrap_or(u64::MAX),
-                    "embedded DefraDB canonical write gate acquisition timed out"
+                    "embedded DefraDB canonical write admission timed out"
                 );
                 return Err(retry::transaction_storage_failure(anyhow::anyhow!(
-                    "embedded transaction write-gate acquisition for {} timed out after {:?}; current owner {} held for {}ms",
+                    "embedded transaction write admission for {} timed out after {:?}; {} active owners, longest-held owner {} held for {}ms",
                     operation.as_str(),
                     EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+                    active_owner_count,
                     owner_operation,
                     owner_held_ms,
                 )));
             }
         };
+        record_slow_native_phase(
+            Some(operation.as_str()),
+            "gate_wait",
+            wait_started.elapsed(),
+        );
         let lease_id = self.next_lease_id.fetch_add(1, Ordering::Relaxed);
-        *self
-            .owner
+        self.owners
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(MutationWriteOwner {
-            lease_id,
-            operation,
-            acquired_at: Instant::now(),
-        });
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(
+                lease_id,
+                MutationWriteOwner {
+                    operation,
+                    acquired_at: Instant::now(),
+                },
+            );
         Ok(MutationWriteGuard {
             gate: Arc::clone(self),
-            _guard: guard,
+            _permit: guard,
             lease_id,
         })
     }
@@ -167,7 +416,181 @@ tokio::task_local! {
     static ACTIVE_EMBEDDED_TRANSACTION: &'static str;
 }
 
-/// Nested `with_*` scopes shadow the outer fault state rather than combining it.
+#[derive(Default)]
+struct NativeOperationState {
+    in_flight: usize,
+    abandoned: bool,
+}
+
+#[derive(Default)]
+struct NativeOperationTracker {
+    state: StdMutex<NativeOperationState>,
+    idle: tokio::sync::Notify,
+}
+
+impl NativeOperationTracker {
+    fn start(self: &Arc<Self>) -> Result<NativeOperationPermit> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.abandoned {
+            return Err(native_operation_abandoned(
+                "embedded transaction is poisoned by an abandoned native operation",
+            ));
+        }
+        state.in_flight += 1;
+        drop(state);
+        Ok(NativeOperationPermit(Arc::clone(self)))
+    }
+
+    fn abandon(&self) {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .abandoned = true;
+    }
+
+    fn is_abandoned(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .abandoned
+    }
+
+    async fn wait_idle(&self) {
+        loop {
+            let notified = self.idle.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let idle = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .in_flight
+                == 0;
+            if idle {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+
+struct NativeOperationPermit(Arc<NativeOperationTracker>);
+
+impl Drop for NativeOperationPermit {
+    fn drop(&mut self) {
+        let became_idle = {
+            let mut state = self
+                .0
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.in_flight -= 1;
+            state.in_flight == 0
+        };
+        if became_idle {
+            self.0.idle.notify_waiters();
+        }
+    }
+}
+
+struct CallerOperationGuard {
+    tracker: Arc<NativeOperationTracker>,
+    completed: bool,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("native operation remains owned after caller abandonment")]
+struct NativeOperationAbandoned;
+
+fn native_operation_abandoned(message: impl Into<String>) -> anyhow::Error {
+    retry::transaction_storage_failure(
+        anyhow::Error::new(NativeOperationAbandoned).context(message.into()),
+    )
+}
+
+fn is_native_operation_abandoned(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.downcast_ref::<NativeOperationAbandoned>().is_some())
+}
+
+impl CallerOperationGuard {
+    fn new(tracker: Arc<NativeOperationTracker>) -> Self {
+        Self {
+            tracker,
+            completed: false,
+        }
+    }
+
+    fn complete(&mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for CallerOperationGuard {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.tracker.abandon();
+        }
+    }
+}
+
+async fn execute_owned_native(
+    node: Arc<EmbeddedNode>,
+    request: QueryRequest,
+    handle: TransactionHandle,
+    tracker: Arc<NativeOperationTracker>,
+    operation: Option<&'static str>,
+) -> Result<defra_node::QueryResponse> {
+    let permit = tracker.start()?;
+    let mut caller = CallerOperationGuard::new(Arc::clone(&tracker));
+    let dispatcher = tracing::dispatcher::get_default(Clone::clone);
+    let span = tracing::Span::current();
+    let (send, receive) = tokio::sync::oneshot::channel();
+    #[cfg(test)]
+    let native_pause = SUCCESSFUL_MUTATION_FAULT
+        .try_with(|fault| fault.native_pause.clone())
+        .ok()
+        .flatten();
+    tokio::spawn(
+        async move {
+            #[cfg(test)]
+            if let Some((reached, release)) = native_pause {
+                reached.notify_one();
+                release.notified().await;
+            }
+            let result = match operation {
+                Some(operation) => {
+                    ACTIVE_EMBEDDED_TRANSACTION
+                        .scope(operation, node.execute_request_in_txn(request, &handle))
+                        .await
+                }
+                None => node.execute_request_in_txn(request, &handle).await,
+            };
+            drop(permit);
+            let _ = send.send(result);
+        }
+        .with_subscriber(dispatcher)
+        .instrument(span),
+    );
+    let result = tokio::time::timeout(EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT, receive)
+        .await
+        .map_err(|_| {
+            native_operation_abandoned(format!(
+                "embedded execute caller timed out after {:?}; native operation remains owned",
+                EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT
+            ))
+        })?
+        .map_err(|_| {
+            native_operation_abandoned("native signed execution task ended without a response")
+        })?;
+    caller.complete();
+    Ok(result)
+}
+
 #[cfg(test)]
 struct SuccessfulMutationFault {
     fail_after: Option<usize>,
@@ -179,6 +602,22 @@ struct SuccessfulMutationFault {
     write_gate_observation: Option<Arc<WriteGateObservation>>,
     read_storage_failure: Option<&'static str>,
     read_pause: Option<(&'static str, Arc<tokio::sync::Notify>)>,
+    native_pause: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
+    fail_rollback: bool,
+    retry_backoff_reached: Option<Arc<tokio::sync::Notify>>,
+    cleanup_scheduled: Option<Arc<AtomicBool>>,
+}
+
+#[cfg(test)]
+struct LocalOperationPause {
+    reached: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+    completed: Option<Arc<tokio::sync::Notify>>,
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    static LOCAL_OPERATION_PAUSE: Arc<LocalOperationPause>;
 }
 
 #[cfg(test)]
@@ -220,12 +659,31 @@ async fn after_successful_mutation_for_test() -> Result<()> {
     Ok(())
 }
 
-// External storage premise, test-only: an embedded commit may be durable while
-// its receipt never reaches the caller. This reuses the successful-mutation
-// fault task-local (one test-only fault owner) so a scoped future cannot carry
-// two competing fault states across awaits. The receipt-loss arm consumes
-// itself once; only the transaction owner's retry re-enters against the
-// already-committed state, and no rollback is simulated.
+#[cfg(test)]
+fn fail_rollback_for_test() -> bool {
+    SUCCESSFUL_MUTATION_FAULT
+        .try_with(|fault| fault.fail_rollback)
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+fn retry_backoff_reached_for_test() {
+    let _ = SUCCESSFUL_MUTATION_FAULT.try_with(|fault| {
+        if let Some(reached) = fault.retry_backoff_reached.as_ref() {
+            reached.notify_one();
+        }
+    });
+}
+
+#[cfg(test)]
+fn mark_cleanup_scheduled_for_test() {
+    let _ = SUCCESSFUL_MUTATION_FAULT.try_with(|fault| {
+        if let Some(scheduled) = fault.cleanup_scheduled.as_ref() {
+            scheduled.store(true, Ordering::Release);
+        }
+    });
+}
+
 #[cfg(test)]
 fn post_commit_receipt_loss_for_test(operation: Option<&str>) -> bool {
     SUCCESSFUL_MUTATION_FAULT
@@ -237,15 +695,15 @@ fn post_commit_receipt_loss_for_test(operation: Option<&str>) -> bool {
             {
                 return false;
             }
-            // swap leaves the fired flag sticky; only the first call observes
-            // the previous false and actually injects the lost receipt.
             !fault.receipt_fired.swap(true, Ordering::Relaxed)
         })
         .unwrap_or(false)
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("embedded canonical write {waiting_operation} is nested inside transaction {owner_operation}; use the supplied transaction owner")]
+#[error(
+    "embedded canonical write {waiting_operation} is nested inside transaction {owner_operation}; use the supplied transaction owner"
+)]
 pub(crate) struct ReentrantEmbeddedWrite {
     waiting_operation: &'static str,
     owner_operation: &'static str,
@@ -267,9 +725,8 @@ fn ensure_not_reentrant_embedded_write(operation: WriteOperation) -> Result<()> 
     Ok(())
 }
 
-// Embedded DefraDB operations are local and normally complete in milliseconds.
-// Bound every phase that can retain the process-wide mutation gate so one
-// wedged transaction cannot stop response progress, recovery, and hydration.
+// Bound every phase retaining the process-wide mutation gate so one wedged
+// transaction cannot stop response progress, recovery, and hydration.
 pub(crate) const EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT: Duration = Duration::from_secs(60);
 const EMBEDDED_TRANSACTION_CALLBACK_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT: Duration = Duration::from_secs(15);
@@ -296,12 +753,14 @@ where
     tokio::time::timeout(EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT, cleanup).await
 }
 
-fn mutation_write_gate(node: &EmbeddedNode) -> Arc<MutationWriteGate> {
+fn mutation_write_gates() -> &'static StdMutex<HashMap<usize, Weak<MutationWriteGate>>> {
     static GATES: OnceLock<StdMutex<HashMap<usize, Weak<MutationWriteGate>>>> = OnceLock::new();
+    GATES.get_or_init(|| StdMutex::new(HashMap::new()))
+}
 
+fn mutation_write_gate(node: &EmbeddedNode) -> Arc<MutationWriteGate> {
     let node_key = node as *const EmbeddedNode as usize;
-    let mut gates = GATES
-        .get_or_init(|| StdMutex::new(HashMap::new()))
+    let mut gates = mutation_write_gates()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(gate) = gates.get(&node_key).and_then(Weak::upgrade) {
@@ -314,22 +773,42 @@ fn mutation_write_gate(node: &EmbeddedNode) -> Arc<MutationWriteGate> {
     gate
 }
 
+fn existing_mutation_write_gate(node: &EmbeddedNode) -> Option<Arc<MutationWriteGate>> {
+    let node_key = node as *const EmbeddedNode as usize;
+    mutation_write_gates()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&node_key)
+        .and_then(Weak::upgrade)
+}
+
+// Cleanup owners may drop on threads without a Tokio context, so each retains
+// the runtime that created it.
 enum RollbackOnDrop {
     Http {
+        runtime: tokio::runtime::Handle,
         endpoint: GraphqlEndpoint,
         id: String,
         client: reqwest::Client,
         armed: bool,
     },
     Embedded {
-        runner: Arc<dyn query::QueryExecutor>,
-        /// DefraDB binds a transaction to the effective identity that began it,
-        /// so the detached rollback runs under the same node identity.
-        node_identity: Option<String>,
-        handle: Option<TransactionHandle>,
+        runtime: tokio::runtime::Handle,
+        node: Arc<EmbeddedNode>,
+        native_gate: Arc<MutationWriteGate>,
+        native_owner: StdMutex<Option<BoxFuture<'static, Result<()>>>>,
         write_guard: Option<MutationWriteGuard>,
+        #[cfg(test)]
+        drop_cleanup_pause: Option<Arc<RollbackDropCleanupPause>>,
+        native_operations: Arc<NativeOperationTracker>,
         armed: bool,
     },
+}
+
+#[cfg(test)]
+pub(crate) struct RollbackDropCleanupPause {
+    pub(crate) started: Arc<tokio::sync::Notify>,
+    pub(crate) release: Arc<tokio::sync::Notify>,
 }
 
 impl RollbackOnDrop {
@@ -338,22 +817,13 @@ impl RollbackOnDrop {
             Self::Http { armed, .. } | Self::Embedded { armed, .. } => *armed = false,
         }
     }
-
-    fn set_embedded_handle(&mut self, transaction_handle: TransactionHandle) {
-        let Self::Embedded { handle, .. } = self else {
-            unreachable!("only embedded rollback owners receive native handles")
-        };
-        *handle = Some(transaction_handle);
-    }
 }
 
 impl Drop for RollbackOnDrop {
     fn drop(&mut self) {
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
         match self {
             Self::Http {
+                runtime,
                 endpoint,
                 id,
                 client,
@@ -365,6 +835,7 @@ impl Drop for RollbackOnDrop {
                 let endpoint = endpoint.clone();
                 let id = id.clone();
                 let client = client.clone();
+                let runtime = runtime.clone();
                 runtime.spawn(async move {
                     if let Err(error) = graphql::txn_discard(&endpoint, &id, &client).await {
                         tracing::debug!(%error, "discarding cancelled HTTP transaction");
@@ -372,53 +843,91 @@ impl Drop for RollbackOnDrop {
                 });
             }
             Self::Embedded {
-                runner,
-                node_identity,
-                handle,
+                runtime,
+                node,
+                native_gate,
+                native_owner,
                 write_guard,
+                #[cfg(test)]
+                drop_cleanup_pause,
+                native_operations,
                 armed,
             } => {
+                drop(
+                    native_owner
+                        .get_mut()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .take(),
+                );
                 if !*armed {
                     return;
                 }
-                let Some(handle) = handle.take() else {
+                #[cfg(test)]
+                let pause_cleanup = drop_cleanup_pause.is_some();
+                #[cfg(not(test))]
+                let pause_cleanup = false;
+                let in_flight = native_operations
+                    .state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .in_flight;
+                if in_flight == 0 && !pause_cleanup {
                     return;
-                };
-                let runner = runner.clone();
-                let node_identity = node_identity.clone();
+                }
+                let node = Arc::clone(node);
+                let runtime = runtime.clone();
+                let native_gate = Arc::clone(native_gate);
+                let native_operations = Arc::clone(native_operations);
                 let write_guard = write_guard.take();
+                #[cfg(test)]
+                let drop_cleanup_pause = drop_cleanup_pause.take();
+                let dispatcher = tracing::dispatcher::get_default(Clone::clone);
+                let span = tracing::Span::current();
                 runtime.spawn(async move {
+                    let _native_gate = native_gate;
+                    native_operations.wait_idle().await;
+                    let cleanup = async move {
+                        #[cfg(test)]
+                        if let Some(pause) = drop_cleanup_pause {
+                            pause.started.notify_one();
+                            pause.release.notified().await;
+                        }
+                        drop(node);
+                        Ok::<(), anyhow::Error>(())
+                    };
                     match cleanup_while_holding_write_gate(
                         write_guard,
-                        defra_core::current_identity::with_scoped_identity(
-                            node_identity,
-                            runner.rollback_txn(&handle),
-                        ),
+                        cleanup,
                     )
                     .await {
                         Ok(Ok(())) => {}
                         Ok(Err(error)) => {
-                            tracing::debug!(%error, "discarding cancelled embedded transaction");
+                            tracing::debug!(%error, "releasing cancelled embedded transaction ownership");
                         }
                         Err(_) => {
                             tracing::warn!(
                                 timeout_ms = EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT.as_millis(),
-                                "cancelled embedded transaction rollback timed out; releasing mutation gate"
+                                "cancelled embedded transaction gate-release pause timed out"
                             );
                         }
                     }
-                });
+                }
+                .with_subscriber(dispatcher)
+                .instrument(span));
+                #[cfg(test)]
+                mark_cleanup_scheduled_for_test();
             }
         }
     }
 }
 
 async fn begin_embedded_owned<F, Fut>(
-    runner: Arc<dyn query::QueryExecutor>,
-    node_identity: Option<String>,
+    node: Arc<EmbeddedNode>,
+    native_gate: Arc<MutationWriteGate>,
     read_only: bool,
     operation: WriteOperation,
     write_guard: Option<MutationWriteGuard>,
+    native_operations: Arc<NativeOperationTracker>,
     cancellation_rollback_scheduled: Arc<AtomicBool>,
     after_begin: F,
 ) -> Result<(RollbackOnDrop, TransactionHandle)>
@@ -426,34 +935,47 @@ where
     F: FnOnce(TransactionHandle) -> Fut,
     Fut: Future<Output = ()>,
 {
-    // Construct the cleanup owner before begin. The caller deliberately runs
-    // this future in a detached task: if its JoinHandle is cancelled after
-    // DefraDB registers the transaction, dropping the task output still owns
-    // and rolls back the handle before releasing the write gate.
-    let mut rollback = RollbackOnDrop::Embedded {
-        runner: Arc::clone(&runner),
-        node_identity: node_identity.clone(),
-        handle: None,
-        write_guard,
-        armed: true,
-    };
+    let (registered, registration) = tokio::sync::oneshot::channel();
+    let owner_node = Arc::clone(&node);
+    let mut native_owner: BoxFuture<'static, Result<()>> = Box::pin(async move {
+        let transaction = owner_node
+            .begin_transaction_guard(read_only)
+            .await
+            .map_err(|error| {
+                retry::transaction_storage_failure(anyhow::anyhow!("begin_txn: {error}"))
+            })?;
+        let _ = registered.send(transaction.handle().clone());
+        std::future::pending::<()>().await;
+        drop(transaction);
+        Ok(())
+    });
     let started = Instant::now();
-    let result = tokio::time::timeout(
-        EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-        defra_core::current_identity::with_scoped_identity(
-            node_identity,
-            runner.begin_txn(read_only),
-        ),
-    )
+    let result = tokio::time::timeout(EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT, async {
+        tokio::select! {
+            result = &mut native_owner => {
+                result?;
+                anyhow::bail!("native transaction owner ended before registration")
+            }
+            result = registration => result.context("native transaction registration"),
+        }
+    })
     .await;
     record_slow_native_phase(Some(operation.as_str()), "begin", started.elapsed());
-    let handle = result
-        .map_err(|_| embedded_phase_timeout("begin", EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT))?
-        .map_err(|error| {
-            retry::transaction_storage_failure(anyhow::anyhow!("begin_txn: {error}"))
-        })?;
-    rollback.set_embedded_handle(handle.clone());
-    cancellation_rollback_scheduled.store(true, Ordering::Release);
+    let handle = result.map_err(|_| {
+        embedded_phase_timeout("begin", EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT)
+    })??;
+    let rollback = RollbackOnDrop::Embedded {
+        runtime: tokio::runtime::Handle::current(),
+        node: Arc::clone(&node),
+        native_gate,
+        native_owner: StdMutex::new(Some(native_owner)),
+        write_guard,
+        #[cfg(test)]
+        drop_cleanup_pause: None,
+        native_operations,
+        armed: true,
+    };
+    let _ = cancellation_rollback_scheduled;
     after_begin(handle.clone()).await;
     Ok((rollback, handle))
 }
@@ -461,14 +983,13 @@ where
 async fn begin_http_owned(
     endpoint: GraphqlEndpoint,
     cancellation_rollback_scheduled: Arc<AtomicBool>,
+    read_only: bool,
 ) -> Result<(reqwest::Client, String, RollbackOnDrop)> {
-    // Keep the response owner alive if the caller is cancelled while DefraDB
-    // is returning the newly registered ID. Once the ID arrives, dropping the
-    // detached task output schedules DELETE through `RollbackOnDrop`.
-    let (client, id) = graphql::txn_begin(&endpoint)
+    let (client, id) = graphql::txn_begin(&endpoint, read_only)
         .await
         .map_err(retry::transaction_storage_failure)?;
     let rollback = RollbackOnDrop::Http {
+        runtime: tokio::runtime::Handle::current(),
         endpoint: endpoint.clone(),
         id: id.clone(),
         client: client.clone(),
@@ -489,14 +1010,10 @@ struct CommitFailure {
     cleanup: CommitCleanup,
 }
 
-/// Bounded replay policy for transactions whose callbacks are safe to repeat
-/// because every created document has a stable identity and every update is
-/// guarded by durable state.
+/// Replay policy for idempotent transactions (stable identities, durable-state-guarded updates).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IdempotentTransactionRetry {
-    /// One initial attempt plus three retries.
     Standard,
-    /// One initial attempt plus four retries.
     FiveAttempts,
 }
 
@@ -509,8 +1026,7 @@ impl IdempotentTransactionRetry {
     }
 }
 
-/// Result of a transaction whose caller treats a competing commit as a new
-/// observation to reload rather than an operation failure.
+/// A competing commit delivered a new observation to reload rather than a failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TransactionOutcome<T> {
     Committed(T),
@@ -557,20 +1073,9 @@ impl TransactionMode {
     }
 }
 
-/// An open explicit transaction. Callers receive this only inside
-/// [`ConfigAccess::transact`] callbacks once migrations are complete.
-///
-/// The raw begin/commit/discard transport lives in the crate-private
-/// `graphql` submodule and is not nameable from outside `gents`; external
-/// callers must go through the owned [`ConfigAccess::write`] and
-/// [`ConfigAccess::transact`] entry points:
-///
-/// ```compile_fail
-/// use gents::config_client::graphql::txn_begin;
-/// // The `graphql` transport module is private to `gents`, so this import
-/// // fails with E0603 and raw transactions cannot be driven directly.
-/// let _ = txn_begin("http://127.0.0.1:1/api/v0/graphql");
-/// ```
+/// An open explicit transaction, handed to [`ConfigAccess::transact_write`] callbacks.
+/// Raw begin/commit/discard transport lives in the crate-private `graphql`
+/// submodule; external callers must use the owned entry points.
 pub struct ConfigApplyTxn<'a> {
     backend: TxnBackend<'a>,
     rollback_on_drop: Option<RollbackOnDrop>,
@@ -580,11 +1085,83 @@ pub struct ConfigApplyTxn<'a> {
 
 enum EmbeddedTransactionPurpose {
     Mutation,
-    ExecutionRenewal,
+    ExecutionRenewal(Arc<NativeOperationTracker>),
     ReadOnly,
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EmbeddedFinalizationBoundary {
+    BeforeCommit,
+    AfterCommit,
+    BeforeRollback,
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    static EMBEDDED_FINALIZATION_PAUSE: (
+        EmbeddedFinalizationBoundary,
+        Arc<tokio::sync::Notify>,
+    );
+}
+
+#[cfg(test)]
+async fn pause_embedded_finalization_for_test(boundary: EmbeddedFinalizationBoundary) {
+    let reached = EMBEDDED_FINALIZATION_PAUSE
+        .try_with(|(selected, reached)| (*selected == boundary).then(|| Arc::clone(reached)))
+        .ok()
+        .flatten();
+    if let Some(reached) = reached {
+        reached.notify_one();
+        std::future::pending::<()>().await;
+    }
+}
+
 impl<'a> ConfigApplyTxn<'a> {
+    #[cfg(test)]
+    pub(crate) async fn with_owned_local_operation_pause<F: Future>(
+        reached: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        future: F,
+    ) -> F::Output {
+        LOCAL_OPERATION_PAUSE
+            .scope(
+                Arc::new(LocalOperationPause {
+                    reached,
+                    release,
+                    completed: None,
+                }),
+                future,
+            )
+            .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn with_owned_local_operation_completion<F: Future>(
+        reached: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        completed: Arc<tokio::sync::Notify>,
+        future: F,
+    ) -> F::Output {
+        LOCAL_OPERATION_PAUSE
+            .scope(
+                Arc::new(LocalOperationPause {
+                    reached,
+                    release,
+                    completed: Some(completed),
+                }),
+                future,
+            )
+            .await
+    }
+
+    fn embedded_poisoned(&self) -> bool {
+        matches!(
+            &self.backend,
+            TxnBackend::Embedded { native_operations, .. } if native_operations.is_abandoned()
+        )
+    }
+
     #[cfg(test)]
     pub(crate) async fn with_successful_mutation_failure_at<F: Future>(
         fail_after: Option<usize>,
@@ -601,6 +1178,10 @@ impl<'a> ConfigApplyTxn<'a> {
             write_gate_observation: None,
             read_storage_failure: None,
             read_pause: None,
+            native_pause: None,
+            fail_rollback: false,
+            retry_backoff_reached: None,
+            cleanup_scheduled: None,
         });
         let output = SUCCESSFUL_MUTATION_FAULT
             .scope(Arc::clone(&fault), future)
@@ -608,11 +1189,6 @@ impl<'a> ConfigApplyTxn<'a> {
         (output, fault.count.load(Ordering::Relaxed))
     }
 
-    /// Runs `attempt` with a failure injected after each successful mutation in
-    /// turn until an attempt commits without reaching the fault. Every faulted
-    /// attempt must fail with exactly that injection and leave `observe`
-    /// unchanged; the committing attempt must change it. Returns the committed
-    /// value and its mutation count.
     #[cfg(test)]
     pub(crate) async fn assert_every_mutation_rolls_back<T, E, S, A, AF, O, OF>(
         mut attempt: A,
@@ -670,8 +1246,6 @@ impl<'a> ConfigApplyTxn<'a> {
         Self::with_post_commit_receipt_loss_for_operation(None, future).await
     }
 
-    /// Target a commit boundary without consuming the fault on earlier writes
-    /// (for example, publication before dispatch) in the same task.
     #[cfg(test)]
     pub(crate) async fn with_post_commit_receipt_loss_for_operation<F: Future>(
         operation: Option<&'static str>,
@@ -687,6 +1261,10 @@ impl<'a> ConfigApplyTxn<'a> {
             write_gate_observation: None,
             read_storage_failure: None,
             read_pause: None,
+            native_pause: None,
+            fail_rollback: false,
+            retry_backoff_reached: None,
+            cleanup_scheduled: None,
         });
         let output = SUCCESSFUL_MUTATION_FAULT
             .scope(Arc::clone(&fault), future)
@@ -694,8 +1272,6 @@ impl<'a> ConfigApplyTxn<'a> {
         (output, fault.receipt_fired.load(Ordering::Relaxed))
     }
 
-    /// Pause once after the selected successful mutation, while its transaction
-    /// still owns the write gate; the test supplies both synchronization points.
     #[cfg(test)]
     pub(crate) async fn with_successful_mutation_pause_at<F: Future>(
         after: usize,
@@ -719,6 +1295,10 @@ impl<'a> ConfigApplyTxn<'a> {
             write_gate_observation: None,
             read_storage_failure: None,
             read_pause: None,
+            native_pause: None,
+            fail_rollback: false,
+            retry_backoff_reached: None,
+            cleanup_scheduled: None,
         });
         let output = SUCCESSFUL_MUTATION_FAULT
             .scope(Arc::clone(&fault), future)
@@ -734,8 +1314,6 @@ impl<'a> ConfigApplyTxn<'a> {
         )
     }
 
-    /// Observe the actual embedded write-gate lock poll without changing its
-    /// acquisition path. `queued` signals Pending once; `acquired` records Ready.
     #[cfg(test)]
     pub(crate) async fn with_write_gate_observation<F: Future>(
         queued: Arc<tokio::sync::Notify>,
@@ -756,12 +1334,38 @@ impl<'a> ConfigApplyTxn<'a> {
             })),
             read_storage_failure: None,
             read_pause: None,
+            native_pause: None,
+            fail_rollback: false,
+            retry_backoff_reached: None,
+            cleanup_scheduled: None,
         });
         SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
     }
 
-    /// Fail every transaction read whose document contains `marker` as a
-    /// storage failure classified by this owner.
+    #[cfg(test)]
+    pub(crate) async fn fill_mutation_write_gate_for_test(
+        node: &EmbeddedNode,
+    ) -> MutationWriteGateFillers {
+        let gate = mutation_write_gate(node);
+        let held = gate
+            .owners
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len();
+        let mut fillers = Vec::with_capacity(MUTATION_WRITE_GATE_CAPACITY.saturating_sub(held));
+        for _ in held..MUTATION_WRITE_GATE_CAPACITY {
+            fillers.push(
+                gate.acquire(
+                    WriteOperation::new("test.write_gate_capacity_filler")
+                        .expect("static write operation"),
+                )
+                .await
+                .expect("fill the remaining write admission permits"),
+            );
+        }
+        MutationWriteGateFillers { _guards: fillers }
+    }
+
     #[cfg(test)]
     pub(crate) async fn with_read_storage_failure<F: Future>(
         marker: &'static str,
@@ -777,12 +1381,14 @@ impl<'a> ConfigApplyTxn<'a> {
             write_gate_observation: None,
             read_storage_failure: Some(marker),
             read_pause: None,
+            native_pause: None,
+            fail_rollback: false,
+            retry_backoff_reached: None,
+            cleanup_scheduled: None,
         });
         SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
     }
 
-    /// Park every auto-commit read whose document contains
-    /// `marker`, after notifying `reached`; only dropping the reader ends it.
     #[cfg(test)]
     pub(crate) async fn with_read_pause<F: Future>(
         marker: &'static str,
@@ -799,43 +1405,101 @@ impl<'a> ConfigApplyTxn<'a> {
             write_gate_observation: None,
             read_storage_failure: None,
             read_pause: Some((marker, reached)),
+            native_pause: None,
+            fail_rollback: false,
+            retry_backoff_reached: None,
+            cleanup_scheduled: None,
         });
         SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
     }
 
-    async fn begin_local_owned(
-        node: &'a EmbeddedNode,
+    #[cfg(test)]
+    pub(crate) async fn with_native_operation_pause<F: Future>(
+        reached: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        future: F,
+    ) -> F::Output {
+        let fault = Arc::new(SuccessfulMutationFault {
+            fail_after: None,
+            count: AtomicUsize::new(0),
+            lose_receipt: false,
+            receipt_operation: None,
+            receipt_fired: AtomicBool::new(false),
+            pause: None,
+            write_gate_observation: None,
+            read_storage_failure: None,
+            read_pause: None,
+            native_pause: Some((reached, release)),
+            fail_rollback: false,
+            retry_backoff_reached: None,
+            cleanup_scheduled: None,
+        });
+        SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn with_rollback_failure_retry_boundary<F: Future>(
+        reached: Arc<tokio::sync::Notify>,
+        cleanup_scheduled: Arc<AtomicBool>,
+        future: F,
+    ) -> F::Output {
+        let fault = Arc::new(SuccessfulMutationFault {
+            fail_after: None,
+            count: AtomicUsize::new(0),
+            lose_receipt: false,
+            receipt_operation: None,
+            receipt_fired: AtomicBool::new(false),
+            pause: None,
+            write_gate_observation: None,
+            read_storage_failure: None,
+            read_pause: None,
+            native_pause: None,
+            fail_rollback: true,
+            retry_backoff_reached: Some(reached),
+            cleanup_scheduled: Some(cleanup_scheduled),
+        });
+        SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
+    }
+
+    async fn begin_local_owned<'txn>(
+        node: &Arc<EmbeddedNode>,
         identity: Option<Did>,
         operation: WriteOperation,
         cancellation_rollback_scheduled: Arc<AtomicBool>,
         purpose: EmbeddedTransactionPurpose,
-    ) -> Result<Self> {
-        let read_only = matches!(purpose, EmbeddedTransactionPurpose::ReadOnly);
-        let write_guard = match purpose {
+    ) -> Result<ConfigApplyTxn<'txn>> {
+        let read_only = matches!(&purpose, EmbeddedTransactionPurpose::ReadOnly);
+        let native_gate = mutation_write_gate(node);
+        let write_guard = match &purpose {
             EmbeddedTransactionPurpose::Mutation => {
-                Some(mutation_write_gate(node).acquire(operation).await?)
+                Some(Arc::clone(&native_gate).acquire(operation).await?)
             }
-            EmbeddedTransactionPurpose::ExecutionRenewal | EmbeddedTransactionPurpose::ReadOnly => {
-                None
+            EmbeddedTransactionPurpose::ExecutionRenewal(_)
+            | EmbeddedTransactionPurpose::ReadOnly => None,
+        };
+        let native_operations = match purpose {
+            EmbeddedTransactionPurpose::ExecutionRenewal(native_operations) => native_operations,
+            EmbeddedTransactionPurpose::Mutation | EmbeddedTransactionPurpose::ReadOnly => {
+                Arc::new(NativeOperationTracker::default())
             }
         };
-        let runner = node.runner().clone();
-        let (rollback_on_drop, handle) = tokio::spawn(begin_embedded_owned(
-            runner,
-            node.node_identity_did().map(str::to_owned),
+        let (rollback_on_drop, handle) = begin_embedded_owned(
+            Arc::clone(node),
+            native_gate,
             read_only,
             operation,
             write_guard,
+            Arc::clone(&native_operations),
             cancellation_rollback_scheduled,
             |_| std::future::ready(()),
-        ))
-        .await
-        .context("begin embedded transaction task")??;
-        Ok(Self {
+        )
+        .await?;
+        Ok(ConfigApplyTxn {
             backend: TxnBackend::Embedded {
-                node,
+                node: Arc::clone(node),
                 handle: handle.clone(),
                 identity,
+                native_operations,
             },
             rollback_on_drop: Some(rollback_on_drop),
             affected_documents: AtomicU64::new(0),
@@ -844,19 +1508,26 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) async fn begin_execution_renewal_for_test(node: &'a EmbeddedNode) -> Result<Self> {
+    pub(crate) async fn begin_execution_renewal_for_test(
+        node: &Arc<EmbeddedNode>,
+    ) -> Result<ConfigApplyTxn<'static>> {
         Self::begin_local_owned(
             node,
             None,
             WriteOperation::new("test.execution_renewal")?,
             Arc::new(AtomicBool::new(false)),
-            EmbeddedTransactionPurpose::ExecutionRenewal,
+            EmbeddedTransactionPurpose::ExecutionRenewal(Arc::new(
+                NativeOperationTracker::default(),
+            )),
         )
         .await
     }
 
     #[cfg(test)]
-    pub(crate) async fn begin_local(node: &'a EmbeddedNode, identity: Option<Did>) -> Result<Self> {
+    pub(crate) async fn begin_local(
+        node: &Arc<EmbeddedNode>,
+        identity: Option<Did>,
+    ) -> Result<ConfigApplyTxn<'static>> {
         Self::begin_local_owned(
             node,
             identity,
@@ -867,13 +1538,30 @@ impl<'a> ConfigApplyTxn<'a> {
         .await
     }
 
+    #[cfg(test)]
+    pub(crate) fn pause_drop_rollback_for_test(&mut self, pause: Arc<RollbackDropCleanupPause>) {
+        let rollback = self
+            .rollback_on_drop
+            .as_mut()
+            .expect("new transaction owns its rollback guard");
+        let RollbackOnDrop::Embedded {
+            drop_cleanup_pause, ..
+        } = rollback
+        else {
+            panic!("test cleanup pause requires an embedded transaction");
+        };
+        *drop_cleanup_pause = Some(pause);
+    }
+
     async fn begin_http(
         endpoint: &'a GraphqlEndpoint,
         cancellation_rollback_scheduled: Arc<AtomicBool>,
+        read_only: bool,
     ) -> Result<Self> {
         let (client, id, rollback_on_drop) = tokio::spawn(begin_http_owned(
             endpoint.clone(),
             cancellation_rollback_scheduled,
+            read_only,
         ))
         .await
         .context("begin HTTP transaction task")??;
@@ -890,21 +1578,16 @@ impl<'a> ConfigApplyTxn<'a> {
         Ok(txn)
     }
 
-    /// Execute exactly once inside this snapshot. Conflict replay belongs to
-    /// the outer `transact` owner and always begins a fresh transaction.
+    /// Execute exactly once inside this snapshot; conflict replay is the outer `transact` owner's job.
     pub async fn execute(&self, document: &str) -> Result<Value> {
         self.execute_with_variables(document, &json!({})).await
     }
 
-    /// Execute in this same transaction with typed GraphQL variables. JSON
-    /// scalar payloads retain arbitrary keys and nested empty arrays; ordinary
-    /// nillable list fields remain the caller's responsibility.
+    /// Execute with typed GraphQL variables. JSON scalar payloads retain
+    /// arbitrary keys and nested empty arrays; ordinary nillable list fields
+    /// remain the caller's responsibility.
     pub async fn execute_with_variables(&self, document: &str, variables: &Value) -> Result<Value> {
         anyhow::ensure!(variables.is_object(), "GraphQL variables must be an object");
-        let (expanded_document, expanded_variables) =
-            gents_protocol::graphql::expand_mutation_input_variables(document, variables)?;
-        let document = expanded_document.as_str();
-        let variables = &expanded_variables;
         #[cfg(test)]
         if !document.trim_start().starts_with("mutation")
             && SUCCESSFUL_MUTATION_FAULT
@@ -931,22 +1614,21 @@ impl<'a> ConfigApplyTxn<'a> {
                 node,
                 handle,
                 identity,
+                native_operations,
             } => {
                 let started = Instant::now();
-                let result = tokio::time::timeout(
-                    EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-                    node.execute_request_in_txn(
-                        QueryRequest::new(document)
-                            .with_variables(variables.clone())
-                            .with_identity(identity.clone()),
-                        handle,
-                    ),
+                let result = execute_owned_native(
+                    Arc::clone(node),
+                    QueryRequest::new(document)
+                        .with_variables(variables.clone())
+                        .with_identity(identity.clone()),
+                    handle.clone(),
+                    Arc::clone(native_operations),
+                    self.operation,
                 )
                 .await;
                 record_slow_native_phase(self.operation, "execute", started.elapsed());
-                let response = result.map_err(|_| {
-                    embedded_phase_timeout("execute", EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT)
-                })?;
+                let response = result?;
                 if response.is_transaction_conflict() {
                     return Err(retry::transaction_conflict(ConflictSource::StructuredCode));
                 }
@@ -1011,23 +1693,22 @@ impl<'a> ConfigApplyTxn<'a> {
             node,
             handle,
             identity,
+            native_operations,
         } = &self.backend
         else {
             anyhow::bail!("native transaction responses require embedded access");
         };
         let started = Instant::now();
-        let result = tokio::time::timeout(
-            EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-            node.execute_request_in_txn(
-                QueryRequest::new(document).with_identity(identity.clone()),
-                handle,
-            ),
+        let result = execute_owned_native(
+            Arc::clone(node),
+            QueryRequest::new(document).with_identity(identity.clone()),
+            handle.clone(),
+            Arc::clone(native_operations),
+            self.operation,
         )
         .await;
         record_slow_native_phase(self.operation, "execute", started.elapsed());
-        let response = result.map_err(|_| {
-            embedded_phase_timeout("execute", EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT)
-        })?;
+        let response = result?;
         if response.is_transaction_conflict() {
             return Err(retry::transaction_conflict(ConflictSource::StructuredCode));
         }
@@ -1067,12 +1748,39 @@ impl<'a> ConfigApplyTxn<'a> {
                     },
                 }),
             TxnBackend::Embedded { node, handle, .. } => {
+                if self.embedded_poisoned() {
+                    return Err(CommitFailure {
+                        error: native_operation_abandoned(
+                            "commit rejected after an abandoned native transaction operation",
+                        ),
+                        cleanup: CommitCleanup::Required,
+                    });
+                }
+                if let TxnBackend::Embedded {
+                    native_operations, ..
+                } = &self.backend
+                {
+                    native_operations.wait_idle().await;
+                }
                 let started = Instant::now();
-                let result = tokio::time::timeout(
-                    EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-                    node.commit_transaction(handle),
-                )
-                .await;
+                let result =
+                    tokio::time::timeout(EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT, async {
+                        #[cfg(test)]
+                        pause_embedded_finalization_for_test(
+                            EmbeddedFinalizationBoundary::BeforeCommit,
+                        )
+                        .await;
+                        let result = node.commit_transaction(handle).await;
+                        #[cfg(test)]
+                        if result.is_ok() {
+                            pause_embedded_finalization_for_test(
+                                EmbeddedFinalizationBoundary::AfterCommit,
+                            )
+                            .await;
+                        }
+                        result
+                    })
+                    .await;
                 record_slow_native_phase(self.operation, "commit", started.elapsed());
                 match result {
                     Err(_) => Err(CommitFailure {
@@ -1083,12 +1791,6 @@ impl<'a> ConfigApplyTxn<'a> {
                         cleanup: CommitCleanup::Required,
                     }),
                     Ok(Ok(())) => {
-                        // External storage premise, test-only (#1630): the
-                        // embedded commit is durable but its receipt never
-                        // reaches the caller. NotNeeded cleanup leaves committed
-                        // state untouched so only the transaction owner's
-                        // existing retry replays the callback; no rollback is
-                        // simulated.
                         #[cfg(test)]
                         if post_commit_receipt_loss_for_test(self.operation) {
                             return Err(CommitFailure {
@@ -1101,11 +1803,7 @@ impl<'a> ConfigApplyTxn<'a> {
                         Ok(())
                     }
                     Ok(Err(error)) => {
-                        let conflict = matches!(
-                            &error,
-                            query::TransactionError::Execution(message)
-                                if retry::is_transaction_conflict_text(message)
-                        );
+                        let conflict = matches!(&error, query::TransactionError::Conflict(_));
                         if conflict {
                             Err(CommitFailure {
                                 error: retry::transaction_conflict(ConflictSource::TypedError),
@@ -1124,6 +1822,21 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     async fn rollback_inner(&mut self) -> Result<()> {
+        if self.embedded_poisoned() {
+            return Err(native_operation_abandoned(
+                "rollback deferred until abandoned native transaction operations return",
+            ));
+        }
+        if let TxnBackend::Embedded {
+            native_operations, ..
+        } = &self.backend
+        {
+            native_operations.wait_idle().await;
+        }
+        #[cfg(test)]
+        if fail_rollback_for_test() {
+            return Err(anyhow::anyhow!("injected rollback failure"));
+        }
         let result = match &self.backend {
             TxnBackend::Http {
                 endpoint,
@@ -1131,10 +1844,14 @@ impl<'a> ConfigApplyTxn<'a> {
                 client,
             } => graphql::txn_discard(endpoint, id, client).await,
             TxnBackend::Embedded { node, handle, .. } => {
-                match tokio::time::timeout(
-                    EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT,
-                    node.rollback_transaction(handle),
-                )
+                match tokio::time::timeout(EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT, async {
+                    #[cfg(test)]
+                    pause_embedded_finalization_for_test(
+                        EmbeddedFinalizationBoundary::BeforeRollback,
+                    )
+                    .await;
+                    node.rollback_transaction(handle).await
+                })
                 .await
                 {
                     Ok(result) => result.map_err(|error| anyhow::anyhow!("rollback_txn: {error}")),
@@ -1146,8 +1863,6 @@ impl<'a> ConfigApplyTxn<'a> {
                         tracing::warn!(
                             "embedded rollback timed out; releasing mutation gate with transaction outcome ambiguous"
                         );
-                        // Do not let Drop schedule a second bounded rollback
-                        // while retaining the same process-wide write gate.
                         self.disarm_rollback();
                         return Err(error);
                     }
@@ -1216,7 +1931,7 @@ fn auto_commit_telemetry(
         retry_owner: RetryOwner::DefraDb,
         ordinal: WriteAttemptOrdinal::new(1, 1)?,
         started: Instant::now(),
-        finished: Cell::new(false),
+        state: StdMutex::new(AttemptTelemetryState::default()),
         cancelled_rollback: RollbackStatus::NotNeeded,
         cancellation_rollback_scheduled: None,
         dispatch: tracing::dispatcher::get_default(Clone::clone),
@@ -1228,9 +1943,19 @@ fn finish_auto_commit<T>(
     result: Result<T>,
     affected_documents: impl FnOnce(&T) -> u64,
 ) -> Result<T> {
-    let affected_documents = result.as_ref().ok().map(affected_documents).or(Some(0));
+    let pending_native = result
+        .as_ref()
+        .err()
+        .is_some_and(is_native_operation_abandoned);
+    let affected_documents = if pending_native {
+        None
+    } else {
+        result.as_ref().ok().map(affected_documents).or(Some(0))
+    };
     telemetry.record(AttemptReport {
-        outcome: if result.is_ok() {
+        outcome: if pending_native {
+            WriteOutcome::PendingNative
+        } else if result.is_ok() {
             WriteOutcome::Committed
         } else {
             WriteOutcome::Failed
@@ -1271,6 +1996,12 @@ struct AttemptReport {
     rollback: RollbackStatus,
 }
 
+#[derive(Default)]
+struct AttemptTelemetryState {
+    finished: bool,
+    pending_native: bool,
+}
+
 struct AttemptTelemetry {
     operation: WriteOperation,
     backend: WriteBackend,
@@ -1278,10 +2009,43 @@ struct AttemptTelemetry {
     retry_owner: RetryOwner,
     ordinal: WriteAttemptOrdinal,
     started: Instant,
-    finished: Cell<bool>,
+    state: StdMutex<AttemptTelemetryState>,
     cancelled_rollback: RollbackStatus,
     cancellation_rollback_scheduled: Option<Arc<AtomicBool>>,
     dispatch: tracing::Dispatch,
+}
+
+struct AutoCommitCallerObservation {
+    telemetry: Arc<AttemptTelemetry>,
+    completed: bool,
+}
+
+struct AutoCommitNativeCompletion {
+    telemetry: Arc<AttemptTelemetry>,
+    started: bool,
+    completed: bool,
+}
+
+impl AutoCommitCallerObservation {
+    fn complete(&mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for AutoCommitCallerObservation {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.telemetry.record_pending_native();
+        }
+    }
+}
+
+impl Drop for AutoCommitNativeCompletion {
+    fn drop(&mut self) {
+        if self.started && !self.completed {
+            self.telemetry.record_pending_native();
+        }
+    }
 }
 
 impl AttemptTelemetry {
@@ -1290,9 +2054,14 @@ impl AttemptTelemetry {
     }
 
     fn record_with_receipt(&self, report: AttemptReport, receipt_recovery: ReceiptRecovery) {
-        if self.finished.replace(true) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.finished {
             return;
         }
+        state.finished = true;
         let event = WriteAttemptEvent {
             operation: self.operation,
             backend: self.backend,
@@ -1311,10 +2080,44 @@ impl AttemptTelemetry {
             event.record();
         });
     }
+
+    fn record_pending_native(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.finished || state.pending_native {
+            return;
+        }
+        state.pending_native = true;
+        let event = WriteAttemptEvent {
+            operation: self.operation,
+            backend: self.backend,
+            mode: self.mode,
+            retry_owner: self.retry_owner,
+            ordinal: self.ordinal,
+            outcome: WriteOutcome::PendingNative,
+            conflict_source: ConflictSource::None,
+            receipt_recovery: ReceiptRecovery::NotAttempted,
+            backoff: None,
+            elapsed: self.started.elapsed(),
+            affected_documents: None,
+            rollback: RollbackStatus::NotNeeded,
+        };
+        tracing::dispatcher::with_default(&self.dispatch, || event.record());
+    }
 }
 
 impl Drop for AttemptTelemetry {
     fn drop(&mut self) {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.finished || state.pending_native {
+            return;
+        }
+        drop(state);
         let rollback = if self
             .cancellation_rollback_scheduled
             .as_ref()
@@ -1328,7 +2131,11 @@ impl Drop for AttemptTelemetry {
             outcome: WriteOutcome::Cancelled,
             conflict_source: ConflictSource::None,
             backoff: None,
-            affected_documents: Some(0),
+            affected_documents: if matches!(rollback, RollbackStatus::Scheduled) {
+                None
+            } else {
+                Some(0)
+            },
             rollback,
         });
     }
@@ -1389,7 +2196,7 @@ where
                 retry_owner: mode.retry_owner(),
                 ordinal,
                 started: Instant::now(),
-                finished: Cell::new(false),
+                state: StdMutex::new(AttemptTelemetryState::default()),
                 cancelled_rollback: RollbackStatus::NotNeeded,
                 cancellation_rollback_scheduled: Some(Arc::clone(&cancellation_rollback_scheduled)),
                 dispatch: tracing::dispatcher::get_default(Clone::clone),
@@ -1419,7 +2226,10 @@ where
                     return Err(error);
                 }
             };
-            telemetry.cancelled_rollback = RollbackStatus::Scheduled;
+            telemetry.cancelled_rollback = match backend {
+                WriteBackend::Embedded => RollbackStatus::NotNeeded,
+                WriteBackend::Http => RollbackStatus::Scheduled,
+            };
             let callback_result = match backend {
                 WriteBackend::Embedded => ACTIVE_EMBEDDED_TRANSACTION
                     .scope(
@@ -1490,6 +2300,16 @@ where
                 rollback,
                 retry_generic,
             } = failure;
+            if txn.embedded_poisoned() {
+                telemetry.record(AttemptReport {
+                    outcome: WriteOutcome::PendingNative,
+                    conflict_source: ConflictSource::None,
+                    backoff: None,
+                    affected_documents: None,
+                    rollback: RollbackStatus::Scheduled,
+                });
+                return Err(error);
+            }
             let conflict_source = retry::classified_transaction_conflict(&error);
             let source = conflict_source.unwrap_or(ConflictSource::None);
             match failure_disposition(mode, conflict_source, retry_generic, attempt, max_attempts) {
@@ -1511,6 +2331,9 @@ where
                         affected_documents: Some(0),
                         rollback,
                     });
+                    drop(txn);
+                    #[cfg(test)]
+                    retry_backoff_reached_for_test();
                     tokio::time::sleep(backoff).await;
                 }
                 FailureDisposition::Fail => {
@@ -1539,11 +2362,47 @@ fn expect_committed<T>(outcome: TransactionOutcome<T>) -> T {
 }
 
 impl ConfigAccess {
-    pub(crate) async fn execute_local_response_with_retry(
+    pub(crate) fn claimed_for_node(node: &EmbeddedNode) -> Option<Self> {
+        let gate = existing_mutation_write_gate(node)?;
+        let claim = gate.store_claim()?;
+        Some(Self::Local(LocalConfigAccess {
+            node: Arc::clone(&claim.node),
+            gate,
+        }))
+    }
+
+    pub(crate) async fn read_local_response_owned(
+        local: &LocalConfigAccess,
+        document: &str,
+        operation: &str,
+    ) -> Result<defra_node::QueryResponse> {
+        graphql::ensure_query_document(document)?;
+        Self::read_local_response_owned_validated(local, document, operation).await
+    }
+
+    async fn read_local_response_owned_validated(
+        local: &LocalConfigAccess,
+        document: &str,
+        operation: &str,
+    ) -> Result<defra_node::QueryResponse> {
+        let document = document.to_owned();
+        let operation = operation.to_owned();
+        local
+            .run_owned(move |node| async move {
+                Self::execute_local_read(&node, &document, &operation).await
+            })
+            .await
+    }
+
+    pub(crate) async fn read_local_response(
         node: &EmbeddedNode,
         document: &str,
-        retry_policy: ExecuteRetryPolicy,
-    ) -> defra_node::QueryResponse {
+        operation: &str,
+    ) -> Result<defra_node::QueryResponse> {
+        graphql::ensure_query_document(document)?;
+        if let Some(Self::Local(local)) = Self::claimed_for_node(node) {
+            return Self::read_local_response_owned_validated(&local, document, operation).await;
+        }
         #[cfg(test)]
         if let Some(reached) = SUCCESSFUL_MUTATION_FAULT
             .try_with(|fault| {
@@ -1559,7 +2418,31 @@ impl ConfigAccess {
             reached.notify_one();
             std::future::pending::<()>().await;
         }
-        node.execute_with_retry(document, retry_policy).await
+        Self::execute_local_read(node, document, operation).await
+    }
+
+    async fn execute_local_read(
+        node: &EmbeddedNode,
+        document: &str,
+        operation: &str,
+    ) -> Result<defra_node::QueryResponse> {
+        let started = Instant::now();
+        let response = node.execute(document).await;
+        let elapsed = started.elapsed();
+        if elapsed > Duration::from_secs(1) {
+            tracing::warn!(
+                operation,
+                elapsed_ms = elapsed.as_millis() as u64,
+                "DefraDB GraphQL completed"
+            );
+        } else {
+            tracing::debug!(
+                operation,
+                elapsed_ms = elapsed.as_millis() as u64,
+                "DefraDB GraphQL completed"
+            );
+        }
+        Ok(response)
     }
 
     async fn begin_apply_txn(
@@ -1569,11 +2452,11 @@ impl ConfigAccess {
     ) -> Result<ConfigApplyTxn<'_>> {
         match self {
             Self::Graphql(endpoint) => {
-                ConfigApplyTxn::begin_http(endpoint, cancellation_rollback_scheduled).await
+                ConfigApplyTxn::begin_http(endpoint, cancellation_rollback_scheduled, false).await
             }
-            Self::Local(node) => {
+            Self::Local(local) => {
                 ConfigApplyTxn::begin_local_owned(
-                    node,
+                    local.node(),
                     None,
                     operation,
                     cancellation_rollback_scheduled,
@@ -1584,26 +2467,30 @@ impl ConfigAccess {
         }
     }
 
-    /// Commit one mutation through DefraDB's native auto-commit owner.
     pub async fn write(&self, operation: &'static str, mutation: &str) -> Result<Value> {
         graphql::ensure_mutation_document(mutation)?;
         let operation = WriteOperation::new(operation)?;
-        let backend = backend_for_access(self);
-        let telemetry = auto_commit_telemetry(operation, backend)?;
-        let result = match self {
-            Self::Graphql(endpoint) => graphql::auto_commit(endpoint, mutation).await,
-            Self::Local(node) => Self::write_local_inner(node, operation, mutation).await,
-        };
-        finish_auto_commit(&telemetry, result, graphql::affected_documents)
+        match self {
+            Self::Graphql(endpoint) => {
+                let telemetry = auto_commit_telemetry(operation, WriteBackend::Http)?;
+                let result = graphql::auto_commit(endpoint, mutation).await;
+                finish_auto_commit(&telemetry, result, graphql::affected_documents)
+            }
+            Self::Local(local) => {
+                let telemetry = Arc::new(auto_commit_telemetry(operation, WriteBackend::Embedded)?);
+                let response =
+                    Self::execute_local_mutation(local.node(), operation, mutation, telemetry)
+                        .await?;
+                Ok(crate::graphql::into_data_envelope(response.data))
+            }
+        }
     }
 
-    /// Commit a stable-id HTTP mutation with bounded ambiguous-result recovery.
-    ///
-    /// Each mutation is posted exactly once. A retryable response or transport
+    /// Committed stable-id HTTP mutation with bounded ambiguous-result recovery:
+    /// each mutation is posted exactly once; a retryable response or transport
     /// failure is ambiguous, so the owner checks the caller's stable receipt
-    /// before it may repost. Receipt reads are retried separately; a mutation
-    /// is replayed only after a successful receipt read confirms absence.
-    /// Embedded access has no ambiguous HTTP response and uses [`Self::write`].
+    /// before it may repost, and replays only after a successful receipt read
+    /// confirms absence. Embedded access uses [`Self::write`].
     pub async fn write_with_receipt<F, Fut>(
         &self,
         operation: &'static str,
@@ -1630,7 +2517,7 @@ impl ConfigAccess {
                 retry_owner: RetryOwner::GentsReceipt,
                 ordinal: WriteAttemptOrdinal::new(attempt, max_attempts)?,
                 started: Instant::now(),
-                finished: Cell::new(false),
+                state: StdMutex::new(AttemptTelemetryState::default()),
                 cancelled_rollback: RollbackStatus::NotNeeded,
                 cancellation_rollback_scheduled: None,
                 dispatch: tracing::dispatcher::get_default(Clone::clone),
@@ -1719,77 +2606,124 @@ impl ConfigAccess {
         unreachable!("bounded receipt write loop returns on its final attempt")
     }
 
-    /// Borrowed embedded-node auto-commit seam for runtime and desktop code.
     pub async fn write_local(
-        node: &EmbeddedNode,
+        node: &Arc<EmbeddedNode>,
         operation: &'static str,
         mutation: &str,
     ) -> Result<Value> {
         graphql::ensure_mutation_document(mutation)?;
         let operation = WriteOperation::new(operation)?;
-        let telemetry = auto_commit_telemetry(operation, WriteBackend::Embedded)?;
-        let result = Self::write_local_inner(node, operation, mutation).await;
-        finish_auto_commit(&telemetry, result, graphql::affected_documents)
-    }
-
-    /// Embedded auto-commit seam for callers that need DefraDB's typed
-    /// response metadata.
-    pub(crate) async fn write_local_response(
-        node: &EmbeddedNode,
-        operation: &'static str,
-        mutation: &str,
-    ) -> Result<defra_node::QueryResponse> {
-        graphql::ensure_mutation_document(mutation)?;
-        let operation = WriteOperation::new(operation)?;
-        let telemetry = auto_commit_telemetry(operation, WriteBackend::Embedded)?;
-        let result = Self::write_local_response_inner(node, operation, mutation).await;
-        finish_auto_commit(&telemetry, result, |response| {
-            crate::graphql::mutation_affected_documents(response) as u64
-        })
-    }
-
-    async fn write_local_inner(
-        node: &EmbeddedNode,
-        operation: WriteOperation,
-        mutation: &str,
-    ) -> Result<Value> {
-        let response = Self::write_local_response_inner(node, operation, mutation).await?;
+        let telemetry = Arc::new(auto_commit_telemetry(operation, WriteBackend::Embedded)?);
+        let response = Self::execute_local_mutation(node, operation, mutation, telemetry).await?;
         Ok(crate::graphql::into_data_envelope(response.data))
     }
 
-    async fn write_local_response_inner(
-        node: &EmbeddedNode,
-        operation: WriteOperation,
+    pub(crate) async fn write_local_response(
+        node: &Arc<EmbeddedNode>,
+        operation: &'static str,
         mutation: &str,
     ) -> Result<defra_node::QueryResponse> {
-        let retry_policy = ExecuteRetryPolicy::new(
-            retry::TRANSACT_CONFLICT_MAX_RETRIES,
-            std::time::Duration::from_millis(100),
-            std::time::Duration::from_millis(800),
-        );
-        Self::execute_local_mutation(node, operation, mutation, retry_policy).await
+        graphql::ensure_mutation_document(mutation)?;
+        let operation = WriteOperation::new(operation)?;
+        let telemetry = Arc::new(auto_commit_telemetry(operation, WriteBackend::Embedded)?);
+        Self::execute_local_mutation(node, operation, mutation, telemetry).await
     }
 
     async fn execute_local_mutation(
-        node: &EmbeddedNode,
+        node: &Arc<EmbeddedNode>,
         operation: WriteOperation,
         mutation: &str,
-        retry_policy: ExecuteRetryPolicy,
+        telemetry: Arc<AttemptTelemetry>,
     ) -> Result<defra_node::QueryResponse> {
-        let _write_guard = mutation_write_gate(node).acquire(operation).await?;
-        let response = tokio::time::timeout(
-            EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-            node.execute_with_retry(mutation, retry_policy),
-        )
-        .await
-        .map_err(|_| {
-            embedded_phase_timeout("auto-commit", EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT)
-        })?;
-        crate::graphql::ensure_no_errors(&response, operation.as_str())?;
-        Ok(response)
+        let write_guard = match mutation_write_gate(node).acquire(operation).await {
+            Ok(guard) => guard,
+            Err(error) => {
+                telemetry.record(AttemptReport {
+                    outcome: WriteOutcome::Failed,
+                    conflict_source: ConflictSource::None,
+                    backoff: None,
+                    affected_documents: Some(0),
+                    rollback: RollbackStatus::NotNeeded,
+                });
+                return Err(error);
+            }
+        };
+        let mut caller_observation = AutoCommitCallerObservation {
+            telemetry: Arc::clone(&telemetry),
+            completed: false,
+        };
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let node = Arc::clone(node);
+        let mutation = mutation.to_owned();
+        let dispatcher = tracing::dispatcher::get_default(Clone::clone);
+        let span = tracing::Span::current();
+        #[cfg(test)]
+        let native_pause = SUCCESSFUL_MUTATION_FAULT
+            .try_with(|fault| fault.native_pause.clone())
+            .ok()
+            .flatten();
+        tokio::spawn(
+            async move {
+                let mut native_completion = AutoCommitNativeCompletion {
+                    telemetry: Arc::clone(&telemetry),
+                    started: false,
+                    completed: false,
+                };
+                #[cfg(test)]
+                if let Some((reached, release)) = native_pause {
+                    reached.notify_one();
+                    release.notified().await;
+                }
+                let started = Instant::now();
+                native_completion.started = true;
+                let result = node.execute(&mutation).await;
+                let elapsed = started.elapsed();
+                record_slow_native_phase(Some(operation.as_str()), "auto-commit", elapsed);
+                let successful = !result.has_errors();
+                let affected = if successful {
+                    Some(crate::graphql::mutation_affected_documents(&result) as u64)
+                } else {
+                    Some(0)
+                };
+                telemetry.record(AttemptReport {
+                    outcome: if successful {
+                        WriteOutcome::Committed
+                    } else {
+                        WriteOutcome::Failed
+                    },
+                    conflict_source: ConflictSource::None,
+                    backoff: None,
+                    affected_documents: affected,
+                    rollback: RollbackStatus::NotNeeded,
+                });
+                native_completion.completed = true;
+                let result =
+                    crate::graphql::ensure_no_errors(&result, operation.as_str()).map(|()| result);
+                drop(write_guard);
+                let _ = send.send(result);
+            }
+            .with_subscriber(dispatcher)
+            .instrument(span),
+        );
+        let result = tokio::time::timeout(EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT, receive)
+            .await
+            .map_err(|_| {
+                native_operation_abandoned(format!(
+                    "embedded auto-commit caller timed out after {:?}; native operation and write gate remain owned",
+                    EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT
+                ))
+            })?;
+        caller_observation.complete();
+        result.map_err(|_| {
+            native_operation_abandoned("native auto-commit task ended without a response")
+        })?
     }
 
-    pub async fn transact<'a, T, F>(&'a self, operation: &'static str, callback: F) -> Result<T>
+    pub async fn transact_write<'a, T, F>(
+        &'a self,
+        operation: &'static str,
+        callback: F,
+    ) -> Result<T>
     where
         T: Send + 'a,
         F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T>> + Send + 'a,
@@ -1807,9 +2741,8 @@ impl ConfigAccess {
         .map(expect_committed)
     }
 
-    /// Run a query-only transaction. Embedded access uses DefraDB's native
-    /// read-only snapshot and does not acquire the mutation gate; HTTP access
-    /// retains its existing transaction owner.
+    /// Query-only transaction; DefraDB enforces read-only mode on both transports
+    /// and embedded access avoids the mutation gate.
     pub async fn transact_readonly<'a, T, F>(
         &'a self,
         operation: &'static str,
@@ -1820,15 +2753,26 @@ impl ConfigAccess {
         F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T>> + Send + 'a,
     {
         match self {
-            Self::Local(node) => {
-                Self::transact_local_readonly(node, None, operation, callback).await
+            Self::Local(local) => {
+                Self::transact_local_readonly(local.node(), None, operation, callback).await
             }
-            Self::Graphql(_) => self.transact(operation, callback).await,
+            Self::Graphql(endpoint) => transact_owned(
+                operation,
+                WriteBackend::Http,
+                TransactionMode::ConflictRetry,
+                move |_operation, rollback| {
+                    Box::pin(
+                        async move { ConfigApplyTxn::begin_http(endpoint, rollback, true).await },
+                    )
+                },
+                callback,
+            )
+            .await
+            .map(expect_committed),
         }
     }
 
     /// Replay a stable-key transaction after any callback or commit error.
-    ///
     /// Callers must make the callback idempotent across an ambiguous commit:
     /// creates need stable unique identities and retries must reconcile an
     /// already-durable winner before attempting another create.
@@ -1876,9 +2820,8 @@ impl ConfigAccess {
         .await
     }
 
-    /// Borrowed embedded-node transaction seam preserving the supplied ACP DID.
-    pub async fn transact_local<'a, T, F>(
-        node: &'a EmbeddedNode,
+    pub async fn transact_local_write<'a, T, F>(
+        node: &'a Arc<EmbeddedNode>,
         identity: Option<Did>,
         operation: &'static str,
         callback: F,
@@ -1910,10 +2853,9 @@ impl ConfigAccess {
         .map(expect_committed)
     }
 
-    /// Native snapshot reads retain the supplied ACP DID without taking the
-    /// mutation gate. DefraDB's native read-only transaction rejects mutations.
+    /// Native snapshot reads retain the supplied ACP DID without taking the mutation gate.
     pub async fn transact_local_readonly<'a, T, F>(
-        node: &'a EmbeddedNode,
+        node: &'a Arc<EmbeddedNode>,
         identity: Option<Did>,
         operation: &'static str,
         callback: F,
@@ -1945,18 +2887,20 @@ impl ConfigAccess {
         .map(expect_committed)
     }
 
-    /// Exact-request renewal retains generation/deadline CAS and native point-read
-    /// OCC while ordinary writes hold the mutation gate. Authorization is checked
-    /// again immediately before commit admission; native commit does not atomically
-    /// check wall clock, so this is not a durable-commit-before-expiry guarantee.
+    /// Renew an execution lease: generation/deadline CAS, native point-read OCC,
+    /// ordinary writes under the mutation gate. Authorization is re-checked
+    /// before commit admission; native commit does not atomically check wall
+    /// clock, so this is not a durable-commit-before-expiry guarantee.
     pub(crate) async fn renew_execution_lease(
-        node: &EmbeddedNode,
+        node: &Arc<EmbeddedNode>,
         request_doc_id: &str,
         generation: &str,
         expected_deadline: Option<chrono::DateTime<chrono::Utc>>,
         fixture_now: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<crate::lifecycle::RenewalAttemptOutcome> {
-        transact_owned(
+        let native_operations = Arc::new(NativeOperationTracker::default());
+        let operations_for_attempt = Arc::clone(&native_operations);
+        let result = transact_owned(
             "lifecycle.renew_execution_lease",
             WriteBackend::Embedded,
             TransactionMode::Idempotent(IdempotentTransactionRetry::Standard),
@@ -1966,7 +2910,9 @@ impl ConfigAccess {
                     None,
                     operation,
                     rollback,
-                    EmbeddedTransactionPurpose::ExecutionRenewal,
+                    EmbeddedTransactionPurpose::ExecutionRenewal(Arc::clone(
+                        &operations_for_attempt,
+                    )),
                 ))
             },
             move |txn| {
@@ -1979,13 +2925,15 @@ impl ConfigAccess {
                 ))
             },
         )
-        .await
-        .map(expect_committed)
+        .await;
+        if native_operations.is_abandoned() {
+            native_operations.wait_idle().await;
+        }
+        result.map(expect_committed)
     }
 
-    /// Borrowed embedded variant of [`Self::transact_idempotent`].
     pub async fn transact_local_idempotent<'a, T, F>(
-        node: &'a EmbeddedNode,
+        node: &'a Arc<EmbeddedNode>,
         identity: Option<Did>,
         retry_policy: IdempotentTransactionRetry,
         operation: &'static str,
@@ -2019,7 +2967,7 @@ impl ConfigAccess {
     }
 
     pub(crate) async fn transact_local_observing_conflict<'a, T, F>(
-        node: &'a EmbeddedNode,
+        node: &'a Arc<EmbeddedNode>,
         identity: Option<Did>,
         operation: &'static str,
         callback: F,
@@ -2056,8 +3004,20 @@ impl ConfigAccess {
 mod owner_tests;
 
 #[cfg(test)]
+#[path = "txn_native_completion_conformance.rs"]
+mod native_completion_conformance;
+
+#[cfg(test)]
+#[path = "txn_native_claim_lifetime_conformance.rs"]
+mod native_claim_lifetime_conformance;
+
+#[cfg(test)]
 #[path = "receipt_owner_tests.rs"]
 mod receipt_owner_tests;
+
+#[cfg(test)]
+#[path = "txn_stream_waiter_conformance.rs"]
+mod stream_waiter_conformance;
 
 #[cfg(test)]
 mod variable_tests {
@@ -2065,7 +3025,7 @@ mod variable_tests {
 
     #[tokio::test]
     async fn whole_input_variables_update_upsert_and_rollback_losslessly() {
-        let node = EmbeddedNode::builder().build().await.unwrap();
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         node.add_schema("type MutationVariableProbe { key: String label: String enabled: Boolean count: Int tags: [String] payload: JSON }").await.unwrap();
         let payload = json!({"a-b": [], "nested": [{"": {}, "雪": [null, []]}]});
         for (query, input) in [
@@ -2083,7 +3043,7 @@ mod variable_tests {
             ),
         ] {
             let vars = json!({"input": input});
-            ConfigAccess::transact_local(&node, None, "variable_probe", |txn| {
+            ConfigAccess::transact_local_write(&node, None, "variable_probe", |txn| {
                 let vars = vars.clone();
                 Box::pin(async move { txn.execute_with_variables(query, &vars).await.map(|_| ()) })
             })
@@ -2100,7 +3060,7 @@ mod variable_tests {
         assert_eq!(before["count"], 7);
         assert!(before["tags"].is_null());
         assert_eq!(before["payload"], payload);
-        ConfigAccess::transact_local(&node, None, "variable_upsert_insert", |txn| Box::pin(async move {
+        ConfigAccess::transact_local_write(&node, None, "variable_upsert_insert", |txn| Box::pin(async move {
             txn.execute_with_variables("mutation($input: MutationVariableProbeMutationInputArg!) { upsert_MutationVariableProbe(filter:{key:{_eq:\"two\"}},add:$input,update:$input) {_docID} }", &json!({"input":{"key":"two","label":"inserted","payload":{"empty":[]}}})).await.map(|_| ())
         })).await.unwrap();
         let inserted = node
@@ -2111,7 +3071,7 @@ mod variable_tests {
             inserted.data.unwrap()["MutationVariableProbe"],
             json!([{"label":"inserted","payload":{"empty":[]}}])
         );
-        let aborted: Result<()> = ConfigAccess::transact_local(&node, None, "variable_probe_rollback", |txn| Box::pin(async move {
+        let aborted: Result<()> = ConfigAccess::transact_local_write(&node, None, "variable_probe_rollback", |txn| Box::pin(async move {
             txn.execute_with_variables("mutation($input: MutationVariableProbeMutationInputArg!) { update_MutationVariableProbe(filter:{key:{_eq:\"one\"}},input:$input) {_docID} }", &json!({"input":{"label":"must rollback","payload":{"lost":[]}}})).await?;
             anyhow::bail!("intentional rollback")
         })).await;
@@ -2126,7 +3086,7 @@ mod variable_tests {
 
     #[tokio::test]
     async fn embedded_transaction_preserves_json_variables_and_rollback() {
-        let node = EmbeddedNode::builder().build().await.unwrap();
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         node.add_schema("type TransactionJsonProbe { key: String payload: JSON }")
             .await
             .unwrap();

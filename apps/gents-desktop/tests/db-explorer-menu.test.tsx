@@ -6,7 +6,6 @@ import { describe, expect, it, vi } from "vitest";
 import { AppShell } from "../src/ui/app/AppShell";
 import { renderIn, testApp } from "./app-fixture";
 
-/* the window is narrow under test: settings sit in the menu's nav sheet */
 function renderShell(openDbExplorer?: () => Promise<string>) {
   return renderIn(
     testApp({ api: openDbExplorer ? { openDbExplorer } : {} }),

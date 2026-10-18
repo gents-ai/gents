@@ -57,8 +57,6 @@ pub(super) async fn load_skill_metadata(state: &ShimState) -> Result<Vec<codex::
             interface: None,
             dependencies: None,
             path: skill_doc_path(skill_id),
-            // Gents skills are node-owned documents. Preserve Codex's
-            // wire vocabulary by projecting that ownership as system scope.
             scope: codex::SkillScope::System,
             enabled,
         });

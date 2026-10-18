@@ -1,6 +1,5 @@
-/* jsdom's gaps, filled before the setup and any test module load: modules
-   read some of these when they are imported. A setup file of its own, first,
-   since imports are hoisted above a file's statements. */
+/* jsdom gaps, filled before any test module load (imports are hoisted above
+   a setup file's statements). */
 if (typeof window.matchMedia !== "function") {
   window.matchMedia = (query: string) =>
     ({
@@ -22,7 +21,6 @@ if (typeof globalThis.ResizeObserver !== "function") {
   } as unknown as typeof ResizeObserver;
 }
 if (typeof window.PointerEvent !== "function") {
-  /* jsdom has no PointerEvent; Base UI's floating focus manager builds one */
   window.PointerEvent = class extends MouseEvent {
     readonly pointerId: number;
     readonly pointerType: string;

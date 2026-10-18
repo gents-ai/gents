@@ -1,5 +1,3 @@
-//! Shared types and helpers for request interruption signaling.
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,38 +9,24 @@ use tokio::sync::watch;
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::lifecycle::queue::drain_automated_wakeups_in_txn;
 
-/// Request a soft interrupt by latching `interrupt_requested_at` on the
-/// AgentRequest document. Idempotent: if the field is already set, the
-/// current timestamp is preserved and this call is a no-op.
-/// The first latch drains automated wakes visible as pending in the same
-/// transaction and exact session scope. A replay does not scan the queue.
+/// Requests a soft interrupt by latching `interrupt_requested_at` on the
+/// AgentRequest document. Idempotent: the first latch drains automated wakes
+/// visible as pending in the same transaction and exact session scope; a
+/// replay preserves the existing timestamp and does not scan the queue.
 ///
-/// The runtime's per-request observer (see `spawn_request_interrupt_observer`)
-/// watches this field and signals the daemon to cancel in-flight inference and
-/// transition the request to `interrupted`. A terminal target keeps its
-/// lifecycle state, though its first latch still drains pending automated wakes.
-///
-/// # Concurrent callers
-///
-/// Same-node lookup and latch run in the existing transaction owner, preserving
-/// an already observed timestamp. Distributed concurrent writers still follow
-/// DefraDB's existing merge semantics.
-///
-/// In P2P-replicated deployments, independent writers on different nodes
-/// may each stamp, and CRDT merge will pick whichever timestamp sorts
-/// higher by DefraDB's LWW rules. Same conclusion: audit meaning is
-/// preserved; microsecond-exact ordering is not.
-pub async fn interrupt_request(node: &EmbeddedNode, request_id: &str) -> Result<()> {
+/// Concurrent same-node lookup and latch run in the existing transaction
+/// owner. In P2P-replicated deployments independent writers may each stamp and
+/// CRDT merge picks one timestamp: audit meaning is preserved, microsecond
+/// ordering is not.
+pub async fn interrupt_request(node: &Arc<EmbeddedNode>, request_id: &str) -> Result<()> {
     let logical = escape_graphql_string(request_id);
     interrupt_request_matching(node, format!("request_id:{{_eq:\"{logical}\"}}"))
         .await
         .map(|_| ())
 }
 
-/// Interrupt the exact request already selected within a node/requester scope.
-/// DefraDB ACP and the existing interruption owner retain all authorization and lifecycle work.
 pub async fn interrupt_request_by_doc_id(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     request_doc_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -58,7 +42,7 @@ pub async fn interrupt_request_by_doc_id(
 }
 
 pub(crate) async fn interrupt_request_by_doc_id_returning_drained_wake_ids(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     request_doc_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -108,8 +92,6 @@ fn scoped_request_filter(
     ))
 }
 
-/// Latch the same exact interrupt through local or HTTP transaction access.
-/// The existing completion loop observes the durable intent on the target node.
 pub async fn interrupt_request_by_doc_id_with_access(
     access: &crate::config_client::ConfigAccess,
     request_doc_id: &str,
@@ -118,7 +100,7 @@ pub async fn interrupt_request_by_doc_id_with_access(
 ) -> Result<()> {
     let filter = exact_request_filter(request_doc_id, node_did, requester_did)?;
     access
-        .transact("interrupt.latch_request", |txn| {
+        .transact_write("interrupt.latch_request", |txn| {
             let filter = &filter;
             Box::pin(async move { interrupt_request_matching_in_txn(txn, filter).await })
         })
@@ -126,8 +108,11 @@ pub async fn interrupt_request_by_doc_id_with_access(
         .map(|_| ())
 }
 
-async fn interrupt_request_matching(node: &EmbeddedNode, filter: String) -> Result<Vec<String>> {
-    crate::config_client::ConfigAccess::transact_local(
+async fn interrupt_request_matching(
+    node: &std::sync::Arc<EmbeddedNode>,
+    filter: String,
+) -> Result<Vec<String>> {
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "interrupt.latch_request",
@@ -202,7 +187,7 @@ pub(crate) async fn active_session_request(
     let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let response = graphql_with_transaction_retry(
         node,
-        &format!(r#"{{AgentRequest(filter:{{{scope},purpose:{{_eq:"normal"}},lifecycle_state:{{_in:["claimed","processing"]}}}},limit:2){{_docID request_id node_did requester_did session_id}}}}"#),
+        &format!(r#"{{AgentRequest(filter:{{{scope},purpose:{{_eq:"normal"}},lifecycle_state:{{_in:["claimed","processing"]}}}},limit:2){{_docID request_id node_did requester_did session_id lifecycle_state}}}}"#),
         "active request lookup",
     )
     .await?;
@@ -223,11 +208,6 @@ pub(crate) async fn active_session_request(
     Ok(rows.pop())
 }
 
-/// Fetch the durable interrupt intent for the exact physical AgentRequest
-/// document identified by `_docID`.
-///
-/// `_docID` is the globally unique physical key, so this lookup cannot
-/// cross nodes or collide on a shared logical `request_id`.
 pub async fn fetch_interrupt_requested_at_by_doc_id(
     node: &EmbeddedNode,
     request_doc_id: &str,
@@ -267,13 +247,6 @@ pub async fn fetch_interrupt_requested_at_by_doc_id(
     Ok(value)
 }
 
-/// Fetch the durable interrupt intent by logical request id.
-///
-/// The logical id is not a physical key: resolution goes through the
-/// existing request-binding owner, which rejects ambiguous logical ids
-/// instead of silently reading one replica's row with `limit: 1`. Callers
-/// carrying the physical `_docID` must prefer
-/// `fetch_interrupt_requested_at_by_doc_id`.
 pub async fn fetch_interrupt_requested_at(
     node: &EmbeddedNode,
     request_id: &str,
@@ -282,12 +255,6 @@ pub async fn fetch_interrupt_requested_at(
     fetch_interrupt_requested_at_by_doc_id(node, &request_doc_id).await
 }
 
-/// Fetch the durable interrupt intent by logical request id within one
-/// node scope (`node_did` + optional `requester_did`).
-///
-/// Cross-node collisions on the same logical id are excluded by the
-/// scope; any residual same-scope collision fails closed via the existing
-/// ambiguity rejection (`limit: 2` + row-count check), never `limit: 1`.
 pub async fn fetch_interrupt_requested_at_scoped(
     node: &EmbeddedNode,
     request_id: &str,
@@ -334,27 +301,26 @@ pub struct InterruptIntent {
 const OBSERVER_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Spawn an observer task that reads `interrupt_requested_at` for a single
-/// request and signals the channel when the field flips to non-null.
-///
-/// The field is re-read whenever the node reports a change to this request
-/// document (local write or replicated merge), and on a slower fallback tick
-/// in case the change subscription overflows or closes.
-///
-/// The task exits when:
-///   - the channel has been signaled once (idempotent latch), OR
-///   - the shutdown receiver changes, OR
-///   - the returned `JoinHandle` is aborted.
+/// request and signals the channel when the field flips to non-null. The field
+/// is re-read on document changes (local write or replicated merge) and on a
+/// slower fallback tick in case the change subscription overflows or closes.
+/// Exits when signaled once, the shutdown receiver changes, or the handle is
+/// aborted.
 pub fn spawn_request_interrupt_observer(
     node: Arc<EmbeddedNode>,
     request_doc_id: String,
     interrupt_tx: watch::Sender<Option<InterruptIntent>>,
     mut shutdown: watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
-    let changes = node.subscribe_document_changes();
+    let changes = crate::subscribe_collections(&node, ["AgentRequest"])
+        .inspect_err(|error| {
+            tracing::warn!(doc_id = %request_doc_id, %error, "interrupt observer polling only");
+        })
+        .ok();
     tokio::spawn(async move {
         observe_request_interrupt(
             &request_doc_id,
-            Some(changes),
+            changes,
             || read_interrupt_requested_at(&node, &request_doc_id),
             &interrupt_tx,
             &mut shutdown,

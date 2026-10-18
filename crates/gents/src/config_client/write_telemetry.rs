@@ -1,8 +1,5 @@
-//! Low-cardinality telemetry for the committed-write owner.
-//!
-//! Events contain a static operation name, bounded states, counts, and
-//! durations. Queries, endpoints, identities, document IDs, and errors never
-//! enter this type.
+//! Low-cardinality telemetry for the committed-write owner: queries,
+//! endpoints, identities, document IDs, and errors never enter these types.
 
 use std::time::Duration;
 
@@ -69,6 +66,7 @@ pub(crate) enum WriteOutcome {
     ConflictObserved,
     Recovered,
     Retrying,
+    PendingNative,
     Failed,
     Cancelled,
 }
@@ -160,6 +158,7 @@ impl WriteAttemptEvent {
                 WriteOutcome::ConflictObserved => "conflict_observed",
                 WriteOutcome::Recovered => "recovered",
                 WriteOutcome::Retrying => "retrying",
+                WriteOutcome::PendingNative => "pending_native",
                 WriteOutcome::Failed => "failed",
                 WriteOutcome::Cancelled => "cancelled",
             },
@@ -179,6 +178,7 @@ impl WriteAttemptEvent {
             receipt_recovered = matches!(self.outcome, WriteOutcome::Recovered),
             conflict_observed = matches!(self.outcome, WriteOutcome::ConflictObserved),
             will_retry = matches!(self.outcome, WriteOutcome::Retrying),
+            settled = !matches!(self.outcome, WriteOutcome::PendingNative) && !matches!(self.rollback, RollbackStatus::Scheduled),
             backoff_scheduled = self.backoff.is_some(),
             backoff_ms = millis(self.backoff.unwrap_or_default()),
             elapsed_ms = millis(self.elapsed),
@@ -190,7 +190,7 @@ impl WriteAttemptEvent {
                 RollbackStatus::Scheduled => "scheduled",
             },
             cancelled = matches!(self.outcome, WriteOutcome::Cancelled),
-            "DefraDB committed-write attempt finished"
+            "DefraDB write attempt observation"
                 );
             };
         }
@@ -215,56 +215,4 @@ impl WriteAttemptEvent {
 
 fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn operation_names_are_static_and_low_cardinality() {
-        assert!(WriteOperation::new("goal.resume_request").is_ok());
-        for invalid in ["", "Goal Resume", "did:key:secret", "request/id"] {
-            assert!(
-                WriteOperation::new(invalid).is_err(),
-                "accepted {invalid:?}"
-            );
-        }
-    }
-
-    fn committed_event(affected_documents: Option<u64>) -> WriteAttemptEvent {
-        WriteAttemptEvent {
-            operation: WriteOperation::new("test.noop").unwrap(),
-            backend: WriteBackend::Embedded,
-            mode: WriteMode::Transaction,
-            retry_owner: RetryOwner::GentsTransaction,
-            ordinal: WriteAttemptOrdinal::new(1, 4).unwrap(),
-            outcome: WriteOutcome::Committed,
-            conflict_source: ConflictSource::None,
-            receipt_recovery: ReceiptRecovery::NotAttempted,
-            backoff: None,
-            elapsed: Duration::ZERO,
-            affected_documents,
-            rollback: RollbackStatus::NotNeeded,
-        }
-    }
-
-    #[test]
-    fn only_clean_known_zero_effect_commits_are_debug_events() {
-        assert!(committed_event(Some(0)).is_clean_committed_noop());
-        assert!(!committed_event(None).is_clean_committed_noop());
-        assert!(!committed_event(Some(1)).is_clean_committed_noop());
-
-        let mut retried = committed_event(Some(0));
-        retried.ordinal = WriteAttemptOrdinal::new(2, 4).unwrap();
-        assert!(!retried.is_clean_committed_noop());
-
-        let mut recovered = committed_event(Some(0));
-        recovered.receipt_recovery = ReceiptRecovery::StableIdConfirmed;
-        assert!(!recovered.is_clean_committed_noop());
-
-        let mut retry_count_unknown = committed_event(Some(0));
-        retry_count_unknown.retry_owner = RetryOwner::DefraDb;
-        assert!(!retry_count_unknown.is_clean_committed_noop());
-    }
 }

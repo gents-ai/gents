@@ -1,15 +1,4 @@
 import Proofs.ToolExecution.State
-
-/-!
-# Background Process Control
-
-Authorization and bounded-wait semantics for ordinary background tool calls.
-A process handle remains manageable across request turns in the same session,
-but never crosses the session, node, or requester boundary.
-When requester identity is unavailable on both requests, absence is the shared
-requester scope. A missing requester on only one side fails closed.
--/
-
 namespace Background.ProcessControl
 
 structure Scope where

@@ -4,6 +4,7 @@ use gents::document_config::{
 };
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use serde_json::json;
+use std::sync::Arc;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
@@ -155,7 +156,7 @@ async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
         .skills
         .iter()
         .any(|row| row.node_did == node_did && row.skill_id == "amy-skill"));
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -277,6 +278,6 @@ async fn desktop_task_run_defers_declared_goal_until_claim() -> Result<()> {
     assert_eq!(goals[0]["token_budget"], 10_000);
     drop(lifecycle);
 
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }

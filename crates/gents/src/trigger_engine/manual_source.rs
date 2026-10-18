@@ -1,5 +1,3 @@
-//! Manual-fire `TriggerSource`.
-
 use std::future::Future;
 use std::pin::Pin;
 

@@ -110,8 +110,6 @@ private theorem unavailable_observation_retries_without_claim :
       (claimed unavailableCase).isNone = true := by
   native_decide
 
-/-- This bounds only the decimal fixture symbols emitted below, not request
-identity or the native adapter's supported ID width. -/
 private def emittedModelLabels (c : Case) : List Nat :=
   let start := world c
   let binding := (activation c).map fun activation =>
@@ -135,8 +133,6 @@ private def rowJson (r : _root_.TitleAdmission.RequestRowEvidence) : Json :=
     , ("branch_fields_exact", toJson r.branchFieldsExact)
     , ("pending_deadline_absent", toJson r.pendingDeadlineAbsent) ]
 
-/-- Collision-free model labels may exceed native integer widths; decimal JSON
-strings preserve exact equality and are not durable document identifiers. -/
 private def symbolJson (value : Nat) : Json := toJson (toString value)
 private def optionalSymbolJson (value : Option Nat) : Json :=
   value.map symbolJson |>.getD Json.null

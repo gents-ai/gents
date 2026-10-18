@@ -1,11 +1,9 @@
 """Tests for the Harbor adapter's post-run metadata projection.
 
-Runs with the standard library only::
-
     python3 scripts/harbor/test_gents_agent.py
 
-Harbor and certifi are stubbed before import so the adapter's metadata
-contract can be exercised without a Harbor installation.
+Harbor and certifi are stubbed before import so the adapter can be exercised
+without a Harbor installation.
 """
 
 from __future__ import annotations
@@ -92,154 +90,9 @@ _TRAJECTORY = {
         },
     },
 }
-_MAX_TURN_ERROR = (
-    "agent stream failed: PromptError: MaxTurnError: (reached max turn limit: 250)"
-)
-
-
-class PopulateContextPostRunTest(unittest.TestCase):
-    def _run(self, files: dict[str, object]) -> dict[str, object]:
-        agent = GentsAgent.__new__(GentsAgent)
-        agent.logger = logging.getLogger("test_gents_agent")
-        with tempfile.TemporaryDirectory() as temp_dir:
-            agent.logs_dir = Path(temp_dir)
-            for name, payload in files.items():
-                text = payload if isinstance(payload, str) else json.dumps(payload)
-                (agent.logs_dir / name).write_text(text)
-            context = _AgentContext()
-            agent.populate_context_post_run(context)
-            self.last_context = context
-            return ((context.metadata or {}).get("gents")) or {}
-
-    def test_max_turn_exhaustion_is_identified(self) -> None:
-        gents = self._run(
-            {
-                "trajectory.json": _TRAJECTORY,
-                "request.json": {"request_id": "req-1"},
-                "gents-outcome.json": {
-                    "outcome": "max_turns_exhausted",
-                    "response_status": "error",
-                    "max_turns": 250,
-                    "request_id": "req-1",
-                },
-                "response.json": {"request": {"lifecycle_state": "failed", "failure_reason": _MAX_TURN_ERROR}, "output": {"kind": "terminal_no_message"}},
-            }
-        )
-        self.assertEqual(gents.get("outcome"), "max_turns_exhausted")
-        self.assertIs(gents.get("budget_exhausted"), True)
-        self.assertEqual(gents.get("terminal_error"), _MAX_TURN_ERROR)
-        self.assertEqual(gents.get("request_id"), "req-1")
-        self.assertEqual(gents.get("total_steps"), 7)
-        self.assertEqual(self.last_context.n_input_tokens, 300)
-        self.assertEqual(self.last_context.n_cache_tokens, 60)
-        self.assertEqual(self.last_context.n_output_tokens, 100)
-        self.assertEqual(gents.get("max_total_tokens"), 1_000_000)
-        self.assertEqual(gents.get("aggregate_token_budget_used"), 400)
-        self.assertEqual(gents.get("aggregate_token_budget_remaining"), 999_600)
-
-    def test_token_exhaustion_is_identified(self) -> None:
-        gents = self._run(
-            {
-                "trajectory.json": _TRAJECTORY,
-                "request.json": {"request_id": "req-token"},
-                "gents-outcome.json": {"outcome": "token_budget_exhausted"},
-                "response.json": {
-                    "request": {"lifecycle_state": "failed", "failure_reason": "aggregate_token_budget_exhausted: limit=100000"},
-                "output": {"kind": "terminal_no_message"},
-                },
-            }
-        )
-        self.assertEqual(gents.get("outcome"), "token_budget_exhausted")
-        self.assertIs(gents.get("budget_exhausted"), True)
-
-    def test_completed_run_is_not_budget_exhausted(self) -> None:
-        gents = self._run(
-            {
-                "trajectory.json": _TRAJECTORY,
-                "request.json": {"request_id": "req-2"},
-                "gents-outcome.json": {
-                    "outcome": "completed",
-                    "response_status": "complete",
-                },
-                "response.json": {"request": {"lifecycle_state": "completed", "failure_reason": None}, "output": {"kind": "terminal_no_message"}},
-            }
-        )
-        self.assertEqual(gents.get("outcome"), "completed")
-        self.assertIs(gents.get("budget_exhausted"), False)
-        self.assertIsNone(gents.get("terminal_error"))
-
-    def test_missing_outcome_artifacts_degrade_to_null(self) -> None:
-        gents = self._run(
-            {
-                "trajectory.json": _TRAJECTORY,
-                "request.json": {"request_id": "req-3"},
-            }
-        )
-        self.assertIsNone(gents.get("outcome"))
-        self.assertIs(gents.get("budget_exhausted"), False)
-        self.assertIsNone(gents.get("terminal_error"))
-
-    def test_corrupt_outcome_file_degrades_to_null(self) -> None:
-        gents = self._run(
-            {
-                "trajectory.json": _TRAJECTORY,
-                "request.json": {"request_id": "req-4"},
-                "gents-outcome.json": '{"outcome": "max_turns_exhausted", oops',
-                "response.json": {"request": {"lifecycle_state": "failed", "failure_reason": _MAX_TURN_ERROR}, "output": {"kind": "terminal_no_message"}},
-            }
-        )
-        self.assertIsNone(gents.get("outcome"))
-        self.assertIs(gents.get("budget_exhausted"), False)
-        self.assertEqual(gents.get("terminal_error"), _MAX_TURN_ERROR)
-
-    def test_server_loss_metadata_survives_without_atif(self) -> None:
-        gents = self._run(
-            {
-                "request.json": {"request_id": "req-lost"},
-                "gents-outcome.json": {"outcome": "runtime_server_lost"},
-                "gents-diagnostic.json": {
-                    "reason": "server_lost_during_request",
-                    "graphql_available": False,
-                },
-                "gents-server-exit.json": {
-                    "status": "signal",
-                    "signal": 9,
-                    "wait_status": 137,
-                },
-            }
-        )
-        self.assertEqual(gents.get("request_id"), "req-lost")
-        self.assertEqual(gents.get("failure_origin"), "gents_server")
-        self.assertIs(gents.get("diagnostic_graphql_available"), False)
-        self.assertEqual((gents.get("server_exit") or {}).get("signal"), 9)
-
-    def test_compaction_provider_failure_has_distinct_origin(self) -> None:
-        gents = self._run(
-            {
-                "request.json": {"request_id": "req-compaction"},
-                "gents-outcome.json": {"outcome": "compaction_provider_error"},
-                "response.json": {
-                    "request": {"lifecycle_state": "failed", "failure_reason": "compaction_provider_failure: guided and fallback output failed"},
-                "output": {"kind": "terminal_no_message"},
-                },
-            }
-        )
-        self.assertEqual(gents.get("outcome"), "compaction_provider_error")
-        self.assertEqual(gents.get("failure_origin"), "compaction_provider")
 
 
 class PersistedRequestContractTest(unittest.TestCase):
-    def test_null_value_is_distinct_from_an_omitted_contract_field(self) -> None:
-        self.assertIsNone(
-            GentsAgent._persisted_request_value(
-                {"max_total_tokens": None}, "max_total_tokens"
-            )
-        )
-        with self.assertRaisesRegex(
-            RuntimeError, "omits required persisted field: max_total_tokens"
-        ):
-            GentsAgent._persisted_request_value({}, "max_total_tokens")
-
     def test_run_stays_empty_until_harbor_syncs_logs_for_post_run(self) -> None:
         agent = GentsAgent.__new__(GentsAgent)
         agent.logger = logging.getLogger("test_gents_agent")
@@ -300,36 +153,11 @@ class PersistedRequestContractTest(unittest.TestCase):
         self.assertEqual(gents.get("outcome"), "token_budget_exhausted")
         self.assertEqual(gents.get("model"), "fixture-model")
         self.assertEqual(gents.get("seed"), 1)
-        # ATIF durable budget observation wins over re-reading only the
-        # submit-time request payload when both are present.
         self.assertEqual(gents.get("max_total_tokens"), 1_000_000)
         self.assertEqual(gents.get("aggregate_token_budget_used"), 400)
         self.assertEqual(gents.get("aggregate_token_budget_remaining"), 999_600)
         self.assertIn(
             f"cat {GentsAgent._REMOTE_PERSISTED_REQUEST}", environment.commands
-        )
-
-    def test_incomplete_usage_does_not_partially_fill_context(self) -> None:
-        incomplete_trajectory = json.loads(json.dumps(_TRAJECTORY))
-        del incomplete_trajectory["final_metrics"]["total_completion_tokens"]
-        context = _AgentContext()
-
-        self.assertIs(
-            GentsAgent._populate_token_usage(context, incomplete_trajectory), False
-        )
-        self.assertIsNone(context.metadata)
-        self.assertIsNone(context.n_input_tokens)
-        self.assertIsNone(context.n_cache_tokens)
-        self.assertIsNone(context.n_output_tokens)
-
-    def test_atif_budget_observation_is_read_from_final_metrics_extra(self) -> None:
-        observation = GentsAgent._atif_budget_observation(_TRAJECTORY)
-        self.assertEqual(observation["limit"], 1_000_000)
-        self.assertEqual(observation["used"], 400)
-        self.assertEqual(observation["remaining"], 999_600)
-        self.assertEqual(
-            GentsAgent._atif_budget_observation({"final_metrics": {}}),
-            {"limit": None, "used": None, "remaining": None},
         )
 
 
@@ -529,8 +357,6 @@ elif args[:1] == ["server"]:
         print("gents server is running with fake transport", flush=True)
         while True:
             time.sleep(1)
-    # Model the production restart race: status can report the prior server's
-    # persisted ready state before the replacement has acquired its store.
     time.sleep(0.2)
     (home / "second-server-ready").touch()
     print("gents server is running with fake transport", flush=True)

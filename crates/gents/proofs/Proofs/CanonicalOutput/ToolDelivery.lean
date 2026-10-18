@@ -1,14 +1,6 @@
 import Proofs.CanonicalOutput.Message
 import Proofs.ToolExecution.Executable
 
-/-!
-# Tool-owned canonical sources
-
-This module validates one physical tool-owned source. It deliberately owns no
-message collection, transcript cursor, request lease, or independent delivery
-flag. The composed transaction in `CanonicalOutput.Execution.ToolDelivery`
-applies these validators to the single shared execution world.
--/
 namespace CanonicalOutput.ToolDelivery
 
 inductive Error where
@@ -93,8 +85,6 @@ def appendReplayValid (records : List Segment) (request document : DocId)
     | [closing] => closedRecordValid records request document closing
     | _ => false
 
-/-- Add one running tool flush to the authoritative segment collection. Output
-does not alter either request or tool liveness. -/
 def appendRecords (records : List Segment) (request document : DocId)
     (currentTime : Time) (record : Segment) : Except Error (List Segment) :=
   if record ∈ records && appendReplayValid records request document record then .ok records
@@ -106,9 +96,6 @@ def appendRecords (records : List Segment) (request document : DocId)
     .error .malformed
   else .ok (records ++ [record])
 
-/-- Install the exact terminal closure. Tool status is intentionally not
-derived from `OutputOutcome`: lifecycle completion and output completeness are
-separate axes. -/
 def closeRecords (records : List Segment) (request document : DocId)
     (currentTime : Time) (record : Segment) : Except Error (List Segment) :=
   if record ∈ records && closedRecordValid records request document record then .ok records
@@ -120,8 +107,6 @@ def closeRecords (records : List Segment) (request document : DocId)
     if !freshClosedRecordValid next request document record then .error .malformed
     else .ok next
 
-/-- A successful append is replay or one globally fresh, non-closing record at
-an open source.  This is the structural interface used by composed invariants. -/
 theorem appendRecords_success_effect (records after : List Segment)
     (request document : DocId) (currentTime : Time) (record : Segment)
     (h : appendRecords records request document currentTime record = .ok after) :
@@ -134,8 +119,6 @@ theorem appendRecords_success_effect (records after : List Segment)
     | (solve | simp_all [openSource, ownedRecord])
     | split at h
 
-/-- A successful close is replay or one globally fresh closure installed at a
-previously open source. -/
 theorem closeRecords_success_effect (records after : List Segment)
     (request document : DocId) (currentTime : Time) (record : Segment)
     (h : closeRecords records request document currentTime record = .ok after) :
@@ -183,8 +166,6 @@ def closingTwin : Segment := { closing with createdAt := 6 }
 example : closedRecordValid [first, closing, closingTwin] 10 300 closing = false := by
   native_decide
 
-/-- A flush delivered after the selected closure extent cannot rewind or
-invalidate replay of that already-committed extent. -/
 def laterBeyondExtent : Segment :=
   { id := 403, coordinate := coordinate 10 300, writer := .tool 300
     flush := some ⟨1, [⟨0, 1, none⟩], [66]⟩

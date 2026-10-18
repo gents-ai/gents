@@ -1,12 +1,9 @@
 """Harbor custom agent that runs the native Gents runtime inside a task container.
 
-Use this agent by import path from the repository root::
-
     harbor run ... --agent scripts.harbor.gents_agent:GentsAgent
 
-The adapter deliberately installs Gents *inside* the task environment. Native
-filesystem and shell tools therefore operate on the same ``/app`` tree that the
-Harbor verifier inspects.
+The adapter installs Gents inside the task environment so native filesystem and
+shell tools operate on the same ``/app`` tree that the Harbor verifier inspects.
 """
 
 from __future__ import annotations
@@ -27,12 +24,8 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
 class GentsAgent(BaseAgent):
-    """Run one Harbor instruction through a durable Gents request."""
-
     SUPPORTS_ATIF = True
     _REMOTE_BINARY = "/usr/local/bin/gents"
-    # Keep the conventional basename for diagnostics and direct execution. The
-    # explicit-loader case uses the filesystem-runner shim installed in setup.
     _REMOTE_REAL_BINARY = "/usr/local/libexec/gents"
     _REMOTE_BINARY_UPLOAD = "/tmp/gents-harbor-upload"
     _REMOTE_FS_RUNNER = "/usr/local/bin/gents-fs-runner"
@@ -48,8 +41,7 @@ class GentsAgent(BaseAgent):
         super().__init__(*args, **kwargs)
         docker_platform = self._env("GENTS_DOCKER_PLATFORM")
         if docker_platform:
-            # Compose honors this for prebuilt images. Harbor 0.20.0 does not
-            # honor it for buildx, whose resolver runs after agent creation.
+            # Harbor 0.20.0 does not honor DOCKER_DEFAULT_PLATFORM for buildx.
             os.environ["DOCKER_DEFAULT_PLATFORM"] = docker_platform
             from harbor.environments.docker import docker as harbor_docker
             from harbor.environments.docker import utils as harbor_docker_utils
@@ -111,12 +103,6 @@ class GentsAgent(BaseAgent):
     def _atif_budget_observation(
         cls, trajectory: dict[str, Any]
     ) -> dict[str, int | None]:
-        """Read request-wide budget fields Gents projects into ATIF extra.
-
-        These are the durable observation path: limit from AgentRequest,
-        used/remaining from InferenceCall rows under the same charge rule as
-        live enforcement. Harbor must not re-sum tokens itself.
-        """
         final_metrics = cls._atif_final_metrics(trajectory)
         extra = final_metrics.get("extra") or {}
         if not isinstance(extra, dict):
@@ -133,12 +119,6 @@ class GentsAgent(BaseAgent):
     def _populate_token_usage(
         cls, context: AgentContext, trajectory: dict[str, Any]
     ) -> bool:
-        """Copy ATIF final_metrics token columns into Harbor context.
-
-        Incomplete metrics fail closed (no partial fill). Usage is never
-        reconstructed from logs or InferenceCall rows here — Gents already
-        projected the durable charge into ATIF.
-        """
         final_metrics = cls._atif_final_metrics(trajectory)
         values: dict[str, int] = {}
         for attribute, key in (
@@ -192,8 +172,6 @@ class GentsAgent(BaseAgent):
         elif outcome.get("outcome") == "compaction_provider_error":
             failure_origin = "compaction_provider"
 
-        # Prefer ATIF's durable budget projection when present; fall back to the
-        # persisted AgentRequest row (already validated against GENTS_* env).
         max_total_tokens = budget["limit"]
         if max_total_tokens is None:
             max_total_tokens = persisted_request.get("max_total_tokens")
@@ -232,7 +210,6 @@ class GentsAgent(BaseAgent):
         }
 
     async def _install_ca_bundle(self, environment: BaseEnvironment) -> None:
-        """Provide TLS roots without invoking a package manager in every task."""
         ca_bundle = Path(certifi.where())
         if not ca_bundle.is_file():
             raise FileNotFoundError(f"Harbor CA bundle is missing: {ca_bundle}")
@@ -336,9 +313,8 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
                 "GENTS_RELEASE_URL to a gents Linux release tarball"
             )
 
-        # An explicit glibc loader becomes /proc/self/exe, so Gents cannot use
-        # its executable basename to discover the embedded filesystem runner.
-        # Install a stable external command and point the runtime at it.
+        # An explicit glibc loader becomes /proc/self/exe, so the runtime cannot
+        # discover the embedded filesystem runner by executable basename.
         install_fs_runner = (
             f"printf '%s\\n' '#!/bin/sh' "
             f"'exec {self._REMOTE_BINARY} __native-fs-runner \"$@\"' "
@@ -425,8 +401,7 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
             )
 
         session_slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", self.session_id or "trial")
-        # Harbor retries retain the trial/session identity. A per-run suffix
-        # guarantees that a cancelled attempt can never leave the next attempt
+        # Per-run suffix: a cancelled attempt must never leave the next retry
         # contending on the same persistent store.
         run_slug = f"{session_slug}-{uuid.uuid4().hex[:12]}"
         instruction_path = f"/tmp/gents-harbor-{run_slug}.instruction.md"
@@ -464,16 +439,10 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
                 "GENTS_REASONING_EFFORT", "max"
             )
             or "max",
-            # Avoid `TOKEN` in this environment key. Harbor treats matching
-            # agent-env names as secrets and blindly replaces their values in
-            # downloaded text artifacts, which can corrupt numeric JSON fields.
+            # Harbor treats agent-env names containing TOKEN as secrets and
+            # rewrites their values in downloaded artifacts, corrupting JSON.
             "GENTS_MAX_OUTPUT": self._env("GENTS_MAX_OUTPUT", "393216") or "393216",
             "GENTS_MAX_TOTAL": max_total,
-            # Keep 53,248 tokens of provider-tokenization headroom below DeepSeek V4 Flash's
-            # 512K server limit. Gents dynamically clamps each turn's 384K
-            # output ceiling to the context remaining after the assembled input,
-            # so compaction follows the 75% input threshold instead of a fixed
-            # 65,536-token reservation.
             "GENTS_CONTEXT_WINDOW": self._env("GENTS_CONTEXT_WINDOW", "458752")
             or "458752",
             "GENTS_MAX_TURNS": self._env("GENTS_MAX_TURNS", "1000") or "1000",
@@ -506,9 +475,8 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
         )
         runner_error: BaseException | None = None
         try:
-            # Classify the runner while GENTS_HOME still exists. The runner's
-            # failure trap projects partial traces and captures its bounded
-            # diagnostic bundle before returning a nonzero status.
+            # Classify while GENTS_HOME still exists (failure trap projects
+            # partial traces and captures diagnostics).
             self._require_success(self._REMOTE_RUNNER, result)
         except BaseException as error:
             runner_error = error
@@ -543,10 +511,9 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
         if runner_error is not None:
             raise runner_error
 
-        # Validate the persisted request inside the environment, but leave
-        # AgentContext empty. Harbor 0.20.0 only invokes the post-run projection
-        # after syncing logs when AgentContext.is_empty(); populating even one
-        # metadata or usage field here would suppress the complete ATIF import.
+        # Harbor 0.20.0 only invokes the post-run projection after syncing logs
+        # when AgentContext.is_empty(); populating context here would suppress
+        # the complete ATIF import.
         persisted_result = await environment.exec(
             command=f"cat {shlex.quote(self._REMOTE_PERSISTED_REQUEST)}"
         )
@@ -617,8 +584,6 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
         try:
             parsed = json.loads(path.read_text())
         except (OSError, ValueError):
-            # ValueError covers JSONDecodeError and the UnicodeDecodeError a
-            # Harbor artifact rewrite can leave behind.
             self.logger.warning("Failed to read %s", path, exc_info=True)
             return {}
         return parsed if isinstance(parsed, dict) else {}

@@ -74,8 +74,6 @@ instance (w : IsolatedWorkspace) (b : WorkspaceBinding) :
   unfold IntegrateOk
   infer_instance
 
-/-- Node ownership plus workspace lifecycle eligibility. Local filesystem
-availability remains an execution observation; this is not a host fingerprint. -/
 def OwnerClaimable (nodeDid : String) (w : IsolatedWorkspace) : Prop :=
   w.ownerNodeDid = nodeDid ∧ WorkspaceState.bindable w.state
 
@@ -100,10 +98,6 @@ def BindingAuthority.commandMode : BindingAuthority → ExecutionMode
 def authorityMeet (agent : ExecutionMode) (authority : BindingAuthority) : ExecutionMode :=
   agent.meet (BindingAuthority.commandMode authority)
 
-/-- Explicit contextual grant, distinct from attenuation. The optional binding
-has already been checked by the existing workspace/execution owners, including
-active binding and current live, uncanceled execution. `requested` is AFTER the
-agent/selection/operator-ceiling meet, never the raw artifact selection. -/
 def effectiveBoundCommand (requested : ExecutionMode)
     (binding : Option ArtifactBinding) : Option ExecutionMode :=
   if requested = .artifactWrite then

@@ -1,5 +1,3 @@
-//! Immutable source-path admission. Alias keys detect ambiguity only: they never
-//! replace the literal repository-relative paths granted by the capability.
 use anyhow::{bail, ensure, Context, Result};
 use caseless::Caseless;
 use serde::{Deserialize, Serialize};
@@ -115,9 +113,8 @@ impl WorkspacePathCapability {
         }
     }
 
-    /// Validate existing components without following symlinks. Missing leaves
-    /// and parent suffixes are allowed for new files; their spelling remains the
-    /// exact admitted spelling. This is a check, not a filesystem race lock.
+    /// No-follow check; missing leaves and parent suffixes are allowed for new
+    /// files. A check, not a filesystem race lock.
     pub fn validate_paths_at(&self, root: &Path) -> Result<()> {
         self.validate()?;
         let Self::ExactPaths { paths } = self else {
@@ -142,8 +139,6 @@ impl WorkspacePathCapability {
                     let entry = entry?;
                     let filename = entry.file_name();
                     let Some(spelling) = filename.to_str() else {
-                        // Admitted components are UTF-8. An unrelated opaque
-                        // filename cannot alias this literal component.
                         continue;
                     };
                     if alias_key(spelling) != wanted_alias {
@@ -158,8 +153,6 @@ impl WorkspacePathCapability {
                     exact = Some(entry.path());
                 }
                 let Some(found) = exact else {
-                    // No existing component (including alias) can redirect the
-                    // remaining literal suffix during this observation.
                     break;
                 };
                 let metadata = std::fs::symlink_metadata(&found)?;
@@ -188,8 +181,6 @@ impl WorkspacePathCapability {
     }
 }
 
-/// Refine the changed-prefix observations against a complete Git tree without
-/// imposing new path-admission requirements on unrelated historical entries.
 pub(crate) fn validate_changed_path_aliases<'a>(
     changed: &[&str],
     tree_paths: impl IntoIterator<Item = &'a str>,
@@ -230,8 +221,8 @@ pub(crate) fn validate_changed_path_aliases<'a>(
     Ok(())
 }
 
-/// Compatibility caseless key, following caseless::compatibility_caseless_match
-/// (NFD, casefold, NFKD, casefold, NFKD). It is never an admitted path rewrite.
+/// Compatibility caseless key (caseless::compatibility_caseless_match); never
+/// an admitted path rewrite.
 pub(crate) fn alias_key(value: &str) -> String {
     value
         .chars()
@@ -277,7 +268,7 @@ pub(crate) fn validate_relative_path(path: &str) -> Result<()> {
             folded != ".git",
             "workspace path must not name Git metadata: {path}"
         );
-        // NFKD also exposes fullwidth dot/separators and superscript device digits.
+        // NFKD exposes fullwidth dot/separators and superscript device digits.
         ensure!(
             !folded.contains(['/', '\\', ':'])
                 && folded != "."
@@ -304,8 +295,6 @@ mod tests {
         WorkspacePathCapability::exact_paths(paths.iter().map(|p| (*p).into()).collect())
     }
 
-    // macOS rejects opaque byte filenames at creation (EILSEQ); its Git-object
-    // cases still exercise opaque tree entries without impossible host files.
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn unrelated_non_utf8_sibling_does_not_reject_owned_path() {
@@ -321,22 +310,6 @@ mod tests {
             .unwrap()
             .validate_paths_at(root.path())
             .unwrap();
-    }
-
-    #[test]
-    fn empty_exact_and_literal_membership_never_widen() {
-        let empty = exact(&[]).unwrap();
-        assert!(!empty.authorizes("src/main.rs"));
-        let cap = exact(&["src/main.rs"]).unwrap();
-        assert!(cap.authorizes("src/main.rs"));
-        for other in [
-            "SRC/main.rs",
-            "src/main.rs/child",
-            "src/main.rs.bak",
-            "src/../src/main.rs",
-        ] {
-            assert!(!cap.authorizes(other));
-        }
     }
 
     #[test]

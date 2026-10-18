@@ -17,7 +17,6 @@ const user = (requestId: string) =>
     requestId,
     ownsTurn: true,
   }) as RenderedTimelineItem;
-/* a row the request authors beside its prompt: saved, but not the turn */
 const context = (requestId: string) =>
   ({
     kind: "userMessage",
@@ -36,7 +35,6 @@ const live = (content: string) =>
 const session = (timelineItems: RenderedTimelineItem[]) =>
   ({ sessionId: "s", timelineItems }) as unknown as DesktopSessionSnapshot;
 
-/* the facts screens read besides drawing the transcript, kept on write */
 describe("session facts", () => {
   it("leave a streamed chunk to the live reply uncounted", () => {
     const row = user("r1");
@@ -90,9 +88,6 @@ describe("session facts", () => {
   });
 });
 
-/* A request the app sent, known by its id on every row the bridge draws
-   for it; the rows that stand for its turn — its pending turn, its saved
-   prompt — are the ones that hold it. */
 describe("whether the bridge holds a sent request", () => {
   const pending = (requestId: string) =>
     ({

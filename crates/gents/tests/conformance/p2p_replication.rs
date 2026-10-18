@@ -1,5 +1,3 @@
-//! Physical P2P replication of canonical output and durable peer identity (node identity).
-
 use anyhow::{Context, Result};
 use defra_p2p_adapter::P2pDocumentRequest;
 use gents::config_client::ConfigAccess;
@@ -31,10 +29,6 @@ async fn replicated_output_ordinal_twin_fails_closed_after_physical_p2p_import()
         .expect("replicated ordinal twin must invalidate the original canonical projection");
 }
 
-/// Two connected P2P nodes. Only `Network` has a replicator route: the
-/// exact-document push is sent through the replicator retry guard and returns
-/// Ok without sending when no route exists, while output collections must
-/// arrive only by the explicit push.
 async fn connected_pair() -> Result<(TestDb, TestDb)> {
     let a = test_p2p_db("p2p-replication-a").await;
     let b = test_p2p_db("p2p-replication-b").await;
@@ -113,8 +107,6 @@ async fn push_segment(from: &TestDb, to: &TestDb, doc_id: &str) -> Result<()> {
     }
 }
 
-/// Exercise imported-fact projection only; it does not establish that either
-/// peer could authorize the other's write under a production ACP grant.
 async fn assert_replicated_nonclosing_ordinal_twin_rejected() -> Result<()> {
     use gents::session::canonical_rows::{
         decode_output_segment_row, decode_transcript_message_row, output_segment_create_variables,
@@ -140,7 +132,7 @@ async fn assert_replicated_nonclosing_ordinal_twin_rejected() -> Result<()> {
     )
     .await;
 
-    let a_access = ConfigAccess::Local(a.node.clone());
+    let a_access = ConfigAccess::local(a.node.clone());
     let header_query = format!(
         "{{ AgentMessage(filter: {{ node_did: {{ _eq: \"{}\" }}, session_id: {{ _eq: \"{}\" }}, sequence: {{ _eq: 1 }} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}",
         escape_graphql_string(node_did),
@@ -203,8 +195,8 @@ async fn assert_replicated_nonclosing_ordinal_twin_rejected() -> Result<()> {
         "twin must be nonclosing without changing the sealed byte extent"
     );
     let variables = output_segment_create_variables(&twin)?;
-    ConfigAccess::transact_local(
-        b.node.as_ref(),
+    ConfigAccess::transact_local_write(
+        &b.node,
         None,
         "test.p2p_replicated_output_conflict",
         |txn| {
@@ -217,7 +209,7 @@ async fn assert_replicated_nonclosing_ordinal_twin_rejected() -> Result<()> {
         },
     )
     .await?;
-    let b_access = ConfigAccess::Local(b.node.clone());
+    let b_access = ConfigAccess::local(b.node.clone());
     let source_rows = b_access.execute(&segment_query).await?;
     let source_rows = source_rows["data"]["AgentOutputSegment"]
         .as_array()

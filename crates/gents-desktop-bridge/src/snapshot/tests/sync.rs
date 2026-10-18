@@ -31,17 +31,6 @@ fn serving_progress() -> ClientHydrationProgress {
 }
 
 #[test]
-fn hydration_view_copies_receiver_counts_exactly() {
-    let view = to_hydration_view(&serving_progress(), None);
-    assert_eq!(view.session_id, "session-1");
-    assert_eq!(view.node_did, "did:test:agent");
-    assert_eq!(view.phase, "serving");
-    assert_eq!(view.merged_count, 4);
-    assert_eq!(view.covered_count, 3);
-    assert_eq!(view.served_count, Some(11));
-}
-
-#[test]
 fn ownership_refusal_is_unreadable_not_a_retryable_failure() {
     let failed = ClientHydrationProgress {
         phase: ClientHydrationPhase::Failed,

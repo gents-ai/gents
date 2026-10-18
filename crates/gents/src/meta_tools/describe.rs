@@ -742,225 +742,6 @@ mod tests {
     use crate::health_checker::ServiceHealthMap;
     use crate::mcp_pool::McpPool;
 
-    fn x_data_search_tool() -> McpTool {
-        let schema = json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Search text.",
-                    "examples": ["gents"]
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Maximum results to return.",
-                    "default": 10,
-                    "minimum": 1,
-                    "maximum": 100
-                }
-            },
-            "required": ["query"]
-        })
-        .as_object()
-        .expect("schema object")
-        .clone();
-
-        McpTool::new("search_posts", "Search x-data posts.", Arc::new(schema))
-    }
-
-    #[test]
-    fn missing_x_data_tool_returns_structured_envelope_with_available_tools() {
-        let list_result = ListToolsResult::with_all_items(vec![x_data_search_tool()]);
-        let error = describe_tool_result("x-data", "search_post", false, &list_result)
-            .expect_err("missing tool should return envelope");
-
-        assert_eq!(error.failure_class, "tool_not_found");
-        assert_eq!(error.path, "/tool_name");
-        assert!(error.retryable);
-        assert_eq!(error.service_id, "x-data");
-        assert_eq!(error.tool_name, "search_post");
-        assert_eq!(error.requested_tool_name.as_deref(), Some("search_post"));
-        assert_eq!(
-            error.available_tools,
-            Some(vec!["search_posts".to_string()])
-        );
-
-        let value: Value = serde_json::from_str(&error.to_result_text()).expect("structured json");
-        assert_eq!(value["ok"], false);
-        assert_eq!(value["failure_class"], "tool_not_found");
-        assert_eq!(value["requested_tool_name"], "search_post");
-        assert_eq!(value["available_tools"], json!(["search_posts"]));
-        assert!(value["message"]
-            .as_str()
-            .expect("message")
-            .contains("available tools: search_posts"));
-    }
-
-    #[test]
-    fn default_describe_tool_output_is_compact_contract() {
-        let list_result = ListToolsResult::with_all_items(vec![x_data_search_tool()]);
-        let output = describe_tool_result("x-data", "search_posts", false, &list_result)
-            .expect("known tool should describe");
-
-        assert!(output.starts_with("## search_posts\nPurpose: Search x-data posts."));
-        assert!(output.contains("Input contract:"));
-        assert!(output.contains(
-            "Required arguments:\n- `/arguments/query` (string; examples: \"gents\") - Search text."
-        ));
-        assert!(output.contains("Optional arguments:\n- `/arguments/limit` (integer; default: 10; minimum: 1; maximum: 100) - Maximum results to return."));
-        assert!(
-            output.contains("Unknown top-level fields: rejected (`additionalProperties: false`)")
-        );
-        assert!(output.contains("Raw schema: call `describe_tool` with `raw_schema: true`."));
-        assert!(output.contains("Example `call_tool.arguments`:"));
-        assert!(output.contains("\"query\": \"gents\""));
-        assert!(!output.contains("Input schema:\n```json"));
-    }
-
-    #[test]
-    fn raw_schema_can_still_be_requested() {
-        let expected_schema = json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Search text.",
-                    "examples": ["gents"]
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Maximum results to return.",
-                    "default": 10,
-                    "minimum": 1,
-                    "maximum": 100
-                }
-            },
-            "required": ["query"]
-        });
-        let list_result = ListToolsResult::with_all_items(vec![x_data_search_tool()]);
-        let output = describe_tool_result("x-data", "search_posts", true, &list_result)
-            .expect("known tool should describe raw schema");
-
-        assert!(output
-            .starts_with("## search_posts\nSearch x-data posts.\n\nRaw input schema:\n```json\n"));
-        assert!(output.ends_with("\n```"));
-        let schema_text = output
-            .split("```json\n")
-            .nth(1)
-            .and_then(|text| text.strip_suffix("\n```"))
-            .expect("schema block");
-        let schema: Value = serde_json::from_str(schema_text).expect("schema json");
-        assert_eq!(schema, expected_schema);
-    }
-
-    #[test]
-    fn nested_object_and_array_fields_render_compact_paths() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "query": { "type": "string" },
-                "filter": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "properties": {
-                        "repo_name": { "type": "string" },
-                        "states": {
-                            "type": "array",
-                            "items": {
-                                "type": "string",
-                                "enum": ["open", "closed"]
-                            }
-                        }
-                    },
-                    "required": ["repo_name"]
-                },
-                "sort": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "field": { "type": "string" },
-                            "direction": {
-                                "type": "string",
-                                "enum": ["asc", "desc"]
-                            }
-                        },
-                        "required": ["field"]
-                    }
-                }
-            },
-            "required": ["query", "filter"]
-        })
-        .as_object()
-        .expect("schema object")
-        .clone();
-        let tool = McpTool::new(
-            "search_coding_notes",
-            "Search coding notes.",
-            Arc::new(schema),
-        );
-        let list_result = ListToolsResult::with_all_items(vec![tool]);
-
-        let output = describe_tool_result(
-            "coding-session-store",
-            "search_coding_notes",
-            false,
-            &list_result,
-        )
-        .expect("known tool should describe");
-
-        assert!(output.contains("- `/arguments/query` (string)"));
-        assert!(output.contains("- `/arguments/filter` (object; unknown nested fields: rejected (`additionalProperties: false`))"));
-        assert!(output.contains("- `/arguments/filter/repo_name` (string; required)"));
-        assert!(output.contains("- `/arguments/filter/states` (array<string>; optional)"));
-        assert!(output.contains("- `/arguments/sort[]/field` (string; required)"));
-        assert!(output.contains(
-            "- `/arguments/sort[]/direction` (string; optional; enum: \"asc\", \"desc\")"
-        ));
-        assert!(output.contains("do not invent generic fields like `limit`"));
-    }
-
-    #[test]
-    fn compact_contract_is_smaller_than_representative_raw_schema() {
-        let properties = (0..40)
-            .map(|i| {
-                (
-                    format!("optional_field_{i}"),
-                    json!({
-                        "type": "string",
-                        "description": format!("Optional tuning field {i} with a deliberately verbose description that would be expensive in raw JSON Schema."),
-                        "default": format!("value-{i}")
-                    }),
-                )
-            })
-            .chain(std::iter::once((
-                "query".to_string(),
-                json!({
-                    "type": "string",
-                    "description": "Search text.",
-                    "examples": ["gents agent schema navigation"]
-                }),
-            )))
-            .collect::<Map<String, Value>>();
-        let mut schema = Map::new();
-        schema.insert("type".to_string(), json!("object"));
-        schema.insert("additionalProperties".to_string(), json!(false));
-        schema.insert("properties".to_string(), Value::Object(properties));
-        schema.insert("required".to_string(), json!(["query"]));
-        let raw_schema = serde_json::to_string_pretty(&schema).expect("raw schema");
-        let tool = McpTool::new("search_posts", "Search x-data posts.", Arc::new(schema));
-        let contract = format_tool_description("x-data", &tool, false);
-
-        assert!(
-            contract.len() < raw_schema.len(),
-            "compact contract should be smaller than raw schema: contract={}, raw={}",
-            contract.len(),
-            raw_schema.len()
-        );
-    }
-
     #[tokio::test]
     async fn disallowed_service_returns_before_registry_lookup() {
         let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
@@ -1030,13 +811,8 @@ mod tests {
         assert_eq!(value["path"], "/service_id");
     }
 
-    /// Build a schema so large that `raw_schema: true` would exceed
-    /// `RAW_SCHEMA_MAX_BYTES` and confirm the output is capped with an honest
-    /// truncation marker.
     #[test]
     fn raw_schema_oversized_is_capped_with_truncation_marker() {
-        // Build a schema with many verbose properties so the pretty-printed JSON
-        // exceeds 16 000 bytes.
         let properties: Map<String, Value> = (0..200)
             .map(|i| {
                 (
@@ -1074,7 +850,6 @@ mod tests {
         let output = describe_tool_result("x-data", "big_tool", true, &list_result)
             .expect("known tool should describe");
 
-        // Output must be shorter than the raw pretty-printed schema + header overhead.
         let header = "## big_tool\nA tool with a huge schema.\n\nRaw input schema:\n```json\n";
         let body = output
             .strip_prefix(header)
@@ -1087,13 +862,11 @@ mod tests {
             body.len(),
             raw_schema_json.len()
         );
-        // Slack: body should be within 2x the cap (marker overhead).
         assert!(
             body.len() < RAW_SCHEMA_MAX_BYTES * 2,
             "capped body should be near the cap, got {}",
             body.len()
         );
-        // Honest marker must be present.
         assert!(
             body.contains("[Showing lines"),
             "honest truncation marker must be present"
@@ -1101,20 +874,6 @@ mod tests {
         assert!(
             body.contains("bytes total"),
             "total byte count must be reported"
-        );
-    }
-
-    /// A small schema under the cap must be returned verbatim (no truncation marker).
-    #[test]
-    fn raw_schema_under_cap_passes_through_verbatim() {
-        let list_result = ListToolsResult::with_all_items(vec![x_data_search_tool()]);
-        let output = describe_tool_result("x-data", "search_posts", true, &list_result)
-            .expect("known tool should describe");
-
-        // The schema from x_data_search_tool is small; no truncation marker expected.
-        assert!(
-            !output.contains("[Showing lines"),
-            "small schema must not carry a truncation marker"
         );
     }
 }

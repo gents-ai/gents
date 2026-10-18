@@ -10,7 +10,6 @@ pub(crate) struct GoalContinuationIdentity {
     pub(crate) queue_key: String,
 }
 
-/// Preserve the existing goal/parent retry identity and stable sequence IDs.
 pub(crate) fn goal_continuation_identity(
     goal_id: &str,
     parent_request_id: &str,
@@ -27,8 +26,8 @@ pub(crate) fn goal_continuation_identity(
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
-    // The sequence distinguishes continuation IDs. The shared Goal head selector
-    // follows physical ancestry when whole-second timestamps coincide.
+    // The shared Goal head selector follows physical ancestry when
+    // whole-second timestamps coincide; the sequence distinguishes continuation IDs.
     Ok(GoalContinuationIdentity {
         request_id: format!("goal-cont-{continuation_sequence:020}-{digest_hex}"),
         retry_key: format!("goal-continuation:{digest_hex}"),
@@ -36,12 +35,6 @@ pub(crate) fn goal_continuation_identity(
     })
 }
 
-/// Prepare the existing continuation DTO without reads, signing, or publication.
-/// `hop` is the session's current hop (Lean `CausalHop` session current hop),
-/// which the transaction owner reads alongside the rest of the session.
-/// Transaction owners resolve the agent and time before staging this request.
-/// Original issuance facts are signed typed input; goal/parent identities stay
-/// on the signed request lineage (trigger edge and parent linkage).
 pub(crate) fn prepare_goal_continuation(
     parent: &AgentRequest,
     agent_id: String,
@@ -118,8 +111,6 @@ pub(crate) fn prepare_goal_continuation(
     build_request(spec)
 }
 
-/// Resolve the agent for a goal continuation from its required parent
-/// selection. The parent request is the sole authority for this choice.
 pub(crate) async fn goal_continuation_agent(
     _txn: &crate::config_client::ConfigApplyTxn<'_>,
     parent: &AgentRequest,

@@ -1,4 +1,3 @@
-//! Apply-owned `EthTool` documents.
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
@@ -7,7 +6,6 @@ use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 use super::serde_helpers::deserialize_optional_string_vec;
 
-/// Document-layer view of an `EthTool` row.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -30,8 +28,7 @@ pub struct EthToolDocument {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub rpc_url: Option<String>,
-    /// Per-RPC HTTP timeout; unset retains the current 30s default.
-    /// The enclosing tool-call deadline can shorten it.
+    // Per-RPC HTTP timeout; the enclosing tool-call deadline can shorten it.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub rpc_timeout_secs: Option<i64>,
@@ -50,7 +47,6 @@ pub struct EthToolDocument {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub created_at: Option<String>,
-    /// Optional UI/discovery labels. References, never tags, determine execution.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -61,8 +57,6 @@ pub struct EthToolDocument {
 }
 
 impl EthToolDocument {
-    /// Validate authored declarations even when the document is disabled.
-    /// An empty surface needs no connection; advertised tools do.
     pub fn validate(&self) -> Result<()> {
         anyhow::ensure!(!self.tool_id.trim().is_empty(), "EthTool requires tool_id");
         anyhow::ensure!(

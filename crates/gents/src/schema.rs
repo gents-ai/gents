@@ -1,11 +1,3 @@
-//! Runtime-side schema registration helpers.
-//!
-//! Schema strings remain the canonical exports of `gents_protocol::schemas`
-//! (docs, desktop collection resolution, SelfConfig). **Registration** always
-//! goes through [`crate::migration::ensure_all_runtime_migrations`] /
-//! `gents_migration::ensure_migrations` so every database shares one version
-//! lineage. There is no public "register schemas only" path.
-
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 
@@ -31,10 +23,13 @@ pub use gents_protocol::schemas::{
     TOOL_SERVICE_REGISTRY as TOOL_SERVICE_REGISTRY_SCHEMA,
 };
 
-/// Register baseline + verify lineage (full engine). Feature-invariant.
 pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
-    gents_migration::ensure_migrations(node)
-        .await
-        .map(|_| ())
-        .map_err(|e| anyhow::anyhow!(e))
+    if let Some(access) = crate::config_client::ConfigAccess::claimed_for_node(node) {
+        return access
+            .run_local_owned(|node| async move {
+                crate::migration::ensure_migrations_borrowed(node.as_ref()).await
+            })
+            .await;
+    }
+    crate::migration::ensure_migrations_borrowed(node).await
 }

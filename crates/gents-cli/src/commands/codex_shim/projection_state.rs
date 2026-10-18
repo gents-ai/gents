@@ -1,7 +1,3 @@
-//! Codex-independent state used to decide whether a durable observation is
-//! semantically new. Wire-protocol types belong in the emit/read boundary,
-//! not in the stream's equality and de-duplication model.
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ProjectionStatus {
     InProgress,

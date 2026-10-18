@@ -4,22 +4,10 @@ import Mathlib.Data.List.Dedup
 import Mathlib.Order.Interval.Finset.Nat
 
 /-!
-# Authorized session-hydration closure
-
-Hydration starts from exact messages authorized by the session owner. It
-validates each native envelope through shared reconstruction, then adds its
-immutable origin messages, closing records, exact extent segments and the
-request/tool provenance derived from those records. Mutable provenance enters
-only after its existing owner returns an explicit access observation.
-
-There is deliberately no input for cross-session provenance. A request's
-`caused_by_parent_*` lineage explains why it exists; it is not a capability,
-hydration root, or grant of the calling session's output documents.
-
-Composed plugin children point back at their parent, so no message reaches
-them. They are retained only from a tool call already in the closure, through
-their single persisted-provenance decoder, with their argument and terminal
-audit payloads.
+Authorized session-hydration closure. Hydration roots come from the session
+owner; a request's `caused_by_parent_*` lineage is not a capability or hydration
+root. Composed plugin children are retained only through a tool call already in
+the closure, via their single persisted-provenance decoder.
 -/
 namespace CanonicalOutput.Hydration
 
@@ -32,8 +20,6 @@ structure DocumentKey where
   id : DocId
   deriving DecidableEq, Repr
 
-/-- Separately selected session roots have already passed their existing
-owners. They cannot satisfy provenance derived from a payload reference. -/
 inductive AuthorizedBase where
   | request (id : DocId)
   | toolCall (id : DocId)
@@ -98,9 +84,8 @@ structure AuthorizationScope where
   nativeSession : SessionId
   deriving DecidableEq, Repr
 
-/-- One observation returned by the existing document ACP owner.  Scope is
-part of the observation: evidence obtained for one hydration request cannot be
-replayed for another request, even when both requests name the same session. -/
+/-- One observation returned by the existing document ACP owner. The scope is
+part of the observation and cannot be replayed for a different request. -/
 structure ProvenanceAccess where
   scope : AuthorizationScope
   key : DocumentKey
@@ -137,11 +122,6 @@ def checkedOrigin (header : Header) : Except Error (Option DocId) :=
       if header.origin = some origin then .ok (some origin) else .error .invalidOrigin
   | _ => if header.origin = none then .ok none else .error .invalidOrigin
 
-/-- A fork may change child identity, session and key only. Numeric sequence
-is retained in the child session, exactly as the fork publication owner writes
-it; readers cannot authorize an arbitrary reorder of individually valid copies. Native
-content, source references, outcome, role and creation provenance remain the
-origin facts. -/
 def forkMetadataMatches (child origin : MessageEnvelope) : Bool :=
   child.header == forkHeader origin.header child.header.id child.header.session &&
     child.nativeId == origin.nativeId && child.blocks == origin.blocks &&
@@ -156,9 +136,6 @@ theorem reordered_fork_rejected (child origin : MessageEnvelope)
     (h : child.sequence ≠ origin.sequence) : forkMetadataMatches child origin = false := by
   simp [forkMetadataMatches, h]
 
-/-- Every referenced physical request is retained. Tool-owned sources also
-retain the exact lifecycle row; authored delivery derives its owner from the
-writer. Shared reconstruction rejects incoherent source/writers. -/
 def requiredProvenance (closing : Segment) : List DocumentKey :=
   let request : DocumentKey := ⟨.agentRequest, closing.coordinate.request⟩
   match closing.coordinate.source, closing.writer with
@@ -228,9 +205,6 @@ def terminalRoots (targetSession : SessionId) (messages : List MessageEnvelope)
       | none => .ok later
       | some header => .ok (header.id :: later)
 
-/-- Depth-first origin traversal rejects an ID already on the active path. An
-ID visited through a completed sibling/root is shared DAG data and is skipped.
-Native immutable identity is the premise behind document IDs as vertices. -/
 def collectOne (scope : AuthorizationScope) (messages : List MessageEnvelope) (segments : List Segment)
     (provenance : List ProvenanceAccess) (deniedHeaders deniedSegments : List DocId)
     (dependencyDenials : List DependencyDenial) : Nat → DocId → List DocId →
@@ -273,8 +247,6 @@ def collectRoots (scope : AuthorizationScope) (messages : List MessageEnvelope) 
       collectRoots scope messages segments provenance deniedHeaders deniedSegments
         dependencyDenials fuel rest visited manifest
 
-/-- One observed AgentToolCall's persisted plugin-effect provenance, before
-decoding. `terminal` is the `terminal_output` reference of a settled child. -/
 structure EffectRow where
   id : DocId
   parent : Option DocId
@@ -287,9 +259,6 @@ structure EffectRow where
 def effectIdentity (parent : DocId) (ordinal : Nat) : String :=
   "plugin-effect:" ++ toString parent ++ ":" ++ toString ordinal
 
-/-- `PluginEffectBinding::decode`, the only reader of stored child provenance.
-A row it refuses is not a child: hydration skips it instead of re-deriving a
-parent from its identity string. -/
 def decodeEffect (row : EffectRow) : Option (DocId × Nat) :=
   match row.parent, row.ordinal with
   | some parent, some ordinal =>
@@ -301,9 +270,6 @@ def decodeEffect (row : EffectRow) : Option (DocId × Nat) :=
 def isEffect (effects : List EffectRow) (id : DocId) : Bool :=
   effects.any fun row => row.id == id && (decodeEffect row).isSome
 
-/-- Children of tool calls already retained. A child is dispatched without a
-delegation service (`ToolPolicy.PluginCalls.children_cannot_delegate`), so an
-effect is never followed as a parent. -/
 def selectedChildren (effects : List EffectRow) (retained : List DocumentKey) :
     List EffectRow :=
   effects.dedup.filter fun row => match decodeEffect row with
@@ -311,9 +277,6 @@ def selectedChildren (effects : List EffectRow) (retained : List DocumentKey) :
         retained.contains ⟨.agentToolCall, parent⟩ && !isEffect effects parent
     | none => false
 
-/-- Rows the native owner observes. Document ACP filters the reverse lookup, so
-a missing or denied child is unobserved: it is not hydrated and does not fail
-the manifest. -/
 def observedEffects (scope : AuthorizationScope) (provenance : List ProvenanceAccess)
     (effects : List EffectRow) : List EffectRow :=
   effects.filter fun row =>
@@ -321,12 +284,6 @@ def observedEffects (scope : AuthorizationScope) (provenance : List ProvenanceAc
     | .ok _ => true
     | .error _ => false
 
-/-- Distinct rows may not share a physical identity or a `(parent, ordinal)`
-slot; admission replays one row per slot. Incoherent observed children fail
-the manifest rather than being skipped: their writer is already trusted with
-the session's base rows, message and segment conflicts fail the same way, and
-skipping would leave which row is authoritative ambiguous. Missing arguments
-and a terminal naming a foreign source fail closed for the same reason. -/
 def childrenCoherent (children : List EffectRow) : Bool :=
   decide (children.map decodeEffect).Nodup && decide (children.map (·.id)).Nodup
 
@@ -335,7 +292,6 @@ def childConflict (children : List EffectRow) : DocId :=
     other != row && (other.id == row.id || decodeEffect other == decodeEffect row)).map
       (·.id)).getD 0
 
-/-- The child's arguments are its one closed `ToolEffectArguments` source. -/
 def effectArguments (segments : List Segment) (child : DocId) : Except Error PayloadRef :=
   match uniqueRecord (Error.reference (.lookup .unavailable))
       (Error.reference (.lookup .conflictingClosures))
@@ -344,7 +300,6 @@ def effectArguments (segments : List Segment) (child : DocId) : Except Error Pay
   | .ok closing => .ok ⟨closing.id, 0⟩
   | .error error => .error error
 
-/-- A settled child's terminal names its own tool source. -/
 def effectTerminal (segments : List Segment) (deniedSegments : List DocId) (child : DocId)
     (reference : PayloadRef) : Except Error PayloadRef :=
   match resolveClose segments deniedSegments reference with
@@ -421,7 +376,6 @@ theorem decoded_ordinal_bounded (row : EffectRow) (parent ordinal : Nat)
     · contradiction
   · contradiction
 
-/-- Coherent children of one parent occupy distinct bounded ordinals. -/
 theorem children_per_parent_bounded (children : List EffectRow) (parent : DocId)
     (h : childrenCoherent children = true) :
     (children.filter fun row => (decodeEffect row).map Prod.fst == some parent).length ≤
@@ -579,7 +533,6 @@ example : resultMatches
         then { observation with state := .denied } else observation) [] [])
     (.error (.provenanceDenied ⟨.agentOutputSegment, 100⟩)) = true := by native_decide
 
-/-- Evidence for a hydration twin is not evidence for this request. -/
 example : resultMatches
     (buildManifest originScope 1 [] [200] [] [originMessage] [closing]
       (originAccess.map fun observation =>
@@ -619,8 +572,6 @@ example : resultMatches
     (.ok [⟨.agentRequest, 10⟩, ⟨.agentMessage, 200⟩,
       ⟨.agentOutputSegment, 100⟩]) = true := by native_decide
 
-/-- Explicit `NoMessage` still retains and authorizes the physical terminal
-request; it is not an empty, ownerless manifest. -/
 example : resultMatches
     (buildManifest originScope 1 [] [] [⟨10, 1, some .noMessage⟩] [] [] originAccess [] [])
     (.ok [⟨.agentRequest, 10⟩]) = true := by native_decide
@@ -638,7 +589,6 @@ def cycleRight : MessageEnvelope :=
       id := 211, session := 1, origin := some 210, publication := .fork 210 }
     key := "cycle-right" }
 
-/-- Per-header content equality cannot grant a reordered child transcript. -/
 example : resultMatches
     (buildManifest scope 2 [] [201] []
       [originMessage, { childMessage with sequence := childMessage.sequence + 1 }]
@@ -696,11 +646,9 @@ def child : EffectRow :=
   { id := 400, parent := some 300, ordinal := some 1, spawned := false
   , toolCallId := effectIdentity 300 1, terminal := some ⟨411, 0⟩ }
 
-/-- Claims the parent with an identity its decoder refuses. -/
 def forgedChild : EffectRow :=
   { id := 401, parent := some 300, ordinal := some 2, spawned := false, toolCallId := "forged" }
 
-/-- A decodable child whose parent is not retained. -/
 def unreachableChild : EffectRow :=
   { id := 402, parent := some 399, ordinal := some 1, spawned := false
   , toolCallId := effectIdentity 399 1 }
@@ -719,7 +667,6 @@ example : resultMatches
       ⟨.agentToolCall, 400⟩, ⟨.agentOutputSegment, 301⟩, ⟨.agentOutputSegment, 410⟩,
       ⟨.agentOutputSegment, 411⟩]) = true := by native_decide
 
-/-- Without its parent in the closure, the same child is not reachable. -/
 example : resultMatches
     (buildManifest scope 2 [] [201] [] [originMessage, childMessage, parentDelivery]
       (closing :: effectSegments) effectAccess [] [] [] [child])
@@ -742,15 +689,12 @@ example : resultMatches
       [{ child with terminal := some ⟨301, 0⟩ }])
     (.error (.reference (.lookup .invalidReference))) = true := by native_decide
 
-/-- A running or undelivered parent is retained as a session base; its child
-is reachable without any delivery message. -/
 example : resultMatches
     (buildManifest scope 2 [.toolCall 300] [] [] [] [childArguments, childOutput] effectAccess
       [] [] [] [child, forgedChild])
     (.ok [⟨.agentRequest, 10⟩, ⟨.agentToolCall, 300⟩, ⟨.agentToolCall, 400⟩,
       ⟨.agentOutputSegment, 410⟩, ⟨.agentOutputSegment, 411⟩]) = true := by native_decide
 
-/-- A child the peer may not read is unobserved, not a failed manifest. -/
 example : resultMatches
     (buildManifest scope 2 [.toolCall 300] [] [] [] [childArguments, childOutput]
       (effectAccess.map fun observation =>

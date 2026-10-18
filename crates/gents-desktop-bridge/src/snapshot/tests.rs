@@ -1,3 +1,6 @@
+use gents::agent::p2p_reconcile::session_hydration::{
+    ClientHydrationPhase, ClientHydrationProgress,
+};
 use gents::session::canonical_rows::{OutputSegmentRow, TranscriptMessageRow};
 use gents_desktop_core::client::{ClientStore, ClientStoreRows};
 use gents_protocol::output::{
@@ -10,15 +13,77 @@ use gents_protocol::session::{
     AgentSession, SessionObservation, SessionRequestObservation, SessionTitle, SessionTitleSource,
 };
 
+use super::super::types::InitConfigStatus;
 use super::super::types::RenderedTimelineItem;
 use super::apply_session_timeline_page;
 use super::apply_session_timeline_page_with_query;
 use super::build_session_live_delta_from_store;
 use super::build_session_snapshot_from_store;
 use super::build_session_snapshot_from_store_for_node;
+use super::read_stored_init_config;
 use super::recent_runs_for_task_views;
+use super::scoped_hydration_observation_view;
 use super::session_summaries;
-use super::task_run_history;
+use super::task_run_histories;
+
+#[test]
+fn supplied_hydration_observation_is_projected_only_for_its_exact_session_and_node() {
+    let observation = ClientHydrationProgress {
+        session_id: "session-a".into(),
+        node_did: "did:test:node-a".into(),
+        phase: ClientHydrationPhase::Requested,
+        ..Default::default()
+    };
+
+    let view = scoped_hydration_observation_view(
+        Some((observation.clone(), None)),
+        "session-a",
+        "did:test:node-a",
+    )
+    .expect("matching observation");
+    assert_eq!(view.session_id, "session-a");
+    assert_eq!(view.node_did, "did:test:node-a");
+    assert_eq!(view.phase, "requested");
+
+    assert!(scoped_hydration_observation_view(
+        Some((observation.clone(), None)),
+        "session-b",
+        "did:test:node-a",
+    )
+    .is_none());
+    assert!(scoped_hydration_observation_view(
+        Some((observation, None)),
+        "session-a",
+        "did:test:node-b",
+    )
+    .is_none());
+}
+
+#[test]
+fn bootstrap_init_config_status_distinguishes_absence_from_unreadable_and_configured() {
+    let home = tempfile::tempdir().expect("node home");
+
+    let (config, status) = read_stored_init_config(home.path());
+    assert!(config.is_none());
+    assert_eq!(status, InitConfigStatus::Absent);
+
+    std::fs::write(home.path().join("init.json"), b"{").expect("write malformed init config");
+    let (config, status) = read_stored_init_config(home.path());
+    assert!(config.is_none());
+    assert_eq!(status, InitConfigStatus::Unreadable);
+
+    std::fs::write(
+        home.path().join("init.json"),
+        br#"{"home":"/node","node_name":"Engineer","node_did":"did:key:home","tool_ceiling":"meta_only"}"#,
+    )
+    .expect("write valid init config");
+    let (config, status) = read_stored_init_config(home.path());
+    assert_eq!(status, InitConfigStatus::Configured);
+    assert_eq!(
+        config.expect("decoded init config").node_did,
+        "did:key:home"
+    );
+}
 
 fn canonical_text_message(
     doc_id: &str,
@@ -92,10 +157,6 @@ fn canonical_text_message(
     (header, segment)
 }
 
-/// Add one fully closed canonical text message to a store fixture.  Desktop
-/// tests deliberately go through the same header/segment split as a real
-/// transcript: a header without its segment is an incomplete reconstruction,
-/// not a serialized-message fallback.
 pub(super) fn push_canonical_text_message(
     rows: &mut ClientStoreRows,
     doc_id: &str,

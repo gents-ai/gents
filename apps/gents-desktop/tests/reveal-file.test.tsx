@@ -15,6 +15,7 @@ vi.mock("../src/lib/shellPlatform", async (original) => ({
 
 vi.mock("../src/lib/nativeShell", () => ({
   revealInFolder: vi.fn().mockResolvedValue(undefined),
+  homeFolder: vi.fn().mockResolvedValue(null),
 }));
 
 const edited: RenderedToolCallView = {
@@ -34,8 +35,6 @@ const edited: RenderedToolCallView = {
   reconstruction: { state: "ready" },
 } as unknown as RenderedToolCallView;
 
-/* the runtime is a user service the desktop pairs with by enrollment: only
-   the home's DID says it is this machine's */
 function appOn(nodeDid: string) {
   return testApp({
     snapshot: {

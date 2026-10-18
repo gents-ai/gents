@@ -1,7 +1,6 @@
 # Admin-signed immutable evidence that the runtime reconciled the exact
-# client-to-server route for one current enrollment authorization generation.
-# Authorization remains owned by NetworkAuthorizationRevision; a later maximum
-# revision makes this historical receipt non-current.
+# client-to-server route for one enrollment authorization generation;
+# authorization remains owned by NetworkAuthorizationRevision.
 type NetworkEnrollmentRouteReceipt @branchable {
     protocol_version: Int @immutable
     receipt_id: String @index(unique: true) @immutable

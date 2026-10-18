@@ -402,9 +402,6 @@ structure ManagedExecLivenessCase where
   killSignalRequired : Bool
   deriving Repr
 
-/-- Host stop verdict witness: the owner's observation before and
-    after its signal, and the verdict, signal admissibility and cancel reply
-    computed by `ManagedExec`. -/
 structure ProcessStopCase where
   name : String
   before : String
@@ -474,11 +471,6 @@ structure RecoverySweepCase where
   notificationReason : Option String := none
   deriving DecidableEq, Repr
 
-/-- Startup restart-disposition witness (#937): one running `AgentToolCall`
-    row shape and what `ToolCallLifecycle::recover_all` must do with it —
-    terminalize with a pinned cause/terminal state, or leave it running.
-    `disposition`, `cause`, `terminalState`, and the notification/wake fields
-    are computed from `Recovery.restartDisposition`, never hand-written. -/
 structure RestartDispositionCase where
   name : String
   rustFunction : String
@@ -496,8 +488,6 @@ structure RestartDispositionCase where
   theoremName : String
   deriving DecidableEq, Repr
 
-/-- Interrupt disposition witness: one owned tool-call shape and the
-    disposition and post-state computed by `Background.Interrupt.interruptTool`. -/
 structure InterruptDispositionCase where
   name : String
   state : String
@@ -507,10 +497,6 @@ structure InterruptDispositionCase where
   postAwaitMode : String
   deriving DecidableEq, Repr
 
-/-- Paging witness over the retained output window (#937): inputs plus the
-    slice outputs, computed from `Background.ToolOutput.readSlice` — never
-    hand-written. Consumed by the `background_tools` unit test against
-    `read_retained_output_slice`. -/
 structure ToolOutputPagingCase where
   name : String
   firstOffset : Nat
@@ -557,8 +543,6 @@ structure R6BackgroundingCase where
   notificationPersisted : Option Bool := none
   wakeCreated : Option Bool := none
   redriveAllowed : Option Bool := none
-  /-- `ToolOperation` of the executed native-lifecycle row; a
-      `sessionMessage` row is background-only. -/
   operation : Option String := none
   deriving Repr
 
@@ -597,9 +581,9 @@ structure ComposedInvariantWitness where
 namespace R4cWitnesses
 
 /-- One executable canonical-tool-source projection input and the result
-    computed by `Background.ToolOutput.project`.  The native adapter supplies the
-    fixed accepted physical tool binding and persists these exact segment
-    facts; it does not infer output from flags. -/
+computed by `Background.ToolOutput.project`. The native adapter supplies the
+fixed accepted physical tool binding and persists these exact segment facts;
+it does not infer output from flags. -/
 structure ToolOutputProjectionCase where
   name : String
   document : Nat
@@ -609,7 +593,7 @@ structure ToolOutputProjectionCase where
   deriving Repr
 
 /-- Canonical `read_tool_output`: open and closed reads use the same immutable
-    physical tool source; missing/conflicting facts are rejection. -/
+physical tool source; missing/conflicting facts are rejection. -/
 structure ReadToolOutputCanonicalSourceReconstruction where
   toolCallId : String
   canonicalSource : String

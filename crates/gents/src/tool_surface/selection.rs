@@ -15,17 +15,11 @@ use crate::toolset::{
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct AgentToolConfig {
-    /// The `agent_new` allowlist, by friendly name.
     pub targets: Vec<AgentTargetDocument>,
     pub enabled: bool,
 }
 
 impl AgentToolConfig {
-    /// Project the canonical `Tools.agents` group. Targets are NOT populated
-    /// here: `AgentTools.target_ids` are references to AgentTarget
-    /// documents, resolved and pushed by the runtime snapshot owner. The tools
-    /// default to disabled when the group or flag is absent; selecting targets
-    /// never implicitly enables them.
     pub(crate) fn from_document(tools: &crate::document_config::Tools) -> Result<Self> {
         tools.validate()?;
         Ok(Self {
@@ -83,14 +77,12 @@ impl AgentToolConfig {
     }
 
     /// The agents group follows `AgentTools.enabled` alone (Lean
-    /// `ToolPolicy.Surface.sessionMessages`): `agent_message`, `agent_list` and
+    /// `ToolPolicy.Surface.sessionMessages`): `agent_message`, `agent_list`, `agent_session_list`, `agent_session_read` and
     /// `agent_interrupt` address sessions on this node and need no target.
     pub(crate) fn tools_enabled(&self) -> bool {
         self.enabled
     }
 
-    /// `agent_new` can only start an allowlisted target (Lean
-    /// `agentTargets`), so it is presented only when one resolves.
     pub(crate) fn agent_new_enabled(&self) -> bool {
         self.enabled && !self.targets.is_empty()
     }
@@ -106,7 +98,6 @@ impl AgentToolConfig {
             .collect()
     }
 
-    /// Whether a target in the allowlist runs `agent_id` on `target_node_did`.
     pub(crate) fn allows(&self, target_node_did: &str, agent_id: &str) -> bool {
         self.targets
             .iter()
@@ -126,12 +117,9 @@ impl BackgroundToolConfig {
     }
 }
 
-/// Validated `host.bash`/`host.cli[]` `max_output_chars`. Unset entries keep
-/// the toolset default or the host CLI registration's budget.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CommandOutputLimits {
     pub bash: Option<usize>,
-    /// Keyed by CLI tool name.
     pub cli: std::collections::BTreeMap<String, usize>,
 }
 
@@ -147,19 +135,12 @@ pub struct ResolvedToolSelection {
     /// `host.files` per-call limits; unset fields keep the toolset defaults.
     pub file_limits: crate::toolset::FileToolLimits,
     pub enable_meta_tools: bool,
-    /// Enables the session-owned durable goal read/update tools independently
-    /// of generic MCP discovery and dispatch.
     pub enable_goal_tools: bool,
     pub enable_graph_tools: bool,
-    /// Enables model-originated durable goal creation. Creation is an
-    /// additional capability: it is effective only when `enable_goal_tools`
-    /// is also enabled.
     pub enable_goal_creation: bool,
     pub allowed_mcp_service_ids: Vec<String>,
     pub remote_tools: Option<crate::document_config::RemoteTools>,
     pub required_mcp_service_ids: Vec<String>,
-    /// Derived from canonical host and remote capability groups. This is the
-    /// single runtime allowlist for background process dispatch.
     pub backgroundable_tool_names: Vec<String>,
     pub enable_memory: bool,
     pub enable_session_history_tool: bool,
@@ -234,9 +215,6 @@ impl Default for ResolvedToolSelection {
 }
 
 impl ResolvedToolSelection {
-    /// Whether the selected host-facing capabilities need the shared cwd/root.
-    /// Keep this predicate beside the canonical selection so configuration
-    /// admission and execution cannot drift as host capabilities are added.
     pub(crate) fn requires_filesystem_root(&self) -> bool {
         self.file_tools != FileToolMode::Off
             || self.bash != BashMode::Off
@@ -244,14 +222,6 @@ impl ResolvedToolSelection {
             || self.enable_lsp
     }
 
-    /// Project the canonical `document_config::Tools` nested groups.
-    ///
-    /// Disabled-by-absence: an omitted group or unset flag grants nothing. There
-    /// is no policy version: the canonical document has no historical
-    /// re-interpretation contract. Timeout
-    /// and background defaults belong to the individual capability owners, not
-    /// this projection. Datastore write/query declarations and eth tools are
-    /// expanded from their referenced documents by the caller.
     pub(crate) fn from_document(tools: &crate::document_config::Tools) -> anyhow::Result<Self> {
         tools.validate()?;
         let host = tools.host.as_ref();
@@ -280,9 +250,6 @@ impl ResolvedToolSelection {
                 .collect(),
         };
 
-        // Remote selections use explicit service ids. Any selected service needs
-        // the meta dispatch wrapper to be callable, so selecting services enables
-        // meta tools; empty selections grant none.
         let remote_services = tools
             .remote
             .as_ref()
@@ -308,8 +275,6 @@ impl ResolvedToolSelection {
             if service.required {
                 required_mcp_service_ids.push(service_id.to_string());
             }
-            // Background capability is per-service; the generic dispatch wrapper
-            // is the surface entry for background MCP calls.
             if !service.background_tool_names.is_empty() {
                 match service.style {
                     crate::document_config::RemoteToolStyle::Discovery => {
@@ -337,11 +302,6 @@ impl ResolvedToolSelection {
 
         Ok(Self {
             file_tools,
-            // Tools.host.root is the shared default cwd for files, bash, CLI,
-            // LSP, and task commands. The canonical root owner rejects authored
-            // relative paths and requires an explicit admitted root whenever
-            // WorkspaceRoot policy is configured. Absence retains the legacy
-            // runtime default only when no such policy exists.
             file_tool_root: host
                 .and_then(|host| host.root.as_deref())
                 .map(str::trim)
@@ -381,8 +341,6 @@ impl ResolvedToolSelection {
             enable_session_history_tool: built_ins
                 .and_then(|built| built.enable_session_history_tool)
                 .unwrap_or(true),
-            // Canonical default is disabled-by-absence, matching
-            // ToolPolicy.resolveGoalTools-style fail-closed decoding.
             enable_context_budget: built_ins
                 .and_then(|built| built.enable_context_budget)
                 .unwrap_or(false),
@@ -398,8 +356,6 @@ impl ResolvedToolSelection {
             application_write_collections: datastore
                 .and_then(|v| v.write_collections.clone())
                 .unwrap_or_default(),
-            // Canonical surfaces own datastore write declarations; canonical
-            // DatastoreToolSurface/EthTool documents are expanded by the caller.
             write_tools: Vec::new(),
             query_tools: Vec::new(),
             surface_of_tool: Default::default(),
@@ -509,8 +465,6 @@ fn command_policy_from_document(
         };
     }
 
-    // Canonical bash.mode owns the exposed bash tool; execution_mode can only
-    // narrow within it. Off/ReadOnly force read-only execution.
     let mode = match bash {
         BashMode::Off | BashMode::ReadOnly => CommandExecutionMode::ReadOnly,
         BashMode::Unrestricted => execution_mode.unwrap_or(CommandExecutionMode::Unrestricted),

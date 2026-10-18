@@ -2,8 +2,6 @@ import Proofs.Session.Properties.Coalescing
 
 namespace SessionQueue
 
-/-- Both interactive user input and agent messages may steer, but only after
-native admission has verified the same requester and execution context. -/
 def steersInto (active candidate : QueueEntry) : Prop :=
   candidate.fresh = true ∧ candidate.delivery = .steer ∧ candidate.policy = .append ∧
   (candidate.source = .user ∨ candidate.source = .steering) ∧
@@ -22,9 +20,8 @@ def steeringRun (active : QueueEntry) (admitted : List RequestId) :
         entry :: steeringRun active admitted rest
       else []
 
-/-- A safe boundary is after the previous provider/tool round has settled and
-before the next request is sized or compacted. The native execution owner
-supplies the exact active row and generation; this operation grants no lease. -/
+/-- The native execution owner supplies the exact active row and generation;
+this operation grants no lease. -/
 def intakeSteering? (target : AgentSession.Scope) (pre : SessionQueueState)
     (active : QueueEntry) (admitted : List RequestId) (safeBoundary : Bool) :
     Option SessionQueueState :=
@@ -34,12 +31,9 @@ def intakeSteering? (target : AgentSession.Scope) (pre : SessionQueueState)
     some { pre with folding := selected, pending := pre.pending.drop selected.length }
   else none
 
-/-- Replacement observes the entire pending order so a concurrent append,
-claim, intake or prior edit invalidates it. Only a contiguous group belonging
-to the caller is replaceable; fresh admissions inherit its signed slots.
-An empty replacement cancels the group. Selection is provisional until
-authored consumption: an edit invalidates it and restores the remaining order.
-The active request and already-consumed input cannot be edited. -/
+/-- The active request and already-consumed input cannot be edited; selection is
+provisional until authored consumption (an edit invalidates it and restores the
+remaining order). -/
 def replacementAllowed (target : AgentSession.Scope) (pre : SessionQueueState)
     (caller : Option Nat) (expected : List RequestId) (offset count : Nat)
     (replacements : List QueueEntry) : Bool :=
@@ -123,8 +117,6 @@ theorem steeringRun_append_drop (active : QueueEntry) (admitted : List RequestId
           List.cons_append, ih]
       · simp [steeringRun, h]
 
-/-- Intake moves a prefix of the queue behind the active request without
-reordering, admitting or terminalizing anything. -/
 theorem intake_preserves_queue {target : AgentSession.Scope} {pre post : SessionQueueState}
     {active : QueueEntry} {admitted : List RequestId} {safe : Bool}
     (h : intakeSteering? target pre active admitted safe = some post) :
@@ -167,7 +159,6 @@ private theorem mem_zip_right {old fresh : List QueueEntry}
           · obtain ⟨x, hx⟩ := ih (by simpa using hl) hy
             exact ⟨x, by simp [hx]⟩
 
-/-- Facts every accepted replacement establishes, read from the executable check. -/
 theorem replacementAllowed_facts {target : AgentSession.Scope} {pre : SessionQueueState}
     {caller : Option Nat} {expected : List RequestId} {offset count : Nat}
     {replacements : List QueueEntry}
@@ -233,8 +224,6 @@ private theorem createdOrdered_of_orderKeys {left right : List QueueEntry}
           rw [h_keys.1, ← hk]
           exact h_order.1 o ho
 
-/-- Replacement retires exactly the caller's selected group: every other queued
-entry keeps its position and history, and fresh admissions occupy the retired slots. -/
 theorem replace_shape {target : AgentSession.Scope} {pre post : SessionQueueState}
     {caller : Option Nat} {expected : List RequestId} {offset count : Nat}
     {replacements : List QueueEntry}
@@ -293,8 +282,6 @@ theorem replace_preserves_uniqueCoalescedQueueKeys {target : AgentSession.Scope}
   conv => rhs; rw [← take_group_drop (pre.folding ++ pre.pending) offset count]
   exact List.Sublist.append_left (List.sublist_append_right _ _) _
 
-/-- Steering intake and pending-group replacement compose with the proven queue
-transitions; the queue's trace invariants hold over every interleaving. -/
 inductive ManagedStep : SessionQueueState → SessionQueueState → Prop where
   | queue {pre post : SessionQueueState} : Transition pre post → ManagedStep pre post
   | intake {target : AgentSession.Scope} {pre post : SessionQueueState} {active : QueueEntry}

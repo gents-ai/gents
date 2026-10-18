@@ -66,8 +66,6 @@ fn backend_document(
     }))?)
 }
 
-/// The connection fingerprint a behavior slot built against `connection`
-/// carries, derived the way `build_admitted_model` derives it.
 fn slot_connection(backend_id: &str, connection: u64) -> Result<String> {
     let backend = backend_document(backend_id, connection, 1, 0, "slot")?;
     Ok(super::super::config::backend_connection_fingerprint(
@@ -76,8 +74,6 @@ fn slot_connection(backend_id: &str, connection: u64) -> Result<String> {
 }
 
 fn config_from_case(backend_id: &str, desired: &Desired) -> Result<BackendAdmissionConfig> {
-    // Go through the real backend mapping: otherwise a test-only fingerprint
-    // would hide metadata-triggered controller replacement.
     let backend = backend_document(
         backend_id,
         desired.connection,
@@ -98,8 +94,6 @@ fn config_from_case(backend_id: &str, desired: &Desired) -> Result<BackendAdmiss
     )
 }
 
-/// Drives real acquisitions as spawned calls and observes the registry only
-/// once every call is either finished or parked on the pool.
 struct Harness {
     registry: AdmissionRegistry,
     backend_id: String,
@@ -171,8 +165,6 @@ impl Harness {
                     pool.available_permits_for_test(),
                 )
             });
-            // Parked calls exist only while admission is open and no permit
-            // is free; closing admission wakes and fails every one of them.
             let open = self.registry.active_for_test(&self.backend_id).is_some();
             let parked_only = waiters == 0 || (open && available == 0);
             if self.calls.len() == waiters && transit == 0 && parked_only {
@@ -282,9 +274,6 @@ async fn generated_inference_registry_cases_drive_real_permits() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Rollback may reuse an epoch. The restored configuration is a distinct
-/// incarnation on the same pool, so the replaced incarnation's permit still
-/// counts against capacity and its release frees the shared slot.
 #[tokio::test]
 async fn rollback_reuses_epoch_with_distinct_controller_on_shared_pool() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
@@ -321,8 +310,6 @@ async fn rollback_reuses_epoch_with_distinct_controller_on_shared_pool() {
     let old = registry.active_for_test(backend_id).unwrap();
     let mut first = acquire("rollback-old-owner").await.unwrap();
     registry.reconcile(2, &[(backend_id.to_owned(), config(2, 2))].into());
-    // Failed snapshot publication restores the prior full configuration and
-    // epoch.
     registry.reconcile(1, &[(backend_id.to_owned(), config(1, 1))].into());
     let restored = registry.active_for_test(backend_id).unwrap();
     assert!(!Arc::ptr_eq(&old, &restored));

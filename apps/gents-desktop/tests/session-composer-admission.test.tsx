@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -43,8 +43,6 @@ vi.mock("../src/ui/screens/BehaviorPicker", () => ({
 
 const NODE = deployment.nodeDid;
 
-/* a session held for the screen: interrupted (so a message may follow)
-   unless a test says otherwise */
 function heldSession(over: Partial<DesktopSessionSnapshot> = {}) {
   return {
     sessionId: "session",
@@ -64,8 +62,6 @@ function heldSession(over: Partial<DesktopSessionSnapshot> = {}) {
   } as unknown as DesktopSessionSnapshot;
 }
 
-/* the screen's app: the fixture node, ready to chat unless a test gives
-   another, and the session it holds (none for the new-session screen) */
 function screenApp({
   session = null,
   nodeOverrides = {},
@@ -77,7 +73,6 @@ function screenApp({
   session?: DesktopSessionSnapshot | null;
   nodeOverrides?: Record<string, unknown>;
   sendChatMessage?: ReturnType<typeof vi.fn>;
-  /** more of the bridge, for what a test asks of it */
   api?: Record<string, unknown>;
 } = {}) {
   const app = testApp({
@@ -108,7 +103,6 @@ function renderScreen(app: DesktopApp) {
   );
 }
 
-/* another session selected and held, as the projection would */
 function hold(app: DesktopApp, session: DesktopSessionSnapshot) {
   act(() => {
     app.stores.selection.setState({ sessionId: session.sessionId });
@@ -286,7 +280,6 @@ describe("SessionScreen canonical composer admission", () => {
       target: { value: "keep this draft" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    /* the person moves to another node while the send is in flight */
     act(() => app.actions.selectNode("did:key:other-agent"));
     fireEvent.change(screen.getByLabelText("Message"), {
       target: { value: "unrelated draft" },
@@ -304,7 +297,6 @@ describe("SessionScreen canonical composer admission", () => {
   });
 
   it("preserves a canonical blocker for a non-empty local draft", () => {
-    /* a node whose route is not safe to chat over */
     const { app, sendChatMessage } = screenApp({ nodeOverrides: { chatSafe: false } });
     renderScreen(app);
     const status = app.view.getState().shellProjection.nonEmptyContentSendStatus;
@@ -329,7 +321,6 @@ describe("SessionScreen canonical composer admission", () => {
     fireEvent.change(screen.getByLabelText("Message"), {
       target: { value: "follow up" },
     });
-    /* typed text while the turn runs is queued behind it */
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
 
     hold(app, heldSession({ turnState: "interrupted" }));
@@ -387,7 +378,7 @@ describe("SessionScreen messages queued behind a running turn", () => {
     );
   });
 
-  it("shows queued messages after the running turn, in queue order, as queued", () => {
+  it("stacks queued messages on the composer, after the running turn, in queue order", () => {
     const { app } = screenApp({
       session: heldSession({
         turnState: "running",
@@ -402,12 +393,14 @@ describe("SessionScreen messages queued behind a running turn", () => {
     });
     renderScreen(app);
     expect(screen.getAllByTestId("queued-input").map((row) => row.textContent)).toEqual(
-      ["we should move fasterPending", "and check the testsPending"],
+      ["we should move faster", "and check the tests"],
     );
-    const text = screen.getByTestId("transcript-panel").textContent ?? "";
-    expect(text.indexOf("how are we looking")).toBeLessThan(
-      text.indexOf("we should move faster"),
-    );
+    const transcript = screen.getByTestId("transcript-panel");
+    const tray = screen.getByTestId("queued-inputs");
+    expect(transcript.contains(tray)).toBe(false);
+    expect(
+      transcript.compareDocumentPosition(tray) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("renders folded messages once, as the claimed turn's own input", () => {
@@ -529,11 +522,7 @@ describe("SessionScreen automated inputs", () => {
     const text = screen.getByTestId("transcript-panel").textContent ?? "";
     expect(text.indexOf("started")).toBeLessThan(text.indexOf("Message from"));
     expect(screen.queryByTestId("automated-input-content")).not.toBeInTheDocument();
-    await user.click(
-      screen.getByRole("button", {
-        name: "Message from another session: show its published input",
-      }),
-    );
+    await user.click(within(items[0]!).getByRole("button", { name: "Show detail" }));
     expect(screen.getByTestId("automated-input-content").textContent).toBe(
       "please review the diff\nit is in src/",
     );
@@ -559,7 +548,9 @@ describe("SessionScreen automated inputs", () => {
     });
     renderScreen(app);
     await user.click(
-      screen.getByRole("button", { name: "Event · nightly: show its published input" }),
+      within(screen.getByTestId("automated-input")).getByRole("button", {
+        name: "Show detail",
+      }),
     );
     expect(screen.getByTestId("automated-input-unavailable")).toHaveTextContent(
       "This input is not shared with this device.",
@@ -659,7 +650,6 @@ describe("renaming a session", () => {
         title: "Renamed session",
       }),
     );
-    /* the title shown is the held session's, so it is read again */
     await vi.waitFor(() =>
       expect(fetchSessionSnapshot).toHaveBeenCalledWith(
         "session",

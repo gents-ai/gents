@@ -48,8 +48,6 @@ fn modeled_scope(case: &LeanAuxiliaryOutputCase) -> (CaptureScope, usize, u32) {
     )
 }
 
-// The native one-shot reasoning event carries the same block/part fields as
-// the modeled raw flush. Unsupported modeled shapes fail this adapter loudly.
 fn modeled_message(case: &LeanAuxiliaryOutputCase) -> Message {
     let flush = case.raw.flush.as_ref().expect("modeled raw flush");
     assert_eq!(
@@ -139,7 +137,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
         crate::graphql::escape_graphql_string(&request_id),
         crate::graphql::escape_graphql_string(&now),
     );
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     access
         .write("test.auxiliary_request", &mutation)
         .await
@@ -238,7 +236,7 @@ fn native_raw(
 
 async fn output_state(node: &Arc<EmbeddedNode>, request_doc_id: &str) -> serde_json::Value {
     let request_doc_id = crate::graphql::escape_graphql_string(request_doc_id);
-    let response = ConfigAccess::Local(node.clone())
+    let response = ConfigAccess::local(node.clone())
         .execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ _docID }} }}"#,
         ))
@@ -689,7 +687,7 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
         .unwrap();
 
         let request_doc_id = crate::graphql::escape_graphql_string(&request.doc_id);
-        let response = ConfigAccess::Local(node.clone()).execute(&format!(
+        let response = ConfigAccess::local(node.clone()).execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ _docID }} }}"#,
         )).await.unwrap();
         let data = &response["data"];

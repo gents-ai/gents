@@ -8,9 +8,6 @@ enum Container {
     Array,
 }
 
-/// References, alternatives and conditional schemas remain with the tool's
-/// validator. Only an explicit object/array type, optionally nullable, grants
-/// permission to decode a string. Untyped payloads and string unions stay opaque.
 fn container(schema: &Value) -> Option<Container> {
     let schema = schema.as_object()?;
     if [
@@ -122,10 +119,6 @@ fn repair(
     }
 }
 
-/// Refines `PromptAssembly.SchemaArgumentRepair.run`. The caller supplies the
-/// exact schema advertised for this provider attempt, before acceptance and
-/// dispatch. Each eligible string gets one strict parse; tool validation still
-/// decides whether the repaired value is a legal call.
 pub(super) fn repair_arguments(schema: &Value, arguments: &mut Value) -> Vec<String> {
     repair_with_decoder(schema, arguments, &mut |raw| serde_json::from_str(raw).ok())
 }

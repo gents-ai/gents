@@ -1,35 +1,3 @@
-//! Canonical durable output (#1571): payloads are persisted once; small runtime
-//! presentation literals live in headers. Neither document shape is updated.
-//!
-//! Two immutable, create-only document shapes:
-//!
-//! - [`OutputSegment`] — a flush, a terminal closure, or both. Large payloads
-//!   live here; normal closure rides on the final flush without another document.
-//! - [`TranscriptMessage`] — a header mirroring the native
-//!   [`crate::message::Message`] structure, with every payload string replaced
-//!   by a [`PayloadRef`] to a closed stream, plus small presentation literals.
-//!
-//! The collections only grow, so replication is set union and every reader
-//! question is "which facts are visible": no visible closing record means closure is
-//! unknown, not proof that a producer is still running. A closing record with missing
-//! segments means the replica is incomplete. Live previews, answer streaming,
-//! completed transcripts, provider input, forks and
-//! exports are projections of these same facts through one shared
-//! reconstruction; no consumer reads a second durable text copy, because none
-//! exists.
-//!
-//! What this replaces: `AgentResponse` and its cumulative-prefix rewrites, the
-//! serialized native message in `AgentMessage.content`, the extracted
-//! `AgentMessage.reasoning` copy, in-flight `AgentMessage` upserts,
-//! `AgentToolCall.args` / `result` / `partial_output_tail`, and the
-//! `AgentToolResult` spill collection.
-//!
-//! Distinct facts that remain, each for a distinct guarantee:
-//! `AgentRequest.content` is the requester-signed admission input, not the
-//! transcript (the runtime may template or wrap it before it becomes a user
-//! message). `RenderedRequest` is what a provider received. Neither is a
-//! transcript source, and the transcript is not reconstructed from them.
-
 use serde::{Deserialize, Serialize};
 
 use crate::message::{
@@ -37,55 +5,39 @@ use crate::message::{
 };
 use crate::rendered_request::{CaptureScope, CaptureScopeKind};
 
-/// Strict reconstruction of an unsealed source for recovery/closure planning.
 pub mod extent;
 pub mod live;
-/// Shared immutable fork-origin validation for runtime and replica readers.
 pub mod origin;
-/// Shared closed-source reconstruction; header and live-view owners build on it.
 pub mod reconstruction;
 pub mod recovery;
 
-/// What produced a run of content. Its identity is known before the first
-/// byte arrives, so segments never wait on the closing record or message that later
-/// names them.
-///
-/// No variant mints a new logical ID: each reuses a coordinate or document
-/// identity that already exists for another reason (#1425).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum OutputSource {
-    /// The output of one provider call within the owning request. This is the
-    /// same `(scope, turn_index, attempt)` coordinate as that call's
-    /// `RenderedRequest` capture: the input and output of a provider call join
-    /// on it. A retried turn writes under a higher `attempt` after its
-    /// predecessor is sealed `Retracted`. Scope allocation survives
-    /// reclaim/restart; a new execution cannot reuse an old coordinate.
+    /// The output of one provider call within the owning request, joined to its
+    /// `RenderedRequest` capture by the same coordinate. A retried turn writes
+    /// under a higher `attempt` after its predecessor is sealed `Retracted`.
+    /// Scope allocation survives reclaim/restart; a new execution cannot reuse
+    /// an old coordinate.
     ProviderTurn {
         scope: CaptureScope,
         turn_index: u32,
         attempt: u32,
     },
     /// The output of one tool execution, identified by its exact lifecycle
-    /// document. Tool output may stream (bash) or arrive whole; both are
-    /// segments. It can outlive the provider turn, and for background tools the
+    /// document. It can outlive the provider turn, and for background tools the
     /// request's active execution.
     ToolCall { tool_call_doc_id: String },
-    /// Arguments emitted by an installed plugin for one derived tool call.
-    /// The request owner commits this complete source atomically with the
-    /// child's pending lifecycle row. It is audit evidence, not a provider
-    /// turn or a transcript message.
+    /// Arguments emitted by an installed plugin for one derived tool call;
+    /// audit evidence, not a provider turn or a transcript message.
     ToolEffectArguments { tool_call_doc_id: String },
-    /// Content the requester or runtime supplies whole: the prompt as placed in
-    /// the transcript, request context and output-obligation reminders. `key`
-    /// is the existing request-scoped idempotency key of that content. Small
-    /// runtime-written text around other output (truncation markers,
-    /// notification wrappers) is an inline presentation literal, not a source.
+    /// Content the requester or runtime supplies whole; `key` is the existing
+    /// request-scoped idempotency key of that content. Small runtime-written
+    /// text around other output is an inline presentation literal, not a source.
     Authored { key: String },
 }
 
 impl OutputSource {
-    /// Auxiliary captures and plugin effect arguments are request-owned audit evidence.
     pub fn is_auxiliary_audit(&self) -> bool {
         matches!(
             self,
@@ -103,19 +55,10 @@ impl OutputSource {
     }
 }
 
-/// What a stream carries and where it sits in the native message. Carried by
-/// the run that opens the stream, so live views render unclosed output in
-/// native structure without any control document.
-///
-/// It names no role: provider output is assistant content and tool output is
-/// a tool result. Authored content is committed with its header in one
-/// transaction, but a replica may receive the parts in any order, so the live
-/// projection never shows an Authored source until its header is visible.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamDeclaration {
     /// Original native position, not a recovered header's compacted index.
-    /// Recovery may omit unpublishable blocks but preserves survivor order.
     pub block_index: u32,
     pub part_index: u32,
     pub payload: StreamPayload,
@@ -127,90 +70,60 @@ pub enum StreamPayload {
     Text,
     Reasoning,
     ReasoningSummary,
-    /// Provider-encrypted reasoning; retained for replay but never rendered.
+    /// Retained for replay but never rendered.
     ReasoningEncrypted,
-    /// Provider-redacted reasoning; retained for replay but never rendered.
     ReasoningRedacted,
-    /// The signature field of a reasoning text part. It may share the part's
-    /// native position with its body and is never rendered.
+    /// The signature field of a reasoning text part; never rendered.
     ReasoningSignature,
     /// Native JSON argument text exactly as emitted; it may be incomplete
-    /// until sealed and is never rewritten to canonicalize. Buffer argument
-    /// bytes until the provider's call identity is known.
+    /// until sealed and is never rewritten to canonicalize.
     ToolArguments {
         id: String,
         call_id: Option<String>,
         name: String,
     },
     ToolOutput,
-    /// Inline media data exactly as the native value carries it.
     Media {
         media_kind: MediaKind,
     },
 }
 
-/// One record of a source. Stored as `AgentOutputSegment`.
+/// One record of a source. Stored as `AgentOutputSegment`. A **flush**
+/// (`ordinal` and `runs` present) holds the bytes since the last flush; a
+/// **final flush** also carries `close`; a **terminal-only** record (`close`
+/// alone) is written when there are no new bytes. Flush and closure
+/// coordinates can never collide: a flush is `(request_doc_id, source,
+/// ordinal)` dense from zero, closure is `(request_doc_id, source)` with no
+/// ordinal, so a late flush landing beyond a closed extent is inert, not a
+/// twin. Repeated delivery of the same coordinate and content is idempotent;
+/// two visible flushes sharing an ordinal but differing in writer, runs or
+/// payload, or two visible closures, are an integrity conflict every reader
+/// must surface. The storage index is ordinary, not unique, because a unique
+/// index can hide the losing twin of a remote conflict (#1073). A replay
+/// reuses the persisted document, including its creation timestamp; an
+/// already-existing create is accepted only after verifying the stored fact.
 ///
-/// A record carries a flush of bytes, the source's closure, or both:
-///
-/// - **Flush** (`ordinal` and `runs` present): the bytes that arrived since the
-///   last flush, however many streams advanced. `payload` is the concatenation
-///   of `runs` in arrival order, and a stream's content is the concatenation
-///   of its runs across the source's flushes in `(ordinal, run)` order — the
-///   native string exactly. Writers flush where the batch interval, a size
-///   threshold, or the source's end falls, never per token.
-/// - **Final flush** (also `close`): the last bytes and the closure in one
-///   document. This is the normal end of a source and costs nothing extra.
-/// - **Terminal-only** (`close` without `ordinal` or `runs`): closure written
-///   when there are no new bytes — everything was already flushed, the source
-///   produced nothing, the attempt is retracted, or recovery closes it.
-///
-/// Flushes and closure have separate coordinates so they can never collide.
-/// A flush is `(request_doc_id, source, ordinal)`, dense from zero. Closure is
-/// `(request_doc_id, source)`, and a terminal-only record occupies no ordinal.
-/// So when recovery closes a source while the superseded writer's last flush
-/// is still in flight, that flush lands at an ordinal beyond the closed extent
-/// and is inert; it is not a twin of the closing record and never becomes a
-/// reconstruction conflict.
-///
-/// Repeated delivery of the same coordinate and content is idempotent. Two
-/// visible flushes sharing an ordinal but differing in writer, runs or
-/// payload, or two visible closures of one source, are an integrity conflict
-/// every reader must surface; the storage index is ordinary, not unique,
-/// because a unique index can hide the losing twin of a remote conflict
-/// (#1073). A replay reuses the persisted document, including its creation
-/// timestamp; an already-existing create is accepted only after verifying the
-/// stored fact.
-///
-/// A flush records output, not lease liveness. It never renews the request lease.
-/// A request-owned flush does not rewrite the request. It commits inside the
-/// existing `config_client::txn::MutationWriteGate`. The owner stamps
-/// `created_at` inside that gate when admitting the write; only a committed
-/// fact counts (non-decreasing within a source; replay reuses the timestamp).
-/// Only that runtime, reading its own store inside the same gate, may decide a
-/// lease expired. Its deadline is exactly `execution_lease_expires_at`, maintained
-/// by bounded explicit owner renewal, independently of output and foreground tool
-/// reads. A lagging replica observes; it never expires work.
-/// Admission rereads generation, lifecycle and effective expiry under the gate.
-/// An expired generation cannot revive itself by timestamping a fresh flush;
-/// it is rejected even if recovery has not installed a replacement yet.
-/// The same effective-expiry check applies to producer closure/retraction,
-/// publication, dispatch, terminalization and explicit renewal before their CAS. Matching
-/// generation alone is insufficient. Recovery instead uses the existing recovery
+/// A flush records output, not lease liveness, and never renews the request
+/// lease. It commits inside the existing `config_client::txn::MutationWriteGate`;
+/// the owner stamps `created_at` inside that gate. Only that runtime, reading
+/// its own store inside the same gate, may decide a lease expired; its deadline
+/// is exactly `execution_lease_expires_at`, maintained by bounded explicit
+/// owner renewal. A lagging replica observes; it never expires work. Admission
+/// rereads generation, lifecycle and effective expiry under the gate — the same
+/// effective-expiry check applies to producer closure/retraction, publication,
+/// dispatch, terminalization and explicit renewal before their CAS; matching
+/// generation alone is insufficient. Recovery uses its existing recovery
 /// authority and may close the expired producer's committed extent.
 ///
-/// Only a plain flush is unfenced. One that loses a race with recovery's
-/// generation swap is inert: it names a superseded writer, renews nothing and
-/// lies beyond the extent recovery closed. Everything that *decides* — any
-/// record carrying `close`, accepting and publishing a turn, dispatch,
-/// terminalization, recovery — still commits under the matching-generation
-/// CAS on the request, so it is definitively ordered against cancellation and
-/// recovery and a loser writes none of them. Tool-owned output follows the
-/// tool lifecycle and never revives a terminal request. There is no per-flush heartbeat
-/// or progress counter; due-only explicit renewal covers both streaming and
-/// silent work. Publication and dispatch do not implicitly extend the deadline.
-/// Tool-owned closure uses the tool lifecycle's terminal/delivery guard, not a
-/// request CAS that could revive the already-terminal originating request.
+/// Only a plain flush is unfenced. Everything that *decides* — any record
+/// carrying `close`, accepting and publishing a turn, dispatch,
+/// terminalization, recovery — still commits under the matching-generation CAS
+/// on the request. Tool-owned output follows the tool lifecycle and never
+/// revives a terminal request. There is no per-flush heartbeat; due-only
+/// explicit renewal covers both streaming and silent work. Publication and
+/// dispatch do not implicitly extend the deadline. Tool-owned closure uses the
+/// tool lifecycle's terminal/delivery guard, not a request CAS that could
+/// revive the already-terminal originating request.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OutputSegment {
@@ -218,12 +131,9 @@ pub struct OutputSegment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requester_did: Option<String>,
     pub session_id: String,
-    /// Exact physical request that owns the execution producing this output.
     pub request_doc_id: String,
     pub source: OutputSource,
-    /// The source's producer, the same on every record of the source. A
-    /// terminal-only record written by recovery still names the producer; the
-    /// CAS it committed under is its authority, not a replacement identity.
+    /// The source's producer, the same on every record of the source.
     pub writer: OutputWriter,
     /// Present exactly when `runs` is non-empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -241,21 +151,12 @@ pub struct OutputSegment {
     )]
     pub payload: String,
     /// Present on the one record that ends the source. A record has `runs`,
-    /// `close`, or both; never neither. With no ordinal, runs and payload must
-    /// be empty and close must be present. No decoder may infer missing closure.
+    /// `close`, or both; never neither. No decoder may infer missing closure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub close: Option<SourceClose>,
     pub created_at: String,
 }
 
-/// The next `bytes` of `payload` belong to `stream`. Runs split only at UTF-8
-/// boundaries. The run that opens a stream carries its declaration; an empty
-/// native string is an opening run of zero bytes.
-/// A zero-byte continuation is not a flush: it carries no new output fact and
-/// cannot be used as a streaming heartbeat. Silent work uses explicit renewal.
-/// Runs cover the payload exactly; streams open densely from zero and declare
-/// exactly once per `(block_index, part_index, signature field)` position.
-/// Missing earlier flushes never permit inventing a declaration.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SegmentRun {
@@ -265,28 +166,16 @@ pub struct SegmentRun {
     pub declaration: Option<StreamDeclaration>,
 }
 
-/// The existing authority that produced a source; never a new lease or host
-/// identity. Every record names it, which lets the shared projection classify
-/// unclosed output and ignore a superseded generation. It never renews a lease.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum OutputWriter {
     /// A request execution generation. A superseded generation can still land
     /// an inert flush, but cannot close, publish, dispatch or terminalize.
     RequestExecution { execution_generation: String },
-    /// The tool lifecycle admits output until terminalization. Its delivery
-    /// owner also admits an authored background-start receipt while running
-    /// and the separate completion notification afterward. The receipt does
-    /// not close the continuing tool output source.
+    /// The tool lifecycle admits output until terminalization.
     ToolExecution { tool_call_doc_id: String },
 }
 
-/// Whether content ends where its producer meant it to. This is completeness
-/// only: partial output is kept and labelled, never presented as a complete
-/// source with silently shorter text. Why it was cut short — interruption,
-/// provider failure, deadline — and whether the producing operation succeeded
-/// are owned by the request and tool lifecycles and are not classified again
-/// here. A tool that fails with its full output has complete output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputOutcome {
@@ -294,9 +183,8 @@ pub enum OutputOutcome {
     Partial,
 }
 
-/// The one terminal fact about a source, carried by its closing record.
-///
-/// At most one per `(request_doc_id, source)`; visible twins are an integrity
+/// The one terminal fact about a source, carried by its closing record. At
+/// most one per `(request_doc_id, source)`; visible twins are an integrity
 /// conflict. It stays valid after its producer's generation is no longer
 /// active. Closing a request-owned source commits under the
 /// matching-generation CAS on the request, so the producer and recovery can
@@ -305,18 +193,13 @@ pub enum OutputOutcome {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SourceClose {
-    /// The exact extent: `segments` flushes (ordinals `0..segments`, including
-    /// this record's own flush if it has one) and `stream_bytes[n]` bytes in
+    /// The exact extent: `segments` flushes and `stream_bytes[n]` bytes in
     /// stream `n`. A reader holding fewer flushes, a gap in ordinals, or a
     /// byte mismatch has an incomplete or conflicting replica and must not
-    /// present the content as complete. A final flush has ordinal segments - 1.
-    /// A terminal-only record contributes no flush to the count. Every stream
-    /// has an opening run, including empty strings; a source with no streams
-    /// has segments = 0 and no stream_bytes. Beyond-extent flushes are inert:
-    /// they are excluded before data-twin checks, but never hide another close.
-    /// Fresh Complete acceptance under the owner gate must include all committed
-    /// data flushes, with nondecreasing timestamps no later than closure. This
-    /// writer check is distinct from replica reconstruction and exact replay.
+    /// present the content as complete. Beyond-extent flushes are inert:
+    /// excluded before data-twin checks, never hiding another close. Fresh
+    /// Complete acceptance under the owner gate must include all committed
+    /// data flushes, with nondecreasing timestamps no later than closure.
     Closed {
         outcome: OutputOutcome,
         segments: u32,
@@ -329,16 +212,7 @@ pub enum SourceClose {
     Retracted,
 }
 
-/// One stream of a closed source, by the exact identity of the record that
-/// closed it. That record is immutable, so its identity pins the extent it
-/// states; there is no logical key or repeated extent to disagree with it. A
-/// forked message carries the same references as its origin — payloads are
-/// never copied.
-///
-/// Closing records, the flushes within their extents, and the request/tool
-/// provenance they name are retained across session close or removal; this
-/// stack introduces no payload GC. ACP applies to every dependency: a
-/// reference never broadens access.
+/// A reference preserves the origin payload and its ACP scope; it grants no new access.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PayloadRef {
@@ -354,7 +228,6 @@ pub enum MessageRole {
     Assistant,
 }
 
-/// Publication authority/provenance, checked atomically by the existing owner.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MessagePublication {
@@ -362,18 +235,13 @@ pub enum MessagePublication {
         execution_generation: String,
     },
     RequestRecovery {
-        /// Recovery publishes only retained text from an unheaded provider source;
-        /// see TranscriptMessage. This is not permission to invent native metadata.
+        /// Recovery publishes only retained text from an unheaded provider
+        /// source; never fabricate native metadata.
         execution_generation: String,
     },
-    /// Tool-owned invocation reply or completion notification. A background
-    /// invocation can reply with a native tool-result receipt while execution
-    /// remains running, then publish an ordinary-text notification on terminal
-    /// completion. Each publication retains its own immutable replay identity.
-    /// The existing notification/queue owner binds ordinary completion messages
-    /// to the coalesced wake request (or the parent for Goal-owned input-only
-    /// delivery). Payload references still name the originating tool's source;
-    /// publication request membership is not payload-source ownership.
+    /// Tool-owned invocation reply or completion notification. Payload
+    /// references name the originating tool's source; publication request
+    /// membership is not payload-source ownership.
     ToolDelivery {
         tool_call_doc_id: String,
     },
@@ -384,16 +252,7 @@ pub enum MessagePublication {
     },
 }
 
-/// Runtime-owned `AgentRequest.terminal_output`, selected by the existing
-/// terminalization owner in the same transaction as terminal lifecycle state
-/// and any final header publication. It is absent before terminalization and
-/// never changed afterward, including by late background delivery.
-///
-/// A terminal row missing this field is incomplete/invalid, not `NoMessage`.
-/// Readers resolve the exact assistant header and all its dependencies in the
-/// physical request's agent/session/requester scope. Missing data never falls
-/// back to the latest locally visible message. Lifecycle/failure_reason still
-/// determine request success or failure; message presence alone does not.
+/// The terminal owner writes this with terminal state and final header publication.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TerminalOutput {
@@ -405,25 +264,16 @@ pub enum TerminalOutput {
     NoMessage,
 }
 
-/// The single durable transcript message. Stored as `AgentMessage`.
-///
-/// Create-only: written once, after every closing record it references, and never
-/// updated. There is no in-flight message row; unclosed output is visible as
-/// segments. `sequence` is the order coordinate within the session and keeps
-/// its existing durable allocator. Two visible messages sharing `message_key`
-/// or `(session_id, sequence)` with different content are an integrity
-/// conflict, surfaced the same way as segment twins.
+/// The single durable transcript message. Stored as `AgentMessage`. Create-only:
+/// written once, after every closing record it references, and never updated.
+/// Two visible messages sharing `message_key` or `(session_id, sequence)` with
+/// different content are an integrity conflict, surfaced the same way as
+/// segment twins.
 ///
 /// A successfully accepted provider turn atomically publishes its Complete
-/// closing record, assistant header and pending `AgentToolCall` rows before any tool is
-/// dispatched. The assistant turn is durable, with its sequence allocated,
-/// before a tool can run or a
-/// background completion can append (#945) — the guarantee in-flight upserts
-/// used to provide. Dispatch and recovery read arguments through the block.
-/// Partial turns may publish diagnostic headers, but any
-/// retained tool-call blocks name terminal, nondispatchable lifecycle rows.
-/// Pending intent is not execution permission: the existing tool owner checks
-/// current request ownership, cancellation/deadline and policy at dispatch.
+/// closing record, assistant header and pending `AgentToolCall` rows before any
+/// tool is dispatched (#945). Partial turns may publish diagnostic headers, but
+/// any retained tool-call blocks name terminal, nondispatchable lifecycle rows.
 /// Once published, an accepted turn cannot be retracted/resampled because a
 /// later dispatch fails. Recovery resumes its existing rows, never new calls.
 ///
@@ -431,19 +281,16 @@ pub enum TerminalOutput {
 /// native `Message` (including `Message::Assistant.id` via `native_id`).
 ///
 /// Recovery of an unheaded provider source is deliberately narrower: close its
-/// committed extent Partial (or reuse its existing Partial closure), then publish
-/// only ordinary Text streams at native part zero as Full
+/// committed extent Partial (or reuse its existing Partial closure), then
+/// publish only ordinary Text streams at native part zero as Full
 /// PresentedPayload references, in original block order, with outcome Partial
-/// and native_id None. Do not turn argument/reasoning/media bytes into text or
-/// fabricate their missing metadata. Omitted blocks leave gaps in original
-/// declaration positions; validate survivor order, not compacted index equality.
-/// If no eligible text stream exists, publish no assistant header for that source. Retain
-/// every omitted stream as diagnostic data, never executable tool intent or
-/// provider input. An existing published header is resolved unchanged, not
+/// and native_id None. Never turn argument/reasoning/media bytes into text or
+/// fabricate their missing metadata. If no eligible text stream exists, publish
+/// no assistant header for that source; retain every omitted stream as
+/// diagnostic data. An existing published header is resolved unchanged, not
 /// replaced by this recovery policy. Provider-input narrowing still applies.
 /// Validate source extent/run accounting for all streams, but decode native
-/// payloads only for referenced blocks: omitted incomplete JSON must not invalidate
-/// an otherwise reconstructable text-only recovery header.
+/// payloads only for referenced blocks.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TranscriptMessage {
@@ -455,18 +302,13 @@ pub struct TranscriptMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requester_did: Option<String>,
     /// Exact request this message belongs to, not necessarily the request that
-    /// produced its referenced bytes. A background completion notification is
-    /// bound by the existing queue owner to its wake request; Goal-owned
-    /// input-only delivery stays parent-bound. Absent only for history a fork
-    /// placed in a child session, which must not acquire live request
-    /// membership. The logical `request_id` is not repeated here (#1425).
+    /// produced its referenced bytes. Absent only for history a fork placed in
+    /// a child session, which must not acquire live request membership.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_doc_id: Option<String>,
     pub publication: MessagePublication,
-    /// Whether this message was published whole or as kept partial output.
-    /// Set by the publisher; never derived from the closing records its blocks reference
-    /// (a complete notification may wrap a tool's partial output), so a message
-    /// with no payloads needs no closing record. Forks retain it.
+    /// Set by the publisher; never derived from the closing records its blocks
+    /// reference, so a message with no payloads needs no closing record.
     pub outcome: OutputOutcome,
     pub sequence: u32,
     pub role: MessageRole,
@@ -483,9 +325,7 @@ pub struct TranscriptMessage {
 
 impl TranscriptMessage {
     /// Every sealed payload dependency named by this header, in native block
-    /// order. Readers use this to build the exact immutable dependency closure;
-    /// it is deliberately shared rather than reimplemented by hydration,
-    /// history, exports, or provider input.
+    /// order.
     pub fn payload_references(&self) -> Vec<&PayloadRef> {
         let mut references = Vec::new();
         for block in &self.blocks {
@@ -554,9 +394,8 @@ pub enum MessageBlock {
         signature: Option<String>,
         additional_params: Option<serde_json::Value>,
     },
-    /// The result paired to its call by exact document identity. Its text
-    /// parts reference the tool call's own output stream rather than copying
-    /// it into the message.
+    /// The result paired to its call by exact document identity; its text
+    /// parts reference the tool call's own output stream.
     ToolResult {
         tool_call_doc_id: String,
         id: String,
@@ -602,12 +441,9 @@ pub struct PresentedPayload {
 }
 
 /// Deterministic byte composition, not a rerun of mutable truncation policy.
-/// Ranges index the full output at UTF-8 boundaries. Literals are the small
-/// runtime-written pieces between them (markers, normalized separators,
-/// retrieval hints, notification wrappers), stored once, inline, here.
-/// This represents line normalization and head/tail presentation without a
-/// second copy of selected tool bytes. Retrieval hints identify the tool call,
-/// never the retired spill collection. Empty parts means an empty presentation.
+/// Ranges index the full output at UTF-8 boundaries; literals are the small
+/// runtime-written pieces between them, stored once, inline, here. Empty parts
+/// means an empty presentation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PayloadPresentation {
@@ -674,22 +510,20 @@ pub enum MediaType {
     Document(DocumentMediaType),
 }
 
-/// Why a projection could not produce content. Every consumer goes through the
-/// one shared reconstruction, so these are the only ways a transcript read can
-/// fail; none of them degrades to shorter text.
+/// Why a projection could not produce content: the only ways a transcript read
+/// can fail; none degrades to shorter text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReconstructionError {
     /// The closing record is unavailable, with no known authorization denial.
-    /// This may be replication lag; absence alone proves neither lag nor denial.
+    /// Absence alone proves neither lag nor denial.
     UnresolvedClose { close_doc_id: String },
-    /// The authorization owner explicitly denied a required dependency. Applies
-    /// to headers, closing records, segments and provenance, not just PayloadRef.
-    /// This is an access error, never a loading state. Do not infer it from absence.
+    /// The authorization owner explicitly denied a required dependency. This
+    /// is an access error, never a loading state; do not infer it from absence.
     AccessDenied { doc_id: String },
     /// A reference names a plain flush, retracted source or absent stream.
     InvalidReference { reference: PayloadRef },
-    /// An ordinal inside the sealed extent is not visible. Expected while
-    /// replication is behind; the source is incomplete, not shorter.
+    /// An ordinal inside the sealed extent is not visible; the source is
+    /// incomplete, not shorter.
     MissingSegment { close_doc_id: String, ordinal: u32 },
     /// Visible twins at a coordinate disagree in writer, runs or payload.
     ConflictingSegments { close_doc_id: String, ordinal: u32 },
@@ -724,8 +558,8 @@ pub enum ReconstructionError {
 }
 
 impl ReconstructionError {
-    /// Errors that can become reconstructable when immutable dependencies
-    /// replicate. All other variants are authorization or integrity failures.
+    /// Recoverable when immutable dependencies replicate; authorization and
+    /// integrity failures are terminal.
     pub fn is_incomplete(&self) -> bool {
         matches!(
             self,
@@ -813,29 +647,19 @@ impl std::fmt::Display for ReconstructionError {
 impl std::error::Error for ReconstructionError {}
 
 /// Output for a request that no message references yet, grouped by declared
-/// native position: sources with no visible closing record, and closed sources awaiting
-/// publication (tool output before delivery, interrupted output before
-/// recovery publishes it), and retained partial diagnostics. Retracted sources
-/// are excluded. This is the live
-/// preview and streaming view, built from the same segments the transcript
-/// will reference, so there is no rollover, overlap, or repair step.
-///
-/// Headers, closing records and segments may replicate in any order and are projected
-/// together: a header whose segments have not arrived is incomplete, never a
-/// second live copy.
-/// Unclosed request-owned output is eligible only for the current generation
-/// of a nonterminal request; tool-owned output follows the tool lifecycle.
-/// Each segment names its writer; a missing request/tool owner observation
-/// cannot establish live eligibility. Authored sources are never shown live:
+/// native position; retracted sources excluded. Built from the same segments
+/// the transcript will reference, so there is no rollover, overlap or repair
+/// step. Headers, closing records and segments may replicate in any order and
+/// are projected together: a header whose segments have not arrived is
+/// incomplete, never a second live copy. Unclosed request-owned output is
+/// eligible only for the current generation of a nonterminal request; tool-owned
+/// output follows the tool lifecycle. Authored sources are never shown live:
 /// they appear only with their header. This projection is an observation for
-/// display. It never decides that work expired; only the owning runtime does.
-/// Superseded sources remain retained history, not current output. Even an
-/// eligible unclosed source is only an observation: its closing record may be in transit.
-/// Closed historical output never depends on today's active generation.
-/// After terminal selection is visible, unreferenced streams from a closed
-/// Partial provider source are RetainedPartial, not pending publication. Resolve
-/// a selected header before classifying its streams; missing dependencies stay
-/// unresolved. Opaque reasoning is never rendered, including in diagnostics.
+/// display; it never decides that work expired. After terminal selection is
+/// visible, unreferenced streams from a closed Partial provider source are
+/// RetainedPartial, not pending publication. Resolve a selected header before
+/// classifying its streams. Opaque reasoning is never rendered, including in
+/// diagnostics.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LiveOutput {
     pub request_doc_id: String,
@@ -858,11 +682,10 @@ pub enum LiveStreamState {
     /// No terminal fact is locally visible; this does not prove remote liveness.
     Unclosed,
     /// Closure/publication is known but the exact message or its dependencies
-    /// are not yet reconstructable. Keep a validated contiguous preview while
-    /// reporting loading; never label a known-closed source as live activity.
+    /// are not yet reconstructable; never label a known-closed source as live
+    /// activity.
     PendingPublication { outcome: OutputOutcome },
-    /// These closed Partial provider bytes remain outside published native messages
-    /// after request terminalization, including fragments omitted by recovery.
-    /// Diagnostic-only: not current activity, pending delivery or provider input.
+    /// Closed Partial provider bytes outside published native messages after
+    /// request terminalization; diagnostic-only.
     RetainedPartial,
 }

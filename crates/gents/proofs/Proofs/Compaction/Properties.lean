@@ -29,11 +29,6 @@ theorem reapply_preserves_view_coherent
   IsValidReducer.preservesCoherent (r := r) (r v)
     (IsValidReducer.preservesCoherent (r := r) v h)
 
-/-- Pair closure over a reduced view.
-
-Unlike the pre-#993 version, this is not vacuous: it is the property the real
-`summarize` reducer earns by retreating its split to a turn boundary, and
-`raw_split_can_orphan` witnesses that an unadjusted split loses it. -/
 theorem no_orphaned_tool_results_after_reduction
     {v : PromptView} (h_pre : PromptView.ViewCoherent v) :
     ∀ row, row ∈ (r v).messages →

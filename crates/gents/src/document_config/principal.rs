@@ -35,12 +35,11 @@ pub struct Node {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub created_by: Option<String>,
-    /// Admission bound on a request's causal hop (`request_hop`). Absent
-    /// uses [`DEFAULT_MAX_REQUEST_HOP`].
+    /// Admission bound on a request's causal hop; absent uses
+    /// [`DEFAULT_MAX_REQUEST_HOP`].
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_request_hop: Option<u32>,
-    /// Optional UI/discovery labels. References, never tags, determine execution.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -89,7 +88,7 @@ pub(crate) async fn load_node_record(
 /// validates the default behavior with the documents it names.
 #[cfg(test)]
 pub(crate) async fn upsert_node(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     display_name: Option<&str>,
     default_agent_id: Option<&str>,

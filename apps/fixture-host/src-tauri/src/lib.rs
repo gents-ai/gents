@@ -1,10 +1,3 @@
-//! Minimal downstream Tauri host composing the reusable desktop packages with a
-//! co-resident domain plugin. It is a package/plugin composition fixture, not a
-//! downstream product simulation: the domain plugin is not a second DefraDB node,
-//! and CI does not drive an enrollment/chat/domain journey through its webview.
-//! Native two-store home isolation is covered by `gents-desktop-bridge`'s
-//! `home_isolation` test.
-
 use std::path::PathBuf;
 
 use fixture_domain_plugin::DomainConfig;
@@ -32,6 +25,7 @@ fn bridge_config() -> BridgeConfig {
             runtime_admin: false,
         },
         managed_server: ManagedServerPolicy::Disabled,
+        client_host: false,
         store_key_custody: gents_desktop_bridge::StoreKeyCustodyChoice::default(),
     }
 }

@@ -1,20 +1,3 @@
-//! Event-trigger `TriggerSource`.
-//!
-//! Subscribes to DefraDB document events and emits `FireIntent`s whenever an
-//! event from a `source_collection` referenced by the active runtime
-//! snapshot's `active_event_triggers` lands. The subscription set is kept in
-//! sync with the snapshot generation — see `reconcile_subscriptions` (Task 19).
-//!
-//! This file lands in staged tasks:
-//! - Task 18: skeleton only — struct, constructor, no-op `next_fire` stub.
-//! - Task 19: `reconcile_subscriptions` drives the desired-collections set
-//!   from the snapshot at each generation bump.
-//! - Task 20: full `next_fire` loop (poll subscription, filter by desired
-//!   collections, build `FireIntent`).
-//! - Task 21 (this file): filter probe + doc-var hydration via an
-//!   introspected source-doc projection cached per source collection.
-//! - Task 22: `on_result` callback body for bookkeeping writes.
-
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -36,15 +19,6 @@ use super::{FireIntent, TriggerKind, TriggerSource};
 
 mod durable;
 
-/// Cap for the one-shot existing-docs seed query run when a collection is
-/// newly admitted to `desired_collections`. The goal of the seed is to
-/// enforce spec's forward-only semantic: pre-existing docs in the source
-/// collection must not fire as "created" when the first event arrives.
-/// Collections larger than the cap are still safe (we just log a warning
-/// and accept that docs beyond the cap may appear as "first-seen" on their
-/// next event); v1 doesn't target catalog-scale source collections, so a
-/// conservative limit is fine.
-const SEEN_DOCS_SEED_LIMIT: usize = 10_000;
 const SEEN_DOCS_SEED_MAX_ATTEMPTS: usize = 20;
 const SEEN_DOCS_SEED_RETRY_DELAY: Duration = Duration::from_millis(100);
 const EVENT_SOURCE_RESCAN_INTERVAL: Duration = Duration::from_secs(5);
@@ -103,31 +77,6 @@ fn take_due_group_batch(
     batch
 }
 
-#[cfg(test)]
-mod due_group_batch_tests {
-    use super::*;
-
-    #[test]
-    fn due_group_batches_are_bounded_and_rotate_fairly() {
-        let due = (0..(GROUP_DUE_RECONCILE_BUDGET + 3))
-            .map(|index| GroupTrackingKey {
-                consumer_key: "consumer-key".to_string(),
-                correlation: format!("run-{index:03}"),
-            })
-            .collect::<Vec<_>>();
-        let mut cursor = 0;
-
-        let first = take_due_group_batch(due.clone(), &mut cursor);
-        let second = take_due_group_batch(due, &mut cursor);
-
-        assert_eq!(first.len(), GROUP_DUE_RECONCILE_BUDGET);
-        assert_eq!(second.len(), GROUP_DUE_RECONCILE_BUDGET);
-        assert_eq!(first[0].correlation, "run-000");
-        assert_eq!(second[0].correlation, "run-016");
-        assert!(second.iter().any(|key| key.correlation == "run-018"));
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct GroupTrackingKey {
     consumer_key: String,
@@ -153,16 +102,12 @@ struct DeliveryBuild {
     intents: Vec<FireIntent>,
     correlation_pending: bool,
     settled_trigger_ids: Vec<String>,
-    /// `(trigger_id, correlation_field)` of each delivery deferred because
-    /// the source document has not set its correlation field yet.
     deferred: Vec<(String, String)>,
 }
 
 pub struct EventSource {
     durable_checkpoint: Option<durable::PendingCheckpoint>,
     durable_ready: bool,
-    /// Per-trigger arrivals whose last fire was not acknowledged; see
-    /// [`durable::ParkedArrival`].
     parked_arrivals: HashMap<String, durable::ParkedArrival>,
     last_refusal_scan: Option<Instant>,
     durable_after_trigger: Option<String>,
@@ -179,15 +124,8 @@ pub struct EventSource {
     cancel: CancellationToken,
     source_schema_cache: SourceSchemaCache,
     collection_id_to_name: HashMap<String, String>,
-    // Fast path for documents whose matching trigger deliveries have all
-    // settled. Incomplete correlation keeps a document out of this set.
     seen_docs: HashMap<String, HashSet<String>>,
-    // Settled delivery identities for a document that still has at least one
-    // correlation-incomplete sibling. This prevents a ready sibling from
-    // firing again when a follow-up update supplies the missing correlation.
     partially_seen_triggers: HashMap<SourceDocumentKey, HashSet<String>>,
-    /// Startup reconstructs incomplete correlations/live graph rows that predate
-    /// the registration cursor; these retain the existing deferred-delivery owner.
     startup_deferred_documents: HashSet<SourceDocumentKey>,
     pub(super) deferrals: super::deferred_delivery::DeferralWatch,
     pending_intents: Mutex<VecDeque<FireIntent>>,
@@ -200,31 +138,20 @@ pub struct EventSource {
     group_recovery_page_queries: AtomicUsize,
     #[cfg(test)]
     group_membership_queries: AtomicUsize,
-    /// Periodic live rescan that closes the lossy-subscription gap. The
-    /// interval is stored on the source so a busy stream of `next_fire()` calls
-    /// does not reset the cadence.
+    /// Periodic live rescan that closes the lossy-subscription gap; the
+    /// interval is stored so busy `next_fire()` calls do not reset the cadence.
     rescan_tick: tokio::time::Interval,
     rescan_interval: Duration,
 }
 
-/// Per-source-collection schema cache.
+/// Per-source-collection cache of projectable field names from GraphQL
+/// introspection; entries are never invalidated because the active schema for
+/// a collection is stable across the runtime's lifetime.
 ///
-/// `fields_for(collection, node)` runs a one-shot GraphQL introspection
-/// (`__type(name: "<collection>") { fields { name } }`) the first time a
-/// given source collection is seen, then memoizes the resulting projectable
-/// field list. Subsequent hydrations for the same collection are a pure
-/// cache hit. Entries are never invalidated — the active schema for a
-/// collection is stable across the runtime's lifetime, and any schema
-/// migration produces a new collection version whose identity the fire
-/// path treats as a distinct source.
-///
-/// Filtering: DefraDB's GraphQL introspection exposes several auto-
-/// generated fields on every collection (aggregates like `_count`,
-/// `_sum`, and per-field wrappers). These are not direct scalars and
-/// cannot be included in a plain projection — selecting them without
-/// required arguments produces a parse error. We filter aggressively:
-/// drop anything starting with `_` (GraphQL meta / DefraDB aggregate) and
-/// anything whose name is an upper-case aggregate keyword.
+/// Filtering: DefraDB introspection exposes auto-generated fields (aggregates
+/// like `_count`, `_sum`, and per-field wrappers) that cannot be selected in a
+/// plain projection; anything starting with `_` or an upper-case aggregate
+/// keyword is dropped.
 #[derive(Default)]
 pub(crate) struct SourceSchemaCache {
     by_collection: tokio::sync::Mutex<HashMap<String, Vec<String>>>,
@@ -387,8 +314,6 @@ pub(crate) fn source_fields_query(collection: &str) -> anyhow::Result<String> {
     ))
 }
 
-/// A collection's own fields from [`source_fields_query`]'s data: no system
-/// fields and no aggregates.
 pub(crate) fn source_fields_from(
     data: Option<&serde_json::Value>,
     collection: &str,
@@ -488,17 +413,6 @@ impl EventSource {
         self
     }
 
-    /// Override the reconciliation debounce. Test-only hook mirroring
-    /// `ScheduleSource::with_tick_every`.
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(crate) fn with_reconcile_debounce(mut self, debounce: Duration) -> Self {
-        self.reconcile_debounce = debounce;
-        self
-    }
-
-    /// Snapshot of the source-collection names the event source is currently
-    /// filtering on. Test-only accessor.
     #[cfg(test)]
     pub(crate) fn subscribed_collections(&self) -> Vec<String> {
         let mut v: Vec<String> = self.desired_collections.iter().cloned().collect();
@@ -506,8 +420,6 @@ impl EventSource {
         v
     }
 
-    /// Lose every buffered and future notification until the source
-    /// resubscribes on its next rescan tick. Test-only.
     #[cfg(test)]
     pub(crate) fn drop_subscription(&mut self) {
         self.subscription = None;
@@ -580,7 +492,7 @@ impl EventSource {
             };
             let owner = delivery.owner();
             let consumer = delivery.consumer();
-            if let Err(error) = crate::config_client::ConfigAccess::transact_local(
+            if let Err(error) = crate::config_client::ConfigAccess::transact_local_write(
                 &self.node,
                 None,
                 "trigger.seed_arrival_cursor",
@@ -677,10 +589,9 @@ impl EventSource {
         }
 
         // A snapshot generation bump is not permission to full-scan every
-        // source collection. Admit at most one page of changed group
-        // membership here; the existing rotating sweep eventually covers the
-        // remaining pages and triggers. Unrelated task/config updates do no
-        // startup recovery I/O at all.
+        // source collection: admit at most one page of changed group
+        // membership here, so the rotating sweep eventually covers the
+        // remaining pages and triggers.
         for trigger in group_triggers
             .iter()
             .filter(|trigger| changed_group_trigger_ids.contains(&trigger.trigger_id))
@@ -766,34 +677,12 @@ impl EventSource {
         for (_, field) in correlation_probes.keys() {
             crate::graphql::validate_graphql_name(field)?;
         }
-        let query = format!(
-            r#"query {{ {collection}(limit: {limit}) {{ _docID }} }}"#,
-            collection = collection,
-            limit = SEEN_DOCS_SEED_LIMIT,
-        );
-        let response = crate::graphql::graphql_with_transaction_retry(
-            &self.node,
-            &query,
-            "seen-doc seed query",
-        )
-        .await
-        .with_context(|| format!("seen-doc seed query for {collection}"))?;
-        let rows = response
-            .data
-            .as_ref()
-            .and_then(|d| d.get(collection))
-            .and_then(serde_json::Value::as_array);
-        let Some(rows) = rows else {
-            anyhow::bail!("seen-doc seed query for {collection} returned no rows field");
+        let ids = tokio::select! {
+            biased;
+            _ = self.cancel.cancelled() => anyhow::bail!("event source seeding cancelled"),
+            ids = super::event_delivery::source_scan::load_doc_ids(&self.node, collection) => ids?,
         };
-        let mut doc_ids: HashSet<String> = rows
-            .iter()
-            .filter_map(|row| {
-                row.get("_docID")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned)
-            })
-            .collect();
+        let mut doc_ids: HashSet<String> = ids.into_iter().collect();
         // Documents of a graph run already underway on a trigger's own
         // revision are live work, never history, even when they predate this
         // engine noticing the trigger.
@@ -816,27 +705,12 @@ impl EventSource {
                 .filter(|filter| !filter.is_empty())
                 .unwrap_or("{}");
             crate::graphql::validate_graphql_filter_fragment(filter)?;
-            let query = format!(
-                r#"query {{
-                    {collection}(filter: {filter}, limit: {limit}) {{ _docID {field} }}
-                }}"#,
-                limit = SEEN_DOCS_SEED_LIMIT,
-            );
-            let response = crate::graphql::graphql_with_transaction_retry(
-                &self.node,
-                &query,
-                "correlation readiness seed",
-            )
-            .await
-            .with_context(|| format!("correlation readiness seed for {collection}.{field}"))?;
-            for row in response
-                .data
-                .as_ref()
-                .and_then(|data| data.get(collection))
-                .and_then(serde_json::Value::as_array)
-                .into_iter()
-                .flatten()
-            {
+            let rows = tokio::select! {
+                biased;
+                _ = self.cancel.cancelled() => anyhow::bail!("event source correlation seeding cancelled"),
+                rows = super::event_delivery::source_scan::load_source_rows(&self.node, collection, Some(&field), Some(filter)) => rows?,
+            };
+            for row in rows {
                 let correlation = row
                     .get(&field)
                     .and_then(serde_json::Value::as_str)
@@ -874,22 +748,12 @@ impl EventSource {
                     .collect::<Vec<_>>(),
             );
         }
-        let count = doc_ids.len();
         let deferred = deferred_by_doc.len();
         if deferred > 0 {
             tracing::debug!(
                 source_collection = %collection,
                 deferred_docs = deferred,
                 "event source left pre-existing docs with incomplete correlation eligible for a follow-up update",
-            );
-        }
-        if rows.len() >= SEEN_DOCS_SEED_LIMIT {
-            tracing::warn!(
-                source_collection = %collection,
-                seed_count = %count,
-                limit = %SEEN_DOCS_SEED_LIMIT,
-                "event source seeded seen_docs at limit; older pre-existing docs \
-                 beyond the cap may fire as created on their first observed event",
             );
         }
         self.seen_docs
@@ -906,6 +770,10 @@ impl EventSource {
     ) -> anyhow::Result<()> {
         let mut last_error = None;
         for attempt in 1..=SEEN_DOCS_SEED_MAX_ATTEMPTS {
+            anyhow::ensure!(
+                !self.cancel.is_cancelled(),
+                "event source seeding cancelled"
+            );
             match self
                 .seed_seen_docs_for_collection(collection, snapshot)
                 .await
@@ -914,7 +782,11 @@ impl EventSource {
                 Err(error) => last_error = Some(error),
             }
             if attempt < SEEN_DOCS_SEED_MAX_ATTEMPTS {
-                tokio::time::sleep(SEEN_DOCS_SEED_RETRY_DELAY).await;
+                tokio::select! {
+                    biased;
+                    _ = self.cancel.cancelled() => anyhow::bail!("event source seeding cancelled"),
+                    _ = tokio::time::sleep(SEEN_DOCS_SEED_RETRY_DELAY) => {}
+                }
             }
         }
         Err(last_error.expect("seed retry loop always attempts at least once"))
@@ -1031,8 +903,7 @@ impl EventSource {
 
     /// Run the trigger's `filter` against the source doc, narrowed by
     /// `_docID`, via a `limit: 1` probe. Returns `Ok(true)` when the doc
-    /// matches (so the fire should proceed), `Ok(false)` when it doesn't
-    /// (so the dispatch loop should skip), and `Err` when the probe query
+    /// matches, `Ok(false)` when it doesn't, and `Err` when the probe query
     /// itself errored — the caller treats errors as "skip this fire" so a
     /// transient GraphQL failure doesn't brick the source.
     ///
@@ -1041,10 +912,10 @@ impl EventSource {
     /// `_docID` from the event payload is escaped, and `trigger.filter` —
     /// spliced in whole as an object fragment, where escaping would break
     /// the syntax — is checked as a balanced filter object. A break-out has
-    /// to close an `]`, `}` or `)` it never opened, which is what that
-    /// check rejects.
+    /// to close an `]`, `}` or `)` it never opened, which is that check
+    /// rejects.
     ///
-    /// Note the CLI apply probe is not a substitute: it executes the filter
+    /// The CLI apply probe is not a substitute: it executes the filter
     /// rather than validating it, in a different embedding than this one.
     async fn probe_filter(
         &self,
@@ -1077,8 +948,8 @@ impl EventSource {
         collection: &str,
         source_doc_id: &str,
     ) -> anyhow::Result<Option<serde_json::Value>> {
-        // `fields_for` validates this same binding and `?`-propagates before
-        // the query below is built, so it is the one gate for both sites.
+        // `fields_for` validates this binding before the query is built, so
+        // it is the one gate for both sites.
         let fields = self
             .source_schema_cache
             .fields_for(collection, &self.node)
@@ -1124,8 +995,7 @@ impl EventSource {
             .unwrap_or_default();
         let mut source_fields = std::collections::BTreeMap::new();
         for field in fields {
-            // Mailbox-capable stages capture an owner when the source has
-            // one. Ownerless automation still runs; the stamped mailbox tool
+            // Ownerless automation still runs; the stamped mailbox tool
             // itself fails closed if that stage tries to file without owner
             // lineage.
             if let Some(canonical) = captured_source_field(doc, &field)? {
@@ -1799,6 +1669,10 @@ impl EventSource {
         });
     }
 
+    /// A candidate's filter miss or probe/fetch error is settled in
+    /// isolation: it must not prevent the other matching triggers from
+    /// firing. Candidates are ordered by `trigger_id` so dispatch order is
+    /// stable across ticks.
     /// Build a `FireIntent` for every active event-source trigger whose
     /// `source_collection` matches `collection_name` AND `event_kind` matches
     /// `kind`. Each candidate's operator-authored filter is probed against
@@ -1811,10 +1685,6 @@ impl EventSource {
     ///
     /// Candidates are ordered by `trigger_id` for determinism so tests and
     /// dispatch order are stable across ticks.
-    ///
-    /// Replaces the former `first_matching_trigger` helper, which silently
-    /// dropped all but one matching trigger per event (and, worse, dropped
-    /// the whole event when that one trigger's filter missed).
     async fn build_intents_for_all_matching(
         &self,
         snapshot: &ActiveRuntimeSnapshot,
@@ -2115,9 +1985,8 @@ impl EventSource {
 
 /// A durable fire's acknowledgment. Dropping the guard without acknowledging
 /// means the driver died between emitting the intent and seeing it answered —
-/// a panic or abort inside dispatch — which is the one loss mode no live owner
-/// can report; Drop records it on the Trigger so a seed wait can tell a lost
-/// fire from a configuration error.
+/// the one loss mode no live owner can report; Drop records it on the Trigger
+/// so a seed wait can tell a lost fire from a configuration error.
 pub(super) struct UnacknowledgedGuard {
     node: Arc<EmbeddedNode>,
     node_did: String,
@@ -2214,9 +2083,6 @@ impl TriggerSource for EventSource {
                     }
                 }
 
-                // Step 3: race the subscription against snapshot changes and
-                // cancel. Subscription is guaranteed Some here by the check
-                // above, so we can take a &mut borrow for the recv poll.
                 let mut message = None;
                 let mut dropped = 0;
                 let mut subscription_closed = false;
@@ -2267,9 +2133,6 @@ impl TriggerSource for EventSource {
                 let message = message.expect("subscription recv branch sets message");
 
                 if dropped > 0 {
-                    // Dropped events are a correctness hazard. The periodic
-                    // rescan closes the gap for created docs, and this log
-                    // keeps the lossy event visible operationally.
                     tracing::warn!(
                         dropped = dropped,
                         "event source dropped messages; periodic rescan will recover created docs",

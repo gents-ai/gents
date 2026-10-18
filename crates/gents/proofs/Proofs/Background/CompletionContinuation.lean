@@ -106,7 +106,6 @@ structure QueuedCompletion where
 /-- Enqueue the first coalesced completion wake for this parent session.
 Subsequent terminal completions reuse the session queue's separately-proved
 coalescing path while each still gets its own transcript notification.
-
 Goal presence is deliberately not an input. Jack's decision (2026-09-24, wake
 ownership): Goals and background wakes are independent, so no Goal,
 whatever its status (including paused and complete), suppresses the

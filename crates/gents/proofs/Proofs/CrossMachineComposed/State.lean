@@ -31,8 +31,6 @@ def Coherent (pre : ComposedState) (toolPre : ToolExecution.ToolCallContext) : P
   toolPre.deadline = pre.request.deadline ∧
   toolPre.currentTime = pre.request.currentTime
 
-/-- An `agent_new`/`agent_message` row outlives its request's deadline:
-its terminal is another request's terminal output, not this request's clock. -/
 def IsDetached (t : ToolExecution.ToolCallContext) : Prop :=
   t.operation = .sessionMessage
 

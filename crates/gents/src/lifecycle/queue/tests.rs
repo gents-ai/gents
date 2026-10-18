@@ -196,7 +196,7 @@ async fn queue_rows(node: &EmbeddedNode, session_id: &str) -> Vec<QueueRow> {
 }
 
 async fn insert_raw_queue_request(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     request_id: &str,
     session_id: &str,
@@ -246,10 +246,6 @@ async fn insert_raw_queue_request(
         .expect("raw queue create returns _docID")
 }
 
-/// A real accepted background tool and its closed `ToolExecution` source for
-/// queue-owner tests.  This deliberately goes through provider publication,
-/// accepted-tool adoption, running CAS, and terminal output closure: queue
-/// notification tests must not manufacture an `AgentToolCall` authority row.
 struct CanonicalBackgroundFixture {
     node: Arc<EmbeddedNode>,
     parent: AgentRequest,
@@ -432,9 +428,6 @@ async fn request_doc_lookup_rejects_duplicate_logical_request_ids() {
     assert!(error.to_string().contains("ambiguous across 2 documents"));
 }
 
-/// Replace the admission signature field (owned and pinned by the protocol
-/// crate's canonical encoder tests) with a placeholder so the runtime pin
-/// stays stable while still asserting the exact field set.
 fn normalize_pin_fields(fields: &str) -> String {
     let start = fields
         .find("admission_signature: \"")
@@ -452,9 +445,6 @@ mod background_completion;
 mod coalescing;
 mod input;
 
-/// Pin signed GraphQL fields through the production preparation functions.
-/// Fixed timestamps and a deterministic signing identity keep these wire
-/// compatibility checks stable without duplicating request construction.
 mod pin_tests {
     use super::*;
     use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
@@ -468,11 +458,6 @@ mod pin_tests {
         parent.caused_by_trigger_context = Some(r#"{"a":"b"}"#.to_string());
         parent
     }
-
-    // --- Site 3: `lifecycle::queue::mutation::session_request_create_mutation` ---
-    // Pure (no node) and already returns the full mutation string built
-    // from `create.graphql_mutation()`; the input fields are extracted from
-    // that known wrapper.
 
     #[tokio::test]
     async fn pin_session_request_create_mutation() {
@@ -514,7 +499,6 @@ mod pin_tests {
         );
     }
 
-    // Pin the production preparation seam; do not reconstruct its DTO here.
     #[tokio::test]
     async fn pin_goal_continuation_preparation() {
         let tempdir = tempfile::tempdir().unwrap();

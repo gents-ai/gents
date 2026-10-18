@@ -1,60 +1,3 @@
-//! Grok shim tool projection.
-//!
-//! Durable `AgentToolCall` rows are the authoritative source for the Grok
-//! pager's `tool_call` / `tool_call_update` `session/update` notifications.
-//! This leaf projects those rows, request-id scoped and ordered by
-//! `started_at`, into fresh Grok notification payloads: tracker updates
-//! (`tool_call` then `tool_call_update` when the observed lifecycle status
-//! changes), command titles/status/content, available-command updates, and
-//! the execute-kind subprocess lifecycle the pager renders for shell work.
-//!
-//! Ordering rules mirrored from `xai-grok-pager/src/acp/tracker.rs`:
-//!
-//! - suppressed tool families (`todo`, `bg-plumbing`, `goal`,
-//!   `scheduler`, `workflow`) are never rendered as scrollback blocks;
-//! - `task`/`Task` are deliberately **not**
-//!   suppressed: they emit an ordinary standard ACP `tool_call` plus a
-//!   same-id terminal `tool_call_update` (title = the durable tool name,
-//!   kind `other`), and the pager handles title recognition, waiting, and
-//!   suppression on its side;
-//! - `send_subagent_message` is recognized by canonical tool meta
-//!   (the `x.ai/tool` envelope carrying
-//!   `{"version": <TOOL_META_VERSION>, "kind": "ActiveAgentMessage"}`) or
-//!   the title `send_subagent_message`, with rawInput
-//!   `{"subagent_id", "text"}`;
-//! - `available_commands_update` carries an empty ACP command catalog plus
-//!   Grok's tool names in `_meta.tools`;
-//! - orphan `tool_call_update` values arriving before their `tool_call` are
-//!   merged into the pending base by `toolCallId` on arrival.
-//!
-//! Streaming bash output deltas: canonical live output is not a row column.
-//! `gents::tool_call_lifecycle::load_tool_call_presentation` reconstructs it
-//! from the call's durable `AgentOutputSegment` stream for spawned
-//! subprocess calls (`live_output`), and the projection surfaces that
-//! preview while the call runs and no durable result text exists — a
-//! streaming window, never replayed from scratch or duplicated as durable
-//! materialization.
-//!
-//! Terminal ACP client methods `terminal/create`, `terminal/output`,
-//! `terminal/wait_for_exit`, `terminal/kill`, and `terminal/release` remain
-//! explicit shaped unsupported results: the shim registers
-//! `clientTerminal: false`, so shell work runs agent-side and reaches the
-//! client purely as execute-kind tool_call events. `terminal/wait_for_exit`
-//! answers with the pager's exact `METHOD_NOT_FOUND` error
-//! (`wait_for_exit_not_supported("pager")`); the other terminal methods
-//! answer with ordinary shaped method-not-found errors of the shim's own
-//! wording. No permission document is ever created by this leaf.
-//!
-//! Reads run in-process through `graphql_with_transaction_retry`, and
-//! presentations through `load_tool_call_presentation` over `ConfigAccess`,
-//! with every interpolated value passed through `escape_graphql_string`; no
-//! HTTP GraphQL helper is used. `project_tools` is bounded and
-//! request-id-scoped: one `AgentToolCall` query per request id, then one
-//! canonical presentation load per projected call row (the owner's per-call
-//! identity chain), and no graph walks beyond the rows of that request.
-//! `session_tool_results` reads one root session's calls of a single tool,
-//! with one presentation load per call its caller has not yet settled.
-
 use std::{char::REPLACEMENT_CHARACTER, collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
@@ -69,36 +12,18 @@ use super::nonempty;
 
 mod background;
 
-/// JSON-RPC error code the pager uses for a client method the client does
-/// not implement (method not supported by the connection).
 pub(crate) const JSONRPC_METHOD_NOT_SUPPORTED: i64 = -32601;
 
-/// The exact message the reference pager answers `terminal/wait_for_exit`
-/// with: `xai-grok-pager/src/acp/mod.rs::wait_for_exit_not_supported("pager")`
-/// builds a `METHOD_NOT_FOUND` error whose message is
-/// `"{context} does not handle WaitForTerminalExit"`. The shim reproduces
-/// that error exactly, because the pager's adapter falls back to polling
-/// when it sees it.
 pub(crate) const PAGER_WAIT_FOR_EXIT_MESSAGE: &str = "pager does not handle WaitForTerminalExit";
 
-/// Canonical tool meta envelope key the pager recognizes: the `_meta` field
-/// of a `tool_call` carries an envelope object whose `x.ai/tool` entry holds
-/// the canonical tool meta (`version`/`kind`), with a `subagentBackground`
-/// boolean sibling merged from the row's persisted `await_mode`.
 pub(super) const TOOL_META_KEY: &str = "x.ai/tool";
 
-/// Canonical tool meta version marker.
 pub(super) const TOOL_META_VERSION: u64 = 1;
 
-/// Canonical tool meta kind for an active agent message
-/// (`send_subagent_message`).
 pub(super) const TOOL_META_KIND_ACTIVE_AGENT_MESSAGE: &str = "ActiveAgentMessage";
 
-/// Title the pager falls back to when recognizing
-/// `send_subagent_message` without canonical meta.
 pub(super) const SEND_ACTIVE_AGENT_MESSAGE_TITLE: &str = "send_subagent_message";
 
-/// Grok pager tool-call kinds, mapped from durable tool names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ToolCallKind {
     Read,
@@ -113,7 +38,6 @@ pub(super) enum ToolCallKind {
 }
 
 impl ToolCallKind {
-    /// The `kind` wire string for this tool call.
     pub(super) fn wire_name(self) -> &'static str {
         match self {
             ToolCallKind::Read => "read",
@@ -128,14 +52,17 @@ impl ToolCallKind {
         }
     }
 
-    /// Map a durable Gents tool name onto the pager kind vocabulary.
     pub(super) fn from_tool_name(tool_name: &str) -> Self {
         match tool_name {
-            "read_file" => ToolCallKind::Read,
+            "read_file" | gents::toolset::AGENT_SESSION_READ_TOOL_NAME => ToolCallKind::Read,
             "edit_file" | "write_file" | "apply_patch" | "create_file" => ToolCallKind::Edit,
             "delete_file" | "remove_file" => ToolCallKind::Delete,
             "move_file" | "rename_file" => ToolCallKind::Move,
-            "grep" | "glob" | "list_files" | "search" => ToolCallKind::Search,
+            "grep"
+            | "glob"
+            | "list_files"
+            | "search"
+            | gents::toolset::AGENT_SESSION_LIST_TOOL_NAME => ToolCallKind::Search,
             "bash"
             | "bash_unrestricted"
             | "shell"
@@ -152,8 +79,6 @@ impl ToolCallKind {
     }
 }
 
-/// Grok pager tool-call statuses, mapped from the authoritative durable
-/// lifecycle state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ToolCallStatus {
     Pending,
@@ -163,7 +88,6 @@ pub(super) enum ToolCallStatus {
 }
 
 impl ToolCallStatus {
-    /// The `status` wire string for this tool call.
     pub(super) fn wire_name(self) -> &'static str {
         match self {
             ToolCallStatus::Pending => "pending",
@@ -173,15 +97,11 @@ impl ToolCallStatus {
         }
     }
 
-    /// True when the pager treats the tool call as settled
-    /// (`Completed | Failed`); a settled call emits no further updates.
     pub(super) fn is_completed(self) -> bool {
         matches!(self, ToolCallStatus::Completed | ToolCallStatus::Failed)
     }
 }
 
-/// One durable `AgentToolCall` row scoped to the projected request. `_docID`
-/// is the document identity the canonical presentation map joins on.
 #[derive(Clone, Debug, Deserialize)]
 pub(super) struct ToolCallRow {
     #[serde(rename = "_docID")]
@@ -199,17 +119,8 @@ pub(super) struct ToolCallRow {
     selected_tool_name: Option<String>,
     #[serde(default)]
     tool_failure_class: Option<String>,
-    /// Persisted await mode of the call, when the runtime recorded one.
-    /// The exact value `background` marks a background call
-    /// (`subagentBackground: true` in the projected meta envelope);
-    /// anything else — including `None` — is foreground.
     #[serde(default)]
     await_mode: Option<String>,
-    /// Durable transcript position of the assistant turn this call belongs
-    /// to. The runtime stamps it from the session hook's transcript turn
-    /// sequence, the same sequence space `AgentMessage.sequence` allocates
-    /// from, which makes it the cross-family chronology key for the
-    /// projection engine's merged emission order.
     #[serde(default)]
     message_sequence: Option<i64>,
     #[serde(default)]
@@ -234,40 +145,21 @@ const TOOL_CALL_FIELDS: &str = r#"
     completed_at
 "#;
 
-/// The full set of projection events for one request id, ordered so a client
-/// can replay each tool call's lifecycle exactly once.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ToolProjection {
-    /// Tracker-shaped `tool_call` / `tool_call_update` notifications in
-    /// emission order.
     pub updates: Vec<ToolUpdate>,
-    /// Durable chronology key per update, aligned 1:1 with `updates`: the
-    /// row's `message_sequence` (the shared transcript sequence space) for
-    /// per-call events, and `None` for the trailing
-    /// `available_commands_update` (which is positionless bookkeeping and
-    /// stays last in its family). The projection engine merges families by
-    /// this key; `None` sorts after every positioned event of the family.
     pub chronology: Vec<Option<i64>>,
 }
 
-/// A single projected tool update, already split by kind so the caller (the
-/// projection engine) only needs to stamp `_meta` and wrap it in a
-/// `session/update` notification.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum ToolUpdate {
-    /// A full `tool_call` tracker registration.
     ToolCall(ToolCallUpdate),
-    /// A `tool_call_update` merging fields into the pending base by
-    /// `toolCallId`.
     ToolCallUpdate(ToolCallFieldsUpdate),
-    /// An `available_commands_update` carrying the visible tool list.
     AvailableCommands(AvailableCommandsUpdate),
     BackgroundTask(background::BackgroundTaskUpdate),
 }
 
 impl ToolUpdate {
-    /// The `sessionUpdate` discriminator for this update. Test observation
-    /// helper: the projection engine discriminates by matching the enum.
     #[cfg(test)]
     pub fn session_update_kind(&self) -> &'static str {
         match self {
@@ -279,7 +171,6 @@ impl ToolUpdate {
     }
 }
 
-/// A full `tool_call` tracker registration payload.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ToolCallUpdate {
     pub tool_call_id: String,
@@ -293,17 +184,12 @@ pub(super) struct ToolCallUpdate {
 }
 
 impl ToolCallUpdate {
-    /// True when canonical tool meta recognizes this call as an active agent
-    /// message (`send_subagent_message`). Test observation helper.
     #[cfg(test)]
     pub fn is_active_agent_message(&self) -> bool {
         is_active_agent_message_meta(self.meta.as_ref())
             || self.title == SEND_ACTIVE_AGENT_MESSAGE_TITLE
     }
 
-    /// Render the `tool_call` payload. Optional absent objects
-    /// (`rawInput`/`rawOutput`/`_meta`/`content`) are omitted entirely rather
-    /// than sent as nulls, matching the pager decoder.
     pub fn to_payload(&self) -> Value {
         let mut payload = json!({
             "sessionUpdate": "tool_call",
@@ -331,8 +217,6 @@ impl ToolCallUpdate {
     }
 }
 
-/// A `tool_call_update` payload: the changed fields merged into the pending
-/// base by `toolCallId`.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ToolCallFieldsUpdate {
     pub tool_call_id: String,
@@ -340,16 +224,12 @@ pub(super) struct ToolCallFieldsUpdate {
 }
 
 impl ToolCallFieldsUpdate {
-    /// Render ACP's flattened `tool_call_update` payload.
     #[cfg(test)]
     pub fn to_payload(&self) -> Value {
         tool_call_update_payload(&self.tool_call_id, &self.fields)
     }
 }
 
-/// Render ACP's flattened `tool_call_update` shape. The schema models the
-/// changed fields with `#[serde(flatten)]`, so nesting them below a synthetic
-/// `fields` key makes the pager silently ignore status/content revisions.
 pub(super) fn tool_call_update_payload(tool_call_id: &str, fields: &Value) -> Value {
     let mut payload = json!({
         "sessionUpdate": "tool_call_update",
@@ -361,7 +241,6 @@ pub(super) fn tool_call_update_payload(tool_call_id: &str, fields: &Value) -> Va
     payload
 }
 
-/// An `available_commands_update` payload.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct AvailableCommandsUpdate {
     pub tools: Vec<String>,
@@ -379,15 +258,6 @@ impl AvailableCommandsUpdate {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Suppressed tool families and canonical meta
-// ---------------------------------------------------------------------------
-
-/// The tool families the pager never renders as scrollback blocks. The
-/// `task` family (`task`/`Task`) is deliberately
-/// **not** suppressed: those rows emit an ordinary standard ACP
-/// `tool_call` plus a same-id terminal `tool_call_update`, and the pager
-/// handles title recognition, waiting, and suppression on its side.
 pub(super) fn suppressed_tool_family(tool_name: &str) -> Option<&'static str> {
     match tool_name {
         "todo" | "todos" => Some("todo"),
@@ -399,10 +269,6 @@ pub(super) fn suppressed_tool_family(tool_name: &str) -> Option<&'static str> {
     }
 }
 
-/// True when the durable tool name belongs to the `task` family the pager
-/// recognizes for agent spawns: `task`/`Task` and `agent_new`.
-/// Every such row projects an object `meta` carrying an explicit
-/// `subagentBackground` boolean sibling.
 pub(super) fn is_task_family(tool_name: &str) -> bool {
     matches!(
         tool_name,
@@ -410,10 +276,6 @@ pub(super) fn is_task_family(tool_name: &str) -> bool {
     )
 }
 
-/// True when canonical tool meta recognizes the call as an active agent
-/// message (`send_subagent_message`): the `meta` envelope's `x.ai/tool`
-/// entry is a JSON object carrying
-/// `version == TOOL_META_VERSION` and `kind == ActiveAgentMessage`.
 pub(super) fn is_active_agent_message_meta(meta: Option<&Value>) -> bool {
     let Some(meta) = meta else {
         return false;
@@ -428,24 +290,6 @@ pub(super) fn is_active_agent_message_meta(meta: Option<&Value>) -> bool {
         && object.get("kind").and_then(Value::as_str) == Some(TOOL_META_KIND_ACTIVE_AGENT_MESSAGE)
 }
 
-// ---------------------------------------------------------------------------
-// Projection entry point
-// ---------------------------------------------------------------------------
-
-/// Project the tool-call lifecycle for one request id.
-///
-/// Bounded and request-id-scoped: the query set is exactly one
-/// `AgentToolCall` query for the rows of this request id under the exact
-/// node/session/requester scope, followed by one canonical
-/// presentation load per projected row through
-/// `gents::tool_call_lifecycle::load_tool_call_presentation` (the owner's
-/// per-call identity chain: canonical arguments, the optional delivered
-/// result, and the live-output preview). A reconstruction error is a real
-/// projection error, never a tool status change: the lifecycle state stays
-/// the durable row's.
-///
-/// The projection is read-only: it never replays the session, never
-/// duplicates durable materialization, and never writes a document.
 pub(super) async fn project_tools(
     node: &Arc<EmbeddedNode>,
     request: &gents_protocol::row::AgentRequestRow,
@@ -492,7 +336,7 @@ pub(super) async fn project_tools(
         anyhow::ensure!(identities.insert(id), "duplicate tool physical identity");
     }
     let rows = decode_tool_call_rows(&tool_response)?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let mut presentations = std::collections::HashMap::new();
     for row in &rows {
         let presentation = load_tool_call_presentation(
@@ -511,17 +355,11 @@ pub(super) async fn project_tools(
     Ok(projection)
 }
 
-/// One call of a named tool in a root session and its durable reply.
 pub(crate) struct SessionToolResult {
     pub doc_id: String,
-    /// `Ok(None)` until the reply is delivered. An `Err` belongs to this call
-    /// alone: the other calls of the batch are still read.
     pub result: Result<Option<String>>,
 }
 
-/// Calls of `tool_name` in this root session (requester is the node),
-/// excluding `skip`ped physical identities, each read through the canonical
-/// presentation owner.
 pub(crate) async fn session_tool_results(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
@@ -550,7 +388,7 @@ pub(crate) async fn session_tool_results(
             .context("missing AgentToolCall rows")?,
     )
     .context("invalid AgentToolCall identity")?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let mut results = Vec::new();
     for Row { doc_id } in rows {
         if skip.contains(&doc_id) {
@@ -566,14 +404,6 @@ pub(crate) async fn session_tool_results(
     Ok(results)
 }
 
-/// The durable chronology sort key of one tool call row:
-/// `(message_sequence, stable identity)`. Rows with a `message_sequence`
-/// sort before rows without one (a missing sequence falls back to
-/// `i64::MAX`), and equal sequences break by the durable stable
-/// identity: `tool_call_id`, then `tool_call_key`, then `_docID` — each
-/// when non-empty, in that order. The fallback keeps every row keyed by
-/// *some* durable identity, so the projected wire order never depends on
-/// the query's iteration order, storage layout, or hash-map placement.
 fn tool_call_row_sort_key(row: &ToolCallRow) -> (i64, String) {
     (
         row.message_sequence.unwrap_or(i64::MAX),
@@ -581,17 +411,10 @@ fn tool_call_row_sort_key(row: &ToolCallRow) -> (i64, String) {
     )
 }
 
-/// Sort decoded `AgentToolCall` rows into the deterministic durable
-/// chronology order (sequence, then stable identity). The query's
-/// iteration order and any equal-`started_at`/equal-time ties it
-/// produces never leak into the projected wire order: this stable sort
-/// is the single ordering authority for the family.
 fn sort_tool_call_rows(rows: &mut [ToolCallRow]) {
     rows.sort_by_key(tool_call_row_sort_key);
 }
 
-/// Pure projection over decoded rows joined with their canonical
-/// presentations (keyed by physical `_docID`); unit-testable without a node.
 pub(super) fn project_tool_rows(
     rows: &[ToolCallRow],
     presentations: &HashMap<String, CanonicalToolCallPresentation>,
@@ -599,15 +422,9 @@ pub(super) fn project_tool_rows(
     let mut updates: Vec<ToolUpdate> = Vec::new();
     let mut chronology: Vec<Option<i64>> = Vec::new();
 
-    // Deterministic durable chronology first: sequence, then the row's
-    // stable durable identity. Without this, two rows with the same
-    // `message_sequence` (and rows without one) would emit in whatever
-    // order the query iterated them, which is not a wire contract.
     let mut ordered = rows.to_vec();
     sort_tool_call_rows(&mut ordered);
 
-    // Streaming windows owned across the loop so `result_text` can borrow
-    // them; one entry per row that needed the live-output fallback.
     let mut live_windows: Vec<String> = Vec::new();
 
     for row in &ordered {
@@ -621,9 +438,6 @@ pub(super) fn project_tool_rows(
             .and_then(nonempty)
             .unwrap_or_default();
         let args = presentation.map_or("", |p| p.arguments.as_str());
-        // Streaming first: a running row with no durable result text yet
-        // projects its live output window, so bash output deltas stream
-        // through `rawOutput` instead of appearing only at terminalization.
         let durable_result = presentation.and_then(|p| p.result.as_deref());
         let result_text: &str = if durable_result.is_none() {
             if let Some(window) = live_output_window(presentation, row) {
@@ -635,19 +449,8 @@ pub(super) fn project_tool_rows(
         } else {
             durable_result.unwrap_or_default()
         };
-        // The `meta` envelope: the canonical `x.ai/tool` entry decoded from
-        // the recorded args, with a `subagentBackground` boolean sibling
-        // merged from the row's persisted `await_mode` (the exact value
-        // `background` => true; anything else, including absent, => false).
-        // Task-family rows always carry the explicit boolean — false is
-        // never omitted — so the pager never has to read a missing key.
         let meta = tool_meta_envelope(tool_name, args, row.await_mode.as_deref());
 
-        // Family suppression drops the rendered block. The `task` family is
-        // deliberately not suppressed here: those rows emit an ordinary
-        // standard ACP `tool_call` plus a same-id terminal
-        // `tool_call_update`, and the pager handles title recognition,
-        // waiting, and suppression on its side.
         if suppressed_tool_family(tool_name).is_some() {
             continue;
         }
@@ -664,8 +467,6 @@ pub(super) fn project_tool_rows(
         let background = background::project(row, &tool_call_id, result_text, args);
         if background.is_some() {
             if let Some(input) = raw_input.as_mut().and_then(Value::as_object_mut) {
-                // Native pager defers this execute registration until its
-                // task_backgrounded card, including fast terminal calls.
                 input.insert("is_background".to_string(), Value::Bool(true));
             }
         }
@@ -692,8 +493,6 @@ pub(super) fn project_tool_rows(
         if let Some((started, _)) = &background {
             updates.push(ToolUpdate::BackgroundTask(started.clone()));
             chronology.push(row.message_sequence);
-            // The stock pager maps task IDs only on task_backgrounded and
-            // consumes cumulative output via tool_call_update, not the base.
             if let Some(raw) = raw_output {
                 updates.push(ToolUpdate::BackgroundTask(background::BackgroundTaskUpdate {
                     method: "session/update", kind: "tool_call_update", key: tool_call_id.clone(),
@@ -706,9 +505,6 @@ pub(super) fn project_tool_rows(
             }
         }
 
-        // A terminal first observation still emits the base `tool_call`
-        // (a fast call may first be observed already completed); a later
-        // lifecycle change emits `tool_call_update`.
         if status.is_completed() {
             updates.push(ToolUpdate::ToolCallUpdate(ToolCallFieldsUpdate {
                 tool_call_id,
@@ -728,8 +524,6 @@ pub(super) fn project_tool_rows(
         updates.push(ToolUpdate::AvailableCommands(AvailableCommandsUpdate {
             tools: available_commands(rows),
         }));
-        // The available-commands bookkeeping is positionless: it sorts after
-        // every positioned tool event of the family.
         chronology.push(None);
     }
 
@@ -740,29 +534,16 @@ pub(super) fn project_tool_rows(
 }
 
 impl ToolCallRow {
-    /// The pager-visible `toolCallId`: the durable `tool_call_id` when
-    /// recorded, otherwise the `tool_call_key` (which the runtime shapes as
-    /// `<session_id>:<tool_call_id>`).
     fn tool_call_key_tool_call_id(&self) -> Option<String> {
         if let Some(id) = self.tool_call_id.as_deref().and_then(nonempty) {
             return Some(id.to_string());
         }
-        nonempty(&self.tool_call_key).map(|key| {
-            // Strip a `<session>:` prefix when the key carries one so the
-            // pager sees the bare call id it correlates updates by.
-            match key.split_once(':') {
-                Some((_, tail)) if !tail.is_empty() => tail.to_string(),
-                _ => key.to_string(),
-            }
+        nonempty(&self.tool_call_key).map(|key| match key.split_once(':') {
+            Some((_, tail)) if !tail.is_empty() => tail.to_string(),
+            _ => key.to_string(),
         })
     }
 
-    /// The durable stable identity of this row for deterministic ordering
-    /// ties: the first non-empty of `tool_call_id`, `tool_call_key`, and
-    /// `_docID`. At least one is always non-empty for a decodable row
-    /// (`tool_call_key` is the schema's unique index), so equal-sequence
-    /// rows always order by a durable value, never by query iteration
-    /// order.
     fn stable_identity(&self) -> &str {
         self.tool_call_id
             .as_deref()
@@ -773,22 +554,11 @@ impl ToolCallRow {
     }
 }
 
-/// The streaming live-output preview for one tool row, when the canonical
-/// presentation has no durable result text yet.
-///
-/// Canonical live output is not a row column: the presentation owner
-/// reconstructs the open `ToolOutput` stream of a spawned subprocess call
-/// from its durable `AgentOutputSegment`s into `live_output`. The window
-/// is a streaming view, never a durable materialization: it is a preview
-/// only, and the durable result replaces it at terminalization.
 fn live_output_window(
     presentation: Option<&CanonicalToolCallPresentation>,
     row: &ToolCallRow,
 ) -> Option<String> {
     let preview = presentation.and_then(|p| p.live_output.as_deref())?;
-    // Whitespace is meaningful shell output (trailing newlines are real
-    // stream content), so the window is not trimmed — only a blank preview
-    // is rejected.
     if preview.trim().is_empty() {
         return None;
     }
@@ -805,12 +575,6 @@ fn live_output_window(
     Some(decoded)
 }
 
-/// The authoritative observed lifecycle status of one tool row. The durable
-/// `lifecycle_state` wins; a persisted failure class is always `failed`; a
-/// blank row falls back to the legacy `status` vocabulary; anything else is
-/// still in progress. The canonical presentation owner owns status-external
-/// facts only (arguments, delivered result, live preview); the durable
-/// row's lifecycle vocabulary remains the sole status authority.
 fn observed_status(row: &ToolCallRow) -> ToolCallStatus {
     if row
         .tool_failure_class
@@ -842,9 +606,6 @@ fn observed_status(row: &ToolCallRow) -> ToolCallStatus {
     }
 }
 
-/// The pager title for a tool call. `send_subagent_message` keeps its
-/// recognized title; shell tools surface their command; other tools surface
-/// their durable name.
 fn tool_title(
     row: &ToolCallRow,
     kind: &ToolCallKind,
@@ -886,7 +647,6 @@ fn tool_title(
     }
 }
 
-/// Extract a shell command from JSON args (`command` key).
 fn shell_command_from_args(args: &str) -> Option<String> {
     let object = serde_json::from_str::<Value>(args).ok()?;
     object
@@ -896,9 +656,6 @@ fn shell_command_from_args(args: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// The `content` blocks for a tool call, derived from the recorded result
-/// text. Absent results produce no blocks (the field is omitted on the
-/// wire).
 fn tool_content(result_text: &str) -> Vec<Value> {
     let trimmed = result_text.trim();
     if trimmed.is_empty() {
@@ -910,8 +667,6 @@ fn tool_content(result_text: &str) -> Vec<Value> {
     })]
 }
 
-/// `agent_message` keeps the pager's active-agent-message input shape:
-/// the target session as `subagent_id` and the message as `text`.
 fn agent_message_raw_input(args: &str) -> Option<Value> {
     let object = serde_json::from_str::<Value>(args.trim()).ok()?;
     let mut shaped = Map::new();
@@ -924,10 +679,6 @@ fn agent_message_raw_input(args: &str) -> Option<Value> {
     Some(Value::Object(shaped))
 }
 
-/// The structured `rawInput` for a tool call. JSON args are passed through
-/// as the object; `send_subagent_message` is shaped to
-/// `{"subagent_id", "text"}`; non-JSON args are wrapped as a single
-/// `input` string.
 fn raw_input_value(args: &str, meta: Option<&Value>) -> Option<Value> {
     let trimmed = args.trim();
     if trimmed.is_empty() {
@@ -950,9 +701,6 @@ fn raw_input_value(args: &str, meta: Option<&Value>) -> Option<Value> {
     Some(json!({ "input": trimmed }))
 }
 
-/// The structured `rawOutput` for a tool call. JSON results pass through;
-/// shell results surface their recorded exit code when present; plain text
-/// is wrapped as a single `output` string.
 fn raw_output_value(result_text: &str) -> Option<Value> {
     let trimmed = result_text.trim();
     if trimmed.is_empty() {
@@ -964,21 +712,6 @@ fn raw_output_value(result_text: &str) -> Option<Value> {
     Some(json!({ "output": trimmed }))
 }
 
-/// Decode the canonical tool meta envelope for a tool call. The recorded
-/// args may carry the canonical meta under the `x.ai/tool` key; the
-/// projected `meta` is the full envelope object — the `x.ai/tool` entry
-/// verbatim plus a `subagentBackground` boolean sibling merged from the
-/// row's persisted `await_mode` (the exact value `background` => true;
-/// anything else, including absent, => false).
-///
-/// Task-family rows (`task`/`Task`) always carry
-/// an object `meta` with the explicit `subagentBackground` boolean — false
-/// is never omitted, so the pager reads a definite value for every
-/// recognized spawn. When canonical meta exists it is preserved verbatim
-/// inside the full `"x.ai/tool": {...}` envelope with the boolean merged
-/// beside it. Other rows keep the settled shape: no canonical meta and no
-/// background await mode project no `meta` at all, and a canonical meta
-/// without a background await mode keeps the bare envelope.
 fn tool_meta_envelope(tool_name: &str, args: &str, await_mode: Option<&str>) -> Option<Value> {
     let tool_meta = tool_meta_from_args(args);
     let background = matches!(await_mode, Some("background"));
@@ -1006,7 +739,6 @@ fn tool_meta_envelope(tool_name: &str, args: &str, await_mode: Option<&str>) -> 
     }
 }
 
-/// Decode the canonical tool meta recorded in the row's args, when present.
 fn tool_meta_from_args(args: &str) -> Option<Value> {
     let trimmed = args.trim();
     if trimmed.is_empty() {
@@ -1016,9 +748,6 @@ fn tool_meta_from_args(args: &str) -> Option<Value> {
     object.get(TOOL_META_KEY).cloned()
 }
 
-/// The visible tool list for `available_commands_update`, derived from the
-/// projected request's non-suppressed durable tool names, deduplicated and
-/// ordered.
 fn available_commands(rows: &[ToolCallRow]) -> Vec<String> {
     let mut tools: Vec<String> = rows
         .iter()
@@ -1031,17 +760,6 @@ fn available_commands(rows: &[ToolCallRow]) -> Vec<String> {
     tools
 }
 
-// ---------------------------------------------------------------------------
-// Terminal ACP client method stubs
-// ---------------------------------------------------------------------------
-
-/// The exact not-supported JSON-RPC error value the reference pager answers
-/// `terminal/wait_for_exit` with:
-/// `xai-grok-pager/src/acp/mod.rs::wait_for_exit_not_supported("pager")`
-/// returns a `METHOD_NOT_FOUND` error with the message
-/// `"pager does not handle WaitForTerminalExit"`. The pager's adapter
-/// recognizes this failure and falls back to polling, so the shim answers
-/// the method with the same code and message verbatim.
 pub(crate) fn wait_for_exit_not_supported() -> Value {
     json!({
         "code": JSONRPC_METHOD_NOT_SUPPORTED,
@@ -1049,12 +767,6 @@ pub(crate) fn wait_for_exit_not_supported() -> Value {
     })
 }
 
-/// The shaped method-not-found error value for a terminal ACP client method
-/// other than `terminal/wait_for_exit` (`terminal/create`, `terminal/output`,
-/// `terminal/kill`, `terminal/release`). The shim registers
-/// `clientTerminal: false` and never routes terminal work to the client, so
-/// these stay explicit on the wire. The wording is the shim's own — only
-/// `terminal/wait_for_exit` reproduces the pager's exact message.
 pub(crate) fn terminal_not_supported_error(method: &str) -> Value {
     json!({
         "code": JSONRPC_METHOD_NOT_SUPPORTED,
@@ -1065,17 +777,6 @@ pub(crate) fn terminal_not_supported_error(method: &str) -> Value {
     })
 }
 
-/// Route one terminal ACP client method to its shaped unsupported result.
-///
-/// Returns `Err(not_supported_error)` for the five known terminal methods
-/// (`terminal/create`, `terminal/output`, `terminal/wait_for_exit`,
-/// `terminal/kill`, `terminal/release`) so the ACP service can surface the
-/// shaped error, and `Ok(())` never: the shim does not implement a client
-/// terminal, does not synthesize terminal documents, and does not create
-/// permission documents. `terminal/wait_for_exit` carries the pager's exact
-/// `METHOD_NOT_FOUND` error; the other four carry the shim's shaped
-/// method-not-found wording. Unknown methods are routed through the caller's
-/// generic method-not-found handling.
 pub(crate) fn handle_terminal_client_method(method: &str) -> std::result::Result<(), Value> {
     match method {
         "terminal/wait_for_exit" => Err(wait_for_exit_not_supported()),
@@ -1092,10 +793,6 @@ pub(crate) fn handle_terminal_client_method(method: &str) -> std::result::Result
         })),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Queries and decoding
-// ---------------------------------------------------------------------------
 
 fn tool_calls_query(request: &gents_protocol::row::AgentRequestRow) -> Result<String> {
     let scope = gents::session::session_scope_filter(
@@ -1154,17 +851,6 @@ mod tests {
         .unwrap();
         request_fixture(id, session, &physical)
     }
-    #[test]
-    fn tool_results_use_acp_tool_call_content_not_bare_message_blocks() {
-        assert_eq!(
-            super::tool_content("tool call cancelled"),
-            vec![serde_json::json!({
-                "type":"content", "content":{"type":"text","text":"tool call cancelled"}
-            })]
-        );
-        assert!(super::tool_content("  ").is_empty());
-    }
-
     use super::*;
 
     fn tool_row(tool_name: &str, lifecycle_state: Option<&str>) -> ToolCallRow {
@@ -1184,9 +870,6 @@ mod tests {
         }
     }
 
-    /// A canonical presentation keyed by the row's physical `_docID`,
-    /// with the accepted native arguments and an optional delivered
-    /// result (`None` = not yet delivered; `Some("")` = delivered empty).
     fn presentation(
         doc_id: &str,
         arguments: &str,
@@ -1202,15 +885,10 @@ mod tests {
         )
     }
 
-    /// The empty presentation map for rows that carry no canonical
-    /// arguments or delivered result.
     fn no_presentations() -> HashMap<String, CanonicalToolCallPresentation> {
         HashMap::new()
     }
 
-    /// The presentation map for one row keyed by its physical `_docID`,
-    /// carrying canonical arguments and an optional delivered result
-    /// (`None` = not yet delivered; `Some("")` = delivered empty).
     fn args_result(
         doc_id: &str,
         arguments: &str,
@@ -1219,9 +897,6 @@ mod tests {
         HashMap::from([presentation(doc_id, arguments, result)])
     }
 
-    /// The presentation map for one row keyed by its physical `_docID`,
-    /// carrying a canonical live-output preview (`None` = no open stream).
-    /// `result` stays undelivered.
     fn live_presentation(
         doc_id: &str,
         arguments: &str,
@@ -1235,8 +910,6 @@ mod tests {
         .keyed(doc_id)])
     }
 
-    /// Local extension trait: pair a canonical presentation with the
-    /// physical `_docID` key the projection joins on.
     trait PresentationKeyed {
         fn keyed(self, doc_id: &str) -> (String, CanonicalToolCallPresentation);
     }
@@ -1244,19 +917,6 @@ mod tests {
         fn keyed(self, doc_id: &str) -> (String, CanonicalToolCallPresentation) {
             (doc_id.to_string(), self)
         }
-    }
-
-    #[test]
-    fn kind_wire_names_match_grok_pager() {
-        assert_eq!(ToolCallKind::Read.wire_name(), "read");
-        assert_eq!(ToolCallKind::Edit.wire_name(), "edit");
-        assert_eq!(ToolCallKind::Delete.wire_name(), "delete");
-        assert_eq!(ToolCallKind::Move.wire_name(), "move");
-        assert_eq!(ToolCallKind::Search.wire_name(), "search");
-        assert_eq!(ToolCallKind::Execute.wire_name(), "execute");
-        assert_eq!(ToolCallKind::Think.wire_name(), "think");
-        assert_eq!(ToolCallKind::Fetch.wire_name(), "fetch");
-        assert_eq!(ToolCallKind::Other.wire_name(), "other");
     }
 
     #[test]
@@ -1291,44 +951,6 @@ mod tests {
         };
         assert_eq!(update.payload["rawOutput"]["output_for_prompt"], text);
         assert_eq!(update.payload["rawOutput"]["truncated"], true);
-    }
-
-    #[test]
-    fn kind_mapping_covers_durable_tool_names() {
-        assert_eq!(
-            ToolCallKind::from_tool_name("read_file"),
-            ToolCallKind::Read
-        );
-        for name in [
-            "bash",
-            "bash_unrestricted",
-            "shell",
-            "execute",
-            "execute_command",
-            "run_command",
-            "run_terminal_command",
-            "run_terminal_cmd",
-            "terminal",
-        ] {
-            assert_eq!(
-                ToolCallKind::from_tool_name(name),
-                ToolCallKind::Execute,
-                "{name}"
-            );
-        }
-        assert_eq!(ToolCallKind::from_tool_name("grep"), ToolCallKind::Search);
-        assert_eq!(
-            ToolCallKind::from_tool_name("unknown_tool"),
-            ToolCallKind::Other
-        );
-    }
-
-    #[test]
-    fn status_wire_names_match_grok_pager() {
-        assert_eq!(ToolCallStatus::Pending.wire_name(), "pending");
-        assert_eq!(ToolCallStatus::InProgress.wire_name(), "in_progress");
-        assert_eq!(ToolCallStatus::Completed.wire_name(), "completed");
-        assert_eq!(ToolCallStatus::Failed.wire_name(), "failed");
     }
 
     #[test]
@@ -1390,7 +1012,7 @@ mod tests {
     fn running_tool_call_has_no_update_and_stays_in_progress() {
         let row = tool_row("bash", Some("running"));
         let projection = project_tool_rows(&[row], &no_presentations());
-        assert_eq!(projection.updates.len(), 2); // tool_call + available_commands
+        assert_eq!(projection.updates.len(), 2);
         let ToolUpdate::ToolCall(call) = &projection.updates[0] else {
             panic!("first update should be a tool_call");
         };
@@ -1399,11 +1021,6 @@ mod tests {
 
     #[test]
     fn task_family_rows_render_ordinary_tool_calls_and_terminal_updates() {
-        // The `task` family is deliberately NOT suppressed: `task` and `Task`
-        // rows emit an ordinary standard ACP
-        // `tool_call` plus a same-id terminal `tool_call_update` (title =
-        // the durable tool name, kind `other`); the pager handles title
-        // recognition, waiting, and suppression on its side.
         for name in ["task", "Task", "agent_new"] {
             let row = tool_row(name, Some("completed"));
             let presentations =
@@ -1416,7 +1033,6 @@ mod tests {
             assert_eq!(call.title, name, "{name} keeps its durable tool name");
             assert_eq!(call.kind, ToolCallKind::Other, "{name}");
             assert_eq!(call.status, ToolCallStatus::Completed, "{name}");
-            // The same-id terminal update follows the base.
             let ToolUpdate::ToolCallUpdate(update) = &projection.updates[1] else {
                 panic!("{name} must emit a same-id terminal tool_call_update");
             };
@@ -1427,10 +1043,6 @@ mod tests {
 
     #[test]
     fn task_family_rows_always_carry_explicit_background_meta_flag() {
-        // Every recognized task-family row projects an object `meta` with an
-        // explicit `subagentBackground` boolean: absent, `foreground`, and
-        // unknown persisted await modes are all explicit false; only the
-        // exact value `background` is true. False is never omitted.
         for name in ["task", "Task", "agent_new"] {
             for (await_mode, expected) in [
                 (None, false),
@@ -1470,10 +1082,6 @@ mod tests {
 
     #[test]
     fn task_family_canonical_meta_envelope_survives_with_boolean_beside_it() {
-        // A task-family row whose args carry the canonical `x.ai/tool` meta
-        // keeps the full envelope verbatim, with `subagentBackground` merged
-        // as a sibling — false for a foreground await mode, true for the
-        // exact `background` value.
         let tool_meta = json!({
             "version": TOOL_META_VERSION,
             "kind": "SubagentSpawn",
@@ -1504,8 +1112,6 @@ mod tests {
 
     #[test]
     fn background_await_mode_merges_background_true_into_meta() {
-        // The exact persisted value `background` => `subagentBackground:
-        // true` in the meta envelope; anything else stays foreground.
         let presentations = args_result("doc-Task", r#"{"description":"scout the repo"}"#, None);
         let mut row = tool_row("Task", Some("running"));
         row.await_mode = Some("background".to_string());
@@ -1518,8 +1124,6 @@ mod tests {
         let payload = call.to_payload();
         assert_eq!(payload["_meta"]["subagentBackground"], true);
 
-        // A non-`background` await mode is foreground: explicit false, never
-        // an omitted key.
         let mut foreground = tool_row("Task", Some("running"));
         foreground.await_mode = Some("foreground".to_string());
         let projection = project_tool_rows(&[foreground], &presentations);
@@ -1642,13 +1246,6 @@ mod tests {
     }
 
     #[test]
-    fn empty_rows_project_nothing() {
-        let projection = project_tool_rows(&[], &no_presentations());
-        assert!(projection.updates.is_empty());
-        assert!(projection.chronology.is_empty());
-    }
-
-    #[test]
     fn blank_lifecycle_falls_back_to_status_vocabulary() {
         let mut row = tool_row("bash", None);
         row.status = Some("completed".to_string());
@@ -1672,13 +1269,7 @@ mod tests {
 
     #[test]
     fn status_authority_holds_even_when_a_delivered_result_exists() {
-        // A delivered result never changes the authoritative observed
-        // status: the durable call row's lifecycle_state is the sole
-        // status source. The delivered output still surfaces as the
-        // call's rawOutput/content.
         let mut row = tool_row("bash", Some("running"));
-        // A stale legacy `status` column must not override the durable
-        // lifecycle_state either.
         row.status = Some("success".to_string());
         let presentations = args_result(
             "doc-bash",
@@ -1701,18 +1292,12 @@ mod tests {
 
     #[test]
     fn presentation_join_is_by_physical_doc_id_not_tool_name() {
-        // Two same-name calls in one request, each with its own distinct
-        // canonical presentation keyed by the call row's `_docID`. The
-        // join is the presentation map's physical-`_docID` key, so neither
-        // call may borrow the other's result by matching on tool name.
         let first = tool_row("bash", Some("completed"));
         let mut second = tool_row("bash", Some("completed"));
         second.doc_id = "doc-bash-second".to_string();
         second.tool_call_key = "session-1:call-bash-second".to_string();
         second.tool_call_id = Some("call-bash-second".to_string());
 
-        // Deliberately ordered so a naive first-same-tool_name match would
-        // hand both calls the first presentation.
         let presentations = HashMap::from([
             presentation(
                 "doc-bash-second",
@@ -1745,8 +1330,6 @@ mod tests {
         assert_eq!(output_for("call-bash"), "first delivered output");
         assert_eq!(output_for("call-bash-second"), "second delivered output");
 
-        // And a call whose `_docID` has no presentation gets no borrowed
-        // output, even when a same-name presentation exists.
         let mut orphan = tool_row("bash", Some("completed"));
         orphan.doc_id = "doc-bash-orphan".to_string();
         orphan.tool_call_key = "session-1:call-bash-orphan".to_string();
@@ -1760,9 +1343,6 @@ mod tests {
 
     #[test]
     fn absent_result_omits_content_and_raw_output() {
-        // `None` (no delivery yet) differs from `Some("")` (delivered
-        // empty): an undelivered call projects neither content nor
-        // rawOutput.
         let row = tool_row("bash", Some("completed"));
         let projection = project_tool_rows(&[row], &no_presentations());
         let ToolUpdate::ToolCall(call) = &projection.updates[0] else {
@@ -1775,9 +1355,6 @@ mod tests {
 
     #[test]
     fn delivered_empty_result_projects_empty_raw_output() {
-        // A delivered empty result (`Some("")`) is real durable data, not
-        // an absent delivery: it renders the structured empty `rawOutput`
-        // shape instead of dropping the field.
         let presentations = args_result("doc-bash", r#"{"command":"true"}"#, Some(""));
         let projection = project_tool_rows(&[tool_row("bash", Some("completed"))], &presentations);
         let ToolUpdate::ToolCall(call) = &projection.updates[0] else {
@@ -1800,11 +1377,6 @@ mod tests {
 
     #[test]
     fn running_row_with_no_durable_result_streams_live_output_window() {
-        // While a spawned bash call runs, the canonical presentation owner
-        // reconstructs its open `ToolOutput` stream into `live_output`; the
-        // projection surfaces that preview as the call's `rawOutput` so
-        // output streams through the pager instead of appearing only at
-        // terminalization.
         let presentations = live_presentation(
             "doc-bash",
             r#"{"command":"echo gents-subprocess-probe"}"#,
@@ -1835,12 +1407,6 @@ mod tests {
 
     #[test]
     fn running_row_streams_incremental_growth_not_replay() {
-        // Two successive live flushes grow the preview monotonically. The
-        // projection is a pure function of the presentation, so each
-        // projection pass emits the current window; the projection
-        // engine's cursor diffs `rawOutput` and streams only the delta to
-        // the pager. The window itself must be the presentation's
-        // preview, never a replay of a durable materialization.
         let row = tool_row("bash", Some("running"));
         let first = project_tool_rows(
             &[row.clone()],
@@ -1872,12 +1438,6 @@ mod tests {
 
     #[test]
     fn running_row_holds_back_a_trailing_incomplete_utf8_sequence() {
-        // The streamed preview can end mid-multibyte-character (the last
-        // chunk boundary split a sequence). On a running row that trailing
-        // replacement character is a placeholder for bytes the next flush
-        // completes, so the streaming window holds it back; the next
-        // projection pass (with the completed sequence) streams the full
-        // character.
         let row = tool_row("bash", Some("running"));
         let mut split_tail = "counter: 3 ".to_string();
         split_tail.push(REPLACEMENT_CHARACTER);
@@ -1916,9 +1476,6 @@ mod tests {
 
     #[test]
     fn terminal_row_keeps_a_trailing_replacement_character() {
-        // A terminal row's stream is finished: a replacement character in
-        // the preview is genuine decoded data (lossy decoding of invalid
-        // bytes), not a pending sequence, so it is kept verbatim.
         let mut tail = "done ".to_string();
         tail.push(REPLACEMENT_CHARACTER);
         let presentations = live_presentation("doc-bash", r#"{"command":"true"}"#, Some(&tail));
@@ -1940,8 +1497,6 @@ mod tests {
 
     #[test]
     fn durable_result_always_beats_the_live_window() {
-        // Once a durable result exists it is authoritative: the live
-        // preview never overrides or duplicates it.
         let presentations = HashMap::from([CanonicalToolCallPresentation {
             arguments: r#"{"command":"echo gents-subprocess-probe"}"#.to_string(),
             result: Some("gents-subprocess-probe".to_string()),
@@ -1961,8 +1516,6 @@ mod tests {
             "the durable result wins"
         );
 
-        // The same holds while the call is still running: a delivered
-        // result beats the live preview, which is never duplicated.
         let presentations = HashMap::from([CanonicalToolCallPresentation {
             arguments: r#"{"command":"echo gents-subprocess-probe"}"#.to_string(),
             result: Some("delivered while running".to_string()),
@@ -1997,18 +1550,11 @@ mod tests {
             "raw value must not appear unescaped: {query}"
         );
         assert!(query.contains("AgentToolCall"));
-        // The presentation join resolves each call's physical `_docID`, so
-        // the query must select `_docID` alongside the projection fields.
         assert!(query.contains("_docID"), "{query}");
     }
 
     #[test]
     fn wait_for_exit_answers_the_pagers_exact_method_not_found_error() {
-        // The reference pager answers `terminal/wait_for_exit` with
-        // `wait_for_exit_not_supported("pager")`: a `METHOD_NOT_FOUND` error
-        // whose message is exactly "pager does not handle
-        // WaitForTerminalExit". The shim reproduces it verbatim so the
-        // adapter's poll fallback keeps working.
         let error = handle_terminal_client_method("terminal/wait_for_exit")
             .expect_err("wait_for_exit must be unsupported");
         assert_eq!(error["code"], JSONRPC_METHOD_NOT_SUPPORTED);
@@ -2017,8 +1563,6 @@ mod tests {
             "pager does not handle WaitForTerminalExit"
         );
         assert_eq!(error["message"], PAGER_WAIT_FOR_EXIT_MESSAGE);
-        // The shim's own generic method-not-found wording never leaks into
-        // the pager-exact answer.
         assert!(!error["message"]
             .as_str()
             .expect("message")
@@ -2027,10 +1571,6 @@ mod tests {
 
     #[test]
     fn other_terminal_methods_answer_shaped_method_not_found() {
-        // The other known terminal methods are also unsupported (the
-        // connection registers clientTerminal=false), but their messages are
-        // the shim's own shaped wording — only wait_for_exit reproduces the
-        // pager's exact message.
         for method in [
             "terminal/create",
             "terminal/output",
@@ -2055,9 +1595,6 @@ mod tests {
         assert_eq!(unknown["code"], JSONRPC_METHOD_NOT_SUPPORTED);
     }
 
-    /// A sequenced tool call row for the deterministic chronology tests:
-    /// same-shape rows whose only differences are the durable sequence and
-    /// the stable identity, so the assertions isolate the sort.
     fn sequenced_tool_row(
         tool_call_id: &str,
         tool_name: &str,
@@ -2070,8 +1607,6 @@ mod tests {
         row
     }
 
-    /// The projected `tool_call_id`s (the pager-visible stable identity) of
-    /// a projection's base `tool_call` registrations, in emission order.
     fn projected_call_ids(projection: &ToolProjection) -> Vec<String> {
         projection
             .updates
@@ -2085,13 +1620,6 @@ mod tests {
 
     #[test]
     fn decoded_rows_sort_by_sequence_then_stable_identity_regardless_of_input_order() {
-        // Two rows share `message_sequence: 5` and arrive in *reverse*
-        // stable-identity order (the "later" call first), a third carries a
-        // lower sequence and a fourth a higher one, and one row has no
-        // sequence at all. The projection must emit the positioned rows in
-        // sequence order, break the equal-sequence tie by the stable
-        // identity (tool_call_id), and place the sequenceless row after
-        // every positioned one — never in the input order.
         let rows = vec![
             sequenced_tool_row("call-z-late", "bash", Some(5)),
             sequenced_tool_row("call-a-first", "grep", Some(5)),
@@ -2112,8 +1640,6 @@ mod tests {
             "wire order must follow (sequence, stable identity), not input order"
         );
 
-        // The same rows in a different input order project to the exact same
-        // wire order: the sort is a function of the rows alone.
         let mut reversed = rows.clone();
         reversed.reverse();
         assert_eq!(
@@ -2125,8 +1651,6 @@ mod tests {
 
     #[test]
     fn stable_identity_falls_back_to_key_then_doc_id() {
-        // A row without `tool_call_id` breaks its sequence tie by the
-        // `tool_call_key`; a row with only `_docID` breaks by that.
         let mut by_key = sequenced_tool_row("call-z", "bash", Some(1));
         by_key.tool_call_id = None;
         by_key.tool_call_key = "session-1:call-z".to_string();
@@ -2148,11 +1672,6 @@ mod tests {
 
     #[test]
     fn equal_sequence_rows_keep_base_and_update_semantics_and_result_join() {
-        // Two same-sequence `bash` calls with distinct stable identities and
-        // distinct presentations: each keeps its own base registration, the
-        // terminal-status `tool_call_update` follows its own base (same
-        // chronology), and the exact physical-identity join is preserved —
-        // the presentation for doc-b never leaks into call a.
         let mut call_a = sequenced_tool_row("call-a", "bash", Some(4));
         call_a.doc_id = "doc-a".to_string();
         let mut call_b = sequenced_tool_row("call-b", "bash", Some(4));
@@ -2162,10 +1681,6 @@ mod tests {
             presentation("doc-a", r#"{"command":"true"}"#, Some("output for a")),
         ]);
         let projection = project_tool_rows(&[call_b, call_a], &presentations);
-        // Emission: base a, update a, base b, update b, commands. The update
-        // interleaves inside the projection stream (the merged engine sort
-        // re-groups by family later); what matters here is the identity
-        // pairing and the per-call result join.
         let pairs: Vec<(String, &str)> = projection
             .updates
             .iter()
@@ -2187,15 +1702,10 @@ mod tests {
         );
     }
 
-    /// Start an embedded node with the runtime schemas, the production
-    /// shape the exact spill-association regression runs against.
     async fn embedded_node() -> (tempfile::TempDir, Arc<EmbeddedNode>) {
         let dir = tempfile::tempdir().expect("tempdir");
         let node = Arc::new(
             EmbeddedNode::builder()
-                // The staging `TempDir` guard stays in scope (`dir`) for the
-                // test's lifetime, so the node's storage directory is
-                // deleted when the test ends — never abandoned or leaked.
                 .data_path(dir.path().join("node"))
                 .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()
@@ -2207,13 +1717,6 @@ mod tests {
             .expect("runtime schemas");
         (dir, node)
     }
-
-    // Canonical record seeding for the embedded-node tests: tool calls are
-    // admitted through a coordinator `RequestExecution` header bound to the
-    // physical `AgentToolCall` document, and results are delivered through
-    // a `ToolDelivery` publication reconstructing its native `ToolResult`
-    // block. This mirrors the codex shim's canonical seed pattern — no
-    // retired payload column is ever written.
 
     use gents::graphql::single_mutation_document;
     use gents::session::canonical_rows::{
@@ -2228,10 +1731,9 @@ mod tests {
 
     async fn insert_segment(node: &EmbeddedNode, segment: &OutputSegment) -> String {
         let response = node
-            .execute_request_with_retry(
+            .execute_request(
                 gents::defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                     .with_variables(output_segment_create_variables(segment).unwrap()),
-                gents::defra_node::ExecuteRetryPolicy::default(),
             )
             .await;
         assert!(
@@ -2249,10 +1751,9 @@ mod tests {
 
     async fn insert_header(node: &EmbeddedNode, header: &TranscriptMessage) {
         let response = node
-            .execute_request_with_retry(
+            .execute_request(
                 gents::defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                     .with_variables(transcript_message_create_variables(header).unwrap()),
-                gents::defra_node::ExecuteRetryPolicy::default(),
             )
             .await;
         assert!(
@@ -2262,10 +1763,6 @@ mod tests {
         );
     }
 
-    /// Publish the canonical delivery for one already-admitted physical
-    /// tool call: the closed `ToolCall` output segment carrying the result
-    /// text plus the `ToolDelivery` header reconstructing its native
-    /// `ToolResult` block bound to the same physical document.
     async fn seed_tool_delivery(
         node: &EmbeddedNode,
         request_doc_id: &str,
@@ -2351,12 +1848,8 @@ mod tests {
         .await;
     }
 
-    /// Seed one `AgentToolCall` row plus its full canonical admission
-    /// record (the coordinator `RequestExecution` header binding the
-    /// physical document), and — when `result` is `Some` — its canonical
-    /// delivery. Returns the row's physical `_docID`.
     async fn seed_canonical_tool_call(
-        node: &EmbeddedNode,
+        node: &Arc<EmbeddedNode>,
         request_doc_id: &str,
         request_id: &str,
         session_id: &str,
@@ -2393,14 +1886,6 @@ mod tests {
         .await;
     }
 
-    /// The embedded-node exact presentation-association regression: two
-    /// same-name `AgentToolCall` rows, each with its own full canonical
-    /// record (coordinator admission + `ToolDelivery` reply) and distinct
-    /// outputs, seeded in crossed identity order. The full production path
-    /// — query, deserialize, per-row canonical presentation load,
-    /// projection — must hand each pager `toolCallId` only its exact
-    /// delivered result in `rawOutput`, never the other call's delivery by
-    /// tool-name matching or query-iteration accident.
     #[tokio::test]
     async fn embedded_exact_presentation_association_survives_query_deserialize_projection() {
         let (_dir, node) = embedded_node().await;
@@ -2409,9 +1894,6 @@ mod tests {
         let request = seed_projection_request(&node, request_id, session_id).await;
         let request_doc_id = request.doc_id.as_deref().unwrap().to_string();
 
-        // Seed the second call first (crossed creation order) so any naive
-        // first-same-tool_name join would hand both calls the wrong
-        // delivery. Both calls share the tool name `bash`.
         let doc_second = seed_canonical_tool_call(
             &node,
             &request_doc_id,
@@ -2444,7 +1926,6 @@ mod tests {
         .await;
         assert_ne!(doc_first, doc_second, "the two calls are distinct docs");
 
-        // The actual production path: query + deserialize + projection.
         let projection = project_tools(&node, &request)
             .await
             .expect("tool projection");
@@ -2469,8 +1950,6 @@ mod tests {
             Some("durable output for the second call"),
             "the second pager toolCallId must receive exactly its own durable result"
         );
-        // No other spill ever leaks into either call, and no third tool_call
-        // registration exists to borrow one.
         let call_ids = projected_call_ids(&projection);
         assert_eq!(
             call_ids,
@@ -2482,7 +1961,6 @@ mod tests {
         );
     }
 
-    /// The projected `tool_call` registration for one pager `toolCallId`.
     fn call_for<'a>(projection: &'a ToolProjection, tool_call_id: &str) -> &'a ToolCallUpdate {
         projection
             .updates
@@ -2494,15 +1972,6 @@ mod tests {
             .unwrap_or_else(|| panic!("no tool_call registration for {tool_call_id}"))
     }
 
-    /// The embedded-node task regression: seed `task`/`Task`
-    /// `AgentToolCall` rows through DefraDB with persisted
-    /// foreground/background/unknown/absent `await_mode` (one carrying the
-    /// canonical `x.ai/tool` args envelope), run the full production
-    /// query/decoder/projection path, and prove the task family is not
-    /// suppressed, the plural `tasks` lookalike remains an ordinary tool,
-    /// the `subagentBackground` false/true mapping is exact, the full
-    /// canonical envelope survives, and a terminal mutation keeps the same
-    /// `toolCallId` with the terminal status.
     #[tokio::test]
     async fn embedded_task_family_meta_mapping_and_terminal_update_keep_identity() {
         let (_dir, node) = embedded_node().await;
@@ -2511,11 +1980,6 @@ mod tests {
         let request = seed_projection_request(&node, request_id, session_id).await;
         let request_doc_id = request.doc_id.as_deref().unwrap().to_string();
 
-        // Four canonical calls: three valid task-family cases covering
-        // foreground, background (with the canonical args envelope), and
-        // unknown await modes, plus the plural `tasks` lookalike with an
-        // absent await_mode. Await modes are stamped with the production
-        // update mutation after canonical admission.
         let _doc_fg = seed_canonical_tool_call(
             &node,
             &request_doc_id,
@@ -2597,14 +2061,10 @@ mod tests {
             response.errors
         );
 
-        // The full production path: query + deserialize + projection.
         let projection = project_tools(&node, &request)
             .await
             .expect("tool projection");
 
-        // Task-family rows are not suppressed, and the unrecognized plural
-        // `tasks` remains an ordinary tool call rather than being assigned
-        // task-only pager metadata.
         assert_eq!(
             projected_call_ids(&projection),
             vec![
@@ -2616,9 +2076,6 @@ mod tests {
             "task/spawn rows and ordinary unknown rows must render"
         );
 
-        // The false/true mapping is exact and always explicit: foreground
-        // and unknown await modes are explicit false; only the exact persisted
-        // value `background` is true.
         for (id, expected) in [
             ("call-task-fg", false),
             ("call-task-bg", true),
@@ -2643,8 +2100,6 @@ mod tests {
             "plural tasks is not a Grok task alias and must not receive task-only metadata"
         );
 
-        // The full canonical `x.ai/tool` envelope survives verbatim beside
-        // the merged boolean on the background row.
         let bg = call_for(&projection, "call-task-bg");
         let meta = bg.meta.as_ref().expect("background row carries meta");
         assert_eq!(
@@ -2657,10 +2112,6 @@ mod tests {
         );
         assert_eq!(meta["subagentBackground"], true);
 
-        // A terminalization on the absent-mode row: the runtime finalizes
-        // the call through a durable canonical delivery plus a terminal
-        // status mutation, and the re-projection keeps the same
-        // `toolCallId` with the terminal status and durable output.
         seed_tool_delivery(
             &node,
             &request_doc_id,
@@ -2697,7 +2148,6 @@ mod tests {
         let reprojection = project_tools(&node, &request)
             .await
             .expect("tool reprojection");
-        // Same toolCallId, still rendered, now terminal.
         let call = call_for(&reprojection, "call-tasks-absent");
         assert_eq!(call.status, ToolCallStatus::Completed);
         assert_eq!(
@@ -2711,7 +2161,6 @@ mod tests {
             call.meta.is_none(),
             "plural tasks remains an ordinary tool after terminal update"
         );
-        // The same-id terminal tool_call_update follows the base.
         let update = reprojection
             .updates
             .iter()
@@ -2727,14 +2176,6 @@ mod tests {
         assert_eq!(update.fields["status"], "completed");
     }
 
-    /// The embedded-node live-window regression: a running `bash` call that
-    /// is a spawned subprocess (canonical admission plus the
-    /// `spawned_by_tool_call_doc_id` link to its parent `spawn_process`
-    /// meta-call) receives an open `ToolCall`-source output segment while
-    /// it runs; the full production path streams that window as
-    /// `rawOutput`. A durable canonical delivery then replaces the window:
-    /// the live window is streaming evidence, never durable
-    /// materialization.
     #[tokio::test]
     async fn embedded_live_output_window_streams_then_durable_result_replaces_it() {
         let (_dir, node) = embedded_node().await;
@@ -2743,10 +2184,6 @@ mod tests {
         let request = seed_projection_request(&node, request_id, session_id).await;
         let request_doc_id = request.doc_id.as_deref().unwrap().to_string();
 
-        // The parent `spawn_process` meta-call, admitted canonically with
-        // its own `ProviderTurn` source coordinates (distinct per row —
-        // closures are per-source). Its accepted arguments are the spawn
-        // envelope the owner decodes (`tool_name` + `args`).
         let parent_doc_id = seed_canonical_tool_call(
             &node,
             &request_doc_id,
@@ -2763,8 +2200,6 @@ mod tests {
         )
         .await;
 
-        // The child `bash` call: the spawn link is an `@immutable` genesis
-        // field, so the child is created already linked to its parent.
         let child_doc_id = seed_canonical_tool_call(
             &node,
             &request_doc_id,
@@ -2781,8 +2216,6 @@ mod tests {
         )
         .await;
 
-        // The live window: an open `ToolCall`-source output segment on the
-        // child's physical document, streamed while the call runs.
         let live_segment = OutputSegment {
             node_did: "did:test:grok-shim".into(),
             requester_did: Some("did:test:grok-shim".into()),
@@ -2810,7 +2243,6 @@ mod tests {
         };
         insert_segment(&node, &live_segment).await;
 
-        // The production path streams the window while the call runs.
         let projection = project_tools(&node, &request)
             .await
             .expect("live projection");
@@ -2825,9 +2257,6 @@ mod tests {
             "the live window streams through rawOutput while the call runs"
         );
 
-        // Terminalization closes the spawned child's own ToolOutput stream.
-        // A spawned child never owns a native ToolResult header; that receipt
-        // belongs exclusively to the parent spawn_process call.
         insert_segment(
             &node,
             &OutputSegment {

@@ -40,7 +40,6 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
-    // -- create --
     let created = run_cli_json(
         &home_dir,
         &[
@@ -72,7 +71,6 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
         .to_string();
     assert_eq!(agent_id, format!("{node_did}:research-assistant"));
 
-    // -- clone --
     let cloned = run_cli_json(
         &home_dir,
         &[
@@ -96,7 +94,6 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
         .to_string();
     assert_eq!(cloned_id, format!("{node_did}:cloned-assistant"));
 
-    // -- disable the clone --
     let disabled = run_cli_json(
         &home_dir,
         &[
@@ -126,8 +123,6 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
         Some(false)
     );
 
-    // -- enriched show: preset classification for a readonly-template
-    //    selection, and "custom" once hand-tuned --
     let write_show = run_cli_json(
         &home_dir,
         &["config", "agent", "show", &agent_id, "--graphql", &graphql],
@@ -198,9 +193,6 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
         .context("show output missing tools_id")?
         .to_string();
 
-    // Hand-tune the readonly-template selection: this is exactly the
-    // "one extra argv prefix classifies as custom" case
-    // `presets::classify_tools` fences.
     let mut tools = readonly_show["resolved"]["tools"].clone();
     tools["host"]["bash"]["allowed_argv_prefixes"] = serde_json::json!([["git", "status"]]);
     let tools_file = tempdir.path().join("tuned-tools.json");

@@ -15,10 +15,6 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
         errors.push(format!("{error:#}"));
         return;
     }
-    // Reference closure and inference bounds use the shared transaction over
-    // retained + authored documents. Offline authoring does not require copies
-    // of existing backends, contexts, profiles, skills or the default agent_config.
-    // System prompts remain literal; only task templates are evaluated.
     tooling::validate_surfaces(manifest, errors);
     tooling::validate_eth_tools(manifest, errors);
     tooling::validate_tools(manifest, errors);

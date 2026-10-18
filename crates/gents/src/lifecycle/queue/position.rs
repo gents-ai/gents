@@ -78,16 +78,17 @@ pub async fn validate_position(read: &impl ConfigRead, row: &AgentRequestRow) ->
     }
 }
 
-/// A malformed position cannot affect scheduling before admission rejects it.
-/// Valid replacements retain the original native arrival slot across edits.
 pub(crate) async fn effective_slots(
     txn: &ConfigApplyTxn<'_>,
     ids: &[String],
 ) -> Result<Vec<(String, String)>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
     let literal = crate::graphql::graphql_string_list_literal(ids.iter().map(String::as_str));
     let response = txn
         .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _in: {literal} }} }}) {{
+            r#"{{ AgentRequest(docIDs: {literal}) {{
             _docID request_id node_did requester_did session_id agent_id input
             workspace_id workspace_owner_node_did workspace_authority workspace_seal_hash
         }} }}"#,
@@ -120,127 +121,66 @@ pub(crate) async fn effective_slots(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::{KeyIdentity, NodeIdentity};
-    use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
-    };
-    use gents_protocol::request_input::{QueueDelivery, QueuePosition};
-
-    struct Rows(Vec<AgentRequestRow>);
-    #[async_trait::async_trait]
-    impl ConfigRead for Rows {
-        async fn execute_read(&self, query: &str) -> Result<serde_json::Value> {
-            let rows = self
-                .0
-                .iter()
-                .filter(|row| {
-                    query.contains(&format!("_eq: \"{}\"", row.doc_id.as_deref().unwrap()))
-                })
-                .map(|row| {
-                    let mut value = serde_json::to_value(row).unwrap();
-                    value["_docID"] = serde_json::json!(row.doc_id);
-                    value
-                })
-                .collect::<Vec<_>>();
-            Ok(serde_json::json!({"data":{"AgentRequest":rows}}))
-        }
-    }
-
-    async fn signed_row(
-        identity: &KeyIdentity,
-        id: &str,
-        position: Option<QueuePosition>,
-    ) -> AgentRequestRow {
-        let mut create = AgentRequestCreate::base(
-            RequestPurpose::Normal,
-            id,
-            identity.did(),
-            identity.did(),
-            "agent",
-            "session",
-            "text",
-            "interactive",
-            "2026-10-10T00:00:00Z",
-            AgentRequestAdmissionRecord::local_self(identity.did()),
-        );
-        create.input.queue = Some(RequestQueue {
-            source: QueueSource::User,
-            policy: QueuePolicy::Append,
-            delivery: QueueDelivery::Steer,
-            position,
-            key: None,
-            queued_after_request_id: None,
-            interrupted_request_id: None,
-            background_completion_wake_version: None,
-        });
-        crate::sign_agent_request_create(identity, &mut create)
-            .await
-            .unwrap();
-        AgentRequestRow {
-            doc_id: Some(id.into()),
-            request_id: create.request_id,
-            purpose: Some(create.purpose),
-            node_did: Some(create.node_did),
-            requester_did: Some(create.requester_did),
-            agent_id: Some(create.agent_id),
-            session_id: Some(create.session_id),
-            content: Some(create.content),
-            input: Some(create.input),
-            execution_origin: Some(create.execution_origin),
-            created_at: Some(create.created_at),
-            retry_root_request: create.retry_root_request,
-            retry_count: Some(create.retry_count),
-            max_retries: Some(create.max_retries),
-            request_hop: Some(i64::from(create.request_hop)),
-            admission_kind: Some(create.admission.kind.as_str().into()),
-            admission_signer_did: Some(create.admission.signer_did),
-            admission_signature: Some(bs58::encode(&create.admission.signature).into_string()),
-            lifecycle_state: Some(RequestLifecycleState::Pending),
-            ..Default::default()
-        }
-    }
 
     #[tokio::test]
-    async fn inherited_slot_requires_authenticated_chain_to_original_physical_document() {
-        let temp = tempfile::tempdir().unwrap();
-        let identity = KeyIdentity::load_or_create(temp.path().join("position.key"), None).unwrap();
-        let mut original = signed_row(&identity, "original", None).await;
-        let mut replacement = signed_row(
-            &identity,
-            "replacement",
-            Some(QueuePosition {
-                slot_request_doc_id: "original".into(),
-                replaces_request_doc_id: "original".into(),
-            }),
-        )
-        .await;
-        let final_row = signed_row(
-            &identity,
-            "final",
-            Some(QueuePosition {
-                slot_request_doc_id: "original".into(),
-                replaces_request_doc_id: "replacement".into(),
-            }),
-        )
-        .await;
-        original.lifecycle_state = Some(RequestLifecycleState::Superseded);
-        original.superseded_by_request_doc_id = Some("replacement".into());
-        original.failure_reason = Some("pending message replaced".into());
-        replacement.lifecycle_state = Some(RequestLifecycleState::Superseded);
-        replacement.superseded_by_request_doc_id = Some("final".into());
-        replacement.failure_reason = Some("pending message replaced".into());
-        validate_position(
-            &Rows(vec![original.clone(), replacement.clone()]),
-            &final_row,
+    async fn effective_slot_batch_uses_only_found_physical_requests() {
+        use crate::config_client::ConfigAccess;
+        use crate::defra_node::EmbeddedNode;
+
+        let dir = tempfile::tempdir().unwrap();
+        let node = std::sync::Arc::new(
+            EmbeddedNode::builder()
+                .data_path(dir.path().join("node"))
+                .build()
+                .await
+                .unwrap(),
+        );
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+
+        async fn create_request(
+            node: &std::sync::Arc<EmbeddedNode>,
+            request_id: &str,
+            node_did: &str,
+            session_id: &str,
+        ) -> String {
+            let mutation = format!(
+                r#"mutation {{ create_AgentRequest(input: {{
+                    purpose: "normal", request_id: "{request_id}",
+                    node_did: "{node_did}", requester_did: "did:test:requester",
+                    agent_id: "worker", session_id: "{session_id}", content: "work",
+                    lifecycle_state: "completed", backend_id: "",
+                    execution_origin: "interactive", failure_reason: "",
+                    created_at: "2026-10-10T00:00:00Z", retry_count: 0, max_retries: 3
+                }}) {{ _docID }} }}"#
+            );
+            let created =
+                ConfigAccess::write_local_response(node, "test.queue_position", &mutation)
+                    .await
+                    .unwrap();
+            let data = created.data.unwrap();
+            data.as_object().unwrap().values().next().unwrap()[0]["_docID"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        }
+
+        let requested = create_request(&node, "requested", "did:test:node", "queue").await;
+        let _foreign = create_request(&node, "foreign", "did:test:other", "other-queue").await;
+        let missing =
+            document::DocID::new_v0_from_seed("missing-queue-position-request").to_string();
+        let ids = vec![requested.clone(), missing];
+        let slots = ConfigAccess::transact_local_readonly(
+            &node,
+            None,
+            "test.queue_position_direct_ids",
+            |txn| {
+                let ids = ids.clone();
+                Box::pin(async move { effective_slots(txn, &ids).await })
+            },
         )
         .await
         .unwrap();
-        original.content = Some("changed after signing".into());
-        assert!(
-            validate_position(&Rows(vec![original, replacement]), &final_row)
-                .await
-                .unwrap_err()
-                .is::<InvalidQueuePosition>()
-        );
+        assert_eq!(slots, vec![(requested.clone(), requested)]);
+        node.shutdown().await;
     }
 }

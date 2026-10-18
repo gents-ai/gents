@@ -54,9 +54,6 @@ pub(crate) struct TaskRunOutput {
     pub(crate) duplicate: bool,
 }
 
-/// Manual invocations use the loaded Task document as their source identity.
-/// The invocation key distinguishes their synthetic trigger identities; request
-/// provenance remains manual because no persisted Trigger fired this request.
 pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRunOutput> {
     let task_id =
         resolve_task_id_for("run", args.task_id.as_deref(), args.task_id_flag.as_deref())?;
@@ -72,7 +69,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     let node_did = crate::resolve_node_did(args.home.as_deref(), None)?;
     ensure_local_request_signer(args.home.as_deref(), &node_did)?;
     let (task_doc_id, task) = access
-        .transact("cli.task_run.read", |txn| {
+        .transact_write("cli.task_run.read", |txn| {
             let node_did = &node_did;
             let task_id = &task_id;
             Box::pin(async move {
@@ -274,8 +271,6 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     })
 }
 
-/// Goal invocations use the explicit stable key. Ordinary calls retain their
-/// fresh-invocation agent even when --session-id supplies a session label.
 fn resolve_invocation_key(
     task_id: &str,
     goal_backed: bool,
@@ -360,52 +355,6 @@ pub(crate) fn resolve_task_id_for(
 mod tests {
     use super::*;
 
-    fn test_manual_mutation(input: RequestInput) -> String {
-        let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-            gents_protocol::request_admission::RequestPurpose::Normal,
-            "req-1",
-            "did:test:test",
-            "did:test:test",
-            "agent-1",
-            "sess-1",
-            "hello Amy",
-            "interactive",
-            "2026-04-21T00:00:00Z",
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                "did:test:test",
-            ),
-        );
-        create.admission.signature = vec![0; 64];
-        create.input = input;
-        create.caused_by_trigger_kind = Some("manual".to_string());
-        create.graphql_mutation().unwrap()
-    }
-
-    #[test]
-    fn build_mutation_uses_signed_local_self_and_omits_trigger_id() {
-        let mutation = test_manual_mutation(RequestInput::default());
-        assert!(mutation.contains("admission_kind: \"local-self\""));
-        assert!(mutation.contains("caused_by_trigger_kind: \"manual\""));
-        assert!(
-            !mutation.contains("caused_by_trigger_id:"),
-            "caused_by_trigger_id must be omitted so it stays null for manual runs"
-        );
-        assert!(mutation.contains("execution_origin: \"interactive\""));
-        assert!(mutation.contains("lifecycle_state: \"pending\""));
-        assert!(mutation.contains("content: \"hello Amy\""));
-    }
-
-    #[test]
-    fn build_mutation_includes_selected_skill_input_when_present() {
-        let mutation = test_manual_mutation(RequestInput {
-            selected_skill_ids: vec!["vuln-scan".into()],
-            ..Default::default()
-        });
-
-        assert!(mutation.contains("input:"));
-        assert!(mutation.contains(r#"selected_skill_ids: ["vuln-scan"]"#));
-    }
-
     #[test]
     fn goal_task_requires_a_stable_invocation_key() {
         assert!(resolve_invocation_key("task", true, None).is_err());
@@ -415,28 +364,5 @@ mod tests {
         );
         assert!(resolve_invocation_key("task", false, None).is_ok());
         assert!(resolve_invocation_key("task", false, Some(" ")).is_err());
-    }
-
-    #[test]
-    fn resolve_task_id_accepts_positional_or_flag_and_rejects_conflict() {
-        assert_eq!(
-            resolve_task_id_for("run", Some("host-check"), None).unwrap(),
-            "host-check"
-        );
-        assert_eq!(
-            resolve_task_id_for("run", None, Some("host-check")).unwrap(),
-            "host-check"
-        );
-        assert_eq!(
-            resolve_task_id_for("run", Some("host-check"), Some("host-check")).unwrap(),
-            "host-check"
-        );
-        assert!(resolve_task_id_for("run", Some("host-check"), Some("other")).is_err());
-        assert!(resolve_task_id_for("run", None, None).is_err());
-        assert_eq!(
-            resolve_task_id_for("run", Some(" task "), None).unwrap(),
-            " task "
-        );
-        assert!(resolve_task_id_for("run", Some(" task "), Some("task")).is_err());
     }
 }

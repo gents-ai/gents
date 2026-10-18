@@ -2,8 +2,6 @@ import Proofs.AgentSession
 import Proofs.SessionFork
 import Proofs.SessionRecovery
 
-/-! Executable session/fork witnesses for the next conformance layer. These use
-actual owners, including negative branches, rather than asserting copied counts. -/
 namespace Conformance.SessionDocuments
 open AgentSession
 

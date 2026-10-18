@@ -39,9 +39,6 @@ def inferenceCallRecover (row : InferenceCallRecoveryRow) : InferenceCallRecover
   | .staleRunning => { row with call := { row.call with state := .failed } }
   | .interruptedParent => { row with call := { row.call with state := .cancelled } }
 
-/-- Refinement of an atomic update guarded by the observed call state. The
-    document identity selects `current`; its state must still match the stale
-    observation. Recovery does not overwrite another owner's intervening step. -/
 def inferenceCallRecoverObserved
     (observed : InferenceCallRecoveryRow) (current : InferenceCall) : InferenceCall :=
   if current.state = observed.call.state ∧ inferenceCallRecoveryStale observed then
@@ -62,8 +59,6 @@ theorem inferenceCallRecoverObserved_changed_state_noop
     inferenceCallRecoverObserved observed current = current := by
   simp [inferenceCallRecoverObserved, h_changed]
 
-/-- A completed call cannot satisfy a stale queued/running observation, even
-    when a recovery sweep selected it before the original owner completed. -/
 theorem inferenceCallRecoverObserved_completed_noop
     (observed : InferenceCallRecoveryRow) (current : InferenceCall)
     (h_completed : current.state = .completed) :

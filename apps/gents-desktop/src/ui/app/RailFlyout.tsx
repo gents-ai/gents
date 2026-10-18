@@ -1,12 +1,3 @@
-/* The rail, expanded: hovering the side nav slides out a raised panel
-   over the canvas with the same items in full (agent, new session,
-   mailbox, sessions) and a quick list of recent sessions, the way a
-   collapsed sidebar opens on hover. It overlays rather than pushes, so
-   the screen behind never reflows, and its rows sit on the rail's own
-   grid (same top padding, heights and gaps, icons in the same 32px slot
-   12px from the edge) so nothing appears to move when it opens. Opens
-   after a short rest, closes when the pointer leaves; keyboard focus
-   inside keeps it open. */
 import { createContext } from "react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronRight, Inbox, Lock, Plus, ScrollText, Waypoints } from "lucide-react";
@@ -56,7 +47,6 @@ function Item({
         active && "border-border/60 bg-background text-ink shadow-xs",
       )}
     >
-      {/* the rail's 32px square, minus the border already on the row */}
       <span className="grid size-[30px] shrink-0 place-items-center">{icon}</span>
       <span className="min-w-0 flex-1 truncate">{children}</span>
       {count ? (
@@ -68,17 +58,13 @@ function Item({
   );
 }
 
-/* the panel's content, shared by the hover flyout, the expanded column
-   and the mobile sheet */
 export function NavPanel({
   route,
   settings,
   syncRow,
 }: {
   route: Route;
-  /** the settings menu, as a row at the foot */
   settings: ReactNode;
-  /** the sync chip as a row above Nodes; the hover flyout's is the rail's own */
   syncRow: boolean;
 }) {
   const online = useOnline();
@@ -114,9 +100,6 @@ export function NavPanel({
     working !== null && route.name === "agent" && route.nodeDid === working.nodeDid;
   return (
     <>
-      {/* the working node, in the same slot as its avatar on the rail: its
-          configuration is always one click away. A client that runs no node
-          of its own says so, and offers the nodes it can see. */}
       {working ? (
         <a
           href={href({
@@ -127,7 +110,7 @@ export function NavPanel({
           aria-current={workingCurrent ? "page" : undefined}
           data-testid="working-node"
           className={cn(
-            "group mr-3 mb-2 ml-[14px] flex h-7 items-center gap-3 rounded-lg text-sm transition-colors",
+            "group mr-3 mb-2 ml-[14px] flex h-9 items-center gap-3 rounded-lg text-sm transition-colors",
             workingCurrent && "text-ink",
           )}
         >
@@ -162,7 +145,7 @@ export function NavPanel({
         <a
           href={href({ name: "nodes" })}
           data-testid="no-working-node"
-          className="group mr-3 mb-2 ml-[14px] flex h-7 items-center gap-3 rounded-lg text-sm text-muted-foreground transition-colors hover:text-foreground"
+          className="group mr-3 mb-2 ml-[14px] flex h-9 items-center gap-3 rounded-lg text-sm text-muted-foreground transition-colors hover:text-foreground"
         >
           <span className="grid size-7 shrink-0 place-items-center rounded-full ring-1 ring-dashed ring-border">
             <Waypoints className="size-3.5" />
@@ -175,7 +158,6 @@ export function NavPanel({
           </span>
         </a>
       )}
-      {/* the rail's hairline, in place, then drawn on to the edge */}
       <div className="mb-1 ml-[18px] h-px w-5 bg-border" />
       <Item
         to={href({ name: "session", sessionId: null })}
@@ -243,7 +225,6 @@ export function NavPanel({
           </a>
         </>
       )}
-      {/* the same rhythm as the rail's foot (AppShell): 4px between chip, rule, Nodes and Settings */}
       <div className="mt-auto flex flex-col gap-1">
         {syncRow && (
           <div className="mx-3">
@@ -266,8 +247,6 @@ export function NavPanel({
   );
 }
 
-/* whether the hover flyout is showing: what the rail draws under the
-   flyout's own rows hides itself while it is, so there is one control */
 export const FlyoutOpenContext = createContext(false);
 
 export function RailFlyout({
@@ -277,16 +256,11 @@ export function RailFlyout({
   children,
 }: {
   route: Route;
-  /** hover: rail with a flyout; expanded: the panel in the flow; collapsed: rail only */
   mode?: NavMode;
   settings: ReactNode;
-  /** the collapsed rail */
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  /* menus opened from the flyout render inside it rather than at the end
-     of the body, so moving the pointer or focus into one is not leaving
-     the flyout, and it stays open while the menu is used */
   const [portal, setPortal] = useState<HTMLElement | null>(null);
   const timer = useRef<number | null>(null);
   const later = (next: boolean, ms: number) => {
@@ -310,14 +284,6 @@ export function RailFlyout({
         hover && e.pointerType === "mouse" && later(true, OPEN_AFTER)
       }
       onPointerLeave={() => hover && later(false, CLOSE_AFTER)}
-      /* Do not replace the hit target between pointerdown and pointerup.
-         Pressing a rail icon focuses it, and opening on focus put a flyout
-         row — aligned to the rail's own grid, so nothing looks like it
-         moved — over the icon before the finger came up. The browser saw
-         mousedown and mouseup on different elements and dispatched no
-         click: the icon simply did not respond. A press holds the timer,
-         a mouse release goes back to hover timing, and only real keyboard
-         focus still opens at once. */
       onPointerDown={() => {
         if (timer.current) window.clearTimeout(timer.current);
       }}
@@ -333,14 +299,12 @@ export function RailFlyout({
         <FlyoutOpenContext.Provider value={hover && open}>
           {hover && children}
         </FlyoutOpenContext.Provider>
-        {/* the rail's first row is the avatar, and the panel's first row
-            (8px in) lands on it from 4px down */}
+
         <div
           aria-hidden={!shown}
           className={cn(
-            "absolute top-1 bottom-2 left-2 flex w-72 flex-col gap-2 overflow-hidden bg-raised pt-2 pb-2",
-            /* the flyout sits exactly where the expanded panel sits, so
-               switching modes moves nothing but whether it stays */
+            "absolute top-1 bottom-2 left-2 flex w-72 flex-col gap-2 overflow-hidden bg-raised pb-2",
+            hover ? "pt-2" : "pt-3.5",
             "rounded-2xl border border-border/60",
             hover
               ? "z-30 shadow-lg transition-[opacity,transform] duration-200 ease-out"
@@ -351,7 +315,6 @@ export function RailFlyout({
                 : "pointer-events-none -translate-x-2 opacity-0"),
           )}
         >
-          {/* the hover flyout's sync row is the rail's own chip, drawn over it */}
           <NavPanel route={route} settings={settings} syncRow={!hover} />
         </div>
       </PortalContainerProvider>

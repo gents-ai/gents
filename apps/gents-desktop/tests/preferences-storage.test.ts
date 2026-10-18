@@ -1,10 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import { restoreListViews } from "../src/ui/app/listViews";
 import { emptyFilter } from "../src/ui/lib/session-filter";
-import { restorePreferences, type Preferences } from "../src/ui/preferences";
+import {
+  applyChosenTheme,
+  followOtherWindows,
+  resetPreferences,
+  restorePreferences,
+  zoomLevel,
+  type Preferences,
+} from "../src/ui/preferences";
+import { onZoomKeys, stepZoom, zoomKey } from "../src/ui/lib/zoom";
 
-const defaults: Preferences = { theme: "light", nav: "hover" };
+const defaults: Preferences = { theme: "light", nav: "hover", zoom: 1 };
 
 describe("preferences read back from storage", () => {
   it("keeps the defaults for values that are not preferences", () => {
@@ -13,13 +22,86 @@ describe("preferences read back from storage", () => {
     expect(restorePreferences({ theme: "dark", nav: "collapsed" }, defaults)).toEqual({
       theme: "dark",
       nav: "collapsed",
+      zoom: 1,
     });
+  });
+
+  it("keeps a zoom only when it is one of the steps", () => {
+    expect(restorePreferences({ zoom: 1.25 }, defaults).zoom).toBe(1.25);
+    expect(restorePreferences({ zoom: 7 }, defaults).zoom).toBe(1);
+    expect(restorePreferences({ zoom: "1.25" }, defaults).zoom).toBe(1);
+  });
+});
+
+describe("zooming", () => {
+  it("steps up and down through the browser's steps, and resets to actual size", () => {
+    expect(stepZoom(1, "in")).toBe(1.1);
+    expect(stepZoom(1, "out")).toBe(0.9);
+    expect(stepZoom(2, "in")).toBe(2);
+    expect(stepZoom(0.67, "out")).toBe(0.67);
+    expect(stepZoom(1.5, "reset")).toBe(1);
+  });
+
+  it("takes Ctrl with =, +, − and 0 where no menu carries the keys", () => {
+    const key = (key: string, mods: Partial<KeyboardEvent> = {}) =>
+      zoomKey({ key, ctrlKey: true, metaKey: false, altKey: false, ...mods });
+    expect([key("="), key("+"), key("-"), key("0")]).toEqual([
+      "in",
+      "in",
+      "out",
+      "reset",
+    ]);
+    expect(key("=", { ctrlKey: false })).toBeNull();
+    expect(key("=", { altKey: true })).toBeNull();
+    expect(key("1")).toBeNull();
+
+    const steps: string[] = [];
+    const stop = onZoomKeys(window, (action) => steps.push(action));
+    const press = new KeyboardEvent("keydown", {
+      key: "=",
+      ctrlKey: true,
+      cancelable: true,
+    });
+    document.body.dispatchEvent(press);
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "a", ctrlKey: true }),
+    );
+    stop();
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "0", ctrlKey: true }),
+    );
+    expect(steps).toEqual(["in"]);
+    expect(press.defaultPrevented).toBe(true);
+  });
+});
+
+describe("another window's preferences", () => {
+  it("are read back when that window saves them, and its theme is shown", async () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+    });
+    const stop = followOtherWindows();
+    localStorage.setItem(
+      "gents-preferences",
+      JSON.stringify({
+        state: { theme: "dark", nav: "hover", zoom: 1.25 },
+        version: 1,
+      }),
+    );
+    window.dispatchEvent(new StorageEvent("storage", { key: "gents-preferences" }));
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
+    expect(zoomLevel()).toBe(1.25);
+    stop();
+    resetPreferences();
+    applyChosenTheme();
+    vi.unstubAllGlobals();
   });
 });
 
 describe("list views read back from storage", () => {
-  /* an earlier build offered "Needs you"; its saved pick must not be read
-     as another state */
   it("drops a session state or source this build does not offer", () => {
     const restored = restoreListViews({
       sessionFilter: {
@@ -29,7 +111,7 @@ describe("list views read back from storage", () => {
       },
     });
     expect(restored.sessionFilter).toEqual({
-      states: ["live"],
+      states: ["working", "waiting"],
       sources: ["task"],
       agents: [],
     });
@@ -41,6 +123,7 @@ describe("list views read back from storage", () => {
       sessionNodes: null,
       mailboxNodes: ["a"],
       mailboxKinds: [],
+      openSessions: [],
     });
     expect(restoreListViews({ sessionNodes: [] }).sessionNodes).toEqual([]);
   });

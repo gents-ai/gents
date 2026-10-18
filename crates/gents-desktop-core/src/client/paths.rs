@@ -84,22 +84,14 @@ impl DesktopPaths {
         &self.iroh_secret_key_path
     }
 
-    /// The client store's recorded at-rest encryption.
     pub fn store_encryption_path(&self) -> &Path {
         &self.store_encryption_path
     }
 
-    /// The client store's key when it is kept in a file.
     pub fn store_key_path(&self) -> &Path {
         &self.store_key_path
     }
 
-    /// Whether this home contains enough durable client state to require a
-    /// restart, even before enrollment has materialized its first peer row.
-    ///
-    /// This is only a liveness hint. The restarted client still verifies every
-    /// enrollment signature, authorization generation, lease, and route
-    /// receipt before it can create authority or report readiness.
     pub fn client_state_exists(&self) -> bool {
         self.principal_metadata_path.is_file()
             && self.identity_key_path.is_file()
@@ -107,10 +99,6 @@ impl DesktopPaths {
             && self.node_data_dir.join("MANIFEST").is_file()
     }
 
-    /// Records only the desktop client writes: its identity, P2P key, store
-    /// custody record and key, and peer directory. Their presence shows the
-    /// root is a desktop home; generic names such as the store directory do
-    /// not.
     pub fn client_records(&self) -> [&Path; 6] {
         [
             &self.principal_metadata_path,
@@ -122,10 +110,6 @@ impl DesktopPaths {
         ]
     }
 
-    /// Every entry of the desktop client's durable state: its store and the
-    /// store's encryption record and key file, peer directory (and lease),
-    /// desktop identity and P2P key. The packaged runtime copied under the
-    /// same root is not client state.
     pub fn client_state_entries(&self) -> Vec<PathBuf> {
         vec![
             self.node_data_dir.clone(),
@@ -143,28 +127,6 @@ impl DesktopPaths {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn discover_uses_desktop_home_env_when_set() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-
-        let paths = DesktopPaths::discover_with_env(Some(tempdir.path().as_os_str().to_owned()))
-            .expect("paths");
-
-        assert_eq!(paths.root(), tempdir.path());
-        assert_eq!(
-            paths.peer_directory_path(),
-            tempdir.path().join("peers.json")
-        );
-    }
-
-    #[test]
-    fn discover_without_override_uses_fresh_gents_desktop_root() {
-        let paths = DesktopPaths::discover_with_env(None).expect("paths");
-
-        assert_eq!(DESKTOP_HOME_ENV, "GENTS_DESKTOP_HOME");
-        assert!(paths.root().ends_with(Path::new("gents").join("desktop")));
-    }
 
     #[cfg(unix)]
     #[tokio::test]

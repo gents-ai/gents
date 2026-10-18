@@ -1,36 +1,3 @@
-//! Live end-to-end `agent_new`/`agent_message` tests against a real
-//! inference target. An orchestrator agent, driven by the live model, starts a
-//! session on an allowlisted agent; the started session runs its own agent configuration
-//! (live model) and its result reaches the caller only as a background
-//! completion notification plus a wake on the caller's session.
-//!
-//! Normal test runs skip these (they are `#[ignore]`-gated AND early-return
-//! unless `GENTS_LIVE_SESSION_MESSAGE=1`). Inference comes from the target
-//! named by `GENTS_EVAL_TARGET`. To run locally:
-//!
-//! ```bash
-//! GENTS_LIVE_SESSION_MESSAGE=1 GENTS_EVAL_TARGET=workstation-1 \
-//!   cargo test -p gents --features live-e2e --test e2e_live live_ -- --ignored --nocapture
-//! ```
-//!
-//! The standard-path backgrounding test has its own gate:
-//!
-//! ```bash
-//! GENTS_LIVE_BACKGROUNDING=1 GENTS_EVAL_TARGET=workstation-1 \
-//!   cargo test -p gents --features live-e2e --test e2e_live \
-//!   live_standard_backgrounding_uses_real_inference -- --ignored --nocapture
-//! ```
-//!
-//! The randomized soak additionally needs `GENTS_LIVE_SOAK=1`;
-//! `GENTS_LIVE_SOAK_ITERS` (default 20) and `GENTS_LIVE_SOAK_SEED` (random
-//! and logged when unset) shape the run.
-//!
-//! The cross-node test starts a session on another node. The
-//! caused `AgentRequest` is authored on the caller's node, replicated to the
-//! target by the `agent-target-caller` data-plane route, admitted there as a
-//! Peer request under the target's enrollment authority, and its terminal
-//! request, session, messages and output replicate back by `agent-target-host`.
-
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
@@ -77,7 +44,6 @@ use crate::support::{
 const RESEARCHER_AGENT_ID: &str = "live-researcher";
 const FAST_WORKER_AGENT_ID: &str = "live-fast-worker";
 const BACKGROUND_WORKER_AGENT_ID: &str = "live-background-worker";
-/// Model-facing agent names; the model never sees agent IDs.
 const RESEARCHER_TARGET_NAME: &str = "researcher";
 const FAST_WORKER_TARGET_NAME: &str = "fast-worker";
 const BACKGROUND_WORKER_TARGET_NAME: &str = "background-worker";
@@ -109,10 +75,6 @@ fn completion_marker(tool_call_id: &str, tool_name: &str) -> String {
     format!(r#"<tool-completion tool_call_id="{tool_call_id}" tool_name="{tool_name}""#)
 }
 
-// ---------------------------------------------------------------------------
-// Test 1: local agent_new (orchestrator + target on one node / one DID)
-// ---------------------------------------------------------------------------
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_SESSION_MESSAGE=1 and pass --ignored"]
 async fn live_local_create_session() -> Result<()> {
@@ -129,9 +91,9 @@ async fn live_local_create_session() -> Result<()> {
     let node_did = identity.did().to_string();
     let orchestrator_agent_id = default_agent_id_for_node(&node_did);
     let profile_id = default_inference_profile_id_for_agent(&orchestrator_agent_id);
-    upsert_live_backend(db.node.as_ref(), &node_did, &target).await;
+    upsert_live_backend(&db.node, &node_did, &target).await;
     configure_agent(
-        db.node.as_ref(),
+        &db.node,
         &orchestrator_agent_id,
         &node_did,
         &target,
@@ -142,7 +104,7 @@ async fn live_local_create_session() -> Result<()> {
     )
     .await;
     configure_agent(
-        db.node.as_ref(),
+        &db.node,
         RESEARCHER_AGENT_ID,
         &node_did,
         &target,
@@ -153,7 +115,7 @@ async fn live_local_create_session() -> Result<()> {
     )
     .await;
     authorize_session_targets(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         vec![AgentTargetDocument {
@@ -173,7 +135,7 @@ async fn live_local_create_session() -> Result<()> {
     let request_id = "req-live-local-create-session";
     let session_id = "session-live-local-create-session";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         request_id,
@@ -191,9 +153,9 @@ async fn live_local_create_session() -> Result<()> {
     )
     .await;
     let Some(caused) =
-        wait_for_caused_request(db.node.as_ref(), request_id, Duration::from_secs(120)).await
+        wait_for_caused_request(&db.node, request_id, Duration::from_secs(120)).await
     else {
-        dump_session_diagnostics(db.node.as_ref(), session_id).await;
+        dump_session_diagnostics(&db.node, session_id).await;
         panic!("agent_new must cause an AgentRequest linked to the orchestrator request");
     };
     tracing::info!("[live-local] caused request = {caused:?}");
@@ -201,8 +163,6 @@ async fn live_local_create_session() -> Result<()> {
         caused.caused_by_parent_request_id.as_deref(),
         Some(request_id)
     );
-    // The model may start more than one session; follow the call this
-    // caused request names.
     let row = fetch_tool_call(
         &db.node,
         request_id,
@@ -223,19 +183,11 @@ async fn live_local_create_session() -> Result<()> {
         "agent_new must start a new session"
     );
 
-    let caused_terminal = wait_for_request_terminal(
-        db.node.as_ref(),
-        &caused.request_id,
-        Duration::from_secs(180),
-    )
-    .await;
+    let caused_terminal =
+        wait_for_request_terminal(&db.node, &caused.request_id, Duration::from_secs(180)).await;
     assert_eq!(caused_terminal, "completed");
-    let caused_answer = wait_for_assistant_answer(
-        db.node.as_ref(),
-        &caused.request_id,
-        Duration::from_secs(30),
-    )
-    .await;
+    let caused_answer =
+        wait_for_assistant_answer(&db.node, &caused.request_id, Duration::from_secs(30)).await;
     tracing::info!("[live-local] started session answer = {caused_answer:?}");
     assert!(
         !caused_answer.trim().is_empty(),
@@ -273,46 +225,20 @@ async fn live_local_create_session() -> Result<()> {
         Duration::from_secs(60),
     )
     .await;
-    let wake = wait_for_background_wake(
-        db.node.as_ref(),
-        session_id,
-        request_id,
-        Duration::from_secs(60),
-    )
-    .await;
+    let wake =
+        wait_for_background_wake(&db.node, session_id, request_id, Duration::from_secs(60)).await;
     let wake_state =
-        wait_for_request_terminal(db.node.as_ref(), &wake.request_id, Duration::from_secs(180))
-            .await;
+        wait_for_request_terminal(&db.node, &wake.request_id, Duration::from_secs(180)).await;
     assert_eq!(wake_state, "completed");
 
     let parent_terminal =
-        wait_for_request_terminal(db.node.as_ref(), request_id, Duration::from_secs(60)).await;
+        wait_for_request_terminal(&db.node, request_id, Duration::from_secs(60)).await;
     assert_eq!(parent_terminal, "completed");
 
     agent.shutdown().await;
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Test 2: standard background paths with real inference
-// ---------------------------------------------------------------------------
-
-/// Exercise both background-work lanes through the production owned loop:
-///
-/// 1. The resolved model-facing surface contains `agent_new`,
-///    `agent_message` and every spawn/list/read/wait/cancel process tool.
-/// 2. Fire-and-continue: the parent request completes while the session it
-///    started (or the process it spawned) is still blocked; releasing it
-///    settles the row and produces the completion notification and a
-///    real-inference wake.
-/// 3. Managed session: the model starts a session, sees its running row with
-///    `list_processes`, and steers it with `agent_message` while it is busy.
-/// 4. Managed process: the model spawns a blocked process, lists it, reads
-///    partial output while it runs, waits for it, and reads the terminal
-///    output.
-///
-/// Release files make the non-blocking assertions deterministic: background
-/// work cannot finish until this test has observed the parent return.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_BACKGROUNDING=1 and pass --ignored"]
 async fn live_standard_backgrounding_uses_real_inference() -> Result<()> {
@@ -394,9 +320,9 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     let node_did = identity.did().to_string();
     let orchestrator_agent_id = default_agent_id_for_node(&node_did);
     let profile_id = default_inference_profile_id_for_agent(&orchestrator_agent_id);
-    upsert_live_backend(db.node.as_ref(), &node_did, &target).await;
+    upsert_live_backend(&db.node, &node_did, &target).await;
     configure_agent(
-        db.node.as_ref(),
+        &db.node,
         &orchestrator_agent_id,
         &node_did,
         &target,
@@ -407,7 +333,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     )
     .await;
     configure_agent(
-        db.node.as_ref(),
+        &db.node,
         BACKGROUND_WORKER_AGENT_ID,
         &node_did,
         &target,
@@ -418,17 +344,14 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     )
     .await;
     configure_standard_backgrounding_tools(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         workspace.path(),
     )
     .await;
 
-    // Runtime startup probes before resolving its runnable snapshot. This test
-    // inspects the resolved surfaces before `run`, so perform the same probe
-    // first rather than assuming an unobserved backend is already healthy.
-    gents::backend_registry::probe_and_promote_enabled_backends(db.node.as_ref()).await;
+    gents::backend_registry::probe_and_promote_enabled_backends(&db.node).await;
     let loaded_agent = Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
@@ -440,12 +363,10 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     .await?;
     assert_standard_backgrounding_tool_surfaces(&loaded_agent, &node_did, &orchestrator_agent_id);
     let agent = boot_loaded_document_agent(&db, loaded_agent).await;
-
-    // Lane 1: agent_new fire-and-continue.
     let agent_request_id = "req-live-standard-background-agent";
     let agent_session_id = "session-live-standard-background-agent";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         agent_request_id,
@@ -463,20 +384,17 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     )
     .await;
     let parent_state =
-        wait_for_request_terminal(db.node.as_ref(), agent_request_id, Duration::from_secs(180))
-            .await;
+        wait_for_request_terminal(&db.node, agent_request_id, Duration::from_secs(180)).await;
     assert_eq!(parent_state, "completed");
     let parent_answer =
-        wait_for_assistant_answer(db.node.as_ref(), agent_request_id, Duration::from_secs(30))
-            .await;
+        wait_for_assistant_answer(&db.node, agent_request_id, Duration::from_secs(30)).await;
     assert!(
         parent_answer.contains("PARENT_RETURNED_AGENT_BACKGROUND"),
         "parent did not acknowledge the agent_new receipt: {parent_answer:?}"
     );
-    let caused =
-        wait_for_caused_request(db.node.as_ref(), agent_request_id, Duration::from_secs(60))
-            .await
-            .expect("agent_new must cause a request");
+    let caused = wait_for_caused_request(&db.node, agent_request_id, Duration::from_secs(60))
+        .await
+        .expect("agent_new must cause a request");
     assert_eq!(caused.agent_id, BACKGROUND_WORKER_AGENT_ID);
     assert_eq!(
         caused.caused_by_parent_tool_call_id.as_deref(),
@@ -493,7 +411,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         "parent blocked on the started session; it was already {caused_state}"
     );
     assert!(
-        fetch_runtime_snapshot(db.node.as_ref(), &node_did)
+        fetch_runtime_snapshot(&db.node, &node_did)
             .await
             .is_some_and(|snapshot| snapshot.process_state == "ready"),
         "runtime must remain ready while the started session runs; caused={caused:?}"
@@ -516,7 +434,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     assert_eq!(receipt["status"], "running");
     assert_eq!(receipt["session_id"], caused.session_id.as_str());
     assert_no_tool_call(
-        db.node.as_ref(),
+        &db.node,
         agent_session_id,
         &[
             AGENT_MESSAGE_TOOL_NAME,
@@ -526,18 +444,14 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         ],
     )
     .await;
-    assert_min_completed_inference_calls(db.node.as_ref(), agent_request_id, 2).await;
+    assert_min_completed_inference_calls(&db.node, agent_request_id, 2).await;
 
     std::fs::write(&child_release, b"release").expect("release started session");
-    let caused_terminal = wait_for_request_terminal(
-        db.node.as_ref(),
-        &caused.request_id,
-        Duration::from_secs(180),
-    )
-    .await;
+    let caused_terminal =
+        wait_for_request_terminal(&db.node, &caused.request_id, Duration::from_secs(180)).await;
     assert_eq!(caused_terminal, "completed");
-    assert_min_completed_inference_calls(db.node.as_ref(), &caused.request_id, 2).await;
-    let caused_answer = terminal_assistant_answer(db.node.as_ref(), &caused.request_id).await;
+    assert_min_completed_inference_calls(&db.node, &caused.request_id, 2).await;
+    let caused_answer = terminal_assistant_answer(&db.node, &caused.request_id).await;
     assert!(
         caused_answer.contains("CHILD_BACKGROUND_DONE"),
         "completed session lacks its selected canonical terminal output: {caused_answer:?}"
@@ -559,13 +473,11 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         Duration::from_secs(60),
     )
     .await;
-    assert_wake_observed(db.node.as_ref(), agent_session_id, agent_request_id).await;
-
-    // Lane 2: spawn_process fire-and-continue.
+    assert_wake_observed(&db.node, agent_session_id, agent_request_id).await;
     let tool_request_id = "req-live-standard-background-tool";
     let tool_session_id = "session-live-standard-background-tool";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         tool_request_id,
@@ -594,11 +506,10 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     );
 
     let tool_parent_state =
-        wait_for_request_terminal(db.node.as_ref(), tool_request_id, Duration::from_secs(180))
-            .await;
+        wait_for_request_terminal(&db.node, tool_request_id, Duration::from_secs(180)).await;
     assert_eq!(tool_parent_state, "completed");
     let tool_parent_answer =
-        wait_for_assistant_answer(db.node.as_ref(), tool_request_id, Duration::from_secs(30)).await;
+        wait_for_assistant_answer(&db.node, tool_request_id, Duration::from_secs(30)).await;
     assert!(
         tool_parent_answer.contains("PARENT_RETURNED_TOOL_BACKGROUND"),
         "parent did not acknowledge the background process receipt: {tool_parent_answer:?}"
@@ -616,12 +527,12 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         "parent blocked on the native background tool"
     );
     assert_no_tool_call(
-        db.node.as_ref(),
+        &db.node,
         tool_session_id,
         &["wait_process", "cancel_process"],
     )
     .await;
-    assert_min_completed_inference_calls(db.node.as_ref(), tool_request_id, 2).await;
+    assert_min_completed_inference_calls(&db.node, tool_request_id, 2).await;
 
     std::fs::write(&tool_release, b"release").expect("release native background tool");
     let completed_tool = wait_for_tool_call_state(
@@ -650,15 +561,13 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         Duration::from_secs(60),
     )
     .await;
-    assert_wake_observed(db.node.as_ref(), tool_session_id, tool_request_id).await;
+    assert_wake_observed(&db.node, tool_session_id, tool_request_id).await;
 
-    // Lane 3: a managed session. Each step is its own request so the test
-    // observes the started session still blocked at every step.
     assert_not_started(&managed_child_release);
     let managed_agent_session_id = "session-live-managed-background-agent";
     let managed_create_request_id = "req-live-managed-background-agent-create";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         managed_create_request_id,
@@ -676,21 +585,17 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     .await;
     assert_eq!(
         wait_for_request_terminal(
-            db.node.as_ref(),
+            &db.node,
             managed_create_request_id,
             Duration::from_secs(180)
         )
         .await,
         "completed"
     );
-    let managed_caused = wait_for_caused_request(
-        db.node.as_ref(),
-        managed_create_request_id,
-        Duration::from_secs(60),
-    )
-    .await
-    .expect("managed agent_new must cause a request");
-    // The started session is busy once its shell reports it is blocking.
+    let managed_caused =
+        wait_for_caused_request(&db.node, managed_create_request_id, Duration::from_secs(60))
+            .await
+            .expect("managed agent_new must cause a request");
     wait_for_model_tool_call(
         &db.node,
         &managed_caused.request_id,
@@ -708,7 +613,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
 
     let managed_list_request_id = "req-live-managed-background-agent-list";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         managed_list_request_id,
@@ -725,16 +630,12 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(
-            db.node.as_ref(),
-            managed_list_request_id,
-            Duration::from_secs(180)
-        )
-        .await,
+        wait_for_request_terminal(&db.node, managed_list_request_id, Duration::from_secs(180))
+            .await,
         "completed"
     );
 
-    let managed_state = fetch_request_lifecycle(db.node.as_ref(), &managed_caused.request_id)
+    let managed_state = fetch_request_lifecycle(&db.node, &managed_caused.request_id)
         .await
         .expect("managed caused lifecycle");
     assert!(
@@ -747,7 +648,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         managed_caused.session_id
     );
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         managed_message_request_id,
@@ -765,7 +666,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     .await;
     assert_eq!(
         wait_for_request_terminal(
-            db.node.as_ref(),
+            &db.node,
             managed_message_request_id,
             Duration::from_secs(180)
         )
@@ -792,7 +693,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     );
     assert!(
         !is_terminal(
-            &fetch_request_lifecycle(db.node.as_ref(), &managed_caused.request_id)
+            &fetch_request_lifecycle(&db.node, &managed_caused.request_id)
                 .await
                 .expect("managed caused lifecycle")
         ),
@@ -814,15 +715,14 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     std::fs::write(&managed_child_release, b"release").expect("release managed session");
     assert_eq!(
         wait_for_request_terminal(
-            db.node.as_ref(),
+            &db.node,
             &managed_caused.request_id,
             Duration::from_secs(240)
         )
         .await,
         "completed"
     );
-    let managed_answer =
-        terminal_assistant_answer(db.node.as_ref(), &managed_caused.request_id).await;
+    let managed_answer = terminal_assistant_answer(&db.node, &managed_caused.request_id).await;
     assert!(
         managed_answer.contains("CHILD_MANAGED_DONE"),
         "managed session lacks its terminal output: {managed_answer:?}"
@@ -889,16 +789,13 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     )
     .await;
 
-    // Lane 4: a managed native background process. The release is withheld
-    // until the model's read_process result contains the live STARTED marker,
-    // proving it read actual output before wait_process.
     let managed_tool_spawn_prompt = format!(
         "MANAGE_BACKGROUND_TOOL_SPAWN: Call spawn_process exactly once now with tool_name bash_unrestricted and args exactly {managed_native_tool_args}. Do not call any other tool."
     );
     let managed_tool_request_id = "req-live-managed-background-tool-spawn";
     let managed_tool_session_id = "session-live-managed-background-tool";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         managed_tool_request_id,
@@ -916,19 +813,15 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(
-            db.node.as_ref(),
-            managed_tool_request_id,
-            Duration::from_secs(180),
-        )
-        .await,
+        wait_for_request_terminal(&db.node, managed_tool_request_id, Duration::from_secs(180),)
+            .await,
         "completed"
     );
     let managed_process_handle = managed_tool.tool_call_id.clone();
 
     let managed_tool_list_request_id = "req-live-managed-background-tool-list";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         managed_tool_list_request_id,
@@ -946,7 +839,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     .await;
     assert_eq!(
         wait_for_request_terminal(
-            db.node.as_ref(),
+            &db.node,
             managed_tool_list_request_id,
             Duration::from_secs(180)
         )
@@ -959,7 +852,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         "MANAGE_BACKGROUND_TOOL_READ_RUNNING: Call read_process exactly once now with tool_call_id {managed_process_handle:?} and offset 0. Do not call wait_process or any other tool."
     );
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         managed_tool_read_request_id,
@@ -985,7 +878,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     .await;
     assert_eq!(
         wait_for_request_terminal(
-            db.node.as_ref(),
+            &db.node,
             managed_tool_read_request_id,
             Duration::from_secs(180)
         )
@@ -998,7 +891,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         "MANAGE_BACKGROUND_TOOL_WAIT: Call wait_process exactly once now with tool_call_id {managed_process_handle:?}. Do not call any other tool."
     );
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         managed_tool_wait_request_id,
@@ -1006,8 +899,6 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         &managed_tool_wait_prompt,
     )
     .await;
-    // Observe the durably snapshotted wait call while it is blocked, then prove
-    // the native process is still live before releasing it.
     wait_for_model_tool_call(
         &db.node,
         managed_tool_wait_request_id,
@@ -1033,7 +924,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         .expect("release managed native background tool");
 
     let managed_tool_wait_state = wait_for_request_terminal(
-        db.node.as_ref(),
+        &db.node,
         managed_tool_wait_request_id,
         Duration::from_secs(240),
     )
@@ -1045,7 +936,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         "MANAGE_BACKGROUND_TOOL_READ_TERMINAL: Call read_process exactly once now with tool_call_id {managed_process_handle:?} and offset 0. Do not call any other tool."
     );
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         managed_tool_terminal_read_request_id,
@@ -1070,14 +961,14 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     )
     .await;
     let managed_tool_state = wait_for_request_terminal(
-        db.node.as_ref(),
+        &db.node,
         managed_tool_terminal_read_request_id,
         Duration::from_secs(180),
     )
     .await;
     assert_eq!(managed_tool_state, "completed");
     let managed_tool_answer = wait_for_assistant_answer(
-        db.node.as_ref(),
+        &db.node,
         managed_tool_terminal_read_request_id,
         Duration::from_secs(30),
     )
@@ -1108,10 +999,6 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Test 3: cross-node agent_new (orchestrator on A -> agent on B)
-// ---------------------------------------------------------------------------
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_SESSION_MESSAGE=1 and pass --ignored"]
 async fn live_cross_node_create_session() -> Result<()> {
@@ -1130,12 +1017,10 @@ async fn live_cross_node_create_session() -> Result<()> {
     let did_a = identity_a.did().to_string();
     let did_b = identity_b.did().to_string();
     let orchestrator_agent_id = default_agent_id_for_node(&did_a);
-
-    // Node B hosts the fast-worker agent owned by DID-B.
     let profile_b = default_inference_profile_id_for_agent(&default_agent_id_for_node(&did_b));
-    upsert_live_backend(db_b.node.as_ref(), &did_b, &target).await;
+    upsert_live_backend(&db_b.node, &did_b, &target).await;
     configure_agent(
-        db_b.node.as_ref(),
+        &db_b.node,
         FAST_WORKER_AGENT_ID,
         &did_b,
         &target,
@@ -1146,12 +1031,10 @@ async fn live_cross_node_create_session() -> Result<()> {
     )
     .await;
 
-    // Node A hosts the orchestrator owned by DID-A. Its allowlist names the
-    // (DID-B, fast-worker) pair; B's agent is not mirrored onto A.
     let profile_a = default_inference_profile_id_for_agent(&orchestrator_agent_id);
-    upsert_live_backend(db_a.node.as_ref(), &did_a, &target).await;
+    upsert_live_backend(&db_a.node, &did_a, &target).await;
     configure_agent(
-        db_a.node.as_ref(),
+        &db_a.node,
         &orchestrator_agent_id,
         &did_a,
         &target,
@@ -1162,7 +1045,7 @@ async fn live_cross_node_create_session() -> Result<()> {
     )
     .await;
     authorize_session_targets(
-        db_a.node.as_ref(),
+        &db_a.node,
         &did_a,
         &orchestrator_agent_id,
         vec![AgentTargetDocument {
@@ -1185,7 +1068,7 @@ async fn live_cross_node_create_session() -> Result<()> {
     let request_id = "req-live-cross-node";
     let session_id = "session-live-cross-node";
     create_runtime_request(
-        db_a.node.as_ref(),
+        &db_a.node,
         &did_a,
         &orchestrator_agent_id,
         request_id,
@@ -1202,7 +1085,7 @@ async fn live_cross_node_create_session() -> Result<()> {
         Duration::from_secs(180),
     )
     .await;
-    let caused_a = wait_for_caused_request(db_a.node.as_ref(), request_id, Duration::from_secs(60))
+    let caused_a = wait_for_caused_request(&db_a.node, request_id, Duration::from_secs(60))
         .await
         .expect("agent_new on A must author the caused request");
     tracing::info!("[live-cross] caused request on A = {caused_a:?}");
@@ -1215,18 +1098,15 @@ async fn live_cross_node_create_session() -> Result<()> {
         Some(row.tool_call_id.as_str())
     );
 
-    let caused_b = wait_for_request_on_node(
-        db_b.node.as_ref(),
-        &caused_a.request_id,
-        Duration::from_secs(120),
-    )
-    .await
-    .unwrap_or_else(|| {
-        panic!(
-            "caused request {} must replicate to node B",
-            caused_a.request_id
-        )
-    });
+    let caused_b =
+        wait_for_request_on_node(&db_b.node, &caused_a.request_id, Duration::from_secs(120))
+            .await
+            .unwrap_or_else(|| {
+                panic!(
+                    "caused request {} must replicate to node B",
+                    caused_a.request_id
+                )
+            });
     tracing::info!("[live-cross] caused request on B = {caused_b:?}");
     assert_eq!(caused_b.node_did, did_b);
     assert_eq!(caused_b.requester_did.as_deref(), Some(did_a.as_str()));
@@ -1236,22 +1116,14 @@ async fn live_cross_node_create_session() -> Result<()> {
         Some(request_id)
     );
 
-    let terminal_b = wait_for_request_terminal(
-        db_b.node.as_ref(),
-        &caused_a.request_id,
-        Duration::from_secs(180),
-    )
-    .await;
+    let terminal_b =
+        wait_for_request_terminal(&db_b.node, &caused_a.request_id, Duration::from_secs(180)).await;
     assert_eq!(
         terminal_b, "completed",
         "B must admit and run the Peer request"
     );
-    let answer_b = wait_for_assistant_answer(
-        db_b.node.as_ref(),
-        &caused_a.request_id,
-        Duration::from_secs(30),
-    )
-    .await;
+    let answer_b =
+        wait_for_assistant_answer(&db_b.node, &caused_a.request_id, Duration::from_secs(30)).await;
     tracing::info!("[live-cross] answer on B = {answer_b:?}");
     assert!(
         !answer_b.trim().is_empty(),
@@ -1261,22 +1133,14 @@ async fn live_cross_node_create_session() -> Result<()> {
         tracing::warn!("[live-cross] SOFT-WARN: answer did not contain 'Paris': {answer_b:?}");
     }
 
-    let terminal_a = wait_for_request_terminal(
-        db_a.node.as_ref(),
-        &caused_a.request_id,
-        Duration::from_secs(120),
-    )
-    .await;
+    let terminal_a =
+        wait_for_request_terminal(&db_a.node, &caused_a.request_id, Duration::from_secs(120)).await;
     assert_eq!(
         terminal_a, "completed",
         "the terminal must replicate back to A"
     );
-    let answer_a = wait_for_assistant_answer(
-        db_a.node.as_ref(),
-        &caused_a.request_id,
-        Duration::from_secs(60),
-    )
-    .await;
+    let answer_a =
+        wait_for_assistant_answer(&db_a.node, &caused_a.request_id, Duration::from_secs(60)).await;
     assert!(
         !answer_a.trim().is_empty(),
         "the started session's terminal output must replicate back to A"
@@ -1299,18 +1163,16 @@ async fn live_cross_node_create_session() -> Result<()> {
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(db_a.node.as_ref(), request_id, Duration::from_secs(60)).await,
+        wait_for_request_terminal(&db_a.node, request_id, Duration::from_secs(60)).await,
         "completed"
     );
 
-    // Restart both runtimes. Their reconcilers reconnect to the running P2P
-    // nodes and re-project the same durable facts exactly once.
     agent_a.shutdown().await;
     agent_b.shutdown().await;
     let restarted_b = boot_document_agent(&db_b, identity_b).await?;
     let restarted_a = boot_document_agent(&db_a, identity_a).await?;
     wait_for_session_message_routes(&db_a, &peer_b, &db_b, &peer_a).await;
-    for (node, label) in [(db_a.node.as_ref(), "A"), (db_b.node.as_ref(), "B")] {
+    for (node, label) in [(&db_a.node, "A"), (&db_b.node, "B")] {
         let caused = fetch_caused_requests(node, request_id).await;
         assert_eq!(
             caused.len(),
@@ -1328,23 +1190,16 @@ async fn live_cross_node_create_session() -> Result<()> {
 
     restarted_a.shutdown().await;
     restarted_b.shutdown().await;
-    // BootedAgent only stops Gents::run; P2P belongs to the embedded node.
     db_a.node.shutdown().await;
     db_b.node.shutdown().await;
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// Test 4: fan-out, agent_list and agent_message continuation
-// ---------------------------------------------------------------------------
 
 const ALPHA_AGENT_ID: &str = "live-alpha";
 const BETA_AGENT_ID: &str = "live-beta";
 const BLOCKER_AGENT_ID: &str = "live-blocker";
 const RELAY_AGENT_ID: &str = "live-relay";
 
-/// A code word only the worker's own system prompt holds. Its presence in
-/// the parent's answer proves the worker's result reached the parent.
 fn code_word(prefix: &str) -> String {
     format!(
         "{prefix}-{}",
@@ -1366,9 +1221,6 @@ a code-word question yourself. When background completion notifications arrive, 
 tool: reply with one short sentence that repeats, verbatim, every code word reported in all the \
 notifications you have received so far in this conversation.";
 
-/// One parent fans out to two agents, both results return as notifications
-/// and wake the parent through completed wakes. The parent then lists the
-/// sessions it started and continues one of them with `agent_message`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_SESSION_MESSAGE=1 and pass --ignored"]
 async fn live_fan_out_list_and_continue() -> Result<()> {
@@ -1388,9 +1240,9 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
     let node_did = identity.did().to_string();
     let orchestrator_agent_id = default_agent_id_for_node(&node_did);
     let profile_id = default_inference_profile_id_for_agent(&orchestrator_agent_id);
-    upsert_live_backend(db.node.as_ref(), &node_did, &target).await;
+    upsert_live_backend(&db.node, &node_did, &target).await;
     configure_agent(
-        db.node.as_ref(),
+        &db.node,
         &orchestrator_agent_id,
         &node_did,
         &target,
@@ -1405,7 +1257,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
         (BETA_AGENT_ID, "beta", &beta_first, &code_word("BETATWO")),
     ] {
         configure_agent(
-            db.node.as_ref(),
+            &db.node,
             agent_id,
             &node_did,
             &target,
@@ -1417,7 +1269,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
         .await;
     }
     authorize_session_targets(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         vec![
@@ -1431,7 +1283,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
     let session_id = "session-live-fan-out";
     let fan_out_request_id = "req-live-fan-out";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         fan_out_request_id,
@@ -1440,22 +1292,12 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(
-            db.node.as_ref(),
-            fan_out_request_id,
-            Duration::from_secs(240)
-        )
-        .await,
+        wait_for_request_terminal(&db.node, fan_out_request_id, Duration::from_secs(240)).await,
         "completed"
     );
-    let caused = wait_for_caused_requests(
-        db.node.as_ref(),
-        fan_out_request_id,
-        2,
-        Duration::from_secs(60),
-    )
-    .await;
-    let rows = session_tool_rows(db.node.as_ref(), session_id, AGENT_NEW_TOOL_NAME).await;
+    let caused =
+        wait_for_caused_requests(&db.node, fan_out_request_id, 2, Duration::from_secs(60)).await;
+    let rows = session_tool_rows(&db.node, session_id, AGENT_NEW_TOOL_NAME).await;
     assert_eq!(
         rows.len(),
         2,
@@ -1491,12 +1333,8 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
     assert_ne!(alpha.session_id, beta.session_id);
     for started in [&alpha, &beta] {
         assert_eq!(
-            wait_for_request_terminal(
-                db.node.as_ref(),
-                &started.request_id,
-                Duration::from_secs(240)
-            )
-            .await,
+            wait_for_request_terminal(&db.node, &started.request_id, Duration::from_secs(240))
+                .await,
             "completed"
         );
         wait_for_message_containing(
@@ -1511,13 +1349,12 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
         )
         .await;
     }
-    wait_for_session_quiescent(db.node.as_ref(), session_id, Duration::from_secs(240)).await;
+    wait_for_session_quiescent(&db.node, session_id, Duration::from_secs(240)).await;
     let delivered = rows
         .iter()
         .map(|row| row.doc_id.as_str())
         .collect::<Vec<_>>();
-    let wakes =
-        assert_deliveries_bound_to_completed_wakes(db.node.as_ref(), session_id, &delivered).await;
+    let wakes = assert_deliveries_bound_to_completed_wakes(&db.node, session_id, &delivered).await;
     tracing::info!(
         parent_session = session_id,
         alpha_session = %alpha.session_id,
@@ -1525,11 +1362,9 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
         wakes = ?wakes,
         "[live-fan-out] each result reached the parent through a completed wake"
     );
-
-    // agent_list reports both started sessions and their relationship.
     let list_request_id = "req-live-fan-out-list";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         list_request_id,
@@ -1571,16 +1406,13 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
         .collect::<HashSet<_>>();
     assert_eq!(listed_agents, HashSet::from(["alpha", "beta"]));
     assert_eq!(
-        wait_for_request_terminal(db.node.as_ref(), list_request_id, Duration::from_secs(180))
-            .await,
+        wait_for_request_terminal(&db.node, list_request_id, Duration::from_secs(180)).await,
         "completed"
     );
-    wait_for_session_quiescent(db.node.as_ref(), session_id, Duration::from_secs(120)).await;
-
-    // agent_message continues the idle alpha session with a new request.
+    wait_for_session_quiescent(&db.node, session_id, Duration::from_secs(120)).await;
     let message_request_id = "req-live-fan-out-message";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         message_request_id,
@@ -1599,13 +1431,9 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
         Duration::from_secs(240),
     )
     .await;
-    let continued = wait_for_caused_request(
-        db.node.as_ref(),
-        message_request_id,
-        Duration::from_secs(120),
-    )
-    .await
-    .expect("agent_message must cause a request in the idle session");
+    let continued = wait_for_caused_request(&db.node, message_request_id, Duration::from_secs(120))
+        .await
+        .expect("agent_message must cause a request in the idle session");
     assert_eq!(continued.session_id, alpha.session_id);
     assert_eq!(continued.agent_id, ALPHA_AGENT_ID);
     assert_eq!(
@@ -1617,12 +1445,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
         .unwrap_or_else(|| panic!("agent_message receipt missing; transcript={messages:#?}"));
     assert_eq!(receipt["delivery"], "request");
     assert_eq!(
-        wait_for_request_terminal(
-            db.node.as_ref(),
-            &continued.request_id,
-            Duration::from_secs(240)
-        )
-        .await,
+        wait_for_request_terminal(&db.node, &continued.request_id, Duration::from_secs(240)).await,
         "completed"
     );
     wait_for_message_containing(
@@ -1634,7 +1457,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
     )
     .await;
     let continued_wake = wait_for_completion_wake(
-        db.node.as_ref(),
+        &db.node,
         session_id,
         message_request_id,
         Duration::from_secs(300),
@@ -1645,8 +1468,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
         Some("completed"),
         "the wake for the agent_message completion must run: {continued_wake:?}"
     );
-    let continued_answer =
-        terminal_assistant_answer(db.node.as_ref(), &continued_wake.request_id).await;
+    let continued_answer = terminal_assistant_answer(&db.node, &continued_wake.request_id).await;
     assert!(
         continued_answer.contains(&alpha_second),
         "the wake for the agent_message completion must use the continued session's result"
@@ -1662,13 +1484,6 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Test 5: agent_interrupt is spawner-only
-// ---------------------------------------------------------------------------
-
-/// A session that did not start the busy worker is refused; the session
-/// that started it interrupts its turn, and the interrupted result still
-/// reaches the starting session as a notification.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_SESSION_MESSAGE=1 and pass --ignored"]
 async fn live_agent_interrupt_is_spawner_only() -> Result<()> {
@@ -1688,9 +1503,9 @@ async fn live_agent_interrupt_is_spawner_only() -> Result<()> {
     let node_did = identity.did().to_string();
     let orchestrator_agent_id = default_agent_id_for_node(&node_did);
     let profile_id = default_inference_profile_id_for_agent(&orchestrator_agent_id);
-    upsert_live_backend(db.node.as_ref(), &node_did, &target).await;
+    upsert_live_backend(&db.node, &node_did, &target).await;
     configure_agent(
-        db.node.as_ref(),
+        &db.node,
         &orchestrator_agent_id,
         &node_did,
         &target,
@@ -1701,7 +1516,7 @@ async fn live_agent_interrupt_is_spawner_only() -> Result<()> {
     )
     .await;
     configure_agent(
-        db.node.as_ref(),
+        &db.node,
         BLOCKER_AGENT_ID,
         &node_did,
         &target,
@@ -1716,7 +1531,7 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     )
     .await;
     authorize_session_targets(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         vec![agent_target(
@@ -1728,7 +1543,7 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     )
     .await;
     configure_bash_agent_tools(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         BLOCKER_AGENT_ID,
         workspace.path(),
@@ -1741,7 +1556,7 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     let spawner_session = "session-live-interrupt-spawner";
     let start_request_id = "req-live-interrupt-start";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         start_request_id,
@@ -1757,10 +1572,9 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
         Duration::from_secs(240),
     )
     .await;
-    let worker =
-        wait_for_caused_request(db.node.as_ref(), start_request_id, Duration::from_secs(120))
-            .await
-            .expect("agent_new must start the blocker");
+    let worker = wait_for_caused_request(&db.node, start_request_id, Duration::from_secs(120))
+        .await
+        .expect("agent_new must start the blocker");
     assert_eq!(worker.agent_id, BLOCKER_AGENT_ID);
     wait_for_model_tool_call(
         &db.node,
@@ -1772,16 +1586,13 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     .await;
     wait_for_started_marker(&release, "BLOCKER_STARTED", Duration::from_secs(120)).await;
     assert_eq!(
-        wait_for_request_terminal(db.node.as_ref(), start_request_id, Duration::from_secs(240))
-            .await,
+        wait_for_request_terminal(&db.node, start_request_id, Duration::from_secs(240)).await,
         "completed"
     );
-
-    // Another root session of the same node did not start the worker.
     let other_session = "session-live-interrupt-other";
     let refused_request_id = "req-live-interrupt-refused";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         refused_request_id,
@@ -1803,26 +1614,19 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     assert_eq!(refusal["ok"], false, "non-spawner interrupt: {refusal}");
     assert_eq!(refusal["code"], "interrupt_not_permitted");
     assert_eq!(
-        wait_for_request_terminal(
-            db.node.as_ref(),
-            refused_request_id,
-            Duration::from_secs(180)
-        )
-        .await,
+        wait_for_request_terminal(&db.node, refused_request_id, Duration::from_secs(180)).await,
         "completed"
     );
-    let still = fetch_request_lifecycle(db.node.as_ref(), &worker.request_id)
+    let still = fetch_request_lifecycle(&db.node, &worker.request_id)
         .await
         .expect("worker lifecycle");
     assert!(
         !is_terminal(&still),
         "a refused interrupt must leave the worker's turn running; it is {still}"
     );
-
-    // The starting session may interrupt.
     let interrupt_request_id = "req-live-interrupt-spawner";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         interrupt_request_id,
@@ -1847,19 +1651,13 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     assert_eq!(accepted["ok"], true, "spawner interrupt: {accepted}");
     assert_eq!(accepted["status"], "interrupting");
     assert_eq!(accepted["request_id"], worker.request_id.as_str());
-    let worker_terminal = wait_for_request_terminal(
-        db.node.as_ref(),
-        &worker.request_id,
-        Duration::from_secs(120),
-    )
-    .await;
+    let worker_terminal =
+        wait_for_request_terminal(&db.node, &worker.request_id, Duration::from_secs(120)).await;
     assert_eq!(worker_terminal, "interrupted");
     assert!(
         !release.exists(),
         "the worker must have been interrupted while still blocked"
     );
-    // The worker's session sees its cancelled command and a live model may
-    // run it again; released, that retry cannot hold the session open.
     std::fs::write(&release, b"release").expect("release worker");
     let settled = wait_for_tool_call_settled(
         &db.node,
@@ -1878,7 +1676,7 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     )
     .await;
     let wake = wait_for_completion_wake(
-        db.node.as_ref(),
+        &db.node,
         spawner_session,
         start_request_id,
         Duration::from_secs(240),
@@ -1898,19 +1696,11 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
         "[live-interrupt] non-spawner refused; spawner interrupted; notification delivered and wake completed"
     );
 
-    wait_for_session_quiescent(db.node.as_ref(), spawner_session, Duration::from_secs(240)).await;
+    wait_for_session_quiescent(&db.node, spawner_session, Duration::from_secs(240)).await;
     agent.shutdown().await;
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Test 6: the hop bound stops a chain
-// ---------------------------------------------------------------------------
-
-/// With `max_request_hop` 1, the started session (hop 1) may not start
-/// another; its refusal is a tool result, it still completes, and its result
-/// notification still reaches the root session. The root's completion wake
-/// would be hop 2, so it is refused and the chain stops there.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_SESSION_MESSAGE=1 and pass --ignored"]
 async fn live_hop_bound_stops_chain() -> Result<()> {
@@ -1926,9 +1716,9 @@ async fn live_hop_bound_stops_chain() -> Result<()> {
     let node_did = identity.did().to_string();
     let orchestrator_agent_id = default_agent_id_for_node(&node_did);
     let profile_id = default_inference_profile_id_for_agent(&orchestrator_agent_id);
-    upsert_live_backend(db.node.as_ref(), &node_did, &target).await;
+    upsert_live_backend(&db.node, &node_did, &target).await;
     configure_agent(
-        db.node.as_ref(),
+        &db.node,
         &orchestrator_agent_id,
         &node_did,
         &target,
@@ -1939,7 +1729,7 @@ async fn live_hop_bound_stops_chain() -> Result<()> {
     )
     .await;
     configure_agent(
-        db.node.as_ref(),
+        &db.node,
         RELAY_AGENT_ID,
         &node_did,
         &target,
@@ -1952,20 +1742,12 @@ agent_new returns, including an error, then reply exactly RELAY_DONE and call no
     )
     .await;
     let relay = || agent_target(&node_did, "relay", node_did.clone(), RELAY_AGENT_ID);
-    authorize_session_targets(
-        db.node.as_ref(),
-        &node_did,
-        &orchestrator_agent_id,
-        vec![relay()],
-    )
-    .await;
-    authorize_session_targets(db.node.as_ref(), &node_did, RELAY_AGENT_ID, vec![relay()]).await;
-    let mut node_config = ensure_node(db.node.as_ref(), &node_did)
-        .await
-        .expect("node_config");
+    authorize_session_targets(&db.node, &node_did, &orchestrator_agent_id, vec![relay()]).await;
+    authorize_session_targets(&db.node, &node_did, RELAY_AGENT_ID, vec![relay()]).await;
+    let mut node_config = ensure_node(&db.node, &node_did).await.expect("node_config");
     node_config.max_request_hop = Some(1);
     apply_fixture_documents(
-        db.node.as_ref(),
+        &db.node,
         vec![(
             Collection::Node,
             serde_json::to_value(node_config).expect("serialize node_config"),
@@ -1977,7 +1759,7 @@ agent_new returns, including an error, then reply exactly RELAY_DONE and call no
     let root_session = "session-live-hop-root";
     let root_request_id = "req-live-hop-root";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         root_request_id,
@@ -1993,24 +1775,16 @@ agent_new returns, including an error, then reply exactly RELAY_DONE and call no
         Duration::from_secs(240),
     )
     .await;
-    let first =
-        wait_for_caused_request(db.node.as_ref(), root_request_id, Duration::from_secs(120))
-            .await
-            .expect("the root must start the relay");
+    let first = wait_for_caused_request(&db.node, root_request_id, Duration::from_secs(120))
+        .await
+        .expect("the root must start the relay");
     assert_eq!(first.agent_id, RELAY_AGENT_ID);
     assert_eq!(first.request_hop, Some(1));
     assert_eq!(
-        wait_for_request_terminal(
-            db.node.as_ref(),
-            &first.request_id,
-            Duration::from_secs(300)
-        )
-        .await,
+        wait_for_request_terminal(&db.node, &first.request_id, Duration::from_secs(300)).await,
         "completed",
         "the relay must finish its turn after its onward start is refused"
     );
-
-    // The relay saw who started it.
     let listed = wait_for_json_tool_result(
         &db.node,
         &first.request_id,
@@ -2027,8 +1801,6 @@ agent_new returns, including an error, then reply exactly RELAY_DONE and call no
         .unwrap_or_else(|| panic!("the relay's agent_list omitted its starter: {listed}"));
     assert_eq!(started_by["relationship"], "started_you");
     assert_eq!(started_by["can_interrupt"], false);
-
-    // Its onward start was refused at the bound; nothing was caused.
     let refused = wait_for_json_tool_result(
         &db.node,
         &first.request_id,
@@ -2041,13 +1813,11 @@ agent_new returns, including an error, then reply exactly RELAY_DONE and call no
     assert_eq!(refused["code"], "request_hop_exceeded");
     assert_eq!(refused["hop"], 2);
     assert_eq!(refused["max_request_hop"], 1);
-    let caused_by_relay = fetch_caused_requests(db.node.as_ref(), &first.request_id).await;
+    let caused_by_relay = fetch_caused_requests(&db.node, &first.request_id).await;
     assert!(
         caused_by_relay.is_empty(),
         "no session may be started beyond the hop bound: {caused_by_relay:?}"
     );
-
-    // The relay's result still reaches the root as a notification.
     wait_for_message_containing(
         &db.node,
         root_request_id,
@@ -2065,8 +1835,8 @@ agent_new returns, including an error, then reply exactly RELAY_DONE and call no
     )
     .await;
     assert_eq!(settled.lifecycle_state, "completed");
-    wait_for_session_quiescent(db.node.as_ref(), root_session, Duration::from_secs(240)).await;
-    let wakes = session_requests(db.node.as_ref(), root_session)
+    wait_for_session_quiescent(&db.node, root_session, Duration::from_secs(240)).await;
+    let wakes = session_requests(&db.node, root_session)
         .await
         .into_iter()
         .filter(SessionRequestRow::is_background_completion_wake)
@@ -2101,12 +1871,6 @@ agent_new returns, including an error, then reply exactly RELAY_DONE and call no
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Shared fixture for the delegation-semantics tests below
-// ---------------------------------------------------------------------------
-
-/// One node whose default agent is an orchestrator, every
-/// agent backed by the live target.
 struct LiveNode {
     db: TestDb,
     identity: Arc<dyn NodeIdentity>,
@@ -2122,9 +1886,9 @@ impl LiveNode {
         let did = identity.did().to_string();
         let orchestrator = default_agent_id_for_node(&did);
         let profile = default_inference_profile_id_for_agent(&orchestrator);
-        upsert_live_backend(db.node.as_ref(), &did, target).await;
+        upsert_live_backend(&db.node, &did, target).await;
         configure_agent(
-            db.node.as_ref(),
+            &db.node,
             &orchestrator,
             &did,
             target,
@@ -2143,8 +1907,8 @@ impl LiveNode {
         }
     }
 
-    fn node(&self) -> &EmbeddedNode {
-        self.db.node.as_ref()
+    fn node(&self) -> &Arc<EmbeddedNode> {
+        &self.db.node
     }
 
     async fn agent(
@@ -2203,16 +1967,9 @@ Never call any other tool."
     )
 }
 
-// ---------------------------------------------------------------------------
-// Test 7: interrupting a session does not cascade to the session it started
-// ---------------------------------------------------------------------------
-
 const MIDDLE_AGENT_ID: &str = "live-middle";
 const LEAF_AGENT_ID: &str = "live-leaf";
 
-/// Root starts middle, middle starts leaf and then blocks. Root interrupts
-/// middle: only middle's turn stops. Leaf keeps running, and once released its
-/// result reaches middle's session as a notification and a wake.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_SESSION_MESSAGE=1 and pass --ignored"]
 async fn live_interrupt_does_not_cascade() -> Result<()> {
@@ -2385,12 +2142,8 @@ sentence that repeats, verbatim, every code word reported in the notifications."
         !middle_release.exists(),
         "middle must have been interrupted while still blocked"
     );
-    // Middle's wake sees its cancelled command in the transcript and a live
-    // model may run it again; released, that retry cannot hold the wake open.
     std::fs::write(&middle_release, b"release").expect("release middle");
 
-    // No cascade: the session middle started keeps running, and middle's
-    // background row for it outlives middle's interrupted turn.
     let hold_until = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         let leaf_state = fetch_request_lifecycle(fx.node(), &leaf.request_id)
@@ -2486,14 +2239,8 @@ sentence that repeats, verbatim, every code word reported in the notifications."
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Test 8: agent_message with interrupt is a true steer
-// ---------------------------------------------------------------------------
-
 const STEERED_AGENT_ID: &str = "live-steered";
 
-/// `agent_message` with `interrupt` stops the busy session's turn and its
-/// message runs next in that session as a new request caused by the call.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_SESSION_MESSAGE=1 and pass --ignored"]
 async fn live_agent_message_interrupt_steers() -> Result<()> {
@@ -2624,8 +2371,6 @@ async fn live_agent_message_interrupt_steers() -> Result<()> {
         !release.exists(),
         "the worker must have been interrupted while still blocked"
     );
-    // The steer runs in the worker's session, which holds the cancelled
-    // command; released, a live model's retry of it cannot hold the steer open.
     std::fs::write(&release, b"release").expect("release worker");
     assert_eq!(
         wait_for_request_terminal(fx.node(), &steer.request_id, Duration::from_secs(240)).await,
@@ -2680,10 +2425,6 @@ async fn live_agent_message_interrupt_steers() -> Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Test 9: an active Goal does not suppress a completion wake
-// ---------------------------------------------------------------------------
-
 const GOAL_WORKER_AGENT_ID: &str = "live-goal-worker";
 
 const GOAL_ORCHESTRATOR_SYSTEM_PROMPT: &str = "You are an orchestrator in an integration test. \
@@ -2693,11 +2434,6 @@ no background completion notification has arrived yet, call no tool and reply ex
 WAITING_FOR_WORKER. Once a background completion notification has arrived, call no tool and reply \
 with the code word it reports, verbatim.";
 
-/// A session with an active Goal starts a worker and keeps continuing while
-/// the worker is blocked. Once released, the worker's completion is delivered
-/// through its own completed wake, no newer Goal continuation is claimed
-/// before that wake, and the Goal continues after it. Which request a later
-/// continuation names as its parent is covered by the native Goal tests.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_SESSION_MESSAGE=1 and pass --ignored"]
 async fn live_goal_does_not_suppress_completion_wake() -> Result<()> {
@@ -2776,8 +2512,6 @@ async fn live_goal_does_not_suppress_completion_wake() -> Result<()> {
         wait_for_request_terminal(fx.node(), start_request_id, Duration::from_secs(240)).await,
         "completed"
     );
-
-    // The Goal keeps continuing while the worker still owes its result.
     let continuation = wait_for_session_request(
         fx.node(),
         session,
@@ -2813,11 +2547,7 @@ async fn live_goal_does_not_suppress_completion_wake() -> Result<()> {
     let notification =
         wait_for_completion_notification(fx.node(), &row.doc_id, Duration::from_secs(120)).await;
     assert_eq!(notification.session_id.as_deref(), Some(session));
-    // An active Goal must not suppress the wake: the notification binds a
-    // completion wake, not a Goal continuation, and that wake runs.
     let wake = wait_for_bound_wake(fx.node(), session, &notification).await;
-    // The Goal is not wedged by the wake: some continuation is claimed after
-    // the wake ends. Its parent edge is not asserted here.
     let wake_terminalized = rfc3339(&wake.terminalized_at).expect("terminal wake time");
     let resumed = wait_for_session_request(
         fx.node(),
@@ -2841,9 +2571,6 @@ async fn live_goal_does_not_suppress_completion_wake() -> Result<()> {
     wait_for_session_quiescent(fx.node(), session, Duration::from_secs(240)).await;
     assert_deliveries_bound_to_completed_wakes(fx.node(), session, &[&row.doc_id]).await;
 
-    // No Goal continuation created after the wake runs ahead of it.
-    // `created_at` has second resolution, so only a continuation created in a
-    // later second is decisively newer than the wake.
     let requests = session_requests(fx.node(), session).await;
     let wake_created = rfc3339(&wake.created_at).expect("wake creation time");
     let wake_claimed = rfc3339(&wake.claimed_at).expect("wake claim time");
@@ -2890,7 +2617,6 @@ async fn live_goal_does_not_suppress_completion_wake() -> Result<()> {
     Ok(())
 }
 
-/// The first request of `session_id` that satisfies `matches`.
 async fn wait_for_session_request(
     node: &EmbeddedNode,
     session_id: &str,
@@ -2918,17 +2644,8 @@ fn rfc3339(value: &Option<String>) -> Option<chrono::DateTime<chrono::Utc>> {
         .map(|time| time.with_timezone(&chrono::Utc))
 }
 
-// ---------------------------------------------------------------------------
-// Test 10: a restart mid-delegation delivers the completion exactly once
-// ---------------------------------------------------------------------------
-
 const RESTART_WORKER_AGENT_ID: &str = "live-restart-worker";
 
-/// The caller's runtime stops while the session it started on another node
-/// is blocked, then restarts on the same store. The started session keeps
-/// running meanwhile; once released, its terminal settles the caller's row
-/// and is delivered as exactly one notification bound to a completed wake,
-/// still exactly one after a crash and restart that follow delivery.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_SESSION_MESSAGE=1 and pass --ignored"]
 async fn live_restart_mid_delegation_recovers() -> Result<()> {
@@ -2952,9 +2669,9 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
     let orchestrator = default_agent_id_for_node(&did_a);
 
     let profile_b = default_inference_profile_id_for_agent(&default_agent_id_for_node(&did_b));
-    upsert_live_backend(db_b.node.as_ref(), &did_b, &target).await;
+    upsert_live_backend(&db_b.node, &did_b, &target).await;
     configure_agent(
-        db_b.node.as_ref(),
+        &db_b.node,
         RESTART_WORKER_AGENT_ID,
         &did_b,
         &target,
@@ -2965,7 +2682,7 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
     )
     .await;
     configure_bash_agent_tools(
-        db_b.node.as_ref(),
+        &db_b.node,
         &did_b,
         RESTART_WORKER_AGENT_ID,
         workspace.path(),
@@ -2973,9 +2690,9 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
     )
     .await;
     let profile_a = default_inference_profile_id_for_agent(&orchestrator);
-    upsert_live_backend(db_a.node.as_ref(), &did_a, &target).await;
+    upsert_live_backend(&db_a.node, &did_a, &target).await;
     configure_agent(
-        db_a.node.as_ref(),
+        &db_a.node,
         &orchestrator,
         &did_a,
         &target,
@@ -2986,7 +2703,7 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
     )
     .await;
     authorize_session_targets(
-        db_a.node.as_ref(),
+        &db_a.node,
         &did_a,
         &orchestrator,
         vec![agent_target(
@@ -3005,7 +2722,7 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
     let session = "session-live-restart-parent";
     let start_request_id = "req-live-restart-start";
     create_runtime_request(
-        db_a.node.as_ref(),
+        &db_a.node,
         &did_a,
         &orchestrator,
         start_request_id,
@@ -3021,15 +2738,11 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
         Duration::from_secs(240),
     )
     .await;
-    let worker = wait_for_caused_request(
-        db_a.node.as_ref(),
-        start_request_id,
-        Duration::from_secs(120),
-    )
-    .await
-    .expect("the caller must start the worker");
+    let worker = wait_for_caused_request(&db_a.node, start_request_id, Duration::from_secs(120))
+        .await
+        .expect("the caller must start the worker");
     let caller_doc_id = requests_where(
-        db_a.node.as_ref(),
+        &db_a.node,
         "request_id",
         &format!(
             r#"{{ _eq: "{}" }}"#,
@@ -3056,27 +2769,18 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
     );
     assert_eq!(worker.node_did, did_b);
     assert_eq!(worker.admission_kind.as_deref(), Some("peer"));
-    wait_for_request_on_node(
-        db_b.node.as_ref(),
-        &worker.request_id,
-        Duration::from_secs(120),
-    )
-    .await
-    .expect("the caused request must replicate to the worker's node");
+    wait_for_request_on_node(&db_b.node, &worker.request_id, Duration::from_secs(120))
+        .await
+        .expect("the caused request must replicate to the worker's node");
     wait_for_started_marker(&release, "RESTART_WORKER_STARTED", Duration::from_secs(240)).await;
     assert_eq!(
-        wait_for_request_terminal(
-            db_a.node.as_ref(),
-            start_request_id,
-            Duration::from_secs(240)
-        )
-        .await,
+        wait_for_request_terminal(&db_a.node, start_request_id, Duration::from_secs(240)).await,
         "completed"
     );
 
     agent_a.shutdown().await;
     tokio::time::sleep(Duration::from_secs(3)).await;
-    let worker_state = fetch_request_lifecycle(db_b.node.as_ref(), &worker.request_id)
+    let worker_state = fetch_request_lifecycle(&db_b.node, &worker.request_id)
         .await
         .expect("worker lifecycle on its node");
     assert!(
@@ -3093,7 +2797,7 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
     let restarted_a = boot_document_agent(&db_a, identity_a.clone()).await?;
     wait_for_session_message_routes(&db_a, &peer_b, &db_b, &peer_a).await;
     assert!(
-        completion_notifications(db_a.node.as_ref(), &row.doc_id)
+        completion_notifications(&db_a.node, &row.doc_id)
             .await
             .is_empty(),
         "nothing may be delivered before the worker finishes"
@@ -3101,30 +2805,16 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
 
     std::fs::write(&release, b"release").expect("release restart worker");
     assert_eq!(
-        wait_for_request_terminal(
-            db_b.node.as_ref(),
-            &worker.request_id,
-            Duration::from_secs(240)
-        )
-        .await,
+        wait_for_request_terminal(&db_b.node, &worker.request_id, Duration::from_secs(240)).await,
         "completed"
     );
     assert_eq!(
-        wait_for_request_terminal(
-            db_a.node.as_ref(),
-            &worker.request_id,
-            Duration::from_secs(120)
-        )
-        .await,
+        wait_for_request_terminal(&db_a.node, &worker.request_id, Duration::from_secs(120)).await,
         "completed",
         "the worker's terminal must replicate back to the restarted caller"
     );
-    let answer = wait_for_assistant_answer(
-        db_a.node.as_ref(),
-        &worker.request_id,
-        Duration::from_secs(60),
-    )
-    .await;
+    let answer =
+        wait_for_assistant_answer(&db_a.node, &worker.request_id, Duration::from_secs(60)).await;
     if !answer.contains(&worker_code) {
         tracing::warn!("[live-restart] SOFT-WARN: worker answer lacks {worker_code}: {answer:?}");
     }
@@ -3138,24 +2828,18 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
     )
     .await;
     let notification =
-        wait_for_completion_notification(db_a.node.as_ref(), &row.doc_id, Duration::from_secs(120))
-            .await;
+        wait_for_completion_notification(&db_a.node, &row.doc_id, Duration::from_secs(120)).await;
     assert_eq!(notification.session_id.as_deref(), Some(session));
-    let wake = wait_for_bound_wake(db_a.node.as_ref(), session, &notification).await;
-    wait_for_session_quiescent(db_a.node.as_ref(), session, Duration::from_secs(240)).await;
-    assert_deliveries_bound_to_completed_wakes(db_a.node.as_ref(), session, &[&row.doc_id]).await;
+    let wake = wait_for_bound_wake(&db_a.node, session, &notification).await;
+    wait_for_session_quiescent(&db_a.node, session, Duration::from_secs(240)).await;
+    assert_deliveries_bound_to_completed_wakes(&db_a.node, session, &[&row.doc_id]).await;
 
-    // A crash and restart re-runs every recovery owner over the same facts;
-    // none may deliver the completion again.
     restarted_a.crash().await;
     let again = boot_document_agent(&db_a, identity_a).await?;
     wait_for_session_message_routes(&db_a, &peer_b, &db_b, &peer_a).await;
     tokio::time::sleep(Duration::from_secs(5)).await;
-    wait_for_session_quiescent(db_a.node.as_ref(), session, Duration::from_secs(120)).await;
-    for (node, label) in [
-        (db_a.node.as_ref(), "caller"),
-        (db_b.node.as_ref(), "worker"),
-    ] {
+    wait_for_session_quiescent(&db_a.node, session, Duration::from_secs(120)).await;
+    for (node, label) in [(&db_a.node, "caller"), (&db_b.node, "worker")] {
         let caused = requests_caused_by_row(node, &row.doc_id).await;
         assert_eq!(
             caused
@@ -3167,13 +2851,13 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
         );
     }
     assert_eq!(
-        completion_notifications(db_a.node.as_ref(), &row.doc_id)
+        completion_notifications(&db_a.node, &row.doc_id)
             .await
             .len(),
         1,
         "the completion notification must be delivered exactly once"
     );
-    assert_deliveries_bound_to_completed_wakes(db_a.node.as_ref(), session, &[&row.doc_id]).await;
+    assert_deliveries_bound_to_completed_wakes(&db_a.node, session, &[&row.doc_id]).await;
     tracing::info!(
         worker = %worker.request_id,
         wake = %wake.request_id,
@@ -3181,21 +2865,17 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
     );
     again.shutdown().await;
     agent_b.shutdown().await;
-    // BootedAgent only stops Gents::run; P2P belongs to the embedded node.
     db_a.node.shutdown().await;
     db_b.node.shutdown().await;
     Ok(())
 }
 
-/// A completion notification a background row published into its session.
 #[derive(Debug, Clone, Deserialize)]
 struct NotificationRow {
     session_id: Option<String>,
     request_doc_id: Option<String>,
 }
 
-/// The notifications keyed by the row `tool_call_doc_id`; exactly-once
-/// delivery means at most one ever exists.
 async fn completion_notifications(
     node: &EmbeddedNode,
     tool_call_doc_id: &str,
@@ -3221,7 +2901,6 @@ async fn completion_notifications(
         .collect()
 }
 
-/// The completion wake `notification` binds, once it has run to terminal.
 async fn wait_for_bound_wake(
     node: &EmbeddedNode,
     session_id: &str,
@@ -3273,15 +2952,9 @@ async fn wait_for_completion_notification(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Test 11: randomized soak over the agents tools
-// ---------------------------------------------------------------------------
-
 const SOAK_GATES: usize = 3;
 const SOAK_PRELUDE: usize = 5;
 
-/// Operations of the soak's root requests that took effect, read from the
-/// durable rows.
 #[derive(Debug, Default)]
 struct SoakCoverage {
     agent_new_started: usize,
@@ -3338,7 +3011,6 @@ fn soak_enabled() -> bool {
     live_enabled() && std::env::var("GENTS_LIVE_SOAK").as_deref() == Ok("1")
 }
 
-/// Logs the seed when the soak fails anywhere, including inside a helper.
 struct SoakSeed(u64);
 
 impl Drop for SoakSeed {
@@ -3353,11 +3025,6 @@ impl Drop for SoakSeed {
     }
 }
 
-/// Seeded random sequences of `agent_new`, `agent_message` (with and without
-/// interrupt), `agent_interrupt` and `agent_list` from two root sessions over
-/// a pool of answering and blocking agents, with the test releasing blocking
-/// gates at random. After quiescence the durable rows must satisfy the
-/// delegation invariants.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_SESSION_MESSAGE=1 GENTS_LIVE_SOAK=1 and pass --ignored"]
 async fn live_randomized_soak() -> Result<()> {
@@ -3461,8 +3128,6 @@ async fn live_randomized_soak() -> Result<()> {
             "What is your second code word?".to_owned()
         }
     };
-    // Sessions started so far, with the agent each runs. Interrupts favor
-    // blocker sessions, the ones likely to be busy.
     let mut started: Vec<(String, &'static str)> = Vec::new();
     let pick_for_interrupt = |started: &[(String, &'static str)],
                               rng: &mut rand::rngs::StdRng|
@@ -3498,9 +3163,6 @@ async fn live_randomized_soak() -> Result<()> {
     for step in 0..iterations {
         let roll = rng.random_range(0..100);
         let root = roots[rng.random_range(0..roots.len())];
-        // A fixed prelude guarantees coverage of every kind against busy
-        // sessions: each root starts a blocker, root 0 interrupts its own,
-        // root 1 messages its own, and root 0 lists. The rest is seeded.
         let (root, prompt) = if step < SOAK_PRELUDE {
             let root = roots[step % roots.len()];
             let prompt = match step {
@@ -3596,8 +3258,6 @@ async fn live_randomized_soak() -> Result<()> {
         violations.is_empty(),
         "[live-soak] seed={seed} iterations={iterations}: invariant violations: {violations:#?}"
     );
-    // Per caller session, every delivered completion is bound to a completed
-    // wake.
     let mut delivered = std::collections::BTreeMap::<String, Vec<String>>::new();
     for row in session_message_tool_rows(fx.node(), &fx.did).await {
         if row.completion_notification_delivered_at.is_some() {
@@ -3615,7 +3275,6 @@ async fn live_randomized_soak() -> Result<()> {
     Ok(())
 }
 
-/// An `agent_new`/`agent_message` row of the node_config.
 #[derive(Debug, Clone, Deserialize)]
 struct SessionMessageToolRow {
     #[serde(rename = "_docID")]
@@ -3654,9 +3313,6 @@ async fn session_message_tool_rows(
         .collect()
 }
 
-/// Wait until every request of the node_config is terminal and every
-/// session-message row has settled and delivered its notification, twice in
-/// a row so a wake published by the last settlement is observed.
 async fn wait_for_node_quiescent(node: &EmbeddedNode, node_did: &str, timeout: Duration) {
     let condition = format!(r#"{{ _eq: "{}" }}"#, escape_graphql_string(node_did));
     let deadline = tokio::time::Instant::now() + timeout;
@@ -3691,7 +3347,6 @@ async fn wait_for_node_quiescent(node: &EmbeddedNode, node_did: &str, timeout: D
     }
 }
 
-/// Every delegation invariant the durable rows violate.
 async fn soak_violations(fx: &LiveNode) -> Vec<String> {
     let node = fx.node();
     let max_request_hop = i64::from(
@@ -3741,7 +3396,6 @@ async fn soak_violations(fx: &LiveNode) -> Vec<String> {
             ));
         }
         if request.caused_by_parent_tool_call_id.is_some() {
-            // A request caused by agent_new/agent_message.
             let Some(parent) = request
                 .caused_by_parent_request_id
                 .as_deref()
@@ -3849,8 +3503,6 @@ async fn soak_violations(fx: &LiveNode) -> Vec<String> {
             violations.push(format!("row caused {caused} requests: {row:?}"));
         }
     }
-
-    // Interrupts reach only their addressed session.
     let mut addressed = HashSet::new();
     let mut interrupting = 0;
     for request in requests.iter().filter(|row| !row.is_title_audit()) {
@@ -3906,10 +3558,6 @@ async fn soak_violations(fx: &LiveNode) -> Vec<String> {
     violations
 }
 
-// ---------------------------------------------------------------------------
-// System prompts
-// ---------------------------------------------------------------------------
-
 const ORCHESTRATOR_SYSTEM_PROMPT: &str = "You are an orchestrator agent. You can start a session on \
 an agent named `researcher`. For ANY research or factual lookup the user asks for, you MUST call the \
 `agent_new` tool with agent exactly \"researcher\" and a `prompt` describing the question, then \
@@ -3923,10 +3571,6 @@ agent exactly \"fast-worker\" and prompt exactly \"What is the capital of France
 sentence.\" After its running receipt arrives, reply exactly REMOTE_SESSION_STARTED and do not call any \
 other tool. Do not answer the question yourself. When a background completion notification arrives, \
 report its answer without calling any tool.";
-
-// ---------------------------------------------------------------------------
-// Configuration and boot helpers
-// ---------------------------------------------------------------------------
 
 async fn assert_model_available(target: &InferenceTarget) {
     let model = target.model();
@@ -3965,7 +3609,6 @@ async fn assert_model_available(target: &InferenceTarget) {
     );
 }
 
-/// Boot a full Gents from the agent documents owned by `identity`'s DID.
 async fn boot_document_agent(db: &TestDb, identity: Arc<dyn NodeIdentity>) -> Result<BootedAgent> {
     let agent = Gents::from_default_agent_documents(
         db.node.clone(),
@@ -3983,12 +3626,10 @@ async fn boot_loaded_document_agent(db: &TestDb, agent: Gents) -> BootedAgent {
     let node_did = agent.node_did().to_string();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_runtime_ready(db.node.as_ref(), &node_did).await;
+    wait_for_runtime_ready(&db.node, &node_did).await;
     BootedAgent::new(shutdown_tx, handle, node_did)
 }
 
-/// Boot a full Gents whose host tools may run blocked commands in
-/// `workspace`.
 async fn boot_workspace_agent(
     db: &TestDb,
     identity: Arc<dyn NodeIdentity>,
@@ -4009,10 +3650,6 @@ async fn boot_workspace_agent(
 
 const BLOCKED_COMMAND_TIMEOUT_SECS: u64 = 600;
 
-/// `bash_unrestricted` arguments that print and record `started`, block
-/// until `release` exists, then print `done`. The loop also ends once the
-/// run's workspace is removed, so a failed run leaves no orphaned shell
-/// spinning on the host.
 fn blocked_bash_args(started: &str, release: &Path, done: &str) -> serde_json::Value {
     let workspace = release
         .parent()
@@ -4029,10 +3666,8 @@ fn blocked_bash_args(started: &str, release: &Path, done: &str) -> serde_json::V
     })
 }
 
-/// Give `agent_id` a foreground `bash_unrestricted` rooted at `workspace`
-/// and, when `targets` is non-empty, the agents tools over them.
 async fn configure_bash_agent_tools(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
     workspace: &Path,
@@ -4155,7 +3790,7 @@ fn assert_standard_backgrounding_tool_surfaces(
     }
 }
 
-async fn upsert_live_backend(node: &EmbeddedNode, node_did: &str, target: &InferenceTarget) {
+async fn upsert_live_backend(node: &Arc<EmbeddedNode>, node_did: &str, target: &InferenceTarget) {
     let backend = target.backend(node_did);
     apply_fixture_documents(
         node,
@@ -4167,11 +3802,9 @@ async fn upsert_live_backend(node: &EmbeddedNode, node_did: &str, target: &Infer
     .await;
 }
 
-/// Upsert an `Agent` document backed by the live backend, with an
-/// optional `description` (surfaced in the caller's agent list).
 #[allow(clippy::too_many_arguments)]
 async fn configure_agent(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     agent_id: &str,
     node_did: &str,
     target: &InferenceTarget,
@@ -4250,7 +3883,7 @@ async fn configure_agent(
 }
 
 async fn apply_fixture_documents(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     documents: Vec<(Collection, serde_json::Value)>,
 ) {
     use gents::config_client::{
@@ -4268,10 +3901,15 @@ async fn apply_fixture_documents(
             .collect(),
     )
     .expect("build live fixture plan");
-    gents::ConfigAccess::transact_local(node, None, "test.live_session_message_fixture", |txn| {
-        let plan = &plan;
-        Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
-    })
+    gents::ConfigAccess::transact_local_write(
+        node,
+        None,
+        "test.live_session_message_fixture",
+        |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+        },
+    )
     .await
     .expect("apply live fixture documents");
 }
@@ -4298,10 +3936,8 @@ fn target_documents(targets: Vec<AgentTargetDocument>) -> Vec<(Collection, serde
         .collect()
 }
 
-/// Publish canonical tools enabling `agent_new`/`agent_message` over
-/// `targets` for `agent_id`.
 async fn authorize_session_targets(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
     targets: Vec<AgentTargetDocument>,
@@ -4322,11 +3958,8 @@ async fn authorize_session_targets(
     .await;
 }
 
-/// Configure the parent with both background lanes and the worker with a
-/// foreground bash tool used to hold its request open until the test
-/// releases it.
 async fn configure_standard_backgrounding_tools(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     parent_agent_id: &str,
     workspace: &Path,
@@ -4387,10 +4020,6 @@ async fn configure_standard_backgrounding_tools(
     .await;
 }
 
-// ---------------------------------------------------------------------------
-// Request observation
-// ---------------------------------------------------------------------------
-
 fn is_terminal(state: &str) -> bool {
     RequestLifecycleState::is_terminal_str(Some(state))
 }
@@ -4412,9 +4041,6 @@ async fn fetch_request_lifecycle(node: &EmbeddedNode, request_id: &str) -> Optio
     first_optional_row::<Row>(&resp, "AgentRequest").and_then(|r| r.lifecycle_state)
 }
 
-/// A request caused by an `agent_new`/`agent_message` call, identified by
-/// its `caused_by_parent_*` edge naming a tool call. Completion wakes also
-/// name their parent request, but no tool call.
 #[derive(Debug, Clone, Deserialize)]
 struct CausedRequestRow {
     request_id: String,
@@ -4466,7 +4092,6 @@ async fn fetch_caused_requests(
     caused_request_rows(&node.execute(&query).await)
 }
 
-/// The requests whose calling edge names the physical tool-call row.
 async fn requests_caused_by_row(
     node: &EmbeddedNode,
     tool_call_doc_id: &str,
@@ -4499,16 +4124,10 @@ async fn wait_for_caused_request(
     }
 }
 
-/// Where a blocked test command records its started marker. A running
-/// foreground tool's stdout is not durable until it exits, so the command
-/// also writes the marker here.
 fn started_path(release: &Path) -> std::path::PathBuf {
     release.with_extension("started")
 }
 
-/// The sentinel lives in this run's own temporary workspace; it must not
-/// exist before the blocked command is launched, so only that shell can
-/// create it.
 fn assert_not_started(release: &Path) {
     assert!(
         !started_path(release).exists(),
@@ -4585,7 +4204,6 @@ async fn session_tool_rows(
         .collect()
 }
 
-/// One request, with the lineage and queue facts the live assertions read.
 #[derive(Debug, Clone, Deserialize)]
 struct SessionRequestRow {
     #[serde(rename = "_docID")]
@@ -4629,7 +4247,6 @@ async fn session_requests(node: &EmbeddedNode, session_id: &str) -> Vec<SessionR
     .await
 }
 
-/// Every request whose `field` satisfies the GraphQL `condition`, oldest first.
 async fn requests_where(
     node: &EmbeddedNode,
     field: &str,
@@ -4657,9 +4274,6 @@ async fn requests_where(
         .collect()
 }
 
-/// The terminal completion wake caused by a background row of
-/// `owning_request_id` settling: a background-completion wake whose cause
-/// names that request.
 async fn wait_for_completion_wake(
     node: &EmbeddedNode,
     session_id: &str,
@@ -4696,7 +4310,6 @@ async fn wait_for_completion_wake(
     }
 }
 
-/// Wait until every request of the session is terminal.
 async fn wait_for_session_quiescent(node: &EmbeddedNode, session_id: &str, timeout: Duration) {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
@@ -4715,12 +4328,6 @@ async fn wait_for_session_quiescent(node: &EmbeddedNode, session_id: &str, timeo
     }
 }
 
-/// Every listed background row's completion reached the parent as exactly one
-/// notification bound to a completed background-completion wake (Lean
-/// `WakeAttemptSnapshot.acknowledgedBindings`). A completion landing while an
-/// earlier wake is claimed belongs to a successor wake, so which wake carries
-/// which notification, the wake count and each wake's wording are not part of
-/// the contract. Returns the bound wakes' request ids, one per row.
 async fn assert_deliveries_bound_to_completed_wakes(
     node: &EmbeddedNode,
     session_id: &str,
@@ -4802,7 +4409,6 @@ async fn assert_deliveries_bound_to_completed_wakes(
     deliveries
 }
 
-/// Wait for a JSON tool result of `request_id` that satisfies `matches`.
 async fn wait_for_json_tool_result(
     node: &Arc<EmbeddedNode>,
     request_id: &str,
@@ -4852,7 +4458,6 @@ async fn wait_for_request_on_node(
     }
 }
 
-/// Dump tool calls + messages for a session to stderr.
 async fn dump_session_diagnostics(node: &EmbeddedNode, session_id: &str) {
     let escaped = escape_graphql_string(session_id);
     let query = format!(
@@ -4872,10 +4477,6 @@ async fn dump_session_diagnostics(node: &EmbeddedNode, session_id: &str) {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Tool-call rows and transcript observation
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone)]
 struct ToolCallRow {
     doc_id: String,
@@ -4890,7 +4491,7 @@ async fn timeline_tools(
     node: &Arc<EmbeddedNode>,
     request_id: &str,
 ) -> Vec<gents::TimelineToolCallRow> {
-    load_run_timeline_rows(&ConfigAccess::Local(node.clone()), request_id)
+    load_run_timeline_rows(&ConfigAccess::local(node.clone()), request_id)
         .await
         .unwrap_or_else(|error| panic!("load canonical timeline for {request_id}: {error:#}"))
         .tool_calls
@@ -5048,7 +4649,7 @@ async fn load_session_messages(
     request_id: &str,
     session_id: &str,
 ) -> Vec<gents_protocol::message::Message> {
-    load_run_timeline_rows(&ConfigAccess::Local(node.clone()), request_id)
+    load_run_timeline_rows(&ConfigAccess::local(node.clone()), request_id)
         .await
         .unwrap_or_else(|error| {
             panic!("load canonical session timeline for {request_id}: {error:#}")
@@ -5081,7 +4682,6 @@ fn tool_result_texts(messages: &[gents_protocol::message::Message]) -> Vec<&str>
         .collect()
 }
 
-/// Every `agent_new`/`agent_message` receipt the model received.
 fn session_receipts(messages: &[gents_protocol::message::Message]) -> Vec<serde_json::Value> {
     tool_result_texts(messages)
         .into_iter()
@@ -5166,7 +4766,6 @@ async fn wait_for_model_tool_call(
     }
 }
 
-/// Wait for one tool-result text part that contains every needle.
 async fn wait_for_tool_result_containing(
     node: &Arc<EmbeddedNode>,
     request_id: &str,
@@ -5298,8 +4897,6 @@ async fn wait_for_background_wake(
     }
 }
 
-/// The completion wake after `parent_request_id` runs real inference and
-/// processes the notification.
 async fn assert_wake_observed(node: &EmbeddedNode, session_id: &str, parent_request_id: &str) {
     let wake =
         wait_for_background_wake(node, session_id, parent_request_id, Duration::from_secs(60))
@@ -5348,15 +4945,6 @@ async fn assert_min_completed_inference_calls(
     );
 }
 
-// ---------------------------------------------------------------------------
-// Cross-node pairing
-// ---------------------------------------------------------------------------
-
-/// Each node enrolls the other's node_config and routes the session-message
-/// data plane: A coordinates requests it authors for B, B hosts them for A.
-/// B's enrollment is the Peer admission authority for requests DID-A
-/// authors for DID-B; both enrollments gate the transport. Returns the peer
-/// ids of A and B.
 async fn pair_session_message_nodes(
     db_a: &TestDb,
     identity_a: &Arc<dyn NodeIdentity>,
@@ -5365,8 +4953,8 @@ async fn pair_session_message_nodes(
 ) -> (String, String) {
     let did_a = identity_a.did().to_string();
     let did_b = identity_b.did().to_string();
-    let (peer_a, addr_a) = wait_for_peer_identity(db_a.node.as_ref()).await;
-    let (peer_b, addr_b) = wait_for_peer_identity(db_b.node.as_ref()).await;
+    let (peer_a, addr_a) = wait_for_peer_identity(&db_a.node).await;
+    let (peer_b, addr_b) = wait_for_peer_identity(&db_b.node).await;
     authorize_enrollment_peer(
         db_a.node.clone(),
         CROSS_NODE_NETWORK_ID,
@@ -5388,7 +4976,7 @@ async fn pair_session_message_nodes(
     )
     .await;
     write_data_plane_pairing(
-        db_a.node.as_ref(),
+        &db_a.node,
         &peer_b,
         &did_a,
         &addr_b,
@@ -5396,7 +4984,7 @@ async fn pair_session_message_nodes(
     )
     .await;
     write_data_plane_pairing(
-        db_b.node.as_ref(),
+        &db_b.node,
         &peer_a,
         &did_b,
         &addr_a,
@@ -5408,15 +4996,9 @@ async fn pair_session_message_nodes(
 }
 
 async fn wait_for_session_message_routes(db_a: &TestDb, peer_b: &str, db_b: &TestDb, peer_a: &str) {
+    wait_for_pairing_applied(&db_a.node, peer_b, "AgentRequest", Duration::from_secs(120)).await;
     wait_for_pairing_applied(
-        db_a.node.as_ref(),
-        peer_b,
-        "AgentRequest",
-        Duration::from_secs(120),
-    )
-    .await;
-    wait_for_pairing_applied(
-        db_b.node.as_ref(),
+        &db_b.node,
         peer_a,
         "AgentOutputSegment",
         Duration::from_secs(120),
@@ -5424,8 +5006,6 @@ async fn wait_for_session_message_routes(db_a: &TestDb, peer_b: &str, db_b: &Tes
     .await;
 }
 
-/// Author the local data-plane layer for one enrolled peer. Enrollment remains
-/// the transport and identity gate; this row only selects the scope template.
 async fn write_data_plane_pairing(
     node: &EmbeddedNode,
     peer_id: &str,
@@ -5467,8 +5047,6 @@ async fn write_data_plane_pairing(
     );
 }
 
-/// Wait until the applied route for `peer_id` has an address and a replicator
-/// filter for `collection`.
 async fn wait_for_pairing_applied(
     node: &EmbeddedNode,
     peer_id: &str,

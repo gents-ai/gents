@@ -1,14 +1,6 @@
 import Proofs.CanonicalOutput.Execution.Gate
 import Proofs.CanonicalOutput.Execution.Properties
 
-/-!
-# Canonical message sequence bound
-
-The shared transcript cursor is the allocator for canonical message headers.
-This invariant deliberately ranges only over messages for the world's current
-session: durable observations may also contain messages copied from another
-session, whose allocator is owned by that session.
--/
 namespace CanonicalOutput.Execution
 
 def SequenceBound (world : World) : Prop :=
@@ -21,8 +13,6 @@ theorem empty_messages_sequenceBound (world : World)
   intro message hmem
   simp [h] at hmem
 
-/-- Transport the bound across an operation which preserves the canonical
-message collection and current-session identity while advancing the allocator. -/
 theorem SequenceBound.of_messages_eq {before after : World}
     (hbound : SequenceBound before)
     (hmessages : after.messages = before.messages)
@@ -33,7 +23,6 @@ theorem SequenceBound.of_messages_eq {before after : World}
   apply Nat.lt_of_lt_of_le (hbound message (hmessages ▸ hmem) ?_) hnext
   simpa [hsession] using hcurrent
 
-/-- The allocator step used by every singleton canonical publication. -/
 theorem SequenceBound.of_append {before after : World} {message : MessageEnvelope}
     (hbound : SequenceBound before)
     (hmessages : after.messages = before.messages ++ [message])

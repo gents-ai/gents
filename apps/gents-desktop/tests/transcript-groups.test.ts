@@ -1,5 +1,3 @@
-/* Placement is decided by what came before, never by what comes after:
-   adding items to the end must never change the entries already made. */
 import type {
   RenderedTimelineItem,
   RenderedToolCallView,
@@ -93,7 +91,6 @@ const live = (content: string | null): RenderedTimelineItem =>
     reasoning: null,
   });
 
-/* a turn the way the runtime sends it: narration, then one call per group */
 const turn: RenderedTimelineItem[] = [
   person(1),
   said(2, "Looking at the export route."),
@@ -159,8 +156,6 @@ describe("placing activity", () => {
     for (let i = 1; i <= turn.length; i++) {
       const before = shape(groupTranscript(turn.slice(0, i)));
       const after = shape(groupTranscript(turn));
-      /* each entry made from a prefix is still there, same key, and a group
-         has only grown at its end */
       before.forEach((entry, j) => {
         const later = after[j]!;
         if (entry.includes("[")) {
@@ -185,6 +180,26 @@ describe("naming a group", () => {
       "Edited 1 file",
     );
   });
+
+  it("says how many calls failed, after what it did", () => {
+    const failed = (t: RenderedToolCallView) =>
+      ({ ...t, statusKind: "error" }) as RenderedToolCallView;
+    const exited = (t: RenderedToolCallView) =>
+      ({
+        ...t,
+        presentation: { ...t.presentation, exitCode: 1, failed: true },
+      }) as RenderedToolCallView;
+    expect(
+      groupLabel([
+        { kind: "tool", key: "a", tool: tool("command") },
+        { kind: "tool", key: "b", tool: exited(tool("command")) },
+        { kind: "tool", key: "c", tool: failed(tool("fileRead")) },
+      ]),
+    ).toBe("Read 1 file, ran 2 commands, 2 failed");
+    expect(groupLabel([{ kind: "tool", key: "d", tool: tool("command") }])).toBe(
+      "Ran 1 command",
+    );
+  });
 });
 
 describe("naming a live group", () => {
@@ -206,7 +221,6 @@ describe("naming a live group", () => {
 });
 
 describe("the order of a burst", () => {
-  /* keys the way the runtime writes them: the call's position at the end */
   const key = (i: number) =>
     `bae-c74c:provider:bae-c74c:{"kind":"provider_turn","scope":"inference.1","turn_index":1,"attempt":0}:${i}`;
   const burst = (order: number[]) =>
@@ -218,7 +232,6 @@ describe("the order of a burst", () => {
     }) as RenderedTimelineItem;
 
   it("puts calls in the order they ran, not in the order their keys sort as text", () => {
-    /* what the query returns for fifteen calls: 10-14 between 1 and 2 */
     const asQueried = [0, 1, 10, 11, 12, 13, 14, 2, 3, 4, 5, 6, 7, 8, 9];
     const g = groupTranscript([burst(asQueried)])[0]!;
     if (g.kind !== "group") throw new Error("expected a group");

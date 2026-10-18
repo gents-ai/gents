@@ -1,18 +1,13 @@
-/* A worker's scattered steps, gathered: a turn that hands work to five
-   workers otherwise reads as a dozen rows about them. */
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 
 export type GatheredWorker = { key: string; tools: RenderedToolCallView[] };
 
-/* a worker is its session, or its name while the call has not named one */
 const workerKey = (tool: RenderedToolCallView) => {
   const p = tool.presentation;
   if (p.kind !== "agent") return null;
   return p.sessionId ?? p.name ?? null;
 };
 
-/** Each call to a worker that more than one call reached, by the call's
-    item key: the worker and every call to it, in order. */
 export function gatherWorkers(
   tools: readonly RenderedToolCallView[],
 ): ReadonlyMap<string, GatheredWorker> {
@@ -36,7 +31,6 @@ const VERB: Record<string, string> = {
   interrupt: "interrupted",
 };
 
-/** What happened to a worker, in the order it happened. */
 export function workerStory(tools: readonly RenderedToolCallView[]): string {
   const counts = new Map<string, number>();
   for (const tool of tools) {

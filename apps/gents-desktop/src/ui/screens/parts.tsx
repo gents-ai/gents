@@ -3,9 +3,6 @@ import { cn } from "@gents/ui/lib/utils";
 import type { AgentEnvironmentView } from "@source-inc/gents-desktop-client";
 import { bashAccess, fileAccess, initials, network } from "./behavior";
 
-/* two-letter initials inside a quiet ring: raised face, hairline border,
-   ordinary text ink */
-/* forwards every span prop, so a hover-card or tooltip trigger can render it */
 export function AgentInitials({
   name,
   className,
@@ -25,9 +22,6 @@ export function AgentInitials({
   );
 }
 
-/** What an agent may do, as one sentence: files and commands, then the
-    network. Its environment is read from the node, so it may still be
-    loading. */
 export function AccessSentence({
   name,
   env,

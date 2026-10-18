@@ -56,8 +56,6 @@ use crate::toolset::{
 #[cfg(feature = "agent-memory")]
 use crate::toolset::{build_memory_tool, MEMORY_TOOL_NAME};
 
-/// Timeout of a `--cli-tool` host registration. A document overrides it per
-/// tool with `host.cli[].timeout_secs`, within the host foreground maximum.
 const DEFAULT_CLI_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Clone)]
@@ -89,15 +87,11 @@ pub struct ToolSurface {
     pub(super) eth_calls: Vec<crate::eth::ResolvedEthCall>,
     pub(super) plugin_tools: Vec<crate::document_config::PluginToolRef>,
     /// The plugin tools above resolved against the host plugin store when the
-    /// surface was resolved. It exists so that installing or removing a named
-    /// plugin is an Agent configuration change the reconciler sees (it feeds the runtime
-    /// configuration fingerprint and the slot comparison through this struct's
-    /// Debug), re-admitting an Agent whose build failed on the missing tool.
-    /// The whole installed record is kept, so a same-artifact reinstall that
-    /// changes what the built tool renders or enforces (instructions,
-    /// declaration, grant, model binding) refreshes the slot too. `None`
-    /// records a not-installed or pin-mismatched plugin and never makes a
-    /// Agent unavailable: building tools stays the fail-closed gate.
+    /// surface was resolved. It feeds the runtime configuration fingerprint and
+    /// slot comparison through this struct's Debug, so installing, removing or
+    /// replacing a plugin re-admits an Agent whose build failed on the missing
+    /// tool. `None` records a not-installed or pin-mismatched plugin and never
+    /// makes an Agent unavailable: building tools stays the fail-closed gate.
     pub(super) plugin_resolutions: Vec<(
         crate::document_config::PluginToolRef,
         Option<crate::plugin::store::InstalledPlugin>,
@@ -116,9 +110,6 @@ pub struct SelfConfigToolConfig {
     pub preview: bool,
     pub enable_pack_install: bool,
     pub enable_graph_tools: bool,
-    /// Runtime-owned host ceiling captured when this Agent's tool surface
-    /// is resolved. It is observation data for self-configuration responses,
-    /// never a writable configuration document.
     pub process_ceiling: SelfConfigProcessCeiling,
 }
 
@@ -162,8 +153,7 @@ impl ToolSurface {
             .any(|decl| decl.collection == crate::mailbox::MAILBOX_COLLECTION)
         {
             // Mailbox-capable event-trigger stages require explicit human-owner
-            // lineage from the source document. This is capture, not a model
-            // fill vocabulary.
+            // lineage from the source document.
             fields.insert("requester_did".to_string());
         }
         fields
@@ -409,7 +399,7 @@ impl ToolSurface {
         }
         if !self.application_write_collections.is_empty() {
             tools.push(Box::new(crate::application_write::WriteTool::new(
-                crate::config_client::ConfigAccess::Local(runtime.node.clone()),
+                crate::config_client::ConfigAccess::local(runtime.node.clone()),
                 self.application_write_collections.iter().cloned().collect(),
                 datastore_actor.clone(),
             )));
@@ -454,7 +444,7 @@ impl ToolSurface {
                 )) as Box<dyn ToolDyn>);
             } else {
                 let tool = BoundedWriteTool::new(
-                    crate::config_client::ConfigAccess::Local(runtime.node.clone()),
+                    crate::config_client::ConfigAccess::local(runtime.node.clone()),
                     decl.clone(),
                 )
                 .declared_by(self.surface_of_tool.get(&decl.tool_name).cloned());
@@ -469,7 +459,7 @@ impl ToolSurface {
         }
         for decl in &self.query_tools {
             let tool = BoundedQueryTool::new(
-                crate::config_client::ConfigAccess::Local(runtime.node.clone()),
+                crate::config_client::ConfigAccess::local(runtime.node.clone()),
                 decl.clone(),
             )
             .with_actor(datastore_actor.clone().expect("query actor was validated"))

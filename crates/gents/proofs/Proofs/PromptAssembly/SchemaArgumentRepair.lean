@@ -9,9 +9,6 @@ inductive Container where
   | array
   deriving BEq, DecidableEq, Repr
 
-/-- References, alternatives and conditional schemas need a schema evaluator.
-The repair boundary does not choose an alternative or reinterpret a schema
-that admits strings. Native validation remains authoritative after repair. -/
 def unsupported : List String :=
   ["$ref", "$dynamicRef", "anyOf", "oneOf", "allOf", "not", "if", "then", "else",
    "prefixItems", "patternProperties", "dependentSchemas", "unevaluatedProperties"]
@@ -36,10 +33,6 @@ def hasContainer : Container → Json → Bool
   | .array, .arr _ => true
   | _, _ => false
 
-/-- Strict parsing and JSON representation belong to the native decoder. Each
-observation records one raw string and that decoder's result; conformance checks
-these observations against serde_json before replaying this owner. Lean's JSON
-parser is not an assumption about native Unicode, numeric or nesting behavior. -/
 structure ParseObservation where
   raw : String
   parsed : Option Json
@@ -47,8 +40,6 @@ structure ParseObservation where
 def parsedValue (observations : List ParseObservation) (raw : String) : Option Json :=
   (observations.find? (fun observation => observation.raw == raw)).bind (·.parsed)
 
-/-- One observed parse, only when the schema requires its resulting container.
-A string containing a JSON string is never decoded twice. -/
 def decode (observations : List ParseObservation) (kind : Container) (value : Json) : Json × Bool :=
   match value with
   | .str raw =>
@@ -69,10 +60,6 @@ def propertySchema (schema : Json) (key : String) : Json :=
   | .ok child => child
   | .error _ => schema.getObjValD "additionalProperties"
 
-/-- Depth is bounded at the provider/tool boundary, independently of JSON
-parser limits. A subtree beyond the bound remains unchanged and goes through
-the tool's ordinary validation. Only declared property and homogeneous item
-schemas authorize recursive repair; untyped payloads remain opaque. -/
 def repair (observations : List ParseObservation) : Nat → Json → Json → String → Result
   | 0, _, value, _ => ⟨value, []⟩
   | depth + 1, schema, value, path =>

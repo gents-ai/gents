@@ -1,6 +1,3 @@
-//! Stock --agent is sent as session/new|load _meta.agentProfile. Select one
-//! immutable agent-scoped service per connection, before exposing history.
-//! This is connection routing, not a second runtime agent/identity owner.
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -12,10 +9,6 @@ use super::acp::{internal_method, AcpRequest, AcpService};
 use super::server::{AcpDelegate, AcpOutbound, Registration};
 use super::AcpDelegateFactoryInputs;
 
-/// Stock Grok sends its built-in agents' `agent_type` (e.g. `grok-build`,
-/// `grok-build-plan`) as `_meta.agentProfile` even without `--agent`; those
-/// names are Grok's own, not Gents agent ids, so they resolve to the
-/// default and cannot select a principal agent of the same name.
 pub(super) fn grok_built_in_agent_profile(name: &str) -> bool {
     name == "grok-build" || name.starts_with("grok-build-")
 }
@@ -74,8 +67,6 @@ impl AgentConnection {
             return Ok(Some(service.clone()));
         }
         if !selecting {
-            // History requests carry no --agent selector. Never leak the
-            // default history while the intended session/new is in flight.
             if matches!(method, "x.ai/session/list" | "x.ai/sessions/list") {
                 return Ok(None);
             }
@@ -112,8 +103,6 @@ impl AgentConnection {
             inputs.service(self.client_id, &self.registration)
         };
         binding.selected = Some((agent, service.clone()));
-        // Never hold the selection lock across dispatch: prompt cancellation
-        // and disconnect must not wait for inference or outbound delivery.
         Ok(Some(service))
     }
 }

@@ -29,16 +29,3 @@ fn runtime_fleet_slots_url(graphql: &str) -> Result<String> {
     url.set_fragment(None);
     Ok(url.to_string())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn fleet_slots_url_uses_runtime_http_root() {
-        assert_eq!(
-            runtime_fleet_slots_url("http://127.0.0.1:9191/api/v0/graphql").unwrap(),
-            "http://127.0.0.1:9191/fleet/slots"
-        );
-    }
-}

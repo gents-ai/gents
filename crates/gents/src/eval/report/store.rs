@@ -1,10 +1,7 @@
-//! Gathering a run's documents for a report: the module's one I/O boundary
-//! (loading rows for an owner, and the run's frozen definition), alongside
-//! `evidence::load_run_rows`. `build`, `compare` and the breakdowns are pure.
-//!
-//! `eval::documents` is frozen and has no list read, so listing asks
-//! `EvalRun` for the owner's run ids and reads each through `load_run`,
-//! keeping the row decoding in one place.
+//! Gathering a run's documents for a report: the module's one I/O boundary,
+//! alongside `evidence::load_run_rows`. `eval::documents` has no list read, so
+//! listing asks `EvalRun` for the owner's run ids and reads each through
+//! `load_run`, keeping row decoding in one place.
 
 use std::path::Path;
 
@@ -25,7 +22,7 @@ pub async fn load_runs(access: &ConfigAccess, owner: &str) -> Result<Vec<RunReco
         owner = escape_graphql_string(owner),
     );
     let response = access
-        .transact("eval.report.load_runs", |txn| {
+        .transact_readonly("eval.report.load_runs", |txn| {
             let query = &query;
             Box::pin(async move { txn.execute(query).await })
         })
@@ -61,15 +58,8 @@ pub fn run_header(record: &RunRecord) -> RunHeader {
     }
 }
 
-/// `record`'s report, with exposure counted over `peers`. For a caller that
-/// already listed the owner's runs. `runs_dir` is `<launching home>/eval/runs`.
-///
-/// The definition is the one the run froze beside itself; the installed one
-/// is read only to say whether it has changed since. A run with no frozen
-/// copy (frozen before the file existed, or whose directory was removed)
-/// reads the installed definition, which `build` refuses unless it still
-/// digests to the run's. A definition that cannot be resolved is a
-/// [`ReportRefused`](super::ReportRefused), like every other unreportable run.
+/// `record`'s report, with exposure counted over `peers` (a caller that
+/// already listed the owner's runs); `runs_dir` is `<launching home>/eval/runs`.
 pub async fn load_report_among(
     access: &ConfigAccess,
     owner: &str,
@@ -85,7 +75,6 @@ pub async fn load_report_among(
         Some(definition) => {
             let changed = match live {
                 Ok(live) => definition_ref(&live)?.digest != frozen.digest,
-                // Missing or no longer valid: either way not what the run froze.
                 Err(error) if unresolvable(&error) => true,
                 Err(error) => return Err(error),
             };
@@ -100,11 +89,9 @@ pub async fn load_report_among(
     Ok(report)
 }
 
-/// A run whose definition cannot be resolved — its frozen copy tampered
-/// with or unparseable, or, with no copy, the installed one missing or
-/// invalid — is unreportable: one [`ReportRefused`](super::ReportRefused)
-/// carrying the reason, so a caller skips it by checking one type.
-/// Transport and database errors pass through unchanged.
+/// A run whose definition cannot be resolved is unreportable: one
+/// [`ReportRefused`](super::ReportRefused) carrying the reason. Transport and
+/// database errors pass through unchanged.
 fn definition_refused(error: anyhow::Error) -> anyhow::Error {
     if unresolvable(&error) {
         refused(format!("{error:#}"))
@@ -113,8 +100,7 @@ fn definition_refused(error: anyhow::Error) -> anyhow::Error {
     }
 }
 
-/// A definition that is missing, invalid, tampered with or does not parse,
-/// as opposed to one that could not be read at all.
+/// A definition that is missing, invalid, tampered with or does not parse.
 fn unresolvable(error: &anyhow::Error) -> bool {
     freeze_refused(error).is_some() || error.chain().any(|cause| cause.is::<serde_json::Error>())
 }
@@ -217,8 +203,6 @@ mod tests {
             .await
             .unwrap();
         let cell = &report.cells[0];
-        // Launching's check has no `min`, so every trial is graded by a
-        // grader error: Unknown, never a failure of the subject.
         assert_eq!(
             cell.slots.iter().map(|slot| slot.class).collect::<Vec<_>>(),
             vec![SlotClass::Unknown; 2]
@@ -268,7 +252,7 @@ mod tests {
         let report = load_report(&launching.access, OWNER, &launching.runs_dir(), "run-2")
             .await
             .unwrap();
-        assert_eq!(report.exposure, 1, "the invalidated run is not exposure");
+        assert_eq!(report.exposure, 1);
     }
 
     #[tokio::test]
@@ -292,7 +276,6 @@ mod tests {
         assert_eq!(report.run.definition.comparability_version, 1);
         assert_eq!(report.cells[0].slots.len(), 2);
 
-        // Without the frozen copy, the installed definition no longer matches.
         std::fs::remove_file(
             launching
                 .runs_dir()
@@ -304,13 +287,10 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            report_refused(&error).is_some_and(|refusal| refusal.0.contains("no longer digests")),
-            "{error:#}"
+            report_refused(&error).is_some_and(|refusal| refusal.0.contains("no longer digests"))
         );
     }
 
-    /// A run frozen before `definition.json` existed still
-    /// reports while the installed definition digests to the run's.
     #[tokio::test]
     async fn a_run_without_the_frozen_file_reports_from_a_matching_installed_definition() {
         let launching = Launching::new().await;
@@ -337,8 +317,6 @@ mod tests {
             .join(crate::eval::runner::DEFINITION_FILE)
     }
 
-    /// Every way a run's definition fails to resolve is one refusal type,
-    /// so a listing skips unreportable runs by checking `ReportRefused`.
     #[tokio::test]
     async fn a_tampered_or_unparseable_frozen_copy_is_a_report_refusal() {
         let launching = Launching::new().await;
@@ -354,18 +332,14 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            report_refused(&error).is_some_and(|refusal| refusal.0.contains("no longer digests")),
-            "{error:#}"
+            report_refused(&error).is_some_and(|refusal| refusal.0.contains("no longer digests"))
         );
 
         std::fs::write(&path, b"{\"definition_id\": ").unwrap();
         let error = load_report(&launching.access, OWNER, &launching.runs_dir(), "run-1")
             .await
             .unwrap_err();
-        assert!(
-            report_refused(&error).is_some_and(|refusal| refusal.0.contains("parsing")),
-            "{error:#}"
-        );
+        assert!(report_refused(&error).is_some_and(|refusal| refusal.0.contains("parsing")));
     }
 
     #[tokio::test]
@@ -382,8 +356,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            report_refused(&error).is_some_and(|refusal| refusal.0.contains("no eval definition")),
-            "{error:#}"
+            report_refused(&error).is_some_and(|refusal| refusal.0.contains("no eval definition"))
         );
     }
 

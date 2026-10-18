@@ -1,5 +1,3 @@
-/* The session's transcript: its rows, the live reply, notices and the
-   actions on a response. */
 import {
   Fragment,
   createContext,
@@ -47,7 +45,6 @@ import {
 import { type Workers } from "./workers";
 import {
   AutomatedInput,
-  QueuedInputs,
   UserInputWithState,
   pendingInputState,
 } from "./TranscriptInputs";
@@ -64,8 +61,7 @@ import {
   Reasoning,
   useGroupState,
 } from "./ActivityGroup";
-/* the newest entries are always drawn: the turn in progress and the few
-   before it are where the reader is, and where the transcript grows */
+
 const ALWAYS_DRAWN = 8;
 
 function FailedEarlier({ message }: { message: string }) {
@@ -94,22 +90,16 @@ function copyActions(text: string | null | undefined) {
   ];
 }
 
-/* the sessions that sent work into this one; a turn another session sent is
-   labeled with its sender */
 const ParentContext = createContext<ParentWork | null>(null);
-
-const AppliedInputsContext = createContext<ReadonlySet<string>>(new Set());
 
 const TranscriptItem = memo(function TranscriptItem({
   item,
   final = false,
 }: {
   item: RenderedTimelineItem;
-  /* the answer a finished turn ended on: it carries the response actions */
   final?: boolean;
 }) {
   const parentWork = useContext(ParentContext);
-  const appliedInputs = useContext(AppliedInputsContext);
   switch (item.kind) {
     case "automatedInput":
       return (
@@ -124,9 +114,7 @@ const TranscriptItem = memo(function TranscriptItem({
       const state =
         item.kind === "pendingUserTurn"
           ? pendingInputState(item.lifecycleState, item.foldedIntoRequestId)
-          : item.inputRequestId && appliedInputs.has(item.inputRequestId)
-            ? "Applied"
-            : null;
+          : null;
       if (item.kind === "pendingUserTurn" && item.origin) {
         return (
           <AutomatedInput origin={item.origin} content={item.content} state={state} />
@@ -146,18 +134,10 @@ const TranscriptItem = memo(function TranscriptItem({
         <UserMessage actions={copyActions(item.content)}>{item.content}</UserMessage>
       );
       const senderName = sender.summary?.title ?? "another session";
-      /* a turn another session sent wears that session's mark, the way any
-         other sender would; its state, where the mark cannot say it, is a
-         chip seated on the bubble's bottom edge */
       return (
-        /* the mark hangs in the transcript's right gutter, seated on the
-           first line's center: the bubble's own my-1 and py-3 put that 26px
-           down, half the avatar is 12 */
         <div className={cn("relative", state && "mb-2")}>
           <AgentInitials
             name={sender.agentName ?? senderName}
-            /* in the gutter where there is one; seated on the bubble's
-               top corner when the screen is too narrow to spare it */
             className="absolute -top-1 right-2 size-6 text-[10px] ring-2 ring-background sm:top-3.5 sm:-right-8 sm:ring-0"
             aria-hidden={false}
             role="img"
@@ -182,7 +162,6 @@ const TranscriptItem = memo(function TranscriptItem({
     case "liveAssistant":
       return <Reply item={item} final={final} />;
     case "toolGroup":
-      /* placed by the transcript into an ActivityGroup; never reaches here */
       return null;
   }
 });
@@ -245,13 +224,6 @@ function StoppedNotice({
   );
 }
 
-/* A reply, live or saved, drawn as one tree. The saved message that
-   replaces a live tail is drawn under the tail's key (`drawKey`), so this
-   same tree updates in place: nothing is removed and inserted under the
-   reader, and the text carries on revealing. A turn that thought and then
-   acted leaves reasoning with nothing said after it: that is a think, not
-   an empty answer, so it carries no action bar and no blank line where
-   prose would be. */
 function Reply({
   item,
   final,
@@ -263,15 +235,9 @@ function Reply({
   return (
     <div data-testid={live ? "live-assistant" : undefined}>
       <AssistantMessage
-        /* the answer sits wider apart than the rows around it: the column's
-           gap is even, which puts the thing a person came to read at the
-           same distance as a row of activity */
         className={item.content ? "py-4" : undefined}
         actions={!live && item.content && !final ? copyActions(item.content) : false}
       >
-        {/* a provider that will not hand its reasoning over leaves a
-            placeholder, not prose: say so in a line rather than offer a
-            disclosure with an apology behind it */}
         {readableReasoning(item.reasoning) ? (
           <Reasoning text={readableReasoning(item.reasoning)!} />
         ) : reasoningWithheld(item.reasoning) ? (
@@ -286,29 +252,15 @@ function Reply({
   );
 }
 
-/* A reply drawn while it was live reveals at a steady pace, on through the
-   message that replaces it; anything else — history, a message from
-   elsewhere — is simply there. */
 function ReplyText({ content, live }: { content: string; live: boolean }) {
   const [revealing] = useState(live);
-  /* No wrapper: prose-app spaces its blocks with `& > * + *`, so anything
-     between it and the markdown makes every paragraph, heading and list
-     lose its margins at once — silently, because the text still renders. */
-  /* the one Markdown that is the model's own reply, so the one that may
-     hand a `::name{}` paragraph to a plugin */
   if (!revealing) return <Markdown directives>{content}</Markdown>;
   return <StreamText text={content} directives />;
 }
 
-/* Under a finished response the actions sit on the line below the answer
-   and stay there, rather than floating over it on hover. Copy takes the response as written — its markdown — and says so. */
 function ResponseActions({ text }: { text: string }) {
   const { copied, copy } = useCopied();
   return (
-    /* on a desktop they wait for the pointer, like a step's caret: an
-       answer reads as the end of the turn, not as a row of controls. The
-       space is kept, so nothing moves when they appear; a touch screen has
-       no hover to wait for, and keyboard focus shows them too */
     <div
       className={cn(
         "-mt-1 flex items-center gap-1 px-1 transition-opacity duration-150 motion-reduce:transition-none",
@@ -331,9 +283,6 @@ function ResponseActions({ text }: { text: string }) {
   );
 }
 
-/* A row in the transcript's window. Memoized on what it draws, so an update
-   that leaves a row alone (every streamed chunk, for all but the last)
-   renders neither the row nor its wrapper. */
 const ItemRow = memo(function ItemRow({
   rowKey,
   timelineKey,
@@ -352,6 +301,9 @@ const ItemRow = memo(function ItemRow({
       rowKey={rowKey}
       drawn={drawn}
       data-timeline-key={timelineKey}
+      data-turn={
+        item.kind === "userMessage" || item.kind === "pendingUserTurn" ? "" : undefined
+      }
       className="group/response"
     >
       <TranscriptItem item={item} final={final} />
@@ -387,9 +339,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
 }: {
   inFlight: boolean;
   stopping?: boolean;
-  /** the transcript's scroller, once mounted */
   scroller: HTMLElement | null;
-  /** everything the scroller scrolls, once mounted */
   content: HTMLElement | null;
   session: DesktopSessionSnapshot | null;
   workers: Workers;
@@ -407,31 +357,18 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   );
   const [retrying, setRetrying] = useState(false);
 
-  /* the latest request's terminal facts; the bridge sends no response row */
   const latest = session?.latestRequestOutcome;
   const status = inFlight
     ? activityStatus(session?.timelineItems ?? [], stopping)
     : null;
   const wasInterrupted = session?.turnState === "interrupted";
-  const appliedInputIds = (session?.foldedInputs ?? [])
-    .map((input) => input.requestId)
-    .sort()
-    .join("\n");
-  const appliedInputs = useMemo(
-    () => new Set(appliedInputIds ? appliedInputIds.split("\n") : []),
-    [appliedInputIds],
-  );
   const responseError =
     latest?.failureReason?.trim() ||
     (session?.turnState === "failed"
       ? "The request failed before a response was available. Check the request trace for details."
       : "");
-  /* the request that ended failed, and the session is already on a later
-     one: both facts, in order, the failure before the live text */
   const continuing =
     Boolean(latest?.failureReason) && session?.turnState === "processing";
-  /* the list the transcript actually maps, held stable so the fold's
-     memo has a key that does not change on every render */
   const visible = useMemo(
     () =>
       (continuing
@@ -442,9 +379,6 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   const showError =
     Boolean(responseError) && !wasInterrupted && (continuing || !inFlight);
 
-  /* Streaming continuity: the live text is kept on screen until the
-     message that replaces it arrives (a projection can drop one before the
-     other lands), and that message is drawn under the live tail's key. */
   const sessionKey = session?.sessionId ?? null;
   const heldRef = useRef<HeldLive | null>(null);
   const [heldExpiry, setHeldExpiry] = useState(0);
@@ -453,7 +387,6 @@ export const TranscriptPanel = memo(function TranscriptPanel({
       continuing
         ? { items: visible, held: null }
         : holdLive(visible, heldRef.current, sessionKey),
-    // heldExpiry: a hold that ran out re-derives without it
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [visible, continuing, heldExpiry, sessionKey],
   );
@@ -463,16 +396,12 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     !visible.some((item) => item.kind === "liveAssistant" && Boolean(item.content));
   useEffect(() => {
     if (!holding) return;
-    /* nothing replaced it: an interrupted turn, or a message that never
-       came. Stop holding rather than show stale text indefinitely. */
     const timer = setTimeout(() => {
       heldRef.current = null;
       setHeldExpiry((n) => n + 1);
     }, 3_000);
     return () => clearTimeout(timer);
   }, [holding]);
-  /* the message just sent, drawn from the moment it is sent: one row per
-     message, whatever stands for it as it settles */
   const localTurn = useView((view) => view.pendingTurn);
   const turns = useMemo(
     () => withSentTurns(held.items, localTurn, sessionKey),
@@ -486,10 +415,6 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   keysRef.current = keys;
   const rendered = turns;
   const entries = useMemo(() => groupTranscript(rendered), [rendered]);
-  /* A turn's answer is the last thing it said before the person spoke
-     again, or before the transcript ends once nothing is running. Only a
-     finished turn has one: while the agent works, its last words are
-     narration that may yet be followed by more. */
   const finalKeys = useMemo(() => {
     const keys = new Set<string>();
     let last: string | null = null;
@@ -523,14 +448,8 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   };
 
   return (
-    /* the condensed header floats over the scroller, so a step opening
-       near the top must stop below it, not under it (h-12 plus a little) */
     <div
-      /* the composer is sticky over the foot of this scroller, so the
-         transcript keeps its height clear: without it the last thing in a
-         session sits underneath the composer, and anything that sticks to
-         the bottom lands there too */
-      className="mt-6 grid grid-cols-[minmax(0,1fr)] gap-5 pb-[var(--composer-h,0px)] [--step-scroll-inset:56]"
+      className="mt-6 grid grid-cols-[minmax(0,1fr)] gap-5 [--step-scroll-inset:56]"
       data-testid="transcript-panel"
     >
       {session?.timelinePage?.hasOlder && (
@@ -544,40 +463,36 @@ export const TranscriptPanel = memo(function TranscriptPanel({
         </div>
       )}
       <WorkerActionsContext.Provider value={workerActions}>
-        <AppliedInputsContext.Provider value={appliedInputs}>
-          <ParentContext.Provider value={parentWork}>
-            <GroupStateContext.Provider value={groupState}>
-              <TranscriptWindowProvider scroller={scroller} session={sessionKey}>
-                {entries.map((entry, index) =>
-                  entry.kind === "item" ? (
-                    /* keyed for the pager, which holds the reader's place
-                     by the row under their eye while older pages land */
-                    <ItemRow
-                      key={drawKey(keys, entry.item)}
-                      rowKey={drawKey(keys, entry.item)}
-                      timelineKey={entry.key}
-                      item={entry.item}
-                      final={finalKeys.has(entry.key)}
-                      drawn={entries.length - index <= ALWAYS_DRAWN}
-                    />
-                  ) : (
-                    <GroupRow
-                      key={entry.key}
-                      entry={entry}
-                      workers={workers}
-                      drawn={entries.length - index <= ALWAYS_DRAWN}
-                    />
-                  ),
-                )}
-              </TranscriptWindowProvider>
-            </GroupStateContext.Provider>
-            {continuing && showError && <FailedEarlier message={responseError} />}
-            {continuing &&
-              session?.timelineItems
-                .filter((item) => item.kind === "liveAssistant")
-                .map((item) => <TranscriptItem key={item.itemKey} item={item} />)}
-          </ParentContext.Provider>
-        </AppliedInputsContext.Provider>
+        <ParentContext.Provider value={parentWork}>
+          <GroupStateContext.Provider value={groupState}>
+            <TranscriptWindowProvider scroller={scroller} session={sessionKey}>
+              {entries.map((entry, index) =>
+                entry.kind === "item" ? (
+                  <ItemRow
+                    key={drawKey(keys, entry.item)}
+                    rowKey={drawKey(keys, entry.item)}
+                    timelineKey={entry.key}
+                    item={entry.item}
+                    final={finalKeys.has(entry.key)}
+                    drawn={entries.length - index <= ALWAYS_DRAWN}
+                  />
+                ) : (
+                  <GroupRow
+                    key={entry.key}
+                    entry={entry}
+                    workers={workers}
+                    drawn={entries.length - index <= ALWAYS_DRAWN}
+                  />
+                ),
+              )}
+            </TranscriptWindowProvider>
+          </GroupStateContext.Provider>
+          {continuing && showError && <FailedEarlier message={responseError} />}
+          {continuing &&
+            session?.timelineItems
+              .filter((item) => item.kind === "liveAssistant")
+              .map((item) => <TranscriptItem key={item.itemKey} item={item} />)}
+        </ParentContext.Provider>
       </WorkerActionsContext.Provider>
       {wasInterrupted && !inFlight && (
         <StoppedNotice
@@ -608,27 +523,11 @@ export const TranscriptPanel = memo(function TranscriptPanel({
           )}
         </div>
       )}
-      {/* the run's line, in the place kept for it at the foot: laid out as a
-          reply is, but not one, so nothing reading the transcript counts it */}
       <div className="relative min-w-0">
         <div data-slot="activity-line" className="prose-app px-2">
           <ActivityLine status={status} />
         </div>
       </div>
-      <QueuedInputs
-        queued={session?.queuedTurns ?? []}
-        queue={session?.pendingQueue ?? null}
-        onEdit={
-          session?.nodeDid
-            ? (edit) =>
-                actions.editPendingQueue({
-                  ...edit,
-                  nodeDid: session.nodeDid!,
-                  sessionId: session.sessionId,
-                })
-            : undefined
-        }
-      />
     </div>
   );
 });

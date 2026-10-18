@@ -24,7 +24,6 @@ fn request_from_native(
     }
 }
 
-/// Text-only request: empty surface, no preamble.
 fn ping_request() -> CompletionRequest {
     request_from_native(None, vec![Message::user("ping")], Vec::new())
 }
@@ -41,8 +40,6 @@ fn echo_tool_request() -> CompletionRequest {
     )
 }
 
-/// Fixture-only client: the bearer refuses, so a turn that outruns the
-/// fixture queue fails at the token read instead of reaching the network.
 fn test_client() -> ClaudeSubscriptionClient<StaticBearer> {
     ClaudeSubscriptionClient::with_bearer(Arc::new(StaticBearer::failing("no credential")))
 }
@@ -129,8 +126,6 @@ async fn live_path_without_fixture_asks_the_bearer_and_fails_closed_on_bearer_er
     assert_eq!(client.bearer.bearer_calls(), 1);
 }
 
-/// The queue serves one body per call; once drained the live path runs and
-/// asks the bearer, which here refuses so no network is touched.
 #[tokio::test]
 async fn fixture_queue_serves_one_body_per_call_then_asks_the_bearer() {
     let _guard = crate::claude_messages::lock_fixtures_for_test();
@@ -160,7 +155,7 @@ async fn fixture_queue_serves_one_body_per_call_then_asks_the_bearer() {
 #[tokio::test]
 async fn build_without_a_credential_fails_closed_with_the_login_hint() {
     let node = test_node().await;
-    let err = ClaudeSubscriptionClient::build(Arc::new(node), "did:key:z6MkNobody", None)
+    let err = ClaudeSubscriptionClient::build(node, "did:key:z6MkNobody", None)
         .await
         .expect_err("missing");
     assert!(
@@ -172,7 +167,7 @@ async fn build_without_a_credential_fails_closed_with_the_login_hint() {
 
 #[tokio::test]
 async fn build_with_a_seeded_credential_yields_a_shared_bearer() {
-    let node = Arc::new(test_node().await);
+    let node = test_node().await;
     seed_credential(
         &node,
         "did:key:z6MkSeeded",
@@ -196,14 +191,9 @@ async fn build_with_a_seeded_credential_yields_a_shared_bearer() {
     );
 }
 
-/// Spec §6: a stale credential triggers exactly one refresh before the send.
-/// Drives the real `OAuthRefreshKind::Claude` dispatch and the env-override
-/// wrapper: the rotated token comes back as the bearer, and the second read
-/// is served from cache (the one-shot server is gone by then, so a second
-/// refresh would fail to connect).
 #[tokio::test]
 async fn stale_credential_refreshes_once_through_the_claude_token_endpoint() {
-    let node = Arc::new(test_node().await);
+    let node = test_node().await;
     seed_credential(
         &node,
         "did:key:z6MkStaleRefresh",
@@ -216,9 +206,6 @@ async fn stale_credential_refreshes_once_through_the_claude_token_endpoint() {
         r#"{"access_token":"access-NEW","refresh_token":"refresh-NEW","expires_in":28800}"#,
     )
     .await;
-    // Process-global, read by the wrapper at refresh time; hold TOKEN_URL_ENV
-    // across the whole set/remove window so lib tests that set this override
-    // cannot interleave with it.
     let _env = crate::oauth_credential::test_support::TOKEN_URL_ENV
         .lock()
         .await;
@@ -292,7 +279,7 @@ fn anthropic_api_key_is_a_shared_key_kind_on_the_messages_wire() {
 #[tokio::test]
 async fn usage_wiring_claude_built_client_holds_its_account_reporter() {
     let did = "did:key:z6MkUsageWireClaude";
-    let node = Arc::new(crate::oauth_credential::test_support::test_node().await);
+    let node = crate::oauth_credential::test_support::test_node().await;
     let credential = crate::oauth_credential::OAuthCredential {
         doc_id: None,
         credential_id: format!(

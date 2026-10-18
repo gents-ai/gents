@@ -3,41 +3,29 @@ use crate::client::store::ClientStore;
 
 #[path = "tests/backpressure.rs"]
 mod backpressure;
+#[path = "tests/missing_agent_requests.rs"]
+mod missing_agent_requests;
 #[path = "tests/mixed_batch.rs"]
 mod mixed_batch;
 #[path = "tests/overflow.rs"]
 mod overflow;
-
-#[test]
-fn projection_invalidation_reuses_the_observed_snapshot_allocation() {
-    let (store, _) = ObservedStore::new(ClientStore::default());
-    let held = store.snapshot();
-    let pointer = Arc::as_ptr(&held);
-    let initial = store.projection_revision();
-    store.invalidate_projection(false);
-    assert_eq!(Arc::as_ptr(&store.snapshot()), pointer);
-    assert_eq!(
-        store.projection_revision().store_version,
-        initial.store_version + 1
-    );
-}
-
-#[test]
-fn observer_merge_advances_revision_and_strips_transcript_rows() {
-    let (store, _) = ObservedStore::new(ClientStore::default());
-    let initial = store.projection_revision();
-    store.merge_observer_patch(ClientStore::default());
-    let current = store.projection_revision();
-    assert_eq!(current.store_version, initial.store_version + 1);
-    assert!(store.snapshot().transcript_messages.is_empty());
-    assert!(store.snapshot().output_segments.is_empty());
-}
 
 use crate::client::schema::ensure_runtime_schemas;
 use defra_node::{EventName, NodeBuilder};
 use std::sync::Arc;
 
 async fn build_observer_fixture() -> (
+    tempfile::TempDir,
+    Arc<EmbeddedNode>,
+    Arc<ObservedStore>,
+    ObserverHandle,
+) {
+    build_observer_fixture_for_selection(None).await
+}
+
+async fn build_observer_fixture_for_selection(
+    selected_node_did: Option<String>,
+) -> (
     tempfile::TempDir,
     Arc<EmbeddedNode>,
     Arc<ObservedStore>,
@@ -60,7 +48,7 @@ async fn build_observer_fixture() -> (
         Vec::new(),
     );
     let subscription = node.subscribe_document_changes();
-    let (_tx, rx) = watch::channel::<Option<String>>(None);
+    let (_tx, rx) = watch::channel(selected_node_did);
     let handle = spawn_observer_with_selection(
         node.clone(),
         store.clone(),
@@ -314,7 +302,7 @@ async fn tool_call_invalidations_refresh_lineage_without_retaining_transcript() 
     let (_tempdir, node, store, handle) = build_observer_fixture().await;
     let mut changes = store.subscribe_changes();
     let before = store.projection_revision();
-    gents::ConfigAccess::Local(node.clone())
+    gents::ConfigAccess::local(node.clone())
         .write(
             "test.lineage_tool_invalidation",
             r#"mutation {

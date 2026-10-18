@@ -36,8 +36,8 @@ async fn seed_config(node: &Arc<EmbeddedNode>) {
         "inference_backends":[{"node_did":NODE_DID,"backend_id":BACKEND_ID,"name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:11434/v1","auth":{"kind":"api_key","key":SECRET},"max_concurrent":1}]
     })).unwrap();
     let plan = DesiredStateApplyPlan::from_pack_config(&config).unwrap();
-    ConfigAccess::Local(node.clone())
-        .transact("test.self_config.seed", |txn| {
+    ConfigAccess::local(node.clone())
+        .transact_write("test.self_config.seed", |txn| {
             let plan = plan.clone();
             Box::pin(async move { apply_desired_state_plan(txn, &plan).await })
         })
@@ -47,8 +47,8 @@ async fn seed_config(node: &Arc<EmbeddedNode>) {
 
 async fn read(node: &Arc<EmbeddedNode>, collection: Collection, id: &str) -> Value {
     let id = id.to_owned();
-    ConfigAccess::Local(node.clone())
-        .transact("test.self_config.read", |txn| {
+    ConfigAccess::local(node.clone())
+        .transact_write("test.self_config.read", |txn| {
             let id = id.clone();
             Box::pin(async move {
                 Ok(
@@ -335,9 +335,6 @@ async fn typed_patch_values_reject_injection_and_protected_auth_without_writes()
         );
     }
     assert_eq!(before["auth"]["key"], SECRET);
-    // Selecting a reference replaces the auth variant; there is no second key
-    // field to remain accidentally active beside it. Raw key replacement above
-    // stays operator-only.
     call_tool(
         &tools,
         "configure_backend",
@@ -387,13 +384,12 @@ async fn configure_event_source_rejects_filter_and_collection_injection() {
         .await
         .expect_err("collection identifiers cannot contain GraphQL syntax");
     }
-    let rows = ConfigAccess::Local(db.node.clone())
+    let rows = ConfigAccess::local(db.node.clone())
         .execute("{ EventSource { _docID } Agent { agent_id } }")
         .await
         .unwrap();
     assert!(rows["data"]["EventSource"].as_array().unwrap().is_empty());
     assert_eq!(rows["data"]["Agent"].as_array().unwrap().len(), 1);
-    // Self-config installs schemas before sources that watch them.
     db.node
         .add_schema("type CustomerSignup { kind: String }")
         .await
@@ -470,8 +466,6 @@ async fn configure_automation_creates_one_chain_and_preserves_runtime_ownership(
 async fn self_only_boundaries_reject_foreign_references_and_corrupted_bindings() {
     let db = test_db("self-config-boundaries").await;
     seed_config(&db.node).await;
-    // Corrupt storage explicitly to exercise the self-config reader's fail-closed
-    // behavior independently of the normal writer's reference validation.
     for query in [
         r#"mutation { create_Tools(input:{node_did:"did:key:zVictim", tools_id:"victim-tools"}) {_docID} }"#,
         r#"mutation { create_Task(input:{node_did:"did:key:zVictim", task_id:"victim-task", agent_id:"victim", prompt_template:"Victim"}) {_docID} }"#,
@@ -500,9 +494,6 @@ async fn self_only_boundaries_reject_foreign_references_and_corrupted_bindings()
         read(&db.node, Collection::AgentContext, CONTEXT_ID).await,
         before
     );
-    // A sibling behavior under the same principal is still outside this
-    // self-config tool's task scope. Retargeting must validate the stored task
-    // as well as the proposed one, so it cannot take over a sibling trigger.
     for query in [
         format!(
             r#"mutation {{ create_Agent(input:{{node_did:"{NODE_DID}", agent_id:"sibling", context_id:"{CONTEXT_ID}", inference_profile_id:"{PROFILE_ID}"}}) {{_docID}} }}"#

@@ -99,7 +99,6 @@ fn user_text_message(text: &str) -> Message {
     }
 }
 
-// Preserve the created physical request identity and exact owner/requester scope.
 fn fixture_agent_request(
     doc_id: String,
     request_id: &str,
@@ -411,8 +410,6 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
         Duration::from_secs(60),
     );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    // Begin a streaming response so reset_tail (called by persist_partial_turn)
-    // has a live buffer to clear.
     lifecycle
         .begin_owned_execution(&stream_writer)
         .await
@@ -691,7 +688,6 @@ async fn create_pending_request_with_input(
         "create_AgentRequest failed: {:?}",
         resp.errors
     );
-    // DefraDB returns the doc id in the mutation response or we query for it.
     if let Some(doc_id) = resp
         .data
         .as_ref()
@@ -701,7 +697,6 @@ async fn create_pending_request_with_input(
     {
         return doc_id.to_string();
     }
-    // Fallback: query by request_id.
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
@@ -1032,7 +1027,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         .and_then(serde_json::Value::as_str)
         .expect("physical tool call identity");
     let native = crate::session::load_tool_call_result(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         tool_doc_id,
         "did:test:test",
         &session_id,
@@ -1130,10 +1125,6 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         .await
         .unwrap();
 
-    // Canonical claimed publication: the streamed tool-call envelope is
-    // accepted through the owned completion loop's publication authority
-    // (ProviderTurnReady consuming the accumulated assistant turn) before the
-    // hook may dispatch it. There is no fabricated lifecycle state here.
     let accepted_message = processor.assistant_turn.clone().take_message().unwrap();
     processor
         .process_item(Ok(LoopStreamItem::ProviderTurnReady {
@@ -1155,13 +1146,10 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         crate::llm::ToolCallHookAction::Continue
     ));
 
-    // Reproduce the live wait race: an independent background task appends a
-    // user-role completion while inline tool execution is still active. The
-    // streamed tool-call envelope must already own its durable assistant row,
-    // so this append allocates the following sequence instead of colliding.
-    // Seed a closed independent tool source, then let the real notification
-    // transaction allocate its header/wake alongside the running foreground
-    // call. The helper does not bypass the notification publication owner.
+    // The streamed tool-call envelope already owns its durable assistant row,
+    // so a concurrent background completion allocates the following sequence
+    // instead of colliding. Seed an already-admitted pending wake so the real
+    // publisher exercises coalescing rather than asking the fixture to sign.
     let queue = gents_protocol::request_input::RequestQueue {
         delivery: Default::default(),
         position: None,
@@ -1172,9 +1160,6 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         interrupted_request_id: None,
         background_completion_wake_version: None,
     };
-    // This unit fixture has a synthetic DID, not a signing identity. Seed an
-    // already-admitted pending wake so the real publisher exercises coalescing
-    // rather than asking the fixture to sign a new request.
     create_pending_request_with_input(
         &node,
         "concurrent-notification-wake",
@@ -1260,9 +1245,9 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
-/// Three calls publish in one accepted assistant turn before dispatch. Each
-/// result closes independently and its later streamed observation cannot
-/// duplicate the durable delivery (Lean: `Transcript.parallel_results_complete_independently`).
+/// Three calls publish in one accepted assistant turn; each result closes
+/// independently and its later streamed observation cannot duplicate the
+/// durable delivery (Lean: `Transcript.parallel_results_complete_independently`).
 #[tokio::test]
 async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
     let data_path = std::env::temp_dir().join(format!(
@@ -1438,7 +1423,6 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    // Set up session hook + establish session by persisting user message.
     let hook = crate::hook::DefraSessionHook::with_identity(
         node.clone(),
         "did:test:test",
@@ -1451,7 +1435,6 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
     ));
     let session_id = hook.session_id().await.expect("session id");
 
-    // Create a pending request in the DB so the lifecycle can be claimed.
     let request_id = uuid::Uuid::new_v4().to_string();
     let request_doc_id = create_pending_request(&node, &request_id, &session_id).await;
 
@@ -1472,11 +1455,9 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
         "test-backend",
     );
 
-    // Claim → Streaming so advance() calls will work.
     let outcome = lifecycle.claim().await.unwrap();
     assert_eq!(outcome, ClaimOutcome::Claimed, "expected Claimed outcome");
 
-    // Use 0 ms batch interval so write_tokens flushes immediately to DB.
     let stream_writer =
         DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
     lifecycle
@@ -1506,7 +1487,6 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
         }))
         .await
         .unwrap();
-    // Publication precedes dispatch; the result closes its own tool source.
     processor.process_item(text_item("hello ")).await.unwrap();
     processor.process_item(text_item("world")).await.unwrap();
     let args = r#"{"tool":"discover_tools"}"#;
@@ -1548,7 +1528,6 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
     assert!(processor.assistant_turn.clone().take_message().is_none());
     assert!(processor.next_flush_deadline().await.is_none());
 
-    // Feed: Text("done") after the tool boundary.
     processor
         .process_item(Ok(LoopStreamItem::ProviderAttemptStarted {
             turn: 1,
@@ -1577,7 +1556,6 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
         .await
         .unwrap();
 
-    // Feed: FinalResponse.
     processor.process_item(final_item("done")).await.unwrap();
 
     let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
@@ -1789,11 +1767,6 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
-/// #589 durable-history fence: a streamed tool call whose `arguments` the wire
-/// parser left as a raw corrupt string (the production poison shape) must
-/// persist OBJECT-shaped into `AgentMessage` — the salvageable payload as its
-/// intended object, never as a `Value::String` that would jam every subsequent
-/// render of the session (#590).
 #[tokio::test]
 async fn corrupt_tool_call_arguments_persist_object_shaped() {
     let data_path = std::env::temp_dir().join(format!(
@@ -1864,8 +1837,6 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
         }))
         .await
         .unwrap();
-    // The wire parser could not shape the corrupt bytes, so the streamed rig
-    // ToolCall carries them as a raw Value::String — the exact production shape.
     let corrupt_call: Result<LoopStreamItem, crate::error::LoopStreamError> =
         Ok(LoopStreamItem::ToolCall {
             tool_call: crate::llm::rig_compat::from_rig_tool_call(
@@ -1928,8 +1899,6 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
         .await
         .unwrap();
 
-    // The durable history's assistant turn carries the SALVAGED object — the
-    // intended call — not the raw corrupt string.
     let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
         .await
         .unwrap();

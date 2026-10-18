@@ -141,8 +141,6 @@ else
   esac
 fi
 
-# Versioned binary names do not use the runtime's built-in runner discovery.
-# Resolve the packaged helper before any inference is started.
 if [ -z "${GENTS_FS_RUNNER:-}" ] && [ -x "$(dirname "$GENTS")/gents-fs-runner" ]; then
   export GENTS_FS_RUNNER="$(dirname "$GENTS")/gents-fs-runner"
 fi
@@ -166,8 +164,6 @@ fi
 DID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["node_did"])' "$EVAL_HOME/init.json")
 
 GRAPHQL="http://127.0.0.1:$PORT/api/v0/graphql"
-# Served means the endpoint answers and runtime.json names it: CLI commands
-# with --home fall back to opening the store themselves until runtime.json does.
 served() {
   grep -qF "127.0.0.1:$PORT/" "$EVAL_HOME/runtime.json" 2>/dev/null &&
     "$GENTS" query --home "$EVAL_HOME" --graphql "$GRAPHQL" --collection Node --field node_did 2>/dev/null |
@@ -205,9 +201,6 @@ PYFREE
   served || { echo "the eval home did not become ready; see $EVAL_HOME/server.log" >&2; tail -n 20 "$EVAL_HOME/server.log" >&2; exit 1; }
 fi
 
-# The trial copies the backend, sampling, profile and the profile's bound
-# InferenceExecution the run freezes; the ladder profile reuses the execution
-# `gents init` created for the home's default profile.
 PROFILE_ID="$DID:ladder-$TARGET"
 INFERENCE="$EVAL_HOME/inference-$TARGET"
 python3 - "$TARGET_FILE" "$DID" "$PER_TRIAL" "$INFERENCE" "$REASONING" "$TEMPERATURE" "$TOP_P" <<'PY'
@@ -234,8 +227,6 @@ PY
 "$GENTS" config apply --root "$INFERENCE" --bind-node-did home --home "$EVAL_HOME" >/dev/null
 echo "profile $PROFILE_ID: $MODEL, reasoning $REASONING, temperature $TEMPERATURE, top_p $TOP_P, $PER_TRIAL call(s) per trial" >&2
 
-# The subject is the Engineer this checkout seeds: its canonical prompt and grant,
-# copied over the pack's so the cell never drifts from gents_protocol.
 SUBJECT="$EVAL_HOME/engineer_subject-$SHA"
 rm -rf "$SUBJECT" && cp -R "${GENTS_EVAL_SUBJECT:-$LADDER/engineer_subject}" "$SUBJECT"
 cp "$ROOT/crates/gents-protocol/prompts/engineer.md" "$SUBJECT/agents/engineer/system_prompt.md"
@@ -278,14 +269,18 @@ c["tools"][0]["self_config"] = json.load(open(grant))
 json.dump(c, open(config, "w"), indent=2)
 PYSESSIONS
   fi
+  if [ "$level" = native-packs ]; then
+    RUN_SUBJECT="$EVAL_HOME/native_packs_subject-$SHA"
+    rm -rf "$RUN_SUBJECT"
+    cp -R "${GENTS_EVAL_SUBJECT:-$FIXTURES/native_pack_subject}" "$RUN_SUBJECT"
+    cp "$ROOT/crates/gents-protocol/prompts/engineer.md" "$RUN_SUBJECT/agents/engineer/system_prompt.md"
+  fi
   if [ "$level" = factory-setup ]; then
     RUN_SUBJECT="$EVAL_HOME/factory_subject-$SHA"
     rm -rf "$RUN_SUBJECT"
     cp -R "$FIXTURES/factory_setup/engineer_kspec" "$RUN_SUBJECT"
     cp "$ROOT/crates/gents-protocol/prompts/engineer.md" "$RUN_SUBJECT/engineer/system_prompt.md"
   fi
-  # A definition pack's empty node would clear the home's default
-  # agent, and the served home then refuses to restart; keep the default.
   DEFINITION="$EVAL_HOME/definitions/$level"
   rm -rf "$DEFINITION" && mkdir -p "$EVAL_HOME/definitions" && cp -R "${GENTS_EVAL_DEFINITION_SOURCE:-$FIXTURES/$SUITE_PATH}" "$DEFINITION"
   python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["node"]={"default_agent_id": sys.argv[2]}; json.dump(c, open(p,"w"), indent=2)' \

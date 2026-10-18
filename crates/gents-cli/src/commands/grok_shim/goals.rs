@@ -1,10 +1,9 @@
-//! Native goal-panel hydration from the runtime's canonical goal owner.
-//! Only the last successfully delivered observation is connection-local.
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents::goal::{GoalDocument, GoalStatus};
 use serde_json::{json, Value};
+use std::sync::Arc;
 
 use super::projection::{ProjectionEngine, UpdateTimestamps};
 use super::turn::{PromptSender, PromptSenderLine};
@@ -35,8 +34,6 @@ impl GoalCommand {
             "resume" => Self::Resume,
             "clear" => Self::Clear,
             _ => {
-                // Match stock Grok: only a trailing standalone positive
-                // --budget value is syntax; other occurrences are prose.
                 let mut objective = args.to_string();
                 let mut token_budget = None;
                 if let Some((head, tail)) = args.rsplit_once("--budget") {
@@ -78,11 +75,9 @@ impl GoalCommand {
         Ok(None)
     }
 
-    /// Operator controls reuse the runtime transition/clear owners. The ACP
-    /// caller must authorize the exact attached session before invoking this.
     pub(super) async fn execute(
         &self,
-        node: &EmbeddedNode,
+        node: &Arc<EmbeddedNode>,
         principal: &str,
         session: &str,
     ) -> Result<String> {
@@ -115,9 +110,6 @@ impl GoalCommand {
         };
         if let Some(status) = status {
             let state = goal.state().context("unrecognized persisted goal state")?;
-            // A legitimate but unavailable control is a host-command reply,
-            // not a failed model turn inviting the user to retry endlessly.
-            // The runtime's transition function remains the legality owner.
             if gents::goal::apply_operator_status_transition(state, status).is_err() {
                 return Ok(format!(
                     "Goal remains {}. This control is not available in that state.",
@@ -146,11 +138,9 @@ pub(super) struct GoalCursor {
 }
 
 impl GoalCursor {
-    /// The session observer has already authorized the attached root session.
-    /// No refresh_goal_usage/set_goal calls: observation must not mutate goals.
     pub(super) async fn refresh(
         &mut self,
-        node: &EmbeddedNode,
+        node: &Arc<EmbeddedNode>,
         principal: &str,
         session: &str,
         sender: &PromptSender,
@@ -158,15 +148,9 @@ impl GoalCursor {
     ) -> Result<()> {
         let mut goal = gents::goal::load_canonical_goal(node, principal, session).await?;
         if let Some(goal) = goal.as_mut() {
-            // The stored Goal counter is a scheduler checkpoint. Inference can
-            // finish after update_goal marks it complete, when the scheduler
-            // no longer refreshes it. Read the runtime's budget calculation;
-            // never repair persisted state from this observer.
             goal.tokens_used =
                 Some(gents::goal::session_token_usage(node, principal, session).await?);
         }
-        // Compare the rendered observation, including runtime-derived active
-        // time, rather than only fields stored in the scheduler checkpoint.
         let observed = goal
             .as_ref()
             .map(|goal| project(goal, Utc::now()))
@@ -211,16 +195,11 @@ impl GoalCursor {
     }
 }
 
-/// Stock permanently suppresses a cleared wire ID. Gents logical goal IDs
-/// are reused across clear/create, so project the stable physical incarnation
-/// instead. No synthesized generation counter or second identity owner.
 fn wire_goal_id(doc_id: &str) -> String {
     format!("gents:{doc_id}")
 }
 
 fn base_update(id: &str, objective: &str, status: &str, elapsed_ms: u64) -> Value {
-    // Grok's optional worker/verifier orchestration is not used by Gents'
-    // durable goal owner. Do not reinterpret continuation attempts as rounds.
     json!({"sessionUpdate":"goal_updated", "goal_id":id, "objective":objective,
         "status":status, "phase":"idle", "elapsed_ms":elapsed_ms,
         "total_deliverables":0, "completed_deliverables":0,
@@ -235,9 +214,6 @@ fn project(goal: &GoalDocument, now: DateTime<Utc>) -> Result<Value> {
         GoalStatus::Active => "active",
         GoalStatus::Paused => "user_paused",
         GoalStatus::Blocked => "blocked",
-        // Stock explicitly renders unfamiliar status strings as paused.
-        // Preserve the real cause rather than claiming an infrastructure
-        // failure or a token-budget limit; pause_message explains it.
         GoalStatus::UsageLimited => "usage_limited",
         GoalStatus::BudgetLimited => "budget_limited",
         GoalStatus::Complete => "complete",
@@ -422,8 +398,6 @@ mod tests {
         assert_eq!(cleared["params"]["update"]["status"], "cleared");
         assert_eq!(cleared["params"]["update"]["goal_id"], first_wire_id);
         drop(lines);
-        // Reusing a logical goal ID must not hit the stock pager's permanent
-        // last_cleared_goal_id suppression for the preceding incarnation.
         let recreated = node.execute(r#"mutation {create_Goal(input:{
             goal_id:"owned", node_did:"principal", session_id:"session", objective:"New incarnation",
             status:"active", created_at:"2026-09-02T00:00:00Z"
@@ -440,9 +414,6 @@ mod tests {
         assert_eq!(next["params"]["update"]["_meta"]["gents/goalId"], "owned");
         drop(lines);
 
-        // A completed goal does not receive scheduler usage refreshes. Late
-        // persisted inference must still update its panel, without changing
-        // the canonical Goal row or depending on a Goal document event.
         for mutation in [
             r#"mutation {update_Goal(filter:{goal_id:{_eq:"owned"}}, input:{status:"complete",tokens_used:12}) {_docID}}"#,
             r#"mutation {create_AgentRequest(input:{purpose: "normal", request_id:"usage-request",node_did:"principal",session_id:"session"}) {_docID}}"#,
@@ -519,8 +490,7 @@ mod tests {
             let update = project(&goal, now).unwrap();
             assert_eq!(
                 update,
-                project(&goal, now + chrono::Duration::seconds(1)).unwrap(),
-                "non-active goals must not accrue elapsed time"
+                project(&goal, now + chrono::Duration::seconds(1)).unwrap()
             );
             assert_eq!(update["goal_id"], "gents:physical-goal");
             assert_eq!(update["status"], native);

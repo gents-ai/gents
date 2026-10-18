@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::observations::apply_title_in_txn;
 use super::query::load_agent_session;
 use super::*;
@@ -5,7 +7,7 @@ use gents_protocol::session::{SessionTitle, SessionTitleSource};
 
 #[tokio::test]
 async fn title_transitions_preserve_session_and_request_observation() {
-    let node = EmbeddedNode::builder().build().await.unwrap();
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     node.add_schema(gents_protocol::schemas::AGENT_SESSION)
         .await
         .unwrap();
@@ -27,7 +29,7 @@ async fn title_transitions_preserve_session_and_request_observation() {
         SessionTitleSource::Task,
         SessionTitleSource::Placeholder,
     ] {
-        crate::config_client::ConfigAccess::transact_local(
+        crate::config_client::ConfigAccess::transact_local_write(
             &node,
             None,
             "test.automatic_title",
@@ -56,20 +58,25 @@ async fn title_transitions_preserve_session_and_request_observation() {
             before
         );
     }
-    crate::config_client::ConfigAccess::transact_local(&node, None, "test.user_title", |txn| {
-        Box::pin(async move {
-            apply_title_in_txn(
-                txn,
-                "owner",
-                None,
-                "title-session",
-                Some("  renamed  "),
-                SessionTitleSource::User,
-                "2026-01-02T00:00:00Z",
-            )
-            .await
-        })
-    })
+    crate::config_client::ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "test.user_title",
+        |txn| {
+            Box::pin(async move {
+                apply_title_in_txn(
+                    txn,
+                    "owner",
+                    None,
+                    "title-session",
+                    Some("  renamed  "),
+                    SessionTitleSource::User,
+                    "2026-01-02T00:00:00Z",
+                )
+                .await
+            })
+        },
+    )
     .await
     .unwrap();
     let renamed = load_agent_session(&node, "owner", "title-session", None)
@@ -82,20 +89,25 @@ async fn title_transitions_preserve_session_and_request_observation() {
         source: SessionTitleSource::User,
     });
     assert_eq!(renamed, expected);
-    crate::config_client::ConfigAccess::transact_local(&node, None, "test.clear_title", |txn| {
-        Box::pin(async move {
-            apply_title_in_txn(
-                txn,
-                "owner",
-                None,
-                "title-session",
-                None,
-                SessionTitleSource::User,
-                "2026-01-04T00:00:00Z",
-            )
-            .await
-        })
-    })
+    crate::config_client::ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "test.clear_title",
+        |txn| {
+            Box::pin(async move {
+                apply_title_in_txn(
+                    txn,
+                    "owner",
+                    None,
+                    "title-session",
+                    None,
+                    SessionTitleSource::User,
+                    "2026-01-04T00:00:00Z",
+                )
+                .await
+            })
+        },
+    )
     .await
     .unwrap();
     expected.title = None;
@@ -121,7 +133,7 @@ async fn title_transitions_preserve_session_and_request_observation() {
         .await
         .unwrap()
         .unwrap();
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "test.generated_title",
@@ -181,8 +193,6 @@ fn model_time(value: &serde_json::Value) -> serde_json::Value {
         .unwrap_or(serde_json::Value::Null)
 }
 
-/// Translate Lean's interned identities and logical seconds, without deriving
-/// any expected title/update outcome outside the Lean transition owner.
 fn model_session(value: &serde_json::Value) -> gents_protocol::session::AgentSession {
     let mut provenance = value["provenance"].clone();
     if let Some(object) = provenance.as_object_mut() {
@@ -236,11 +246,11 @@ async fn generated_user_title_cases_drive_the_shared_session_owner() {
     for case in cases {
         let before = model_session(&case["before"]);
         let expected = model_session(&case["after"]);
-        let node = EmbeddedNode::builder().build().await.unwrap();
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         node.add_schema(gents_protocol::schemas::AGENT_SESSION)
             .await
             .unwrap();
-        crate::config_client::ConfigAccess::transact_local(&node, None, "test.seed_model_title", |txn| {
+        crate::config_client::ConfigAccess::transact_local_write(&node, None, "test.seed_model_title", |txn| {
                 let before = before.clone();
                 Box::pin(async move {
                     txn.execute_with_variables(
@@ -252,7 +262,7 @@ async fn generated_user_title_cases_drive_the_shared_session_owner() {
             }).await.unwrap();
         let now = model_time(&case["now"]).as_str().unwrap().to_owned();
         let title = case["title"]["text"].as_str();
-        crate::config_client::ConfigAccess::transact_local(
+        crate::config_client::ConfigAccess::transact_local_write(
             &node,
             None,
             "test.model_user_title",

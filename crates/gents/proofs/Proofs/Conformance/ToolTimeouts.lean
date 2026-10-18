@@ -1,8 +1,8 @@
 import Proofs.ToolPolicy.Configuration
 import Lean
 
-/-! Tools-document timeouts under host ceilings. Every expectation is computed by
-the `ToolPolicy` owners; a `null` expectation is a document the owner rejects. -/
+
+
 
 namespace Conformance.ToolTimeouts
 open ToolPolicy Lean
@@ -57,7 +57,7 @@ private def backgroundJson : Json := toJson (backgroundCases.map fun (name, auth
   Json.mkObj [("name", toJson name), ("background_timeout_secs", toJson authored),
     ("expected", toJson (effectiveBackgroundLifetime authored))])
 
-/-- Requests probe the default, the lower bound, an in-range value and the maximum. -/
+
 private def requests : List (Option Nat) := [none, some 0, some 1, some 45, some 5000]
 
 private def boundedJson (name : String) (authored maximum : Option Int)

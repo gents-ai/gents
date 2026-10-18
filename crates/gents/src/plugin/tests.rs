@@ -5,13 +5,8 @@ fn wat(src: &str) -> Vec<u8> {
     wat::parse_str(src).expect("WAT parses")
 }
 
-/// The archive path a plugin's compiled `.afb` must live under, by
-/// `crate::pack::PLUGIN_ARTIFACT_PREFIX`'s own convention.
 const PLUGIN_ARTIFACT: &str = "plugins/plugin.afb";
 
-/// A guest that ignores stdin and writes exactly `json` to stdout: the
-/// prepare plugin fixture for tests that only need a deterministic
-/// result, not a real transformation of the host facts.
 pub(crate) fn constant_output_wat(json: &[u8]) -> String {
     let mut escaped = String::with_capacity(json.len() * 4);
     for byte in json {
@@ -33,12 +28,6 @@ drop))
     )
 }
 
-/// Builds a real Afterburner `.afb` around a compiled Wasm module,
-/// mirroring the minimal manifest `afterburner::afb_run`'s own tests use
-/// (`minimal_manifest` in its `tests.rs`) so `PluginRunner` sees exactly
-/// the shape `run_afb_bytes` dispatches through `run_wasm`: a
-/// `precompiled/wasm32-wasip1/main.wasm` member and a `[runtime]
-/// target = "wasm32-wasip1"`.
 pub(crate) fn build_plugin_afb(wat_source: &str) -> Vec<u8> {
     build_plugin_afb_bytes(&wat(wat_source))
 }
@@ -82,8 +71,6 @@ pub(crate) fn build_plugin_afb_bytes(wasm: &[u8]) -> Vec<u8> {
     bytes
 }
 
-/// Packs a one-plugin pack around a compiled `.afb`, so `PluginRunner`
-/// is exercised exactly as an installed pack ships it.
 pub(crate) fn build_plugin_pack(
     pack_name: &str,
     wat_source: &str,
@@ -132,9 +119,6 @@ pub(crate) fn build_plugin_pack(
     (plugin, afb_bytes)
 }
 
-/// Reads fd 0 in one shot and writes exactly what it read to fd 1:
-/// the identity plugin, and the vehicle for every "does the ABI carry
-/// arguments through" test below.
 pub(crate) const ECHO_WAT: &str = r#"
       (module
         (import "wasi_snapshot_preview1" "fd_read"
@@ -143,19 +127,15 @@ pub(crate) const ECHO_WAT: &str = r#"
           (func $fd_write (param i32 i32 i32 i32) (result i32)))
         (memory (export "memory") 1)
         (func (export "_start")
-          ;; iovec at 256: buf=0, buf_len=256
           i32.const 256  i32.const 0    i32.store
           i32.const 260  i32.const 256  i32.store
-          ;; fd_read(fd=0, iovs_ptr=256, iovs_len=1, nread_ptr=264)
           i32.const 0
           i32.const 256
           i32.const 1
           i32.const 264
           call $fd_read
           drop
-          ;; reuse the iovec, buf_len = bytes actually read
           i32.const 260  i32.const 264 i32.load  i32.store
-          ;; fd_write(fd=1, iovs_ptr=256, iovs_len=1, nwritten_ptr=268)
           i32.const 1
           i32.const 256
           i32.const 1
@@ -178,8 +158,6 @@ fn echo_plugin_returns_exactly_its_input() {
     assert_eq!(outcome.output, arguments);
 }
 
-/// Rule 1: every call gets a fresh instance, so two calls on the same
-/// compiled runner never see each other's arguments.
 #[test]
 fn two_calls_on_one_runner_never_see_each_others_arguments() {
     let (plugin, afb) = build_plugin_pack("echo_twice_pack", ECHO_WAT, None);
@@ -196,8 +174,6 @@ fn two_calls_on_one_runner_never_see_each_others_arguments() {
     assert_eq!(second.output, serde_json::json!({"call": 2}));
 }
 
-/// Rule 6: stdout that is not a single JSON value is `BadOutput`,
-/// naming why, never a silent empty result.
 #[test]
 fn non_json_stdout_is_bad_output() {
     let wat_source = r#"
@@ -231,8 +207,6 @@ fn non_json_stdout_is_bad_output() {
     );
 }
 
-/// A non-zero exit is a failure even when stdout is valid JSON: the exit
-/// code is the plugin's own verdict on the call.
 #[test]
 fn a_non_zero_exit_is_a_failure_even_with_json_stdout() {
     let wat_source = r#"
@@ -270,8 +244,6 @@ fn a_non_zero_exit_is_a_failure_even_with_json_stdout() {
     );
 }
 
-/// Rule 5: a plugin that loops forever is bounded by an explicit fuel
-/// ceiling, and the exhaustion is its own verdict, not a generic failure.
 #[test]
 fn an_infinite_loop_exhausts_an_explicit_fuel_ceiling() {
     let wat_source = r#"
@@ -302,13 +274,6 @@ fn an_infinite_loop_exhausts_an_explicit_fuel_ceiling() {
     );
 }
 
-/// The default budget sets no fuel ceiling at all: a guest that burns far
-/// more than Afterburner's own 100-million-instruction family default
-/// still completes, bounded only by the wall clock. This is the regression
-/// that matters: a real plugin (a source-scanning pre-pass) measured at
-/// roughly 166 fuel per byte plus a 25 million fixed cost needs on the
-/// order of 6.5 billion fuel for a 39 MB input, which the old fixed
-/// default failed well under a megabyte in.
 #[test]
 fn the_default_budget_has_no_fuel_ceiling_so_a_guest_over_100_million_instructions_still_runs() {
     let wat_source = r#"
@@ -352,12 +317,6 @@ fn the_default_budget_has_no_fuel_ceiling_so_a_guest_over_100_million_instructio
     );
 }
 
-/// Rule 5: `budget.wall_clock` is a real, independent bound, not
-/// merely a description of the fuel bound. Fuel is set far larger than
-/// what could exhaust within the wall-clock deadline (so the deadline
-/// reliably wins the race) but still finite (so the detached
-/// background thread this call leaves running eventually exhausts its
-/// own fuel and exits, rather than spinning forever).
 #[test]
 fn a_slow_plugin_is_stopped_by_its_wall_clock_budget() {
     let wat_source = r#"
@@ -380,9 +339,6 @@ fn a_slow_plugin_is_stopped_by_its_wall_clock_budget() {
     assert_eq!(outcome.verdict, PluginVerdict::Timeout);
 }
 
-/// The same bound, with no fuel ceiling at all: the wall clock is the only
-/// backstop an unlimited-fuel budget has against a guest that never
-/// returns, and it must still fire.
 #[test]
 fn a_slow_plugin_is_stopped_by_its_wall_clock_budget_even_with_unlimited_fuel() {
     let wat_source = r#"
@@ -408,10 +364,6 @@ fn a_slow_plugin_is_stopped_by_its_wall_clock_budget_even_with_unlimited_fuel() 
     assert_eq!(outcome.verdict, PluginVerdict::Timeout);
 }
 
-/// Rule 2: a plugin that declared no manifold gets no capabilities. Fd
-/// 3 only exists when a preopen was configured; this runner never
-/// configures one, so the guest observes a `fd_write` failure on it
-/// regardless of what it might have wanted.
 #[test]
 fn a_plugin_with_no_declared_manifold_gets_no_filesystem() {
     let wat_source = r#"
@@ -464,9 +416,6 @@ fn a_plugin_with_no_declared_manifold_gets_no_filesystem() {
     );
 }
 
-/// This runner's ceiling narrows even a wide-open declared manifold
-/// to nothing, because nothing beyond stdin/stdout/stderr crosses
-/// this plugin ABI today (`PluginRunner::compile`'s own doc).
 #[test]
 fn a_wide_declared_manifold_is_still_narrowed_to_this_runners_ceiling() {
     let wat_source = r#"(module (func (export "_start")))"#;
@@ -485,9 +434,6 @@ fn a_wide_declared_manifold_is_still_narrowed_to_this_runners_ceiling() {
     assert_eq!(runner.manifold, Manifold::sealed());
 }
 
-/// A source-only fixture `.afb` for `language`, carrying `entry` and
-/// nothing precompiled - the shape an interpreted package takes before
-/// `burn compile` has produced anything for it.
 fn source_only_afb(name: &str, language: &str, entry: &str, body: &[u8]) -> Vec<u8> {
     use afterburner_afb::manifest::{Format, Manifest, Package, Runtime};
     use afterburner_afb::pack::Builder;
@@ -527,8 +473,6 @@ fn source_only_afb(name: &str, language: &str, entry: &str, body: &[u8]) -> Vec<
     bytes
 }
 
-/// A plugin declaration pointing at [`PLUGIN_ARTIFACT`], for a fixture that
-/// supplies its own `.afb` bytes.
 fn plugin_named(name: &str, language: &str) -> PackPlugin {
     PackPlugin {
         name: name.to_owned(),
@@ -542,17 +486,10 @@ fn plugin_named(name: &str, language: &str) -> PackPlugin {
         bind_dir: None,
         limits: None,
         model_slot: None,
+        service: None,
     }
 }
 
-/// Rule 4, the coordinating requirement this module exists to enforce:
-/// a plugin whose real artifact would run through a dispatch path that
-/// cannot honour the bounds a call applies is refused at admission, with a
-/// reason naming what would not be enforced, never silently run.
-///
-/// Ruby source is that path: its runner exposes no fuel, memory, stdin or
-/// manifold override at all, so every axis a call asks for would be
-/// dropped.
 #[test]
 fn a_ruby_source_plugin_is_refused_at_admission_not_silently_run() {
     let afb_bytes = source_only_afb("rb_plugin", "ruby", "source/main.rb", b"puts 'hello'");
@@ -567,14 +504,6 @@ fn a_ruby_source_plugin_is_refused_at_admission_not_silently_run() {
     assert!(message.contains("wall-clock"), "{message}");
 }
 
-/// A default budget is raised to what the artifact needs to start at all.
-///
-/// This is the other half of admitting Python. Admission says the bounds
-/// are enforceable; this says the default ones are survivable. Handing a
-/// Pyodide-backed plugin `PluginBudget::default()` used to fail before its
-/// first line: CPython's linear memory will not instantiate under 64 MiB.
-/// The default no longer carries a fuel ceiling at all, so only the memory
-/// floor and the wall clock need raising.
 #[test]
 fn a_default_budget_is_raised_to_what_the_artifact_needs_to_start() {
     let wasi = source_only_afb("rs_plugin", "rust", "source/main.rs", b"fn main() {}");
@@ -621,7 +550,6 @@ fn for_plugin_raises_the_default_to_declared_limits() {
     assert_eq!(budget.wall_clock, std::time::Duration::from_secs(120));
     assert_eq!(budget.max_output_bytes, 4 * 1024 * 1024);
 
-    // A plugin that declares nothing gets exactly `for_artifact`'s answer.
     let no_limits = plugin_named("rs_plugin", "rust");
     assert_eq!(
         PluginBudget::for_plugin(&wasi, &no_limits).memory_bytes,
@@ -629,17 +557,9 @@ fn for_plugin_raises_the_default_to_declared_limits() {
     );
 }
 
-/// The literal prefix of the JSON this guest writes: `{"filler":"`. Kept as
-/// bytes (not a WAT text literal) because embedding an unescaped `"` inside
-/// a WAT string would terminate it early; every byte is written with its
-/// own `i32.store8` instead.
 const LARGE_OUTPUT_PREFIX: &[u8] = b"{\"filler\":\"";
 const LARGE_OUTPUT_SUFFIX: &[u8] = b"\"}";
 
-/// WAT for a guest that writes exactly `total_len` bytes of one valid JSON
-/// value to stdout: `{"filler":"aaa...a"}`. Used to prove
-/// `limits.max_output_mib` actually changes what a real call accepts, not just
-/// the arithmetic in [`PluginBudget::for_plugin`].
 fn large_json_output_wat(total_len: usize) -> String {
     let envelope_len = LARGE_OUTPUT_PREFIX.len() + LARGE_OUTPUT_SUFFIX.len();
     assert!(total_len > envelope_len, "need room for the JSON envelope");
@@ -650,14 +570,9 @@ fn large_json_output_wat(total_len: usize) -> String {
     )
 }
 
-/// WAT for a guest that writes `prefix`, `filler_len` bytes of `a`, then
-/// `suffix` to stdout. The `a`s are filled in bulk with `memory.fill` rather
-/// than a giant literal in the module source, and every envelope byte has its
-/// own `i32.store8` because an unescaped `"` would end a WAT string.
 pub(crate) fn filled_output_wat(prefix: &[u8], filler_len: usize, suffix: &[u8]) -> String {
     let total_len = prefix.len() + filler_len + suffix.len();
     let suffix_offset = total_len - suffix.len();
-    // WASI reads the iovec as an aligned guest pointer.
     let iovec_offset = total_len.next_multiple_of(4);
     let nwritten_offset = iovec_offset + 8;
     let pages = (nwritten_offset + 4).div_ceil(65536);
@@ -692,14 +607,9 @@ pub(crate) fn filled_output_wat(prefix: &[u8], filler_len: usize, suffix: &[u8])
     )
 }
 
-/// The real bound end to end: a guest that actually writes past the default
-/// 1 MiB output cap is `BadOutput` under the default budget, and succeeds
-/// once `limits.max_output_mib` raises it - proving the declared limit
-/// changes what a real call accepts, not only what [`PluginBudget::for_plugin`]
-/// computes on paper.
 #[test]
 fn a_call_over_the_default_output_cap_succeeds_once_the_declared_limit_covers_it() {
-    const TOTAL_LEN: usize = 1_500_000; // > default 1 MiB, <= a declared 2 MiB limit
+    const TOTAL_LEN: usize = 1_500_000;
     let wat_source = large_json_output_wat(TOTAL_LEN);
     let (mut plugin, afb) = build_plugin_pack("large_output_pack", &wat_source, None);
     plugin.limits = Some(crate::pack::PluginLimits {
@@ -740,11 +650,6 @@ fn a_call_over_the_default_output_cap_succeeds_once_the_declared_limit_covers_it
     );
 }
 
-/// WAT for a guest that writes one 64 KiB chunk to stdout in a loop until it
-/// overflows [`super::STDOUT_CAPTURE_PIPE_BYTES`], the real fixed capture
-/// pipe every compiled plugin's stdout runs through regardless of what its
-/// own budget declares. `chunks * 65536` must exceed the pipe; the write
-/// that crosses it traps.
 fn overflow_stdout_capture_pipe_wat(chunks: u32) -> String {
     const CHUNK_BYTES: u32 = 65536;
     let iovec_ptr = CHUNK_BYTES;
@@ -772,16 +677,8 @@ fn overflow_stdout_capture_pipe_wat(chunks: u32) -> String {
     )
 }
 
-/// The blocker this test pins: a guest that fills the host's fixed 4 MiB
-/// stdout capture pipe before it finishes traps inside `wasmtime-wasi`'s
-/// preview1 shim (`wasm trap: wasm unreachable instruction executed`), not
-/// because it wrote anything invalid. Before this was classified, that trap
-/// surfaced as an opaque hard `Err`, indistinguishable from a genuine guest
-/// crash, and never reached `describe_prepare_plugin_failure`'s "narrow
-/// base..head" message. It must come back as `BadOutput` instead.
 #[test]
 fn a_trap_that_fills_the_stdout_capture_pipe_is_bad_output_not_a_hard_error() {
-    // 4 MiB / 64 KiB = 64 whole chunks fit exactly; the 65th overflows.
     let wat_source = overflow_stdout_capture_pipe_wat(65);
     let (plugin, afb) = build_plugin_pack("overflow_pack", &wat_source, None);
     let runner = PluginRunner::compile(&afb, &plugin).expect("compiles");
@@ -797,9 +694,6 @@ fn a_trap_that_fills_the_stdout_capture_pipe_is_bad_output_not_a_hard_error() {
     );
 }
 
-/// A guest that traps having written almost nothing (a genuine crash, not
-/// an output-capacity problem) must stay a hard `Err`: reclassifying every
-/// trap as `BadOutput` would hide a real bug behind an output-size message.
 #[test]
 fn a_trap_with_little_captured_output_stays_a_hard_error() {
     let wat_source = r#"(module
@@ -814,15 +708,6 @@ fn a_trap_with_little_captured_output_stays_a_hard_error() {
     assert!(err.to_string().contains("trapped"), "{err}");
 }
 
-/// The same gate, the other way round: Python is admitted, because its
-/// dispatch path really does enforce every axis a call asks for.
-///
-/// This is the regression that matters. The gate used to be a hand-written
-/// table of language names in this file, and it went on refusing Python
-/// long after Python's bounds had been wired - a language that ran fully
-/// contained reported as unsafe. Asking
-/// `afterburner::afb_run::bounds_for` is what makes that impossible, and
-/// this test fails if anything reintroduces a second copy of the answer.
 #[test]
 fn a_python_plugin_is_admitted_because_its_bounds_are_enforced() {
     let afb_bytes = source_only_afb("py_plugin", "python", "source/main.py", b"print('hello')");
@@ -846,19 +731,16 @@ fn a_plugin_whose_artifact_is_not_a_readable_afb_is_refused() {
         bind_dir: None,
         limits: None,
         model_slot: None,
+        service: None,
     };
     let error = PluginRunner::compile(b"not an afb", &plugin).expect_err("must be refused");
     assert!(format!("{error:#}").contains("broken"), "{error:#}");
 }
 
-// ---- narrow_manifold: the intersection rule from (2) --------------
-
 #[test]
 fn an_admitting_caller_can_widen_the_ceiling_but_never_past_the_plugin() {
     use afterburner_core::manifold::FsAccess;
 
-    // A plugin that asked to read a workspace gets nothing under the
-    // sealed default, because nothing has admitted it yet.
     let sealed = narrow_manifold(
         &Manifold {
             fs: FsAccess::ReadOnly(vec!["/workspace".into()]),
@@ -868,8 +750,6 @@ fn an_admitting_caller_can_widen_the_ceiling_but_never_past_the_plugin() {
     );
     assert!(matches!(sealed.fs, FsAccess::None));
 
-    // An operator that allows the workspace admits exactly what the
-    // plugin asked for, and no more.
     let admitted = narrow_manifold(
         &Manifold {
             fs: FsAccess::ReadOnly(vec!["/workspace".into()]),
@@ -1019,17 +899,6 @@ fn plugin_requests_select_native_nan_arithmetic() {
     assert_eq!(request.nan_mode, NanMode::Native);
 }
 
-#[cfg(target_os = "macos")]
-#[test]
-fn masked_trap_startup_uses_the_plugin_request_engine() {
-    let startup = start_wasm_trap_handler_with_signals_blocked()
-        .unwrap()
-        .unwrap();
-    let request = plugin_run_request(Vec::new(), Manifold::sealed(), &PluginBudget::default());
-    let selected = afterburner::wasi::embedder_vm::shared_epoch_vm_with(request.nan_mode).unwrap();
-    assert!(std::ptr::eq(startup, selected));
-}
-
 #[test]
 fn generated_plugin_resource_cases_bind_budget_and_consent() {
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases;
@@ -1151,9 +1020,6 @@ fn bound_guest_can_read_inside_but_cannot_write_or_follow_a_symlink_out() {
     assert!(!inside.join("created.txt").exists());
 }
 
-/// Lean `ToolPolicy.pluginBindingValid`, `pluginCallAccess` and
-/// `pluginCallAdmitted`, driven through the manifest validator and the
-/// executor's headless bind admission over a real allowed-folders file.
 #[tokio::test]
 async fn generated_plugin_call_access_cases_drive_bind_admission() {
     use crate::pack::BindAccess;

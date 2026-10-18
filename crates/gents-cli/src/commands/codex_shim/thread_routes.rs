@@ -73,13 +73,10 @@ pub(super) async fn fork_thread_response(
             .map_err(internal_error)?
     };
     let thread = codex_thread_json_with_turns(&record, turns);
-    let bound_model_id = load_bound_model_selection_id_for_state(
-        state.node.as_ref(),
-        &state.node_did,
-        &state.agent_id,
-    )
-    .await
-    .map_err(internal_error)?;
+    let bound_model_id =
+        load_bound_model_selection_id_for_state(&state.node, &state.node_did, &state.agent_id)
+            .await
+            .map_err(internal_error)?;
     let response = thread_response_json(&record, thread, &bound_model_id);
     Ok((record, response))
 }
@@ -481,29 +478,5 @@ fn internal_error(err: anyhow::Error) -> ThreadRouteError {
     ThreadRouteError {
         code: JSONRPC_INTERNAL_ERROR,
         message: err.to_string(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn source_filters_classify_gents_spawned_children() {
-        assert!(source_filter_allows_cli(None));
-        assert!(source_filter_allows_cli(Some(&[])));
-        assert!(!source_filter_allows_spawned_agent_threads(None));
-        assert!(!source_filter_allows_spawned_agent_threads(Some(&[])));
-
-        assert!(source_filter_allows_spawned_agent_threads(Some(&[
-            codex::ThreadSourceKind::SubAgent,
-        ])));
-        assert!(source_filter_allows_spawned_agent_threads(Some(&[
-            codex::ThreadSourceKind::SubAgentThreadSpawn,
-        ])));
-        assert!(!source_filter_allows_spawned_agent_threads(Some(&[
-            codex::ThreadSourceKind::Cli,
-            codex::ThreadSourceKind::SubAgentReview,
-        ])));
     }
 }

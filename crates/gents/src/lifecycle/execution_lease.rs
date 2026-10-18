@@ -130,8 +130,6 @@ enum TerminalAuthority<'a> {
 }
 
 impl RequestExecutionLease {
-    /// `decide` over this execution's generation and the current request
-    /// row's lease, or `None` when the row is gone.
     async fn decide_lease(
         &self,
         node: &EmbeddedNode,
@@ -198,8 +196,6 @@ impl RequestLifecycle {
         Ok(())
     }
 
-    /// Cancelled when the lease owner observes this execution lost its
-    /// request; never cancelled for an execution without a renewal owner.
     pub(crate) fn ownership_lost(&self) -> tokio_util::sync::CancellationToken {
         self.renewal_task
             .as_ref()
@@ -284,11 +280,9 @@ impl RequestLifecycle {
     }
 }
 
-/// LatestOnly and child deadlines revoke the observed execution through the
-/// same atomic terminal owner. Unlike recovery, revocation may cancel a live lease.
 #[cfg(test)]
 pub(crate) async fn revoke_execution_generation(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     row: &AgentRequestRow,
     outcome: RequestTerminalOutcome,
     selection: TerminalOutput,
@@ -318,7 +312,7 @@ pub(crate) async fn revoke_execution_generation(
 /// the same write gate as the generation CAS and uses immutable header metadata,
 /// exactly as `terminalSelectionMetadataValid`; corrupt bytes remain untouched.
 pub(crate) async fn revoke_execution_preserving_output(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     row: &AgentRequestRow,
     outcome: RequestTerminalOutcome,
     reason: &str,
@@ -345,7 +339,7 @@ pub(crate) async fn revoke_execution_preserving_output(
 
 #[cfg(test)]
 pub(crate) async fn revoke_execution_preserving_output_at(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     row: &AgentRequestRow,
     outcome: RequestTerminalOutcome,
     reason: &str,
@@ -374,7 +368,7 @@ pub(crate) async fn revoke_execution_preserving_output_at(
 }
 
 async fn terminalize_execution(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_doc_id: &str,
     authority: TerminalAuthority<'_>,
     outcome: RequestTerminalOutcome,
@@ -397,7 +391,7 @@ async fn terminalize_execution(
 
 #[cfg(test)]
 pub(crate) async fn terminalize_owned_at(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_doc_id: &str,
     generation: &str,
     outcome: RequestTerminalOutcome,
@@ -419,7 +413,7 @@ pub(crate) async fn terminalize_owned_at(
 }
 
 async fn terminalize_execution_with_time(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_doc_id: &str,
     authority: TerminalAuthority<'_>,
     outcome: RequestTerminalOutcome,
@@ -429,10 +423,6 @@ async fn terminalize_execution_with_time(
     fixture_fresh_generation: Option<&str>,
     pending_fence: Option<(&[String], Option<DateTime<Utc>>)>,
 ) -> Result<TerminalizeResult> {
-    use super::execution_policy::{
-        authorize_execution_revocation, authorize_finalize, LeaseObservation,
-    };
-    use gents_protocol::output::{MessagePublication, MessageRole};
     let fresh_generation = fixture_fresh_generation
         .map_or_else(ExecutionGeneration::fresh, |generation| {
             ExecutionGeneration(generation.to_owned())
@@ -440,171 +430,343 @@ async fn terminalize_execution_with_time(
     let fresh_generation = &fresh_generation;
     let selection = &selection;
     crate::config_client::ConfigAccess::transact_local_idempotent(
-        node, None, crate::config_client::IdempotentTransactionRetry::Standard,
+        node,
+        None,
+        crate::config_client::IdempotentTransactionRetry::Standard,
         "lifecycle.terminalize_execution",
-        move |txn| Box::pin(async move {
-            if pending_fence.is_some() {
-                crate::graphql::fence_arrivals(txn, "AgentRequest").await?;
-            }
-            let doc_id = escape_graphql_string(request_doc_id);
-            let result = txn.execute_local_response(&format!(r#"{{ AgentRequest(
+        move |txn| {
+            Box::pin(terminalize_execution_in_txn(
+                txn,
+                request_doc_id,
+                authority,
+                outcome,
+                selection,
+                reason,
+                fixture_now,
+                fresh_generation,
+                pending_fence,
+            ))
+        },
+    )
+    .await
+}
+
+pub(super) async fn stage_revoke_execution_preserving_output(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    row: &AgentRequestRow,
+    outcome: RequestTerminalOutcome,
+    reason: &str,
+) -> Result<TerminalizeResult> {
+    terminalize_execution_in_txn(
+        txn,
+        row.doc_id.as_deref().context("missing request document")?,
+        TerminalAuthority::Revocation {
+            generation: row
+                .execution_generation
+                .as_deref()
+                .context("missing execution generation")?,
+            expiry: row
+                .execution_lease_expires_at
+                .as_deref()
+                .context("missing execution expiry")?,
+        },
+        outcome,
+        &None,
+        reason,
+        None,
+        &ExecutionGeneration::fresh(),
+        None,
+    )
+    .await
+}
+
+async fn terminalize_execution_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    request_doc_id: &str,
+    authority: TerminalAuthority<'_>,
+    outcome: RequestTerminalOutcome,
+    selection: &Option<TerminalOutput>,
+    reason: &str,
+    fixture_now: Option<DateTime<Utc>>,
+    fresh_generation: &ExecutionGeneration,
+    pending_fence: Option<(&[String], Option<DateTime<Utc>>)>,
+) -> Result<TerminalizeResult> {
+    use super::execution_policy::{
+        authorize_execution_revocation, authorize_finalize, LeaseObservation,
+    };
+    use gents_protocol::output::{MessagePublication, MessageRole};
+
+    if pending_fence.is_some() {
+        crate::graphql::fence_arrivals(txn, "AgentRequest").await?;
+    }
+    let doc_id = escape_graphql_string(request_doc_id);
+    let result = txn.execute_local_response(&format!(r#"{{ AgentRequest(
                 filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
                 _docID request_id purpose node_did requester_did session_id lifecycle_state
                 execution_generation execution_lease_expires_at interrupt_requested_at terminal_output
             }} }}"#)).await?;
-            let row = crate::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")?
-                .context("execution request disappeared")?;
-            let title = row.purpose.context("execution request purpose missing")?
-                == gents_protocol::request_admission::RequestPurpose::TitleAudit;
-            if title {
-                anyhow::ensure!(selection.as_ref().is_none_or(|selected| *selected == TerminalOutput::NoMessage),
-                    "title execution cannot select a transcript message");
-            }
-            let owner = row.execution_generation.as_deref().context("missing execution generation")?;
-            let state = row.lifecycle_state.context("missing request state")?;
-            let effective_outcome = if outcome == RequestTerminalOutcome::Failed
-                && row.interrupt_requested_at.as_deref().is_some_and(|v| !v.is_empty()) {
-                RequestTerminalOutcome::Interrupted
-            } else { outcome };
-            if state.is_terminal() {
-                return Ok(if matches!(authority, TerminalAuthority::Owner(expected) if expected == owner)
-                    && state == effective_outcome.request_state() && row.terminal_output.as_ref() == selection.as_ref() {
-                    TerminalizeResult::AlreadySame
-                } else { TerminalizeResult::Lost });
-            }
-            let expiry = row.execution_lease_expires_at.as_deref().context("missing execution expiry")?;
-            let deadline = DateTime::parse_from_rfc3339(expiry)?.timestamp_millis();
-            let now = fixture_now.unwrap_or_else(Utc::now);
-            let observed = LeaseObservation { request: state, generation: owner, deadline_ms: deadline };
-            let authorized = match authority {
-                TerminalAuthority::Owner(expected) => authorize_finalize(
-                    observed, expected, now.timestamp_millis(), effective_outcome == RequestTerminalOutcome::Completed),
-                TerminalAuthority::Revocation { generation, expiry: expected } =>
-                    authorize_execution_revocation(observed,
-                        LeaseObservation { generation, deadline_ms: DateTime::parse_from_rfc3339(expected)?.timestamp_millis(), ..observed },
-                        fresh_generation.as_str(), effective_outcome.request_state()),
-            };
-            if !authorized || row.terminal_output.is_some() {
-                return Ok(TerminalizeResult::Lost);
-            }
-            let agent = row.node_did.as_deref().context("missing request agent")?;
-            let session_id = row.session_id.as_deref().context("missing request session")?;
-            if let Some((expected, request_deadline)) = pending_fence {
-                anyhow::ensure!(request_deadline.is_none_or(|deadline| Utc::now() < deadline), "request deadline expired before natural completion");
-                let actual = super::queue::pending_ids_in_txn(txn, agent, session_id).await?;
-                if actual != expected { return Err(PendingQueueChanged.into()); }
-            }
+    let row = crate::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")?
+        .context("execution request disappeared")?;
+    let title = row.purpose.context("execution request purpose missing")?
+        == gents_protocol::request_admission::RequestPurpose::TitleAudit;
+    if title {
+        anyhow::ensure!(
+            selection
+                .as_ref()
+                .is_none_or(|selected| *selected == TerminalOutput::NoMessage),
+            "title execution cannot select a transcript message"
+        );
+    }
+    let owner = row
+        .execution_generation
+        .as_deref()
+        .context("missing execution generation")?;
+    let state = row.lifecycle_state.context("missing request state")?;
+    let effective_outcome = if outcome == RequestTerminalOutcome::Failed
+        && row
+            .interrupt_requested_at
+            .as_deref()
+            .is_some_and(|v| !v.is_empty())
+    {
+        RequestTerminalOutcome::Interrupted
+    } else {
+        outcome
+    };
+    if state.is_terminal() {
+        return Ok(
+            if matches!(authority, TerminalAuthority::Owner(expected) if expected == owner)
+                && state == effective_outcome.request_state()
+                && row.terminal_output.as_ref() == selection.as_ref()
+            {
+                TerminalizeResult::AlreadySame
+            } else {
+                TerminalizeResult::Lost
+            },
+        );
+    }
+    let expiry = row
+        .execution_lease_expires_at
+        .as_deref()
+        .context("missing execution expiry")?;
+    let deadline = DateTime::parse_from_rfc3339(expiry)?.timestamp_millis();
+    let now = fixture_now.unwrap_or_else(Utc::now);
+    let observed = LeaseObservation {
+        request: state,
+        generation: owner,
+        deadline_ms: deadline,
+    };
+    let authorized = match authority {
+        TerminalAuthority::Owner(expected) => authorize_finalize(
+            observed,
+            expected,
+            now.timestamp_millis(),
+            effective_outcome == RequestTerminalOutcome::Completed,
+        ),
+        TerminalAuthority::Revocation {
+            generation,
+            expiry: expected,
+        } => authorize_execution_revocation(
+            observed,
+            LeaseObservation {
+                generation,
+                deadline_ms: DateTime::parse_from_rfc3339(expected)?.timestamp_millis(),
+                ..observed
+            },
+            fresh_generation.as_str(),
+            effective_outcome.request_state(),
+        ),
+    };
+    if !authorized || row.terminal_output.is_some() {
+        return Ok(TerminalizeResult::Lost);
+    }
+    let agent = row.node_did.as_deref().context("missing request agent")?;
+    let session_id = row
+        .session_id
+        .as_deref()
+        .context("missing request session")?;
+    if let Some((expected, request_deadline)) = pending_fence {
+        anyhow::ensure!(
+            request_deadline.is_none_or(|deadline| Utc::now() < deadline),
+            "request deadline expired before natural completion"
+        );
+        let actual = super::queue::pending_ids_in_txn(txn, agent, session_id).await?;
+        if actual != expected {
+            return Err(PendingQueueChanged.into());
+        }
+    }
 
-            let headers = session::load_request_headers_in_txn(
-                txn, session_id, agent, row.requester_did.as_deref(), request_doc_id
-            ).await?;
-            if title && matches!(authority, TerminalAuthority::Owner(_)) {
-                let records = super::recovery::request_segments(
-                    txn, request_doc_id, agent, session_id, row.requester_did.as_deref(),
-                ).await?;
-                validate_title_sources_decided(request_doc_id, &records)?;
+    let headers = session::load_request_headers_in_txn(
+        txn,
+        session_id,
+        agent,
+        row.requester_did.as_deref(),
+        request_doc_id,
+    )
+    .await?;
+    if title && matches!(authority, TerminalAuthority::Owner(_)) {
+        let records = super::recovery::request_segments(
+            txn,
+            request_doc_id,
+            agent,
+            session_id,
+            row.requester_did.as_deref(),
+        )
+        .await?;
+        validate_title_sources_decided(request_doc_id, &records)?;
+    }
+    let mut reader = session::TxnCanonicalReader::new(txn, agent, row.requester_did.as_deref());
+    reader.observe_headers(&headers);
+    let eligible = |header: &&session::canonical_rows::TranscriptMessageRow| {
+        header.message.role == MessageRole::Assistant
+            && matches!(
+                header.message.publication,
+                MessagePublication::RequestExecution { .. }
+                    | MessagePublication::RequestRecovery { .. }
+            )
+    };
+    let selected;
+    let selection = match selection.as_ref() {
+        Some(explicit) => explicit,
+        None => {
+            anyhow::ensure!(
+                matches!(authority, TerminalAuthority::Revocation { .. }),
+                "only revocation may select output by metadata"
+            );
+            let latest = headers
+                .iter()
+                .filter(eligible)
+                .max_by_key(|header| header.message.sequence);
+            if let Some(latest) = latest {
+                anyhow::ensure!(
+                    headers
+                        .iter()
+                        .filter(eligible)
+                        .filter(|header| header.message.sequence == latest.message.sequence)
+                        .count()
+                        == 1,
+                    "revocation terminal header sequence is ambiguous"
+                );
             }
-            let mut reader = session::TxnCanonicalReader::new(txn, agent, row.requester_did.as_deref());
-            reader.observe_headers(&headers);
-            let eligible = |header: &&session::canonical_rows::TranscriptMessageRow| {
-                header.message.role == MessageRole::Assistant &&
-                matches!(header.message.publication, MessagePublication::RequestExecution { .. }
-                    | MessagePublication::RequestRecovery { .. })
-            };
-            let selected;
-            let selection = match selection.as_ref() {
-                Some(explicit) => explicit,
-                None => {
-                    anyhow::ensure!(matches!(authority, TerminalAuthority::Revocation { .. }),
-                        "only revocation may select output by metadata");
-                    let latest = headers.iter().filter(eligible)
-                        .max_by_key(|header| header.message.sequence);
-                    if let Some(latest) = latest {
-                        anyhow::ensure!(headers.iter().filter(eligible)
-                            .filter(|header| header.message.sequence == latest.message.sequence).count() == 1,
-                            "revocation terminal header sequence is ambiguous");
-                    }
-                    selected = latest.map_or(TerminalOutput::NoMessage, |header|
-                        TerminalOutput::Message { message_doc_id: header.doc_id.clone() });
-                    &selected
+            selected = latest.map_or(TerminalOutput::NoMessage, |header| {
+                TerminalOutput::Message {
+                    message_doc_id: header.doc_id.clone(),
                 }
-            };
-            anyhow::ensure!(!title || *selection == TerminalOutput::NoMessage,
-                "title execution cannot select a transcript message");
-            match selection {
-                TerminalOutput::Message { message_doc_id } => {
-                    let matching = headers.iter().filter(eligible)
-                        .filter(|header| &header.doc_id == message_doc_id).collect::<Vec<_>>();
-                    anyhow::ensure!(matching.len() == 1, "terminal selection lacks exact owned assistant header");
-                    if !matches!(authority, TerminalAuthority::Revocation { .. }) {
-                        reader.load_message(message_doc_id).await?;
-                    }
-                }
-                TerminalOutput::NoMessage => {
-                    for header in headers.iter().filter(eligible) {
-                        anyhow::ensure!(!matches!(authority, TerminalAuthority::Revocation { .. }),
-                            "NoMessage cannot replace an owned assistant header during revocation");
-                        match reader.load_message(&header.doc_id).await {
-                            Ok(_) => anyhow::bail!("NoMessage cannot replace a reconstructable owned assistant header"),
-                            // Match eligibleOwnedAssistantExists: invalid output
-                            // is retained, but does not become terminal payload.
-                            Err(error) if error.downcast_ref::<gents_protocol::output::ReconstructionError>().is_some() => {},
-                            // Storage/authorization failures are not evidence of
-                            // absence and must roll back the terminal decision.
-                            Err(error) => return Err(error),
-                        }
-                    }
+            });
+            &selected
+        }
+    };
+    anyhow::ensure!(
+        !title || *selection == TerminalOutput::NoMessage,
+        "title execution cannot select a transcript message"
+    );
+    match selection {
+        TerminalOutput::Message { message_doc_id } => {
+            let matching = headers
+                .iter()
+                .filter(eligible)
+                .filter(|header| &header.doc_id == message_doc_id)
+                .collect::<Vec<_>>();
+            anyhow::ensure!(
+                matching.len() == 1,
+                "terminal selection lacks exact owned assistant header"
+            );
+            if !matches!(authority, TerminalAuthority::Revocation { .. }) {
+                reader.load_message(message_doc_id).await?;
+            }
+        }
+        TerminalOutput::NoMessage => {
+            for header in headers.iter().filter(eligible) {
+                anyhow::ensure!(
+                    !matches!(authority, TerminalAuthority::Revocation { .. }),
+                    "NoMessage cannot replace an owned assistant header during revocation"
+                );
+                match reader.load_message(&header.doc_id).await {
+                    Ok(_) => anyhow::bail!(
+                        "NoMessage cannot replace a reconstructable owned assistant header"
+                    ),
+                    Err(error)
+                        if error
+                            .downcast_ref::<gents_protocol::output::ReconstructionError>()
+                            .is_some() => {}
+                    Err(error) => return Err(error),
                 }
             }
-            let terminal_generation = match authority {
-                TerminalAuthority::Owner(_) => owner,
-                TerminalAuthority::Revocation { .. } => fresh_generation.as_str(),
-            };
-            let generation = escape_graphql_string(owner);
-            let next_generation = escape_graphql_string(terminal_generation);
-            let expiry = escape_graphql_string(expiry);
-            let timestamp = now.to_rfc3339();
-            let timestamp_gql = escape_graphql_string(&timestamp);
-            let outcome_reason = reason;
-            let reason = escape_graphql_string(reason);
-            let stopped_before_running = state.certifies_stopped_before_running(
-                effective_outcome.request_state(), matches!(authority, TerminalAuthority::Owner(_)));
-            let target = escape_graphql_string(effective_outcome.request_state().as_str());
-            let state = escape_graphql_string(state.as_str());
-            let mutation = format!(r#"mutation($terminal_output: JSON) {{ update_AgentRequest(
+        }
+    }
+    let terminal_generation = match authority {
+        TerminalAuthority::Owner(_) => owner,
+        TerminalAuthority::Revocation { .. } => fresh_generation.as_str(),
+    };
+    let generation = escape_graphql_string(owner);
+    let next_generation = escape_graphql_string(terminal_generation);
+    let expiry = escape_graphql_string(expiry);
+    let timestamp = now.to_rfc3339();
+    let timestamp_gql = escape_graphql_string(&timestamp);
+    let outcome_reason = reason;
+    let reason = escape_graphql_string(reason);
+    let stopped_before_running = state.certifies_stopped_before_running(
+        effective_outcome.request_state(),
+        matches!(authority, TerminalAuthority::Owner(_)),
+    );
+    let target = escape_graphql_string(effective_outcome.request_state().as_str());
+    let state = escape_graphql_string(state.as_str());
+    let mutation = format!(
+        r#"mutation($terminal_output: JSON) {{ update_AgentRequest(
                 docID: "{doc_id}", filter: {{ _docID: {{ _eq: "{doc_id}" }}, lifecycle_state: {{ _eq: "{state}" }},
                     execution_generation: {{ _eq: "{generation}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }} }},
                 input: {{ lifecycle_state: "{target}", execution_generation: "{next_generation}",
                     execution_lease_expires_at: "{timestamp_gql}", failure_reason: "{reason}",
                     terminalized_at: "{timestamp_gql}", terminal_redrive_attempts: 0,
                     terminal_output: $terminal_output, stopped_before_running: {stopped_before_running} }}
-            ) {{ _docID }} }}"#);
-            let result = txn.execute_with_variables(&mutation, &serde_json::json!({
+            ) {{ _docID }} }}"#
+    );
+    let result = txn
+        .execute_with_variables(
+            &mutation,
+            &serde_json::json!({
                 "terminal_output": selection
-            })).await?;
-            if !result.get("data").and_then(|value| value.get("update_AgentRequest"))
-                .is_some_and(response_has_documents) {
-                return Ok(TerminalizeResult::Lost);
-            }
-            // After the winning request CAS, but in the SAME transaction.
-            // Any missing reply, lost tool CAS or validation error rolls it all back.
-            if !title {
-                super::terminal_tools::account_tools_in_txn(
-                txn, &mut reader, &row, &headers, owner,
-                effective_outcome == RequestTerminalOutcome::Completed, &timestamp,
-            ).await?;
-            session::refresh_session_request_observation_in_txn(
-                txn, agent, row.requester_did.as_deref(), session_id,
-                request_doc_id, &row.request_id, &timestamp,
-            ).await?;
-            }
-            crate::trigger_engine::durable::publish_request_outcome(
-                txn, agent, &row.request_id, effective_outcome.request_state().as_str(),
-                outcome_reason, &timestamp,
-            ).await?;
-            Ok(TerminalizeResult::Won)
-        }),
-    ).await
+            }),
+        )
+        .await?;
+    if !result
+        .get("data")
+        .and_then(|value| value.get("update_AgentRequest"))
+        .is_some_and(response_has_documents)
+    {
+        return Ok(TerminalizeResult::Lost);
+    }
+    if !title {
+        super::terminal_tools::account_tools_in_txn(
+            txn,
+            &mut reader,
+            &row,
+            &headers,
+            owner,
+            effective_outcome == RequestTerminalOutcome::Completed,
+            &timestamp,
+        )
+        .await?;
+        session::refresh_session_request_observation_in_txn(
+            txn,
+            agent,
+            row.requester_did.as_deref(),
+            session_id,
+            request_doc_id,
+            &row.request_id,
+            &timestamp,
+        )
+        .await?;
+    }
+    crate::trigger_engine::durable::publish_request_outcome(
+        txn,
+        agent,
+        &row.request_id,
+        effective_outcome.request_state().as_str(),
+        outcome_reason,
+        &timestamp,
+    )
+    .await?;
+    Ok(TerminalizeResult::Won)
 }
 
 pub(super) fn validate_title_sources_decided(

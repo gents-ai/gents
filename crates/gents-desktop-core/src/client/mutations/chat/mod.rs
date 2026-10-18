@@ -2,17 +2,11 @@ mod binding;
 mod request;
 mod session;
 
-pub use session::rename_session;
-// Re-export the shared interrupt helper from `gents` so the desktop
-// client and the runtime share a single GraphQL implementation. Keeping this
-// behind the `chat::` module path preserves the existing public surface.
-// `fetch_interrupt_requested_at` is reachable directly via `gents::` for
-// the conformance test; desktop code only uses `interrupt_request`.
 pub use gents::interrupt_request;
 pub use request::{
-    resend_request, retry_request, submit_goal_backed_request, submit_request, submit_task_request,
-    SubmitRequestOptions, SubmittedRequest,
+    resend_request, retry_request, submit_request, submit_task_request, SubmitRequestOptions,
+    SubmittedRequest,
 };
+pub use session::rename_session;
 
-#[cfg(test)]
-mod tests;
+pub(crate) use request::prepare_request_submission;

@@ -1,6 +1,3 @@
-//! Representation bridge for model-derived payload presentation cases.
-//! Reconstruction and admission policy remain in `gents_protocol::output`.
-
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents_protocol::message::{
@@ -264,8 +261,6 @@ fn media(value: &LeanMedia<LeanPayloadSpec>) -> Result<MediaBlock> {
         },
         LeanMediaData::Unknown => MediaData::Unknown,
     };
-    // Native media types are typed by media kind; decoding a modeled MIME
-    // string is representation translation, never a validation fallback.
     let media_type = value
         .media_type
         .as_deref()
@@ -475,9 +470,8 @@ fn presented_bytes(value: &Message) -> Result<u64> {
                             ReasoningContent::Redacted { data } => data.len(),
                         })
                         .sum(),
-                    // `reconstruct_message` has validated this native field,
-                    // but parses its JSON into a Value. Count the sealed source
-                    // bytes below, so whitespace and key order are not lost.
+                    // Count sealed source bytes, not re-parsed JSON, so
+                    // whitespace and key order are not lost.
                     AssistantContent::ToolCall(_) => 0,
                     AssistantContent::Image(image) => data_bytes(&image.data),
                 })

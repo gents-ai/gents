@@ -1,10 +1,7 @@
-//! Flat presentation is only an adapter: invocation uses the dispatcher owner.
 use super::{CallToolArgs, CallToolTool, MetaToolContext};
 use crate::document_config::{RemoteToolStyle, RemoteTools};
 use crate::llm::tool::{BoxFuture, Tool, ToolDefinition, ToolDyn, ToolError};
 
-/// Stable provider-safe name, resolved only against the configured selection.
-/// Hashing avoids ambiguous separators and provider name-length restrictions.
 pub(crate) fn flat_tool_name(service: &str, tool: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut hash = Sha256::new();

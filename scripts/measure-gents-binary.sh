@@ -1,19 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Measure the release dependency graph and, when requested, the built CLI.
-#
-# Environment:
-#   MEASURE_MODE=graph|binary  graph skips the release build/binary inspection
-#   SKIP_BUILD=1              inspect an existing release binary
-#   BUILD_ELAPSED_SECONDS=N   preserve timing from a build performed elsewhere
-#   BINARY_PATH=path          override $CARGO_TARGET_DIR/release/gents
-#   ARCHIVE_PATH=path         include the packaged release archive in the report
-#   OUTPUT_JSON=path          write the stable machine-readable report
-#
-# When GITHUB_OUTPUT or GITHUB_STEP_SUMMARY are set, the script also exposes
-# scalar step outputs and appends a compact Actions summary.
-
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
@@ -84,10 +71,8 @@ sha256_file() {
 
 git_dirty=false
 if [[ -n "${GITHUB_SHA:-}" ]]; then
-  # Actions checks out the immutable workflow SHA. Prefer that authoritative
-  # value because container jobs can intentionally have a different uid than
-  # the host-owned checkout, which makes Git reject repository inspection as
-  # dubious ownership even though the checked-out sources are valid.
+  # Prefer the immutable workflow SHA over local git inspection; container uid
+  # mismatches make Git reject repository ownership otherwise.
   git_sha=$GITHUB_SHA
 else
   git_sha=$(git rev-parse HEAD)
@@ -107,13 +92,8 @@ case "$release_lto" in
   false) release_lto=local-thin ;;
 esac
 
-# GitHub's Rust setup action exports CARGO_TERM_COLOR=always. Override it for
-# machine-readable tree output: Cargo colors the `(*)` marker itself, so the
-# escape codes used to make the old normalization miss the marker and inflate
-# the v0.11.0 reports from 819 to 1,141 packages on macOS.
-#
-# Also select the recorded target explicitly. Without that, a report labelled
-# for a cross target can silently describe the host graph instead.
+# CARGO_TERM_COLOR=never: Cargo colors the `(*)` marker so plain sed cannot
+# strip it, and colored output inflates the package counts.
 package_lines=$(
   CARGO_TERM_COLOR=never cargo tree --locked -p gents-cli --edges normal \
     --target "$target_triple" --prefix none --format '{p}' \

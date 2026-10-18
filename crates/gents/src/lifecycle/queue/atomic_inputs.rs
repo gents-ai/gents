@@ -20,13 +20,6 @@ struct BackgroundCompletionGateKey {
     queue_key: String,
 }
 
-/// Serialize the read/create/reconcile path for one local coalescing domain.
-/// The proven queue transition is sequential: one coalescing enqueue must
-/// observe the pending entry created by the previous transition. DefraDB
-/// transactions conflict only when they touch the same document, so two empty
-/// reads could otherwise create disjoint requests and return before duplicate
-/// reconciliation converges them. The weak registry does not retain either
-/// nodes or idle gates; stale entries are pruned when a new gate is created.
 pub(super) fn background_completion_gate(
     node: &EmbeddedNode,
     session_id: &str,
@@ -57,14 +50,9 @@ pub(super) fn background_completion_gate(
     gate
 }
 
-/// Atomically persist background input and reuse or create the coalesced
-/// pending wake. A Goal on the session, in any status, never suppresses the
-/// wake (Lean `CompletionContinuation.enqueueWake?`).
 /// A concurrent claim conflicts and retries, so a wake cannot precede its input.
-/// The single transaction owner for fresh input and canonical receipt replay.
-/// An observed receipt ID is reloaded and validated inside this transaction.
 pub(crate) async fn persist_background_completion_with_message_canonical(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     parent: &AgentRequest,
     notification_content: &str,
     message_key: &str,
@@ -145,7 +133,7 @@ pub(crate) async fn persist_background_completion_with_message_canonical(
 
 #[cfg(test)]
 pub(crate) async fn persist_background_completion_with_message(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     parent: &AgentRequest,
     notification_content: &str,
     message_key: &str,
@@ -169,7 +157,7 @@ pub(crate) async fn persist_background_completion_with_message(
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn persist_background_completion_with_message_waking(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     parent: &AgentRequest,
     notification_content: &str,
     message_key: &str,
@@ -183,113 +171,116 @@ pub(crate) async fn persist_background_completion_with_message_waking(
         StreamDeclaration, StreamPayload,
     };
     let tool_key = format!("fixture:{message_key}");
-    let (tool_call_doc_id, close_doc_id) = crate::config_client::ConfigAccess::transact_local(
-        node,
-        None,
-        "test.canonical_background_notification_authority",
-        |txn| {
-            let tool_key = tool_key.clone();
-            Box::pin(async move {
-                let existing = txn
-                    .execute(&format!(
-                        r#"{{
+    let (tool_call_doc_id, close_doc_id) =
+        crate::config_client::ConfigAccess::transact_local_write(
+            node,
+            None,
+            "test.canonical_background_notification_authority",
+            |txn| {
+                let tool_key = tool_key.clone();
+                Box::pin(async move {
+                    let existing = txn
+                        .execute(&format!(
+                            r#"{{
                 AgentToolCall(filter: {{ tool_call_key: {{ _eq: "{}" }} }}, limit: 2) {{ _docID }}
                 AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {} }}
             }}"#,
-                        escape_graphql_string(&tool_key),
-                        escape_graphql_string(&parent.doc_id),
-                        crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS
-                    ))
-                    .await?;
-                let tools = existing["data"]["AgentToolCall"]
-                    .as_array()
-                    .context("fixture tool lookup")?;
-                if tools.len() == 1 {
-                    let tool_doc = tools[0]["_docID"]
-                        .as_str()
-                        .context("fixture tool ID")?
-                        .to_owned();
-                    let source = OutputSource::ToolCall {
-                        tool_call_doc_id: tool_doc.clone(),
-                    };
-                    let rows = existing["data"]["AgentOutputSegment"]
+                            escape_graphql_string(&tool_key),
+                            escape_graphql_string(&parent.doc_id),
+                            crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS
+                        ))
+                        .await?;
+                    let tools = existing["data"]["AgentToolCall"]
                         .as_array()
-                        .context("fixture segment lookup")?;
-                    let close = rows
-                        .iter()
-                        .map(crate::session::canonical_rows::decode_output_segment_row)
-                        .collect::<Result<Vec<_>>>()?
-                        .into_iter()
-                        .find(|row| row.segment.source == source && row.segment.close.is_some())
-                        .context("fixture tool closure")?;
-                    return Ok((tool_doc, close.doc_id));
-                }
-                anyhow::ensure!(tools.is_empty(), "ambiguous fixture tool authority");
-                let created = txn
-                    .execute(&format!(
-                        r#"mutation {{ create_AgentToolCall(input: {{
+                        .context("fixture tool lookup")?;
+                    if tools.len() == 1 {
+                        let tool_doc = tools[0]["_docID"]
+                            .as_str()
+                            .context("fixture tool ID")?
+                            .to_owned();
+                        let source = OutputSource::ToolCall {
+                            tool_call_doc_id: tool_doc.clone(),
+                        };
+                        let rows = existing["data"]["AgentOutputSegment"]
+                            .as_array()
+                            .context("fixture segment lookup")?;
+                        let close = rows
+                            .iter()
+                            .map(crate::session::canonical_rows::decode_output_segment_row)
+                            .collect::<Result<Vec<_>>>()?
+                            .into_iter()
+                            .find(|row| row.segment.source == source && row.segment.close.is_some())
+                            .context("fixture tool closure")?;
+                        return Ok((tool_doc, close.doc_id));
+                    }
+                    anyhow::ensure!(tools.is_empty(), "ambiguous fixture tool authority");
+                    let created = txn
+                        .execute(&format!(
+                            r#"mutation {{ create_AgentToolCall(input: {{
                 tool_call_key: "{}", tool_call_id: "{}", request_id: "{}",
                 request_doc_id: "{}", node_did: "{}", requester_did: {}, session_id: "{}",
                 tool_name: "fixture", message_sequence: 1, await_mode: "background",
                 status: "completed", lifecycle_state: "completed"
             }}) {{ _docID }} }}"#,
-                        escape_graphql_string(&tool_key),
-                        escape_graphql_string(&tool_key),
-                        escape_graphql_string(&parent.request_id),
-                        escape_graphql_string(&parent.doc_id),
-                        escape_graphql_string(&parent.node_did),
-                        parent
-                            .requester_did
-                            .as_deref()
-                            .map(|v| format!("\"{}\"", escape_graphql_string(v)))
-                            .unwrap_or_else(|| "null".into()),
-                        escape_graphql_string(&parent.session_id)
-                    ))
-                    .await?;
-                let tool_doc = crate::graphql::created_doc_id(&created, "AgentToolCall")?;
-                let segment = OutputSegment {
-                    node_did: parent.node_did.clone(),
-                    requester_did: parent.requester_did.clone(),
-                    session_id: parent.session_id.clone(),
-                    request_doc_id: parent.doc_id.clone(),
-                    source: OutputSource::ToolCall {
-                        tool_call_doc_id: tool_doc.clone(),
-                    },
-                    writer: OutputWriter::ToolExecution {
-                        tool_call_doc_id: tool_doc.clone(),
-                    },
-                    ordinal: Some(0),
-                    runs: vec![SegmentRun {
-                        stream: 0,
-                        bytes: notification_content.len() as u32,
-                        declaration: Some(StreamDeclaration {
-                            block_index: 0,
-                            part_index: 0,
-                            payload: StreamPayload::ToolOutput,
+                            escape_graphql_string(&tool_key),
+                            escape_graphql_string(&tool_key),
+                            escape_graphql_string(&parent.request_id),
+                            escape_graphql_string(&parent.doc_id),
+                            escape_graphql_string(&parent.node_did),
+                            parent
+                                .requester_did
+                                .as_deref()
+                                .map(|v| format!("\"{}\"", escape_graphql_string(v)))
+                                .unwrap_or_else(|| "null".into()),
+                            escape_graphql_string(&parent.session_id)
+                        ))
+                        .await?;
+                    let tool_doc = crate::graphql::created_doc_id(&created, "AgentToolCall")?;
+                    let segment = OutputSegment {
+                        node_did: parent.node_did.clone(),
+                        requester_did: parent.requester_did.clone(),
+                        session_id: parent.session_id.clone(),
+                        request_doc_id: parent.doc_id.clone(),
+                        source: OutputSource::ToolCall {
+                            tool_call_doc_id: tool_doc.clone(),
+                        },
+                        writer: OutputWriter::ToolExecution {
+                            tool_call_doc_id: tool_doc.clone(),
+                        },
+                        ordinal: Some(0),
+                        runs: vec![SegmentRun {
+                            stream: 0,
+                            bytes: notification_content.len() as u32,
+                            declaration: Some(StreamDeclaration {
+                                block_index: 0,
+                                part_index: 0,
+                                payload: StreamPayload::ToolOutput,
+                            }),
+                        }],
+                        payload: notification_content.to_owned(),
+                        close: Some(SourceClose::Closed {
+                            outcome: OutputOutcome::Complete,
+                            segments: 1,
+                            stream_bytes: vec![notification_content.len() as u64],
                         }),
-                    }],
-                    payload: notification_content.to_owned(),
-                    close: Some(SourceClose::Closed {
-                        outcome: OutputOutcome::Complete,
-                        segments: 1,
-                        stream_bytes: vec![notification_content.len() as u64],
-                    }),
-                    created_at: chrono::Utc::now().to_rfc3339(),
-                };
-                let created = txn
-                    .execute_with_variables(
-                        crate::session::canonical_rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-                        &crate::session::canonical_rows::output_segment_create_variables(&segment)?,
-                    )
-                    .await?;
-                Ok((
-                    tool_doc,
-                    crate::graphql::created_doc_id(&created, "AgentOutputSegment")?,
-                ))
-            })
-        },
-    )
-    .await?;
+                        created_at: chrono::Utc::now().to_rfc3339(),
+                    };
+                    let created = txn
+                        .execute_with_variables(
+                            crate::session::canonical_rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                            &crate::session::canonical_rows::output_segment_create_variables(
+                                &segment,
+                            )?,
+                        )
+                        .await?;
+                    Ok((
+                        tool_doc,
+                        crate::graphql::created_doc_id(&created, "AgentOutputSegment")?,
+                    ))
+                })
+            },
+        )
+        .await?;
     let _ = close_doc_id;
     persist_background_completion_with_message_canonical(
         node,
@@ -449,17 +440,10 @@ async fn background_completion_transaction_attempt(
     let current_hop =
         crate::session::load_session_current_hop_in_txn(txn, &parent.node_did, &parent.session_id)
             .await?;
-    // A wake over the bound is written like any other and refused at
-    // admission, so it becomes the session's latest request and every later
-    // same-session continuation copies its hop.
     let wake_hop = crate::lifecycle::next_request_hop(wake, current_hop);
     let pending_rows: Vec<AgentRequestRow> =
         serde_json::from_value(response["data"]["pending"].clone())
             .context("decode pending AgentRequest rows")?;
-    // Every pending notification is consumed by whichever wake claims next
-    // (the claim snapshots the session's input by sequence), so the one
-    // pending wake must carry the highest hop any of them requires: a lower
-    // one is superseded by a new wake at this hop rather than joined.
     let (pending, lower) = match pending_rows.into_iter().find(|row| {
         row_matches_coalesced_source_and_key(row, QueueSource::BackgroundCompletion, queue_key)
     }) {
@@ -506,8 +490,6 @@ async fn background_completion_transaction_attempt(
             let request_id = format!("background-completion-{queue_scope}-{next_generation:020}");
             let retry_key = format!("{retry_key_prefix}{next_generation:020}");
             let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-            // The durable wake format marker is stamped by this owner on
-            // creation, never taken from caller-supplied input.
             let wake_input = RequestInput {
                 queue: Some(background_wake_queue(
                     queue,

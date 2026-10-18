@@ -72,8 +72,8 @@ inductive ActionJournalState where
   | executing
   | effectObserved
   | resultDocsWritten
-  /-- Recovery found the action still executing: the attempt was cut off and
-  what it did outside the runtime is unknown. -/
+  /-- Recovery found the action still executing: what it did outside the
+  runtime is unknown. -/
   | interrupted
   deriving DecidableEq, Repr
 
@@ -103,17 +103,11 @@ def laterThanValidated : ActionJournalState → Bool
   | .executing | .effectObserved | .resultDocsWritten | .interrupted => true
 
 /-- The action's effect happened, its results were written, or it was
-interrupted with an unknown outcome. Running the invocation again could repeat
-that effect. An interrupted action counts because an external side effect it
-may have caused is unobservable to the runtime and must not be repeated. An
-`executing` action does not count: a failed invocation keeps one only when its
-own attempt observed the failure (`Transition.fail`), and recovery, which
-cannot observe it, replaces it with `interrupted` (`CallbackInvocation.recover`). -/
+interrupted with an unknown outcome; running it again could repeat that effect. -/
 def effectful : ActionJournalState → Bool
   | .effectObserved | .resultDocsWritten | .interrupted => true
   | .validated | .executing => false
 
-/-- Recovery's record of an action it found executing: its outcome is unknown. -/
 def markInterrupted : ActionJournalState → ActionJournalState
   | .executing => .interrupted
   | s => s
@@ -131,11 +125,9 @@ structure CallbackInvocation where
   /-- Opaque frozen projected input, including ordered group members. Its
   internal JSON encoding belongs to the existing projection owner. -/
   input : String := ""
-  /-- Structured identity projection of the referenced durable group, if any. -/
   originGroupKey : Option Triggers.Groups.EventGroupKey := none
   state : InvocationState
   journal : List ActionJournalEntry
   resultEmitted : Bool
-  /-- Claims so far; each claim starts one attempt. -/
   attempts : Nat := 0
   deriving DecidableEq, Repr

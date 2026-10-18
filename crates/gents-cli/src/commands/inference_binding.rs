@@ -3,15 +3,16 @@
 use anyhow::{anyhow, Result};
 use gents::defra_node::EmbeddedNode;
 use gents::load_node;
+use std::sync::Arc;
 
 pub(crate) async fn load_bound_profile(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
 ) -> Result<gents::document_config::InferenceProfile> {
     use gents::config_client::{read_desired_state_record_in_txn as read, ConfigAccess};
     use gents::Collection;
-    ConfigAccess::transact_local(node, None, "codex.bound_profile", |txn| {
+    ConfigAccess::transact_local_write(node, None, "codex.bound_profile", |txn| {
         Box::pin(async move {
             let agent: gents::document_config::Agent = serde_json::from_value(
                 read(txn, Collection::Agent, node_did, agent_id)
@@ -52,7 +53,7 @@ pub(crate) async fn load_bound_profile(
 }
 
 pub(crate) async fn load_bound_context_window(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
 ) -> Result<i64> {
@@ -94,10 +95,6 @@ pub(crate) async fn load_bound_context_window(
     Ok(value)
 }
 
-/// Resolve the agent the Codex shim binds to.
-///
-/// An explicit override always wins. Otherwise the exact principal document
-/// and its configured default agent are required.
 pub(crate) async fn resolve_bound_agent_id(
     node: &EmbeddedNode,
     override_agent_id: Option<&str>,
@@ -116,7 +113,6 @@ pub(crate) async fn resolve_bound_agent_id(
         .ok_or_else(|| anyhow!("node {node_did:?} has no default agent binding"))
 }
 
-/// Normalize an optional adapter agent selector before resolving documents.
 pub(crate) fn explicit_agent_override(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)

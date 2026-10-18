@@ -2,13 +2,16 @@ import type {
   DesktopApiAdapter,
   DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
-import { applySessionLiveDelta, sessionLiveDeltaRequest } from "./liveDelta";
+import {
+  applySessionLiveDelta,
+  sessionLiveDeltaRequest,
+} from "@source-inc/gents-desktop-client";
 import { acceptsAsyncResult } from "./observationOrdering";
 import { timingConfig } from "./timing";
 import {
   mergeOlderSessionTimelinePage,
   mergeSessionTipSnapshot,
-} from "./timelinePaging";
+} from "@source-inc/gents-desktop-client";
 import type { SessionLoadState } from "../lib/loadingStatus";
 import type { SelectionStore } from "./selectionStore";
 import {
@@ -23,23 +26,14 @@ export const SESSION_TIMELINE_PAGE_SIZE = 40;
 
 type SessionReadParams = {
   api: DesktopApiAdapter;
-  /** the selection, read when a read lands */
   store: SelectionStore;
-  /** where the selected session's reads land */
   sessionStore: SessionStore;
-  /** the request being tracked now, read when a live read is asked for */
   trackedRequestId: () => string | null;
   setError: (error: string | null) => void;
 };
 
 const MAX_HIDDEN_PAGE_HOPS = 8;
 
-/**
- * The selected session's reads: its tip, a hydration retry, the tracked
- * request's live delta and older pages. Each reads the selection and the
- * session store when it runs and commits only while the selection still
- * asks for what it read, so a later read always wins.
- */
 export function createSessionReads({
   api,
   store,
@@ -69,7 +63,6 @@ export function createSessionReads({
     }
     const nodeDid =
       nodeDidOverride === undefined ? store.getState().nodeDid : nodeDidOverride;
-    /* a failed read stays said while the same session is read again */
     const previous = sessionStore.getState().load;
     setSessionLoad({
       phase: "loading",
@@ -150,9 +143,6 @@ export function createSessionReads({
     const current = readSession(sessionStore);
     const requestId = trackedRequestId();
     if (!current || !requestId || !api.fetchSessionLiveDelta) return false;
-    // A delta covers only the live overlay. Enforce history reconciliation at
-    // this shared event/poll entry so a continuous wake stream cannot starve
-    // it; a null period configures no periodic reconciliation.
     const reconcileMs = timingConfig().activeSessionPollMs;
     if (reconcileMs !== null && performance.now() - reconciledAt >= reconcileMs)
       return false;
@@ -179,8 +169,6 @@ export function createSessionReads({
       return true;
     } catch {
       if (!stillCurrent()) return true;
-      // The authoritative full read owns failure reporting. A transient delta
-      // failure must not leave a global error after that read recovers.
       return false;
     }
   }
@@ -218,8 +206,6 @@ export function createSessionReads({
           return false;
         }
       }
-      // The durable cursor was committed at every hop. A later user gesture
-      // resumes from there without making this interaction unbounded.
       return false;
     } catch (error) {
       if (capturedRun !== runEpoch) return false;
@@ -229,36 +215,14 @@ export function createSessionReads({
   }
 
   return {
-    /** Revoke pending reads when client observation stops. */
     invalidateSessionReads() {
       runEpoch += 1;
       refreshSeq += 1;
       liveSeq += 1;
     },
-    /**
-     * Reads a session (the selected node's unless another is given) and holds
-     * it, or clears the held session for null. Only the latest read commits,
-     * and only while the selection still asks for that session; a failed read
-     * stays shown while the same session is read again. Its load state is the
-     * session store's.
-     */
     refreshSession,
-    /**
-     * Asks the bridge to hydrate a session again, then reads it. A failure is
-     * the client's own state, shown in the banner.
-     */
     retrySessionHydration,
-    /**
-     * Applies the tracked request's live changes to the held session. Returns
-     * false when there is nothing to follow or the delta does not apply, so
-     * the caller reads the session whole instead.
-     */
     refreshSessionLiveDelta,
-    /**
-     * Loads the held session's next older page, crossing at most a few pages
-     * that add no visible row. Returns whether rows were added; the durable
-     * cursor is kept at every page, so a later ask resumes there.
-     */
     loadOlderSessionTimeline,
   };
 }

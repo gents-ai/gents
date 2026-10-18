@@ -10,14 +10,7 @@ import { createPeerActions } from "../src/hooks/peerActions";
 import { createSelectionActions } from "../src/hooks/selectionActions";
 import { useSelection } from "../src/hooks/selectionStore";
 import { shellStores } from "./shell-fixture";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
+import { deferred } from "./deferred";
 
 function usePeerRoute(
   api: DesktopApiAdapter,

@@ -129,7 +129,7 @@ async fn generated_composed_invariants_use_canonical_admission_owner() {
         assert_eq!(row["request_doc_id"], request_doc_id);
         let session_id = format!("session-composed-{}", witness.tool_call_id);
         let arguments = super::load_tool_call_arguments(
-            &ConfigAccess::Local(admission.node.clone()),
+            &ConfigAccess::local(admission.node.clone()),
             &tool_doc_id,
             &admission.node_did,
             &session_id,
@@ -145,9 +145,6 @@ async fn generated_composed_invariants_use_canonical_admission_owner() {
         );
         match witness.pre_request_admission.as_str() {
             "executing" => assert_eq!(witness.pre_request_state, "processing"),
-            // The accepted physical header/tool binding survives the request
-            // interrupt transition, while the request admission is correctly
-            // released before cancellation is projected to its tool.
             "released" => assert_eq!(witness.pre_request_state, "interrupted"),
             other => panic!("unsupported composed request admission {other}"),
         }

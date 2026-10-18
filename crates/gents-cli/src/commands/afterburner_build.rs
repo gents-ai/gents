@@ -1,36 +1,3 @@
-//! One canonical way to compile an Afterburner package source directory
-//! into a `.afb`, shared by `gents pack build` (compiling a pack's
-//! declared plugins, `commands::pack::build`) and `gents plugin build`
-//! (compiling one standalone, `commands::plugin::build`). Two call sites
-//! that must agree on which languages are safe to ship call this one
-//! function rather than each deciding for itself.
-//!
-//! ## The bounded-run gate
-//!
-//! Compiling is not the whole story: a plugin has to be runnable under
-//! every bound it declares, or "it compiles" is a false safety claim.
-//! [`gents::plugin::PluginRunner`] hands a plugin's `.afb` to
-//! `afterburner::afb_run::run_afb_bytes`, the one place in this workspace
-//! that actually runs a plugin (`commands::plugin::run` uses the exact
-//! same runner), and that function cannot enforce every bound for every
-//! language (see its own module doc's "Known gaps"). Rather than keep a
-//! second, hand-maintained list of which languages are safe here, this
-//! module validates against the real compiler
-//! ([`SourceLang::from_str`]) and then against
-//! [`gents::pack::SUPPORTED_PLUGIN_LANGUAGES`] - the exact list
-//! `gents::pack::PackPlugin::validate` already enforces for a
-//! pack-declared plugin - so a language this CLI will build and a language
-//! a pack may declare can never drift apart.
-//!
-//! Neither list decides whether a *built* artifact is actually runnable
-//! under its bounds. That question is answered against the artifact
-//! itself, by `PluginRunner::compile_within`, which asks
-//! `afterburner::afb_run::bounds_for` rather than guessing from a language
-//! name. It has to be that way round: one language compiles to more than
-//! one shape (Ruby to an ordinary WASI command, Python to an
-//! emscripten-pyodide bundle), and the shape, not the name, is what
-//! decides what can be enforced.
-
 use std::path::Path;
 use std::str::FromStr;
 
@@ -39,8 +6,6 @@ use afterburner::cli::compile::lang::SourceLang;
 use afterburner_cloud::pkg;
 use anyhow::{Context, Result};
 
-/// What is missing or malformed at `path` for a source directory that was
-/// supposed to be an Afterburner package.
 pub(crate) fn describe_source(path: &Path) -> String {
     if !path.exists() {
         "which is missing".to_owned()
@@ -51,11 +16,6 @@ pub(crate) fn describe_source(path: &Path) -> String {
     }
 }
 
-/// Parses `declared` against Afterburner's own [`SourceLang::from_str`] -
-/// the real, single source of truth for what `dispatch_compile` accepts,
-/// rather than a hand-copied list that can drift from it - then refuses a
-/// language [`gents::pack::SUPPORTED_PLUGIN_LANGUAGES`] does not admit
-/// (see this module's own doc for why that is the right second gate).
 fn validate_source_language(owner: &str, declared: &str) -> Result<SourceLang> {
     let lang = SourceLang::from_str(declared).with_context(|| {
         format!(
@@ -74,10 +34,6 @@ fn validate_source_language(owner: &str, declared: &str) -> Result<SourceLang> {
     Ok(lang)
 }
 
-/// Loads the Afterburner package at `dir` and gates its declared language,
-/// without compiling yet. Split from [`compile`] so a caller that needs
-/// the loaded manifest (a default output filename, a report) has it before
-/// paying for the compile.
 pub(crate) fn load_and_validate(owner: &str, dir: &Path) -> Result<pkg::LocalPackage> {
     anyhow::ensure!(
         dir.join("afb.toml").is_file(),
@@ -95,7 +51,6 @@ pub(crate) fn load_and_validate(owner: &str, dir: &Path) -> Result<pkg::LocalPac
     Ok(local)
 }
 
-/// Compiles an already-loaded, already-gated package to `out_path`.
 pub(crate) fn compile(
     owner: &str,
     dir: &Path,
@@ -111,9 +66,7 @@ pub(crate) fn compile(
         .with_context(|| format!("compiling {owner} from {}", dir.display()))
 }
 
-/// While alive, whatever the process or the toolchains it starts write to
-/// standard output goes to standard error. The compiler reports progress on
-/// stdout, and a gents command's stdout carries only its JSON report.
+/// Redirects compiler progress so command stdout remains available for JSON output.
 struct StdoutToStderr {
     #[cfg(unix)]
     saved: libc::c_int,
@@ -183,20 +136,8 @@ impl Drop for StdoutToStderr {
     }
 }
 
-/// Serializes every `dispatch_compile` call in this crate's tests. Each
-/// shells out to an external toolchain (cargo, go, clang, javy, wasi-vfs);
-/// running two at once was observed to race on those toolchains' own
-/// shared scratch files (a transient `No such file or directory`, not
-/// reproducible when the same test runs alone) - a test-concurrency hazard
-/// in the external tooling, not in this module's own logic. Mirrors
-/// `pack::registry::tests::env_lock`'s identical shape for the identical
-/// reason: a shared external resource these tests must not contend over in
-/// parallel.
-///
-/// Module-level rather than inside `tests`, and `pub(crate)`, because
-/// `commands::plugin`'s fixtures compile through the same toolchains: two
-/// locks would not serialize anything.
 #[cfg(test)]
+/// Serializes external compiler calls because their toolchains share scratch files.
 pub(crate) fn compile_lock() -> &'static std::sync::Mutex<()> {
     static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
     LOCK.get_or_init(|| std::sync::Mutex::new(()))
@@ -212,9 +153,6 @@ mod tests {
         std::fs::write(path, contents).unwrap();
     }
 
-    /// Writes a minimal, otherwise-valid Afterburner package declaring
-    /// `language` with `entry_rel`/`entry_contents` as its one source
-    /// file, ready for [`load_and_validate`] + [`compile`].
     fn write_package(root: &Path, language: &str, entry_rel: &str, entry_contents: &[u8]) {
         write(
             &root.join("afb.toml"),
@@ -233,10 +171,7 @@ mod tests {
         write(&root.join(entry_rel), entry_contents);
     }
 
-    /// Compiles `root` (already written by [`write_package`]) and asserts
-    /// the produced `.afb` is genuine: readable, declares `language`, and
-    /// carries a `wasm32-wasip1` precompiled WASI command module.
-    fn assert_compiles_to_wasm32_wasip1(root: &Path, language: &str) {
+    fn assert_compiles_to_wasm32_wasip1(root: &Path, language: &str) -> Vec<u8> {
         let owner = format!("test plugin ({language})");
         let out = root.parent().unwrap().join(format!("{language}.afb"));
         let local = load_and_validate(&owner, root).unwrap_or_else(|error| {
@@ -262,35 +197,100 @@ mod tests {
                 .contains_key("precompiled/wasm32-wasip1/main.wasm"),
             "{language}'s .afb must carry the precompiled WASI command module"
         );
+        bytes
     }
 
-    /// `rustc` with the `wasm32-wasip1` target: verified present on this
-    /// machine before writing this test (`rustc --version`, `rustup target
-    /// list --installed`).
-    #[test]
-    fn rust_compiles_to_a_genuine_wasm32_wasip1_afb() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("pkg");
+    fn write_rust_package(root: &Path) {
         write_package(
-            &root,
+            root,
             "rust",
             "source/main.rs",
             b"fn main() { println!(\"{{}}\"); }",
         );
-        // Rust is the one language whose compile path shells out to `cargo
-        // build` directly (`lang::compile_rust`), so it is also the one
-        // that needs its own Cargo.toml on disk; the others need only the
-        // afb.toml + source `write_package` already writes.
         write(
             &root.join("Cargo.toml"),
             b"[workspace]\n\n\
               [package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
               [[bin]]\nname = \"sample\"\npath = \"source/main.rs\"\n",
         );
+    }
+
+    #[test]
+    fn rust_compiles_to_a_genuine_wasm32_wasip1_afb() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("pkg");
+        write_rust_package(&root);
         assert_compiles_to_wasm32_wasip1(&root, "rust");
     }
 
-    /// `go` 1.27.1: verified present on this machine (`go version`).
+    #[test]
+    fn rust_compiles_with_configured_target_directories() {
+        const PACKAGE_ENV: &str = "GENTS_TEST_RUST_PLUGIN_PACKAGE";
+        let inherited_target = std::env::var_os("CARGO_TARGET_DIR");
+        if let Some(root) = std::env::var_os(PACKAGE_ENV) {
+            let root = Path::new(&root);
+            let bytes = assert_compiles_to_wasm32_wasip1(root, "rust");
+            assert!(root
+                .join("target/wasm32-wasip1/release/sample.wasm")
+                .is_file());
+            assert_eq!(std::env::var_os("CARGO_TARGET_DIR"), inherited_target);
+
+            let plugin: gents::pack::PackPlugin = serde_json::from_value(serde_json::json!({
+                "name": "sample",
+                "description": "a test plugin",
+                "artifact": "plugins/rust.afb",
+                "language": "rust",
+                "input_schema": {"type": "object"},
+            }))
+            .unwrap();
+            let result = gents::plugin::PluginRunner::compile(&bytes, &plugin)
+                .unwrap()
+                .call(
+                    &serde_json::json!({}),
+                    &gents::plugin::PluginBudget::default(),
+                )
+                .unwrap();
+            assert_eq!(result.verdict, gents::plugin::PluginVerdict::Success);
+            assert_eq!(result.output, serde_json::json!({}));
+            return;
+        }
+
+        let test_name = std::thread::current().name().unwrap().to_owned();
+        for (environment, config) in [(true, false), (false, true), (true, true)] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("pkg");
+            write_rust_package(&root);
+            if config {
+                write(
+                    &root.join(".cargo/config.toml"),
+                    b"[build]\ntarget-dir = \"configured-target\"\n",
+                );
+            }
+            let redirected = dir.path().join("environment-target");
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            child
+                .args([test_name.as_str(), "--exact", "--nocapture"])
+                .current_dir(dir.path())
+                .env(PACKAGE_ENV, "pkg");
+            if environment {
+                child.env("CARGO_TARGET_DIR", &redirected);
+            } else {
+                child.env_remove("CARGO_TARGET_DIR");
+            }
+            let output = child.output().unwrap();
+            assert!(
+                output.status.success(),
+                "Rust compilation failed with environment={environment}, config={config}:\n{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(dir.path().join("rust.afb").is_file());
+            assert!(!redirected.exists());
+            assert!(!root.join("configured-target").exists());
+        }
+        assert_eq!(std::env::var_os("CARGO_TARGET_DIR"), inherited_target);
+    }
+
     #[test]
     fn go_compiles_to_a_genuine_wasm32_wasip1_afb() {
         let dir = tempfile::tempdir().unwrap();
@@ -304,9 +304,6 @@ mod tests {
         assert_compiles_to_wasm32_wasip1(&root, "go");
     }
 
-    /// `clang` 22.1.8 with a cached wasi-sdk under `~/.burn`: verified
-    /// present on this machine (`clang --version`,
-    /// `find ~/.burn -iname '*wasi-sdk*'`).
     #[test]
     fn c_compiles_to_a_genuine_wasm32_wasip1_afb() {
         let dir = tempfile::tempdir().unwrap();
@@ -320,8 +317,6 @@ mod tests {
         assert_compiles_to_wasm32_wasip1(&root, "c");
     }
 
-    /// `clang++` 22.1.8 with the same cached wasi-sdk: verified present
-    /// alongside `clang` above.
     #[test]
     fn cpp_compiles_to_a_genuine_wasm32_wasip1_afb() {
         let dir = tempfile::tempdir().unwrap();
@@ -335,7 +330,6 @@ mod tests {
         assert_compiles_to_wasm32_wasip1(&root, "cpp");
     }
 
-    /// `javy` 8.1.1: verified present on this machine (`javy --version`).
     #[test]
     fn js_compiles_to_a_genuine_wasm32_wasip1_afb() {
         let dir = tempfile::tempdir().unwrap();
@@ -349,7 +343,6 @@ mod tests {
         assert_compiles_to_wasm32_wasip1(&root, "js");
     }
 
-    /// Same Javy path as JS, transpiled first: `javy` present as above.
     #[test]
     fn ts_compiles_to_a_genuine_wasm32_wasip1_afb() {
         let dir = tempfile::tempdir().unwrap();
@@ -363,11 +356,6 @@ mod tests {
         assert_compiles_to_wasm32_wasip1(&root, "ts");
     }
 
-    /// `wasi-vfs` cached under `~/.burn`: verified present on this machine
-    /// (`find ~/.burn -iname '*wasi-vfs*'`). Compiled Ruby lands on the
-    /// same `wasm32-wasip1` WASI-command shape as the other compiled
-    /// languages, so `gents::pack::SUPPORTED_PLUGIN_LANGUAGES` admits it
-    /// and this CLI builds it.
     #[test]
     fn ruby_compiles_to_a_genuine_wasm32_wasip1_afb() {
         let dir = tempfile::tempdir().unwrap();
@@ -376,13 +364,6 @@ mod tests {
         assert_compiles_to_wasm32_wasip1(&root, "ruby");
     }
 
-    /// Python is the one language that does not compile to a WASI command:
-    /// `burn compile` emits a self-contained `emscripten-pyodide` bundle.
-    /// The test that matters is therefore not "does it compile" but "is the
-    /// thing it compiled admissible as a plugin", so it runs the real
-    /// artifact past the real admission gate
-    /// ([`gents::plugin::PluginRunner`]), which is what decides whether a
-    /// call's bounds would actually be enforced.
     #[test]
     fn python_compiles_to_a_pyodide_bundle_a_plugin_runner_admits() {
         let dir = tempfile::tempdir().unwrap();
@@ -420,6 +401,7 @@ mod tests {
             bind_dir: None,
             limits: None,
             model_slot: None,
+            service: None,
         };
         gents::plugin::PluginRunner::compile(&bytes, &plugin).unwrap_or_else(|error| {
             panic!("a compiled python bundle runs under every bound a call applies: {error:#}")

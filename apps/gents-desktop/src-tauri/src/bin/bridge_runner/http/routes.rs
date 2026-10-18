@@ -129,7 +129,7 @@ pub(super) fn handle_request(
             let identity: Arc<dyn gents::NodeIdentity> = Arc::new(server.node_identity().clone());
             let network =
                 runtime.block_on(gents_desktop_bridge::enrollment::ensure_enrollment_network(
-                    server.node(),
+                    &server.node_arc(),
                     identity.as_ref(),
                     fixture.deployment_label(),
                 ))?;
@@ -228,20 +228,12 @@ pub(super) fn handle_request(
             let core = fixture.desktop_core();
             core.set_selected_node_did(did.clone());
             if let Some(did) = did {
-                let refreshed = match runtime.block_on(core.refresh_node(&did)) {
-                    Ok(Some(_version)) => true,
-                    Ok(None) => false,
-                    Err(error) => {
-                        tracing::warn!(
-                            error = %error,
-                            node_did = %did,
-                            "local replica selection refresh failed"
-                        );
-                        false
-                    }
-                };
-                if !refreshed {
-                    runtime.block_on(core.ensure_node_loaded(&did))?;
+                if let Err(error) = runtime.block_on(core.refresh_node(&did)) {
+                    tracing::warn!(
+                        error = %error,
+                        node_did = %did,
+                        "local replica selection refresh failed"
+                    );
                 }
             }
             Ok(HttpResponse::json_ok(serde_json::json!({}).to_string()))
@@ -487,10 +479,8 @@ pub(super) fn handle_request(
             runtime.block_on(save_agent_config(fixture.desktop_core().as_ref(), request))?;
             Ok(snapshot_response(runtime, fixture)?)
         }
-        // Test-only escape hatch: write an agent document on the *remote* node so the
-        // subsequent desktop-snapshot read exercises the real P2P propagation path (write
-        // on remote core → visible on desktop core).  This is the D1/D2 cross-node
-        // witness.  Only available when GENTS_TAURI_LIVE=1 (set by run-live-test.mjs).
+        // Test-only: write on the remote core so the desktop-snapshot read
+        // exercises the real P2P propagation path (cross-node witness).
         ("POST", "/desktop/test-fixture/remote-save-agent") => {
             if std::env::var("GENTS_TAURI_LIVE").as_deref() != Ok("1") {
                 return Ok(HttpResponse::json_error(
@@ -521,10 +511,8 @@ pub(super) fn handle_request(
                 serde_json::json!({ "ok": true }).to_string(),
             ))
         }
-        // Test-only projection of the remote node's P2P admin API. The managed
-        // desktop route owner uses this through the same HTTP client and wire
-        // shapes as a deployed runtime. Keeping it inside the live runner lets
-        // the E2E provision two real nodes without a second server process.
+        // Test-only projection of the remote node's P2P admin API; must keep
+        // the same wire shapes as a deployed runtime's HTTP client.
         ("GET", "/p2p/info") => {
             require_live_fixture()?;
             let addresses = runtime.block_on(fixture.remote_core().p2p().listen_addresses())?;

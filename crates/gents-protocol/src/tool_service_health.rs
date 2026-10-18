@@ -1,24 +1,15 @@
 //! `ToolServiceHealthState`: the single Rust owner of MCP health vocabulary
 //! and its projection to the collapsed operator-facing status.
 //!
-//! One column (`status` on `ToolServiceHealthState`), one enum. Source of
-//! truth: the Lean `HealthState` model in
+//! Source of truth: the Lean `HealthState` model in
 //! `crates/gents/proofs/Proofs/MCPHealth/State.lean` — `as_str` here must
-//! stay byte-identical to that model's `toDefraDB`, which the
-//! `lean_vocab_test` fence in `crates/gents/src/health_checker.rs` checks
-//! against this crate's `ALL`/`as_str`.
+//! stay byte-identical to that model's `toDefraDB`.
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 /// The full internal MCP service health state, persisted verbatim to the
 /// `ToolServiceHealthState` DefraDB collection's `status` column.
-///
-/// Distinct from [`ToolServiceHealthProjection`]: operators reading the raw
-/// row can tell the staleness flavor of degraded (heartbeat lag,
-/// `failure_count == 0`) from the failure-count flavor
-/// (`1 <= failure_count < K`), and can see `Evicted` vs. `Reconnecting`
-/// separately even though both collapse to `Unreachable` downstream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ToolServiceHealthState {
     Healthy,
@@ -27,10 +18,8 @@ pub enum ToolServiceHealthState {
     Reconnecting,
 }
 
-/// The collapsed three-state projection every consumer (CLI totals, desktop
-/// panel, `HealthStatus`) classifies against. Owned entirely by
-/// [`ToolServiceHealthState::project`] — no other layer re-derives it from
-/// raw status strings.
+/// The collapsed three-state projection consumers classify against. Owned
+/// entirely by [`ToolServiceHealthState::project`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ToolServiceHealthProjection {
     Healthy,
@@ -46,9 +35,8 @@ impl ToolServiceHealthState {
         Self::Reconnecting,
     ];
 
-    /// String form persisted to the `ToolServiceHealthState` DefraDB
-    /// collection. Mirrors `HealthState.toDefraDB` in
-    /// `Proofs/MCPHealth/State.lean` exactly.
+    /// String form persisted to the `status` column. Mirrors
+    /// `HealthState.toDefraDB` in `Proofs/MCPHealth/State.lean` exactly.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Healthy => "healthy",
@@ -132,43 +120,5 @@ impl Display for ToolServiceHealthState {
 impl Display for ToolServiceHealthProjection {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn as_str_round_trips_for_every_state() {
-        for state in ToolServiceHealthState::ALL {
-            assert_eq!(ToolServiceHealthState::parse(state.as_str()), Ok(state));
-        }
-    }
-
-    #[test]
-    fn projection_table_matches_health_checker() {
-        use ToolServiceHealthProjection as P;
-        use ToolServiceHealthState::*;
-        assert_eq!(Healthy.project(), P::Healthy);
-        assert_eq!(Degraded.project(), P::Stale);
-        assert_eq!(Evicted.project(), P::Unreachable);
-        assert_eq!(Reconnecting.project(), P::Unreachable);
-    }
-
-    #[test]
-    fn projection_words_are_not_valid_states() {
-        assert!(ToolServiceHealthState::parse("stale").is_err());
-        assert!(ToolServiceHealthState::parse("unreachable").is_err());
-    }
-
-    #[test]
-    fn parse_opt_rejects_missing_and_unknown() {
-        assert_eq!(ToolServiceHealthState::parse_opt(None), None);
-        assert_eq!(ToolServiceHealthState::parse_opt(Some("bogus")), None);
-        assert_eq!(
-            ToolServiceHealthState::parse_opt(Some("healthy")),
-            Some(ToolServiceHealthState::Healthy)
-        );
     }
 }

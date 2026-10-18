@@ -10,18 +10,15 @@ def oauthRef : BackendAuth → Option String
   | .nodeOAuth a => a
   | _ => none
 
-/-- Preserve the existing raw-secret restriction while allowing environment
-references and the auth kind to be edited as part of the single auth field.
-OAuth account references are operator-managed: a node-OAuth candidate
-keeps the stored reference, and a non-OAuth backend counts as the original
-account (`none`), so the model can select OAuth but never name an account. -/
+/-- Preserve the raw-secret restriction while allowing environment references;
+OAuth account references are operator-managed: a node-OAuth candidate keeps the
+stored reference and a non-OAuth backend counts as the original account. -/
 def authPatchAllowed (stored candidate : BackendAuth) : Bool :=
   match candidate with
   | .apiKey _ => decide (candidate = stored)
   | .nodeOAuth a => decide (a = oauthRef stored)
   | _ => true
 
-/-- Decoding is the canonical typed-validator boundary, not a second parser. -/
 def authGuard (decode : Doc → Option BackendAuth) (stored candidate : Doc) : Bool :=
   match decode stored, decode candidate with
   | some oldAuth, some newAuth => authPatchAllowed oldAuth newAuth
@@ -66,15 +63,6 @@ theorem oauth_original_introduce_allowed (old : BackendAuth)
     (h : ∀ a, old ≠ .nodeOAuth a) : authPatchAllowed old (.nodeOAuth none) = true := by
   cases old <;> simp_all [authPatchAllowed, oauthRef]
 
-/-- Whether a model selection may move from the `current` backend (absent on
-create) to `next`, each given as (provider kind, auth). The model picks a
-provider, never an account: an account-free backend is always allowed; an
-OAuth backend is allowed when it keeps the current provider and account (which
-covers keeping the backend), or, from no backend or another provider, when it
-names that provider's default account `dflt kind`. Another account of the
-current provider is refused. The owner rule for the default is the provider's
-earliest-connected enabled account (the resolver in `oauth_credential.rs`); the
-case rows fix it to the original account, `fun _ => none`. -/
 def backendChoiceAllowed (dflt : String → Option String)
     (current : Option (String × BackendAuth)) (next : String × BackendAuth) : Bool :=
   match next.2 with
@@ -85,8 +73,6 @@ def backendChoiceAllowed (dflt : String → Option String)
     | none => decide (r = dflt next.1)
   | _ => true
 
-/-- A profile edit or create, read through its stored and merged `backend_id`;
-an unknown next backend is refused. -/
 def profileGuard (backendOf : String → Option (String × BackendAuth))
     (dflt : String → Option String) (stored merged : Doc) : Bool :=
   match (merged "backend_id").bind backendOf with
@@ -116,10 +102,6 @@ theorem profile_choice_lands_on_current_or_default (dflt : String → Option Str
     · subst hk; simp [backendChoiceAllowed] at h; exact .inl (by rw [h])
     · simp [backendChoiceAllowed, hk] at h; exact .inr h
 
-/-- A selection that names a profile (agent and compaction
-`inference_profile_id`, pack inference slots) is the
-backend choice between the backends the two profiles reach; `current` is
-absent on create, and an unknown next profile is refused. -/
 def profileChoiceAllowed (backendOf : String → Option (String × BackendAuth))
     (dflt : String → Option String) (current : Option String) (next : String) : Bool :=
   match backendOf next with
@@ -134,9 +116,9 @@ theorem profile_selection_is_backend_choice
       backendChoiceAllowed dflt (current.bind backendOf) n := by
   simp [profileChoiceAllowed, h]
 
-/-- Schema publication is additive, separate from document transactions. The
-shared schema owner supplies compatibility and exact-artifact validation;
-document ACP is unchanged by publishing a schema. -/
+/-- Additive and separate from document transactions; the shared schema owner
+supplies compatibility and exact-artifact validation, and document ACP is
+unchanged. -/
 def schemaPublicationAllowed (schemaGranted artifactMatches compatible : Bool) : Bool :=
   schemaGranted && artifactMatches && compatible
 

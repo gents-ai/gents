@@ -1,9 +1,4 @@
 import type { NodeView } from "../../../hooks/fleetStore";
-/* What a delete leaves behind, read from the loaded configuration. Every
-   delete asks for the document's name; this says, in the same dialog, which
-   other documents point at it and lose that reference. One owner for the
-   wording, so the editor's Danger zone and a list row's menu agree. */
-
 export type DependentKind =
   | "agent"
   | "context"
@@ -19,7 +14,6 @@ export type DependentKind =
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
-/* who points at the document, as "N things use it" parts */
 export function dependents(
   deployment: NodeView,
   kind: DependentKind,
@@ -116,7 +110,6 @@ export function dependents(
   return parts;
 }
 
-/* the sentence for the confirmation, or nothing when no document points at it */
 export function dependentsWarning(
   deployment: NodeView,
   kind: DependentKind,

@@ -47,7 +47,6 @@ def anchoredFrom (n : Nat) : List (FlatItem O W) → List (Nat × W)
 
 def anchored (items : List (FlatItem O W)) : List (Nat × W) := anchoredFrom 0 items
 
-/-- Rebuild a flat input from its ordinary sequence and anchored reasoning. -/
 def weave : Nat → List O → List (Nat × W) → List (FlatItem O W)
   | _, [], rs => rs.map fun r => .reasoning r.2
   | n, o :: os, [] => .ordinary o :: weave (n + 1) os []
@@ -56,7 +55,6 @@ def weave : Nat → List O → List (Nat × W) → List (FlatItem O W)
       else .ordinary o :: weave (n + 1) os ((k, w) :: rs)
 termination_by _ os rs => os.length + rs.length
 
-/-- Remove the first `count` reasoning items, keeping every ordinary item. -/
 def dropLeadingReasoning : Nat → List (FlatItem O W) → List (FlatItem O W)
   | 0, items => items
   | _ + 1, [] => []
@@ -134,7 +132,6 @@ theorem anchoredFrom_dropLeadingReasoning (n count : Nat) (items : List (FlatIte
       | succ count =>
           cases item <;> simp [dropLeadingReasoning, anchoredFrom, ih]
 
-/-- The replay acceptance rule, decided by two capture-derived checks. -/
 theorem prefix_is_leading_reasoning_removal (current captured : List (FlatItem O W))
     (hords : ords current = ords captured)
     (hsuffix : anchored current <:+ anchored captured) :
@@ -153,7 +150,6 @@ theorem prefix_is_leading_reasoning_removal (current captured : List (FlatItem O
         simp [anchored, anchoredFrom_dropLeadingReasoning]
     _ = dropLeadingReasoning dropped.length captured := weave_roundtrip 0 _
 
-/-- The two checks are also necessary, so the rule never rejects a valid replay. -/
 theorem leading_reasoning_removal_passes_checks (count : Nat)
     (captured : List (FlatItem O W)) :
     ords (dropLeadingReasoning count captured) = ords captured ∧
@@ -161,12 +157,6 @@ theorem leading_reasoning_removal_passes_checks (count : Nat)
   refine ⟨ords_dropLeadingReasoning count captured, ?_⟩
   simp only [anchored, anchoredFrom_dropLeadingReasoning]
   exact List.drop_suffix count _
-
-/-! ## Maximal admissible suffix
-
-Candidates are ordered accepted turns. `ok before x` judges `x` given the kept
-candidates before it. The kept set is always a suffix of the candidates, so
-removal is a leading run. -/
 
 section Chain
 
@@ -183,7 +173,6 @@ def maxAdmissibleSuffix (ok : List α → α → Bool) : List α → List α
   | x :: rest =>
       if admissible ok (x :: rest) then x :: rest else maxAdmissibleSuffix ok rest
 
-/-- Dropping earlier kept candidates never invalidates a later one. -/
 def SuffixClosed (ok : List α → α → Bool) : Prop :=
   ∀ dropped before x, ok (dropped ++ before) x = true → ok before x = true
 
@@ -207,7 +196,6 @@ theorem maxAdmissibleSuffix_admissible (ok : List α → α → Bool) (xs : List
       · assumption
       · exact ih
 
-/-- No longer admissible suffix exists. -/
 theorem maxAdmissibleSuffix_maximal (ok : List α → α → Bool) (xs s : List α)
     (hs : s <:+ xs) (hadm : admissible ok s = true) :
     s.length ≤ (maxAdmissibleSuffix ok xs).length := by
@@ -231,8 +219,6 @@ theorem chainOk_drop_prefix (ok : List α → α → Bool) (hclosed : SuffixClos
       simp only [chainOk, Bool.and_eq_true] at h ⊢
       exact ⟨hclosed dropped before x h.1, ih (before ++ [x]) (by simpa using h.2)⟩
 
-/-- Admissibility is downward closed over suffixes, so a scan from the front
-(or a binary search over the drop count) finds the maximal suffix exactly. -/
 theorem admissible_tail (ok : List α → α → Bool) (hclosed : SuffixClosed ok)
     (x : α) (rest : List α) (h : admissible ok (x :: rest) = true) :
     admissible ok rest = true := by
@@ -258,7 +244,6 @@ theorem chainOk_split (ok : List α → α → Bool) (seen before : List α) (x 
       simp only [chainOk, Bool.and_eq_true, List.cons_append] at h
       simpa using ih (seen ++ [y]) h.2
 
-/-- Every kept candidate was judged against exactly the kept candidates before it. -/
 theorem admissible_split (ok : List α → α → Bool) (before : List α) (x : α)
     (after : List α) (h : admissible ok (before ++ x :: after) = true) :
     ok before x = true := by
@@ -266,17 +251,12 @@ theorem admissible_split (ok : List α → α → Bool) (before : List α) (x : 
 
 end Chain
 
-/-! ## Accepted turns -/
+/-! `captured` is the flattened body of the accepted request that produced the
+turn, `none` only when that request or its capture is verifiably absent, out of
+scope or undecodable. A failed store read is not `none`: it says nothing about
+the turn, so the adapter forms no input and the request fails instead of cutting
+the frontier there. -/
 
-/-- One accepted provider turn carrying reasoning. `prefixOrds` and `items`
-come from the assembled request body (this turn's ordinary prefix and its own
-anchored reasoning items); `captured` is the flattened body of the accepted
-request that produced the turn, `none` when that request or its capture is
-verifiably absent, out of scope or undecodable. A failed store read is not
-`none`: it says nothing about the turn, so the adapter forms no input and the
-request fails instead of cutting the frontier there. `base` is the per-turn
-provenance and payload decision (issuer, completion, witness, replayable
-payload). -/
 structure Turn (O W : Type) where
   base : Bool
   prefixOrds : List O
@@ -311,8 +291,6 @@ theorem turnOk_suffixClosed [DecidableEq O] [DecidableEq W] :
       simp only [keptItems, List.flatMap_append] at hsuffix
       exact (List.suffix_append _ _).trans hsuffix
 
-/-- A kept turn's assembled prefix is its accepted producing prefix with a
-leading run of reasoning removed: the provider acceptance rule. -/
 theorem kept_turn_prefix_is_leading_removal [DecidableEq O] [DecidableEq W]
     (before : List (Turn O W)) (x : Turn O W) (captured : List (FlatItem O W))
     (hok : turnOk before x = true) (hcap : x.captured = some captured) :
@@ -328,9 +306,6 @@ theorem kept_turn_prefix_is_leading_removal [DecidableEq O] [DecidableEq W]
   have := weave_roundtrip 0 (dropLeadingReasoning dropped.length captured)
   simpa [ords_dropLeadingReasoning, anchored, anchoredFrom_dropLeadingReasoning] using this
 
-/-- No resurrection: a reasoning item absent from a kept turn's accepted
-capture is never replayed ahead of that turn, and if that turn is dropped every
-earlier turn is dropped with it (the kept set is a suffix). -/
 theorem kept_before_items_in_capture [DecidableEq O] [DecidableEq W]
     (before : List (Turn O W)) (x : Turn O W) (after : List (Turn O W))
     (captured : List (FlatItem O W))
@@ -349,9 +324,6 @@ theorem kept_turns_are_suffix [DecidableEq O] [DecidableEq W] (turns : List (Tur
   obtain ⟨dropped, h⟩ := maxAdmissibleSuffix_suffix turnOk turns
   exact ⟨dropped, h.symm⟩
 
-/-- Replacing a nonempty leading run with a single item that is not its first
-member changes the sequence. `hfresh` is the summarizer premise: a produced
-summary is new content, not a copy of a row it stands in for. -/
 theorem summary_prefix_ne_replaced_run (summary : O) (replaced kept : List O)
     (hreplaced : replaced ≠ []) (hfresh : ∀ item ∈ replaced, summary ≠ item) :
     summary :: kept ≠ replaced ++ kept := by
@@ -362,11 +334,6 @@ theorem summary_prefix_ne_replaced_run (summary : O) (replaced kept : List O)
       rw [List.cons_append, List.cons.injEq] at heq
       exact hfresh first (by simp) heq.1
 
-/-- A turn whose assembled ordinary prefix replaced a nonempty leading run with
-a summary item fails the capture check, so its reasoning is dropped. This is why
-a reduction may not summarize at or before a turn whose reasoning the provider
-still requires: the provider rejects such a turn outright rather than accepting
-it without its thinking. -/
 theorem turnOk_false_of_summarized_prefix [DecidableEq O] [DecidableEq W]
     (before : List (Turn O W)) (x : Turn O W) (captured : List (FlatItem O W))
     (summary : O) (replaced kept : List O)
@@ -382,8 +349,6 @@ theorem turnOk_false_of_summarized_prefix [DecidableEq O] [DecidableEq W]
     exact summary_prefix_ne_replaced_run summary replaced kept hreplaced hfresh h.symm
   simp [turnOk, hcap, hne]
 
-/-- Executable witness: a summary item standing in for the first two ordinary
-items of the producing request drops the turn. -/
 theorem summarized_prefix_turn_is_dropped :
     turnOk (O := Nat) (W := Nat) []
       { base := true, prefixOrds := [9, 2], items := [],

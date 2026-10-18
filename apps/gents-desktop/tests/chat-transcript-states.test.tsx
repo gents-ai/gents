@@ -124,8 +124,6 @@ describe("session context visibility", () => {
     expect(screen.getByText("Below threshold")).toBeInTheDocument();
     expect(screen.getByText("27,400")).toBeInTheDocument();
     expect(screen.getByText("142,031")).toBeInTheDocument();
-    // The configured threshold the next request compacts at, not the last
-    // request's recorded one.
     expect(screen.getByText("360,000 (75%)")).toBeInTheDocument();
     expect(screen.getByText("198,288 (58%)")).toBeInTheDocument();
     expect(screen.getByText("1 durable compaction")).toBeInTheDocument();

@@ -35,7 +35,6 @@ FIELDS = {"id", "model_symbols", "constructors", "generated_groups", "fixture_st
 
 
 def uncomment(source):
-    """Preserve line/column boundaries, including nested Lean block comments."""
     out, depth, quoted, i = [], 0, False, 0
     while i < len(source):
         if not depth and source[i] == '"':
@@ -66,11 +65,6 @@ def uncomment(source):
 
 
 def constructors(source, declaration):
-    """Read explicitly delimited constructor declarations, including grouped lines.
-
-    Unsupported declaration layout fails closed rather than silently dropping
-    constructors. Lean remains the authority for parsing/typechecking the model.
-    """
     lines = uncomment(source).splitlines()
     starts = [i for i, line in enumerate(lines)
               if re.match(rf"^inductive {re.escape(declaration)}\b", line)]
@@ -81,8 +75,6 @@ def constructors(source, declaration):
     for line in lines[starts[0] + 1:]:
         if line and not line[0].isspace():
             break
-        # Pipes inside binders are not new constructors. Unsupported strings
-        # fail closed; the compiler metadata check below is the final authority.
         if '"' in line:
             raise ValueError(f"unsupported string in constructor declaration: {line}")
         for index, char in enumerate(line):
@@ -147,8 +139,6 @@ def check(root, entries, exported_groups):
                 errors.append(f"{identity}: admission boundary must reference a mapped model declaration")
         if row["fixture_status"] not in {"concrete_inputs", "summary_only", "not_exported"}:
             errors.append(f"{identity}: invalid fixture status")
-        # Deliberately no 'verified' status: native coverage belongs to the
-        # existing consumer registry/ledger, never to a handoff assertion.
         if row["native_status"] not in {"pending", "not_applicable"}:
             errors.append(f"{identity}: native coverage must be established by the consumer ledger")
         if not row["required_cases"]:
@@ -190,7 +180,6 @@ def check(root, entries, exported_groups):
 
 
 def check_execution_export(payload):
-    """Validate the executable handoff envelope, not native behavior or policy."""
     if not isinstance(payload, dict):
         raise ValueError("contract export must be an object")
     cases = payload.get("canonical_execution_gate_cases")

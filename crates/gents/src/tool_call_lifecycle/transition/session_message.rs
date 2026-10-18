@@ -1,8 +1,5 @@
 use super::*;
 
-/// The durable terminal of the request an `agent_new`/`agent_message` row
-/// caused (Lean `Recovery.SessionMessageRecoveryCause`): the row's only
-/// terminal cause.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CausedRequestTerminal {
     Completed { output: String },
@@ -13,7 +10,6 @@ pub enum CausedRequestTerminal {
 }
 
 impl CausedRequestTerminal {
-    /// Lean `SessionMessageRecoveryCause.terminalState`.
     pub(crate) fn tool_state(&self) -> ToolCallState {
         match self {
             Self::Completed { .. } => ToolCallState::Completed,
@@ -52,10 +48,6 @@ impl CausedRequestTerminal {
 }
 
 impl ToolCallLifecycle {
-    /// Running -> terminal for a session-message row, carrying the terminal
-    /// output of the request it caused. The invocation reply was the
-    /// immediate receipt, so this closes the call's source without a second
-    /// native result. Returns whether this caller won the running compare.
     pub(crate) async fn settle_session_message(
         &mut self,
         terminal: &CausedRequestTerminal,

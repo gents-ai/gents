@@ -97,9 +97,8 @@ async fn load_goal_document_versions(
     expected_session_id: &str,
     doc_id: &str,
 ) -> Result<Vec<TimelineGoalVersionRow>> {
-    // Do not send a fieldName filter. DefraDB evaluates that filter in memory
-    // and currently degrades malformed filters to no filter. Selecting the
-    // composite commits in typed Rust keeps history integrity fail-closed.
+    // Do not send a fieldName filter: DefraDB evaluates that filter in memory
+    // and currently degrades malformed filters to no filter.
     let escaped_doc_id = escape_graphql_string(doc_id);
     let response = access
         .execute(&format!(
@@ -149,9 +148,8 @@ async fn load_goal_document_versions(
         }
     }
 
-    // DefraDB's CID collection query reconstructs each historical document
-    // and applies DocumentACP to it. Input CID order is preserved by the
-    // runner, giving an exact commit-to-snapshot pairing.
+    // The CID collection query reconstructs each historical document through
+    // DefraDB's DocumentACP; input CID order is preserved by the runner.
     let cid_list = commits
         .iter()
         .map(|commit| format!(r#""{}""#, escape_graphql_string(&commit.cid)))

@@ -1109,9 +1109,8 @@ fn canonical_action_plan_sorts_object_keys() {
     assert_eq!(parsed, plan);
 }
 
-/// An absent optional field renders as a GraphQL `null`, never as `""`: an
-/// empty string is a real (if odd) value, while a genuinely unset field must
-/// stay unset so a later query can tell the two apart.
+/// Absent optional fields render as GraphQL `null`, never `""`: the empty
+/// string is a real value, so a later query must be able to tell the two apart.
 #[test]
 fn create_callback_result_mutation_renders_absent_fields_as_null_not_empty_string() {
     let result = CallbackResultDoc {
@@ -1154,8 +1153,6 @@ fn create_callback_result_mutation_renders_absent_fields_as_null_not_empty_strin
     );
 }
 
-/// Same rule for `CallbackInvocation`'s update: `action_plan`, `error` and
-/// `claimed_at` are nullable, and clearing them must write `null`.
 #[test]
 fn update_invocation_mutation_renders_absent_fields_as_null_not_empty_string() {
     let origin = crate::document_config::CallbackInvocationOrigin::Event {
@@ -1215,7 +1212,7 @@ async fn callback_results_are_selectable_by_their_binding() {
         ("inv-b", "other"),
     ] {
         let stored = super::documents::create_callback_result(
-            node.as_ref(),
+            &node,
             &super::documents::CallbackResultDoc {
                 result_id: format!("res-{invocation_id}"),
                 invocation_id: invocation_id.to_owned(),
@@ -1261,9 +1258,6 @@ fn every_invocation_origin_names_its_binding() {
     assert_eq!(group.binding_id(), "two");
 }
 
-/// Backlog fixture: a `BacklogWork` source with one document written before
-/// its binding is registered (history), registered through the configuration
-/// owner, so the binding's arrival cursor is seeded there.
 struct Backlog {
     _identity: crate::identity::KeyIdentity,
     _home: TempDir,
@@ -1284,7 +1278,7 @@ impl Backlog {
         let home = tempfile::tempdir().unwrap();
         let identity = crate::lifecycle::test_support::pin_fixed_signing_identity(home.path());
         let node = test_node().await;
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         access
             .add_schema("type BacklogWork { label: String }")
             .await
@@ -1326,7 +1320,7 @@ impl Backlog {
         let plan = DesiredStateApplyPlan::new(documents).unwrap();
         backlog
             .access
-            .transact("test.backlog_config", |txn| {
+            .transact_write("test.backlog_config", |txn| {
                 let plan = &plan;
                 Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
             })
@@ -1360,7 +1354,6 @@ impl Backlog {
         engine
     }
 
-    /// One engine lifetime: startup reconciliation and one delivery pass.
     async fn start_engine(&self) {
         let mut engine = self.engine();
         engine.reconcile_bindings().await;
@@ -1380,7 +1373,7 @@ impl Backlog {
 
     async fn cursor(&self) -> String {
         self.access
-            .transact("test.backlog_cursor", |txn| {
+            .transact_write("test.backlog_cursor", |txn| {
                 Box::pin(async move {
                     Ok(crate::config_client::event_source_cursor::load_or_seed(
                         txn,
@@ -1399,10 +1392,6 @@ impl Backlog {
     }
 }
 
-/// A document written after its binding is registered but before any callback
-/// engine observes the source (startup, downtime) is delivered exactly once,
-/// and a restart does not redeliver it (#2343). History before registration
-/// stays history.
 #[tokio::test]
 async fn document_written_before_engine_start_fires_once_across_restarts() {
     let backlog = Backlog::registered().await;
@@ -1415,8 +1404,6 @@ async fn document_written_before_engine_start_fires_once_across_restarts() {
     backlog.node.shutdown().await;
 }
 
-/// The arrival journal pages at 128 entries; one delivery pass drains a larger
-/// backlog instead of one page per rescan.
 #[tokio::test]
 async fn one_delivery_pass_drains_a_backlog_beyond_one_journal_page() {
     let backlog = Backlog::registered().await;
@@ -1430,9 +1417,6 @@ async fn one_delivery_pass_drains_a_backlog_beyond_one_journal_page() {
     backlog.node.shutdown().await;
 }
 
-/// A crash after admission but before the cursor advanced, followed by an edit
-/// of the admitted document, recovers the same invocation instead of
-/// admitting the new version, and the cursor then advances past it.
 #[tokio::test]
 async fn edited_document_admitted_before_a_crash_is_not_readmitted() {
     let backlog = Backlog::registered().await;
@@ -1475,8 +1459,6 @@ async fn edited_document_admitted_before_a_crash_is_not_readmitted() {
     backlog.node.shutdown().await;
 }
 
-/// Admission rereads the persisted binding: a binding disabled while the
-/// engine still holds its enabled snapshot admits nothing.
 #[tokio::test]
 async fn admission_refuses_a_binding_disabled_after_its_snapshot() {
     let backlog = Backlog::registered().await;

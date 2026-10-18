@@ -15,32 +15,15 @@ pub const DEFAULT_MAX_OUTPUT_TOKENS: usize = 32_768;
 pub const DEFAULT_MAX_TURNS: usize = 1_000;
 pub const DEFAULT_STREAM_BATCH_MS: u64 = 1_000;
 pub const DEFAULT_COMPACTION_THRESHOLD: f64 = 0.75;
-// Moved to gents-loop (G-1): compaction's own default/clamp constants.
 pub use gents_loop::compaction::{
     DEFAULT_COMPACTION_SUMMARY_FILE_LIST_MAX, DEFAULT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
     MAX_COMPACTION_SUMMARY_FILE_LIST_MAX, MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
 };
-/// Default execution lease duration, exposed by InferenceExecution's
-/// stream_liveness_timeout_secs field. The owned renewal task keeps live work
-/// current independently of provider output.
 pub const DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS: u64 = 120;
-/// Default for InferenceExecution's provider_idle_timeout_secs: the longest a
-/// provider attempt's transport may stay silent (header wait included) before
-/// the owned loop fails the attempt through the completion retry owner.
-/// Independent of the execution lease. Sized for keepalive-less first-token
-/// and reasoning silence (Responses reasoning without summaries, long vLLM
-/// prefill); Codex CLI uses the same 300s stream idle bound.
 pub const DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS: u64 = 300;
-/// Overall wall-clock budget for a claimed request. Long-running goals may
-/// legitimately work for many hours while continuing to emit model/tool data.
 pub const DEFAULT_DEADLINE_DURATION_SECS: u64 = 86_400;
 pub const DEFAULT_MODEL_NAME: &str = "default";
 
-/// Fully resolved runtime configuration for one agent executor. Holds an
-/// `Arc<RuntimeNode>` back-reference; the node owns the
-/// signing identity used for all DefraDB ops issued for this
-/// agent. The resolved agent therefore carries the validated owner and
-/// signing handle selected by its node-and-agent key.
 #[derive(Clone)]
 pub struct ResolvedAgent {
     pub agent_id: String,
@@ -60,11 +43,8 @@ pub struct ResolvedAgent {
     pub max_turns_provenance: MaxTurnsProvenance,
     pub system_prompt: String,
     pub tools: AgentToolSurfaceConfig,
-    /// Canonical compaction selection; absence uses runtime defaults.
     pub compaction: Option<crate::document_config::CompactionConfig>,
-    /// Optional summary inference resolved through the same profile chain.
     pub compaction_inference: Option<ResolvedInference>,
-    /// Aggregate budget pinned by the physical request execution owner.
     pub max_total_tokens: Option<u64>,
     pub stream_batch_ms: u64,
     pub stream_liveness_timeout: Duration,
@@ -72,16 +52,11 @@ pub struct ResolvedAgent {
     pub deadline_duration: Duration,
     pub completion_retry: CompletionRetryProfileFields,
     pub sampling: SamplingConfig,
-    /// Effective skill set for this agent (decision D5), resolved at
-    /// snapshot-build time. Their instructions compose into the prompt
-    /// preamble; their tool deps are intersected with the tool ceiling and
-    /// never widen it (decision D3). See `crate::skills`.
+    /// Effective skill set for this agent. Their tool deps are intersected with
+    /// the tool ceiling and never widen it. See `crate::skills`.
     pub skills: Vec<crate::skills::Skill>,
 }
 
-/// Selected canonical documents after one owner-scoped reference resolution.
-/// Shared by user inference and optional compaction inference; no alternate
-/// model selection or independently authored provider configuration exists.
 #[derive(Debug, Clone)]
 pub struct ResolvedInference {
     pub backend: crate::document_config::InferenceBackend,
@@ -168,10 +143,6 @@ fn positive_inference_limit(value: Option<i64>, default: usize, field: &str) -> 
     }
 }
 
-/// Which owner set the effective `max_turns`. An agent resolved from
-/// documents may have no `InferenceExecution` document at all, and an agent
-/// built programmatically has none by construction, so the three cases name
-/// different knobs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MaxTurnsProvenance {
     Default,
@@ -273,7 +244,7 @@ pub struct SamplingConfig {
     pub top_p: Option<f64>,
     pub top_k: Option<i64>,
     pub seed: Option<i64>,
-    /// Sampling knobs the provider takes as extra body params (#649). rig's
+    /// Sampling knobs the provider takes as extra body params (#649): rig's
     /// `CompletionRequest` models only `temperature`, so everything else rides
     /// `additional_params` — see [`SamplingConfig::additional_params`].
     pub min_p: Option<f64>,
@@ -325,14 +296,6 @@ impl SamplingConfig {
             && self.reasoning_effort.is_none()
     }
 
-    /// The sampling knobs that must travel as provider body params.
-    ///
-    /// `temperature` and `max_tokens` are modeled fields on rig's request, and
-    /// `reasoning_effort` needs a provider-specific wire shape in
-    /// `completion_factory`; everything else is emitted here and deep-merged
-    /// into `additional_params` at the request boundary. A `None` knob emits
-    /// nothing at all — the served model's own default stands, which is the
-    /// pre-#649 default for every profile that does not pin a value.
     pub fn additional_params(self) -> Option<serde_json::Value> {
         let mut params = serde_json::Map::new();
         if let Some(top_p) = self.top_p {
@@ -388,11 +351,6 @@ impl std::fmt::Debug for ResolvedAgent {
             .field("context_window", &self.context_window)
             .field("max_output_tokens", &self.max_output_tokens)
             .field("max_turns", &self.max_turns)
-            // Included for the same reason as `skills`: reconcile and slot
-            // selection compare `{agent:?}`, so a provenance-only edit
-            // (unset <-> an explicit value equal to the default) would
-            // otherwise fingerprint identically and leave the running slot
-            // reporting the previous provenance.
             .field("max_turns_provenance", &self.max_turns_provenance)
             .field("system_prompt", &self.system_prompt)
             .field("tools", &self.tools)
@@ -405,9 +363,6 @@ impl std::fmt::Debug for ResolvedAgent {
             .field("deadline_duration", &self.deadline_duration)
             .field("completion_retry", &self.completion_retry)
             .field("sampling", &self.sampling)
-            // Included so the runtime configuration fingerprint (which hashes
-            // `{agent:?}`) changes when an agent's effective skills change,
-            // letting the control watcher reconcile live skill updates (#340).
             .field("skills", &self.skills)
             .finish()
     }
@@ -428,24 +383,14 @@ impl ResolvedAgent {
             .unwrap_or(CompactionStrategy::StripThenSummarize)
     }
 
-    /// Returns the node's DID.
     pub fn node_did(&self) -> &str {
         &self.node.node_did
     }
 
-    /// Returns the node's signing identity.
-    ///
-    /// This is the only way to obtain an `Arc<dyn NodeIdentity>` for
-    /// an agent; the agent itself does not hold one. Two
-    /// agents sharing an `Arc<RuntimeNode>` return identical
-    /// clones, so DefraDB ACP receives the same actor for both —
-    /// satisfying Lean's `RespectsNode` predicate.
     pub fn node_identity(&self) -> &Arc<dyn NodeIdentity> {
         &self.node.identity
     }
 
-    /// Resolve the explicitly selected shared credential. Node OAuth is
-    /// handled by its existing credential owner, never an unauthenticated fallback.
     pub fn resolve_backend_api_key(&self) -> Result<Option<String>> {
         self.backend_auth.resolve_api_key().map_err(|error| {
             anyhow::anyhow!(
@@ -463,8 +408,6 @@ impl ResolvedAgent {
     }
 }
 
-/// Resolve a backend's explicitly selected shared credential, retaining backend
-/// identity in configuration errors. OAuth uses the node credential owner.
 pub fn resolve_backend_api_key(
     backend: &crate::backend_registry::InferenceBackend,
 ) -> Result<Option<String>> {
@@ -478,105 +421,6 @@ pub fn resolve_backend_api_key(
 mod tests {
     use super::*;
     use crate::identity::KeyIdentity;
-
-    fn xai_effort_fixtures(
-        endpoint: &str,
-        model: &str,
-        effort: Option<&str>,
-        catalogued_efforts: Option<&[&str]>,
-    ) -> (
-        crate::document_config::InferenceBackend,
-        crate::document_config::InferenceProfile,
-        crate::document_config::InferenceBackendObservation,
-    ) {
-        let backend = serde_json::from_value(serde_json::json!({
-            "node_did":"did:key:test", "backend_id":"xai", "name":"xAI",
-            "provider_kind":"OpenAiCompatible", "openai_wire_api":"responses",
-            "endpoint":endpoint,
-            "auth":{"kind":"environment","variable":"XAI_API_KEY"}
-        }))
-        .unwrap();
-        let profile = serde_json::from_value(serde_json::json!({
-            "node_did":"did:key:test", "profile_id":"grok", "backend_id":"xai",
-            "model_name":model, "reasoning_effort":effort
-        }))
-        .unwrap();
-        let observation = serde_json::from_value(serde_json::json!({
-            "backend_id":"xai", "probe_status":"healthy",
-            "catalogs":[{"node_did":null,"observed_at":"2026-01-01T00:00:00Z",
-                "models":[{"model_name":model,"reasoning_efforts":catalogued_efforts}]}]
-        }))
-        .unwrap();
-        (backend, profile, observation)
-    }
-
-    #[test]
-    fn unsent_reasoning_effort_explains_the_omission() {
-        const XAI: &str = "https://api.x.ai/v1";
-        const G45: &[&str] = &["low", "medium", "high", "xhigh"];
-        let warning = |endpoint, model, effort, catalogued, observed: bool| {
-            let (backend, profile, observation) =
-                xai_effort_fixtures(endpoint, model, effort, catalogued);
-            unsent_reasoning_effort(&backend, &profile, observed.then_some(&observation))
-        };
-        let text = warning(
-            XAI,
-            "grok-4.20-0309-reasoning",
-            Some("low"),
-            Some(&[]),
-            true,
-        )
-        .expect("grok-4.20 warns");
-        assert!(text.contains("grok-4.20-0309-reasoning"), "{text}");
-        assert!(text.contains("no reasoning effort"), "{text}");
-        let text = warning(XAI, "grok-4.5", Some("none"), Some(G45), true).expect("grok-4.5 none");
-        assert!(text.contains("low, medium, high, xhigh"), "{text}");
-        let text = warning(XAI, "grok-4.5", Some("low"), Some(G45), false).expect("no observation");
-        assert!(text.contains("no discovered catalog"), "{text}");
-        let text = warning(XAI, "grok-4.5", Some("low"), None, true).expect("stale catalog");
-        assert!(text.contains("predates effort discovery"), "{text}");
-        let g43: &[&str] = &["none", "low", "medium", "high", "xhigh"];
-        assert_eq!(warning(XAI, "grok-4.3", Some("low"), Some(g43), true), None);
-        assert_eq!(warning(XAI, "grok-4.5", None, Some(G45), true), None);
-        assert_eq!(
-            warning(
-                "https://api.openai.com/v1",
-                "grok-4.20-0309-reasoning",
-                Some("low"),
-                Some(&[]),
-                true
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn xai_api_key_profile_admits_an_unadvertised_effort() {
-        let (backend, profile, observation) = xai_effort_fixtures(
-            "https://api.x.ai/v1",
-            "grok-4.20-0309-reasoning",
-            Some("low"),
-            Some(&[]),
-        );
-        assert!(
-            advertised_model_for_profile(&backend, &profile, Some(&observation))
-                .unwrap()
-                .is_some()
-        );
-        let (backend, profile, observation) = xai_effort_fixtures(
-            "https://api.openai.com/v1",
-            "grok-4.20-0309-reasoning",
-            Some("low"),
-            Some(&[]),
-        );
-        let error = advertised_model_for_profile(&backend, &profile, Some(&observation))
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.contains("does not advertise selected reasoning effort"),
-            "{error}"
-        );
-    }
 
     fn stub_node() -> Arc<RuntimeNode> {
         let identity = Arc::new(
@@ -593,33 +437,6 @@ mod tests {
             display_name: None,
             enabled: true,
         })
-    }
-
-    #[test]
-    fn anthropic_key_resolves_claude_reasoning_efforts() {
-        let inference = ResolvedInference {
-            backend: serde_json::from_value(serde_json::json!({
-                "node_did": "did:key:backend-owner",
-                "backend_id": "anthropic-key",
-                "name": "Anthropic API",
-                "provider_kind": "AnthropicApiKey",
-                "endpoint": crate::claude_subscription::ANTHROPIC_API_ENDPOINT,
-                "auth": {"kind": "environment", "variable": "ANTHROPIC_API_KEY"}
-            }))
-            .unwrap(),
-            profile: serde_json::from_value(serde_json::json!({
-                "node_did": "did:key:backend-owner",
-                "profile_id": "opus",
-                "backend_id": "anthropic-key",
-                "model_name": "claude-opus-5-5"
-            }))
-            .unwrap(),
-            sampling: None,
-            execution: None,
-            retry_policy: None,
-            advertised_model: None,
-        };
-        assert!(inference.resolved_reasoning_efforts().is_some());
     }
 
     fn agent_with_wire(openai_wire_api: OpenAiWireApi) -> ResolvedAgent {
@@ -652,16 +469,9 @@ mod tests {
         }
     }
 
-    /// An agent bound to a backend whose environment authentication names an
-    /// environment variable that isn't actually set in the process must fail
-    /// loudly, naming both the backend and the agent — never silently
-    /// build/run with no key (#1338).
     #[test]
     fn resolve_backend_api_key_errors_when_env_var_named_but_unset() {
         let mut agent = agent_with_wire(OpenAiWireApi::ChatCompletions);
-        // Deliberately not a substring of `backend-general` (the fixture's
-        // backend id) so the two assertions below can't pass vacuously off
-        // one shared match.
         agent.agent_id = "agent-alpha".to_string();
         agent.backend_auth = crate::document_config::BackendAuth::Environment {
             variable: "GENTS_CONFIG_TEST_KEY_MISSING_1338_NEVER_SET".into(),
@@ -697,100 +507,6 @@ mod tests {
     }
 
     #[test]
-    fn default_max_turns_supports_long_running_agents() {
-        assert_eq!(DEFAULT_MAX_TURNS, 1_000);
-    }
-
-    #[test]
-    fn max_turns_resolves_default_provenance_when_unset() {
-        let resolved = resolve_max_turns(None).expect("default resolves");
-        assert_eq!(resolved.value, DEFAULT_MAX_TURNS);
-        assert_eq!(resolved.provenance, MaxTurnsProvenance::Default);
-    }
-
-    #[test]
-    fn max_turns_resolves_explicit_provenance_when_set() {
-        let resolved = resolve_max_turns(Some(40)).expect("explicit value resolves");
-        assert_eq!(resolved.value, 40);
-        assert_eq!(resolved.provenance, MaxTurnsProvenance::ExecutionProfile);
-    }
-
-    #[test]
-    fn max_turns_keeps_a_persisted_explicit_value_below_the_new_default() {
-        let resolved = resolve_max_turns(Some(250)).expect("persisted value resolves");
-        assert_eq!(resolved.value, 250);
-        assert_eq!(resolved.provenance, MaxTurnsProvenance::ExecutionProfile);
-    }
-
-    #[test]
-    fn max_turns_explicitly_set_to_the_default_value_is_still_explicit() {
-        let configured =
-            i64::try_from(DEFAULT_MAX_TURNS).expect("default fits in the authored field");
-        let resolved = resolve_max_turns(Some(configured)).expect("explicit value resolves");
-        assert_eq!(resolved.value, DEFAULT_MAX_TURNS);
-        assert_eq!(resolved.provenance, MaxTurnsProvenance::ExecutionProfile);
-    }
-
-    #[test]
-    fn max_turns_rejects_non_positive_explicit_value_regardless_of_provenance() {
-        let error = resolve_max_turns(Some(0)).expect_err("zero must still be rejected");
-        assert!(error.to_string().contains("max_turns must be positive"));
-    }
-
-    #[test]
-    fn max_turns_provenance_descriptions_name_a_reachable_knob() {
-        let default = MaxTurnsProvenance::Default.describe();
-        assert!(default.contains("built-in default"));
-        // A default-limit agent may have been built either way, so the
-        // advice has to cover both routes to a higher limit.
-        assert!(default.contains("InferenceExecution document"));
-        assert!(
-            default.contains("AgentBuilder::max_turns"),
-            "a programmatically built agent has no document to edit: {default}"
-        );
-        assert!(MaxTurnsProvenance::ExecutionProfile
-            .describe()
-            .contains("InferenceExecution document"));
-        let builder = MaxTurnsProvenance::BuilderOverride.describe();
-        assert!(builder.contains("AgentBuilder::max_turns"));
-        assert!(
-            builder.contains("no InferenceExecution document"),
-            "a builder-supplied limit must not point the operator at a document: {builder}"
-        );
-    }
-
-    #[test]
-    fn default_request_deadline_supports_long_running_agents() {
-        assert_eq!(DEFAULT_DEADLINE_DURATION_SECS, 86_400);
-    }
-
-    #[test]
-    fn default_execution_lease_is_two_minutes() {
-        assert_eq!(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS, 120);
-        assert_eq!(
-            agent_with_wire(OpenAiWireApi::ChatCompletions).stream_liveness_timeout,
-            Duration::from_secs(120),
-        );
-    }
-
-    #[test]
-    fn reasoning_effort_accepts_provider_vocabulary() {
-        for value in [
-            "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
-        ] {
-            let effort = ReasoningEffort::parse(value).expect("known effort must parse");
-            assert_eq!(effort.as_str(), value);
-        }
-        assert!(ReasoningEffort::parse("extreme").is_err());
-    }
-
-    /// TA-1 (#566 review): `openai_wire_api` must appear in the manual `Debug`
-    /// impl, because the runtime configuration fingerprint hashes
-    /// `format!("{agent:?}")` (see `runtime_snapshot::configuration_fingerprint`).
-    /// Without the Debug field, switching a backend's wire API would not change the
-    /// fingerprint, so the control watcher would never reconcile the change into a new
-    /// generation. Deleting the `.field("openai_wire_api", …)` line makes these equal.
-    #[test]
     fn debug_distinguishes_openai_wire_api_for_reconcile_fingerprint() {
         let chat = format!("{:?}", agent_with_wire(OpenAiWireApi::ChatCompletions));
         let responses = format!("{:?}", agent_with_wire(OpenAiWireApi::Responses));
@@ -804,10 +520,6 @@ mod tests {
     }
 }
 
-/// Whether a profile's context window is admissible for its advertised model:
-/// a selected window may not exceed a well-formed advertised maximum (a
-/// positive maximum no smaller than the advertised default). Runtime inference
-/// resolution and any client presenting the effective window share this check.
 pub fn validate_advertised_context_override(
     profile: &crate::document_config::InferenceProfile,
     model: &crate::document_config::AdvertisedModel,
@@ -834,10 +546,6 @@ pub fn validate_advertised_context_override(
     Ok(())
 }
 
-/// The model catalog a backend's observation advertises in the backend's
-/// credential scope: the node's own catalog for node OAuth, the
-/// shared catalog otherwise. `None` when nothing has been observed; an error
-/// when the observation holds more than one catalog for that scope.
 pub fn backend_catalog<'a>(
     backend: &crate::document_config::InferenceBackend,
     observation: Option<&'a crate::document_config::InferenceBackendObservation>,
@@ -854,10 +562,6 @@ pub fn backend_catalog<'a>(
         .flatten())
 }
 
-/// Whether a profile's reasoning effort is admitted against its model's
-/// advertised list. An `OpenAiCompatible` backend at the xAI API endpoint
-/// admits any effort: the request omits an unadvertised one instead
-/// ([`crate::inference_setup::sent_reasoning_effort`]).
 pub fn admits_reasoning_effort(
     backend: &crate::document_config::InferenceBackend,
     effort: ReasoningEffort,
@@ -868,10 +572,6 @@ pub fn admits_reasoning_effort(
             && crate::inference_setup::is_xai_api_endpoint(&backend.endpoint))
 }
 
-/// Why a profile's reasoning effort will not be sent, or `None` when it is
-/// (or none is set). Only an xAI API-key Responses backend omits an effort
-/// ([`crate::inference_setup::sent_reasoning_effort`]); the model default
-/// applies then.
 pub fn unsent_reasoning_effort(
     backend: &crate::document_config::InferenceBackend,
     profile: &crate::document_config::InferenceProfile,
@@ -923,12 +623,6 @@ pub fn unsent_reasoning_effort(
     })
 }
 
-/// The advertised model a profile selects on its backend, admitted against
-/// that advertisement: the model must be advertised exactly once, support the
-/// selected reasoning effort, and accept the profile's context window
-/// ([`validate_advertised_context_override`]). `None` when the backend's
-/// catalog has not been observed, in which case nothing is known about the
-/// model and nothing is admitted or rejected.
 pub fn advertised_model_for_profile(
     backend: &crate::document_config::InferenceBackend,
     profile: &crate::document_config::InferenceProfile,

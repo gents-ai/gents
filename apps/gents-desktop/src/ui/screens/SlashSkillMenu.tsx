@@ -1,4 +1,3 @@
-/* the skill list the composer shows above its textarea while a "/" line is being typed */
 import type { SkillView } from "@source-inc/gents-desktop-client";
 import { cn } from "@gents/ui/lib/utils";
 

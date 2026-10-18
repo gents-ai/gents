@@ -53,8 +53,8 @@ fn project_message_with_dependencies(
 }
 
 /// Tool payloads are native message blocks reconstructed from canonical output
-/// segments.  The join is deliberately by AgentToolCall's physical `_docID`,
-/// never a logical tool key or provider-native id.
+/// segments, joined by AgentToolCall's physical `_docID`, never a logical tool
+/// key or provider-native id.
 fn canonical_tool_payload(
     tool: &AgentToolCallRow,
     messages: &[&gents::session::canonical_rows::TranscriptMessageRow],
@@ -193,8 +193,6 @@ fn canonical_tool_payload(
                         Ok(text) => text,
                         Err(error) => return (None, None, failed(error)),
                     };
-                    // A matching result with zero text parts is a complete,
-                    // legitimately empty textual projection (possibly media-only).
                     result = Some(text.join("\n"));
                 }
                 _ => {}
@@ -299,6 +297,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
     node_did: Option<&str>,
     session_id: &str,
     preferred_request_id: Option<&str>,
+    request_projection: Option<&[AgentRequestRow]>,
 ) -> Option<DesktopSessionSnapshot> {
     let session_row = store
         .sessions
@@ -317,9 +316,21 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 })
         })
         .map(|(_index, row)| row);
-    let requests = node_did.map_or_else(
-        || store.requests_for_session(session_id),
-        |node_did| store.requests_for_session_for_node(session_id, node_did),
+    let requests = request_projection.map_or_else(
+        || {
+            node_did.map_or_else(
+                || store.requests_for_session(session_id),
+                |node_did| store.requests_for_session_for_node(session_id, node_did),
+            )
+        },
+        |rows| {
+            rows.iter()
+                .filter(|row| {
+                    row.session_id.as_deref() == Some(session_id)
+                        && node_did.is_none_or(|node_did| row.node_did.as_deref() == Some(node_did))
+                })
+                .collect()
+        },
     );
     let goal = store
         .goals
@@ -449,11 +460,6 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 None
             }
         });
-    // AgentSession's observation is the canonical index projection of the
-    // exact latest AgentRequest identity. A desktop replica can still hold an
-    // older request row while operator GraphQL has already advanced both the
-    // request and session. Let the exact observation advance (never regress)
-    // the detailed turn projection until the request row catches up.
     let observed_turn_state = session_row
         .and_then(|session| session.observation.as_ref())
         .and_then(|observation| observation.latest_request.as_ref())
@@ -555,9 +561,6 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
         .iter()
         .copied()
         .map(|row| {
-            // Forks resolve only against the exact rows supplied by the
-            // dependency reader.  Missing facts remain Loading; there is no
-            // parent-session scan or serialized-text fallback.
             let projection = project_message_with_dependencies(
                 row,
                 &observed_messages,
@@ -610,19 +613,12 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
 
             MessageView {
                 message_key: row.message.message_key.clone(),
-                // The transcript repeats only the physical request doc id
-                // (#1425); the view reports the logical request id, and none
-                // when the owning request row is not observed.
                 request_id: row
                     .message
                     .request_doc_id
                     .as_deref()
                     .and_then(|doc_id| requests_by_doc_id.get(doc_id))
                     .map(|request| request.request_id.clone()),
-                // The same ownership the pending turn reconciles by
-                // (pending_turn.rs): only the request's authored prompt row
-                // is the person's turn, never the other user rows the
-                // request authors.
                 owns_turn: row.message.role == gents_protocol::output::MessageRole::User
                     && row.message.request_doc_id.as_deref().is_some_and(|doc_id| {
                         row.message.message_key == authored_prompt_message_key(doc_id)
@@ -706,9 +702,6 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                         )],
                     })
                 } else {
-                    // Canonical tool ownership is the physical request binding.
-                    // Missing evidence cannot be borrowed from the latest turn
-                    // or a coincidentally matching logical request identifier.
                     let req_for_tool = row
                         .request_doc_id
                         .as_deref()
@@ -1290,9 +1283,6 @@ mod tests {
     use gents_desktop_core::client::ClientStoreRows;
     use gents_protocol::output::MessageRole;
 
-    /// A completed turn H published folded F; a later turn L is the tip page.
-    /// F's exact owner is H's folded entry, so it never reappears pending, and
-    /// loading H's page shows F once, carrying F as its input identity.
     #[test]
     fn a_published_folded_message_stays_owned_outside_and_on_its_original_page() {
         let request = |id: &str, state, second: u32| AgentRequestRow {
@@ -1395,6 +1385,7 @@ mod tests {
                 Some("did:test:amy"),
                 "session-1",
                 None,
+                None,
             )
             .unwrap()
         };
@@ -1467,6 +1458,10 @@ mod tests {
             "answer",
         );
         let full = ClientStore::from_rows(rows.clone());
+        let bounded = ClientStore::from_rows(ClientStoreRows {
+            requests: vec![full.requests[0].clone()],
+            ..ClientStoreRows::default()
+        });
         let mut tip_rows = ClientStoreRows::default();
         push_canonical_text_message(
             &mut tip_rows,
@@ -1500,7 +1495,7 @@ mod tests {
             let page = ClientStore::from_rows(page_rows);
             let context = page.merge_snapshot(tip.clone());
             let snapshot = build_session_snapshot_from_store_for_node_with_transcript(
-                &full,
+                &bounded,
                 &page,
                 &context,
                 None,
@@ -1512,6 +1507,7 @@ mod tests {
                 Some("did:test:amy"),
                 "session-1",
                 None,
+                Some(&full.requests),
             )
             .unwrap();
             assert!(
@@ -1570,6 +1566,7 @@ mod tests {
             Some("did:test:amy"),
             "session-1",
             None,
+            None,
         )
         .unwrap();
         assert!(snapshot.timeline_items.iter().any(|item| matches!(item,
@@ -1599,6 +1596,7 @@ mod tests {
             true,
             Some("did:test:amy"),
             "session-1",
+            None,
             None,
         )
         .unwrap();

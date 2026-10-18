@@ -59,11 +59,6 @@ def acceptedMessage : MessageEnvelope :=
   , key := "assistant-813", sequence := 0, nativeId := none, blocks := []
   , createdAt := 9 }
 
-/-- One executable application trace crosses the real queue/claim owner, lease
-owner, retry policy, canonical transcript gate, terminal owner, and queue finish
-owner. Physical request `200` remains distinct from logical queue request `20`.
-No state record is replaced between transitions; only the owners' acquire/release
-operations move the storage gate. -/
 @[noinline] opaque begunPhase : Option World := do
   let before ← initial
   let activated ← activate before 1 6 ordinaryActivation 0 budget (some 11)
@@ -156,10 +151,6 @@ private theorem initial_seed_invariants (before : World)
         · rw [hgate]
           rfl
 
-/-- The executable fixture supplies an actual application `Trace.activate`,
-not merely a second computation with the same endpoint. All four seed
-predicates therefore reach the successfully activated world through their
-trace theorems. -/
 theorem actual_activation_trace_preserves_all_invariants :
     ∃ before after,
       Trace before after ∧
@@ -216,10 +207,6 @@ private theorem held_closureUnique : ClosureUnique held := by
   simp [hs, closures, sourceRecords] at hleft hright
   exact hleft.1.trans hright.1.symm
 
-/-- A real held-gate revocation of a physically running tool supplies an
-actual `Trace.gate`. Both new invariants are transported by the trace theorems,
-while the executable witness confirms the running pre-state and released
-in-flight post-state. -/
 theorem running_revocation_trace_preserves_new_invariants :
     ∃ post, Trace held post ∧ ClosureUnique held ∧
       toolProjectionCoherent held = true ∧ ClosureUnique post ∧
@@ -239,8 +226,6 @@ theorem running_revocation_trace_preserves_new_invariants :
 
 end RunningRevocation
 
-/-- The application Goal entrypoint consumes a proof of the actual Goal owner
-publication; the receipt cannot be supplied as an unjoined caller record. -/
 @[noinline] opaque actualGoalActivation : Option Bool := do
   let state ← heldState
   match hp : GoalContinuation.publishGoalChild? claimedGoal state 1 5 claimedRequest

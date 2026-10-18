@@ -169,8 +169,6 @@ theorem pendingAfterDrainMatching_sublist
       · exact ih.cons head
       · exact ih.cons₂ head
 
-/-- Ordering covers every queued entry: selected folding messages stay ahead
-of the pending queue they return to. -/
 theorem transition_preserves_createdOrdered
     {pre post : SessionQueueState}
     (h_trans : Transition pre post)

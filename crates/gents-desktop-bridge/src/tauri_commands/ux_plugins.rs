@@ -8,6 +8,7 @@
 use serde::Deserialize;
 use serde_json::Value;
 use tauri::State;
+use ts_rs::TS;
 
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::{current_core, DesktopAppState};
@@ -78,7 +79,7 @@ pub async fn desktop_ux_plugin_source(
     serde_json::to_value(module).map_err(|error| BridgeError::untyped(error.to_string()))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginCallRequest {
     /// The runtime listing of the calling ux plugin (`<ns>/<pack>/<name>`);
@@ -101,7 +102,7 @@ pub async fn desktop_plugin_call(
     Ok(serde_json::json!({ "output": output }))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct UxDataCallRequest {
     /// The runtime listing of the calling ux plugin (`<ns>/<pack>/<name>`);
@@ -140,7 +141,7 @@ pub async fn desktop_ux_data_call(
     .map_err(failed)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct UxDataSurfacesRequest {
     pub ux: String,

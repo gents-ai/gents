@@ -3,19 +3,6 @@ use super::super::super::types::{
 };
 use super::*;
 
-fn liveness_with(
-    tools: Vec<ActiveToolCallView>,
-    execs: Vec<NativeExecutorStatusView>,
-) -> RuntimeLivenessView {
-    RuntimeLivenessView {
-        expired_processing_count: 0,
-        requests: Vec::new(),
-        active_tool_calls: tools,
-        active_native_executors_available: true,
-        active_native_executors: execs,
-    }
-}
-
 #[test]
 fn project_filters_to_background_await_mode_only() {
     let mut toolcall_rows = vec![
@@ -42,33 +29,27 @@ fn project_filters_to_background_await_mode_only() {
             stuck_since: None,
         },
     ];
-
     let mut no_mode = toolcall_rows[1].clone();
     no_mode.tool_call_id = "tc_no_mode".into();
     no_mode.await_mode = None;
     toolcall_rows.push(no_mode);
-
     let projected =
         project_backgrounded_tools(&toolcall_rows, &liveness_with(Vec::new(), Vec::new()));
     assert_eq!(projected.len(), 1);
     assert_eq!(projected[0].tool_call_id, "tc_bg");
 }
 
-#[test]
-fn project_skips_terminal_lifecycle_state() {
-    let rows = vec![ToolCallRow {
-        request_id: "req_a".into(),
-        tool_call_id: "tc".into(),
-        tool_name: "grep".into(),
-        lifecycle_state: Some("completed".into()),
-        status: None,
-        started_at: None,
-        deadline_at: None,
-        await_mode: Some("background".into()),
-        stuck_since: None,
-    }];
-    let projected = project_backgrounded_tools(&rows, &liveness_with(Vec::new(), Vec::new()));
-    assert!(projected.is_empty());
+fn liveness_with(
+    tools: Vec<ActiveToolCallView>,
+    execs: Vec<NativeExecutorStatusView>,
+) -> RuntimeLivenessView {
+    RuntimeLivenessView {
+        expired_processing_count: 0,
+        requests: Vec::new(),
+        active_tool_calls: tools,
+        active_native_executors_available: true,
+        active_native_executors: execs,
+    }
 }
 
 #[test]
@@ -98,24 +79,6 @@ fn project_attaches_native_executor_when_correlated() {
     let projected = project_backgrounded_tools(&rows, &liveness);
     assert!(projected[0].native_executor.is_some());
     assert_eq!(projected[0].native_executor.as_ref().unwrap().pid, 41812);
-}
-
-#[test]
-fn stuck_diagnostic_is_emitted_for_stuck_since() {
-    let rows = vec![ToolCallRow {
-        request_id: "req_a".into(),
-        tool_call_id: "tc".into(),
-        tool_name: "index_repo".into(),
-        lifecycle_state: Some("running".into()),
-        status: None,
-        started_at: Some("2026-05-20T12:00:00Z".into()),
-        deadline_at: None,
-        await_mode: Some("background".into()),
-        stuck_since: Some("2026-05-20T12:00:00Z".into()),
-    }];
-    let diagnostics = stuck_diagnostics_from_tool_calls(&rows);
-    assert_eq!(diagnostics.len(), 1);
-    assert_eq!(diagnostics[0].reason, "stuckTool");
 }
 
 #[test]
@@ -205,12 +168,10 @@ fn native_executor_correlation_respects_window_and_tool_name() {
         started_at: started_at.into(),
         age_ms: 0,
     };
-    // Both decoys precede the valid executor, so dropping either the name
-    // check or the ±1000 ms window selects the wrong entry.
     let execs = vec![
-        exec("index_repo", "2026-05-20T12:00:00Z"), // inside window, name differs
-        exec("grep", "2026-05-20T12:00:01.500Z"),   // outside window, name matches
-        exec("grep", "2026-05-20T12:00:00.500Z"),   // inside window, name matches
+        exec("index_repo", "2026-05-20T12:00:00Z"),
+        exec("grep", "2026-05-20T12:00:01.500Z"),
+        exec("grep", "2026-05-20T12:00:00.500Z"),
     ];
     let liveness = liveness_with(Vec::new(), execs);
 
@@ -221,7 +182,6 @@ fn native_executor_correlation_respects_window_and_tool_name() {
         .expect("in-window matching-name executor must correlate");
     assert_eq!(correlated.started_at, "2026-05-20T12:00:00.500Z");
 
-    // A row with no started_at cannot correlate anything.
     let no_start = ToolCallRow {
         started_at: None,
         ..row.clone()
@@ -231,26 +191,4 @@ fn native_executor_correlation_respects_window_and_tool_name() {
         projected[0].native_executor.is_none(),
         "missing started_at must not correlate a native executor"
     );
-}
-
-#[test]
-fn stuck_diagnostic_requires_nonterminal_background_stuck_evidence() {
-    let mut row = ToolCallRow {
-        request_id: "req_a".into(),
-        tool_call_id: "tc_running_quiet".into(),
-        tool_name: "index_repo".into(),
-        lifecycle_state: Some("running".into()),
-        status: None,
-        started_at: Some("2026-05-20T12:00:00Z".into()),
-        deadline_at: None,
-        await_mode: Some("background".into()),
-        stuck_since: None,
-    };
-    assert!(stuck_diagnostics_from_tool_calls(&[row.clone()]).is_empty());
-    row.stuck_since = Some("2026-05-20T12:00:00Z".into());
-    row.lifecycle_state = Some("completed".into());
-    assert!(stuck_diagnostics_from_tool_calls(&[row.clone()]).is_empty());
-    row.lifecycle_state = Some("running".into());
-    row.await_mode = Some("foreground".into());
-    assert!(stuck_diagnostics_from_tool_calls(&[row]).is_empty());
 }

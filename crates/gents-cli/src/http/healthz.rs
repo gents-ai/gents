@@ -21,7 +21,7 @@ fn render_healthz_payload_at(
     state: &RuntimeHttpState,
     data: Option<&MetricsQueryData>,
     error: Option<String>,
-    observed_at: chrono::DateTime<chrono::Utc>,
+    _observed_at: chrono::DateTime<chrono::Utc>,
 ) -> Value {
     let version = version_response();
     let uptime_seconds = state.started_instant.elapsed().as_secs();
@@ -44,11 +44,8 @@ fn render_healthz_payload_at(
                 }
                 ProjectedNodeReadinessSummary::Unknown(_) => true,
             };
-            // Measured backend health is never persisted to
-            // `InferenceBackend` (#640; see `backend_health.rs`), so this
-            // out-of-process reader can't compute degradation from that
-            // document's `enabled`/`probe_status` fields — only from the
-            // readiness projection this runtime already published above.
+            // Measured backend health is never persisted to `InferenceBackend`
+            // (#640), so degradation comes only from the readiness projection.
             let backend_degraded = match &readiness {
                 ProjectedNodeReadinessSummary::Observed(summary) => {
                     summary.unavailable_agents.values().any(|reason| {
@@ -304,7 +301,6 @@ mod tests {
         assert_eq!(
             payload.get("status").and_then(|v| v.as_str()),
             Some("degraded"),
-            "expired processing must downgrade /healthz to degraded; payload was {payload}"
         );
         assert_eq!(
             payload.get("ok").and_then(|v| v.as_bool()),
@@ -328,10 +324,6 @@ mod tests {
 
     #[test]
     fn healthz_reports_backend_degraded_from_readiness_not_backend_document() {
-        // The `InferenceBackend` row itself is healthy — this runtime's
-        // *measured* health (#640, never persisted to that document) is
-        // what vetoed the agent_config, and only the readiness projection
-        // carries that signal.
         let vetoed_readiness = NodeReadinessRow {
             node_did: "did:test:test".to_string(),
             snapshot_json: serde_json::to_string(&NodeReadinessSnapshot {
@@ -365,8 +357,6 @@ mod tests {
                 .pointer("/checks/backends/status")
                 .and_then(Value::as_str),
             Some("degraded"),
-            "a readiness-reported backend veto must degrade the backends check even though \
-             the InferenceBackend document itself reports healthy: {payload}"
         );
         assert_eq!(
             payload.get("status").and_then(Value::as_str),
@@ -515,12 +505,10 @@ mod tests {
                 .pointer("/checks/codex_shim/status")
                 .and_then(Value::as_str),
             Some("pending"),
-            "a shim waiting for its agent_config must be visible in /healthz; payload was {payload}"
         );
         assert_eq!(
             payload.get("status").and_then(Value::as_str),
             Some("degraded"),
-            "a closed shim port must not read as fully healthy; payload was {payload}"
         );
         assert_eq!(
             payload.get("ok").and_then(Value::as_bool),

@@ -1,19 +1,6 @@
-//! Visibility for event deliveries deferred on a missing correlation value.
-//!
-//! An event trigger with a `correlation_field` defers a source document until
-//! that field is populated, and the periodic rescan re-evaluates it. A
-//! producer that never fills the field leaves the delivery deferred forever,
-//! which at `info` is indistinguishable from an idle pipeline (#1592). This
-//! watch remembers when each `(document, trigger)` delivery first deferred and
-//! warns once when it has waited longer than [`DEFERRAL_WARN_AFTER`]. An entry
-//! is dropped as soon as its delivery settles, so the watch holds only
-//! deliveries that are deferred right now.
-
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-/// How long a delivery may wait on its correlation value before it is
-/// reported as stuck.
 pub(crate) const DEFERRAL_WARN_AFTER: Duration = Duration::from_secs(300);
 
 struct Deferral {
@@ -21,7 +8,6 @@ struct Deferral {
     warned: bool,
 }
 
-/// Deferred deliveries, keyed by source collection and document, then trigger.
 pub(crate) struct DeferralWatch {
     warn_after: Duration,
     deferred: HashMap<(String, String), HashMap<String, Deferral>>,
@@ -41,9 +27,6 @@ impl DeferralWatch {
         }
     }
 
-    /// Records that `trigger_id` deferred `collection`/`doc_id` because
-    /// `correlation_field` is empty, warning once when that delivery has
-    /// waited past the threshold.
     pub(crate) fn deferred(
         &mut self,
         collection: &str,
@@ -74,7 +57,6 @@ impl DeferralWatch {
         }
     }
 
-    /// The delivery of `collection`/`doc_id` to `trigger_id` settled.
     pub(crate) fn settled(&mut self, collection: &str, doc_id: &str, trigger_id: &str) {
         let key = (collection.to_owned(), doc_id.to_owned());
         if let Some(triggers) = self.deferred.get_mut(&key) {
@@ -85,13 +67,11 @@ impl DeferralWatch {
         }
     }
 
-    /// Every delivery of `collection`/`doc_id` settled.
     pub(crate) fn settled_document(&mut self, collection: &str, doc_id: &str) {
         self.deferred
             .remove(&(collection.to_owned(), doc_id.to_owned()));
     }
 
-    /// Deferred deliveries that have already been reported as stuck.
     #[cfg(test)]
     pub(crate) fn stuck(&self) -> usize {
         self.deferred
@@ -101,7 +81,6 @@ impl DeferralWatch {
             .count()
     }
 
-    /// Deliveries deferred right now.
     #[cfg(test)]
     pub(crate) fn pending(&self) -> usize {
         self.deferred.values().map(HashMap::len).sum()

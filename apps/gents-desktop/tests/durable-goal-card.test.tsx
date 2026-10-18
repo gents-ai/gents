@@ -52,10 +52,6 @@ describe("durable goal transcript card", () => {
   });
 
   it("renders runtime fallbacks for a goal persisted without status, objective, or budget", () => {
-    // GoalView.status/objective/tokenBudget are all nullable in the generated
-    // snapshot: a replicated or partially written Goal row reaches this card.
-    // The component has distinct fallback branches for each; without this case
-    // only the fully populated projection is observed.
     const session: DesktopSessionSnapshot = {
       sessionId: "session-goal-partial",
       nodeDid: "did:test:goal-node",
@@ -110,7 +106,6 @@ describe("durable goal transcript card", () => {
     expect(card).toHaveTextContent("No objective");
     expect(card).toHaveTextContent("37 charged tokens");
     expect(card).toHaveTextContent("0s active");
-    // An unbudgeted goal renders no budget separator.
     expect(card.textContent).not.toContain("/");
   });
 });

@@ -1,7 +1,3 @@
-//! Shim views of the sessions a session started. Lineage itself is read only
-//! through `gents::session_origin`; this module maps its links onto the
-//! request rows the shims present.
-
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -15,16 +11,13 @@ use gents::session_origin::{caused_requests, lineage, load_session, started_by, 
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
 
-/// A session another session's request started.
 #[derive(Clone, Debug)]
 pub(crate) struct CausedSession {
     pub(crate) scope: SessionScope,
     pub(crate) agent_id: String,
     pub(crate) root_session_id: String,
     pub(crate) caused_by_scope: SessionScope,
-    /// Distance from the root of the resolved chain, starting at one.
     pub(crate) depth: u32,
-    /// The request that started the session, carrying the causing edge.
     pub(crate) first: AgentRequestRow,
     pub(crate) latest: AgentRequestRow,
 }
@@ -35,10 +28,10 @@ const REQUEST_FIELDS: &str = "_docID request_id node_did session_id requester_di
      caused_by_parent_tool_call_doc_id";
 
 fn access(node: &Arc<EmbeddedNode>) -> ConfigAccess {
-    ConfigAccess::Local(node.clone())
+    ConfigAccess::local(node.clone())
 }
 
-/// Sessions started by this exact physical request.
+#[cfg(unix)]
 pub(crate) async fn load_direct_caused_sessions(
     node: &Arc<EmbeddedNode>,
     cause: &AgentRequestRow,
@@ -65,10 +58,6 @@ pub(crate) async fn load_direct_caused_sessions(
     Ok(caused)
 }
 
-/// Every session transitively started by the given roots. Each session has
-/// one starter, so it is visited once and message loops terminate. Use
-/// [`load_direct_caused_sessions`] or [`load_caused_session`] where one level
-/// or one session is enough.
 pub(crate) async fn load_caused_sessions(
     node: &Arc<EmbeddedNode>,
     roots: &[SessionScope],
@@ -101,9 +90,6 @@ pub(crate) async fn load_caused_sessions(
     Ok(caused)
 }
 
-/// Resolve one session label to the session it names by following its
-/// starters until `is_root` accepts one. `None` when the label names no
-/// started session or no accepted root is among its starters.
 pub(crate) async fn load_caused_session(
     node: &Arc<EmbeddedNode>,
     session_id: &str,
@@ -143,11 +129,6 @@ pub(crate) async fn load_caused_session(
     view(node, started, parent.scope, root, depth).await
 }
 
-/// The public request that started a linked session. The causing request's
-/// `agent_new` calls name the requests they caused
-/// (`session_origin::caused_requests`); the one of those in the linked
-/// session is the opening request. A later message into the same session
-/// from the same request is caused by an `agent_message` call instead.
 pub(crate) async fn starting_request(
     access: &ConfigAccess,
     link: &SessionLink,
@@ -199,7 +180,6 @@ pub(crate) async fn starting_request(
     Ok(rows.pop())
 }
 
-/// The sessions this exact request started, with each one's starting request.
 pub(crate) async fn started_by_request(
     access: &ConfigAccess,
     cause: &AgentRequestRow,
@@ -221,8 +201,6 @@ pub(crate) async fn started_by_request(
     Ok(started)
 }
 
-/// Present one started session: its stored agent, the request that
-/// started it and its current head.
 async fn view(
     node: &Arc<EmbeddedNode>,
     link: SessionLink,
@@ -257,12 +235,11 @@ async fn view(
     }))
 }
 
-/// The latest request of one session, selected by the canonical head owner.
 pub(crate) async fn load_session_head(
     node: &Arc<EmbeddedNode>,
     scope: &SessionScope,
 ) -> Result<Option<AgentRequestRow>> {
-    let head = ConfigAccess::transact_local(node, None, "caused_sessions.head", |txn| {
+    let head = ConfigAccess::transact_local_write(node, None, "caused_sessions.head", |txn| {
         Box::pin(async move {
             load_latest_request_in_txn(
                 txn,
@@ -277,7 +254,6 @@ pub(crate) async fn load_session_head(
     let Some(head) = head else {
         return Ok(None);
     };
-    // The exact `_docID` read carries no `order`, so `limit` cannot hide it.
     let query = format!(
         r#"{{AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ {REQUEST_FIELDS} }}}}"#,
         escape_graphql_string(&head.observed.request_doc_id)

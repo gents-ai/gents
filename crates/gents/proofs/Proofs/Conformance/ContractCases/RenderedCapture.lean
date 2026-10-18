@@ -12,25 +12,12 @@ Witness rows for persist-before-send at the provider boundary (#840).
 `.durableAfter`, `.sendPermitted`, and `.providerRequests`. Nothing here is
 transcribed by hand, so a change to `RenderedCapture.capture` changes the rows
 and breaks the Rust fence rather than quietly disagreeing with it.
-
-The rows are also not a second, unproven story about the transition order:
-`RenderedCapture.Scenario.trace_realizes` proves each scenario's computed
-`(store, stage)` pair is reachable from its `assembled` start by legal `Step`s,
-so the scenarios exercise `sent_implies_durably_captured`,
-`sent_requires_a_capture_step`, and `capture_failure_blocks_send`. Matching these
-finite endpoints does not prove production transition ordering or universal
-refinement; the production ordering fence remains a separate obligation.
-
-`renderedCaptureKeyCases` fences the other half: that the capture key is a
-five-component tuple and that equality is componentwise. The distinctness of
-each pair is decided by the model, not asserted here.
 -/
 
 namespace Conformance.ContractCases
 
 open RenderedCapture
 
-/-- One capture delivery, flattened for emission. -/
 structure RenderedCaptureCase where
   name : String
   nodeDid : Nat
@@ -40,20 +27,16 @@ structure RenderedCaptureCase where
   attempt : Nat
   /-- Opaque canonical-request identity. Equal values mean equal canonical JSON. -/
   request : Nat
-  /-- What the durable row already held under this key before the delivery. -/
   priorBinding : Option Nat
   captureOutcome : String
   captureDurable : Bool
   postStage : String
   sendPermitted : Bool
-  /-- How many requests the provider is allowed to observe for this attempt. -/
   providerRequestsObserved : Nat
-  /-- What the durable row holds under this key afterwards. -/
   durableAfter : Option Nat
   finalStage : String
   deriving Repr
 
-/-- Two capture keys and whether the model considers them the same fact. -/
 structure RenderedCaptureKeyCase where
   name : String
   leftNodeDid : Nat
@@ -69,9 +52,6 @@ structure RenderedCaptureKeyCase where
   sameFact : Bool
   deriving Repr
 
-/-- One reference a manifest row names, beside what the row's store holds
-under it: `storedWitness` is the commit of the stored block, `none` when the
-reference is absent. -/
 structure RenderedCaptureManifestBlock where
   ref : ArtifactRef
   pinnedWitness : FieldCommitWitness
@@ -169,15 +149,10 @@ theorem renderedCaptureStorageCases_pinned :
       ] := by
   rfl
 
-/-- No storage row may permit a send unless bounded resolution recovered the
-exact intended request. This is the fail-open guard on the emitted rows
-themselves, storage encodings included. -/
 theorem renderedCaptureStorageCases_no_fail_open :
     renderedCaptureStorageCases.all
       (fun row => !row.sendPermitted || row.decodedRequest == some row.request) = true := by
   rfl
-
-/-! ## Building the rows -/
 
 private def contractNodeDid : Nat := 7
 private def contractSessionId : Nat := 11
@@ -216,17 +191,6 @@ private def renderedCaptureCase
   , finalStage := (Scenario.finalStage scenario).toContract
   }
 
-/-- The five delivery shapes the sink has to get right.
-
-* a first capture,
-* a redelivery of the identical canonical request (restart, lost ack, retried
-  mutation) — success without a write,
-* a reused key carrying a *different* canonical request — an integrity error
-  that must block the provider call,
-* a transport retry, which re-sends an identical request under a new `attempt`
-  and is therefore a second durable fact rather than an idempotent hit,
-* a repair retry, whose assembled input legitimately differs from attempt 0's
-  and which is likewise a separate fact. -/
 def renderedCaptureCases : List RenderedCaptureCase :=
   [ renderedCaptureCase "fresh_capture_then_send" 0 0 100 none
   , renderedCaptureCase "idempotent_recapture_then_send" 0 0 100 (some 100)
@@ -235,8 +199,6 @@ def renderedCaptureCases : List RenderedCaptureCase :=
   , renderedCaptureCase "repair_retry_different_request_new_attempt" 0 1 102 none
   ]
 
-/-- Pinned expected outputs: this fails at Lean build time if `capture` drifts,
-so the emitted rows stay honest instead of self-referential. -/
 theorem renderedCaptureCases_pinned :
     renderedCaptureCases.map
         (fun row =>
@@ -256,8 +218,6 @@ theorem renderedCaptureCases_pinned :
       ] := by
   rfl
 
-/-- No emitted row may permit a send without leaving the fact durable under its
-own key. This is the fail-open guard on the emitted data itself. -/
 theorem renderedCaptureCases_no_fail_open :
     renderedCaptureCases.all
       (fun row =>
@@ -282,9 +242,7 @@ private def renderedCaptureKeyCase
   , sameFact := decide (left = right)
   }
 
-/-- One pair per key component, plus the identical pair. Componentwise equality
-is the whole contract: any component that production drops from the key silently
-merges two facts. -/
+/-- One pair per key component, plus the identical pair. -/
 def renderedCaptureKeyCases : List RenderedCaptureKeyCase :=
   [ renderedCaptureKeyCase "identical_tuple_is_one_fact"
       (contractKey 0 0) (contractKey 0 0)
@@ -316,8 +274,8 @@ theorem renderedCaptureKeyCases_pinned :
 The producer writes the loop discriminator as `"{kind}.{seq}"`. These cases fix
 the label vocabulary a consumer's parser must accept, the reject vectors it
 must error on (never default), and the identity ordering
-`(kind rank, seq, turn, attempt)` — with `seq` compared numerically, because a
-lexical sort of the raw column puts `inference.10` before `inference.2`. -/
+`(kind rank, seq, turn, attempt)`.
+-/
 
 inductive CaptureScopeKind
   | inference
@@ -334,8 +292,7 @@ def CaptureScopeKind.label : CaptureScopeKind → String
   | .title => "title"
   | .oneshot => "oneshot"
 
-/-- Declaration-order rank — the stable identity order across kinds. Not a
-temporal order: loops interleave in wall-clock time. -/
+/-- Declaration-order rank across kinds; not a temporal order. -/
 def CaptureScopeKind.rank : CaptureScopeKind → Nat
   | .inference => 0
   | .compaction => 1
@@ -363,8 +320,6 @@ private def validScopeCase (kind : CaptureScopeKind) (seq : Nat) : CaptureScopeC
 private def invalidScopeCase (label : String) : CaptureScopeCase :=
   { label := label, kind := "", seq := 0, valid := false }
 
-/-- Every kind at seq 1, multi-digit seqs (so a lexical sort cannot pass the
-ordering fence), and the parser's reject vectors. -/
 def captureScopeCases : List CaptureScopeCase :=
   (allCaptureScopeKinds.map (validScopeCase · 1))
     ++ [ validScopeCase .inference 2
@@ -381,8 +336,6 @@ def captureScopeCases : List CaptureScopeCase :=
        , invalidScopeCase "inference. 2"
        ]
 
-/-- Valid labels are pairwise distinct — the label round-trip is injective over
-the emitted vocabulary. -/
 theorem captureScopeCases_valid_labels_distinct :
     ((captureScopeCases.filter (·.valid)).map (·.label)).Nodup := by
   decide
@@ -435,8 +388,6 @@ def captureOrderCases : List CaptureOrderCase :=
   , orderCase "equal_keys_do_not_order" .inference 1 2 3 .inference 1 2 3
   ]
 
-/-- Pinned so a change to the rank or comparison shows up as a Lean build
-failure and a conscious decision, not a silent re-sort of every consumer. -/
 theorem captureOrderCases_pinned :
     captureOrderCases.map (fun row => (row.name, row.leftBeforeRight)) =
       [ ("numeric_seq_dominates_lexical", true)

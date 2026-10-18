@@ -97,7 +97,6 @@ theorem selected_edit_invalidates_provisional_selection :
       [some (some 1, [], [3]), some (some 1, [], [4,3])] := by native_decide
 
 
-/-- Expired and malformed TTLs reach the model identically as `fresh = false`. -/
 theorem stale_steering_is_barrier :
     ((cases[17]!).after.map fun s =>
       (s.folding.map (·.requestId),s.pending.map (·.requestId))) = some ([],[2,3]) := by

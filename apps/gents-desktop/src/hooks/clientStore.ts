@@ -9,21 +9,14 @@ import type { DesktopStartupPhase } from "../lib/loadingStatus";
 import { createSelectors, type WithSelectors } from "./createSelectors";
 import type { ManagedServerStartupError } from "../lib/managedServerStartup";
 
-/** The client and its startup: the last read (nodes, sessions and mailbox
-    items are read by key through the fleet store), where startup has got
-    to, and why the managed server failed it. */
 export type ClientState = {
   snapshot: DesktopClientSnapshot | null;
-  /** the client's own failure, shown in the banner */
   error: string | null;
   startupPhase: DesktopStartupPhase;
   starting: boolean;
   stopping: boolean;
   managedServerFailure: ManagedServerStartupError | null;
-  /** where the logs are, read before the first snapshot when startup failed */
   startupDiagnosticsHint: string | null;
-  /** a home this version cannot open: the reset's report, whether one is in
-      progress, and how many times the person started over */
   home: {
     report: ManagedServerResetResult | null;
     busy: boolean;
@@ -34,12 +27,9 @@ export type ClientState = {
 
 export type ClientStore = WithSelectors<StoreApi<ClientState>>;
 
-/** Whether the client is running: the last read found it. */
 export const clientRunning = (state: Pick<ClientState, "snapshot">) =>
   Boolean(state.snapshot?.client);
 
-/** How the client's database sync is doing, as the runtime projects it;
-    null while the client is not running. */
 export const syncHealthOf = (state: Pick<ClientState, "snapshot">) =>
   state.snapshot?.client?.syncHealth ?? null;
 
@@ -60,17 +50,13 @@ export function createClientStore(
   );
 }
 
-/** The client's changes made outside its lifecycle, which owns the rest. */
 export const clientStatus = {
-  /** the client's own failure, shown in the banner; null once it no longer applies */
   setError(store: ClientStore, error: string | null) {
     if (store.getState().error !== error) store.setState({ error });
   },
-  /** a start of the client is under way, by the lifecycle or a local runtime's setup */
   setStarting(store: ClientStore, starting: boolean) {
     if (store.getState().starting !== starting) store.setState({ starting });
   },
-  /** where the logs are, read before the first snapshot when startup failed */
   setDiagnosticsHint(store: ClientStore, hint: string | null) {
     store.setState({ startupDiagnosticsHint: hint });
   },

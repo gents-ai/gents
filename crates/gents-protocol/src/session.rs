@@ -1,11 +1,5 @@
-//! Canonical durable session document for identity, presentation, provenance,
-//! and compact request observation. Request execution authority remains on
-//! `AgentRequest`.
-
 use serde::{Deserialize, Serialize};
 
-/// One session, owned by a node and selected from one agent.
-/// `_docID` and revision metadata belong to the database envelope.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentSession {
@@ -16,7 +10,6 @@ pub struct AgentSession {
     pub requester_did: Option<String>,
     /// The only configuration selection. Context and inference resolve through it.
     pub agent_id: String,
-    /// Original session creation time, unchanged by resume or later requests.
     pub created_at: String,
     /// Explicit close time; absent for an open session. Reopening clears it.
     /// Authoritative request execution state remains on AgentRequest.
@@ -24,7 +17,6 @@ pub struct AgentSession {
     pub closed_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<SessionTitle>,
-    /// User-managed labels for filtering/grouping; never execution or provenance.
     #[serde(
         default,
         deserialize_with = "crate::row::deserialize_null_default",
@@ -43,14 +35,10 @@ pub struct AgentSession {
     pub observation: Option<SessionObservation>,
 }
 
-/// Existing session projection owner's materialized list view, kept in the same doc.
-/// Advancing a request uses canonical request order; refreshing requires its exact
-/// identity. Title/close/resume patches preserve request identity and preview.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionObservation {
     pub last_activity_at: String,
-    /// Latest prompt snippet; existing whitespace normalization and 240-char bound.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<String>,
     /// An unobserved referenced request must not fall back to an older local request.
@@ -58,7 +46,6 @@ pub struct SessionObservation {
     pub latest_request: Option<SessionRequestObservation>,
 }
 
-/// Identity and state observed together; actual lifecycle authority is AgentRequest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionRequestObservation {
@@ -67,7 +54,6 @@ pub struct SessionRequestObservation {
     pub lifecycle_state: crate::request_lifecycle::RequestLifecycleState,
 }
 
-/// Keep text and its origin together for the existing title replacement policy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionTitle {
@@ -116,7 +102,6 @@ pub struct SessionProvenance {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct SessionFork {
     pub source_session_id: String,
-    /// Existing fork API's user-turn cut, including zero for an empty prefix.
     pub at_user_turn: u32,
 }
 

@@ -4,8 +4,6 @@ import Mathlib.Tactic.Linarith
 
 namespace Triggers.Durable
 
-/-- Trigger IDs are only unique within their owner. Source document identity
-is scoped by collection, including when two sources share a trigger name. -/
 structure Identity where
   owner : String
   trigger : String
@@ -85,9 +83,6 @@ private theorem before_colon (xs ys : List Char) (h : ':' ∉ xs) :
     subst c
     exact h hc
 
-/-- Length prefixes count Unicode scalar values, as Rust `chars().count()` does.
-Colon exclusion in the decimal prefix determines the header boundary even when
-payloads themselves contain colons, decimal numerals, or arbitrary Unicode. -/
 theorem component_append_injective (a b x y : String)
     (h : component a ++ x = component b ++ y) : a = b ∧ x = y := by
   have hl := congrArg String.data h
@@ -105,7 +100,6 @@ theorem component_append_injective (a b x y : String)
   have he := List.append_inj (s₁ := a.data) (s₂ := b.data) (t₁ := x.data) (t₂ := y.data) hv.2 hn
   exact ⟨String.ext he.1, String.ext he.2⟩
 
-/-- No two owner/trigger/collection/document tuples share an admission key. -/
 theorem Identity.key_injective : Function.Injective Identity.key := by
   intro a b h
   unfold Identity.key at h

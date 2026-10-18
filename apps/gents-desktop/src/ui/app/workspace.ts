@@ -1,14 +1,3 @@
-/* The workspace: where things sit on screen. Three regions — the gents
-   chrome on the left (rail and nav panel), the main pane, and a dock on
-   the right. The dock holds the surfaces a person opened, as tabs, one of
-   them showing; nothing is there until asked for. Each session keeps its
-   own dock, since what a session's dock shows can belong to that session;
-   the screens outside a session share one, and the new-session screen has
-   its own. Whose dock a screen shows follows from its route during render,
-   and every change names the dock it changes, so nothing acts on another
-   screen's dock. Which tabs a dock holds outlives the visit and the app;
-   that it was open lasts the run. The dock's width is the resize hook's,
-   in the shell. */
 import { useEffect, useMemo } from "react";
 import { useStore } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
@@ -16,23 +5,18 @@ import { createStore } from "zustand/vanilla";
 
 import { useRoute } from "@/lib/router";
 import { browserStorage } from "@/lib/storage";
-import type { Route } from "@gents/shell";
+import type { Route } from "@/lib/router";
 
 export type DockState = {
   open: boolean;
-  /** registered surface ids, in the order they were opened */
   tabs: string[];
-  /** the tab showing; null when none */
   active: string | null;
 };
 
-/** Whose dock a screen shows: a session's own, the new-session screen's, or
-    the one the other screens share. */
 export function dockScope(route: Route): string {
   return dockScopeOf(route.name, route.name === "session" ? route.sessionId : null);
 }
 
-/** The same, from a route's name and its session. */
 export function dockScopeOf(routeName: string, sessionId: string | null): string {
   if (routeName !== "session") return APP_SCOPE;
   return sessionId ? `session:${sessionId}` : NEW_SESSION_SCOPE;
@@ -40,22 +24,17 @@ export function dockScopeOf(routeName: string, sessionId: string | null): string
 
 const APP_SCOPE = "app";
 const NEW_SESSION_SCOPE = "session:new";
-/* the sessions whose docks are remembered, most recent last */
 const REMEMBERED_SCOPES = 200;
 const EMPTY: DockState = { open: false, tabs: [], active: null };
 
 type WorkspaceState = {
   docks: Record<string, DockState>;
-  /** scopes by last visit, most recent last; bounds what is remembered */
   visited: string[];
 };
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
-/** What storage held, as a workspace: storage is outside the app's control
-    (another build, a hand edit), so a scope whose dock is not one is dropped
-    and a tab that is not an id is left out. */
 export function restoreWorkspace(persisted: unknown): WorkspaceState {
   const saved = isRecord(persisted) ? persisted : {};
   const docks: Record<string, DockState> = {};
@@ -78,7 +57,6 @@ export function restoreWorkspace(persisted: unknown): WorkspaceState {
   return { docks, visited };
 }
 
-/* `scope` becomes the most recent; past the bound the oldest are forgotten */
 function remembering(state: WorkspaceState, scope: string): WorkspaceState {
   const docks = { ...state.docks };
   const visited = [...state.visited.filter((s) => s !== scope), scope];
@@ -94,7 +72,6 @@ const store = createStore<WorkspaceState>()(
     version: 1,
     storage: createJSONStorage(() => browserStorage),
     partialize: ({ docks, visited }) => ({
-      /* the tabs are remembered, not that the dock was open: it opens when asked */
       docks: Object.fromEntries(
         Object.entries(docks).map(([scope, dock]) => [scope, { ...dock, open: false }]),
       ),
@@ -117,17 +94,13 @@ function change(scope: string, next: (dock: DockState) => DockState | null) {
 }
 
 export const workspace = {
-  /** the dock of `scope` now; for handlers and tests */
   dock: (scope: string) => dockIn(store.getState(), scope),
-  /** a screen was shown: its dock is remembered longest */
   visit(scope: string) {
     store.setState((state) => {
       if (state.visited[state.visited.length - 1] === scope) return state;
       return remembering(state, scope);
     });
   },
-  /** a session just created from the new-session screen keeps the dock it
-      was composed with; the new-session screen starts empty again */
   adoptNewSessionDock(sessionId: string) {
     store.setState((state) => {
       const composed = state.docks[NEW_SESSION_SCOPE];
@@ -137,7 +110,6 @@ export const workspace = {
       return remembering({ ...state, docks }, `session:${sessionId}`);
     });
   },
-  /** show a surface: added as a tab if it is not one, made the one showing */
   openSurface(scope: string, id: string) {
     change(scope, ({ tabs }) => ({
       open: true,
@@ -145,13 +117,11 @@ export const workspace = {
       active: id,
     }));
   },
-  /** bring an open tab forward */
   activate(scope: string, id: string) {
     change(scope, (dock) =>
       dock.tabs.includes(id) ? { ...dock, open: true, active: id } : null,
     );
   },
-  /** take a tab away; the neighbour shows, or the dock closes with the last one */
   closeTab(scope: string, id: string) {
     change(scope, (dock) => {
       const i = dock.tabs.indexOf(id);
@@ -162,7 +132,6 @@ export const workspace = {
       return { open: tabs.length > 0 && dock.open, tabs, active };
     });
   },
-  /** put a tab at another position; the tabs keep their order otherwise */
   moveTab(scope: string, id: string, to: number) {
     change(scope, (dock) => {
       const from = dock.tabs.indexOf(id);
@@ -177,11 +146,9 @@ export const workspace = {
   closeDock(scope: string) {
     change(scope, (dock) => (dock.open ? { ...dock, open: false } : null));
   },
-  /** the dock as it was, with the tabs it had */
   reopenDock(scope: string) {
     change(scope, (dock) => (dock.tabs.length > 0 ? { ...dock, open: true } : null));
   },
-  /** tests only */
   reset() {
     store.setState({ docks: {}, visited: [] });
   },
@@ -198,21 +165,15 @@ export type DockHandle = {
   reopenDock: () => void;
 };
 
-/** The dock of the screen being rendered, found from the current route. */
 export function useDock(): DockHandle {
   return useDockFor(dockScope(useRoute()));
 }
 
-/** Records that the route's screen is shown, which keeps its dock
-    remembered longest. Whose dock a screen shows is found from its route
-    while rendering; this is only the bookkeeping that bounds how many are
-    kept. */
 export function useDockVisit(route: Route) {
   const scope = dockScope(route);
   useEffect(() => workspace.visit(scope), [scope]);
 }
 
-/** The dock of `scope`, with its changes bound to it. */
 export function useDockFor(scope: string): DockHandle {
   const dock = useStore(store, (state) => dockIn(state, scope));
   return useMemo(

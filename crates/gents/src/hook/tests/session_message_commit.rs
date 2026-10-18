@@ -1,12 +1,9 @@
-//! A session-message commit whose embedded receipt is lost after it
-//! committed, driven through the real hook dispatch.
-
 use super::*;
 use crate::config_client::ConfigApplyTxn;
 use crate::identity::NodeIdentity;
 
 async fn write_config<T: serde::Serialize>(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     collection: crate::Collection,
     document: &T,
 ) {
@@ -19,17 +16,20 @@ async fn write_config<T: serde::Serialize>(
         },
     ])
     .unwrap();
-    crate::config_client::ConfigAccess::transact_local(node, None, "test.write_config", |txn| {
-        let plan = &plan;
-        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
-    })
+    crate::config_client::ConfigAccess::transact_local_write(
+        node,
+        None,
+        "test.write_config",
+        |txn| {
+            let plan = &plan;
+            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+        },
+    )
     .await
     .unwrap();
 }
 
-/// `general` may start `general` on its own principal, and the `goal` Task
-/// declares a Goal.
-async fn enable_agents_tools(node: &EmbeddedNode, did: &str) {
+async fn enable_agents_tools(node: &Arc<EmbeddedNode>, did: &str) {
     crate::test_support::install_test_agent(node, did, "general").await;
     write_config(
         node,
@@ -78,10 +78,6 @@ async fn rows(node: &EmbeddedNode, query: &str, collection: &str) -> Vec<serde_j
         .unwrap_or_default()
 }
 
-/// Dispatch one agents call with its commit's receipt lost after it
-/// committed, and check the durable delivery: one running row, one caused
-/// request carrying the call's edge, one receipt naming it, and no second
-/// closure of the call's output.
 async fn dispatch_with_lost_receipt(
     hook: &DefraSessionHook,
     call_id: &str,
@@ -148,8 +144,6 @@ async fn dispatch_with_lost_receipt(
     (tool_doc_id, caused[0].clone())
 }
 
-/// Every session-message commit decides a lost receipt from the durable row:
-/// the committed delivery stands, is answered once, and settles once.
 #[tokio::test]
 async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
     let dir = tempfile::tempdir().unwrap();
@@ -164,7 +158,7 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
     let identity =
         crate::KeyIdentity::load_or_create(dir.path().join("test-agent.key"), None).unwrap();
     let did = identity.did().to_owned();
-    enable_agents_tools(node.as_ref(), &did).await;
+    enable_agents_tools(&node, &did).await;
     let hook = DefraSessionHook::with_identity(node.clone(), &did, FailurePolicy::default());
     hook.on_completion_call(&user_text_message("start agents"), &[])
         .await;
@@ -230,8 +224,6 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
         "session_message.commit_goal",
     )
     .await;
-
-    // The started session is busy again, so a message steers it.
     let response = node
         .execute(&format!(
             r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "processing" }}) {{ _docID }} }}"#,

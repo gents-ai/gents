@@ -52,8 +52,6 @@ impl ConfigCommandTool {
         let mut request = ApplyRequest::new(target, patch);
         let skill_id = argv[1].clone();
         request.resolve_unique = Box::new(move |_| Ok(skill_id.clone()));
-        // Imports create an explicit new identity. Never overwrite an existing
-        // skill that may be referenced by Engineer or another working agent.
         request.allow_create = true;
         request.require_create = true;
         let owner = self.node_did.clone();

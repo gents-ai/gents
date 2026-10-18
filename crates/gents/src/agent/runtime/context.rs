@@ -145,8 +145,6 @@ impl RuntimeContext {
             )));
         }
         let loop_tools = std::sync::Arc::new(loop_tools);
-        // Background executions run through `call_tool_managed`, which owns
-        // the deadline/cancellation envelope — no per-tool wrapper needed.
         let background_tool_registry = BackgroundToolRegistry::from_config(
             tool_surface.build_tools(&self.tool_runtime).await?,
             tool_surface.background_tools(),
@@ -281,15 +279,10 @@ mod startup_barrier_tests {
             .expect("an empty barrier must not wait");
     }
 
-    /// The lost-wakeup regression (#559): the final release may land at any
-    /// point relative to the waiter. With the watch channel the waiter always
-    /// observes the current count, so release-before-wait, release-after-wait,
-    /// and anything between all complete.
     #[tokio::test]
     async fn release_before_and_after_wait_both_complete() {
         let barrier = Arc::new(StartupBarrier::new(&[agent_config("a"), agent_config("b")]));
 
-        // Release one before any waiter exists.
         barrier.mark_agent_ready("a", 1).await;
 
         let waiter = {
@@ -305,9 +298,6 @@ mod startup_barrier_tests {
             .unwrap();
     }
 
-    /// Every release class frees the barrier: readiness, demotion (budget
-    /// spent), and supersession (retired mid-startup). Only readiness claims
-    /// health; the others carry their verdict in the demotion ledger.
     #[tokio::test]
     async fn demotion_and_supersession_release_without_readiness() {
         let barrier = Arc::new(StartupBarrier::new(&[

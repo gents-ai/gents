@@ -9,21 +9,11 @@ use serde_json::Value;
 
 use crate::graphql::{escape_graphql_string, first_row, graphql_with_transaction_retry, rows};
 
-async fn committed_mutation(
-    node: &EmbeddedNode,
-    operation: &'static str,
-    mutation: &str,
-) -> Result<defra_node::QueryResponse> {
-    crate::config_client::ConfigAccess::write_local_response(node, operation, mutation).await
-}
 use crate::workspace::{
     isolated_workspace_upsert_mutation, workspace_placement_upsert_mutation, IsolatedWorkspaceDoc,
     MemoryWorkspaceDocuments, RepositoryPlacementRef, WorkspaceDocuments, WorkspacePlacementDoc,
 };
 
-/// Crash-window bound for succeeded-without-result repair. Happy-path
-/// succeeded rows are excluded by a batched CallbackResult lookup, not by
-/// probing every historical invocation.
 pub(crate) const SUCCEEDED_REPAIR_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
 pub(crate) const SUCCEEDED_REPAIR_LIMIT: u32 = 256;
 
@@ -62,7 +52,6 @@ const PLACEMENT_FIELDS: &str = r#"
     observed_tree_hash
 "#;
 
-// Canonical event callback configuration is shared with packs.
 pub use crate::document_config::{
     CallbackBinding as CallbackBindingDoc, CallbackModule as CallbackModuleDoc,
 };
@@ -76,20 +65,15 @@ impl CallbackBindingDoc {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CallbackInvocationDoc {
-    /// Immutable projected planner input captured before dispatch. Events use an
-    /// object and groups an ordered array of projected objects.
-    /// Reuse the existing planner input and action journal; retries never reread
-    /// changed source rows or recompute a persisted action plan.
+    /// Immutable projected planner input captured before dispatch; retries
+    /// never reread changed source rows or recompute a persisted action plan.
     #[serde(deserialize_with = "deserialize_callback_input")]
     pub input: serde_json::Value,
     pub invocation_id: String,
-    /// Node whose runtime owns execution and recovery.
     pub owner_node_did: String,
     pub callback_id: String,
     pub origin: crate::document_config::CallbackInvocationOrigin,
     pub idempotency_key: String,
-    /// The source document's correlation, when its event source names one:
-    /// how a graph run finds the invocations it caused.
     #[serde(default)]
     pub caused_by_correlation: Option<String>,
     pub lifecycle_state: String,
@@ -151,11 +135,8 @@ where
 pub struct CallbackResultDoc {
     pub result_id: String,
     pub invocation_id: String,
-    /// The binding that produced this result, so event sources can select
-    /// one binding's results with a plain filter.
     #[serde(default)]
     pub binding_id: Option<String>,
-    /// Node whose runtime owns execution and recovery.
     pub owner_node_did: String,
     #[serde(default)]
     pub workspace_id: Option<String>,
@@ -172,9 +153,9 @@ pub(super) struct CallbackResultInvocationRow {
     pub invocation_id: String,
 }
 
-/// One per-document event invocation per binding and arrival. The source
-/// version is not part of it: an edit after admission is not another arrival.
-/// Collections and document IDs carry no `:`, so the key is unambiguous.
+/// One per-document event invocation per binding and arrival; an edit after
+/// admission is not another arrival. Keys use `:` separators, unambiguous
+/// because collection and document IDs carry none.
 pub fn idempotency_key(binding_id: &str, source_collection: &str, source_doc_id: &str) -> String {
     format!("{binding_id}:{source_collection}:{source_doc_id}")
 }
@@ -201,7 +182,6 @@ pub fn parse_string_list(raw: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-/// Bindings that list secret-bearing source fields fail closed at apply/load.
 pub fn validate_callback_binding(binding: &CallbackBindingDoc) -> Result<()> {
     for (name, value) in [
         ("binding_id", &binding.binding_id),
@@ -308,7 +288,7 @@ pub fn strip_secret_fields(value: Value) -> Value {
 }
 
 async fn load_config<T: serde::de::DeserializeOwned + Send>(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     collection: crate::Collection,
     owner: &str,
     id: &str,
@@ -356,28 +336,28 @@ pub async fn list_enabled_bindings(
 }
 
 pub async fn load_callback_module(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     module_id: &str,
     owner: &str,
 ) -> Result<Option<CallbackModuleDoc>> {
     load_config(node, crate::Collection::CallbackModule, owner, module_id).await
 }
 pub async fn load_callback(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     callback_id: &str,
     owner: &str,
 ) -> Result<Option<crate::document_config::Callback>> {
     load_config(node, crate::Collection::Callback, owner, callback_id).await
 }
 pub async fn load_binding(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     binding_id: &str,
     owner: &str,
 ) -> Result<Option<CallbackBindingDoc>> {
     load_config(node, crate::Collection::CallbackBinding, owner, binding_id).await
 }
 pub async fn load_event_source(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     source_id: &str,
     owner: &str,
 ) -> Result<Option<crate::document_config::EventSource>> {
@@ -503,8 +483,6 @@ async fn list_recent_succeeded_missing_result(
     Ok(succeeded_missing_result(succeeded, &results))
 }
 
-/// Recently failed invocations, which a retry may pick up again. Bounded by
-/// the same window and page as the succeeded-without-result repair.
 pub async fn list_recent_failed(
     node: &EmbeddedNode,
     owner_node_did: &str,
@@ -633,7 +611,7 @@ pub async fn load_callback_result(
 }
 
 pub async fn create_pending_invocation(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     invocation: &CallbackInvocationDoc,
 ) -> Result<CallbackInvocationDoc> {
     if let Some(existing) = load_invocation_by_key(
@@ -661,7 +639,7 @@ pub async fn create_pending_invocation(
     });
     let variables = serde_json::json!({"input": input});
     let mutation = "mutation($input: CallbackInvocationMutationInputArg!) { create_CallbackInvocation(input: $input) { _docID } }";
-    let written = crate::config_client::ConfigAccess::transact_local(
+    let written = crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "callback.create_invocation",
@@ -694,7 +672,6 @@ pub async fn create_pending_invocation(
     }
 }
 
-/// The compare-and-set update of `invocation`, matched on `expected_state` when given.
 pub(super) fn update_invocation_mutation(
     invocation: &CallbackInvocationDoc,
     expected_state: Option<&str>,
@@ -737,8 +714,6 @@ pub(super) fn update_invocation_mutation(
     )
 }
 
-/// `name: "value",` when `value` is present, `name: null,` when it is
-/// absent. An absent optional field is a genuine null, never `""`.
 fn optional_graphql_string_field(name: &str, value: Option<&str>) -> String {
     value
         .map(|value| format!(r#"{name}: "{}","#, escape_graphql_string(value)))
@@ -746,16 +721,20 @@ fn optional_graphql_string_field(name: &str, value: Option<&str>) -> String {
 }
 
 pub async fn update_invocation(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     invocation: &CallbackInvocationDoc,
     expected_state: Option<&str>,
 ) -> Result<bool> {
     let mutation = update_invocation_mutation(invocation, expected_state);
-    let response = committed_mutation(node, "callback.update_invocation", &mutation).await?;
+    let response = crate::config_client::ConfigAccess::write_local_response(
+        node,
+        "callback.update_invocation",
+        &mutation,
+    )
+    .await?;
     Ok(crate::graphql::single_mutation_document(&response, "update_CallbackInvocation")?.is_some())
 }
 
-/// The create mutation for `result`.
 pub(super) fn create_callback_result_mutation(result: &CallbackResultDoc) -> String {
     let now = result
         .created_at
@@ -790,7 +769,7 @@ pub(super) fn create_callback_result_mutation(result: &CallbackResultDoc) -> Str
 }
 
 pub async fn create_callback_result(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     result: &CallbackResultDoc,
 ) -> Result<CallbackResultDoc> {
     if let Some(existing) =
@@ -799,7 +778,13 @@ pub async fn create_callback_result(
         return Ok(existing);
     }
     let mutation = create_callback_result_mutation(result);
-    match committed_mutation(node, "callback.create_result", &mutation).await {
+    match crate::config_client::ConfigAccess::write_local_response(
+        node,
+        "callback.create_result",
+        &mutation,
+    )
+    .await
+    {
         Ok(_) => load_callback_result(node, &result.invocation_id, &result.owner_node_did)
             .await?
             .ok_or_else(|| anyhow!("created CallbackResult missing after write")),
@@ -815,7 +800,7 @@ pub async fn create_callback_result(
 }
 
 pub async fn load_repository_placement(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     repository_id: &str,
     owner: &str,
 ) -> Result<Option<RepositoryPlacementRef>> {
@@ -850,21 +835,29 @@ pub async fn load_memory_workspace_docs(
 }
 
 pub async fn flush_workspace_docs(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     docs: &MemoryWorkspaceDocuments,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     for workspace in docs.workspaces.values() {
         let mutation = isolated_workspace_upsert_mutation(workspace);
-        committed_mutation(node, "callback.upsert_isolated_workspace", &mutation)
-            .await
-            .with_context(|| format!("persist IsolatedWorkspace {}", workspace.workspace_id))?;
+        crate::config_client::ConfigAccess::write_local_response(
+            node,
+            "callback.upsert_isolated_workspace",
+            &mutation,
+        )
+        .await
+        .with_context(|| format!("persist IsolatedWorkspace {}", workspace.workspace_id))?;
     }
     for placement in docs.placements.values() {
         let mutation = workspace_placement_upsert_mutation(placement, &now);
-        committed_mutation(node, "callback.upsert_workspace_placement", &mutation)
-            .await
-            .with_context(|| format!("persist WorkspacePlacement {}", placement.workspace_id))?;
+        crate::config_client::ConfigAccess::write_local_response(
+            node,
+            "callback.upsert_workspace_placement",
+            &mutation,
+        )
+        .await
+        .with_context(|| format!("persist WorkspacePlacement {}", placement.workspace_id))?;
     }
     Ok(())
 }

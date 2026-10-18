@@ -1,5 +1,3 @@
-//! Single ordered owner of durable runtime agent readiness.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -105,7 +103,7 @@ impl NodeReadinessWriter for DefraNodeReadinessWriter {
         snapshot: &NodeReadinessSnapshot,
         updated_at: &str,
     ) -> Result<()> {
-        upsert_node_readiness(self.node.as_ref(), node_did, snapshot, updated_at).await
+        upsert_node_readiness(&self.node, node_did, snapshot, updated_at).await
     }
 }
 
@@ -844,7 +842,7 @@ fn is_fatal_node_readiness_write(error: &anyhow::Error) -> bool {
 }
 
 pub(crate) async fn upsert_node_readiness(
-    node: &defra_node::EmbeddedNode,
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
     node_did: &str,
     snapshot: &NodeReadinessSnapshot,
     updated_at: &str,

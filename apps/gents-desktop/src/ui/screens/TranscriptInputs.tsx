@@ -1,8 +1,5 @@
-import { useState } from "react";
-import { Bot, ChevronDown, Clock, Play, Timer, Workflow, Zap } from "lucide-react";
+import { Bot, Clock, Play, Timer, Workflow, Zap } from "lucide-react";
 import type {
-  PendingTurnView,
-  PendingQueueEntryView,
   RenderedTimelineItem,
   RequestOriginView,
 } from "@source-inc/gents-desktop-client";
@@ -15,20 +12,10 @@ type Reconstruction = Extract<
   { kind: "automatedInput" }
 >["reconstruction"];
 import { Badge } from "@gents/ui/components/badge";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@gents/ui/components/collapsible";
-import { UserMessage } from "@gents/ui/conversation";
+import { ToolStep, UserMessage } from "@gents/ui/conversation";
 import { cn } from "@gents/ui/lib/utils";
 import { href } from "@/lib/router";
-import { PendingControls, type QueueEdit } from "./PendingMessageControls";
 
-/** A transcript input that ended without being sent. A folded request was
-    consumed when its entry was published, so it was delivered; an input
-    still waiting is the turn being started or is listed with the queue, and
-    carries no chip, so its row keeps its height when it is saved. */
 export function pendingInputState(
   lifecycleState: string | null | undefined,
   foldedIntoRequestId?: string | null,
@@ -83,7 +70,7 @@ export function originLabel(
 }
 
 function OriginIcon({ origin }: { origin: RequestOriginView }) {
-  const className = "size-3.5 shrink-0";
+  const className = "size-4 shrink-0";
   switch (origin.kind) {
     case "sessionMessage":
       return <Bot className={className} />;
@@ -136,7 +123,6 @@ export function AutomatedInput({
   state?: string | null;
 }) {
   const unavailable = unavailableReason(reconstruction);
-  const [open, setOpen] = useState(false);
   const node = useSelectedNode();
   const senderSessionId =
     origin.kind === "sessionMessage" ? origin.senderSessionId : null;
@@ -146,51 +132,41 @@ export function AutomatedInput({
   const label = originLabel(origin, node, senderTitle);
   const preview = firstLine(content);
   return (
-    <Collapsible
-      open={open}
-      onOpenChange={setOpen}
-      className="text-xs text-muted-foreground"
-      data-testid="automated-input"
-    >
-      <div className="flex min-w-0 items-center gap-1.5">
-        <CollapsibleTrigger
-          className="-mx-2 -my-1 flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1 text-left transition-colors hover:bg-accent/30 hover:text-foreground"
-          aria-label={`${label}: ${open ? "hide" : "show"} its published input`}
-        >
-          <OriginIcon origin={origin} />
-          <span className="shrink-0 font-medium text-foreground/80">{label}</span>
-          {preview && (
-            <span className="min-w-0 truncate" data-testid="automated-input-preview">
-              {preview}
+    <div data-testid="automated-input">
+      <ToolStep
+        label={preview ? `${label} · ${preview}` : label}
+        copyText={content ?? label}
+        icon={<OriginIcon origin={origin} />}
+        meta={
+          senderSessionId || state ? (
+            <span className="flex items-center gap-2 font-sans">
+              {senderSessionId && (
+                <a
+                  href={href({ name: "session", sessionId: senderSessionId })}
+                  className="underline decoration-border underline-offset-4 hover:text-foreground"
+                >
+                  Open
+                </a>
+              )}
+              {state && (
+                <Badge
+                  variant="outline"
+                  className="border-border/60 text-[10px] font-normal text-muted-foreground"
+                >
+                  {state}
+                </Badge>
+              )}
             </span>
-          )}
-          <ChevronDown
-            className={cn(
-              "ml-auto size-3.5 shrink-0 transition-transform",
-              open && "rotate-180",
-            )}
-          />
-        </CollapsibleTrigger>
-        {origin.kind === "sessionMessage" && origin.senderSessionId && (
-          <a
-            href={href({ name: "session", sessionId: origin.senderSessionId })}
-            className="shrink-0 underline decoration-border underline-offset-4 hover:text-foreground"
-          >
-            Open
-          </a>
-        )}
-        {state && (
-          <Badge
-            variant="outline"
-            className="shrink-0 border-border/60 text-[10px] font-normal text-muted-foreground"
-          >
-            {state}
-          </Badge>
-        )}
-      </div>
-      <CollapsibleContent className="mt-1 border-l border-border pl-3">
+          ) : undefined
+        }
+      >
         {unavailable ? (
-          <p data-testid="automated-input-unavailable">{unavailable}</p>
+          <p
+            className="text-xs text-muted-foreground"
+            data-testid="automated-input-unavailable"
+          >
+            {unavailable}
+          </p>
         ) : (
           <pre
             className="max-h-96 overflow-auto font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-muted-foreground"
@@ -199,8 +175,8 @@ export function AutomatedInput({
             {content ?? ""}
           </pre>
         )}
-      </CollapsibleContent>
-    </Collapsible>
+      </ToolStep>
+    </div>
   );
 }
 
@@ -229,56 +205,6 @@ export function UserInputWithState({
       >
         {state}
       </Badge>
-    </div>
-  );
-}
-
-export function QueuedInputs({
-  queued,
-  queue = null,
-  onEdit,
-}: {
-  queued: PendingTurnView[];
-  queue?: PendingQueueEntryView[] | null;
-  onEdit?: (edit: QueueEdit) => Promise<void>;
-}) {
-  if (queued.length === 0) return null;
-  // Runtime-managed entries take their queue order, which is the order the
-  // controls move them in; other queued inputs keep their place.
-  const entries = new Map(queue?.map((entry) => [entry.requestId, entry]));
-  const byQueue = (queue ?? []).flatMap(
-    (entry) => queued.find((turn) => turn.requestId === entry.requestId) ?? [],
-  );
-  let next = 0;
-  const ordered = queued.map((turn) =>
-    entries.has(turn.requestId) ? byQueue[next++] : turn,
-  );
-  return (
-    <div
-      className="grid gap-3"
-      data-testid="queued-inputs"
-      aria-label="Pending messages"
-    >
-      {ordered.map((turn) => (
-        <div key={turn.requestId} data-testid="queued-input">
-          {turn.origin ? (
-            <AutomatedInput
-              origin={turn.origin}
-              content={turn.content}
-              state="Queued"
-            />
-          ) : (
-            <UserInputWithState content={turn.content} state="Pending" />
-          )}
-          {onEdit && queue && entries.get(turn.requestId)?.editable && (
-            <PendingControls
-              entry={entries.get(turn.requestId)!}
-              queue={queue}
-              onEdit={onEdit}
-            />
-          )}
-        </div>
-      ))}
     </div>
   );
 }

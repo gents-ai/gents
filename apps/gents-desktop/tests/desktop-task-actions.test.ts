@@ -4,16 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createTaskActions } from "../src/hooks/taskActions";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import { createSelectionStore, selection } from "../src/hooks/selectionStore";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
+import { deferred } from "./deferred";
 
 function fixture(runTask: () => Promise<unknown>, runSchedule = runTask) {
   const store = createSelectionStore();
@@ -99,7 +90,6 @@ describe("task and schedule async intent ordering", () => {
       sessionId: "accepted-session",
     });
     expect(reportFailure).not.toHaveBeenCalled();
-    /* the failed read is the client's own state, in the banner */
     expect(app.stores.client.getState().error).toContain("observation unavailable");
   });
 });

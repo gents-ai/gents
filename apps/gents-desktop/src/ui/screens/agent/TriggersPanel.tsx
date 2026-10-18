@@ -1,6 +1,3 @@
-/* Triggers: each read as a sentence, with the task, schedule and event
-   source it needs creatable in place. Tasks is the page people start on;
-   this is the desktop's own tab. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { setEnabled } from "./enabled";
 import { useState } from "react";
@@ -11,6 +8,7 @@ import {
   ChoiceRow,
   DraftActions,
   FactRow,
+  LongFactRow,
   RefRow,
   SwitchRow,
   TextRow,
@@ -47,7 +45,6 @@ export function TriggerEditor({
 }: {
   deployment: NodeView;
   trigger: TriggerView;
-  /* in a sheet beside a task: no Danger zone */
   embedded?: boolean;
 }) {
   const { changeConfig } = useApp().actions;
@@ -71,7 +68,6 @@ export function TriggerEditor({
         : cfg.source.event_source_id,
     tags: cfg.tags ?? [],
   };
-  /* documents drafted from the reference fields, written with the trigger */
   const [pending, setPending] = useState<{
     task?: Extract<NewReference, { kind: "task" }>["document"];
     schedule?: Extract<NewReference, { kind: "schedule" }>["document"];
@@ -83,7 +79,6 @@ export function TriggerEditor({
   } | null>(null);
   const draftNew = (kind: NewReference["kind"]) =>
     new Promise<string | null>((resolve) => setDrafting({ kind, resolve }));
-  /* the documents drafted from the fields that the draft points at */
   const drafted = (next: typeof saved) => ({
     newTask: pending.task?.task_id === next.taskId ? pending.task : undefined,
     newSchedule:
@@ -113,8 +108,6 @@ export function TriggerEditor({
             : { kind: "event", event_source_id: next.sourceId },
         tags: next.tags.length ? next.tags : null,
       };
-      /* anything drafted from the fields lands with the trigger, in one
-       transaction, or not at all */
       if (newTask || newSchedule || newEvent)
         await changeConfig("applyConfigComponents", {
           document: {
@@ -129,7 +122,6 @@ export function TriggerEditor({
       setPending({});
     },
     {
-      /* the task and the source are ones the node lists, or ones just drafted */
       problems: (next) => {
         const { newTask, newSchedule, newEvent } = drafted(next);
         const sourceExists =
@@ -152,7 +144,6 @@ export function TriggerEditor({
   );
   const id = (f: string) => `${cfg.trigger_id}-${f}`;
   const readiness = triggerReadiness(deployment, trigger);
-  /* a referenced document's full editor, open beside the automation */
   const [beside, setBeside] = useState<{
     kind: "task" | "schedule" | "source";
     id: string;
@@ -391,7 +382,9 @@ export function TriggerEditor({
         <FactRow label="Fired">{trigger.fireCount ?? 0} times</FactRow>
         <FactRow label="Last attempt">{when(trigger.lastAttemptAt)}</FactRow>
         <FactRow label="Last status">{trigger.lastStatus ?? "—"}</FactRow>
-        {trigger.lastError && <FactRow label="Last error">{trigger.lastError}</FactRow>}
+        {trigger.lastError && (
+          <LongFactRow label="Last error">{trigger.lastError}</LongFactRow>
+        )}
         <FactRow label="Next run">{when(trigger.nextRunAt)}</FactRow>
       </Group>
       <Group title="Metadata">

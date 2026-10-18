@@ -1,9 +1,3 @@
-//! `gents plugin install`: fetch a plugin's pack from the registry and
-//! install the plugins it carries. The pack is downloaded, verified and
-//! stored exactly as `gents pack install` does; only its plugins are
-//! installed, each recorded so `gents plugin run` and `gents plugin list`
-//! find it by name.
-
 use anyhow::{Context, Result};
 use serde_json::json;
 
@@ -30,8 +24,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         !manifest.metadata.plugins.is_empty(),
         "{namespace}/{name} carries no plugins; install the whole pack with gents pack install"
     );
-    let rollback = crate::commands::pack::snapshot_pack_plugin_records(&home, manifest);
-    let installed = crate::commands::pack::install_pack_plugins(
+    let installed = gents::plugin::install::install_pack_plugins(
         &home,
         manifest,
         &pack.digest,
@@ -50,12 +43,9 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
             .collect(),
     );
     let coordinate = format!("{namespace}/{name}");
-    if let Err(error) =
-        crate::commands::pack::record_plugin_store_change(&home, &coordinate, Some(&identity)).await
-    {
-        crate::commands::pack::rollback_pack_plugin_records(&home, &rollback);
-        return Err(error);
-    }
+    crate::commands::pack::record_plugin_store_change(&home, &coordinate, Some(&identity))
+        .await
+        .context("the plugins were installed locally, but their node notification was not confirmed; retry to reconcile")?;
 
     crate::print_json(&json!({
         "pack": format!("{namespace}/{name}"),
@@ -73,9 +63,6 @@ mod tests {
 
     use super::super::store;
 
-    /// A real compiled plugin, wrapped by the same code `gents plugin
-    /// publish` uses, with the digest of the pack's bytes a registry
-    /// advertises.
     fn echo_pack() -> (Vec<u8>, String) {
         let afb_bytes = crate::commands::plugin::testing::build_plugin_afb(
             "echo",
@@ -125,8 +112,6 @@ mod tests {
         assert_eq!(store::list_records(home.path()).unwrap().len(), 1);
     }
 
-    /// #2338: against an initialized home, install writes the plugin-store
-    /// record that wakes a running runtime, and remove deletes it again.
     #[tokio::test]
     async fn install_and_remove_record_the_plugin_store_change_in_the_node() {
         use clap::Parser;
@@ -235,8 +220,6 @@ mod tests {
 mod instruction_tests {
     use crate::commands::plugin::store;
 
-    /// A pack whose plugin ships a TOOL.md installs it with the plugin, and the
-    /// model-facing tool shows that markdown rather than the one-line description.
     #[tokio::test]
     async fn a_plugins_tool_markdown_is_what_the_model_sees() {
         let afb = crate::commands::plugin::testing::build_plugin_afb(
@@ -273,7 +256,7 @@ mod instruction_tests {
         let archive = gents::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
         let home = tempfile::tempdir().unwrap();
 
-        crate::commands::pack::install_pack_plugins(
+        gents::plugin::install::install_pack_plugins(
             home.path(),
             archive.manifest(),
             archive.digest(),

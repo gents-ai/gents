@@ -5,14 +5,7 @@ import {
   createProjectionController,
   desktopUpdateRefreshScope,
 } from "../src/hooks/projectionController";
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
+import { deferred } from "./deferred";
 
 function controller(
   overrides: Partial<Parameters<typeof createProjectionController>[0]> = {},
@@ -27,6 +20,30 @@ function controller(
 }
 
 describe("createProjectionController", () => {
+  it("aggregates snapshot completion once for a coalesced update burst", async () => {
+    const session = deferred();
+    const refreshSession = vi.fn(async () => {
+      await session.promise;
+      return null;
+    });
+    const projection = controller({ refreshSession });
+    const first = projection.request("full");
+    await vi.waitFor(() => expect(refreshSession).toHaveBeenCalledTimes(1));
+    for (let index = 0; index < 256; index++) {
+      void projection.request("full");
+    }
+
+    const aggregate = vi.spyOn(Promise, "all");
+    try {
+      session.resolve();
+      await first;
+      expect(aggregate).toHaveBeenCalledTimes(1);
+      expect(refreshSession).toHaveBeenCalledTimes(2);
+    } finally {
+      aggregate.mockRestore();
+    }
+  });
+
   it("coalesces a synchronous delta wave and serializes one trailing wave", async () => {
     const passes = [deferred(), deferred()];
     const refreshSessionLiveDelta = vi.fn(async () => {

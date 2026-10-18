@@ -10,15 +10,16 @@ use gents_protocol::request_input::RequestInput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::client::store::ClientStore;
 
-use super::super::graphql::{
-    escape_graphql_string, execute_mutation, normalize_optional_string, normalize_required,
-};
+use super::super::graphql::{escape_graphql_string, normalize_optional_string, normalize_required};
 use super::binding::resolve_agent_binding;
 
+/// The durable submission receipt. Replica observation may still be pending;
+/// callers must not replay the mutation when a subsequent refresh fails.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubmittedRequest {
     pub request_id: String,
@@ -27,37 +28,18 @@ pub struct SubmittedRequest {
     pub agent_id: Option<String>,
 }
 
-/// Optional submission-time controls. All fields default to "unset"; the
-/// caller opts in to TTL enforcement or retry threading by populating them.
-/// Sampling and output limits are owned by the agent's InferenceProfile;
-/// invocation facts ride the canonical typed `RequestInput`.
 #[derive(Debug, Clone, Default)]
 pub struct SubmitRequestOptions {
-    /// When set, written to the request's `valid_until` field. The runtime's
-    /// admission/scheduler layers treat requests past this deadline as `Stale`.
-    /// None means no TTL is recorded on this row.
     pub valid_until: Option<DateTime<Utc>>,
-    /// When this submission is a resend (or otherwise links to a prior
-    /// request), the parent request id is threaded into `retry_parent_request`
-    /// and the parent's retry root is carried forward into `retry_root_request`.
     pub retry_parent_request: Option<String>,
-    /// Typed invocation facts (selected skills, cwd, initial title, queue).
-    /// Carryover submissions populate this from the prior request's row.
     pub input: RequestInput,
-    /// Mailbox item `_docID` that caused this user submission. Only the
-    /// mailbox compose route sets this field.
     pub caused_by_source_doc_id: Option<String>,
-    /// Canonical causal lineage for non-chat interactive entry points such as
-    /// a manual Task run. Ordinary chat leaves this empty.
     pub trigger_lineage: TriggerLineage,
-    /// Stable identity for owners that atomically compose this request with
-    /// other durable documents (for example Goal + GoalCreationClaim).
-    /// Ordinary interactive chat leaves this unset.
     pub retry_key: Option<String>,
 }
 
 pub async fn submit_request(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     store: &ClientStore,
     session_id: &str,
     node_did: &str,
@@ -68,7 +50,7 @@ pub async fn submit_request(
     agent_id: Option<&str>,
     options: SubmitRequestOptions,
 ) -> Result<SubmittedRequest> {
-    let (result, create) = build_request_submission(
+    let (result, create) = prepare_request_submission(
         node,
         store,
         session_id,
@@ -83,10 +65,11 @@ pub async fn submit_request(
     )
     .await?;
     let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
-    execute_mutation(node, &mutation, "submit_request").await?;
+    ConfigAccess::write_local(node, "submit_request", &mutation).await?;
     Ok(result)
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub async fn submit_goal_backed_request(
     node: &EmbeddedNode,
@@ -109,7 +92,7 @@ pub async fn submit_goal_backed_request(
             normalize_required("session_id", session_id)?
         ));
     }
-    let (result, create) = build_request_submission(
+    let (result, create) = prepare_request_submission(
         node,
         store,
         session_id,
@@ -149,7 +132,7 @@ pub async fn submit_task_request(
     mut options: SubmitRequestOptions,
 ) -> Result<SubmittedRequest> {
     options.retry_key = Some(fire.fire_key.clone());
-    let (result, create) = build_request_submission(
+    let (result, create) = prepare_request_submission(
         node,
         store,
         &fire.session_id,
@@ -172,7 +155,7 @@ pub async fn submit_task_request(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn build_request_submission(
+pub(crate) async fn prepare_request_submission(
     node: &EmbeddedNode,
     store: &ClientStore,
     session_id: &str,
@@ -214,8 +197,6 @@ async fn build_request_submission(
         .await?;
     }
 
-    // Thread retry linkage: carry parent's retry root forward, else this row is
-    // the root of its own retry chain.
     let (retry_parent_request, retry_parent_request_doc_id, retry_root_request, parent_created_at) =
         if let Some(parent_id) = options.retry_parent_request.as_deref() {
             let parent = fetch_retry_lineage(node, parent_id, node_did, requester_did).await?;
@@ -354,7 +335,7 @@ fn prepare_prompt_submission(
 }
 
 pub async fn retry_request(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     store: &ClientStore,
     parent: &AgentRequestRow,
     requester_did: &str,
@@ -374,7 +355,7 @@ pub async fn retry_request(
 }
 
 async fn retry_request_with_request_id(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     store: &ClientStore,
     parent: &AgentRequestRow,
     requester_did: &str,
@@ -486,8 +467,6 @@ async fn retry_request_in_txn(
                 max_retries,
             }),
             retry_key: Some(retry_key),
-            // Exact invocation-fact carryover from the parent row; no
-            // sampling/metadata scalars exist on the canonical request.
             input: parent.input.clone().unwrap_or_default(),
             ..RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,
@@ -720,9 +699,8 @@ fn ensure_retry_parent_eligible(
     execution_origin: &str,
 ) -> Result<()> {
     // The Lean `.released` admission predicate is not persisted on
-    // `AgentRequestRow`; on this desktop surface it is represented by requiring
-    // the parent to be terminal failed. Non-terminal rows, including rows
-    // still waiting on admission, fail this lifecycle gate.
+    // `AgentRequestRow`; it is represented here by requiring the parent to be
+    // terminal failed.
     let lifecycle_state = parent
         .lifecycle_state
         .context("retry parent request must have a lifecycle_state")?;
@@ -815,12 +793,10 @@ fn build_add_agent_request_field(
     )
 }
 
-/// Resend a stale-terminal request by reading its inputs and submitting a
-/// fresh row whose `retry_parent_request` points back at the stale one.
 /// Only `lifecycle_state=dead` with `failure_reason=Stale` is eligible — any
 /// other state would risk bypassing legitimate terminal classifications.
 pub async fn resend_request(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     store: &ClientStore,
     stale_request_id: &str,
     node_did: &str,
@@ -862,9 +838,6 @@ pub async fn resend_request(
         SubmitRequestOptions {
             valid_until: Some(Utc::now() + chrono::Duration::minutes(5)),
             retry_parent_request: Some(stale_request_id.to_string()),
-            // Preserve the exact typed invocation facts from the stale row.
-            // Sampling and output limits belong to the agent's
-            // InferenceProfile; there are no per-request overrides to carry.
             input: stale.input.unwrap_or_default(),
             caused_by_source_doc_id: None,
             trigger_lineage: TriggerLineage::default(),

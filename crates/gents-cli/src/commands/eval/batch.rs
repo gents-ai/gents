@@ -1,6 +1,3 @@
-//! A batch shares only trial admission; each run keeps its existing frozen
-//! identity, report, retry policy, cancellation marker and resume semantics.
-
 use std::collections::BTreeSet;
 use std::io::Write;
 
@@ -63,7 +60,6 @@ fn parse_plan(bytes: &[u8]) -> Result<Vec<EvalRunArgs>> {
                 .run_id
                 .as_deref()
                 .context("each batch run requires an explicit --run-id")?;
-            // The existing run owner validates path-safe IDs; a batch adds only uniqueness.
             runner::run_dir(std::path::Path::new("."), id)?;
             anyhow::ensure!(ids.insert(id.to_owned()), "duplicate batch run ID {id:?}");
             args.json = true;
@@ -102,8 +98,6 @@ pub(super) async fn run(
         let (request, packs) = run::run_request(ctx, &args).await?;
         prepared.push((args, request, packs));
     }
-    // Complete the existing owner's validation/freeze for every entry before
-    // any executor starts. Packs stay guarded until every run has drained.
     for (_, request, _) in &prepared {
         runner::prepare_run(&ctx.access, request, deps.executor.isolation()).await?;
     }
@@ -122,7 +116,6 @@ pub(super) async fn run(
             let mut buffered = Vec::new();
             let result = run::run_prepared(ctx, run_args, request, shared, &mut buffered).await;
             let mut error = result.err().map(|e| format!("{e:#}"));
-            // Even a cancelled/failed run may have a useful durable report.
             let report = match load_report(
                 &ctx.access,
                 &ctx.owner,
@@ -142,8 +135,6 @@ pub(super) async fn run(
         });
     }
     let mut results = Vec::with_capacity(prepared.len());
-    // A failed run never drops another started run's future. Output errors are
-    // also delayed until all run futures have drained.
     let mut output_error = None;
     while let Some((index, run_id, report, error, buffered)) = futures.next().await {
         if !args.json && output_error.is_none() {

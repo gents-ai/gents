@@ -1,7 +1,5 @@
-/* The keys and mouse buttons a person already uses for history in a
-   browser, on the app's own history: Cmd+[ and Cmd+] (Alt+arrow on
-   Windows and Linux), and the two side buttons of a mouse. A field that
-   is being typed in keeps its keys. */
+// The keys and mouse buttons a person already uses for history in a
+// browser, on the app's own history; a field being typed in keeps its keys.
 import { useEffect, useRef } from "react";
 import type { History } from "./router";
 

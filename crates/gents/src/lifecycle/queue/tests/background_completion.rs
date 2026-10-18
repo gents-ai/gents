@@ -2,8 +2,6 @@ use super::*;
 use crate::lifecycle::RequestTerminalOutcome;
 use crate::session;
 
-/// A desktop-owned session: an enrolled desktop request, finished through the
-/// real lifecycle, whose session is owned by the desktop's requester DID.
 async fn desktop_owned_session(
     db: &TestDb,
     session_id: &str,
@@ -45,8 +43,6 @@ async fn desktop_owned_session(
         .await
         .unwrap()
         .unwrap();
-    // Materialize and finish the enrolled desktop turn through the real
-    // lifecycle, before its longer-lived background work completes.
     let writer = crate::streaming::DefraStreamWriter::new(
         db.node.clone(),
         db.node_did(),
@@ -89,10 +85,6 @@ async fn desktop_owned_session(
     (desktop, create, parent, writer)
 }
 
-/// Lean `Enrollment.runtime_internal_adopts_session_scope`: runtime-signed
-/// controls of an enrolled desktop parent are written under the desktop's
-/// requester and share its existing session, while a parent from another
-/// session cannot lend its scope.
 #[tokio::test]
 async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestry() {
     for source in [
@@ -276,7 +268,6 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             error.to_string()
         );
 
-        // The next enrolled user request can use the same canonical session.
         let mut followup = create.clone();
         followup.initial_lifecycle_state = RequestLifecycleState::Pending;
         followup.request_id = "desktop-followup".into();
@@ -313,7 +304,6 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         );
         assert_eq!(after["AgentSession"][0]["requester_did"], desktop.did());
 
-        // Valid runtime signature but a physical parent from another session.
         let mut foreign_parent = parent.clone();
         foreign_parent.session_id = "other-session".into();
         let bad = session_request_create_mutation(
@@ -330,7 +320,6 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         .unwrap();
         let response = db.node.execute(&bad).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
-        // An existing other-session owner must not authorize the mismatched parent.
         session::ensure_session_with_agent_id_and_requester_did(
             &db.node,
             "other-session",
@@ -365,10 +354,6 @@ fn admission_verifier(db: &TestDb) -> crate::request_admission::AgentRequestAdmi
     )
 }
 
-/// #2064: a node-owned callee's result, returned (Lean
-/// `CausalHop.return_keeps_caller_hop`) into a session a paired desktop
-/// started, is written under the desktop's requester, admitted, claimed and
-/// resumed in that same session.
 #[tokio::test]
 async fn a_returned_result_is_admitted_into_a_paired_client_session() {
     let db = test_db("paired-client-completion").await;
@@ -467,9 +452,6 @@ fn wake_agent_request(
         doc_id: doc_id.to_string(),
         request_id: request_id.to_string(),
         node_did: parent.node_did.clone(),
-        // Background wakes are signed local-control requests, so their exact
-        // requester scope is the signing principal even when the parent was
-        // an unscoped interactive request.
         requester_did: Some(parent.node_did.clone()),
         agent_id: parent.agent_id.clone(),
         session_id: parent.session_id.clone(),
@@ -670,7 +652,7 @@ async fn many_concurrent_notifications_publish_one_wake_identity() {
         let parent = parent.clone();
         async move {
             persist_background_completion_with_message(
-                node.as_ref(),
+                &node,
                 &parent,
                 &format!("concurrent notification {index}"),
                 &format!("background-completion-notification:many-race-{index}:tool"),
@@ -704,7 +686,7 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
     let parent = root_parent(db.node_did(), "background-restart-before-claim-session");
     let hints = background_hints(&parent);
     let enqueued = persist_background_completion_with_message(
-        node.as_ref(),
+        &node,
         &parent,
         "restart-safe notification",
         "background-completion-notification:restart-before-claim:tool",
@@ -715,12 +697,12 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
     .await
     .unwrap();
 
-    let recovery = crate::RequestLifecycle::recover_all(node.as_ref(), db.node_did())
+    let recovery = crate::RequestLifecycle::recover_all(&node, db.node_did())
         .await
         .unwrap();
     assert_eq!(recovery.background_wakes_redriven, 0);
     let before = crate::load_background_completion_diagnostics(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         db.node_did(),
     )
     .await
@@ -764,7 +746,7 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
         .unwrap();
 
     let after = crate::load_background_completion_diagnostics(
-        &crate::config_client::ConfigAccess::Local(node),
+        &crate::config_client::ConfigAccess::local(node),
         db.node_did(),
     )
     .await
@@ -781,7 +763,7 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
     let parent = root_parent(db.node_did(), "background-response-repair-ack-session");
     let hints = background_hints(&parent);
     let enqueued = persist_background_completion_with_message(
-        node.as_ref(),
+        &node,
         &parent,
         "response-persisted notification",
         "background-completion-notification:response-persisted:tool",
@@ -836,11 +818,8 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
         )
         .await
         .unwrap();
-    // Publication alone does not acknowledge the wake. The terminal commit
-    // selects the exact header and acknowledges the claimed notification set
-    // atomically; startup must not infer completion from published bytes.
     let unpublished_terminal = crate::load_background_completion_diagnostics(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         db.node_did(),
     )
     .await
@@ -875,13 +854,12 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
         .unwrap()
     );
 
-    let first_repair =
-        crate::RequestLifecycle::repair_terminal_requests(node.as_ref(), db.node_did())
-            .await
-            .unwrap();
+    let first_repair = crate::RequestLifecycle::repair_terminal_requests(&node, db.node_did())
+        .await
+        .unwrap();
     assert_eq!(first_repair.repaired, 0);
     let first = crate::load_background_completion_diagnostics(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         db.node_did(),
     )
     .await
@@ -890,13 +868,12 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
     assert_eq!(first.acknowledged_notifications, 1);
     assert_eq!(first.epochs[0].state, "acknowledged");
 
-    let second_repair =
-        crate::RequestLifecycle::repair_terminal_requests(node.as_ref(), db.node_did())
-            .await
-            .unwrap();
+    let second_repair = crate::RequestLifecycle::repair_terminal_requests(&node, db.node_did())
+        .await
+        .unwrap();
     assert_eq!(second_repair.repaired, 0);
     let second = crate::load_background_completion_diagnostics(
-        &crate::config_client::ConfigAccess::Local(node),
+        &crate::config_client::ConfigAccess::local(node),
         db.node_did(),
     )
     .await
@@ -909,31 +886,19 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
 
 #[tokio::test]
 async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
-    let db = test_db("background-successor-ack").await;
-    let node = db.node.clone();
-    let parent = root_parent(db.node_did(), "background-successor-ack-session");
-    let hints = background_hints(&parent);
-    let first = persist_background_completion_with_message(
-        node.as_ref(),
-        &parent,
-        "first notification",
-        "background-completion-notification:successor-first:tool",
-        "review notifications",
-        hints.clone(),
-        None,
-    )
-    .await
-    .unwrap();
-    let first_request = wake_agent_request(
-        &parent,
-        &first.request.as_ref().expect("non-Goal wake").doc_id,
-        &first.request.as_ref().expect("non-Goal wake").request_id,
-        &hints,
-    );
+    use crate::tool_call_lifecycle::admission_fixture::complete_child;
+    use crate::watcher::{DefraWatcher, Watcher};
+    let (selected, successor_child) = crate::tool_call_lifecycle::completion_owner_conformance::selected_background_wake_with_successor(true).await;
+    let admission = selected.admission;
+    let node = admission.node.clone();
+    let did = admission.node_did.clone();
+    let first_request = selected.wake;
+    let first_id = first_request.request_id.clone();
+    let session_id = first_request.session_id.clone();
     let mut first_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         node.clone(),
         TEST_AGENT_ID,
-        db.node_did(),
+        &did,
         first_request,
         60,
         ExecutionOrigin::Scheduled,
@@ -943,48 +908,50 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         first_lifecycle.claim_with_identity().await.unwrap(),
         crate::lifecycle::ClaimOutcome::Claimed
     );
-    crate::session::import_history_observation(
+    let writer =
+        crate::streaming::DefraStreamWriter::new(node.clone(), &did, std::time::Duration::ZERO);
+    first_lifecycle
+        .begin_owned_execution(&writer)
+        .await
+        .unwrap();
+    writer
+        .publish_authored_message(
+            &first_lifecycle,
+            "unrelated-foreground-input",
+            &gents_protocol::message::Message::user("unrelated foreground input"),
+        )
+        .await
+        .unwrap();
+    complete_child(
         &node,
-        "unrelated-foreground-request-doc",
-        &parent.session_id,
-        &parent.node_did,
-        parent.requester_did.as_deref(),
-        "unrelated foreground input",
-        "unrelated-foreground-input",
-        first.message_sequence + 1,
-        None,
+        &successor_child.unwrap(),
+        &did,
+        "second notification",
     )
     .await;
-
-    let second = persist_background_completion_with_message(
-        node.as_ref(),
-        &parent,
-        "second notification",
-        "background-completion-notification:successor-second:tool",
-        "review notifications",
-        hints.clone(),
-        None,
-    )
-    .await
-    .unwrap();
-    assert!(second.created_request);
-    assert_ne!(
-        first.request.as_ref().expect("non-Goal wake").doc_id,
-        second.request.as_ref().expect("non-Goal wake").doc_id
+    assert_eq!(
+        crate::background_completion::settle_running_session_message_rows(&node, &did)
+            .await
+            .unwrap(),
+        1
     );
-    let generation_query = format!(
-        r#"{{
-            AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ retry_key }}
-        }}"#,
-        escape_graphql_string(&parent.session_id)
-    );
-    let generation_response = node.execute(&generation_query).await;
-    assert!(
-        !generation_response.has_errors(),
-        "generation query: {:?}",
-        generation_response.errors
-    );
-    let mut retry_keys = generation_response.data.as_ref().unwrap()["AgentRequest"]
+    first_lifecycle
+        .terminalize_owned(
+            RequestTerminalOutcome::Failed,
+            gents_protocol::output::TerminalOutput::NoMessage,
+            Some("injected provider failure"),
+        )
+        .await
+        .unwrap();
+    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let response = access
+        .execute(&format!(
+            "{{ AgentRequest(filter: {{ session_id: {{ _eq: \"{}\" }} }}) {{ retry_key }} }}",
+            escape_graphql_string(&session_id)
+        ))
+        .await
+        .unwrap();
+    let mut retry_keys = response["data"]["AgentRequest"]
         .as_array()
         .unwrap()
         .iter()
@@ -1000,25 +967,13 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         retry_keys[1].rsplit_once(':').unwrap().0,
         "unrelated transcript writes must not advance the queue-local generation"
     );
-    first_lifecycle
-        .terminalize_owned(
-            RequestTerminalOutcome::Failed,
-            gents_protocol::output::TerminalOutput::NoMessage,
-            Some("injected provider failure"),
-        )
-        .await
-        .unwrap();
-
-    let second_request = wake_agent_request(
-        &parent,
-        &second.request.as_ref().expect("non-Goal wake").doc_id,
-        &second.request.as_ref().expect("non-Goal wake").request_id,
-        &hints,
-    );
+    let mut watcher = DefraWatcher::new(node.clone(), &did).expect("request watcher");
+    let second_request = watcher.next_request().await.unwrap().unwrap();
+    assert_ne!(second_request.request_id, first_id);
     let mut second_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         node.clone(),
         TEST_AGENT_ID,
-        db.node_did(),
+        &did,
         second_request,
         60,
         ExecutionOrigin::Scheduled,
@@ -1027,11 +982,6 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
     assert_eq!(
         second_lifecycle.claim_with_identity().await.unwrap(),
         crate::lifecycle::ClaimOutcome::Claimed
-    );
-    let writer = crate::streaming::DefraStreamWriter::new(
-        node.clone(),
-        db.node_did(),
-        std::time::Duration::ZERO,
     );
     second_lifecycle
         .begin_owned_execution(&writer)
@@ -1045,9 +995,7 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         )
         .await
         .unwrap();
-
-    let access = crate::config_client::ConfigAccess::Local(node);
-    let diagnostics = crate::load_background_completion_diagnostics(&access, db.node_did())
+    let diagnostics = crate::load_background_completion_diagnostics(&access, &did)
         .await
         .unwrap();
     assert_eq!(diagnostics.pending_notifications, 0);
@@ -1056,20 +1004,20 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
     let first_epoch = diagnostics
         .epochs
         .iter()
-        .find(|epoch| {
-            epoch.root_request_id == first.request.as_ref().expect("non-Goal wake").request_id
-        })
+        .find(|epoch| epoch.root_request_id == first_id)
         .unwrap();
     assert_eq!(first_epoch.state, "acknowledged_by_successor");
-    let timeline = crate::run_timeline_fetch::load_run_timeline(
-        &access,
-        &first.request.as_ref().expect("non-Goal wake").request_id,
-    )
-    .await
-    .unwrap();
+    let timeline = crate::run_timeline_fetch::load_run_timeline(&access, &first_id)
+        .await
+        .unwrap();
     assert_eq!(timeline.background_completions.len(), 2);
     assert!(timeline.background_completion_diagnostics_error.is_none());
     assert!(timeline.child_request_ids.is_empty());
+    drop(watcher);
+    drop(first_lifecycle);
+    drop(second_lifecycle);
+    node.shutdown().await;
+    std::fs::remove_dir_all(admission.path).unwrap();
 }
 
 #[tokio::test]
@@ -1077,7 +1025,7 @@ async fn append_sequence_index_fetches_only_latest_header() {
     let db = test_db("sequence-index").await;
     let session = "sequence-index-session";
     let query = super::super::atomic_inputs::append_sequence_query(db.node_did(), session);
-    let access = crate::config_client::ConfigAccess::Local(db.node.clone());
+    let access = crate::config_client::ConfigAccess::local(db.node.clone());
     let empty = access.execute(&query).await.unwrap();
     assert!(empty["data"]["AgentMessage"].as_array().unwrap().is_empty());
     for sequence in 1..=49 {
@@ -1133,13 +1081,11 @@ async fn append_sequence_index_fetches_only_latest_header() {
         assert_eq!(plan["executionSuccess"], true, "{response}");
         let roots = plan["operationNode"].as_array().unwrap();
         assert_eq!(roots.len(), 2);
-        // DefraDB emits operation roots in query selection order: message, then tool call.
         fetched.push(metric(&roots[0]).unwrap_or_else(|| panic!("{response}")));
     }
     assert_eq!(fetched, vec![49, 1]);
     for (row_session, sequence, key) in [
         (session, "null", "null-sequence"),
-        (session, "49", "duplicate-maximum"),
         ("only-null-sequence", "null", "only-null"),
     ] {
         crate::config_client::ConfigAccess::write_local(
@@ -1153,6 +1099,18 @@ async fn append_sequence_index_fetches_only_latest_header() {
             ),
         ).await.unwrap();
     }
+    let duplicate = crate::config_client::ConfigAccess::write_local(
+        &db.node,
+        "test.sequence_index_duplicate",
+        &format!(
+            r#"mutation {{ create_AgentMessage(input: {{node_did: "{}", session_id: "{}", message_key: "duplicate-maximum", sequence: 49}}) {{_docID}} }}"#,
+            escape_graphql_string(db.node_did()),
+            escape_graphql_string(session),
+        ),
+    )
+    .await
+    .expect_err("a committed session sequence cannot be claimed twice");
+    assert!(format!("{duplicate:#}").contains("unique index"));
     for row_session in [session, "only-null-sequence"] {
         let indexed =
             super::super::atomic_inputs::append_sequence_query(db.node_did(), row_session);
@@ -1163,7 +1121,7 @@ async fn append_sequence_index_fetches_only_latest_header() {
         assert_eq!(
             access.execute(&indexed).await.unwrap()["data"]["AgentMessage"],
             access.execute(&original).await.unwrap()["data"]["AgentMessage"],
-            "index ordering must preserve nullable sequence and duplicate-maximum results",
+            "index ordering must preserve nullable sequence results",
         );
     }
     let txn = ConfigApplyTxn::begin_local(&db.node, None).await.unwrap();
@@ -1212,15 +1170,9 @@ async fn append_sequence_excludes_foreign_session_messages_and_reservations() {
     .await
     .unwrap();
     txn.discard().await.unwrap();
-    assert_eq!(
-        next, 7,
-        "own background reservation remains ahead of own message; foreign rows cannot move this session's cursor"
-    );
+    assert_eq!(next, 7);
 }
 
-/// Lean `CausalHop.completionWake`: the next wake claim consumes every pending
-/// notification, so a notification that needs a higher hop raises the one
-/// pending wake instead of riding a lower-hop wake already queued.
 #[tokio::test]
 async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
     let db = test_db("wake-hop-raise").await;
@@ -1293,11 +1245,6 @@ async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
     assert_eq!(lower["superseded_by_request_doc_id"], raised_wake.as_str());
 }
 
-/// Lean `CausalHop.return_keeps_caller_hop` and
-/// `CausalHop.return_into_refused_session_is_refused`: B's result returned to
-/// A wakes A at A's own hop and joins A's pending process wake. Once a request
-/// over the bound is A's latest, a later returned result copies that hop and
-/// is refused too.
 #[tokio::test]
 async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() {
     let db = test_db("wake-hop-refusal").await;
@@ -1316,7 +1263,6 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
             response.data.unwrap()["AgentRequest"][0].clone()
         }
     };
-    // A's background process completed first: a wake at A's hop is pending.
     let native = persist_background_completion_with_message_waking(
         &db.node,
         &parent,
@@ -1330,7 +1276,6 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
     .await
     .unwrap();
     let native_wake = native.request.expect("native wake").doc_id;
-    // B's result returns at A's hop, so it rides the pending wake.
     let returned = persist_background_completion_with_message_waking(
         &db.node,
         &parent,
@@ -1346,7 +1291,6 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
     assert!(!returned.created_request);
     assert_eq!(returned.request.expect("joined wake").doc_id, native_wake);
     assert_eq!(hop_of(native_wake.clone()).await["request_hop"], 0);
-    // A request past the bound becomes A's latest.
     let refused = persist_background_completion_with_message_waking(
         &db.node,
         &parent,
@@ -1367,7 +1311,6 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
         bound + 1
     ));
     assert_eq!(hop_of(native_wake).await["lifecycle_state"], "superseded");
-    // Admission refuses the over-bound wake; it stays the session's latest.
     let response = db
         .node
         .execute(&format!(
@@ -1376,7 +1319,6 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    // A later returned result copies the refused hop and is refused as well.
     let later = persist_background_completion_with_message_waking(
         &db.node,
         &parent,

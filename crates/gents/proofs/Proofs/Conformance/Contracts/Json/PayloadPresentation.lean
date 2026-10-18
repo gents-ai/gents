@@ -58,7 +58,6 @@ def windowedOutput : Segment :=
       [48, 49, 50, 51, 52, 53, 54, 55, 56, 57]⟩
     close := some (.closed .complete 1 [10]), createdAt := 5 }
 
-/-- Head two bytes, a three-byte UTF-8 ellipsis marker, tail two bytes. -/
 def windowedResult : MessageEnvelope :=
   { header :=
       { id := 801, session := 1, request := some 10, origin := none
@@ -98,7 +97,6 @@ def caseJson (value : Case) : String :=
 
 def casesJson : String := jsonArray (cases.map caseJson)
 
-/-- The exported boundary really is two-sided, and it fails closed. -/
 example : (cases.map (·.expected)) =
     [some ⟨3, 3⟩, some ⟨1, 3⟩, some ⟨10, 7⟩, none] := by native_decide
 

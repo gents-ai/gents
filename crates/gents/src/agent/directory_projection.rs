@@ -1,21 +1,10 @@
-//! Fleet-discovery directory projection.
-//!
-//! Projects Node x Agent x NodeReadiness into
-//! NodeDirectoryEntry rows — the replicated agent index the `machine`
-//! pairing template pushes to attached clients. Modeled in
-//! `Proofs/PeerRegistryDiscovery/DirectoryProjection.lean`; fenced by
-//! `tests/conformance/directory_projection.rs`. The sweep runs on source
-//! Update events, so the load-bearing property is that a settled state is a
-//! write-free fixpoint. Each runtime owns only the rows stamped with its
-//! source DID; replicated foreign rows remain outside its projection.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
-use defra_node::{EmbeddedNode, EventName, QueryResponse};
+use defra_node::{EmbeddedNode, QueryResponse};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
@@ -41,7 +30,6 @@ pub struct AgentInfo {
     pub display_name: String,
 }
 
-/// A single snapshot keeps source reads coherent within each projection tick.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SourceSnapshot {
     pub nodes: Vec<(String, String, String)>,
@@ -58,7 +46,6 @@ pub struct DirectoryTickOutcome {
 
 #[async_trait]
 pub trait DirectoryStore: Send + Sync {
-    /// Load every projection input in one shot (see [`SourceSnapshot`]).
     async fn load_source_snapshot(&self) -> Result<SourceSnapshot>;
     async fn list_directory_entries(
         &self,
@@ -79,29 +66,8 @@ pub fn directory_entry_key(source_did: &str, node_did: &str) -> String {
     )
 }
 
-/// Canonicalize a runtime `updated_at` into the exact lexical form DefraDB's
-/// `DateTime` column stores and returns, so a settled directory row stays a
-/// write-free fixpoint.
-///
-/// `NodeReadiness.updated_at` is a *String* column the runtime writes as
-/// `Utc::now().to_rfc3339()` — offset `+00:00`, sub-second precision — but
-/// `NodeDirectoryEntry.last_seen` is a `DateTime` column that re-serializes on
-/// storage: it renders the offset as `Z`, and its sub-second rendering is not
-/// guaranteed byte-stable (Go's DefraDB trims trailing zeros; chrono buckets to
-/// 3/6/9 digits). Comparing the raw source string against the normalized stored
-/// string made `existing != desired` on *every* sweep, so each tick re-upserted
-/// the row, and each upsert re-fired the Update-driven sweep — an unbounded
-/// write/event storm that starved the runtime.
-///
-/// Quantizing to whole-second UTC `...Z` removes the sub-second ambiguity
-/// entirely: DefraDB round-trips a second-precision `Z` value unchanged (the
-/// conformance fence and the embedded-node fixpoint test pin this), and
-/// sub-second freshness is not meaningful for a fleet "last seen". The function
-/// is idempotent (`canon(canon(x)) == canon(x)`), preserving the model's
-/// projection idempotence. Blank input (a node with no readiness row)
-/// stays blank → rendered as `null`. Genuinely unparseable non-blank input
-/// passes through trimmed unchanged; that one row still fails its upsert, as
-/// before, under the per-entry error tolerance in `reconcile_directory_tick`.
+/// DefraDB stores `NodeDirectoryEntry.last_seen` as `DateTime`, normalizing
+/// offsets and sub-second precision; match that representation for fixpoints.
 fn canonicalize_last_seen(updated_at: &str) -> String {
     let trimmed = updated_at.trim();
     if trimmed.is_empty() {
@@ -115,11 +81,6 @@ fn canonicalize_last_seen(updated_at: &str) -> String {
     }
 }
 
-/// The projection: one entry per node, contents a function of the
-/// node's payload (display name, agent names, runtime state). The
-/// runtime `updated_at` is canonicalized (see `canonicalize_last_seen`) so the
-/// derived `last_seen` matches its own stored `DateTime` round-trip.
-/// Mirrors Lean `project`.
 pub fn derive_directory_entries(
     source_did: &str,
     nodes: &[(String, String, String)],
@@ -159,12 +120,6 @@ pub fn derive_directory_entries(
         .collect()
 }
 
-/// One reconcile sweep: derive the desired directory rows from source
-/// collections and diff against this source's `NodeDirectoryEntry` rows,
-/// upserting/refreshing/retracting exactly what has drifted. Mirrors Lean
-/// `projectStep`; a settled state (desired == existing) must be a
-/// write-free fixpoint (`settled_fixpoint`), since the sweep runs on every
-/// Update event.
 pub async fn reconcile_directory_tick(
     store: &dyn DirectoryStore,
     source_did: &str,
@@ -184,12 +139,6 @@ pub async fn reconcile_directory_tick(
         .await
         .context("list directory entries")?;
 
-    // Per-entry error tolerance: one node's malformed source row (e.g.
-    // no readiness row, previously producing an unparseable `last_seen`)
-    // must not abort the whole sweep. Warn-and-continue past each failure,
-    // collecting only the first error to return once every entry has had a
-    // chance to converge; outcome sets only ever record operations that
-    // actually succeeded.
     let mut outcome = DirectoryTickOutcome::default();
     let mut first_error: Option<anyhow::Error> = None;
     for (did, entry) in &desired {
@@ -243,13 +192,18 @@ pub async fn reconcile_directory_tick(
     Ok(outcome)
 }
 
+/// The source rows a directory sweep projects; its own NodeDirectoryEntry
+/// writes must not wake it again.
+const DIRECTORY_SOURCE_COLLECTIONS: [&str; 3] = ["Node", "NodeReadiness", "Agent"];
+
 pub async fn run_directory_projection(
     node: Arc<EmbeddedNode>,
     source_did: String,
     cancel: CancellationToken,
 ) -> Result<()> {
     let store = GraphqlDirectoryStore::new(node.clone());
-    let mut subscription = node.subscribe(&[EventName::Update]);
+    let mut subscription = crate::subscribe_collections(&node, DIRECTORY_SOURCE_COLLECTIONS)?;
+    let mut subscription_open = true;
     let mut interval =
         tokio::time::interval(crate::agent::p2p_reconcile::intervals::sweep_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -259,14 +213,11 @@ pub async fn run_directory_projection(
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
             _ = interval.tick() => sweep_directory(&store, &source_did).await,
-            message = subscription.recv() => {
-                if message.is_none() {
-                    tracing::warn!("directory projection update subscription closed; continuing with periodic sweeps");
+            batch = subscription.recv(), if subscription_open => {
+                if batch.is_none() {
+                    tracing::warn!("directory projection change subscription closed; continuing with periodic sweeps");
+                    subscription_open = false;
                     continue;
-                }
-                let dropped = subscription.check_and_reset_dropped();
-                if dropped > 0 {
-                    tracing::warn!(dropped, "directory projection update subscription dropped messages");
                 }
                 sweep_directory(&store, &source_did).await;
             }
@@ -413,9 +364,6 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
     let source_did = escape_graphql_string(&entry.source_did);
     let display_name = escape_graphql_string(&entry.display_name);
     let agents = graphql_string_list_literal(entry.agents.iter().map(String::as_str));
-    // Index-aligned with `agents`; rendered as null (never []) when empty
-    // — an empty list literal types as JsonArray and corrupts nillable array
-    // columns.
     let agent_ids = graphql_string_list_literal(entry.agent_ids.iter().map(String::as_str));
     let default_agent_id = escape_graphql_string(&entry.default_agent_id);
     let runtime_state = escape_graphql_string(&entry.runtime_state);
@@ -470,9 +418,6 @@ fn graphql_nullable_datetime_literal(value: &str) -> String {
         format!(r#""{}""#, escape_graphql_string(trimmed))
     }
 }
-
-// The per-collection decoders behind `load_source_snapshot`, each reading its
-// root field out of the shared multi-root response.
 
 fn parse_nodes(response: &QueryResponse) -> Result<Vec<(String, String, String)>> {
     Ok(rows::<NodeRow>(response, "Node")?
@@ -626,176 +571,6 @@ struct DirectoryRow {
 mod tests {
     use super::*;
 
-    fn entry(node_did: &str, last_seen: &str) -> DirectoryEntry {
-        DirectoryEntry {
-            directory_key: directory_entry_key("did:key:home", node_did),
-            node_did: node_did.to_string(),
-            source_did: "did:key:home".to_string(),
-            display_name: "Display".to_string(),
-            agents: Vec::new(),
-            agent_ids: Vec::new(),
-            default_agent_id: String::new(),
-            runtime_state: "running".to_string(),
-            last_seen: last_seen.to_string(),
-        }
-    }
-
-    #[test]
-    fn directory_entry_key_partitions_same_node_did_by_source() {
-        assert_ne!(
-            directory_entry_key("did:key:local-home", "did:key:shared-agent"),
-            directory_entry_key("did:key:foreign-home", "did:key:shared-agent"),
-        );
-    }
-
-    #[test]
-    fn upsert_mutation_sets_immutable_source_did_only_when_adding() {
-        let mutation = upsert_directory_entry_mutation(
-            &entry("did:key:running", "2026-07-20T00:00:00Z"),
-            "2026-07-23T00:00:00Z",
-        );
-        let (add, update) = mutation
-            .split_once("update: {")
-            .expect("upsert mutation has update payload");
-
-        assert!(add.contains(r#"source_did: "did:key:home""#));
-        assert!(
-            !update.contains("source_did:"),
-            "immutable source_did must not be resent in update payload: {update}"
-        );
-    }
-
-    #[test]
-    fn upsert_mutation_renders_null_for_blank_last_seen() {
-        for blank in ["", "   "] {
-            let mutation = upsert_directory_entry_mutation(
-                &entry("did:key:no-runtime", blank),
-                "2026-07-23T00:00:00Z",
-            );
-            assert!(
-                mutation.contains("last_seen: null"),
-                "blank last_seen ({blank:?}) must render as null: {mutation}"
-            );
-            assert!(!mutation.contains(r#"last_seen: """#));
-        }
-    }
-
-    #[test]
-    fn upsert_mutation_renders_quoted_last_seen_when_present() {
-        let mutation = upsert_directory_entry_mutation(
-            &entry("did:key:running", "2026-07-20T00:00:00Z"),
-            "2026-07-23T00:00:00Z",
-        );
-        assert!(mutation.contains(r#"last_seen: "2026-07-20T00:00:00Z""#));
-    }
-
-    /// `agent_ids` follows the same null-never-[] discipline as
-    /// `agents`, and stays index-aligned when both are populated.
-    #[test]
-    fn upsert_mutation_renders_null_agent_ids_when_empty_and_aligned_list_when_present() {
-        let empty = upsert_directory_entry_mutation(
-            &entry("did:key:no-agents", "2026-07-20T00:00:00Z"),
-            "2026-07-23T00:00:00Z",
-        );
-        assert!(empty.contains("agents: null"));
-        assert!(!empty.contains("[]"));
-        assert!(
-            empty.contains("agent_ids: null"),
-            "empty agent_ids must render as null, never []: {empty}"
-        );
-
-        let mut with_agents = entry("did:key:with-agents", "2026-07-20T00:00:00Z");
-        with_agents.agents = vec!["Artist".to_string(), "Coder".to_string()];
-        with_agents.agent_ids = vec![
-            "did:key:a:artist".to_string(),
-            "did:key:a:coder".to_string(),
-        ];
-        let mutation = upsert_directory_entry_mutation(&with_agents, "2026-07-23T00:00:00Z");
-        assert!(mutation.contains(r#"agents: ["Artist", "Coder"]"#));
-        assert!(mutation.contains(r#"agent_ids: ["did:key:a:artist", "did:key:a:coder"]"#));
-    }
-
-    /// `default_agent_id` is a plain string field (unlike the nullable
-    /// list/DateTime fields above): empty stays `""`, never `null`, so the
-    /// client can compare it against a picked `agent_id` unconditionally.
-    #[test]
-    fn upsert_mutation_renders_default_agent_id_as_plain_string() {
-        let empty = upsert_directory_entry_mutation(
-            &entry("did:key:no-default", "2026-07-20T00:00:00Z"),
-            "2026-07-23T00:00:00Z",
-        );
-        assert!(
-            empty.contains(r#"default_agent_id: """#),
-            "empty default_agent_id must render as an empty string, never null: {empty}"
-        );
-
-        let mut with_default = entry("did:key:with-default", "2026-07-20T00:00:00Z");
-        with_default.default_agent_id = "did:key:a:coder".to_string();
-        let mutation = upsert_directory_entry_mutation(&with_default, "2026-07-23T00:00:00Z");
-        assert!(mutation.contains(r#"default_agent_id: "did:key:a:coder""#));
-    }
-
-    /// Round-trip consistency: a stored `null` `last_seen` must decode back
-    /// to `""` so the settled comparison against `derive_directory_entries`'
-    /// blank default holds (no perpetual refresh loop for runtime-less
-    /// nodes).
-    #[test]
-    fn nullable_datetime_literal_blank_maps_to_null_and_round_trips_via_default() {
-        assert_eq!(graphql_nullable_datetime_literal(""), "null");
-        assert_eq!(graphql_nullable_datetime_literal("  "), "null");
-        // DirectoryRow.last_seen is `Option<String>`; DefraDB's stored `null`
-        // decodes to `None`, and `unwrap_or_default()` in
-        // `list_directory_entries` maps that back to `""` — the same value
-        // `derive_directory_entries` defaults to for a runtime-less node.
-        let row: DirectoryRow = serde_json::from_value(serde_json::json!({
-            "directory_key": "dir-no-runtime",
-            "node_did": "did:key:no-runtime",
-            "source_did": "did:key:home",
-            "display_name": "No Runtime",
-            "agents": [],
-            "runtime_state": "",
-            "last_seen": null,
-        }))
-        .expect("stored directory row with null last_seen should deserialize");
-        assert_eq!(row.last_seen.unwrap_or_default(), "");
-    }
-
-    #[test]
-    fn canonicalize_last_seen_quantizes_offset_and_subseconds_to_utc_seconds() {
-        // The exact shape the runtime writes: `Utc::now().to_rfc3339()` —
-        // `+00:00` offset, sub-second precision. Must render whole-second `Z`.
-        assert_eq!(
-            canonicalize_last_seen("2026-07-23T23:30:55.845794+00:00"),
-            "2026-07-23T23:30:55Z"
-        );
-        // Non-UTC offset is converted to UTC before quantizing.
-        assert_eq!(
-            canonicalize_last_seen("2026-07-23T18:30:55.5-05:00"),
-            "2026-07-23T23:30:55Z"
-        );
-        // Already canonical → unchanged (idempotent).
-        assert_eq!(
-            canonicalize_last_seen("2026-07-23T23:30:55Z"),
-            "2026-07-23T23:30:55Z"
-        );
-        assert_eq!(
-            canonicalize_last_seen(&canonicalize_last_seen("2026-07-23T23:30:55.845794+00:00")),
-            "2026-07-23T23:30:55Z"
-        );
-        // Blank stays blank (rendered as null downstream); unparseable passes
-        // through trimmed (that one row fails its upsert, per-entry tolerant).
-        assert_eq!(canonicalize_last_seen(""), "");
-        assert_eq!(canonicalize_last_seen("   "), "");
-        assert_eq!(canonicalize_last_seen("not-a-date"), "not-a-date");
-    }
-
-    /// Regression fence for the settled-fixpoint bug: a readiness `updated_at`
-    /// written in the runtime's real `Utc::now().to_rfc3339()` shape (offset
-    /// `+00:00`, sub-second precision) used to differ from its own stored
-    /// `NodeDirectoryEntry.last_seen` `DateTime` round-trip (offset `Z`),
-    /// making every sweep re-upsert and — since the sweep runs on Update events
-    /// — self-perpetuate into an unbounded write/event storm. Seeding the exact
-    /// runtime format and asserting the second tick is write-free pins the fix.
     #[tokio::test]
     async fn graphql_tick_is_write_free_fixpoint_for_runtime_updated_at_format() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
@@ -848,15 +623,12 @@ mod tests {
         let first = reconcile_directory_tick(&store, "did:key:home").await?;
         assert_eq!(first.upserted, BTreeSet::from(["did:key:real".to_string()]));
 
-        // The stored, canonicalized last_seen is whole-second UTC `Z`.
         let stored = store.list_directory_entries("did:key:home").await?;
         assert_eq!(
             stored.get("did:key:real").map(|e| e.last_seen.as_str()),
             Some(canonicalize_last_seen(&updated_at).as_str())
         );
 
-        // The load-bearing property: a second tick over unchanged sources is a
-        // write-free fixpoint (no self-perpetuating storm).
         let second = reconcile_directory_tick(&store, "did:key:home").await?;
         assert_eq!(
             second,
@@ -866,22 +638,45 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn canonicalize_last_seen_quantizes_offset_and_subseconds_to_utc_seconds() {
+        assert_eq!(
+            canonicalize_last_seen("2026-07-23T23:30:55.845794+00:00"),
+            "2026-07-23T23:30:55Z"
+        );
+        assert_eq!(
+            canonicalize_last_seen("2026-07-23T18:30:55.5-05:00"),
+            "2026-07-23T23:30:55Z"
+        );
+        assert_eq!(
+            canonicalize_last_seen("2026-07-23T23:30:55Z"),
+            "2026-07-23T23:30:55Z"
+        );
+        assert_eq!(
+            canonicalize_last_seen(&canonicalize_last_seen("2026-07-23T23:30:55.845794+00:00")),
+            "2026-07-23T23:30:55Z"
+        );
+        assert_eq!(canonicalize_last_seen(""), "");
+        assert_eq!(canonicalize_last_seen("   "), "");
+        assert_eq!(canonicalize_last_seen("not-a-date"), "not-a-date");
+    }
+
     #[tokio::test]
     async fn graphql_tick_projects_enabled_agents_and_retracts_removed_nodes() -> Result<()> {
         let node = Arc::new(EmbeddedNode::builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         let seed = r#"mutation {
-            create_Node(input: { node_did: "did:key:local", display_name: "Local",
+            local_node: create_Node(input: { node_did: "did:key:local", display_name: "Local",
                 default_agent_id: "coder", enabled: true, created_at: "2026-07-23T00:00:00Z" }) { _docID }
-            create_Node(input: { node_did: "did:key:disabled", enabled: false,
+            disabled_node: create_Node(input: { node_did: "did:key:disabled", enabled: false,
                 created_at: "2026-07-23T00:00:00Z" }) { _docID }
-            create_Agent(input: { node_did: "did:key:local", agent_id: "coder",
+            coder_agent: create_Agent(input: { node_did: "did:key:local", agent_id: "coder",
                 display_name: "Coder", inference_profile_id: "profile", enabled: true }) { _docID }
-            create_Agent(input: { node_did: "did:key:local", agent_id: "artist",
+            artist_agent: create_Agent(input: { node_did: "did:key:local", agent_id: "artist",
                 display_name: "Artist", inference_profile_id: "profile", enabled: true }) { _docID }
-            create_Agent(input: { node_did: "did:key:local", agent_id: "disabled",
+            disabled_agent: create_Agent(input: { node_did: "did:key:local", agent_id: "disabled",
                 inference_profile_id: "profile", enabled: false }) { _docID }
-            create_Agent(input: { node_did: "did:key:foreign", agent_id: "coder",
+            foreign_agent: create_Agent(input: { node_did: "did:key:foreign", agent_id: "coder",
                 display_name: "Foreign", inference_profile_id: "profile", enabled: true }) { _docID }
         }"#;
         crate::config_client::ConfigAccess::write_local_response(

@@ -1,7 +1,6 @@
 use crate::graphql::escape_graphql_string;
 pub(super) use crate::graphql::{first_row, graphql_string_list_literal, rows};
 
-/// Render a nullable GraphQL string literal, emitting `null` for absent/blank.
 pub(super) fn graphql_nullable_string_literal(value: Option<&str>) -> String {
     value
         .map(str::trim)

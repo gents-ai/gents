@@ -29,6 +29,7 @@ description = "Session/conversation snapshot and live-delta reads"
 permissions = [
   "allow-desktop-session-snapshot",
   "allow-desktop-session-live-delta",
+  "allow-desktop-session-goal",
 ]
 
 [[set]]
@@ -52,6 +53,7 @@ description = "Chat send and rename"
 permissions = [
   "allow-desktop-chat-send",
   "allow-desktop-pending-queue-edit",
+  "allow-desktop-goal-control",
   "allow-desktop-session-rename",
 ]
 
@@ -126,7 +128,7 @@ permissions = ["allow-desktop-allowed-dirs-list", "allow-desktop-plugin-approval
 [[set]]
 identifier = "allowed-dirs-admin"
 description = "Allow, change and remove plugin folders, and answer a plugin question"
-permissions = ["allow-desktop-allowed-dirs-add", "allow-desktop-allowed-dirs-remove", "allow-desktop-plugin-approval-decide"]
+permissions = ["allow-desktop-allowed-dirs-add", "allow-desktop-allowed-dirs-remove", "allow-desktop-plugin-approval-decide", "allow-desktop-plugin-approval-subscribe", "allow-desktop-plugin-approval-unsubscribe"]
 
 [[set]]
 identifier = "fleet-admin"

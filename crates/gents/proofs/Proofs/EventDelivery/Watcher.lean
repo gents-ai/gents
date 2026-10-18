@@ -21,8 +21,6 @@ theorem watcher_pending_eventually_observed
       d ∈ w'.handled :=
   D1_delivery_convergence watcherSrc w₀ d h_persisted h_unprocessed (by decide)
 
-/-- Exclusion holds while the cooldown entry is present in this epoch. Runtime
-expiry/eviction permits another delivery and is not modeled as permanent dedupe. -/
 theorem watcher_cooldown_excludes_handle
     (w : World) (d : DocId) (a : Action) (w' : World)
     (h_processed : d ∈ w.processedSet)
@@ -30,25 +28,14 @@ theorem watcher_cooldown_excludes_handle
     a ≠ .handle d :=
   C1_processed_set_excludes_handle w d a w' h_processed h
 
-/-- Whether delivering `head` releases the cooldown mark of `d`.
-
-The watcher orders candidates through `Triggers.Queue` before selecting a
-session's first pending request. Journaled requests use receiving-node arrival
-order; historical requests without a journal entry retain their stable legacy
-order. A cooldown mark can survive a deferred claim while another request
-occupies the session. Delivering the selected head releases the other marks so
-a later rescan can offer those requests again. The canonical claim owner still
-enforces queue order and the pending-state CAS; releasing a local observation
-mark never admits a request. -/
+/-- Delivering the selected head releases the other marks so a later rescan can
+offer those requests again. The canonical claim owner still enforces queue order
+and the pending-state CAS; releasing a local observation mark never admits a
+request. -/
 def releasedBy (session : DocId → String) (head d : DocId) : Prop :=
   d ≠ head ∧ session d = session head
 
-/-- Constructive redelivery witness: once the overtaking head releases it and
-the head leaves the pending set (its terminal transition unblocks the
-session), the Fair two-step trace `[rescanTick, handle d]` delivers the
-overtaken request. This exhibits one such trace; it is not a bound over every
-fair schedule. Until released, `watcher_cooldown_excludes_handle` excludes the
-delivery. -/
+/-- This exhibits one such trace; it is not a bound over every fair schedule. -/
 theorem watcher_overtaken_request_redelivered_after_unblock
     (session : DocId → String) (w₀ : World) (head d : DocId)
     (h_released : releasedBy session head d)
@@ -97,7 +84,6 @@ theorem watcher_overtaken_request_redelivered_after_unblock
     exact ⟨0, Nat.le_refl 0, by rw [h_b]; omega, rfl⟩
   · exact List.mem_cons_self _ _
 
-/-- Release leaves the head's own mark and other sessions' marks in place. -/
 theorem watcher_release_keeps_unrelated_marks
     (w : World) (d x : DocId) (w' : World)
     (h : Transition w (.release d) w')

@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -47,6 +48,10 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
         .node()
         .execute(
             r#"mutation {
+        session: create_AgentSession(input: {
+            session_id: "session-1", node_did: "did:test:amy", requester_did: null,
+            agent_id: "default", created_at: "2026-08-21T18:07:35Z"
+        }) { _docID }
         request: create_AgentRequest(input: {
             purpose: "normal", request_id: "request-1", node_did: "did:test:amy", agent_id: "default",
             session_id: "session-1", content: "run it", lifecycle_state: "processing",
@@ -105,10 +110,15 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
     core.refresh_store().await?;
     assert!(core.store().snapshot().transcript_messages.is_empty());
     assert!(core.store().snapshot().output_segments.is_empty());
-    assert!(core
-        .refresh_local_request("did:test:amy", "request-1")
-        .await?
-        .is_some());
+    core.refresh_local_request("did:test:amy", "session-1", Some("request-1"), None, &[])
+        .await?;
+    let refreshed = core.store().snapshot();
+    assert!(refreshed.transcript_messages.is_empty());
+    assert!(refreshed.output_segments.is_empty());
+    assert!(refreshed
+        .requests
+        .iter()
+        .any(|row| row.request_id == "request-1"));
     let page = load_session_transcript_page(
         core.node(),
         "session-1",
@@ -120,78 +130,208 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
     .await?;
     assert_eq!(page.store.transcript_messages.len(), 1);
     assert_eq!(page.store.output_segments.len(), 1);
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Result<()> {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const NODE_DID: &str = "did:test:hosted-amy";
+    const REQUEST_ID: &str = "request-terminal-config";
     let tempdir = tempfile::tempdir()?;
     let core = ClientCore::start_with_paths_and_options(
         DesktopPaths::from_root(tempdir.path()),
         ClientCoreOptions::local_only(),
     )
     .await?;
+
     let response = core
         .node()
         .execute(
             r#"mutation {
                 create_Node(input: {
-                    node_did: "did:test:amy"
+                    node_did: "did:test:hosted-amy"
                     display_name: "Amy"
-                    default_agent_id: "did:test:amy:default"
+                    default_agent_id: "did:test:hosted-amy:default"
                     enabled: true
                 }) { _docID }
-                create_AgentRequest(input: {
-                    purpose: "normal", request_id: "request-terminal-config"
-                    node_did: "did:test:amy"
-                    agent_id: "did:test:amy:default"
-                    session_id: "session-terminal-config"
-                    content: "make research the default"
-                    lifecycle_state: "processing"
-                    created_at: "2026-08-21T18:07:35Z"
-                }) { _docID }
-            }"#,
-        )
-        .await;
-    assert!(!response.has_errors(), "seed rows: {:?}", response.errors);
-    core.refresh_store().await?;
-    assert_eq!(
-        core.store().snapshot().nodes[0].default_agent_id.as_deref(),
-        Some("did:test:amy:default")
-    );
-
-    let response = core
-        .node()
-        .execute(
-            r#"mutation {
-                update_Node(
-                    filter: { node_did: { _eq: "did:test:amy" } }
-                    input: { default_agent_id: "did:test:amy:research" }
-                ) { _docID }
-                update_AgentRequest(
-                    filter: { request_id: { _eq: "request-terminal-config" } }
-                    input: { lifecycle_state: "completed" }
-                ) { _docID }
             }"#,
         )
         .await;
     assert!(
         !response.has_errors(),
-        "complete turn: {:?}",
+        "seed local node: {:?}",
         response.errors
     );
-
-    assert!(core
-        .refresh_local_request("did:test:amy", "request-terminal-config")
-        .await?
-        .is_some());
+    core.refresh_store().await?;
     assert_eq!(
-        core.store().snapshot().nodes[0].default_agent_id.as_deref(),
-        Some("did:test:amy:research")
+        core.store()
+            .snapshot()
+            .nodes
+            .iter()
+            .find(|node| node.node_did == NODE_DID)
+            .and_then(|node| node.default_agent_id.as_deref()),
+        Some("did:test:hosted-amy:default")
     );
 
-    core.shutdown().await?;
+    let server = MockServer::start().await;
+    let completed_request = serde_json::json!({
+        "_docID": "remote-terminal-request-doc",
+        "request_id": REQUEST_ID,
+        "purpose": "normal",
+        "node_did": NODE_DID,
+        "requester_did": NODE_DID,
+        "agent_id": "did:test:hosted-amy:default",
+        "session_id": "session-terminal-config",
+        "content": "make research the default",
+        "lifecycle_state": "completed"
+    });
+    let mut operator_data = serde_json::json!({
+        "nodes": [{
+            "node_did": NODE_DID,
+            "display_name": "Amy",
+            "default_agent_id": "did:test:hosted-amy:research",
+            "enabled": true
+        }]
+    });
+    for key in [
+        "agents",
+        "runtimes",
+        "node_readiness",
+        "contexts",
+        "tools",
+        "inference_backends",
+        "inference_profiles",
+        "inference_sampling",
+        "inference_execution",
+        "tasks",
+        "schedules",
+        "triggers",
+        "skills",
+        "compactions",
+        "tool_service_registries",
+        "event_sources",
+        "agent_targets",
+        "datastore_tool_surfaces",
+        "chain_key_bindings",
+        "sessions",
+        "requests",
+    ] {
+        operator_data[key] = serde_json::json!([]);
+    }
+    let store = Arc::clone(core.store());
+    let response_request = completed_request.clone();
+    let response_session = serde_json::json!({
+        "session_id": "session-terminal-config",
+        "node_did": NODE_DID,
+        "requester_did": NODE_DID,
+        "agent_id": "did:test:hosted-amy:default",
+        "created_at": "2026-07-24T00:00:00Z"
+    });
+    let response_operator_data = operator_data.clone();
+    Mock::given(method("POST"))
+        .and(path("/api/v0/tx"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "selected-request-refresh"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/tx/selected-request-refresh"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/graphql"))
+        .respond_with(move |request: &wiremock::Request| {
+            let body = String::from_utf8_lossy(&request.body);
+            let data = if body.contains("DesktopSelectedSession") {
+                serde_json::json!({"AgentSession": [response_session.clone()]})
+            } else if body.contains("DesktopSelectedRequest") {
+                serde_json::json!({"AgentRequest": [response_request.clone()]})
+            } else if body.contains("DesktopSessionRequestSeeds") {
+                // Invalidate the captured read while a later owner query is in
+                // flight so the selected patch must be rejected at publication.
+                store.invalidate_projection(true);
+                serde_json::json!({"seeds_0": []})
+            } else if body.contains("RequestDependencies") {
+                serde_json::json!({"r0": []})
+            } else if body.contains("DesktopRequestSessionContext") {
+                serde_json::json!({"goals_0": []})
+            } else if body.contains("DesktopOperatorConfig") {
+                response_operator_data.clone()
+            } else {
+                serde_json::json!({})
+            };
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": data}))
+        })
+        .mount(&server)
+        .await;
+    core.persist_local_standard_peer(
+        "Hosted Amy",
+        "endpoint:hosted-amy",
+        NODE_DID,
+        &format!("{}/api/v0/graphql", server.uri()),
+        "/tmp/test-hosted-amy-home",
+    )
+    .await?;
+
+    let mut updates = core.store_updates();
+    assert!(
+        core.refresh_local_request(
+            NODE_DID,
+            "session-terminal-config",
+            Some(REQUEST_ID),
+            None,
+            &[],
+        )
+        .await?
+        .is_none(),
+        "the in-flight request-event fence must reject direct publication"
+    );
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if core.store().snapshot().nodes.iter().any(|node| {
+                node.node_did == NODE_DID
+                    && node.default_agent_id.as_deref() == Some("did:test:hosted-amy:research")
+            }) {
+                break;
+            }
+            updates.changed().await.expect("store observer is running");
+        }
+    })
+    .await
+    .context("scoped resync must recover operator configuration after stale publication")?;
+
+    let local_node = core
+        .node()
+        .execute(&format!(
+            r#"query {{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ default_agent_id }} }}"#,
+            gents::graphql::escape_graphql_string(NODE_DID)
+        ))
+        .await;
+    assert!(
+        !local_node.has_errors(),
+        "read local replica: {:?}",
+        local_node.errors
+    );
+    assert_eq!(
+        local_node
+            .data
+            .as_ref()
+            .and_then(|data| data.get("Node"))
+            .and_then(serde_json::Value::as_array)
+            .and_then(|rows| rows.first())
+            .and_then(|row| row.get("default_agent_id"))
+            .and_then(serde_json::Value::as_str),
+        Some("did:test:hosted-amy:default"),
+        "the new projection value must come from operator overlay, not local DB mutation"
+    );
+
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -244,7 +384,7 @@ async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
     .context("timed out waiting for refreshed snapshot")??;
 
     assert_eq!(store.snapshot().nodes[0].node_did, "did:test:test-agent");
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -293,7 +433,7 @@ async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
         assert!(dids.contains(want.as_str()), "missing {want}");
     }
 
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -341,7 +481,7 @@ async fn incremental_observer_keeps_transcript_out_of_streaming_store() -> Resul
     assert_eq!(page.message_query_limit, 41);
     assert_eq!(page.store.transcript_messages.len(), 40);
     assert_eq!(page.queried_rows, 41);
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -366,7 +506,7 @@ async fn conflicting_immutable_transcript_facts_are_not_silently_selected() -> R
             second: create_AgentMessage(input: {
                 message_key: "conflict:1", session_id: "conflict", node_did: "did:conflict",
                 publication: {kind: "fork", origin_message_doc_id: "origin-b"},
-                outcome: "complete", sequence: 1, role: "user", native_id: "second",
+                outcome: "complete", sequence: 2, role: "user", native_id: "second",
                 blocks: [], created_at: "2026-05-07T00:00:01Z"
             }) { _docID }
         }"#,
@@ -390,7 +530,7 @@ async fn conflicting_immutable_transcript_facts_are_not_silently_selected() -> R
         result.is_err(),
         "conflicting immutable headers must be surfaced"
     );
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -490,7 +630,7 @@ async fn agent_scope_isolation_under_drop_recovery() -> Result<()> {
         "did:alpha"
     );
 
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 

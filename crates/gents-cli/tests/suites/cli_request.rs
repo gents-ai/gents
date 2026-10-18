@@ -532,7 +532,6 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
         ),
     )
     .await?;
-    // The runtime records the starting request as the session's provenance.
     graphql_query(
         &graphql,
         &format!(
@@ -1039,7 +1038,6 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
         Ok(())
     }
     .await;
-    // Release the provider even when an assertion prerequisite failed.
     gate.add_permits(1);
     result
 }

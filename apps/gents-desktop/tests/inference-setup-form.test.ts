@@ -82,4 +82,44 @@ describe("the inference setup form", () => {
     expect(adding.accounts.signedIn).toEqual({});
     expect(run(onboarding, { type: "accountsCleared" }).accounts.observed).toBe(false);
   });
+
+  it("keeps an account set aside until a sign-in connects another", () => {
+    const account = (credentialId: string) =>
+      ({
+        credentialId,
+        enabled: true,
+        pendingSave: false,
+        provider: "chatgpt-codex",
+        accountRef: null,
+      }) as unknown as ProviderAccountView;
+    const read = (...ids: string[]) =>
+      ({
+        type: "accountsRead",
+        accounts: ids.map(account),
+        seedSignedIn: true,
+      }) as const;
+    const connected = run(initialSetupForm(), read("c-1"));
+    expect(connected.accounts.signedIn).toEqual({
+      openai: { credentialId: "c-1", accountRef: null },
+    });
+    const aside = run(
+      connected,
+      { type: "signedOut", provider: "openai" },
+      read("c-1"),
+    );
+    expect(aside.accounts.signedIn).toEqual({});
+    const again = run(
+      aside,
+      {
+        type: "connected",
+        provider: "openai",
+        account: { credentialId: "c-2", accountRef: "acct-2" },
+      },
+      read("c-2"),
+    );
+    expect(again.accounts.signedIn).toEqual({
+      openai: { credentialId: "c-2", accountRef: null },
+    });
+    expect(again.accounts.switching).toEqual({});
+  });
 });

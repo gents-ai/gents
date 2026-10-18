@@ -66,7 +66,7 @@ async fn setup_hook(
     let request_id = format!("{test_name}-request");
     let did = db.node_identity.did();
     gents::session::ensure_session_with_agent_id_and_requester_did(
-        db.node.as_ref(),
+        &db.node,
         &session_id,
         did,
         "r4c-read-tool-output",
@@ -105,7 +105,7 @@ async fn setup_hook_on_db(
 ) -> (DefraSessionHook, String, String) {
     let did = db.node_identity.did();
     gents::session::ensure_session_with_agent_id_and_requester_did(
-        db.node.as_ref(),
+        &db.node,
         session_id,
         did,
         "r4c-read-tool-output",
@@ -233,7 +233,6 @@ async fn read_tool_output_running_returns_live_stream_tail() {
         registry(tools, &["bash_unrestricted"]),
     )
     .await;
-    // Removing the gate releases the child, including when an assertion unwinds.
     let gate = tempfile::NamedTempFile::new_in(tempdir.path()).expect("process release gate");
     let gate_name = gate.path().file_name().unwrap().to_str().unwrap();
     let handle = background_tool_with_args(

@@ -4,24 +4,13 @@ pub(super) fn usize_to_i64(value: usize) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
-/// Coarse native-JSON estimate for the desktop context meter only. Provider
-/// admission never consumes this value; the runtime's selected wire projector
-/// is the sole budget authority.
+/// Desktop context meter estimate only; provider admission never consumes it.
 fn display_json_token_estimate<T: serde::Serialize>(value: &T) -> usize {
     serde_json::to_vec(value)
         .map(|encoded| encoded.len() / 4)
         .unwrap_or_default()
 }
 
-/// The context window the runtime's inference resolution selects for these
-/// documents: the profile's window, else the advertised model's default
-/// window, else the runtime default (`ResolvedInference::context_window`).
-/// The advertised model is selected and admitted by the runtime's own
-/// `advertised_model_for_profile`, so a window over the advertised maximum,
-/// or a model the catalog does not advertise, is an error rather than a window
-/// in use. When this client has not observed the backend or its catalog, the
-/// result is only the profile's window or the default; it does not say the
-/// runtime will accept the request.
 fn configured_context_window(
     store: &gents_desktop_core::client::ClientStore,
     profile: Option<&gents::document_config::InferenceProfile>,
@@ -175,9 +164,6 @@ pub(super) fn build_session_context_view(
     let compacted_through_sequence = compaction_rows
         .last()
         .and_then(|row| row.compacted_through_sequence);
-    // A compaction cursor only owns rows in the canonical nonnegative sequence
-    // space. If any row is unsequenced, project the durable rows as-is instead
-    // of reconstructing an answer from cumulative counts.
     let usable_cursor = compacted_through_sequence.filter(|cursor| {
         *cursor >= 0
             && durable_messages
@@ -191,11 +177,6 @@ pub(super) fn build_session_context_view(
         })
         .map(|(_, message)| message)
         .collect::<Vec<_>>();
-    // A partial desktop store may not contain the backend yet. In that case
-    // retain the established grouped *display* projection for this coarse
-    // meter, never as an inferred provider/admission choice. The two order
-    // modes only permute blocks within assistant rows, so counts and JSON-byte
-    // estimates are invariant; once configured, use the actual source profile.
     let display_profile =
         selected_provider_profile.unwrap_or(gents::ProviderInputProfile::OpenAiChatCompletions);
     let (active_provider_messages, _) =

@@ -92,12 +92,10 @@ describeLive("Tauri app live agent sessions", () => {
             nodeDid: runner.nodeDid,
             requesterDid: parentSummary!.requesterDid,
           });
-          /* the request started another session: its agent target */
           expect(provenance.started.length).toBeGreaterThan(0);
           const child = provenance.started[0]!;
           expect(child.sessionId).not.toBe(submitted.sessionId);
 
-          /* the started session runs the target's agent, and finished */
           const childSummary = fleet.client?.deployments
             .flatMap((node) => node.sessions)
             .find(

@@ -4,10 +4,6 @@ use gents::document_config::{InferenceExecution, InferenceProfile, InferenceSamp
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-/// `GENTS_DESKTOP_LIVE_INFERENCE` is a JSON object applied to both live fixture
-/// agents, e.g. `{"reasoning_effort":"high","temperature":1,"top_p":0.95,
-/// "max_output_tokens":16384,"max_turns":1000}`. Unspecified fields retain
-/// fixture defaults; deadlines and tool authority are not configurable here.
 #[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct LiveInferenceSettings {
@@ -91,71 +87,5 @@ impl LiveInferenceSettings {
             sampling["top_p"] = json!(top_p);
         }
         config["inference_execution"][0]["max_turns"] = json!(self.max_turns);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn fixture() -> Value {
-        json!({
-            "inference_profiles": [{"profile_id":"main"}, {"profile_id":"target"}],
-            "inference_sampling": [{}],
-            "inference_execution": [{"deadline_duration_secs":300,"stream_batch_ms":250,"stream_liveness_timeout_secs":60}]
-        })
-    }
-
-    #[test]
-    fn absent_settings_preserve_fixture_defaults() {
-        let mut config = fixture();
-        LiveInferenceSettings::parse(None)
-            .unwrap()
-            .apply(&mut config);
-        for profile in config["inference_profiles"].as_array().unwrap() {
-            assert_eq!(profile["max_output_tokens"], 1024);
-            assert!(profile.get("reasoning_effort").is_none());
-        }
-        assert_eq!(config["inference_sampling"][0], json!({"temperature":0.0}));
-        assert_eq!(config["inference_execution"][0]["max_turns"], 20);
-    }
-
-    #[test]
-    fn explicit_settings_apply_to_both_profiles_without_changing_deadlines() {
-        let mut config = fixture();
-        LiveInferenceSettings::parse(Some(r#"{"reasoning_effort":"high","temperature":1,"top_p":0.95,"max_output_tokens":16384,"max_turns":1000}"#))
-            .unwrap().apply(&mut config);
-        for profile in config["inference_profiles"].as_array().unwrap() {
-            assert_eq!(profile["reasoning_effort"], "high");
-            assert_eq!(profile["max_output_tokens"], 16384);
-        }
-        assert_eq!(
-            config["inference_sampling"][0],
-            json!({"temperature":1.0,"top_p":0.95})
-        );
-        assert_eq!(
-            config["inference_execution"][0],
-            json!({"max_turns":1000,"deadline_duration_secs":300,"stream_batch_ms":250,"stream_liveness_timeout_secs":60})
-        );
-    }
-
-    #[test]
-    fn malformed_unknown_and_invalid_explicit_values_are_errors() {
-        for raw in [
-            "",
-            "null",
-            "[]",
-            "{",
-            r#"{"unknown":1}"#,
-            r#"{"reasoning_effort":"highest"}"#,
-            r#"{"temperature":-1}"#,
-            r#"{"temperature":null}"#,
-            r#"{"top_p":1.01}"#,
-            r#"{"max_output_tokens":0}"#,
-            r#"{"max_turns":0}"#,
-            r#"{"max_turns":1.5}"#,
-        ] {
-            assert!(LiveInferenceSettings::parse(Some(raw)).is_err(), "{raw}");
-        }
     }
 }

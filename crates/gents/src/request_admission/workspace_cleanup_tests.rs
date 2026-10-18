@@ -222,7 +222,6 @@ async fn pending_rejection_releases_only_its_exact_binding_and_only_once() {
             );
         }
 
-        // A replay that did not win the terminal CAS has no cleanup authority.
         fixture.write_binding(&fixture.binding).await;
         let before_replay = fixture.observe().await;
         fixture.reject(owner).await.unwrap();

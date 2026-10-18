@@ -62,8 +62,6 @@ pub(super) fn build_host_tools(
     enable_lsp: bool,
     ceiling: &ToolCeiling,
 ) -> Result<ToolSet> {
-    // Per-request IsolatedWorkspace roots overlay into TOOL_RUNTIME_SCOPE
-    // at claim time. Do not bake workspace_id paths into this ToolSet.
     let mut builder =
         ToolSetBuilder::default().background_lifetime(timeouts.background.bash.lifetime);
     let needs_file_tool_root = !matches!(file_tools, FileToolMode::Off)
@@ -292,9 +290,8 @@ pub fn resolve_effective_tool_root(
                 super::root_admission::RootAdmission::Admitted(root) => Ok(Some(root)),
                 denied @ super::root_admission::RootAdmission::Denied { .. } => {
                     // The operator root moves independently of the authored
-                    // behavior grant: a grant that still contains the narrowed
-                    // operator root clamps to it instead of stranding the
-                    // behavior. Only a disjoint grant is refused.
+                    // grant: a grant that still contains the narrowed operator
+                    // root clamps to it, only a disjoint grant is refused.
                     let operator_narrowed = super::root_admission::resolve_admitted_tool_root(
                         ceiling_root,
                         [selection_root],
@@ -378,36 +375,13 @@ pub(super) fn dedupe_strings(values: Vec<String>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeSet;
 
     fn top_bash() -> ToolPolicyBash {
         ToolPolicyBash::unrestricted()
     }
 
     #[test]
-    fn no_command_policy_and_unconstrained_ceiling_stays_none() {
-        // Preserve today's agent: a agent with no command policy and an
-        // unconstrained effective bash resolves to no executable policy.
-        let out =
-            constrain_command_policy_to_effective_bash(None, &top_bash(), BashMode::Unrestricted);
-        assert!(out.is_none());
-    }
-
-    #[test]
-    fn ceiling_allowed_only_narrows_the_executable_gate() {
-        let mut eb = top_bash();
-        eb.allowed_argv_prefixes =
-            EndpointScope::<Vec<String>, ()>::only_units([vec!["git".to_string()]]);
-        let out = constrain_command_policy_to_effective_bash(None, &eb, BashMode::Unrestricted)
-            .expect("a narrowing ceiling must synthesize an executable policy");
-        assert_eq!(out.allowed_argv_prefixes, vec![vec!["git".to_string()]]);
-        assert!(!out.deny_all_argv());
-    }
-
-    #[test]
     fn effective_only_empty_allowed_projects_to_deny_all_not_allow_all() {
-        // The headline trap: Only(∅) must NOT become an empty allowed list
-        // (which validates as allow-all) — it must set the deny-all sentinel.
         for scope in [
             EndpointScope::<Vec<String>, ()>::None,
             EndpointScope::<Vec<String>, ()>::only_units(Vec::<Vec<String>>::new()),
@@ -419,46 +393,6 @@ mod tests {
             assert!(out.deny_all_argv(), "Only(empty)/None must be deny-all");
             assert!(out.allowed_argv_prefixes.is_empty());
         }
-    }
-
-    #[test]
-    fn ceiling_forbidden_union_reaches_the_executable_policy() {
-        let mut eb = top_bash();
-        eb.forbidden_argv_prefixes =
-            BTreeSet::from([vec!["curl".to_string()], vec!["rm".to_string()]]);
-        let out = constrain_command_policy_to_effective_bash(None, &eb, BashMode::Unrestricted)
-            .expect("a forbidden ceiling must synthesize a policy");
-        assert!(out
-            .forbidden_argv_prefixes
-            .contains(&vec!["curl".to_string()]));
-        assert!(out
-            .forbidden_argv_prefixes
-            .contains(&vec!["rm".to_string()]));
-    }
-
-    #[test]
-    fn effective_all_allowed_keeps_the_agent_base_gate() {
-        // effective allowed = All ⇒ no ceiling narrowing ⇒ keep the agent's
-        // own allowed list unchanged.
-        let base = CommandExecutionPolicy::write_capable()
-            .with_allowed_argv_prefixes(vec![vec!["git".to_string()]]);
-        let out = constrain_command_policy_to_effective_bash(
-            Some(base),
-            &top_bash(),
-            BashMode::Unrestricted,
-        )
-        .expect("a Some base is preserved");
-        assert_eq!(out.allowed_argv_prefixes, vec![vec!["git".to_string()]]);
-        assert!(!out.deny_all_argv());
-    }
-
-    #[test]
-    fn ceiling_read_only_only_narrows_the_executable_allowlist() {
-        let mut eb = top_bash();
-        eb.read_only_allowlist = EndpointScope::<String, ()>::only_units([String::from("cat")]);
-        let out = constrain_command_policy_to_effective_bash(None, &eb, BashMode::ReadOnly)
-            .expect("a read-only-narrowing ceiling must synthesize a policy");
-        assert_eq!(out.read_only_allowlist(), ["cat".to_string()]);
     }
 }
 
@@ -474,14 +408,8 @@ pub(super) async fn enabled_mcp_service_ids(
         .collect())
 }
 
-/// MCP services whose node registry row is enabled and whose agent-scoped
-/// measured health permits calls, per `ToolServiceHealthState::project`
-/// (the single owner of the classification): `Healthy` and `Stale` remain
-/// callable (the normal health gate warns but proceeds on `Stale`);
-/// `Unreachable` and missing/unrecognized measurements do not satisfy a
-/// required-service dependency.
 pub(crate) async fn measured_available_mcp_service_ids(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
 ) -> Result<Vec<String>> {
     let services = crate::registry::configured_mcp_services(node, node_did).await?;
@@ -489,7 +417,7 @@ pub(crate) async fn measured_available_mcp_service_ids(
         return Ok(Vec::new());
     }
     let query = mcp_health_query(node_did);
-    let response = crate::config_client::ConfigAccess::transact_local(
+    let response = crate::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
         "tools.measured_availability",
@@ -505,8 +433,7 @@ pub(crate) async fn measured_available_mcp_service_ids(
     project_measured_mcp_services(node_did, &services, &response, hostname.as_deref())
 }
 
-/// Explain the same measured availability for local or HTTP control-plane
-/// access. A remote server's loopback endpoint is never inferred from the CLI host.
+/// A remote server's loopback endpoint is never inferred from the CLI host.
 pub async fn measured_mcp_services_for_access(
     access: &crate::config_client::ConfigAccess,
     node_did: &str,

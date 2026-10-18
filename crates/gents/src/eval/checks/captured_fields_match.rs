@@ -1,6 +1,3 @@
-//! `captured_fields_match`: whether a documents capture's rows hold the
-//! expected field values, graded per row and expectation.
-
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -11,20 +8,9 @@ use crate::eval::checks::{
 };
 use crate::eval::runner::executor::{CaptureResult, StageEvidence};
 
-/// Params: `{ "name": <capture>, "expect": [{ "field", "equals" | "contains"
-/// | "matches" }], "min_rows": <u64>?, "max_rows": <u64>? }`. Every (row,
-/// expectation) pair is one requirement, over at least `min_rows` rows
-/// (default 1): a row the capture lacks fails every expectation, and so does
-/// every row past `max_rows`. `field` is a dotted path of object keys into
-/// the row; `contains` and `matches` read a string field as its text and any
-/// other value as its JSON.
-///
-/// Feedback states the expected values. It is written only on the train
-/// split, and the held-out split is what catches a candidate that hard-codes
-/// them.
+/// Feedback states the expected values; it is written only on the train split, so the held-out split catches a candidate that hard-codes them.
 pub struct CapturedFieldsMatch;
 
-/// Rows whose mismatches feedback spells out.
 const SHOWN_ROWS: usize = 3;
 
 #[derive(Deserialize)]
@@ -42,7 +28,6 @@ fn one() -> usize {
     1
 }
 
-/// A present `equals: null` is a test for null, not an absent test.
 fn some<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
     Value::deserialize(deserializer).map(Some)
 }
@@ -68,8 +53,6 @@ pub(super) struct FieldPath {
 }
 
 impl FieldPath {
-    /// A missing or null primary value uses the fallback. Empty strings and
-    /// other non-null values retain precedence, matching nullable UI labels.
     pub(super) fn resolve(&self, mut lookup: impl FnMut(&str) -> Option<Value>) -> Option<Value> {
         let actual = lookup(&self.field);
         match &self.fallback_field {
@@ -120,7 +103,6 @@ fn text(value: &Value) -> String {
     }
 }
 
-/// `expectation` as a test, or why it is not one.
 pub(super) fn test(expectation: Expectation) -> Result<(FieldPath, Test), String> {
     let field = FieldPath {
         field: expectation.field,
@@ -297,7 +279,6 @@ mod tests {
     use crate::eval::runner::scripted::ScriptedExecutor;
     use crate::eval::OutcomeKind;
 
-    /// One completed stage whose `items` capture holds `rows`.
     fn stage(rows: Vec<Value>) -> StageEvidence {
         let mut evidence = ScriptedExecutor::passed_evidence("did:x", "s1", "items", rows);
         evidence.stages.remove(0)
@@ -371,8 +352,6 @@ mod tests {
         assert!(!text.contains("row 0"), "only what is missing: {text}");
     }
 
-    /// The schema admits `equals: null`, so the parser must read it as a test
-    /// for null rather than as no test at all.
     #[test]
     fn equals_null_tests_for_a_null_value() {
         let params = json!({"name": "items", "expect": [{"field": "sku", "equals": null}]});
@@ -424,8 +403,6 @@ mod tests {
         assert_eq!(vacuous.score_bp, Some(10_000));
     }
 
-    /// Per-pair scoring would otherwise reward padding a capture with rows
-    /// that happen to match.
     #[test]
     fn rows_beyond_max_rows_count_as_unmet_pairs() {
         let verdict = CapturedFieldsMatch.evaluate(

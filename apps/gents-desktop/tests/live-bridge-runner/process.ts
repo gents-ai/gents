@@ -160,7 +160,6 @@ export async function terminateRunnerProcess(
   if (await waitForRunnerDrain(child, processGroupId, graceMs, signalByPid)) {
     return;
   }
-
   const killSignalSent = signalRunnerProcess(
     child,
     "SIGKILL",

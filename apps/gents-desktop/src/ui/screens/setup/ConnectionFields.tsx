@@ -1,8 +1,4 @@
-/* How the inference step connects to the chosen provider: its connection
-   method, then a sign-in for a subscription or a key and endpoint, and the
-   way on to its models. */
 import type { Dispatch } from "react";
-import { CircleCheck } from "lucide-react";
 import type {
   InferenceAuthMethod,
   InferenceProviderOption,
@@ -52,7 +48,6 @@ export function ConnectionFields({
   connection: ConnectionDraft | undefined;
   option: InferenceProviderOption | undefined;
   purpose: "onboarding" | "add-backend";
-  /** the bridge can retry saving a sign-in it holds */
   canRetrySave: boolean;
   ops: {
     updateConnection: (
@@ -61,6 +56,7 @@ export function ConnectionFields({
     ) => void;
     signIn: () => void;
     cancelSignIn: () => void;
+    useAnotherAccount: () => void;
     retrySave: () => void;
     discover: () => void;
   };
@@ -69,7 +65,10 @@ export function ConnectionFields({
   const busy = form.op !== null;
   const accountOp = form.op === "signIn" || form.op === "retrySave" ? form.op : null;
   const { accountLabel, signInHint, authUrl } = form;
-  const { signedIn, pendingSave } = form.accounts;
+  const { signedIn, pendingSave, stored } = form.accounts;
+  const connectedAccount = stored.find(
+    (account) => account.credentialId === signedIn[provider]?.credentialId,
+  );
   const discovery = form.model.discovery;
   const authOptions = option?.authOptions ?? [];
   const oauthProvider = connection ? oauthProviderFor(connection.authMethod) : null;
@@ -120,10 +119,21 @@ export function ConnectionFields({
         {oauthProvider ? (
           <div className="grid gap-3">
             {signedIn[provider] ? (
-              <p className="flex items-center gap-2">
-                <CircleCheck className="size-4" />
-                Account connected
-              </p>
+              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                <p className="min-w-0 truncate">
+                  {connectedAccount?.accountId || connectedAccount?.label
+                    ? `Connected as ${connectedAccount.accountId || connectedAccount.label}`
+                    : "Account connected"}
+                </p>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={ops.useAnotherAccount}
+                  className="text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-50"
+                >
+                  Use another account
+                </button>
+              </div>
             ) : (
               <>
                 {purpose === "add-backend" ? (

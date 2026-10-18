@@ -1,10 +1,3 @@
-//! A running trial's [`LiveSnapshot`]: read out of its own home while the
-//! stages run, and once more when they end.
-//!
-//! The home's store is locked by this process while the trial runs, so the
-//! executor is the only reader that can see inside it; it reports what it
-//! reads through the trial's [`crate::eval::runner::StageProgress`].
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
@@ -20,7 +13,6 @@ use crate::eval::runner::progress::{LastToolCall, LiveSnapshot, ToolTally};
 use crate::graphql::graphql_with_transaction_retry;
 use crate::Collection;
 
-/// The configuration collections every snapshot counts.
 const CONFIGURATION: [Collection; 11] = [
     Collection::Agent,
     Collection::AgentContext,
@@ -35,8 +27,6 @@ const CONFIGURATION: [Collection; 11] = [
     Collection::Schedule,
 ];
 
-/// What one trial's snapshots read: its home, the collections registered
-/// before the subject ran, and the documents captures of every stage.
 pub(super) struct LiveObserver<'a> {
     node: &'a std::sync::Arc<EmbeddedNode>,
     trial_did: &'a str,
@@ -46,8 +36,6 @@ pub(super) struct LiveObserver<'a> {
 }
 
 impl<'a> LiveObserver<'a> {
-    /// Taken once the pack and fixtures are installed and the runtime is up,
-    /// so a later collection is one the subject registered.
     pub(super) async fn new(
         node: &'a std::sync::Arc<EmbeddedNode>,
         trial_did: &'a str,
@@ -63,8 +51,6 @@ impl<'a> LiveObserver<'a> {
                 ..
             } = capture
             {
-                // The last stage to declare a name wins, as it does for the
-                // goal (`crate::eval::runner::goal::case_goal`).
                 captures.retain(|(named, ..)| named != name);
                 captures.push((name, collection, filter));
             }
@@ -78,8 +64,6 @@ impl<'a> LiveObserver<'a> {
         }
     }
 
-    /// Read the home now. A collection or capture that cannot be read is
-    /// left out rather than counted as empty.
     pub(super) async fn snapshot(&self) -> Result<LiveSnapshot> {
         let registered = collection_names(self.node).await?;
         let schemas: Vec<String> = registered.difference(&self.installed).cloned().collect();
@@ -118,11 +102,9 @@ impl<'a> LiveObserver<'a> {
 }
 
 async fn collection_names(node: &std::sync::Arc<EmbeddedNode>) -> Result<BTreeSet<String>> {
-    ConfigAccess::Local(node.clone()).collection_names().await
+    ConfigAccess::local(node.clone()).collection_names().await
 }
 
-/// Requests, model turns, tokens and tool calls across the whole home: every
-/// row in a trial home is the trial's.
 async fn activity(node: &std::sync::Arc<EmbeddedNode>) -> Result<LiveSnapshot> {
     let requests = crate::session::public_request_filter("");
     let query = format!(
@@ -181,8 +163,6 @@ async fn activity(node: &std::sync::Arc<EmbeddedNode>) -> Result<LiveSnapshot> {
     })
 }
 
-/// The tool call that started last, with the start of its result on one
-/// line; `None` when there is none or it cannot be read.
 async fn last_tool_call(node: &std::sync::Arc<EmbeddedNode>) -> Option<LastToolCall> {
     let query = r#"{ AgentToolCall(order: { started_at: DESC }, limit: 1) { _docID node_did session_id requester_did tool_name lifecycle_state } }"#;
     let response = graphql_with_transaction_retry(node, query, "eval trial last tool call")
@@ -200,7 +180,7 @@ async fn last_tool_call(node: &std::sync::Arc<EmbeddedNode>) -> Option<LastToolC
         .clone();
     let text = |key: &str| row.get(key).and_then(Value::as_str).map(str::to_owned);
     let result = crate::tool_call_lifecycle::query::load_tool_call_presentation(
-        &ConfigAccess::Local(node.clone()),
+        &ConfigAccess::local(node.clone()),
         row.get("_docID")?.as_str()?,
         row.get("node_did")?.as_str()?,
         row.get("session_id")?.as_str()?,
@@ -219,7 +199,6 @@ async fn last_tool_call(node: &std::sync::Arc<EmbeddedNode>) -> Option<LastToolC
     })
 }
 
-/// `text` with its whitespace collapsed, cut to `max` chars.
 fn one_line(text: &str, max: usize) -> String {
     let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
     match collapsed.char_indices().nth(max) {

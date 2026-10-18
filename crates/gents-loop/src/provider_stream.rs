@@ -1,6 +1,3 @@
-//! Preserve provider bytes while refusing EOF without a protocol terminal event.
-//! Some provider adapters synthesize a final response on raw EOF; this guard
-//! makes transport truncation an error before that adapter can report success.
 use std::sync::Arc;
 
 use futures::StreamExt;
@@ -31,8 +28,8 @@ impl ProviderStreamProtocol {
     }
 }
 
-/// `activity`, when present, is stamped on every received chunk and settled
-/// at the protocol terminal event, end of body, or a body error.
+/// Refuse raw EOF without a terminal event; provider adapters can otherwise
+/// synthesize a successful final response from a truncated stream.
 pub fn guard_response(
     response: StreamingResponse,
     protocol: Option<ProviderStreamProtocol>,
@@ -61,6 +58,11 @@ pub fn guard_response(
                     }
                     if let Some(events) = events.as_mut() {
                         events.feed(&bytes);
+                        if events.token_limit_reached {
+                            if let Some(activity) = &activity {
+                                activity.observe_token_limit();
+                            }
+                        }
                         if events.terminal {
                             settle(&activity);
                         }
@@ -102,6 +104,7 @@ pub struct TerminalEvents {
     oversized: bool,
     previous_cr: bool,
     pub terminal: bool,
+    token_limit_reached: bool,
 }
 
 impl TerminalEvents {
@@ -114,6 +117,7 @@ impl TerminalEvents {
             oversized: false,
             previous_cr: false,
             terminal: false,
+            token_limit_reached: false,
         }
     }
 
@@ -136,10 +140,7 @@ impl TerminalEvents {
                 if self.event_bytes <= MAX_EVENT_BYTES {
                     self.line.push(byte);
                 } else {
-                    // Discard oversized events, but keep recognizing subsequent
-                    // event boundaries and a later small terminal marker.
                     self.oversized = true;
-                    // A nonempty sentinel distinguishes this line from a blank.
                     if self.line.is_empty() {
                         self.line.push(0);
                     }
@@ -169,8 +170,6 @@ impl TerminalEvents {
     }
 
     fn finish_event(&mut self) {
-        // Only delimited events count: an unterminated last JSON fragment at
-        // EOF must not authenticate an otherwise truncated response.
         if matches!(self.protocol, ProviderStreamProtocol::ChatCompletions)
             && self.data == b"[DONE]"
         {
@@ -179,6 +178,34 @@ impl TerminalEvents {
         }
         let Ok(value) = serde_json::from_slice::<serde_json::Value>(&self.data) else {
             return;
+        };
+        let responses_token_limit = value.get("type").and_then(serde_json::Value::as_str)
+            == Some("response.incomplete")
+            && value
+                .get("response")
+                .and_then(|response| response.get("incomplete_details"))
+                .and_then(|details| details.get("reason"))
+                .and_then(serde_json::Value::as_str)
+                == Some("max_output_tokens");
+        self.token_limit_reached |= match self.protocol {
+            ProviderStreamProtocol::ChatCompletions => {
+                value
+                    .get("choices")
+                    .and_then(serde_json::Value::as_array)
+                    .and_then(|choices| choices.first())
+                    .and_then(|choice| choice.get("finish_reason"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("length")
+            }
+            ProviderStreamProtocol::Anthropic => {
+                value.get("type").and_then(serde_json::Value::as_str) == Some("message_delta")
+                    && value
+                        .get("delta")
+                        .and_then(|delta| delta.get("stop_reason"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some("max_tokens")
+            }
+            ProviderStreamProtocol::Responses => responses_token_limit,
         };
         self.terminal = match self.protocol {
             ProviderStreamProtocol::ChatCompletions => value
@@ -194,10 +221,112 @@ impl TerminalEvents {
                 }),
             ProviderStreamProtocol::Responses => {
                 value.get("type").and_then(serde_json::Value::as_str) == Some("response.completed")
+                    || responses_token_limit
             }
             ProviderStreamProtocol::Anthropic => {
                 value.get("type").and_then(serde_json::Value::as_str) == Some("message_stop")
             }
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+
+    #[tokio::test]
+    async fn responses_terminal_evidence_matches_lean() {
+        #[derive(serde::Deserialize)]
+        struct Case {
+            delimited: bool,
+            event_type: String,
+            reason: Option<String>,
+            termination: Option<String>,
+        }
+        let cases: Vec<Case> = serde_json::from_str(include_str!(
+            "../../gents/tests/fixtures/responses_termination.json"
+        ))
+        .unwrap();
+        for case in cases {
+            let event = serde_json::json!({
+                "type": case.event_type,
+                "response": {
+                    "incomplete_details": case.reason.as_ref().map(|reason| {
+                        serde_json::json!({"reason": reason})
+                    })
+                }
+            });
+            let payload = format!("data: {event}{}", if case.delimited { "\n\n" } else { "" });
+            for split in 0..=payload.len() {
+                let activity = Arc::new(ProviderActivity::default());
+                let body: http_client::sse::BoxedStream = Box::pin(futures::stream::iter([
+                    Ok(Bytes::copy_from_slice(&payload.as_bytes()[..split])),
+                    Ok(Bytes::copy_from_slice(&payload.as_bytes()[split..])),
+                ]));
+                let response = http_client::Response::builder()
+                    .status(200)
+                    .body(body)
+                    .unwrap();
+                let received = guard_response(
+                    response,
+                    Some(ProviderStreamProtocol::Responses),
+                    Some(activity.clone()),
+                )
+                .into_body()
+                .collect::<Vec<_>>()
+                .await;
+                assert_eq!(
+                    received.iter().any(Result::is_err),
+                    case.termination.is_none(),
+                    "{} {:?} delimited={} split={split}",
+                    case.event_type,
+                    case.reason,
+                    case.delimited
+                );
+                let bytes: Vec<_> = received
+                    .into_iter()
+                    .filter_map(Result::ok)
+                    .flatten()
+                    .collect();
+                assert_eq!(bytes, payload.as_bytes());
+                assert_eq!(
+                    activity.token_limit_reached(),
+                    case.termination.as_deref() == Some("token_limit")
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn token_limit_observation_uses_the_selected_protocol_event() {
+        for (protocol, payload, expected) in [
+            (ProviderStreamProtocol::Anthropic,
+                "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n", true),
+            (ProviderStreamProtocol::Anthropic,
+                "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n", false),
+            (ProviderStreamProtocol::Anthropic,
+                "data: {\"type\":\"content_block_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n", false),
+            (ProviderStreamProtocol::ChatCompletions,
+                "data: {\"choices\":[{\"finish_reason\":\"stop\"},{\"finish_reason\":\"length\"}]}\n\n", false),
+            (ProviderStreamProtocol::ChatCompletions,
+                "data: {\"choices\":[{\"delta\":{\"content\":\"length\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n", false),
+            (ProviderStreamProtocol::Responses,
+                "data: {\"type\":\"response.completed\",\"finish_reason\":\"length\"}\n\n", false),
+        ] {
+            for split in 0..=payload.len() {
+                let activity = Arc::new(ProviderActivity::default());
+                let body: http_client::sse::BoxedStream = Box::pin(futures::stream::iter([
+                    Ok(Bytes::copy_from_slice(&payload.as_bytes()[..split])),
+                    Ok(Bytes::copy_from_slice(&payload.as_bytes()[split..])),
+                ]));
+                let response = http_client::Response::builder().status(200).body(body).unwrap();
+                let received = guard_response(response, Some(protocol), Some(activity.clone()))
+                    .into_body().collect::<Vec<_>>().await;
+                let bytes: Vec<u8> = received.into_iter().flat_map(Result::unwrap).collect();
+                assert_eq!(bytes, payload.as_bytes());
+                assert_eq!(activity.token_limit_reached(), expected, "{protocol:?} split {split}");
+            }
+        }
     }
 }

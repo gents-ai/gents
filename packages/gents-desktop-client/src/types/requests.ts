@@ -31,55 +31,39 @@ import type { ToolServiceDeleteRequest as GeneratedToolServiceDeleteRequest } fr
 import type { ToolServiceSaveRequest as GeneratedToolServiceSaveRequest } from "../generated/ToolServiceSaveRequest.js";
 import type { ToolServiceTestRequest as GeneratedToolServiceTestRequest } from "../generated/ToolServiceTestRequest.js";
 
-type RequestInput<T> = {
-  [K in keyof T as null extends T[K] ? never : K]: T[K];
-} & {
-  [K in keyof T as null extends T[K] ? K : never]?: T[K];
-};
-
-export type NodeConfigSaveRequest =
-  RequestInput<GeneratedNodeConfigSaveRequest>;
-export type DefaultAgentSetRequest =
-  RequestInput<GeneratedDefaultAgentSetRequest>;
-export type BackendDeleteRequest = RequestInput<GeneratedBackendDeleteRequest>;
-export type BackendSaveRequest = RequestInput<GeneratedBackendSaveRequest>;
-export type AgentDeleteRequest = RequestInput<GeneratedAgentDeleteRequest>;
-export type ContextDeleteRequest = RequestInput<GeneratedContextDeleteRequest>;
-export type AgentSaveRequest = RequestInput<GeneratedAgentSaveRequest>;
-export type ChatSendRequest = RequestInput<GeneratedChatSendRequest>;
-export type MailboxItemRequest = RequestInput<GeneratedMailboxItemRequest>;
-export type SessionRenameRequest = RequestInput<GeneratedSessionRenameRequest>;
-export type DesktopInitRequest = RequestInput<GeneratedDesktopInitRequest>;
-export type TriggerDeleteRequest = RequestInput<GeneratedTriggerDeleteRequest>;
-export type TriggerSaveRequest = RequestInput<GeneratedTriggerSaveRequest>;
+export type NodeConfigSaveRequest = GeneratedNodeConfigSaveRequest;
+export type DefaultAgentSetRequest = GeneratedDefaultAgentSetRequest;
+export type BackendDeleteRequest = GeneratedBackendDeleteRequest;
+export type BackendSaveRequest = GeneratedBackendSaveRequest;
+export type AgentDeleteRequest = GeneratedAgentDeleteRequest;
+export type ContextDeleteRequest = GeneratedContextDeleteRequest;
+export type AgentSaveRequest = GeneratedAgentSaveRequest;
+export type ChatSendRequest = GeneratedChatSendRequest;
+export type MailboxItemRequest = GeneratedMailboxItemRequest;
+export type SessionRenameRequest = GeneratedSessionRenameRequest;
+export type DesktopInitRequest = GeneratedDesktopInitRequest;
+export type TriggerDeleteRequest = GeneratedTriggerDeleteRequest;
+export type TriggerSaveRequest = GeneratedTriggerSaveRequest;
 export type InferenceProfileDeleteRequest =
-  RequestInput<GeneratedInferenceProfileDeleteRequest>;
-export type InferenceProfileSaveRequest =
-  RequestInput<GeneratedInferenceProfileSaveRequest>;
-export type InferenceProbeRequest =
-  RequestInput<GeneratedInferenceProbeRequest>;
-export type CodexLoginRequest = RequestInput<GeneratedCodexLoginRequest>;
-export type EnrollmentStatusRequest =
-  RequestInput<GeneratedEnrollmentStatusRequest>;
-export type PeerStatusFetchRequest =
-  RequestInput<GeneratedPeerStatusFetchRequest>;
-export type ScheduleDeleteRequest =
-  RequestInput<GeneratedScheduleDeleteRequest>;
-export type ScheduleRunRequest = RequestInput<GeneratedScheduleRunRequest>;
-export type ScheduleSaveRequest = RequestInput<GeneratedScheduleSaveRequest>;
-export type SkillDeleteRequest = RequestInput<GeneratedSkillDeleteRequest>;
-export type SkillSaveRequest = RequestInput<GeneratedSkillSaveRequest>;
-export type TaskDeleteRequest = RequestInput<GeneratedTaskDeleteRequest>;
-export type TaskRunRequest = RequestInput<GeneratedTaskRunRequest>;
-export type TaskSaveRequest = RequestInput<GeneratedTaskSaveRequest>;
-export type ToolsDeleteRequest = RequestInput<GeneratedToolsDeleteRequest>;
-export type ToolsSaveRequest = RequestInput<GeneratedToolsSaveRequest>;
-export type ToolServiceDeleteRequest =
-  RequestInput<GeneratedToolServiceDeleteRequest>;
-export type ToolServiceSaveRequest =
-  RequestInput<GeneratedToolServiceSaveRequest>;
-export type ToolServiceTestRequest =
-  RequestInput<GeneratedToolServiceTestRequest>;
+  GeneratedInferenceProfileDeleteRequest;
+export type InferenceProfileSaveRequest = GeneratedInferenceProfileSaveRequest;
+export type InferenceProbeRequest = GeneratedInferenceProbeRequest;
+export type CodexLoginRequest = GeneratedCodexLoginRequest;
+export type EnrollmentStatusRequest = GeneratedEnrollmentStatusRequest;
+export type PeerStatusFetchRequest = GeneratedPeerStatusFetchRequest;
+export type ScheduleDeleteRequest = GeneratedScheduleDeleteRequest;
+export type ScheduleRunRequest = GeneratedScheduleRunRequest;
+export type ScheduleSaveRequest = GeneratedScheduleSaveRequest;
+export type SkillDeleteRequest = GeneratedSkillDeleteRequest;
+export type SkillSaveRequest = GeneratedSkillSaveRequest;
+export type TaskDeleteRequest = GeneratedTaskDeleteRequest;
+export type TaskRunRequest = GeneratedTaskRunRequest;
+export type TaskSaveRequest = GeneratedTaskSaveRequest;
+export type ToolsDeleteRequest = GeneratedToolsDeleteRequest;
+export type ToolsSaveRequest = GeneratedToolsSaveRequest;
+export type ToolServiceDeleteRequest = GeneratedToolServiceDeleteRequest;
+export type ToolServiceSaveRequest = GeneratedToolServiceSaveRequest;
+export type ToolServiceTestRequest = GeneratedToolServiceTestRequest;
 
 export type { TaskRunResult } from "../generated/TaskRunResult.js";
 export type { ToolServiceTestResult } from "../generated/ToolServiceTestResult.js";

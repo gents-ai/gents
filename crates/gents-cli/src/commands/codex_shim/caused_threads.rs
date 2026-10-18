@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use anyhow::Result;
 use gents_protocol::client_protocol::{project_persisted_attempt, ClientHeadProjection};
@@ -10,60 +10,13 @@ use crate::caused_sessions::{
     load_caused_session, load_caused_sessions, load_session_head, CausedSession, SessionScope,
 };
 
-const CAUSED_THREAD_COLLECTIONS: [&str; 4] = [
+pub(super) const CAUSED_THREAD_COLLECTIONS: [&str; 4] = [
     "AgentRequest",
     "Agent",
     "InferenceProfile",
     "InferenceBackend",
 ];
 
-#[derive(Clone, Debug)]
-pub(super) struct CausedThreadUpdateFilter {
-    collection_ids: HashSet<String>,
-    match_all_updates: bool,
-}
-
-impl CausedThreadUpdateFilter {
-    pub(super) fn from_state(state: &ShimState) -> Self {
-        let mut collection_ids = HashSet::new();
-        let mut match_all_updates = false;
-        for collection_name in CAUSED_THREAD_COLLECTIONS {
-            match state.node.get_collection(collection_name) {
-                Ok(Some(definition)) => {
-                    collection_ids.insert(definition.collection_id);
-                }
-                Ok(None) => {
-                    match_all_updates = true;
-                    tracing::warn!(
-                        collection_name,
-                        "Codex shim could not resolve a caused-thread collection; \
-                         falling back to invalidation on every document update"
-                    );
-                }
-                Err(error) => {
-                    match_all_updates = true;
-                    tracing::warn!(
-                        collection_name,
-                        %error,
-                        "Codex shim failed to resolve a caused-thread collection; \
-                         falling back to invalidation on every document update"
-                    );
-                }
-            }
-        }
-        Self {
-            collection_ids,
-            match_all_updates,
-        }
-    }
-
-    pub(super) fn affects_collection_id(&self, collection_id: &str) -> bool {
-        self.match_all_updates || self.collection_ids.contains(collection_id)
-    }
-}
-
-/// A session started from a Codex-owned root, projected as a read-only
-/// Codex sub-agent thread.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct CausedThread {
     pub(super) session_id: String,
@@ -84,8 +37,6 @@ pub(super) struct CausedThread {
     pub(super) latest_request_created_at: Option<String>,
 }
 
-/// Resolve one wire thread ID to the caused thread it names, when its
-/// causal chain reaches a Codex root thread.
 pub(super) async fn load_caused_thread(
     state: &ShimState,
     thread_id: &str,
@@ -113,7 +64,6 @@ impl CausedThread {
         }
     }
 
-    /// Re-read this thread's latest request; its origin and parent are fixed.
     pub(super) async fn refresh(&mut self, state: &ShimState) -> Result<()> {
         if let Some(latest) = load_session_head(&state.node, &self.scope()).await? {
             self.apply_latest(&latest);
@@ -157,7 +107,6 @@ pub(super) async fn load_caused_threads_for_root_ids(
     let mut labels = HashMap::<String, SessionScope>::new();
     let mut models = HashMap::<(String, String), Option<String>>::new();
     for session in sessions {
-        // A wire thread ID has no node/requester component.
         if let Some(existing) = labels.get(&session.scope.session_id) {
             anyhow::ensure!(
                 existing == &session.scope,

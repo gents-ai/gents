@@ -1,8 +1,3 @@
-/* Who this Node is, at the top of its settings: avatar, name, the facts
-   that do not change (the DID stays in the Identity group below, where it
-   can be copied), and one live line for what it is doing right now,
-   read from the operations snapshot. The line links to the sessions list;
-   the list's own filters do the rest. */
 import { useEffect, useState } from "react";
 import { ArrowUpRight } from "lucide-react";
 import type {
@@ -15,7 +10,9 @@ import { href } from "@/lib/router";
 import { NodeAvatar } from "../AgentAvatar";
 import { isLive } from "@/lib/live";
 import { useApp } from "@/app/AppContext";
-import { useToolAuthority } from "@/hooks/useClient";
+import { useHomeFolder } from "@/hooks/useHomeFolder";
+import { useNodeReach } from "@/hooks/useClient";
+import { shortPath } from "@/lib/paths";
 import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
 
 function pulse(
@@ -24,7 +21,6 @@ function pulse(
 ) {
   const live = sessions.filter((s) => isLive(s.turnState)).length;
   const tools = ops?.backgroundedTools ?? [];
-  /* a started session is a background row of a session-message call */
   const worker = (t: (typeof tools)[number]) =>
     t.toolName === "agent_new" || t.toolName === "agent_message";
   const workers = tools.filter(worker).length;
@@ -47,11 +43,11 @@ export function AgentCard({ deployment }: { deployment: NodeView }) {
   const {
     actions: { fetchOperationsSnapshot },
   } = useApp();
-  const authority = useToolAuthority();
+  const reach = useNodeReach(deployment);
+  const home = useHomeFolder();
   const node = deployment.node;
   const name = node.displayName ?? deployment.label;
   const [ops, setOps] = useState<DesktopOperationsSnapshot | null>(null);
-  /* the snapshot changes with every store ping; the session list is the cue */
   const sessions = useFleet((s) => s.sessionsOf[nodeKeyOf(deployment)] ?? NO_SESSIONS);
   useEffect(() => {
     let alive = true;
@@ -65,8 +61,8 @@ export function AgentCard({ deployment }: { deployment: NodeView }) {
   }, [fetchOperationsSnapshot, deployment.nodeDid, sessions]);
   const now = pulse(sessions, ops);
   const facts = [
-    authority.ceiling ?? null,
-    authority.root ?? null,
+    reach.ceiling,
+    reach.root && shortPath(reach.root, { home: reach.local ? home : null, max: 40 }),
     deployment.peerId ? `on ${deployment.peerId}` : null,
   ].filter(Boolean) as string[];
   return (

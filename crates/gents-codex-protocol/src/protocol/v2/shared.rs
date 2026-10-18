@@ -1,7 +1,6 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-// Macro to declare a camelCased app-server wire enum.
 macro_rules! wire_enum {
     (
         $(#[$enum_meta:meta])*
@@ -32,10 +31,6 @@ pub enum NonSteerableTurnKind {
     Compact,
 }
 
-/// This translation layer make sure that we expose codex error code in camel case.
-///
-/// When an upstream HTTP status is available (for example, from the Responses API or a provider),
-/// it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum CodexErrorInfo {
@@ -47,7 +42,6 @@ pub enum CodexErrorInfo {
         #[serde(rename = "httpStatusCode")]
         http_status_code: Option<u16>,
     },
-    /// Failed to connect to the response SSE stream.
     ResponseStreamConnectionFailed {
         #[serde(rename = "httpStatusCode")]
         http_status_code: Option<u16>,
@@ -57,18 +51,14 @@ pub enum CodexErrorInfo {
     BadRequest,
     ThreadRollbackFailed,
     SandboxError,
-    /// The response SSE stream disconnected in the middle of a turn before completion.
     ResponseStreamDisconnected {
         #[serde(rename = "httpStatusCode")]
         http_status_code: Option<u16>,
     },
-    /// Reached the retry limit for responses.
     ResponseTooManyFailedAttempts {
         #[serde(rename = "httpStatusCode")]
         http_status_code: Option<u16>,
     },
-    /// Returned when `turn/start` or `turn/steer` is submitted while the current active turn
-    /// cannot accept same-turn steering, for example `/review` or manual `/compact`.
     ActiveTurnNotSteerable {
         #[serde(rename = "turnKind")]
         turn_kind: NonSteerableTurnKind,
@@ -96,11 +86,6 @@ pub enum AskForApproval {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-/// Configures who approval requests are routed to for review. Examples
-/// include sandbox escapes, blocked network access, MCP approval prompts, and
-/// ARC escalations. Defaults to `user`. `auto_review` uses a carefully
-/// prompted subagent to gather relevant context and apply a risk-based
-/// decision framework before approving or denying the request.
 pub enum ApprovalsReviewer {
     #[serde(rename = "user")]
     User,

@@ -66,6 +66,7 @@ beforeEach(() => {
   resetRuntimeDoor();
   resetSdkImportMap();
   vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "warn").mockImplementation(() => {});
   installInProcessSandbox();
   listings = [];
   sources.clear();

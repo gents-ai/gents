@@ -1,3 +1,10 @@
+import Proofs.Conformance.RequestPatchPublicationCases
+import Proofs.Conformance.ClientDataPublicationCases
+import Proofs.Conformance.ClientObservationScope
+import Proofs.Conformance.ClientSettings
+import Proofs.Conformance.ClientRequestClosureCases
+import Proofs.Conformance.ClientRequestCacheIdentityCases
+import Proofs.Conformance.SessionQueueOrderCases
 import Proofs.Conformance.CountCarrier
 import Proofs.Conformance.ConfigurationScope
 import Proofs.Conformance.EnrollmentPendingRequests
@@ -12,6 +19,7 @@ import Proofs.Conformance.PluginResources
 import Proofs.Conformance.MailboxNotification
 import Proofs.Conformance.MailboxReply
 import Proofs.Conformance.MailboxHandoff
+import Proofs.Conformance.MailboxSweep
 import Proofs.Conformance.ArtifactAuthority
 import Proofs.Conformance.WorkspacePathCapability
 import Proofs.Conformance.TaskHooks
@@ -65,6 +73,12 @@ import Proofs.Conformance.GoalOperatorResume
 import Proofs.Conformance.GoalClaimedPublication
 import Proofs.Conformance.GoalResetResume
 import Proofs.Conformance.GoalRequestHead
+import Proofs.Conformance.GoalEdit
+import Proofs.Conformance.GoalClientControl
+import Proofs.Conformance.GoalClientMutation
+import Proofs.Conformance.GoalClientStart
+import Proofs.Conformance.GoalObservation
+import Proofs.Conformance.PluginApproval
 import Proofs.Conformance.GraphFailureAttribution
 import Proofs.Conformance.GraphLogicalInvocation
 import Proofs.Conformance.RequestExecutionLease
@@ -85,7 +99,6 @@ namespace Conformance.Contracts
 
 open Conformance.ContractCases
 
-/-- The pairing route rules the native scope-template owner must resolve. -/
 def scopeRulesJson (rules : List ScopeTemplates.CollectionRule) : String :=
   jsonArray (rules.map fun rule =>
     "{\"collection\":" ++ jsonString rule.collection
@@ -107,6 +120,14 @@ def snapshotJson : String :=
       ++ Conformance.GraphFailureAttributionContracts.traceCasesJson ++ ","
     ++ "\"goal_request_head_cases\":"
       ++ Conformance.GoalRequestHeadContracts.casesJson ++ ","
+    ++ "\"goal_edit_cases\":" ++ Conformance.GoalEditContracts.casesJson ++ ","
+    ++ "\"goal_client_control_cases\":" ++ Conformance.GoalClientControlContracts.casesJson ++ ","
+    ++ "\"goal_client_start_cases\":" ++ Conformance.GoalClientStartContracts.casesJson ++ ","
+    ++ "\"goal_client_receipt_cases\":" ++ Conformance.GoalClientMutationContracts.receiptCasesJson ++ ","
+    ++ "\"goal_observation_cases\":" ++ Conformance.GoalObservationContracts.casesJson ++ ","
+    ++ "\"plugin_approval_cases\":" ++ Conformance.PluginApproval.casesJson.compress ++ ","
+    ++ "\"goal_objective_whitespace_codepoints\":"
+      ++ Conformance.GoalEditContracts.whitespaceCodepointsJson ++ ","
     ++ "\"graph_logical_invocation_cases\":"
       ++ Conformance.GraphLogicalInvocationContracts.casesJson ++ ","
     ++ "\"graph_invocation_publication_cases\":"
@@ -144,6 +165,8 @@ def snapshotJson : String :=
     ++ "\"interrupt_queue_cases\":"
       ++ Conformance.InterruptQueueContracts.casesJson ++ ","
     ++ "\"session_input_edit_cases\":" ++ FoldQueueContracts.inputEditCasesJson ++ ","
+    ++ "\"session_input_edit_client_observation_cases\":"
+      ++ FoldQueueContracts.inputEditClientObservationCasesJson ++ ","
     ++ "\"queue_management_cases\":" ++ FoldQueueContracts.managementCasesJson ++ ","
     ++ "\"steering_publication_cases\":" ++ FoldQueueContracts.steeringPublicationCasesJson ++ ","
     ++ "\"fold_queue_cases\":"
@@ -206,6 +229,8 @@ def snapshotJson : String :=
       ++ sessionHydrationDurableCasesJson ++ ","
     ++ "\"session_hydration_start_cases\":"
       ++ sessionHydrationStartCasesJson ++ ","
+    ++ "\"session_hydration_admission_cases\":"
+      ++ sessionHydrationAdmissionCasesJson ++ ","
     ++ "\"enrollment_cases\":"
       ++ enrollmentCasesJson ++ ","
     ++ "\"enrollment_durable_projection_cases\":"
@@ -240,6 +265,20 @@ def snapshotJson : String :=
       ++ toString Conformance.ClientShellContracts.desktopClientShellCaseCount ++ ","
     ++ "\"desktop_client_shell_cases\":"
       ++ Conformance.ClientShellContracts.desktopClientShellCasesJson ++ ","
+    ++ "\"client_observation_scope_cases\":"
+      ++ Conformance.ClientObservationScope.casesJson ++ ","
+    ++ "\"client_settings_cases\":"
+      ++ clientSettingsCases.compress ++ ","
+    ++ "\"client_data_publication_cases\":"
+      ++ Conformance.ClientDataPublication.casesJson ++ ","
+    ++ "\"client_request_patch_publication_cases\":"
+      ++ Conformance.RequestPatchPublicationCases.casesJson ++ ","
+    ++ "\"client_request_closure_cases\":"
+      ++ Conformance.ClientRequestClosure.casesJson ++ ","
+    ++ "\"client_request_cache_identity_cases\":"
+      ++ Conformance.ClientRequestCacheIdentity.casesJson ++ ","
+    ++ "\"client_session_queue_order_cases\":"
+      ++ Conformance.SessionQueueOrder.casesJson ++ ","
     ++ "\"client_session_turn_cases\":"
       ++ Conformance.ClientShellContracts.sessionTurnCasesJson ++ ","
     ++ "\"request_lifecycle_operator_ui_cases\":"
@@ -258,6 +297,8 @@ def snapshotJson : String :=
       ++ ApplyReconcile.ContractCases.applyReconcileCasesJson ++ ","
     ++ "\"eval_outcome_cases\":"
       ++ Conformance.Eval.evalOutcomeCasesJson ++ ","
+    ++ "\"eval_document_capture_cases\":"
+      ++ Conformance.Eval.evalDocumentCaptureCasesJson ++ ","
     ++ "\"optimization_cases\":"
       ++ Conformance.Optimization.optimizationCasesJson ++ ","
     ++ "\"publish_if_cases\":"
@@ -409,6 +450,8 @@ def snapshotJson : String :=
       ++ Conformance.MailboxReplyContracts.casesJson ++ ","
     ++ "\"mailbox_handoff_cases\":"
       ++ Conformance.MailboxHandoffContracts.casesJson ++ ","
+    ++ "\"mailbox_sweep_cases\":"
+      ++ Conformance.MailboxSweepContracts.casesJson ++ ","
     ++ "\"schema_argument_repair_cases\":"
       ++ Conformance.SchemaArgumentRepair.casesJson ++ ","
     ++ "\"invalid_tool_progress_cases\":"
@@ -466,6 +509,7 @@ def snapshotJson : String :=
     ++ "\"retry_frontier_cases\":" ++ retryFrontierCasesJson ++ ","
     ++ "\"retry_entry_cases\":" ++ retryEntryCasesJson ++ ","
     ++ "\"current_input_cases\":" ++ currentInputCasesJson ++ ","
+    ++ "\"wake_input_cases\":" ++ wakeInputCasesJson ++ ","
     ++ "\"prompt_assembly_sanitize_cases\":"
       ++ promptAssemblySanitizeCasesJson ++ ","
     ++ "\"prompt_assembly_assistant_order_cases\":"

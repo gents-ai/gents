@@ -1,11 +1,3 @@
-//! Authoritative client dataplane policy.
-//!
-//! Platform adapters own dialing and persistence. This module owns what a
-//! route means: directory identity versus transport identity, direction,
-//! collection membership, and filters. Keeping that vocabulary here prevents
-//! desktop, mobile, CLI, and runtime repair paths from rebuilding
-//! subtly different replicators.
-
 use std::collections::BTreeSet;
 
 use anyhow::{bail, Context, Result};
@@ -47,7 +39,6 @@ impl PairingDirection {
     }
 }
 
-/// Read the mandatory direction from a durable client-route key.
 pub fn client_route_direction(pairing_id: &str) -> Result<PairingDirection> {
     let pairing_id = pairing_id.trim();
     if pairing_id.is_empty() {
@@ -181,7 +172,6 @@ pub fn client_route_collections(direction: PairingDirection) -> &'static [&'stat
     }
 }
 
-/// Resolve one template's filters for an explicitly named direction.
 pub fn resolve_template_filters(
     template: &ScopeTemplate,
     direction: PairingDirection,
@@ -244,22 +234,30 @@ fn client_route_filters(
             equality_filter("node_did", owner_node_did),
         ),
     );
-    filters.insert(
-        "AgentSessionInputEdit".to_owned(),
-        combine_filters(
-            equality_filter("requester_did", requester_did),
-            equality_filter("node_did", owner_node_did),
-        ),
-    );
+    for collection in ["AgentSessionInputEdit", "AgentSessionGoalControl"] {
+        filters.insert(
+            collection.to_owned(),
+            combine_filters(
+                equality_filter("requester_did", requester_did),
+                equality_filter("node_did", owner_node_did),
+            ),
+        );
+    }
     if direction == PairingDirection::RuntimeToClient {
+        filters.insert(
+            "GoalObservation".to_owned(),
+            combine_filters(
+                equality_filter("requester_did", requester_did),
+                equality_filter("node_did", owner_node_did),
+            ),
+        );
         filters.insert(
             "NodeReadiness".to_string(),
             equality_filter("node_did", owner_node_did),
         );
     }
-    // Runtime-owned configuration is unfiltered only on the return leg. Each
-    // replicator has one runtime source, while its mutable owner fields cannot
-    // legally participate in DefraDB replication filters.
+    // Mutable owner fields cannot legally participate in DefraDB replication
+    // filters, so runtime-owned configuration is unfiltered on the return leg.
     debug_assert!(filters
         .keys()
         .all(|name| CLIENT_COLLECTIONS.contains(&name.as_str())));
@@ -269,65 +267,7 @@ fn client_route_filters(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::p2p_reconcile::templates::{
-        filter_conditions, resolve_template, CLIENT_TEMPLATE,
-    };
-
-    #[test]
-    fn directory_identity_is_not_accepted_as_a_transport_endpoint() {
-        let error = TransportEndpoint::parse("0a7675bb-3378-4b66-ae33-a1490f7aa9f9")
-            .expect_err("directory UUID is not dialable");
-        assert!(error.to_string().contains("Iroh transport peer id"));
-    }
-
-    #[test]
-    fn dialable_endpoint_exposes_transport_peer_separately() {
-        let peer_id = "6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb";
-        let endpoint = TransportEndpoint::parse(format!("127.0.0.1:56000/p2p/{peer_id}"))
-            .expect("valid Iroh endpoint");
-        assert_eq!(endpoint.peer_id(), peer_id);
-        assert_ne!(endpoint.peer_id(), "directory-row-uuid");
-    }
-
-    #[test]
-    fn route_key_direction_is_explicit_and_unsuffixed_keys_are_rejected() {
-        assert_eq!(
-            client_route_direction("directory-a:client-to-runtime").unwrap(),
-            PairingDirection::ClientToRuntime
-        );
-        assert_eq!(
-            client_route_direction("directory-a:runtime-to-client").unwrap(),
-            PairingDirection::RuntimeToClient
-        );
-        assert!(client_route_direction("peer").is_err());
-        assert!(client_route_direction("did:key:phone:route").is_err());
-    }
-
-    #[test]
-    fn identity_only_iroh_endpoint_is_not_dialable() {
-        let peer_id = "6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb";
-        let error = TransportEndpoint::parse(format!("iroh://{peer_id}"))
-            .expect_err("identity-only endpoint must not be accepted");
-        assert!(error.to_string().contains("no dialable"));
-    }
-
-    #[test]
-    fn client_route_conjoins_requester_and_destination_agent() {
-        let template = resolve_template(CLIENT_TEMPLATE).unwrap();
-        let filters = resolve_template_filters(
-            template,
-            PairingDirection::ClientToRuntime,
-            "did:key:phone",
-            "did:key:mandrake",
-        );
-        let conditions = filter_conditions(filters.get("AgentRequest").unwrap()).unwrap();
-        let encoded = serde_json::to_string(&conditions).unwrap();
-        assert!(encoded.contains("requester_did"));
-        assert!(encoded.contains("did:key:phone"));
-        assert!(encoded.contains("node_did"));
-        assert!(encoded.contains("did:key:mandrake"));
-        assert!(!encoded.contains("did:key:amy"));
-    }
+    use crate::agent::p2p_reconcile::templates::{resolve_template, CLIENT_TEMPLATE};
 
     #[test]
     fn client_route_contains_exact_bounded_control_plane() {

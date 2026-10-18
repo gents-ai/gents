@@ -12,12 +12,9 @@ type MailboxActionParams = {
   api: DesktopApiAdapter;
   stores: ShellStores;
   refreshSnapshot: () => Promise<void>;
-  /** shows a failed action to the person, once */
   reportFailure: (message: string) => void;
 };
 
-/** Opening, dismissing and answering mailbox items. An opened item routes
-    the next message to it while the selection is the one it set up. */
 export function createMailboxActions({
   api,
   stores,
@@ -70,8 +67,6 @@ export function createMailboxActions({
         causedBySourceDocId: item.itemId,
         answer,
       });
-      /* the reply consumed the item, so a compose route opened on it must
-         not carry it as the next message's source */
       selection.releaseMailboxRoute(store, item.itemId);
       await refreshSnapshot();
     } catch (error) {
@@ -81,25 +76,8 @@ export function createMailboxActions({
   }
 
   return {
-    /**
-     * Starts the item's reply: selects the node, agent and session it names
-     * and holds the item as the next message's cause. A navigation: if the
-     * person moves on before the bridge answers, the result is dropped and
-     * null returned. A failure is reported once, then rethrown.
-     */
     openMailboxItem,
-    /**
-     * Dismisses the item, lets go of it if the next message was going to
-     * answer it, then reads the client again. A failure is reported once, then
-     * rethrown.
-     */
     dismissMailboxItem,
-    /**
-     * Answers a question item. The answer is the item's ordinary reply
-     * request, whose content the bridge renders from the question, so the
-     * runtime's reply consumes the item; a compose route opened on it is let
-     * go. A failure is reported once, then rethrown.
-     */
     answerMailboxQuestion,
   };
 }

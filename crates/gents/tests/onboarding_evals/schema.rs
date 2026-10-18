@@ -74,12 +74,6 @@ fn schema_cases_use_valid_native_sdl_and_grade_saved_state() {
     }
 }
 
-/// Historical fixture premises come from NHHC biographies, paraphrased:
-/// <https://www.history.navy.mil/browse-by-topic/people/chiefs-of-naval-operations/leahy.html>
-/// <https://www.history.navy.mil/research/library/biographical-files/modern-biographical-files-ndl/modern-bios-h/halsey-william-f.html>
-/// <https://www.history.navy.mil/browse-by-topic/people/chiefs-of-naval-operations/fleet-admiral-chester-w--nimitz.html>
-/// <https://www.history.navy.mil/content/history/nhhc/browse-by-topic/people/chiefs-of-naval-operations/fleet-admiral-ernest-j--king.html>
-/// <https://www.history.navy.mil/research/library/biographical-files/modern-biographical-files-ndl/modern-bios-s/spruance-raymond-a.html>
 #[tokio::test]
 async fn admiral_search_fixture_grades_native_writes_and_ranked_results() {
     use gents::application_write::{WriteParams, WriteTool};
@@ -101,7 +95,7 @@ async fn admiral_search_fixture_grades_native_writes_and_ranked_results() {
             .await
             .unwrap(),
     );
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let configure = &case["stages"][0];
     let schema_params = &configure["checks"][0]["params"];
     access

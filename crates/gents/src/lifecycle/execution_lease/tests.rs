@@ -1,5 +1,46 @@
 use super::*;
 use std::{sync::Arc, time::Duration};
+use tracing::field::{Field, Visit};
+use tracing::instrument::WithSubscriber;
+use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
+use tracing_subscriber::{Layer, Registry};
+
+struct PendingNativeObserver(Arc<tokio::sync::Notify>);
+
+#[derive(Default)]
+struct PendingNativeOutcome(bool);
+
+impl Visit for PendingNativeOutcome {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if field.name() == "outcome" && value == "pending_native" {
+            self.0 = true;
+        }
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "outcome" && format!("{value:?}").trim_matches('"') == "pending_native" {
+            self.0 = true;
+        }
+    }
+}
+
+impl<S> Layer<S> for PendingNativeObserver
+where
+    S: tracing::Subscriber,
+{
+    fn on_event(&self, event: &tracing::Event<'_>, _context: LayerContext<'_, S>) {
+        if event.metadata().target()
+            != crate::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET
+        {
+            return;
+        }
+        let mut outcome = PendingNativeOutcome::default();
+        event.record(&mut outcome);
+        if outcome.0 {
+            self.0.notify_one();
+        }
+    }
+}
 
 struct LeaseTestIdentity;
 
@@ -199,8 +240,6 @@ async fn stale_execution_owner_drop_does_not_expire_successor_generation() {
     let before = lease_tuple(&request_row(&node, &doc_id).await);
     let owners_before_drop = Arc::strong_count(&node);
     drop(lifecycle);
-    // Drop transfers its node reference into the cleanup task. Wait for that
-    // reference to be released, proving the stale CAS finished before asserting.
     tokio::time::timeout(Duration::from_secs(5), async {
         while Arc::strong_count(&node) >= owners_before_drop {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -261,8 +300,6 @@ async fn renewal_timer_advances_durable_deadline_while_provider_and_tool_reads_w
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     let doc_id = lifecycle.request().doc_id.clone();
 
-    // These stand in for an in-flight provider read and an independent tool
-    // read. Neither produces bytes or touches the request's lease.
     let (mut provider_reader, _provider_writer) = tokio::io::duplex(64);
     let (mut tool_reader, _tool_writer) = tokio::io::duplex(64);
     let provider_read = tokio::spawn(async move {
@@ -322,8 +359,6 @@ async fn renewal_after_a_simulated_scheduling_gap_cannot_revive_expired_owner() 
         .execution_generation
         .expect("claimed generation");
 
-    // Stop polling to simulate a scheduler gap. This is not an OS suspend or
-    // wall-clock mutation: the stored deadline remains the authority.
     drop(lifecycle.renewal_task.take());
     let before = request_row(&node, &doc_id).await;
     let deadline =
@@ -488,11 +523,9 @@ async fn expire_observed_execution(node: &EmbeddedNode, doc_id: &str) -> AgentRe
 }
 
 async fn recover_observed_execution(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     row: &AgentRequestRow,
 ) -> Result<TerminalizeResult> {
-    // The canonical recovery coordinator re-observes its fence inside the
-    // transaction; verify that this exact observed generation was the winner.
     let agent = row
         .node_did
         .as_deref()
@@ -632,10 +665,9 @@ async fn expired_conflicting_source_is_revoked_without_rewriting_its_records() {
         .segment;
     twin.payload = "conflict bytes".into();
     let inserted = node
-        .execute_request_with_retry(
+        .execute_request(
             defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                 .with_variables(output_segment_create_variables(&twin).unwrap()),
-            defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(!inserted.has_errors(), "{:?}", inserted.errors);
@@ -717,9 +749,8 @@ async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload
     .unwrap();
     running_lifecycle.start_running().await.unwrap();
 
-    // Persist a physically valid delivery header whose selected tool-output
-    // extent is immutably corrupt. Metadata-only revocation must never read or
-    // rewrite these bytes.
+    // Physically valid delivery header with an immutably corrupt selected
+    // tool-output extent; revocation must never read or rewrite these bytes.
     let now = Utc::now().to_rfc3339();
     let payload = "durable-but-corrupt";
     let segment = OutputSegment {
@@ -752,10 +783,9 @@ async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload
         created_at: now.clone(),
     };
     let response = node
-        .execute_request_with_retry(
+        .execute_request(
             defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                 .with_variables(output_segment_create_variables(&segment).unwrap()),
-            defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -796,10 +826,9 @@ async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload
         created_at: now,
     };
     let response = node
-        .execute_request_with_retry(
+        .execute_request(
             defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                 .with_variables(transcript_message_create_variables(&delivery).unwrap()),
-            defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -958,9 +987,6 @@ async fn expired_owner_racing_recovery_cannot_win_terminalization() {
     assert_eq!(terminal.terminal_output, Some(TerminalOutput::NoMessage));
 }
 
-/// Simulates a host that made no progress while its *stored* deadline passed.
-/// This is not an OS suspend or backward-clock test: the production gates read
-/// a deliberately expired persisted deadline, then recovery takes the fence.
 #[tokio::test]
 async fn expired_stored_deadline_blocks_old_publication_and_tool_admission_after_recovery() {
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
@@ -1024,8 +1050,7 @@ async fn expired_stored_deadline_blocks_old_publication_and_tool_admission_after
     assert_eq!(output_segment_count(&node, &doc_id).await, 0);
     assert_eq!(
         request_row(&node, &doc_id).await.execution_generation,
-        recovered.execution_generation,
-        "the stale owner must not replace recovery's terminal generation"
+        recovered.execution_generation
     );
 
     for collection in ["AgentMessage", "AgentToolCall"] {
@@ -1039,20 +1064,16 @@ async fn expired_stored_deadline_blocks_old_publication_and_tool_admission_after
             "{collection}: {:?}",
             response.errors
         );
-        assert!(
-            response.data.as_ref().unwrap()[collection]
-                .as_array()
-                .unwrap()
-                .is_empty(),
-            "an expired owner published a header or admitted a tool: {collection}"
-        );
+        assert!(response.data.as_ref().unwrap()[collection]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 }
 
 #[tokio::test]
 async fn concurrent_recovery_of_one_observed_execution_commits_one_terminal_winner() {
     let (node, _dir) = test_node().await;
-    // Exercise both creating an absent response and updating a streaming one.
     for processing in [false, true] {
         let lifecycle = if processing {
             owner(&node).await
@@ -1104,8 +1125,6 @@ async fn concurrent_recovery_of_one_observed_execution_commits_one_terminal_winn
 #[tokio::test]
 async fn cancel_racing_provider_eof_commits_one_agreeing_terminal_pair() {
     let (node, _dir) = test_node().await;
-    // Cover both committed orders and actual overlapping latch/terminal transactions.
-    // EOF enters the owner as Failed; a latch observed by that transaction selects Interrupted.
     for ordering in 0..3 {
         let mut lifecycle = owner(&node).await;
         let doc_id = lifecycle.request().doc_id.clone();
@@ -1276,6 +1295,14 @@ async fn observed_case_request(
 #[tokio::test]
 async fn generated_renewal_invalidates_real_publication_point_read_transaction() {
     use crate::lean_vocab_test::LeanRequestExecutionAction;
+    use crate::session::canonical_rows::{
+        output_segment_create_variables, transcript_message_create_variables,
+        CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    };
+    use gents_protocol::output::{
+        MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
+        OutputWriter, SegmentRun, SourceClose, StreamDeclaration, StreamPayload, TranscriptMessage,
+    };
     let case = crate::lean_vocab_test::lean_request_execution_lease_observed_cases()
         .iter()
         .find(|case| case.name == "renewal_invalidates_admitted_publication")
@@ -1289,6 +1316,78 @@ async fn generated_renewal_invalidates_real_publication_point_read_transaction()
         .await
         .unwrap();
     txn.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}) {{ execution_generation execution_lease_expires_at }} }}"#)).await.unwrap();
+    let now = epoch.to_rfc3339();
+    let generation = row.execution_generation.as_deref().unwrap();
+    let message_key = format!("renewal-publication:{}", lifecycle.request.doc_id);
+    let payload = "publication staged before renewal";
+    let segment = OutputSegment {
+        node_did: lifecycle.request.node_did.clone(),
+        requester_did: lifecycle.request.requester_did.clone(),
+        session_id: lifecycle.request.session_id.clone(),
+        request_doc_id: lifecycle.request.doc_id.clone(),
+        source: OutputSource::Authored {
+            key: message_key.clone(),
+        },
+        writer: OutputWriter::RequestExecution {
+            execution_generation: generation.to_owned(),
+        },
+        ordinal: Some(0),
+        runs: vec![SegmentRun {
+            stream: 0,
+            bytes: payload.len().try_into().unwrap(),
+            declaration: Some(StreamDeclaration {
+                block_index: 0,
+                part_index: 0,
+                payload: StreamPayload::Text,
+            }),
+        }],
+        payload: payload.to_owned(),
+        close: Some(SourceClose::Closed {
+            outcome: OutputOutcome::Complete,
+            segments: 1,
+            stream_bytes: vec![payload.len() as u64],
+        }),
+        created_at: now.clone(),
+    };
+    let segment_result = txn
+        .execute_with_variables(
+            CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+            &output_segment_create_variables(&segment).unwrap(),
+        )
+        .await
+        .unwrap();
+    let segment_doc_id =
+        crate::graphql::created_doc_id(&segment_result, "AgentOutputSegment").unwrap();
+    let message = TranscriptMessage {
+        message_key: message_key.clone(),
+        session_id: lifecycle.request.session_id.clone(),
+        node_did: lifecycle.request.node_did.clone(),
+        requester_did: lifecycle.request.requester_did.clone(),
+        request_doc_id: Some(lifecycle.request.doc_id.clone()),
+        publication: MessagePublication::RequestExecution {
+            execution_generation: generation.to_owned(),
+        },
+        outcome: OutputOutcome::Complete,
+        sequence: 0,
+        role: MessageRole::Assistant,
+        native_id: None,
+        blocks: vec![MessageBlock::Text {
+            text: gents_protocol::output::PresentedPayload {
+                output: gents_protocol::output::PayloadRef {
+                    close_doc_id: segment_doc_id,
+                    stream: 0,
+                },
+                presentation: gents_protocol::output::PayloadPresentation::Full,
+            },
+        }],
+        created_at: now,
+    };
+    txn.execute_with_variables(
+        CREATE_AGENT_MESSAGE_MUTATION,
+        &transcript_message_create_variables(&message).unwrap(),
+    )
+    .await
+    .unwrap();
     let [LeanRequestExecutionAction::Renew {
         expected_deadline, ..
     }] = case.intervening.as_slice()
@@ -1314,6 +1413,24 @@ async fn generated_renewal_invalidates_real_publication_point_read_transaction()
     assert!(crate::config_client::is_classified_transaction_conflict(
         &result.unwrap_err()
     ));
+    let request = escape_graphql_string(&lifecycle.request.doc_id);
+    let key = escape_graphql_string(&message_key);
+    let access = crate::config_client::ConfigAccess::local(Arc::clone(&node));
+    let published = access
+        .execute(
+            &format!(r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{key}" }} }}) {{ _docID }} AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID source }} }}"#),
+        )
+    .await
+    .unwrap();
+    assert_eq!(
+        published["data"]["AgentMessage"].as_array().unwrap().len(),
+        0
+    );
+    assert!(published["data"]["AgentOutputSegment"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|row| row["source"]["key"] != message_key));
 }
 
 #[tokio::test]
@@ -1526,4 +1643,204 @@ async fn natural_finish_retries_changed_pending_snapshot_and_selects_exact_saved
         request_row(&node, &pending_doc_id).await.lifecycle_state,
         Some(RequestLifecycleState::Pending)
     );
+}
+
+#[derive(serde::Deserialize)]
+struct NativeCompletionRenewalCase {
+    name: String,
+    periodic_renewal: bool,
+    initial: NativeCompletionRenewalInitial,
+    events: Vec<String>,
+    observations: Vec<NativeCompletionRenewalObservation>,
+}
+
+#[derive(serde::Deserialize)]
+struct NativeCompletionRenewalInitial {
+    cleanup_required: bool,
+    native_outstanding: usize,
+    gate_held: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct NativeCompletionRenewalObservation {
+    renewal_attempt_returned: bool,
+    next_renewal_started: bool,
+    gate_held: bool,
+}
+
+#[tokio::test]
+async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_attempt() {
+    let cases: Vec<NativeCompletionRenewalCase> = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/native_completion.json"
+    ))
+    .unwrap();
+    let cases: Vec<_> = cases
+        .into_iter()
+        .filter(|case| case.periodic_renewal)
+        .collect();
+    assert_eq!(cases.len(), 2, "Lean owns both renewal completion cases");
+
+    for case in cases {
+        assert!(case.initial.cleanup_required, "{}", case.name);
+        assert_eq!(case.initial.native_outstanding, 0, "{}", case.name);
+        assert!(!case.initial.gate_held, "renewal bypasses mutation gate");
+        assert_eq!(case.events.len(), case.observations.len(), "{}", case.name);
+
+        let (node, _dir) = test_node().await;
+        let mut lifecycle = owner(&node).await;
+        drop(lifecycle.renewal_task.take());
+        let doc_id = lifecycle.request().doc_id.clone();
+        let row = request_row(&node, &doc_id).await;
+        let generation = row
+            .execution_generation
+            .clone()
+            .expect("active execution generation");
+        let deadline = DateTime::parse_from_rfc3339(
+            row.execution_lease_expires_at
+                .as_deref()
+                .expect("active execution deadline"),
+        )
+        .unwrap()
+        .with_timezone(&Utc);
+
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let pending_native = Arc::new(tokio::sync::Notify::new());
+        let subscriber = tracing::Dispatch::new(
+            Registry::default().with(PendingNativeObserver(Arc::clone(&pending_native))),
+        );
+        let node_for_attempt = Arc::clone(&node);
+        let request_for_attempt = doc_id.clone();
+        let generation_for_attempt = generation.clone();
+        let mut first_attempt = tokio::spawn(
+            crate::config_client::ConfigApplyTxn::with_native_operation_pause(
+                Arc::clone(&entered),
+                Arc::clone(&release),
+                async move {
+                    crate::lifecycle::renew_execution_lease_once_at(
+                        &node_for_attempt,
+                        &request_for_attempt,
+                        &generation_for_attempt,
+                        deadline,
+                        Utc::now(),
+                    )
+                    .await
+                },
+            )
+            .with_subscriber(subscriber),
+        );
+
+        let mut first_result = None;
+        for (event, observed) in case.events.iter().zip(&case.observations) {
+            match event.as_str() {
+                "native_started" => {
+                    tokio::time::timeout(Duration::from_secs(10), entered.notified())
+                        .await
+                        .expect("renewal admitted one native operation");
+                }
+                "caller_timed_out" => {
+                    tokio::time::pause();
+                    tokio::time::advance(
+                        crate::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+                    )
+                    .await;
+                    tokio::time::resume();
+                    tokio::time::timeout(Duration::from_secs(10), pending_native.notified())
+                        .await
+                        .expect("transaction owner records native work as pending before release");
+                }
+                "native_returned" => {
+                    release.notify_one();
+                    first_result = Some(
+                        tokio::time::timeout(Duration::from_secs(10), &mut first_attempt)
+                            .await
+                            .expect("renewal owner drains after native completion")
+                            .expect("renewal attempt task"),
+                    );
+                }
+                "renewal_attempt_returned" => {
+                    if !observed.renewal_attempt_returned && first_result.is_none() {
+                        if let Ok(result) =
+                            tokio::time::timeout(Duration::from_millis(50), &mut first_attempt)
+                                .await
+                        {
+                            first_result = Some(result.expect("renewal attempt task"));
+                        }
+                    }
+                    let actually_returned = first_result.is_some() || first_attempt.is_finished();
+                    if actually_returned != observed.renewal_attempt_returned {
+                        release.notify_one();
+                        panic!(
+                            "{}: renewal return observation diverged at {event}",
+                            case.name
+                        );
+                    }
+                    assert_eq!(
+                        actually_returned, observed.renewal_attempt_returned,
+                        "{}: {event}",
+                        case.name
+                    );
+                }
+                "renewal_requested" => {
+                    let actually_returned = first_result.is_some() || first_attempt.is_finished();
+                    assert_eq!(
+                        actually_returned, observed.renewal_attempt_returned,
+                        "{}: next renewal cannot be admitted while the prior attempt is pending",
+                        case.name
+                    );
+                    if observed.next_renewal_started {
+                        assert!(first_result.is_some(), "{}", case.name);
+                        let current = request_row(&node, &doc_id).await;
+                        let next_deadline = DateTime::parse_from_rfc3339(
+                            current
+                                .execution_lease_expires_at
+                                .as_deref()
+                                .expect("active execution deadline after rollback"),
+                        )
+                        .unwrap()
+                        .with_timezone(&Utc);
+                        let next = crate::lifecycle::renew_execution_lease_once_at(
+                            &node,
+                            &doc_id,
+                            &generation,
+                            next_deadline,
+                            Utc::now(),
+                        )
+                        .await
+                        .unwrap();
+                        assert!(
+                            matches!(
+                                next,
+                                crate::lifecycle::RenewalAttemptOutcome::Skipped
+                                    | crate::lifecycle::RenewalAttemptOutcome::Committed
+                            ),
+                            "{}: fresh renewal runs after the prior native call drains",
+                            case.name
+                        );
+                    }
+                }
+                other => panic!("unexpected Lean native-completion event: {other}"),
+            }
+            assert!(!observed.gate_held, "renewal remains outside mutation gate");
+        }
+
+        if first_result.is_none() {
+            release.notify_one();
+            first_result = Some(
+                tokio::time::timeout(Duration::from_secs(10), &mut first_attempt)
+                    .await
+                    .expect("renewal owner drains after native completion")
+                    .expect("renewal attempt task"),
+            );
+        }
+        let first_error = first_result
+            .take()
+            .expect("native completion releases the owner")
+            .expect_err("the timed-out attempt must not replay or commit");
+        assert!(
+            crate::config_client::is_transaction_step_unavailable(&first_error),
+            "{}: abandoned native renewal remains an availability failure",
+            case.name
+        );
+    }
 }

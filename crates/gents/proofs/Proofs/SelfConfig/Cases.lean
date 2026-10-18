@@ -13,14 +13,9 @@ structure CaseRow where
   validates : Bool
   doc : List (FieldKey × FieldValue)
   patch : List (FieldKey × Option FieldValue)
-  /-- Operator grants the invoking agent holds. -/
   held : Grants := Grants.bot
-  /-- Tools documents by `tools_id`, for chain and clone rows. -/
   tools : List (FieldValue × List (FieldKey × FieldValue)) := []
-  /-- `context_id` to its `tools_id` (`none` selects no Tools), for Agent rows. -/
   contexts : List (FieldValue × Option FieldValue) := []
-  /-- Backends a profile row can select: (`backend_id` JSON text, provider
-  kind, auth JSON text). -/
   backends : List (String × String × String) := []
   deriving Repr
 
@@ -31,8 +26,7 @@ def rowPatch (r : CaseRow) : Patch :=
         | some v => PatchOp.set v
         | none => PatchOp.clear })
 
-/-- Fixture decoder for the canonical nested values used below; absent groups
-decode as disabled. Production uses the shared typed decoder, not this finite
+/-- Fixture decoder: production uses the shared typed decoder, not this finite
 fixture table. -/
 def decodeControl (doc : Doc) : Option Control := do
   let (selfConfig, noLockout, toolsAuthority) ← match doc "self_config" with
@@ -59,7 +53,6 @@ def decodeControl (doc : Doc) : Option Control := do
     | _ => none
   pure { selfConfig, agents, noLockout, toolsAuthority }
 
-/-- Fixture decoder for the agent values used below. -/
 def decodeReach (doc : Doc) : Option Reach := do
   let enabled ← match doc "enabled" with
     | some "true" | none => some true
@@ -72,9 +65,7 @@ def decodeReach (doc : Doc) : Option Reach := do
     | _ => none
   pure { enabled, engineerTag }
 
-/-- Fixture decoder for the operator grants carried by the `self_config` values
-below; every other value, and an absent group, carries none. Production
-projects the shared typed decoder (`OperatorGrants::from_tools_json`). -/
+/-- Fixture decoder; production projects `OperatorGrants::from_tools_json`. -/
 def decodeGrants (doc : Doc) : Option Grants :=
   match doc "self_config" with
   | some "{\"enable_self_config\":true,\"enable_pack_install\":true}" =>
@@ -83,7 +74,6 @@ def decodeGrants (doc : Doc) : Option Grants :=
       some { Grants.bot with packInstall := true }
   | _ => some Grants.bot
 
-/-- Fixture decoder for the exact backend auth texts used below. -/
 def decodeAuthText : String → Option Configuration.BackendAuth
   | "{\"kind\":\"environment\",\"variable\":\"KEY\"}" => some (.environment "KEY")
   | "{\"kind\":\"node_oauth\"}" => some (.nodeOAuth none)
@@ -95,7 +85,6 @@ def decodeAuthText : String → Option Configuration.BackendAuth
 def decodeAuth (doc : Doc) : Option Configuration.BackendAuth :=
   (doc "auth").bind decodeAuthText
 
-/-- The invoker-only no-lockout slice for Tools and Agent targets. -/
 def lockoutGuard (t : Target) (stored : Doc) : Doc → Bool :=
   if t = .agent then keepsReach decodeReach stored
   else keepsControl decodeControl stored
@@ -103,14 +92,12 @@ def lockoutGuard (t : Target) (stored : Doc) : Doc → Bool :=
 def rowBackendOf (r : CaseRow) (id : String) : Option (String × Configuration.BackendAuth) :=
   (r.backends.find? (·.1 = id)).bind fun (_, kind, auth) => (decodeAuthText auth).map (kind, ·)
 
-/-- Tools fixtures for chain and clone rows, without and with the pack grant. -/
 def plainTools : List (FieldKey × FieldValue) :=
   [("self_config", "{\"enable_self_config\":true}")]
 
 def grantedTools : List (FieldKey × FieldValue) :=
   [("self_config", "{\"enable_self_config\":true,\"enable_pack_install\":true}")]
 
-/-- The Tools document a Context or Agent selects, through the row's tables. -/
 def rowResolve (r : CaseRow) : Doc → Option Doc :=
   let tools (id : FieldValue) : Option Doc :=
     (r.tools.find? (·.1 == id)).map (fun entry => Doc.ofList entry.2)
@@ -121,22 +108,17 @@ def rowResolve (r : CaseRow) : Doc → Option Doc :=
         (r.contexts.find? (·.1 == context)).bind (·.2)).bind tools
   | _ => fun _ => none
 
-/-- The always-on operator-grant slice. It is not part of the guarded
-dispatch: the native owner runs it on every Tools write from the shared validate
-slot, on every Context or Agent write whose Tools selection changes
-(`guard_reselection_keeps_grants_in_txn`), and on a direct clone in the same transaction that validates and publishes
-its candidate (`clone_keeps_grants_in_txn`). -/
+/-- The always-on operator-grant slice: run by the native owner on every Tools
+write and on every Context/Agent write or clone whose Tools selection changes. -/
 def grantGuard (r : CaseRow) (stored : Doc) : Doc → Bool :=
   match r.target with
   | .tools => keepsGrants decodeGrants r.held stored
   | .agentContext | .agent => chainKeepsGrants decodeGrants r.held (rowResolve r) stored
   | _ => fun _ => true
 
-/-- Every Tools, Context and Agent row replays the always-on grant slice. A guarded row also
-replays its target's typed guard: the no-lockout slice for Tools and Agent,
-the auth fence for Backend and the account choice fence for Profile (default
-= the original account), which Rust enforces in `validate` on every model
-write rather than only under no-lockout. -/
+/-- A guarded row replays its target's typed guard: the no-lockout slice for
+Tools and Agent, the auth fence for Backend, the account choice fence for
+Profile (default = the original account), all enforced by Rust in `validate`. -/
 def caseGuard (r : CaseRow) (stored : Doc) : Doc → Bool :=
   fun candidate =>
     grantGuard r stored candidate &&
@@ -189,8 +171,6 @@ def buildWitness (r : CaseRow) : CaseWitness :=
   , selectedAfter := (rowResolve r merged).map (project .tools)
   }
 
-/-- Values are decoded group values abstracted as strings; nested validation
-is supplied to `step`, using the same owner as ordinary configuration. -/
 def examples : List (Target × FieldKey × FieldValue) :=
   [ (.agent, "context_id", "context-1")
   , (.agentContext, "system_prompt", "You are concise.")
@@ -216,8 +196,6 @@ def examplesToRows : List CaseRow := examples.map fun (t, k, v) =>
   , doc := [(t.uniqueField, "doc-1"), ("node_did", "did:key:node-a")]
   , patch := [(k, some v)] }
 
-/-- One provider with two accounts, another with its original and a second
-account, and one account-free backend. -/
 def profileBackends : List (String × String × String) :=
   [ ("\"chat-a1\"", "ChatGptCodex", "{\"kind\":\"node_oauth\",\"account_ref\":\"a1\"}")
   , ("\"chat-a1-alt\"", "ChatGptCodex", "{\"kind\":\"node_oauth\",\"account_ref\":\"a1\"}")
@@ -547,8 +525,6 @@ def emptyAgentCatalog : AgentCatalog :=
 def freshCreate : AgentCreateInput :=
   { name := "reviewer", systemPrompt := "Review diffs.", profile := "fast" }
 
-/-- Rows cover the catalog decision for every operation and each create-input
-and edit-field predicate; verdicts come from `agentOperationAdmitted`. -/
 def agentDecisionScenarios : List AgentDecisionRow :=
   [ { name := "agent_default_disable_rejected"
     , catalog := agentCatalog, operation := .disable, target := "default" }
@@ -620,7 +596,6 @@ def agentDecisionCases : List AgentDecisionWitness :=
     , accepted := agentOperationAdmitted r.profiles r.catalog r.operation r.target
         r.makeDefault }
 
-/-- Regression expectations, checked against model execution. -/
 theorem agent_decision_cases_regressions :
     (agentDecisionCases.filter (·.accepted)).map (·.row.name) =
       ["agent_non_default_disable_accepted", "agent_unprotected_edit_accepted",
@@ -629,11 +604,6 @@ theorem agent_decision_cases_regressions :
        "agent_create_fresh_id_accepted", "agent_create_clone_inherits_prompt_accepted"] := by
   native_decide
 
-/-! ## Materialization through the admission owner -/
-
-/-- The documents of one candidate registry under a single owning node. Lean
-builds the `Registry` from this list form and the emitter serializes the same
-lists, so a consumer constructs its documents from the emitted inputs. -/
 structure CandidateFixture where
   nodeDid : String
   agents : List (String × Configuration.Agent)
@@ -652,10 +622,7 @@ def CandidateFixture.registry (f : CandidateFixture) : Configuration.Registry :=
   , backends := fun scope id =>
       if scope = f.nodeDid then (f.backends.lookup id).map (⟨f.nodeDid, ·⟩) else none }
 
-/-- One node owning an enabled `worker` Agent with no context and the `fast`
-profile on an enabled backend, so canonical resolution succeeds for `worker`.
-Candidate construction is separate from create-input admission: the create
-input never supplies the candidate's context. -/
+/-- The create input never supplies the candidate's context. -/
 def workerFixture : CandidateFixture :=
   { nodeDid := "node"
   , agents := [("worker", { contextId := none, profileId := "fast", enabled := true })]
@@ -697,9 +664,6 @@ def agentMaterializationCases : List (String × Option Configuration.ResolvedSes
     (r.name, materializedAgent r.decision.profiles r.decision.catalog r.decision.operation
       r.decision.target r.decision.makeDefault workerCandidate workerFixture.nodeDid)
 
-/-- Regression expectations, checked against model execution. The rejected
-fresh create resolves canonically (absent context is permitted) yet
-materializes nothing. -/
 theorem agent_materialization_cases_regressions :
     (agentMaterializationCases.filter (·.2.isSome)).map (·.1) =
       ["materialize_fresh_create_with_prompt_session",

@@ -1,7 +1,5 @@
-//! Pure authenticated-enrollment transition and projection core.
-//!
-//! Durable I/O, signatures, transport challenges, and route materialization
-//! remain outside this module. Their verified inputs feed this state machine;
+//! Pure authenticated-enrollment transition and projection core. Durable I/O,
+//! signatures, transport challenges, and route materialization stay outside;
 //! the generated Lean enrollment traces fence its decisions and projections.
 
 use std::collections::BTreeSet;
@@ -107,9 +105,9 @@ impl From<&EnrollmentRequest> for EnrollmentRequestAuthority {
     }
 }
 
-/// The current approval must come from `DurableEnrollmentDocuments::current_approval`;
-/// applied-route evidence must bind its exact signed request and authorization generation.
-/// This projects pending-request visibility without granting authority or retiring documents.
+/// Pending-request visibility only; the current approval must come from
+/// `DurableEnrollmentDocuments::current_approval` and applied-route evidence
+/// must bind its exact signed request and authorization generation.
 pub fn pending_request_satisfied(
     requested: &EnrollmentRequestAuthority,
     current: &EnrollmentRequestAuthority,
@@ -218,7 +216,6 @@ pub struct EnrollmentRouteReceipt {
     pub applied: bool,
 }
 
-/// Unordered durable enrollment documents restored from DefraDB.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DurableEnrollmentDocuments {
     pub offers: BTreeSet<EnrollmentOffer>,
@@ -270,7 +267,6 @@ impl DurableEnrollmentDocuments {
             && receipt.applied
     }
 
-    /// Order-independent restored authority projection.
     pub fn current_approval(
         &self,
         offer: &EnrollmentOffer,

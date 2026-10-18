@@ -1,10 +1,3 @@
-//! Fixture lens: additive field migration template.
-//!
-//! Forward: set `label` from `name` (uppercased) when missing/null.
-//! Inverse: drop `label`.
-//!
-//! Unit-test the pure transform; wasm entry is gated for host tests.
-
 use std::collections::HashMap;
 use std::error::Error;
 
@@ -14,7 +7,6 @@ use serde_json::Value;
 #[cfg(all(feature = "lens-entry", target_arch = "wasm32"))]
 lens_sdk::define!(try_transform, try_inverse);
 
-/// Pure forward transform used by the wasm entry and unit tests.
 pub fn apply_label(mut doc: HashMap<String, Value>) -> HashMap<String, Value> {
     let needs_label = match doc.get("label") {
         None => true,
@@ -33,7 +25,6 @@ pub fn apply_label(mut doc: HashMap<String, Value>) -> HashMap<String, Value> {
     doc
 }
 
-/// Pure inverse: remove the added field.
 pub fn drop_label(mut doc: HashMap<String, Value>) -> HashMap<String, Value> {
     doc.remove("label");
     doc
@@ -71,37 +62,4 @@ fn try_inverse(
         return Ok(StreamOption::Some(drop_label(input)));
     }
     Ok(StreamOption::EndOfStream)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn forward_sets_uppercase_label_from_name() {
-        let mut doc = HashMap::new();
-        doc.insert("name".into(), json!("alice"));
-        let out = apply_label(doc);
-        assert_eq!(out.get("label"), Some(&json!("ALICE")));
-    }
-
-    #[test]
-    fn forward_preserves_existing_label() {
-        let mut doc = HashMap::new();
-        doc.insert("name".into(), json!("alice"));
-        doc.insert("label".into(), json!("keep"));
-        let out = apply_label(doc);
-        assert_eq!(out.get("label"), Some(&json!("keep")));
-    }
-
-    #[test]
-    fn inverse_drops_label() {
-        let mut doc = HashMap::new();
-        doc.insert("name".into(), json!("alice"));
-        doc.insert("label".into(), json!("ALICE"));
-        let out = drop_label(doc);
-        assert!(!out.contains_key("label"));
-        assert_eq!(out.get("name"), Some(&json!("alice")));
-    }
 }

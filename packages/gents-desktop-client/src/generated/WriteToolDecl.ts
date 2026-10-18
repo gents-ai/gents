@@ -8,9 +8,7 @@ import type { WriteToolOutputObligation } from "./WriteToolOutputObligation.js";
  * one runtime `BoundedWriteTool` that writes exactly one validated document to
  * one collection. DatastoreToolSurface.entries owns these canonical declarations;
  * Tools.datastore selects the surfaces by their owner-scoped document IDs.
- *
- * `tool_name` and `collection` are trimmed at deserialization (see
- * [`WriteToolField`] for the rationale); `description` is free text and is
- * preserved verbatim.
+ * `tool_name` and `collection` are trimmed at deserialization; `description`
+ * is preserved verbatim.
  */
 export type WriteToolDecl = { notification?: MailboxNotificationPolicy | null, tool_name: string, collection: string, description?: string, fields?: Array<WriteToolField>, output_obligation?: WriteToolOutputObligation | null, };

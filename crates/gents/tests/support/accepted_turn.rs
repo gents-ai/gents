@@ -12,15 +12,10 @@ pub struct AcceptedTurnSpec<'a> {
     pub request_id: &'a str,
     pub session_id: &'a str,
     pub prompt: &'a str,
-    /// One accepted provider turn. Multiple calls in this vector are published
-    /// atomically in their provider order, never as separate fixture turns.
     pub accepted_chunks: Vec<StreamChunk>,
-    /// Additional exact backend plans, normally paused or completing children.
     pub child_plans: Vec<StreamPlan>,
     pub valid_until: Option<&'a str>,
     pub request_hop: Option<u32>,
-    /// Optional caller-owned admission fields (for example a workspace seal).
-    /// This runs before the canonical request is signed.
     pub request_setup:
         Option<Box<dyn FnOnce(&mut gents_protocol::request_admission::AgentRequestCreate) + 'a>>,
 }
@@ -34,9 +29,6 @@ pub struct AcceptedTurnRuntime {
     pub backend: MockStreamingBackend,
 }
 
-/// Enqueue another canonically signed local-self request for an existing
-/// session while its public runtime remains active. This creates only the
-/// request admission document; provider acceptance remains runtime-owned.
 pub async fn enqueue_local_accepted_request(
     db: &super::TestDb,
     agent_id: &str,
@@ -47,8 +39,6 @@ pub async fn enqueue_local_accepted_request(
     enqueue_local_accepted_request_until(db, agent_id, request_id, session_id, prompt, None).await;
 }
 
-/// Enqueue a canonically signed local-self request with an optional admission
-/// deadline. The runtime remains the sole owner of accepting and executing it.
 pub async fn enqueue_local_accepted_request_until(
     db: &super::TestDb,
     agent_id: &str,
@@ -94,9 +84,6 @@ impl AcceptedTurnRuntime {
     }
 }
 
-/// Drive a real provider acceptance through the public runtime. This helper
-/// owns no transition policy: callers supply provider chunks/plans and observe
-/// durable rows through the production owners.
 pub async fn prepare_accepted_turn(
     db: &super::TestDb,
     spec: AcceptedTurnSpec<'_>,
@@ -104,8 +91,6 @@ pub async fn prepare_accepted_turn(
     prepare_accepted_turn_as(db, db.node_identity.as_ref(), spec).await
 }
 
-/// Prepare an accepted turn for a separately authenticated principal sharing
-/// the fixture node. All durable scope and signatures derive from `identity`.
 pub async fn prepare_accepted_turn_as(
     db: &super::TestDb,
     identity: &dyn NodeIdentity,
@@ -127,7 +112,7 @@ pub async fn prepare_accepted_turn_as(
         .expect("start accepted-turn backend");
     for agent_id in spec.configured_agent_ids {
         bind_agent_backend(
-            db.node.as_ref(),
+            &db.node,
             identity.did(),
             agent_id,
             spec.backend_id,
@@ -200,9 +185,6 @@ pub async fn prepare_accepted_turn_as(
     PreparedAcceptedTurn { backend }
 }
 
-/// Start a caller-composed public runtime after [`prepare_accepted_turn`] has
-/// persisted and signed the request. This is the seam for custom tool factories
-/// and gates configured through `Gents::builder()`.
 pub async fn boot_prepared_accepted_turn(
     db: &super::TestDb,
     prepared: PreparedAcceptedTurn,
@@ -218,7 +200,6 @@ pub async fn boot_prepared_accepted_turn(
     }
 }
 
-/// Convenience path for the document-configured production runtime.
 pub async fn boot_accepted_turn(
     db: &super::TestDb,
     spec: AcceptedTurnSpec<'_>,
@@ -232,9 +213,6 @@ pub async fn boot_accepted_turn(
     boot_prepared_accepted_turn(db, prepared, agent).await
 }
 
-/// Boot a real accepted turn with an explicitly configured backend worker
-/// capacity. Multi-child fixtures use this only when their premise requires
-/// simultaneous child execution before the parent releases its worker slot.
 pub async fn boot_accepted_turn_with_backend_capacity(
     db: &super::TestDb,
     spec: AcceptedTurnSpec<'_>,
@@ -245,9 +223,6 @@ pub async fn boot_accepted_turn_with_backend_capacity(
         .await
 }
 
-/// Keep later provider turns caller-controlled while a previously accepted
-/// background tool is already executing. The dynamic marker is armed before
-/// runtime boot, so the parent cannot consume its static completion response.
 pub async fn boot_accepted_turn_with_backend_capacity_and_dynamic_followups(
     db: &super::TestDb,
     spec: AcceptedTurnSpec<'_>,
@@ -283,8 +258,8 @@ async fn boot_accepted_turn_with_backend_capacity_inner(
         DesiredStateApplyPlan,
     };
     let did = db.node_identity.did();
-    gents::ConfigAccess::transact_local(
-        db.node.as_ref(),
+    gents::ConfigAccess::transact_local_write(
+        &db.node,
         None,
         "test.accepted_turn_backend_capacity",
         |txn| {

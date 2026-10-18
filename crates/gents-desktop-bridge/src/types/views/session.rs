@@ -8,9 +8,6 @@ use super::operations::DerivedCancelCauseView;
 pub struct MessageView {
     pub message_key: String,
     pub request_id: Option<String>,
-    /// Whether this row is the person's own message for its request (the
-    /// authored prompt publication) rather than a row the request also
-    /// authors: workspace context, tool delivery, reminders.
     pub owns_turn: bool,
     pub sequence: Option<i64>,
     pub role: Option<String>,
@@ -19,9 +16,7 @@ pub struct MessageView {
     pub reasoning: Option<String>,
     pub has_tool_calls: bool,
     pub has_tool_results: bool,
-    /// Explicit canonical reconstruction outcome.  A header is durable even
-    /// while one of its immutable dependencies is still replicating, so the
-    /// UI must not mistake absent presentation text for an empty message.
+    /// Durable even while an immutable dependency is still replicating.
     pub reconstruction_state: ReconstructionState,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
@@ -30,31 +25,23 @@ pub struct MessageView {
     #[ts(optional = nullable)]
     pub denied_dependency_doc_id: Option<String>,
     pub runtime_control: bool,
-    /// The request whose input this entry publishes
-    /// (`gents::lifecycle::input_message_owner`); for a folded entry, the
-    /// folded request rather than the request it was published under.
+    /// The request whose input this entry publishes; for a folded entry, the
+    /// folded request.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub input_request_id: Option<String>,
-    /// Set for input that entered the session without the person typing it.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub origin: Option<RequestOriginView>,
-    /// A user entry's text blocks as published, untrimmed and joined by
-    /// newlines; the presented body normalizes whitespace.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub input_text: Option<String>,
     pub timestamp: Option<String>,
 }
 
-/// What put a request's content into the session, when not the person
-/// (`gents::lifecycle::request_origin`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum RequestOriginView {
-    /// Sent by an `agent_message` or `agent_new` call. The sender's session is
-    /// known only when this replica holds the causing request.
     #[serde(rename_all = "camelCase")]
     SessionMessage {
         sender_node_did: Option<String>,
@@ -83,9 +70,6 @@ pub enum ReconstructionState {
     Invalid,
 }
 
-/// Immutable canonical-output reconstruction state.  This is carried through
-/// the rendered timeline so consumers render a received loading/denied/invalid
-/// fact rather than inferring one from blank text.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageReconstructionView {
@@ -109,8 +93,6 @@ pub struct ToolCallView {
     pub args: Option<String>,
     pub partial_output_tail: Option<String>,
     pub result: Option<String>,
-    /// Availability of the immutable canonical arguments and result payloads.
-    /// Tool execution status remains in `lifecycle_state`.
     pub reconstruction: MessageReconstructionView,
     pub status: Option<String>,
     pub lifecycle_state: Option<String>,
@@ -191,8 +173,7 @@ pub enum ToolPresentationView {
     FileEdit {
         operation: String,
         path: Option<String>,
-        /// Execution-node path from the validated native file operation.
-        /// Clients may reveal it only when that node is local.
+        /// Execution-node path; reveal only when that node is local.
         #[ts(optional = nullable)]
         reveal_path: Option<String>,
         created: Option<bool>,
@@ -200,10 +181,6 @@ pub enum ToolPresentationView {
         diff: Vec<ToolDiffLineView>,
         fallback_output: Option<String>,
     },
-    /// The agents tools, by `action`: `start` (`agent_new`), `message`
-    /// (`agent_message`), `interrupt` (`agent_interrupt`) and `list`
-    /// (`agent_list`). `name` is the addressed target and `session_id` the
-    /// session the call started, messaged or interrupted.
     #[serde(rename_all = "camelCase")]
     Agent {
         action: String,
@@ -240,13 +217,9 @@ pub struct RenderedToolCallView {
     pub item_key: String,
     pub tool_name: String,
     pub status_kind: String,
-    /// Request that issued this call; a request it caused names it as
-    /// `caused_by_parent_request_id`.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub request_id: Option<String>,
-    /// The call's logical id; a request it caused names it as
-    /// `caused_by_parent_tool_call_id`.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub tool_call_id: Option<String>,
@@ -289,17 +262,14 @@ pub struct PendingQueueEntryView {
 #[serde(rename_all = "camelCase")]
 pub struct PendingTurnView {
     pub request_id: String,
-    /// Internal reconciliation identity. The wire view keeps its existing
-    /// shape; canonical messages link to the physical request document, not
-    /// the caller-authored logical request id.
     #[serde(skip)]
     #[ts(skip)]
     pub(crate) request_doc_id: Option<String>,
     pub content: String,
     pub selected_skill_ids: Vec<String>,
     pub lifecycle_state: Option<String>,
-    /// The request whose transcript published this message as a folded entry
-    /// (`gents::lifecycle::folded_into`); it is that turn's input, not a turn.
+    /// The request whose transcript published this as a folded entry; it is
+    /// that turn's input, not a turn.
     pub folded_into_request_id: Option<String>,
     pub origin: Option<RequestOriginView>,
     pub created_at: Option<String>,
@@ -312,8 +282,8 @@ pub struct FoldedInputView {
     pub folded_into_request_id: String,
 }
 
-/// Read-only presentation of the latest request's terminal facts. The request
-/// remains the owner; this is not response storage or a second lifecycle.
+/// Read-only presentation of the latest request's terminal facts; the
+/// request remains the owner.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestOutcomeView {
@@ -335,13 +305,7 @@ pub enum RenderedTimelineItem {
         #[serde(skip_serializing_if = "Option::is_none", default)]
         #[ts(optional = nullable)]
         request_id: Option<String>,
-        /// Whether this row stands for the person's turn of its request.
-        /// A request authors user rows that do not (workspace instructions
-        /// under `authored:{doc}:context`, tool delivery); consumers must
-        /// not let those replace or retire the turn's other stand-ins
-        /// (pending turn, the app's own copy of a sent message).
         owns_turn: bool,
-        /// The request whose input this is; dedups its pending projection.
         #[serde(skip_serializing_if = "Option::is_none", default)]
         #[ts(optional = nullable)]
         input_request_id: Option<String>,
@@ -376,15 +340,12 @@ pub enum RenderedTimelineItem {
         origin: Option<RequestOriginView>,
         created_at: Option<String>,
     },
-    /// Input the model received that the person did not type, at its place in
-    /// the transcript.
     #[serde(rename_all = "camelCase")]
     AutomatedInput {
         item_key: String,
         #[serde(skip_serializing_if = "Option::is_none", default)]
         #[ts(optional = nullable)]
         request_id: Option<String>,
-        /// The request whose input this is; dedups its pending projection.
         #[serde(skip_serializing_if = "Option::is_none", default)]
         #[ts(optional = nullable)]
         input_request_id: Option<String>,
@@ -467,23 +428,21 @@ pub struct SessionRequestContextView {
     pub components: SessionContextComponentsView,
 }
 
-/// Observable context pressure for the session. `last_request` is the exact,
-/// prompt-free accounting captured at the most recent provider boundary; the
-/// remaining fields are estimates computed directly from the durable rows.
+/// Observable context pressure for the session; `last_request` is exact,
+/// prompt-free accounting at the most recent provider boundary.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionContextView {
-    /// True when the durable transcript/context rows were read to exhaustion.
-    /// False means the remaining fields describe only the bounded visible page.
+    /// True when durable rows were read to exhaustion; false means only the
+    /// bounded page.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub transcript_totals_exact: Option<bool>,
     pub estimated_durable_tokens: i64,
     pub estimated_conversation_tokens: i64,
     pub context_window: i64,
-    /// Why the configured window cannot be what the next request runs with,
-    /// e.g. the profile exceeds the model's advertised maximum. When set,
-    /// `context_window` is only the runtime default, not a usable window.
+    /// Why the configured window is not usable; `context_window` is the
+    /// runtime default only.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub context_window_error: Option<String>,
@@ -527,27 +486,23 @@ pub struct SessionTimelinePageView {
 #[serde(rename_all = "camelCase")]
 pub struct SessionProjectionRevisionView {
     pub store_version: u64,
-    /// The observed lineage inputs, excluding streamed transcript changes.
     pub provenance_version: u64,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionLiveTextPatchView {
-    /// unchanged | append | replace
     pub mode: String,
     pub value: String,
     pub byte_len: usize,
     pub hash: String,
 }
-
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionLiveDeltaView {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub live_cursor: Option<String>,
-    /// delta | unchanged | snapshotRequired
     pub outcome: String,
     pub revision: SessionProjectionRevisionView,
     pub request_id: String,
@@ -562,12 +517,11 @@ pub struct SessionLiveDeltaView {
 pub struct SessionHydrationView {
     pub session_id: String,
     pub node_did: String,
-    /// idle | requested | serving | complete | failed | unreadable
     pub phase: String,
     pub merged_count: usize,
     pub covered_count: usize,
     pub served_count: Option<usize>,
-    /// The signed rejection detail, or why this client cannot read the session.
+    /// The signed rejection detail, or why this client cannot read it.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub detail: Option<String>,
@@ -576,8 +530,6 @@ pub struct SessionHydrationView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopSessionSnapshot {
-    /// Ephemeral identity of the canonical live source. Full reads still own
-    /// historical reconciliation; this cursor carries no history coverage.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub live_cursor: Option<String>,
@@ -593,15 +545,10 @@ pub struct DesktopSessionSnapshot {
     pub retry_eligibility: RetryEligibilityView,
     pub latest_request_outcome: Option<RequestOutcomeView>,
     pub pending_turn: Option<PendingTurnView>,
-    /// Unclaimed messages waiting behind the session's turn, in queue order.
-    /// They have not entered the transcript: a claim either folds them into
-    /// the claimed turn as its own user entries or makes one the next turn.
     pub queued_turns: Vec<PendingTurnView>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub pending_queue: Option<Vec<PendingQueueEntryView>>,
-    /// Requests a claim folded, each with the request that answered it. The
-    /// requests are control-plane rows, so this does not depend on the page.
     pub folded_inputs: Vec<FoldedInputView>,
     pub context: SessionContextView,
     pub timeline_items: Vec<RenderedTimelineItem>,

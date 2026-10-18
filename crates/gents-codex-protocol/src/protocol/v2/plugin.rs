@@ -10,11 +10,9 @@ use std::path::PathBuf;
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillsListParams {
-    /// When empty, defaults to the current session working directory.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cwds: Vec<PathBuf>,
 
-    /// When true, bypass the skills cache and re-scan skills from disk.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub force_reload: bool,
 }
@@ -28,7 +26,6 @@ pub struct SkillsListResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct HooksListParams {
-    /// When empty, defaults to the current session working directory.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cwds: Vec<PathBuf>,
 }
@@ -92,21 +89,14 @@ pub struct MarketplaceUpgradeErrorInfo {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginListParams {
-    /// Optional working directories used to discover repo marketplaces. When omitted,
-    /// only home-scoped marketplaces and the official curated marketplace are considered.
     pub cwds: Option<Vec<AbsolutePathBuf>>,
-    /// Optional marketplace kind filter. When omitted, only local marketplaces are queried, plus
-    /// the default remote catalog when enabled by feature flag.
     pub marketplace_kinds: Option<Vec<PluginListMarketplaceKind>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginInstalledParams {
-    /// Optional working directories used to discover repo marketplaces.
     pub cwds: Option<Vec<AbsolutePathBuf>>,
-    /// Additional uninstalled plugin names that should be returned when present locally.
-    /// This is used by mention surfaces that intentionally expose install entrypoints.
     pub install_suggestion_plugin_names: Option<Vec<String>>,
 }
 
@@ -325,8 +315,8 @@ pub enum SkillScope {
 pub struct SkillMetadata {
     pub name: String,
     pub description: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     /// Legacy short_description from SKILL.md. Prefer SKILL.json interface.short_description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub short_description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interface: Option<SkillInterface>,
@@ -425,8 +415,6 @@ pub struct HookErrorInfo {
 #[serde(rename_all = "camelCase")]
 pub struct PluginMarketplaceEntry {
     pub name: String,
-    /// Local marketplace file path when the marketplace is backed by a local file.
-    /// Remote-only catalog marketplaces do not have a local path.
     pub path: Option<AbsolutePathBuf>,
     pub interface: Option<MarketplaceInterface>,
     pub plugins: Vec<PluginSummary>,
@@ -458,9 +446,6 @@ pub enum PluginAuthPolicy {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PluginAvailability {
-    /// Plugin-service currently sends `"ENABLED"` for available remote plugins.
-    /// Codex app-server exposes `"AVAILABLE"` in its API; the alias keeps
-    /// decoding compatible with that upstream response.
     #[serde(rename = "AVAILABLE", alias = "ENABLED")]
     #[default]
     Available,
@@ -472,20 +457,16 @@ pub enum PluginAvailability {
 #[serde(rename_all = "camelCase")]
 pub struct PluginSummary {
     pub id: String,
-    /// Backend remote plugin identifier when available.
     pub remote_plugin_id: Option<String>,
-    /// Version of the locally materialized plugin package when available.
     #[serde(default)]
     pub local_version: Option<String>,
     pub name: String,
-    /// Remote sharing context associated with this plugin when available.
     pub share_context: Option<PluginShareContext>,
     pub source: PluginSource,
     pub installed: bool,
     pub enabled: bool,
     pub install_policy: PluginInstallPolicy,
     pub auth_policy: PluginAuthPolicy,
-    /// Availability state for installing and using the plugin.
     #[serde(default)]
     pub availability: PluginAvailability,
     pub interface: Option<PluginInterface>,
@@ -497,7 +478,6 @@ pub struct PluginSummary {
 #[serde(rename_all = "camelCase")]
 pub struct PluginShareContext {
     pub remote_plugin_id: String,
-    /// Version of the remote shared plugin release when available.
     #[serde(default)]
     pub remote_version: Option<String>,
     pub discoverability: Option<PluginShareDiscoverability>,
@@ -550,21 +530,13 @@ pub struct PluginInterface {
     pub website_url: Option<String>,
     pub privacy_policy_url: Option<String>,
     pub terms_of_service_url: Option<String>,
-    /// Starter prompts for the plugin. Capped at 3 entries with a maximum of
-    /// 128 characters per entry.
     pub default_prompt: Option<Vec<String>>,
     pub brand_color: Option<String>,
-    /// Local composer icon path, resolved from the installed plugin package.
     pub composer_icon: Option<AbsolutePathBuf>,
-    /// Remote composer icon URL from the plugin catalog.
     pub composer_icon_url: Option<String>,
-    /// Local logo path, resolved from the installed plugin package.
     pub logo: Option<AbsolutePathBuf>,
-    /// Remote logo URL from the plugin catalog.
     pub logo_url: Option<String>,
-    /// Local screenshot paths, resolved from the installed plugin package.
     pub screenshots: Vec<AbsolutePathBuf>,
-    /// Remote screenshot URLs from the plugin catalog.
     pub screenshot_urls: Vec<String>,
 }
 
@@ -588,9 +560,7 @@ pub enum PluginSource {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillsConfigWriteParams {
-    /// Path-based selector.
     pub path: Option<AbsolutePathBuf>,
-    /// Name-based selector.
     pub name: Option<String>,
     pub enabled: bool,
 }
@@ -628,9 +598,5 @@ pub struct PluginUninstallResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
-/// Notification emitted when watched local skill files change.
-///
-/// Treat this as an invalidation signal and re-run `skills/list` with the
-/// client's current parameters when refreshed skill metadata is needed.
 pub struct SkillsChangedNotification {}
 use crate::core_types::AbsolutePathBuf;

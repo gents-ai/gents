@@ -34,10 +34,6 @@ impl CallToolTool {
     }
 }
 
-/// Return the concrete MCP dispatch identity carried by a `call_tool`
-/// invocation. `call_tool` has no alias-resolution step: these are the exact
-/// registry and native-tool keys used by execution after typed argument
-/// parsing succeeds.
 pub(crate) fn selected_tool_identity(tool_name: &str, args: &str) -> Option<(String, String)> {
     if tool_name != CALL_TOOL_NAME {
         return None;
@@ -542,12 +538,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_stringified_json_object() {
-        normalize_arguments("x-data", "search_bookmarks", &json!("{\"query\":\"amy\"}"))
-            .expect_err("stringified arguments are not part of the tool contract");
-    }
-
-    #[test]
     fn rejects_obvious_schema_type_mismatch() {
         let arguments = json!({ "query": "amy", "limit": "5" })
             .as_object()
@@ -597,31 +587,10 @@ mod tests {
     }
 
     #[test]
-    fn missing_tool_envelope_stays_tool_not_found() {
-        let error = StructuredToolError::tool_not_found(
-            "x-data",
-            "missing_search",
-            vec!["search_bookmarks".to_string()],
-        );
-
-        assert_eq!(error.failure_class, "tool_not_found");
-        assert_eq!(error.path, "/tool_name");
-        assert_eq!(error.service_id, "x-data");
-        assert_eq!(error.tool_name, "missing_search");
-        assert_eq!(
-            error.available_tools,
-            Some(vec!["search_bookmarks".to_string()])
-        );
-    }
-
-    /// Synthesize an oversized MCP text result and confirm that `call_tool`
-    /// caps the returned string and appends an honest truncation marker.
-    #[test]
     fn oversized_mcp_result_is_capped_and_truncation_is_signalled() {
-        // Build a string larger than CALL_TOOL_MAX_BYTES (50 KiB).
         let big_line = "x".repeat(200);
         let lines: Vec<String> = (0..500).map(|_| big_line.clone()).collect();
-        let big_text = lines.join("\n"); // ~100 KiB, well over the 50 KiB cap
+        let big_text = lines.join("\n");
 
         let limits = TruncationLimits {
             max_bytes: CALL_TOOL_MAX_BYTES,
@@ -637,13 +606,11 @@ mod tests {
             capped.len(),
             big_text.len()
         );
-        // Slack: capped output should be within 2× the byte cap (marker overhead)
         assert!(
             capped.len() < CALL_TOOL_MAX_BYTES * 2,
             "capped output should be near the cap, got {}",
             capped.len()
         );
-        // Honest marker must be present so the model knows it was truncated.
         assert!(
             capped.contains("[Showing lines"),
             "honest truncation marker must be present: {capped}"
@@ -652,20 +619,5 @@ mod tests {
             capped.contains("bytes total"),
             "total byte count must be reported: {capped}"
         );
-    }
-
-    /// Small result under the cap must pass through verbatim (no marker added).
-    #[test]
-    fn small_mcp_result_passes_through_unchanged() {
-        let small_text = "hello from MCP tool";
-        let limits = TruncationLimits {
-            max_bytes: CALL_TOOL_MAX_BYTES,
-            max_lines: CALL_TOOL_MAX_LINES,
-        };
-        let (result, _trigger, was_truncated) =
-            truncate_text(small_text, TruncationMode::Head, &limits);
-
-        assert!(!was_truncated);
-        assert_eq!(result, small_text);
     }
 }

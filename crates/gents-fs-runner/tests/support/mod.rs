@@ -1,5 +1,4 @@
-//! Shared helpers for the runner integration-test binaries.
-#![allow(dead_code)] // each test binary compiles this module separately and none uses every helper
+#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 
@@ -7,8 +6,6 @@ use gents_fs_runner::execute_request_with_base;
 use gents_fs_runner::protocol::{GlobArgs, GrepArgs, NativeFsRunnerRequest};
 use serde_json::Value;
 
-/// Fresh, empty temp directory unique to this test (and safe under the
-/// parallel suite: process and thread ids are baked into the name).
 pub fn unique_root(tag: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!(
         "gents-fs-{tag}-{}-{:?}",
@@ -25,7 +22,6 @@ pub fn run_json(root: &Path, request: NativeFsRunnerRequest) -> Value {
     serde_json::from_str(&output).unwrap()
 }
 
-/// Glob request with default budgets, rooted at the base, raw JSON output.
 pub fn glob_request(pattern: &str) -> NativeFsRunnerRequest {
     NativeFsRunnerRequest::Glob(GlobArgs {
         pattern: pattern.to_string(),
@@ -37,7 +33,6 @@ pub fn glob_request(pattern: &str) -> NativeFsRunnerRequest {
     })
 }
 
-/// Grep request with default budgets, rooted at the base, raw JSON output.
 pub fn grep_request(pattern: &str, case_sensitive: bool) -> NativeFsRunnerRequest {
     NativeFsRunnerRequest::Grep(GrepArgs {
         pattern: pattern.to_string(),

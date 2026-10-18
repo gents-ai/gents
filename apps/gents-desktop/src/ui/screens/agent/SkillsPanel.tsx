@@ -1,6 +1,3 @@
-/* Skills: id (immutable after create),
-   name, enabled, display name, description, instructions and tool
-   dependencies, saved through SkillSaveRequest. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { dependentsWarning } from "./dependents";
 import type { SkillView } from "@source-inc/gents-desktop-client";
@@ -168,7 +165,6 @@ function SkillEditor({
   );
 }
 
-/* the canonical document for a skill view, for row edits and copies */
 function skillDocument(deployment: NodeView, s: SkillView) {
   return {
     skill_id: s.skillId,

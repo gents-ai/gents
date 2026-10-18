@@ -210,7 +210,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
     let plugins = Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     access
         .add_schema(
             "type SaturationInput { item: Int correlation: String }
@@ -254,7 +254,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
     .collect();
     let plan = DesiredStateApplyPlan::new(documents).unwrap();
     access
-        .transact("test.callback_saturation_config", |txn| {
+        .transact_write("test.callback_saturation_config", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
         })

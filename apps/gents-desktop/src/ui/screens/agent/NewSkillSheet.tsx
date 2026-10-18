@@ -1,6 +1,3 @@
-/* A skill is content: a name and instructions you write, not settings you
-   pick. So it opens as a sheet beside the agent, with room to write,
-   and resolves with the new skill's id once saved. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { useState } from "react";
 import { Button } from "@gents/ui/components/button";
@@ -22,6 +19,7 @@ import {
 import { Textarea } from "@gents/ui/components/textarea";
 import { newId } from "./draft";
 import { useApp } from "@/app/AppContext";
+import { errorText } from "../../../lib/errorText";
 
 const slug = (s: string) =>
   s
@@ -79,7 +77,7 @@ export function NewSkillSheet({
       reset();
       onClose(skillId);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     } finally {
       setBusy(false);
     }

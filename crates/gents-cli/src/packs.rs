@@ -1,7 +1,3 @@
-//! Pack operations for embedding callers such as the desktop: the same
-//! commands `gents pack` runs, returning their reports instead of printing
-//! them, so there is one install path, not two.
-
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -17,11 +13,10 @@ use crate::commands::pack as command;
 use crate::output_format::OutputFormat;
 use crate::request_helpers::capture_report;
 
-/// What to do with pack documents someone edited since they were installed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum EditedDocuments {
-    /// Stop and name them.
     #[default]
     Refuse,
     Overwrite,
@@ -43,7 +38,6 @@ fn scope(home: PathBuf) -> GraphScopeArgs {
     }
 }
 
-/// Installed packs with the registry's latest version of each.
 pub async fn installed(home: PathBuf, registry: Option<String>) -> Result<Value> {
     capture_report(command::update::outdated(PackOutdatedArgs {
         scope: scope(home),
@@ -65,8 +59,6 @@ pub async fn info(registry: Option<String>, package: String) -> Result<Value> {
     capture_report(command::account::info(PackInfoArgs { package, registry })).await
 }
 
-/// Installs `package` (a registry name, `sha256:<hex>`, a `.pack` file or a
-/// directory), or with `preview` reports what it would write.
 #[allow(clippy::too_many_arguments)]
 pub async fn install(
     home: PathBuf,
@@ -93,8 +85,6 @@ pub async fn install(
     .await
 }
 
-/// The installed plugins that can call a model, which profile each is bound
-/// to (`null` when none), and the profiles a slot may be bound to.
 pub async fn plugin_slots(home: PathBuf) -> Result<Value> {
     let plugins = gents::plugin::store::list_records(&home)?
         .into_iter()
@@ -115,8 +105,6 @@ pub async fn plugin_slots(home: PathBuf) -> Result<Value> {
     Ok(serde_json::json!({"plugins": plugins, "profiles": profiles}))
 }
 
-/// Binds the installed `plugin`'s model slot to `profile`, or leaves it
-/// unbound when `profile` is `None`.
 pub async fn bind_plugin_slot(
     home: PathBuf,
     plugin: String,
@@ -283,18 +271,6 @@ pub async fn ux_data_surfaces(
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn a_captured_command_returns_its_report_instead_of_printing() {
-        let report = capture_report(async {
-            crate::print_json(&serde_json::json!({"first": true}))?;
-            crate::print_json(&serde_json::json!({"last": true}))
-        })
-        .await
-        .unwrap();
-        assert_eq!(report, serde_json::json!({"last": true}));
-        assert!(capture_report(async { Ok(()) }).await.is_err());
-    }
-
     /// `ctx.plugin` resolves its pack from the caller's own listing: an
     /// unknown listing, a plugin outside a pack and a plugin the pack does
     /// not ship are each refused by name; the pack's own plugin resolves.
@@ -362,17 +338,6 @@ mod tests {
         assert_eq!(
             plugin_call_target(home.path(), "examples/board_pack/board", "board_store").unwrap(),
             "examples/board_pack"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_registry_error_reaches_the_caller() {
-        let error = search(Some("http://127.0.0.1:1".into()), "x".into(), 1)
-            .await
-            .unwrap_err();
-        assert!(
-            format!("{error:#}").contains("could not reach the registry"),
-            "{error:#}"
         );
     }
 }

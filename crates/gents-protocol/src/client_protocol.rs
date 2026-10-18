@@ -1,17 +1,7 @@
-//! Client turn observation contract (#1571).
-//!
-//! Execution status comes only from request lifecycle and supersession. Output
-//! visibility comes separately from shared output reconstruction: missing replicated
-//! dependencies do not demote a terminal request, and visible bytes do not complete
-//! an active one. `Running` does not assert that bytes are currently arriving.
-//!
-//! Implements the request-only projection in `Proofs/Client/Types.lean`.
-
 use std::collections::HashSet;
 
 pub use crate::request_lifecycle::{InvalidRequestLifecycleState, RequestLifecycleState};
 
-/// Client execution indicators, independent of output availability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientTurnState {
     WaitingForClaim,
@@ -23,7 +13,6 @@ pub enum ClientTurnState {
 }
 
 impl ClientTurnState {
-    /// Terminal states share rank 2. Transition properties belong to Client.lean.
     pub fn rank(self) -> u32 {
         match self {
             Self::WaitingForClaim => 0,
@@ -56,11 +45,6 @@ pub struct AttemptView {
     pub request: RequestSnapshot,
 }
 
-/// Request-only state for the current request at the head of a client turn.
-///
-/// `turn_state` is the execution indicator. `request_state` preserves detail
-/// such as workspace binding. Output readiness,
-/// live previews and message completeness are not execution states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClientHeadProjection {
     pub turn_state: ClientTurnState,
@@ -99,12 +83,6 @@ pub fn project_attempt(view: &AttemptView) -> ClientHeadProjection {
     }
 }
 
-/// Request-only projection of one persisted attempt.
-///
-/// Two arguments only: the persisted lifecycle state and whether the request is
-/// superseded. Persisted responses carry no execution facts, so there is no
-/// response argument. Returns `None` when the persisted state is not a valid
-/// lifecycle value.
 pub fn derive_persisted_attempt(
     lifecycle_state: &str,
     is_superseded: bool,
@@ -112,11 +90,6 @@ pub fn derive_persisted_attempt(
     project_persisted_attempt(lifecycle_state, is_superseded).map(|view| view.turn_state)
 }
 
-/// Request-only head projection of one persisted attempt.
-///
-/// Same two arguments as [`derive_persisted_attempt`]; see there for why there
-/// is no response argument. Returns `None` when the persisted state is not a
-/// valid lifecycle value.
 pub fn project_persisted_attempt(
     lifecycle_state: &str,
     is_superseded: bool,
@@ -132,13 +105,6 @@ pub fn project_persisted_attempt(
     }))
 }
 
-/// Unordered retry-tip resolution over already-authorized attempts.
-///
-/// The caller supplies the scoped candidate set (agent/session scoping is the
-/// caller's authorization decision, not re-derived here). The turn head is the
-/// exactly one candidate that no other candidate references as its retry
-/// parent. Duplicate request IDs and zero or multiple tips return `None`.
-/// Closed cycles have no tip; this is not complete graph validation.
 pub fn derive_turn(attempts: &[AttemptView]) -> Option<ClientTurnState> {
     let mut seen = HashSet::new();
     for attempt in attempts {
@@ -147,8 +113,6 @@ pub fn derive_turn(attempts: &[AttemptView]) -> Option<ClientTurnState> {
         }
     }
 
-    // Candidate tips are exactly the attempts whose ID is not named as a retry
-    // parent by another attempt (Proofs/Client/Types.lean `retryTips`).
     let parents: HashSet<_> = attempts
         .iter()
         .filter_map(|attempt| attempt.request.retry_parent_request.as_deref())
@@ -157,9 +121,6 @@ pub fn derive_turn(attempts: &[AttemptView]) -> Option<ClientTurnState> {
         .iter()
         .filter(|attempt| !parents.contains(attempt.request.request_id.as_str()));
 
-    // Exactly one tip, or fail closed: zero tips (including a closed cycle,
-    // where every member is referenced as a parent) and multiple-tip ambiguity
-    // are both rejected. This is a projection, not complete graph validation.
     match (tips.next(), tips.next()) {
         (Some(tip), None) => Some(derive_attempt(tip)),
         _ => None,

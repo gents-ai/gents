@@ -1,13 +1,9 @@
-/** Injected transport and the package's only Tauri API import boundary. */
-
 import type { ClientUpdateEvent as GeneratedClientUpdateEvent } from "./generated/ClientUpdateEvent.js";
 
 export type ClientUpdateEvent = Partial<GeneratedClientUpdateEvent>;
 
 export type Unlisten = () => void;
 
-/* The bridge opens the browser for a provider's sign-in itself; it also
-   sends the URL on these events for the person's "Open browser" fallback. */
 const PROVIDER_LOGIN_URL_EVENT = {
   openai: "desktop://codex-login-url",
   anthropic: "desktop://claude-login-url",

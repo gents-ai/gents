@@ -3,16 +3,14 @@ import Proofs.RequestExecutionLease.State
 namespace RequestExecutionLease
 
 /-!
-`step?` models authorization-time policy. Ordinary writes hold the local
-mutation gate. Renewal may instead use a native validated transaction. The
-observed-transaction owner exposes delay and native OCC separately; this machine
-does not claim that another process or remote merge shares the local mutex.
-
-Raw output append is the only producer write that does not rewrite the request's
-explicit deadline. Exact replay is identity and never stamps fresh progress.
-Canonical source closure, header publication, pending tool rows, and exact
-recovery extent are composition obligations: this machine only authorizes their
-generation-fenced request CAS and does not model their effects.
+`step?` models authorization-time policy: ordinary writes hold the local mutation
+gate, renewal may use a native validated transaction, and the observed-transaction
+owner exposes delay and native OCC separately — no shared-mutex claim with other
+processes or remote merges. Raw output append is the only producer write that does
+not rewrite the request's explicit deadline; exact replay is identity. Canonical
+source closure, header publication, pending tool rows, and exact recovery extent
+are composition obligations outside this machine, which only authorizes the
+generation-fenced request CAS.
 -/
 
 inductive ProducerDecision where
@@ -27,8 +25,7 @@ inductive Action (Generation : Type) where
   | begin (boundary : Boundary) (generation : Generation)
   | appendOutput (boundary : Boundary) (generation : Generation)
   | renew (boundary : Boundary) (generation : Generation) (expectedDeadline : Time)
-  /-- Authorizes the request-side CAS for a producer transaction. The canonical
-  output/publication effects are deliberately absent from this world. -/
+  /-- Authorizes the request-side CAS for a producer transaction; canonical output/publication effects are deliberately outside this world. -/
   | authorizeProducerDecision (boundary : Boundary) (generation : Generation)
       (decision : ProducerDecision)
   | socketTraffic (generation : Generation)
@@ -36,18 +33,15 @@ inductive Action (Generation : Type) where
   | advanceTime (now : Time)
   /-- Voluntary relinquishment, not expiry recovery. -/
   | drop (boundary : Boundary) (generation : Generation)
-  /-- Atomic authoritative reread and generation swap for expired work. -/
   | recoverExpired (boundary : Boundary) (expected fresh : Generation)
       (duration explicitDeadline : Time)
   /-- Reclaims explicitly dropped work. -/
   | recoverDropped (boundary : Boundary) (expected fresh : Generation)
       (duration explicitDeadline : Time)
   | finalize (boundary : Boundary) (generation : Generation) (outcome : Outcome)
-  /-- External policy authority. It is not inactivity recovery and intentionally
-  does not treat recent output as a veto. -/
+  /-- External policy authority: not inactivity recovery, and recent output is intentionally not a veto. -/
   | policyRevoke (boundary : Boundary) (expected fresh : Generation) (outcome : Outcome)
-  /-- Atomic expiry recovery that elects the fresh terminal winner. Canonical
-  source recovery and accepted tool-row handling are composed elsewhere. -/
+  /-- Atomic expiry recovery that elects the fresh terminal winner. -/
   | recoverExpiredAndFail (boundary : Boundary) (expected fresh : Generation)
   | recoverExpiredTerminal (boundary : Boundary) (expected fresh : Generation)
       (outcome : Outcome)
@@ -55,8 +49,7 @@ inductive Action (Generation : Type) where
   | recoverDroppedAndFail (boundary : Boundary) (expected fresh : Generation)
   deriving DecidableEq, Repr
 
-/-- The production renewal policy is intentionally not deadline equality:
-every explicit renewal advances the prior deadline by at least one tick. -/
+/-- Every explicit renewal advances the prior deadline by at least one tick. -/
 def renewalInterval (duration : Time) : Time := max 1 (duration / 2)
 
 def renewalDue (duration deadline : Time) : Time :=

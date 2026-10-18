@@ -1,12 +1,8 @@
-//! Native canonical evidence adapter for the loop's source-preserving input.
-
 use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
 use gents_loop::loop_stream::{LoopReplayInput, TaggedMessage};
 
-/// Resolve live and restored continuation evidence through physical canonical
-/// facts. The configured backend and opaque signature bytes confer no origin.
 pub(crate) fn owned_replay_input(
     node: Arc<EmbeddedNode>,
     request: crate::watcher::AgentRequest,
@@ -83,9 +79,6 @@ pub(crate) fn owned_replay_input(
     }
 }
 
-/// Attach each canonical row's physical provenance before any lossy provider
-/// transform. Equal message bytes and provider-assigned IDs never participate
-/// in the association.
 pub(crate) fn tag_canonical_history(
     rows: &[crate::session::SequencedMessage],
 ) -> Vec<TaggedMessage> {

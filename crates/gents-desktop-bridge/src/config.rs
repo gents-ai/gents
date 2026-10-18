@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use gents_desktop_core::client::DesktopPaths;
+
 use crate::snapshot::projection::SnapshotGrants;
 
 #[derive(Debug, Clone)]
@@ -9,8 +11,9 @@ pub struct BridgeConfig {
     pub app_meta: AppMeta,
     pub snapshot_grants: SnapshotGrants,
     pub managed_server: ManagedServerPolicy,
-    /// Custody of new store keys (the client store and a provisioned managed
-    /// home). Tests request file keys so no login-keychain item is written.
+    /// Allows local frontends to use the chat client through private IPC.
+    /// This is independent of the embedding webview's projection grants.
+    pub client_host: bool,
     pub store_key_custody: gents::store_key::StoreKeyCustodyChoice,
 }
 
@@ -27,6 +30,7 @@ impl Default for BridgeConfig {
             },
             snapshot_grants: SnapshotGrants::core_only(),
             managed_server: ManagedServerPolicy::Disabled,
+            client_host: false,
             store_key_custody: gents::store_key::StoreKeyCustodyChoice::default(),
         }
     }
@@ -67,4 +71,16 @@ pub struct AppMeta {
 pub struct TracingConfig {
     pub filter: Option<String>,
     pub console: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedBridgePolicy {
+    pub desktop_paths: DesktopPaths,
+    pub node_home: Option<PathBuf>,
+    pub bootstrap: BootstrapPolicy,
+    pub app_meta: AppMeta,
+    pub snapshot_grants: SnapshotGrants,
+    pub managed_server: ManagedServerPolicy,
+    pub client_host: bool,
+    pub store_key_custody: gents::store_key::StoreKeyCustodyChoice,
 }

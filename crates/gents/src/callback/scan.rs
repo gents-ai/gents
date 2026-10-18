@@ -20,7 +20,8 @@ use super::documents::{
 };
 use super::{CallbackEngine, LIFECYCLE_PENDING};
 
-const SEEN_DOCS_SEED_LIMIT: usize = 10_000;
+use crate::trigger_engine::event_delivery::source_scan::{load_doc_field, load_doc_ids};
+
 const CALLBACK_RESCAN_INTERVAL: Duration = Duration::from_secs(5);
 
 use crate::trigger_engine::event_delivery::{self, Delivery, GroupOutcome};
@@ -80,21 +81,11 @@ impl CallbackEngine {
         let mut desired = HashSet::new();
         let mut cursor_bindings = HashMap::new();
         let mut group_collections = HashSet::new();
-        // Per grouped collection, each binding and the source field that correlates it.
         let mut consumers: HashMap<String, Vec<(String, Option<String>)>> = HashMap::new();
         for binding in &bindings {
-            match load_event_source(
-                self.node.as_ref(),
-                &binding.event_source_id,
-                &binding.node_did,
-            )
-            .await
-            {
+            match load_event_source(&self.node, &binding.event_source_id, &binding.node_did).await {
                 Ok(Some(source)) => {
                     if source.group.is_none() {
-                        // Configuration applies seed this cursor when they
-                        // register the binding; this covers bindings written
-                        // outside them.
                         if !self.cursor_bindings.contains_key(&binding.binding_id) {
                             let _ = self.load_cursor(binding, &source).await;
                         }
@@ -141,19 +132,17 @@ impl CallbackEngine {
         }
     }
 
-    /// Marks the documents already in `collection` as history for grouped
-    /// bindings, except those of a graph run already underway on one of
-    /// `consumers`' own revisions: those are live work the new consumer must
-    /// still deliver.
     async fn seed_seen_docs(
         &mut self,
         collection: &str,
         consumers: &[(String, Option<String>)],
     ) -> Result<()> {
-        let mut ids: HashSet<String> = load_doc_ids(self.node.as_ref(), collection)
-            .await?
-            .into_iter()
-            .collect();
+        let ids = tokio::select! {
+            biased;
+            _ = self.cancel.cancelled() => return Ok(()),
+            ids = load_doc_ids(self.node.as_ref(), collection) => ids?,
+        };
+        let mut ids: HashSet<String> = ids.into_iter().collect();
         let live = crate::graph_pipeline::live_run_correlations(
             self.node.as_ref(),
             &self.node_did,
@@ -163,9 +152,12 @@ impl CallbackEngine {
         if !live.is_empty() {
             for (consumer, field) in consumers {
                 let Some(field) = field else { continue };
-                for (doc_id, correlation) in
-                    load_doc_field(self.node.as_ref(), collection, field).await?
-                {
+                let fields = tokio::select! {
+                    biased;
+                    _ = self.cancel.cancelled() => return Ok(()),
+                    fields = load_doc_field(self.node.as_ref(), collection, field) => fields?,
+                };
+                for (doc_id, correlation) in fields {
                     if crate::graph_pipeline::is_live_for(&live, consumer, &correlation) {
                         ids.remove(&doc_id);
                     }
@@ -197,7 +189,12 @@ impl CallbackEngine {
         self.deliver_arrivals(None).await;
         let collections: Vec<String> = self.group_collections.iter().cloned().collect();
         for collection in collections {
-            let ids = match load_doc_ids(self.node.as_ref(), &collection).await {
+            let read = tokio::select! {
+                biased;
+                _ = self.cancel.cancelled() => return,
+                ids = load_doc_ids(self.node.as_ref(), &collection) => ids,
+            };
+            let ids = match read {
                 Ok(ids) => ids,
                 Err(error) => {
                     tracing::warn!(
@@ -245,8 +242,11 @@ impl CallbackEngine {
         let consumer = EventConsumer::CallbackBinding {
             binding_id: binding.binding_id.clone(),
         };
-        let record =
-            ConfigAccess::transact_local(&self.node, None, "callback.seed_arrival_cursor", |txn| {
+        let record = ConfigAccess::transact_local_write(
+            &self.node,
+            None,
+            "callback.seed_arrival_cursor",
+            |txn| {
                 let consumer = &consumer;
                 Box::pin(async move {
                     event_source_cursor::load_or_seed_for_source(
@@ -257,8 +257,9 @@ impl CallbackEngine {
                     )
                     .await
                 })
-            })
-            .await;
+            },
+        )
+        .await;
         match record {
             Ok(record) => Ok(record.cursor.after),
             Err(error) => {
@@ -272,8 +273,8 @@ impl CallbackEngine {
         }
     }
 
-    /// Advances `binding`'s cursor through `position` when every arrival up
-    /// to it is admitted as an invocation or excluded by the cursor owner.
+    /// Advances the cursor when every arrival up to it is admitted or
+    /// excluded by the cursor owner.
     async fn checkpoint(
         &self,
         binding: &CallbackBindingDoc,
@@ -283,7 +284,7 @@ impl CallbackEngine {
         let consumer = EventConsumer::CallbackBinding {
             binding_id: binding.binding_id.clone(),
         };
-        ConfigAccess::transact_local(&self.node, None, "callback.advance_arrival", |txn| {
+        ConfigAccess::transact_local_write(&self.node, None, "callback.advance_arrival", |txn| {
             let consumer = &consumer;
             Box::pin(async move {
                 event_source_cursor::checkpoint_prefix(
@@ -300,10 +301,6 @@ impl CallbackEngine {
         .await
     }
 
-    /// Per-document bindings deliver from their receiving-node arrival cursor,
-    /// the owner task triggers use: an arrival after a binding's registration
-    /// stays pending until admitted as an invocation or excluded, however late
-    /// this engine first observes the source.
     pub(super) async fn deliver_arrivals(&mut self, collection: Option<&str>) {
         let bindings = match list_enabled_bindings(self.node.as_ref(), &self.node_did).await {
             Ok(bindings) => bindings,
@@ -323,7 +320,7 @@ impl CallbackEngine {
                 continue;
             }
             let source = match load_event_source(
-                self.node.as_ref(),
+                &self.node,
                 &binding.event_source_id,
                 &binding.node_did,
             )
@@ -384,8 +381,6 @@ impl CallbackEngine {
                     .as_str()
                     .context("arrival lacks document ID")?;
                 let position = entry["cursor"].as_str().context("arrival lacks cursor")?;
-                // Admission is idempotent per binding and document, so an
-                // arrival admitted before a crash finds its invocation again.
                 self.materialize_for_binding(binding, collection, doc_id, false)
                     .await?;
                 if !self.checkpoint(binding, collection, position).await? {
@@ -393,8 +388,7 @@ impl CallbackEngine {
                 }
                 after = position.to_owned();
             }
-            // A page ends at `min(head, after + limit)`; the journal is drained
-            // only when a page makes no progress.
+            // The journal is drained only when a page makes no progress.
             let next = page["next"]
                 .as_str()
                 .context("arrival query omitted next cursor")?;
@@ -408,8 +402,6 @@ impl CallbackEngine {
         }
     }
 
-    /// Grouped bindings admit their sealed groups; per-document bindings
-    /// deliver from their arrival cursor instead.
     pub(super) async fn handle_created_doc(&mut self, collection: &str, doc_id: &str) {
         let bindings = match list_enabled_bindings(self.node.as_ref(), &self.node_did).await {
             Ok(bindings) => bindings,
@@ -442,9 +434,6 @@ impl CallbackEngine {
         }
     }
 
-    /// Admits `doc_id` for `binding` when the binding's persisted source is
-    /// `grouped` (or per-document) and both binding and callback are still
-    /// enabled; the engine's binding snapshot may be stale.
     pub(super) async fn materialize_for_binding(
         &mut self,
         binding: &CallbackBindingDoc,
@@ -453,7 +442,7 @@ impl CallbackEngine {
         grouped: bool,
     ) -> Result<bool> {
         let Some(binding) =
-            load_binding(self.node.as_ref(), &binding.binding_id, &binding.node_did).await?
+            load_binding(&self.node, &binding.binding_id, &binding.node_did).await?
         else {
             return Ok(false);
         };
@@ -469,18 +458,14 @@ impl CallbackEngine {
             );
             return Ok(false);
         }
-        let event = load_event_source(
-            self.node.as_ref(),
-            &binding.event_source_id,
-            &binding.node_did,
-        )
-        .await?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "CallbackBinding {} EventSource missing for owner",
-                binding.binding_id
-            )
-        })?;
+        let event = load_event_source(&self.node, &binding.event_source_id, &binding.node_did)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "CallbackBinding {} EventSource missing for owner",
+                    binding.binding_id
+                )
+            })?;
         if event.source_collection != collection || event.group.is_some() != grouped {
             return Ok(false);
         }
@@ -494,7 +479,7 @@ impl CallbackEngine {
             event.filter.as_deref(),
             None,
         )?;
-        let callback = load_callback(self.node.as_ref(), &binding.callback_id, &binding.node_did)
+        let callback = load_callback(&self.node, &binding.callback_id, &binding.node_did)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Callback {} missing for owner", binding.callback_id))?;
         if !callback.enabled {
@@ -565,7 +550,6 @@ impl CallbackEngine {
         self.publish_invocation(invocation, &callback).await
     }
 
-    /// One string field of a source document.
     async fn source_field(
         &self,
         collection: &str,
@@ -578,7 +562,9 @@ impl CallbackEngine {
             "{{{collection}(filter:{{_docID:{{_eq:\"{}\"}}}},limit:1){{{field}}}}}",
             escape_graphql_string(doc_id)
         );
-        let response = self.node.execute(&query).await;
+        let response =
+            crate::graphql::graphql_with_transaction_retry(&self.node, &query, "source_field")
+                .await?;
         Ok(crate::graphql::rows::<Value>(&response, collection)?
             .first()
             .and_then(|row| row.get(field))
@@ -591,7 +577,7 @@ impl CallbackEngine {
         invocation: CallbackInvocationDoc,
         callback: &crate::document_config::Callback,
     ) -> Result<bool> {
-        let stored = create_pending_invocation(self.node.as_ref(), &invocation).await?;
+        let stored = create_pending_invocation(&self.node, &invocation).await?;
         if invocation_is_claimable(&self.node_did, &stored) {
             if let Err(error) = self.execute_invocation(&stored, callback).await {
                 tracing::warn!(
@@ -770,61 +756,6 @@ impl CallbackEngine {
     }
 }
 
-/// Each document's id and string `field`, for the same bounded page
-/// [`load_doc_ids`] reads.
-async fn load_doc_field(
-    node: &EmbeddedNode,
-    collection: &str,
-    field: &str,
-) -> Result<Vec<(String, String)>> {
-    crate::graphql::validate_collection_identifier(collection)?;
-    crate::graphql::validate_graphql_name(field)?;
-    let query = format!(
-        r#"query {{ {collection}(limit: {limit}) {{ _docID {field} }} }}"#,
-        limit = SEEN_DOCS_SEED_LIMIT,
-    );
-    let response =
-        crate::graphql::graphql_with_transaction_retry(node, &query, "callback.seed_correlations")
-            .await?;
-    Ok(crate::graphql::rows::<Value>(&response, collection)?
-        .into_iter()
-        .filter_map(|row| {
-            Some((
-                row.get("_docID")?.as_str()?.to_owned(),
-                row.get(field)?.as_str()?.to_owned(),
-            ))
-        })
-        .collect())
-}
-
-async fn load_doc_ids(node: &EmbeddedNode, collection: &str) -> Result<Vec<String>> {
-    crate::graphql::validate_collection_identifier(collection)?;
-    let query = format!(
-        r#"query {{ {collection}(limit: {limit}) {{ _docID }} }}"#,
-        limit = SEEN_DOCS_SEED_LIMIT,
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "callback source scan for {collection} failed: {:?}",
-            response.errors
-        );
-    }
-    Ok(response
-        .data
-        .as_ref()
-        .and_then(|data| data.get(collection))
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|row| {
-            row.get("_docID")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .collect())
-}
-
 pub(super) async fn probe_filter(
     node: &EmbeddedNode,
     collection: &str,
@@ -862,10 +793,8 @@ pub(super) async fn fetch_source_doc(
         }}"#,
         id = escape_graphql_string(source_doc_id),
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!("fetch callback source doc errors: {:?}", response.errors);
-    }
+    let response =
+        crate::graphql::graphql_with_transaction_retry(node, &query, "fetch_source_doc").await?;
     let Some(row) = response
         .data
         .as_ref()

@@ -43,9 +43,6 @@ pub async fn seed_standalone_fixture() -> (Arc<ClientCore>, TempDir) {
 
 pub const OPERATOR: &str = "did:test:operator";
 
-/// Read counter over the sanctioned access owner, so tests can pin how many
-/// database round trips a projection issues. Instrumentation only: it adds no
-/// retry, authorization or filtering of its own.
 pub struct CountingRead {
     inner: gents::config_client::ConfigAccess,
     queries: std::sync::atomic::AtomicUsize,
@@ -73,15 +70,6 @@ impl gents::config_client::ConfigRead for CountingRead {
     }
 }
 
-/// `req_parent` in `sess_parent` made four agent-tool calls:
-/// - `tc_start` (`agent_new`) started `sess_child` (`req_child`), then
-///   `tc_message` (`agent_message`) messaged it again (`req_child_2`);
-/// - `tc_peer` (`agent_new`) started `sess_peer` on another node (`req_peer`);
-/// - `tc_existing` (`agent_message`) messaged `sess_existing`, which the
-///   person started (`req_existing_1`), as `req_existing_2`.
-///
-/// Every session's requester is the operator node, as the runtime writes
-/// a started session. Returns the core and `req_parent`'s document id.
 pub async fn seed_provenance_fixture() -> (Arc<ClientCore>, TempDir, String) {
     let (core, tmp) = boot_core().await;
     let parent = create_request(
@@ -178,11 +166,32 @@ pub async fn seed_provenance_fixture() -> (Arc<ClientCore>, TempDir, String) {
     (core, tmp, parent)
 }
 
-/// A fleet-shaped provenance fixture for the snapshot starter join: two parent
-/// requests in their own sessions, two children started by the first parent,
-/// one by the second, one child whose stored parent names no stored request,
-/// and one session with no provenance. Returns the core and both parent
-/// request document ids.
+pub async fn refresh_request_and_assert_fresh_projection(
+    core: &ClientCore,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    request_id: &str,
+) {
+    let projection = core
+        .refresh_local_request(node_did, session_id, Some(request_id), None, &[])
+        .await
+        .expect("refresh request");
+    let projection = projection.unwrap_or_else(|| {
+        panic!("request {request_id} has no fresh projection for node {node_did}")
+    });
+    assert_eq!(projection.requester_did.as_deref(), requester_did);
+    assert!(
+        projection.requests.iter().any(|row| {
+            row.node_did.as_deref() == Some(node_did)
+                && row.session_id.as_deref() == Some(session_id)
+                && row.requester_did.as_deref() == requester_did
+                && row.request_id == request_id
+        }),
+        "fresh request projection omitted {request_id} for node {node_did}"
+    );
+}
+
 pub async fn seed_fleet_starter_fixture() -> (Arc<ClientCore>, TempDir, String, String) {
     let (core, tmp) = boot_core().await;
     let parent_a = create_request(
@@ -247,8 +256,6 @@ async fn created_doc_id(core: &Arc<ClientCore>, mutation: &str, collection: &str
         .to_owned()
 }
 
-/// Create one public request of the operator; `cause` is the causing
-/// request's document id, and the causing call's logical and physical ids.
 #[allow(clippy::too_many_arguments)]
 async fn create_request(
     core: &Arc<ClientCore>,

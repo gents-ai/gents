@@ -179,8 +179,6 @@ impl ToolCeiling {
         self
     }
 
-    /// Foreground cap for explicit `timeout_secs` requests (#1018). Unset ⇒
-    /// the cap equals the default, i.e. the coupled #985 behavior.
     pub fn with_command_timeout_max_secs(mut self, timeout_secs: u64) -> Self {
         self.command_timeout_max = Some(std::time::Duration::from_secs(timeout_secs.max(1)));
         self

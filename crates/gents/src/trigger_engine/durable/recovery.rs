@@ -3,10 +3,11 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::trigger_delivery::TriggerFire;
 
-/// Startup and crash-boundary tests use the same transaction owner. Terminal
-/// facts and assignment bindings are observed in the publication snapshot.
-pub(crate) async fn recover_outcomes(node: &EmbeddedNode, owner: &str) -> Result<usize> {
-    crate::config_client::ConfigAccess::transact_local(
+pub(crate) async fn recover_outcomes(
+    node: &std::sync::Arc<EmbeddedNode>,
+    owner: &str,
+) -> Result<usize> {
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "trigger.recover_outcomes",
@@ -124,11 +125,13 @@ mod tests {
                 created_at: "2026-01-01T00:00:00Z".into(),
             };
             let directory = tempfile::tempdir().unwrap();
-            let node = EmbeddedNode::builder()
-                .data_path(directory.path())
-                .build()
-                .await
-                .unwrap();
+            let node = std::sync::Arc::new(
+                EmbeddedNode::builder()
+                    .data_path(directory.path())
+                    .build()
+                    .await
+                    .unwrap(),
+            );
             crate::ensure_runtime_schemas(&node).await.unwrap();
             let terminal = modeled["terminal"].as_bool().unwrap();
             let state = if terminal { "completed" } else { "pending" };
@@ -141,7 +144,7 @@ mod tests {
                 crate::graphql::escape_graphql_string(&fire.identity.owner_did),
                 crate::graphql::escape_graphql_string(&session)
             );
-            ConfigAccess::transact_local(&node, None, "test.seed_terminal_outcome_boundary", |txn| {
+            ConfigAccess::transact_local_write(&node, None, "test.seed_terminal_outcome_boundary", |txn| {
                 let fire = &fire;
                 let request_mutation = &request_mutation;
                 Box::pin(async move {
@@ -165,11 +168,13 @@ mod tests {
             }).await.unwrap();
             node.shutdown().await;
             drop(node);
-            let node = EmbeddedNode::builder()
-                .data_path(directory.path())
-                .build()
-                .await
-                .unwrap();
+            let node = std::sync::Arc::new(
+                EmbeddedNode::builder()
+                    .data_path(directory.path())
+                    .build()
+                    .await
+                    .unwrap(),
+            );
             let expected = case["post"]["outcomes"].as_array().unwrap().len();
             let before = case["pre"]["outcomes"].as_array().unwrap().len();
             assert_eq!(

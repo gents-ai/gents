@@ -77,8 +77,6 @@ impl BackgroundToolRegistry {
         }
     }
 
-    /// Register the behavior's allowed background tools with its configured
-    /// lifetimes and observation waits.
     pub(crate) fn from_config(
         tools: Vec<Box<dyn ToolDyn>>,
         config: &crate::tool_surface::BackgroundToolConfig,
@@ -141,10 +139,6 @@ impl BackgroundLiveOutputState {
     }
 }
 
-/// Process-wide volatile state for ordinary background tool calls.
-///
-/// Sharing this registry across request hooks keeps both cancellation tokens
-/// and live output buffers reachable until each process becomes terminal.
 #[derive(Clone, Default)]
 pub struct BackgroundExecutionRegistry {
     inner: Arc<std::sync::Mutex<HashMap<String, BackgroundExecution>>>,
@@ -153,22 +147,17 @@ pub struct BackgroundExecutionRegistry {
     task_hook_records: crate::task_hooks::TaskHookRecordStore,
 }
 
-/// Bound on waiting for a signalled live worker to release its execution.
 const LIVE_STOP_RELEASE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 impl BackgroundExecutionRegistry {
     /// Keep durable host records of spawned background processes in `dir`,
-    /// which must belong to this runtime's exclusively locked store. Records
-    /// are otherwise volatile: a restarted runtime cannot prove it owns a
-    /// surviving process and settles its row as lost.
+    /// which must belong to this runtime's exclusively locked store; a
+    /// restarted runtime otherwise cannot prove it owns a surviving process.
     pub fn with_process_records(mut self, dir: PathBuf) -> Self {
         self.process_records = crate::managed_exec::ownership::ProcessRecordStore::Durable(dir);
         self
     }
 
-    /// Keep durable records of task hook attempts in `dir`, under the same
-    /// store-lock condition as background process records, so a restarted
-    /// runtime can finish an interrupted execution's cleanup.
     pub fn with_task_hook_records(mut self, dir: PathBuf) -> Self {
         self.task_hook_records = crate::task_hooks::TaskHookRecordStore::durable(dir);
         self
@@ -178,8 +167,6 @@ impl BackgroundExecutionRegistry {
         &self.task_hook_records
     }
 
-    /// Recorder installed around one background execution. Each spawned
-    /// process replaces the execution's record.
     pub(crate) fn process_recorder(
         &self,
         tool_call_id: &str,
@@ -218,9 +205,6 @@ impl BackgroundExecutionRegistry {
         self.process_records.list()
     }
 
-    /// Forgets a finished execution's record once its leader is observed
-    /// gone. A leader that outlives its execution keeps the record so a later
-    /// sweep can stop it.
     pub(crate) async fn release_process_record(&self, tool_call_id: &str, tool_call_doc_id: &str) {
         if let Some(record) = self.process_record(tool_call_id, tool_call_doc_id) {
             let observed = record
@@ -243,12 +227,6 @@ impl BackgroundExecutionRegistry {
         self.process_records.remove(tool_call_id);
     }
 
-    /// Stops one background execution through its owner and reports the
-    /// verdict (Lean `ManagedExec.stopOutcome`). A live worker in this
-    /// runtime is proven ownership: it is signalled and must release its
-    /// execution, and any recorded group must then be observed empty. With
-    /// no live worker, only a durable record whose leader matches proves
-    /// ownership. The caller persists the row's terminal state first.
     pub(crate) async fn stop_execution(
         &self,
         tool_call_id: &str,
@@ -283,9 +261,6 @@ impl BackgroundExecutionRegistry {
         ProcessStopOutcome::from_observations(before, after)
     }
 
-    /// Authorized observation of the runtime-owned output buffer. Adapters
-    /// use the same output and identity boundary as read_process, but read one
-    /// complete retained snapshot without changing the model's page budget.
     pub async fn read_process_output_snapshot(
         &self,
         node: &EmbeddedNode,
@@ -350,21 +325,10 @@ impl BackgroundExecutionRegistry {
         self.remove_now(tool_call_id);
     }
 
-    /// Returns whether this process still owns a live background execution.
     pub(crate) async fn contains(&self, tool_call_id: &str) -> bool {
         self.lock_executions().contains_key(tool_call_id)
     }
 
-    /// Waits until this process releases ownership of a background execution.
-    ///
-    /// Normal worker completion releases ownership after durable terminal
-    /// persistence, completion projection, and live-output cleanup. An
-    /// unexpected task panic or abort drops the same ownership guard earlier,
-    /// allowing recovery to observe the abandoned durable execution.
-    ///
-    /// Subscribing while holding the registry lock makes the boundary
-    /// missed-event-safe: an execution removed before this call returns
-    /// immediately, while an execution removed afterward signals this waiter.
     pub async fn wait_for_completion(&self, tool_call_id: &str) {
         let mut completion_rx = {
             let executions = self.lock_executions();
@@ -420,19 +384,7 @@ impl Drop for BackgroundExecutionReservation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TranscriptTurnState {
     Idle,
-    AssistantBuilding {
-        sequence: u32,
-    },
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Hook conformance tests construct persisted-turn states."
-        )
-    )]
-    AssistantPersisted {
-        sequence: u32,
-    },
+    AssistantBuilding { sequence: u32 },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -449,17 +401,12 @@ struct SessionState {
     request_deadline_at: Option<DateTime<Utc>>,
     sequence: u32,
     transcript_turn: TranscriptTurnState,
-    persisted_tool_result_keys: HashSet<String>,
     tool_result_identities: HashMap<String, ToolResultIdentity>,
 }
 
 impl SessionState {
-    /// Reset on a genuine user message only. Tool-result messages must NOT
-    /// reset the turn state: with several parallel tool calls accumulated in
-    /// one persisted assistant turn, the first streamed result's user message
-    /// would otherwise revoke the persisted-turn gate the remaining results
-    /// still need (Lean: `Transcript.parallel_results_complete_independently`;
-    /// `completeToolWithResult` never removes a persisted reservation).
+    // Tool-result messages stay in the assistant turn so parallel calls share
+    // its sequence (Lean: `Transcript.parallel_results_complete_independently`).
     fn reset_after_user_message(&mut self) {
         self.transcript_turn = TranscriptTurnState::Idle;
     }
@@ -467,26 +414,13 @@ impl SessionState {
     fn begin_or_continue_assistant_turn(&mut self) -> u32 {
         match self.transcript_turn {
             TranscriptTurnState::AssistantBuilding { sequence } => sequence,
-            TranscriptTurnState::Idle | TranscriptTurnState::AssistantPersisted { .. } => {
+            TranscriptTurnState::Idle => {
                 self.sequence += 1;
                 let sequence = self.sequence;
                 self.transcript_turn = TranscriptTurnState::AssistantBuilding { sequence };
                 sequence
             }
         }
-    }
-
-    #[cfg(test)]
-    fn persist_assistant_turn(&mut self) -> u32 {
-        let sequence = match self.transcript_turn {
-            TranscriptTurnState::AssistantBuilding { sequence } => sequence,
-            TranscriptTurnState::Idle | TranscriptTurnState::AssistantPersisted { .. } => {
-                self.sequence += 1;
-                self.sequence
-            }
-        };
-        self.transcript_turn = TranscriptTurnState::AssistantPersisted { sequence };
-        sequence
     }
 
     fn register_tool_result_identity(
@@ -505,109 +439,6 @@ impl SessionState {
         if let Some(call_id) = non_empty(call_id) {
             identity.call_id = Some(call_id.to_string());
         }
-    }
-
-    fn tool_result_message_identity(
-        &self,
-        internal_call_id: &str,
-        call_id: Option<&str>,
-    ) -> (String, Option<String>) {
-        let registered = self.tool_result_identities.get(internal_call_id);
-        let result_id = registered
-            .and_then(|identity| identity.result_id.clone())
-            .or_else(|| non_empty(call_id).map(ToOwned::to_owned))
-            .unwrap_or_else(|| internal_call_id.to_string());
-        let call_id = registered
-            .and_then(|identity| identity.call_id.clone())
-            .or_else(|| non_empty(call_id).map(ToOwned::to_owned));
-
-        (result_id, call_id)
-    }
-
-    fn mark_tool_result_seen_for_persisted_turn(
-        &mut self,
-        internal_call_id: &str,
-        result_id: Option<&str>,
-        call_id: Option<&str>,
-    ) -> bool {
-        self.register_tool_result_identity(internal_call_id, result_id, call_id);
-        if !matches!(
-            self.transcript_turn,
-            TranscriptTurnState::AssistantPersisted { .. }
-        ) {
-            return false;
-        }
-
-        let keys = self.tool_result_dedupe_keys(internal_call_id, result_id, call_id);
-        self.mark_tool_result_keys_seen(keys)
-    }
-
-    #[cfg(test)]
-    fn mark_stream_tool_result_seen(
-        &mut self,
-        internal_call_id: &str,
-        result_id: &str,
-        call_id: Option<&str>,
-    ) -> anyhow::Result<bool> {
-        self.register_tool_result_identity(internal_call_id, Some(result_id), call_id);
-        let keys = self.tool_result_dedupe_keys(internal_call_id, Some(result_id), call_id);
-        if !matches!(
-            self.transcript_turn,
-            TranscriptTurnState::AssistantPersisted { .. }
-        ) {
-            if self.tool_result_keys_already_seen(&keys) {
-                self.persist_tool_result_keys(keys);
-                return Ok(false);
-            }
-            anyhow::bail!(
-                "cannot persist streamed tool result before its assistant turn is persisted"
-            );
-        }
-        Ok(self.mark_tool_result_keys_seen(keys))
-    }
-
-    fn tool_result_dedupe_keys(
-        &self,
-        internal_call_id: &str,
-        result_id: Option<&str>,
-        call_id: Option<&str>,
-    ) -> Vec<String> {
-        let mut keys = Vec::new();
-        push_tool_result_key(&mut keys, "internal", Some(internal_call_id));
-
-        if let Some(identity) = self.tool_result_identities.get(internal_call_id) {
-            push_tool_result_key(&mut keys, "result", identity.result_id.as_deref());
-            push_tool_result_key(&mut keys, "call", identity.call_id.as_deref());
-        }
-        push_tool_result_key(&mut keys, "result", result_id);
-        push_tool_result_key(&mut keys, "call", call_id);
-
-        keys
-    }
-
-    fn mark_tool_result_keys_seen(&mut self, keys: Vec<String>) -> bool {
-        let already_seen = self.tool_result_keys_already_seen(&keys);
-        self.persist_tool_result_keys(keys);
-        !already_seen
-    }
-
-    fn tool_result_keys_already_seen(&self, keys: &[String]) -> bool {
-        keys.iter()
-            .any(|key| self.persisted_tool_result_keys.contains(key))
-    }
-
-    fn persist_tool_result_keys(&mut self, keys: Vec<String>) {
-        self.persisted_tool_result_keys.extend(keys);
-    }
-}
-
-fn push_tool_result_key(keys: &mut Vec<String>, namespace: &str, value: Option<&str>) {
-    let Some(value) = non_empty(value) else {
-        return;
-    };
-    let key = format!("{namespace}:{value}");
-    if !keys.iter().any(|existing| existing == &key) {
-        keys.push(key);
     }
 }
 
@@ -663,8 +494,6 @@ impl DefraSessionHook {
         }));
         self
     }
-    /// Register provider-published physical calls before dispatch.  The next
-    /// matching hook invocation adopts, rather than creates, that exact row.
     pub(crate) async fn adopt_accepted_tool_calls(
         &self,
         calls: Vec<(String, crate::streaming::AcceptedToolCall)>,
@@ -679,10 +508,6 @@ impl DefraSessionHook {
         Ok(())
     }
 
-    /// Binds hooks to an admitted physical call. Plugin effects require their
-    /// exact parent-admitted arguments; provider calls require StreamProcessor's
-    /// native identity and immutable accepted header. Internal keys alone never
-    /// authorize dispatch.
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn adopt_accepted_tool_dispatch(
         &self,
@@ -796,7 +621,6 @@ impl DefraSessionHook {
                 request_deadline_at: None,
                 sequence: 0,
                 transcript_turn: TranscriptTurnState::Idle,
-                persisted_tool_result_keys: HashSet::new(),
                 tool_result_identities: HashMap::new(),
             })),
             in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
@@ -844,7 +668,6 @@ impl DefraSessionHook {
                 request_deadline_at: None,
                 sequence: max_seq,
                 transcript_turn: TranscriptTurnState::Idle,
-                persisted_tool_result_keys: HashSet::new(),
                 tool_result_identities: HashMap::new(),
             })),
             in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
@@ -882,9 +705,6 @@ impl DefraSessionHook {
         self
     }
 
-    /// Install the already-intersected goal authority for this request hook.
-    /// Defaults are deny-all so a forgotten wiring site cannot turn the
-    /// pre-dispatch persistence hook into an authority bypass.
     pub fn with_goal_tool_authority(
         mut self,
         goal_tools_enabled: bool,
@@ -895,7 +715,6 @@ impl DefraSessionHook {
         self
     }
 
-    /// Share this request's configured output gate with the owned completion loop.
     pub(crate) fn with_output_obligation_gate(
         mut self,
         gate: Option<crate::agent::output_obligation::OutputObligationGate>,
@@ -930,9 +749,6 @@ impl DefraSessionHook {
         }
     }
 
-    /// Call-hook failure never authorizes ordinary dispatch: the election may
-    /// have committed without a receipt, or a control tool may already have
-    /// performed its effect. Result-write policy cannot grant that authority.
     fn on_tool_persistence_error(
         &self,
         context: &str,
@@ -1001,9 +817,6 @@ impl DefraSessionHook {
     }
 
     async fn active_request_doc_id_for(&self, request_id: &str) -> anyhow::Result<Option<String>> {
-        // Hooks may also be used for session-only transcript capture, where
-        // there is deliberately no AgentRequest to bind. Keep that state
-        // wholly unbound instead of trying to resolve an empty logical id.
         if request_id.trim().is_empty() {
             return Ok(None);
         }
@@ -1063,8 +876,6 @@ impl DefraSessionHook {
                 .canonical_writer_for(binding)
                 .await;
         }
-        // The caller will fail terminalization without a physical accepted
-        // binding; this registration has no payload fallback.
         self.background_live_outputs
             .writer_for(internal_call_id)
             .await
@@ -1115,9 +926,6 @@ impl DefraSessionHook {
         Ok(count)
     }
 
-    /// Apply the interrupt disposition to this hook's in-flight calls and
-    /// return how many were cancelled. Background work, including spawned
-    /// processes in the background registry, is not reachable from here.
     pub async fn cancel_in_flight_tool_calls(&self) -> anyhow::Result<usize> {
         let lifecycles = {
             let mut map = self.in_flight_lifecycles.lock().await;
@@ -1130,8 +938,6 @@ impl DefraSessionHook {
         let mut first_error = None;
         for mut lifecycle in lifecycles {
             let applied = match lifecycle.interrupt_disposition() {
-                // A pending intent is cancelled by the request's terminal
-                // tool accounting; only a running call has an executor here.
                 InterruptDisposition::Cancel if lifecycle.is_running() => lifecycle
                     .cancel_during_run(CancelCause::Interrupted)
                     .await
@@ -1307,7 +1113,7 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
                     "plugin child did not durably terminalize"
                 );
                 crate::tool_call_lifecycle::query::load_tool_call_result(
-                    &crate::config_client::ConfigAccess::Local(self.node.clone()),
+                    &crate::config_client::ConfigAccess::local(self.node.clone()),
                     current.doc_id().expect("loaded physical child"),
                     current.node_did(),
                     current.session_id(),

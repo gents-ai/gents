@@ -12,11 +12,6 @@ import type {
 import { openInBrowser } from "../lib/externalLinks";
 import { inNativeShell } from "../lib/nativeShell";
 
-/**
- * Packs, the host folders the agent's tools may use, and plugin calls asking
- * for more. Only the panel that asks shows each result, so these are plain
- * commands with no store: the panel keeps what it read and says what failed.
- */
 export function createHostActions({ api }: { api: DesktopApiAdapter }) {
   return {
     listInstalledPacks: () => api.listInstalledPacks(),
@@ -35,6 +30,9 @@ export function createHostActions({ api }: { api: DesktopApiAdapter }) {
     addAllowedFolder: (path: string, access: AllowedFolderAccess) =>
       api.addAllowedFolder(path, access),
     removeAllowedFolder: (path: string) => api.removeAllowedFolder(path),
+    subscribePluginApprovals: (token: string) => api.subscribePluginApprovals(token),
+    unsubscribePluginApprovals: (token: string) =>
+      api.unsubscribePluginApprovals(token),
     listPendingPluginApprovals: () => api.listPendingPluginApprovals(),
     decidePluginApproval: (id: string, decision: PluginApprovalDecision) =>
       api.decidePluginApproval(id, decision),
@@ -44,9 +42,6 @@ export function createHostActions({ api }: { api: DesktopApiAdapter }) {
     callUxData: (request: UxDataCallRequest) => api.callUxData(request),
     listUxDataSurfaces: (request: UxDataSurfacesRequest) =>
       api.listUxDataSurfaces(request),
-    /** Opens a URL in the person's browser: through the bridge in the shell,
-        so the browser starts without the shell's environment, else the way
-        a page would. */
     async openExternalUrl(url: string) {
       if (inNativeShell() && api.openExternalUrl) {
         try {

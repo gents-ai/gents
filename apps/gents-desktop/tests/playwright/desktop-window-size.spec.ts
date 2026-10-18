@@ -12,15 +12,12 @@ import {
   type Page,
 } from "./desktopTest";
 
-/* the native window's configured minimum, so the layout is checked at the
-   narrowest size a person can actually make the window */
 const mainWindow = (
   JSON.parse(
     readFileSync(new URL("../../src-tauri/tauri.conf.json", import.meta.url), "utf8"),
   ) as { app: { windows: { minWidth: number; minHeight: number }[] } }
 ).app.windows[0]!;
 
-/* half of a 1440pt-wide display, the common MacBook size a window snaps to */
 const HALF_SCREEN = { width: 720, height: 900 };
 const MINIMUM = { width: mainWindow.minWidth, height: mainWindow.minHeight };
 
@@ -75,7 +72,6 @@ test.describe("half-screen window", () => {
       await page.setViewportSize(viewport);
       await gotoHarness(page);
 
-      /* shell: the rail collapses into the menu; the header items stay apart */
       await expect(page.getByTestId("sessions-screen")).toBeVisible();
       const header = page.locator(".app-titlebar");
       await expectInsideViewport(page, page.getByRole("button", { name: "Menu" }));
@@ -89,18 +85,15 @@ test.describe("half-screen window", () => {
       );
       await expectNoPageHorizontalOverflow(page);
 
-      /* chat: the composer stays on the canvas */
       await openChat(page);
       await expectInsideViewport(page, composer(page));
       await expectNoPageHorizontalOverflow(page);
 
-      /* agents */
       await page.getByRole("link", { name: "Nodes" }).first().click();
       await expect(page.getByTestId("agents-screen")).toBeVisible();
       await expectInsideViewport(page, page.getByRole("button", { name: "Add node" }));
       await expectNoPageHorizontalOverflow(page);
 
-      /* configuration: the section list becomes a picker and editors stack */
       await openConfig(page);
       await expect(page.getByRole("combobox", { name: "Section" })).toBeVisible();
       await openConfigSection(page, /^Agents\b/);
@@ -112,7 +105,6 @@ test.describe("half-screen window", () => {
       await expectInsideViewport(page, name);
       await expectNoPageHorizontalOverflow(page);
 
-      /* settings: the menu and its theme choices stay on screen */
       await page.getByRole("button", { name: "Menu" }).click();
       await page.getByRole("button", { name: "Settings" }).click();
       await expectInsideViewport(
@@ -122,7 +114,6 @@ test.describe("half-screen window", () => {
     });
   }
 
-  /* half of 1728pt and 1920pt displays: the rail stays, panes overlay */
   for (const viewport of [
     { width: 864, height: 900 },
     { width: 960, height: 900 },
@@ -150,7 +141,6 @@ test.describe("half-screen window", () => {
         .first()
         .click();
       await page.getByRole("menuitem", { name: "Trace" }).click();
-      /* the side panel opens as a sheet over the transcript, not a column */
       const sheet = page.getByRole("dialog", { name: "Side panel" });
       await expect(sheet).toBeVisible();
       await sheet.evaluate((element) =>
@@ -185,19 +175,41 @@ test.describe("half-screen window", () => {
     );
     await page.reload();
     await openConfig(page);
-    /* the canvas keeps the room the expanded nav would take */
     const canvas = await boxOf(page.getByTestId("agent-screen"));
     expect(canvas.width).toBeGreaterThan(800);
     expect((await boxOf(page.getByTestId("pane"))).x).toBeLessThan(100);
     await expect(page.getByRole("combobox", { name: "Section" })).toBeVisible();
     await expectNoPageHorizontalOverflow(page);
 
-    /* a wide window shows the expanded nav as a column beside the pane */
     await page.setViewportSize({ width: 1440, height: 900 });
     await expect
       .poll(async () => (await boxOf(page.getByTestId("pane"))).x)
       .toBeGreaterThanOrEqual(300);
     await expect(page.getByRole("link", { name: "New session" }).first()).toBeVisible();
     await expect(page.getByRole("combobox", { name: "Section" })).toBeHidden();
+  });
+});
+
+test.describe("nav modes", () => {
+  test("the mark keeps its place in every nav mode", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await gotoHarness(page);
+    const mark = page.getByTestId("window-bar").getByRole("link", { name: "Nodes" });
+    const places: Record<string, Box> = {};
+    for (const nav of ["hover", "collapsed", "expanded"]) {
+      await page.evaluate(
+        (mode) =>
+          localStorage.setItem(
+            "gents-preferences",
+            JSON.stringify({ state: { nav: mode }, version: 1 }),
+          ),
+        nav,
+      );
+      await page.reload();
+      await expect(page.getByTestId("app-shell")).toBeVisible();
+      places[nav] = await boxOf(mark);
+    }
+    expect(places.expanded!.x).toBeCloseTo(places.hover!.x, 0);
+    expect(places.collapsed!.x).toBeCloseTo(places.hover!.x, 0);
   });
 });

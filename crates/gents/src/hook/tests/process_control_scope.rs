@@ -57,8 +57,8 @@ async fn finish_owned_request(hook: &DefraSessionHook, request_id: &str) {
     let session_id = hook.session_id().await.expect("owned session");
     let node_did = hook.node_did.clone();
     let requester_did = hook.active_requester_did().await;
-    let headers = crate::config_client::ConfigAccess::transact_local(
-        hook.node.as_ref(),
+    let headers = crate::config_client::ConfigAccess::transact_local_write(
+        &hook.node,
         None,
         "test.process_control_scope.headers",
         |txn| {
@@ -172,8 +172,6 @@ async fn generated_wait_observer_interrupt_preserves_background_process() {
     })
     .await
     .expect("wait owner registered");
-    // No daemon interrupt subscriber runs in this fixture: the persisted
-    // interrupt is observed by the wait owner, not its competing caller sweep.
     crate::interrupt::interrupt_request(&node, request_id)
         .await
         .unwrap();
@@ -194,7 +192,7 @@ async fn generated_wait_observer_interrupt_preserves_background_process() {
     let wait_row = fetch_tool_call_row(&node, &session_id, wait_id).await;
     assert_eq!(wait_row["lifecycle_state"], case.terminal_state);
     let persisted = crate::tool_call_lifecycle::query::load_tool_call_result(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         wait_row["_docID"].as_str().expect("physical wait call"),
         &hook.node_did,
         &session_id,
@@ -302,9 +300,6 @@ async fn run_process_control_scope(requester_did: Option<&str>) {
         requester_did,
     )
     .await;
-    // The real session FIFO admits one owned request at a time. The foreign
-    // caller receives its own request after the spawning parent completes;
-    // the background worker must outlive that parent completion.
     assert_eq!(
         owner.session_id().await.as_deref(),
         Some(session_id.as_str())

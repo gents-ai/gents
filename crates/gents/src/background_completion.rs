@@ -1,17 +1,9 @@
-//! Background completion delivery.
-//!
-//! Every background row ends with one user-role completion notification in
-//! its session plus a coalesced wake. A native process row terminalizes in its
-//! executor; an `agent_new`/`agent_message` row terminalizes here, when the
-//! observer sees the request it caused reach a durable terminal.
-
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::{EmbeddedNode, EventName};
+use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;

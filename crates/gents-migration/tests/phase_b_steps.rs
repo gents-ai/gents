@@ -1,6 +1,3 @@
-//! Migration engine: inactive+fields lock, PatchVersioned (lensless + fixture lens),
-//! crash-window resume, chain-replay pin authoring.
-
 use defra_node::EmbeddedNode;
 use gents_migration::{
     ensure_migrations_dynamic, fixture_lens_wasm, predict_transform_id, BaselineCollectionOwned,
@@ -16,12 +13,17 @@ type FixtureDoc {
 }
 "#;
 
+const UNRELATED_SDL: &str = r#"
+type UnrelatedDoc {
+    name: String
+}
+"#;
+
 const ADD_LABEL_PATCH: &str = r#"[
   {"op":"add","path":"/FixtureDoc/Fields/-","value":{"Name":"label","Kind":"String"}},
   {"op":"replace","path":"/IsActive","value":false}
 ]"#;
 
-/// Discover the destination CID of an inactive field-add patch (authoring tool).
 async fn discover_inactive_patch_pin(node: &EmbeddedNode) -> (String, String) {
     node.add_schema(FIXTURE_SDL).await.expect("add FixtureDoc");
     let v0 = node
@@ -55,7 +57,6 @@ async fn inactive_field_add_keeps_old_version_active() {
     let (v0, v1) = discover_inactive_patch_pin(node.as_ref()).await;
     assert_ne!(v0, v1);
 
-    // Activate the new pin — single-txn flip.
     node.set_active_collection_version(&v1)
         .await
         .expect("activate");
@@ -75,12 +76,10 @@ async fn inactive_field_add_keeps_old_version_active() {
 
 #[tokio::test]
 async fn patch_versioned_lensless_attach_patch_activate_and_idempotent() {
-    // Node A: discover pins only.
     let discover = fresh_node().await;
     let (v0, v1) = discover_inactive_patch_pin(discover.as_ref()).await;
     discover.shutdown().await;
 
-    // Node B: apply via the engine with discovered pins.
     let node = fresh_node().await;
     let registry = DynamicRegistry {
         baseline: vec![BaselineCollectionOwned {
@@ -113,7 +112,6 @@ async fn patch_versioned_lensless_attach_patch_activate_and_idempotent() {
     assert!(active.is_active);
     assert!(active.fields.iter().any(|f| f.name == "label"));
 
-    // Both versions known pins → multi-version DAG accepted.
     let all = node.get_all_collection_versions().await.expect("versions");
     let fixture_versions: Vec<_> = all
         .iter()
@@ -131,9 +129,64 @@ async fn patch_versioned_lensless_attach_patch_activate_and_idempotent() {
 }
 
 #[tokio::test]
+async fn materialization_rescans_versioned_collections_only() {
+    let discover = fresh_node().await;
+    let (fixture_v0, fixture_v1) = discover_inactive_patch_pin(discover.as_ref()).await;
+    discover
+        .add_schema(UNRELATED_SDL)
+        .await
+        .expect("add unrelated collection");
+    let unrelated_v0 = discover
+        .get_collection("UnrelatedDoc")
+        .expect("get unrelated collection")
+        .expect("unrelated collection exists")
+        .version_id;
+    discover.shutdown().await;
+
+    let node = fresh_node().await;
+    let registry = DynamicRegistry {
+        baseline: vec![
+            BaselineCollectionOwned {
+                name: "FixtureDoc".into(),
+                sdl: FIXTURE_SDL.into(),
+                expected_version: Some(fixture_v0),
+                expected_state: CollectionExpectation::dag_only(),
+            },
+            BaselineCollectionOwned {
+                name: "UnrelatedDoc".into(),
+                sdl: UNRELATED_SDL.into(),
+                expected_version: Some(unrelated_v0),
+                expected_state: CollectionExpectation::dag_only(),
+            },
+        ],
+        steps: vec![MigrationStepOwned::PatchVersioned {
+            id: "fixture-add-label-lensless".into(),
+            collection: "FixtureDoc".into(),
+            patch: ADD_LABEL_PATCH.into(),
+            lens: None,
+            expected_version: Some(fixture_v1),
+            expected_transform: None,
+            expected_state: CollectionExpectation::fields(&["name", "label"]),
+        }],
+    };
+
+    let first = ensure_migrations_dynamic(node.as_ref(), &registry)
+        .await
+        .expect("first migration and materialization");
+    assert_eq!(first.materialization.collections_attempted, 1);
+    assert_eq!(first.materialization.documents_materialized, 0);
+
+    let later = ensure_migrations_dynamic(node.as_ref(), &registry)
+        .await
+        .expect("repeat migration and materialization");
+    assert_eq!(later.steps_applied, 0);
+    assert_eq!(later.materialization.collections_attempted, 1);
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn patch_versioned_with_fixture_lens_registers_transform() {
     let wasm = fixture_lens_wasm();
-    // Stub wasm is 8 bytes — skip full lens path if build was stubbed.
     if wasm.len() <= 16 {
         eprintln!(
             "skipping fixture lens e2e: stub wasm (set wasm target / unset GENTS_SKIP_LENS_BUILD)"
@@ -152,7 +205,6 @@ async fn patch_versioned_with_fixture_lens_registers_transform() {
     let predicted_tx = predict_transform_id(&lens);
 
     let node = fresh_node().await;
-    // Seed a document at baseline so a later read exercises the lens path.
     {
         let reg0 = DynamicRegistry {
             baseline: vec![BaselineCollectionOwned {
@@ -213,7 +265,6 @@ async fn patch_versioned_with_fixture_lens_registers_transform() {
         "transform pin must match content-derived id"
     );
 
-    // The activation reindex and eager materializer persist the transformed row.
     let q = r#"{ FixtureDoc { name label } }"#;
     let resp = node.execute(q).await;
     assert!(!resp.has_errors(), "lens read: {:?}", resp.errors);
@@ -227,7 +278,6 @@ async fn patch_versioned_with_fixture_lens_registers_transform() {
     assert_eq!(rows[0]["name"], serde_json::json!("alice"));
     assert_eq!(rows[0]["label"], serde_json::json!("ALICE"));
 
-    // Idempotent re-run.
     let report2 = ensure_migrations_dynamic(node.as_ref(), &registry)
         .await
         .expect("idempotent lens step");
@@ -243,7 +293,6 @@ async fn crash_resume_after_inactive_patch_before_activate() {
     discover.shutdown().await;
 
     let node = fresh_node().await;
-    // Manually reach "complete inactive" without activate.
     node.add_schema(FIXTURE_SDL).await.expect("schema");
     let patched = node
         .patch_collection("FixtureDoc", ADD_LABEL_PATCH)
@@ -273,7 +322,6 @@ async fn crash_resume_after_inactive_patch_before_activate() {
     let report = ensure_migrations_dynamic(node.as_ref(), &registry)
         .await
         .expect("resume activate");
-    // Should activate without re-patching (steps_applied counts activate path).
     assert!(
         report.steps_applied + report.steps_already_current >= 1,
         "{report:?}"
@@ -290,8 +338,6 @@ async fn crash_resume_after_inactive_patch_before_activate() {
 
 #[tokio::test]
 async fn canonical_catalog_pins_for_authoring() {
-    // Authoring aid: register the canonical SDL directly so stale pins cannot
-    // prevent the test from reporting every missing or stale root VersionID.
     let node = fresh_node().await;
     let catalog = gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
         .iter()

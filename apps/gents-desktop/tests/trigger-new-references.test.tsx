@@ -74,7 +74,6 @@ describe("new documents from a trigger's fields", () => {
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "New schedule" })).toBeNull(),
     );
-    /* the trigger's own Cancel, beside its Save */
     const save = screen.getByRole("button", { name: "Save" });
     expect(save).toBeEnabled();
     await user.click(

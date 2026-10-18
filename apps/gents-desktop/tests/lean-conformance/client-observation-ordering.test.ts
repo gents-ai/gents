@@ -4,12 +4,13 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
-import { acceptsLiveCursor } from "../../src/hooks/liveDelta";
+import { acceptsLiveCursor } from "@source-inc/gents-desktop-client";
 import { acceptsAsyncResult } from "../../src/hooks/observationOrdering";
 import {
   projectStartupPhaseAfterSnapshot,
   type DesktopStartupPhase,
 } from "../../src/lib/loadingStatus";
+import { projectFirstRunPhase, type FirstRunPhase } from "../../src/ui/lib/firstRun";
 
 type ObservationFenceCase = {
   current: number;
@@ -35,6 +36,7 @@ describe("generated client observation ordering", () => {
     const {
       fences: cases,
       startup,
+      firstRun,
       liveDeltas,
     } = JSON.parse(stdout.trim()) as {
       liveDeltas: {
@@ -49,6 +51,14 @@ describe("generated client observation ordering", () => {
         running: boolean;
         autostartDeclined: boolean;
         expected: DesktopStartupPhase;
+      }[];
+      firstRun: {
+        phase: FirstRunPhase;
+        snapshotReady: boolean;
+        initConfigAbsent: boolean;
+        needsSetup: boolean;
+        authoritative: boolean;
+        expected: FirstRunPhase;
       }[];
     };
 
@@ -66,6 +76,18 @@ describe("generated client observation ordering", () => {
     for (const row of startup) {
       expect(
         projectStartupPhaseAfterSnapshot(row.phase, row.running, row.autostartDeclined),
+      ).toBe(row.expected);
+    }
+    expect(firstRun).toHaveLength(48);
+    for (const row of firstRun) {
+      expect(
+        projectFirstRunPhase(
+          row.phase,
+          row.snapshotReady,
+          row.initConfigAbsent ? "absent" : "configured",
+          row.needsSetup,
+          row.authoritative,
+        ),
       ).toBe(row.expected);
     }
   }, 300_000);

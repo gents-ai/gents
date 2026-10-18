@@ -1,6 +1,3 @@
-//! Host-mediated plugin HTTP against a loopback server, fake resolvers and
-//! WAT plugins.
-
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
@@ -14,8 +11,6 @@ use crate::plugin::PluginVerdict;
 
 const PLUGIN: &str = "team/plugin";
 
-/// A loopback HTTP server: `/hello`, redirects, an oversized body, a slow
-/// answer, a cookie and an echo of the request's credentials headers.
 struct Server {
     port: u16,
     hits: Arc<Mutex<Vec<String>>>,
@@ -77,7 +72,6 @@ impl Server {
         format!("http://127.0.0.1:{}/{path}", self.port)
     }
 
-    /// The explicit grant of this server's loopback literal.
     fn literal(&self) -> String {
         format!("http://127.0.0.1:{}", self.port)
     }
@@ -87,7 +81,6 @@ impl Server {
     }
 }
 
-/// Answers every name with `addrs`, counting lookups.
 struct Static(Vec<IpAddr>, Arc<AtomicUsize>);
 
 impl Lookup for Static {
@@ -253,8 +246,6 @@ fn a_sealed_or_empty_grant_offers_no_network() {
         .is_none());
 }
 
-/// `team/plugin` asking once for `requests`, declaring `net`, under a fresh
-/// home; granted with consent when `grant`.
 fn installed_asking(
     requests: Value,
     net: Value,
@@ -300,8 +291,6 @@ async fn an_allow_listed_request_reaches_the_server_only_when_granted() {
     assert_eq!(call.outcome.output["n"], 1);
     assert_eq!(server.hits(), ["hello"]);
 
-    // Declared but not granted: the plugin runs sealed and is never offered
-    // the network, so its input reaches it untouched.
     let (home, record) = installed_asking(requests, net, false);
     let call = PluginExecutor::new(Some(home.path().to_owned()))
         .call(&record, json!({"n": 1}))
@@ -343,7 +332,6 @@ async fn a_host_outside_the_allow_list_is_refused_with_the_next_step() {
             && error.contains("--grant-authority"),
         "{error}"
     );
-    // Plaintext and other ports need their own entry.
     let results = ask(
         &mut session,
         json!([
@@ -364,7 +352,6 @@ fn error_of(results: &Map<String, Value>, id: &str) -> String {
 #[tokio::test]
 async fn loopback_and_private_targets_are_refused_unless_named_literally() {
     let server = Server::start().await;
-    // A name that resolves to loopback, through the system resolver.
     let mut named = session(&[format!("http://localhost:{}", server.port)]);
     let results = ask(
         &mut named,
@@ -378,7 +365,6 @@ async fn loopback_and_private_targets_are_refused_unless_named_literally() {
         "{refusal}"
     );
 
-    // Any host means any public host.
     let mut any = Session::for_grant(PLUGIN, &http_manifold(None))
         .unwrap()
         .unwrap();
@@ -397,7 +383,6 @@ async fn loopback_and_private_targets_are_refused_unless_named_literally() {
         assert!(refusal.contains("internal address"), "{id}: {refusal}");
         assert!(refusal.contains("exact IP literal"), "{id}: {refusal}");
     }
-    // The literal to add is in the allow-list's own spelling.
     assert!(
         error(&results, "mapped").contains("add [::ffff:127.0.0.1] to"),
         "{}",
@@ -418,7 +403,6 @@ async fn a_rebinding_name_is_checked_on_the_addresses_the_connection_uses() {
         refusal.contains("rebind.test resolves to the internal address 127.0.0.1"),
         "{refusal}"
     );
-    // One resolution, and it is the one that was checked.
     assert_eq!(lookups.load(Ordering::SeqCst), 1);
 
     let (mut mixed, _) = session_resolving(
@@ -433,8 +417,6 @@ async fn a_rebinding_name_is_checked_on_the_addresses_the_connection_uses() {
     assert!(server.hits().is_empty());
 }
 
-/// The host never follows a redirect: the plugin gets the 3xx and its
-/// location, and following it is a new request under the same admission.
 #[tokio::test]
 async fn a_redirect_comes_back_to_the_plugin() {
     let server = Server::start().await;
@@ -533,8 +515,6 @@ async fn caps_bound_bodies_requests_and_time() {
     assert!(error.contains("larger than"), "{error}");
 }
 
-/// Concurrent requests share one budget, and a response refused for its
-/// size is charged for what was read of it.
 #[tokio::test]
 async fn the_response_budget_is_charged_as_bytes_are_read() {
     let server = Server::start().await;
@@ -568,8 +548,6 @@ async fn the_response_budget_is_charged_as_bytes_are_read() {
     assert!(error(&results, "a").contains("was not sent"));
     assert_eq!(server.hits(), ["hello", "hello", "big"]);
 
-    // A request that starts after earlier ones of its round used the budget
-    // up is not sent.
     let mut session = session_bytes(&server, 4);
     let round: Vec<Value> = (0..MAX_IN_FLIGHT + 4)
         .map(|n| json!({"id": n.to_string(), "url": server.url("hello")}))

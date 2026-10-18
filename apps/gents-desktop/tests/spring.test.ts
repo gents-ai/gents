@@ -1,10 +1,7 @@
-/* The divider's spring, stepped by frames as slow as a long transcript makes
-   them: each frame re-lays out every row under the moving divider. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createSpring } from "../src/ui/lib/spring";
 
-/* frames that arrive `frameMs` apart, run by hand */
 function frames(frameMs: number) {
   let now = 0;
   let queued: ((t: number) => void) | null = null;
@@ -53,7 +50,6 @@ describe("the divider's spring", () => {
       clock.run(400);
       expect(rested).toBe(true);
       expect(value).toBe(520);
-      /* at most the hair of overshoot a damping ratio under 1 allows */
       expect(Math.max(...seen)).toBeLessThan(521);
       expect(Math.min(...seen)).toBeGreaterThanOrEqual(0);
     });

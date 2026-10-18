@@ -140,13 +140,6 @@ fn generated_backend_health_admission_cases_match_registry_and_admission_policy(
     }
 }
 
-/// Operator-UI projection of `(enabled, probe_status)`. Drives every Lean
-/// witness through `derive_display_state` and compares availability with Lean.
-/// An explicit input table checks the display labels, including unknown status.
-///
-/// This is the bridge-snapshot consumer test for the
-/// `backend-health.operatorUi` row of the feature matrix — registered in
-/// `CoverageLedger.lean` and `conformance_consumers.rs`.
 #[test]
 fn display_state_matches_every_lean_backend_health_admission_case() {
     let cases = lean_backend_health_admission_cases();
@@ -376,7 +369,7 @@ async fn scoped_backend_replacement_preserves_observations_and_resets_defaults()
     let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     crate::ensure_node(&node, &base_backend().node_did).await?;
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let mut backend = base_backend();
     backend.backend_id = "reviewers\"quoted".into();
     backend.max_concurrent = Some(4);
@@ -457,7 +450,7 @@ async fn duplicate_backend_owner_keys_fail_without_overwriting_documents() -> Re
     let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     crate::ensure_node(&node, &base_backend().node_did).await?;
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let backend = base_backend();
     crate::config_client::write_inference_backend_document(&access, &backend).await?;
     let mut duplicate = backend.clone();
@@ -497,7 +490,7 @@ async fn backend_lists_skip_an_unknown_provider_kind_and_lookups_stay_strict() -
     crate::ensure_runtime_schemas(&node).await?;
     let owner = base_backend().node_did;
     crate::ensure_node(&node, &owner).await?;
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     crate::config_client::write_inference_backend_document(&access, &base_backend()).await?;
     let mut future = serde_json::to_value(base_backend())?;
     future["backend_id"] = "future".into();
@@ -541,7 +534,7 @@ async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catal
     let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     crate::ensure_node(&node, &base_backend().node_did).await?;
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let backend = base_backend();
     crate::config_client::write_inference_backend_document(&access, &backend).await?;
     let catalog = BackendModelCatalog {
@@ -566,12 +559,16 @@ async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catal
     older.observed_at = "2026-09-09T09:00:00Z".into();
     older.models.clear();
     record_model_catalog(&node, &backend, older).await?;
+    let mut rediscovered = catalog.clone();
+    rediscovered.observed_at = "2026-09-09T11:00:00Z".into();
+    record_model_catalog(&node, &backend, rediscovered).await?;
     assert_eq!(
         lookup_backend_observation(&node, &backend.node_did, &backend.backend_id)
             .await?
             .unwrap()
             .catalogs,
-        vec![catalog.clone()]
+        vec![catalog.clone()],
+        "older and unchanged discoveries must not rewrite the catalog"
     );
     let mut changed = backend.clone();
     changed.endpoint = "http://127.0.0.1:9000/v1".into();
@@ -594,7 +591,7 @@ async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Re
     let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     crate::ensure_node(&node, &base_backend().node_did).await?;
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let backend = base_backend();
     crate::config_client::write_inference_backend_document(&access, &backend).await?;
     let catalog = BackendModelCatalog {
@@ -610,7 +607,7 @@ async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Re
         }],
     };
     access
-        .transact("test.catalog.transaction", |txn| {
+        .transact_write("test.catalog.transaction", |txn| {
             let catalog = catalog.clone();
             let backend = &backend;
             Box::pin(async move { record_model_catalog_in_txn(txn, backend, catalog).await })
@@ -629,7 +626,7 @@ async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Re
         ..catalog.clone()
     };
     let failed: Result<()> = access
-        .transact("test.catalog.rollback", |txn| {
+        .transact_write("test.catalog.rollback", |txn| {
             let empty = empty.clone();
             let backend = &backend;
             Box::pin(async move {
@@ -658,8 +655,6 @@ async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Re
     Ok(())
 }
 
-/// Serve one `/v1/models` response whose rows carry the request's bearer back
-/// in unrelated fields, as a hostile or careless provider might.
 async fn spawn_echoing_models_server(secret: &'static str) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -701,7 +696,7 @@ async fn operator_discovery_publishes_scoped_credential_free_catalog() -> Result
     crate::ensure_runtime_schemas(&node).await?;
     let owner = base_backend().node_did;
     crate::ensure_node(&node, &owner).await?;
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let endpoint = spawn_echoing_models_server(SECRET).await;
     let mut claude = base_backend();
     claude.backend_id = "claude".into();

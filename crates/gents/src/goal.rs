@@ -1,14 +1,16 @@
-//! Durable, session-scoped autonomous goals.
-
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::{EmbeddedNode, QueryResponse};
+use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 
 mod claimed_publication;
+mod client_control;
+mod client_submission;
+mod edit;
+mod observation;
 mod operator_resume;
 mod readiness_gate;
 mod request_head;
@@ -16,6 +18,11 @@ mod reset_resume;
 pub(crate) use claimed_publication::{
     publish_claimed_continuation, stop_claimed_continuation_for_unavailable_agent,
 };
+pub(crate) use client_control::{prepare_goal_control, stage_goal_control};
+pub use client_submission::submit_session_goal_control;
+pub(crate) use edit::{edit_active_goal, GoalEdit};
+pub use observation::load_session_goal_observation;
+pub(crate) use observation::{reconcile_goal_observations, SOURCES as GOAL_OBSERVATION_SOURCES};
 pub use operator_resume::{
     resume_goal_on_account, resume_goal_request, GoalResumeOnReceipt, GoalResumeReceipt,
 };
@@ -80,7 +87,6 @@ pub fn goal_creation_fingerprint(request: &GoalCreateRequest) -> GoalCreationFin
     }
 }
 
-/// Executable mirror of `GoalAutomation.decideCreate`.
 pub fn decide_model_goal_create(
     request: &GoalCreateRequest,
     existing: Option<&GoalCreationFingerprint>,
@@ -126,7 +132,6 @@ pub enum GoalSubmissionAction {
     Crash,
 }
 
-/// Executable mirror of `GoalAutomation.submissionStep`.
 pub fn goal_submission_step(
     state: GoalSubmissionState,
     action: GoalSubmissionAction,
@@ -174,7 +179,6 @@ pub enum GoalContinuationAction {
     Crash,
 }
 
-/// Executable mirror of `GoalAutomation.continuationStep`.
 pub fn goal_continuation_materialization_step(
     phase: GoalContinuationPhase,
     action: GoalContinuationAction,
@@ -297,8 +301,6 @@ pub struct GoalState {
 }
 
 impl GoalState {
-    /// Committed continuation ownership observed by graph projection/publication.
-    /// Active includes the gap before GoalSource decides or publishes a child.
     pub(crate) fn has_continuation_obligation(self) -> bool {
         self.status == GoalStatus::Active
             || (self.status == GoalStatus::BudgetLimited
@@ -306,7 +308,6 @@ impl GoalState {
                 && !self.wrapup_completed)
     }
 
-    /// Executable mirror of `Goals.step?` in `proofs/Proofs/Goals.lean`.
     pub fn step(self, action: GoalAction) -> Option<Self> {
         match action {
             GoalAction::Pause if self.status == GoalStatus::Active => Some(Self {
@@ -409,7 +410,6 @@ pub fn next_blocked_audit(
     (state.blocked_audits, state.status == GoalStatus::Blocked)
 }
 
-/// Executable mirror of `Goals.decide` in `proofs/Proofs/Goals.lean`.
 #[allow(clippy::too_many_arguments)]
 pub fn decide_goal_continuation(
     status: GoalStatus,
@@ -618,48 +618,27 @@ impl GoalDocument {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct GoalSnapshot {
-    pub goal_id: String,
-    pub session_id: String,
-    pub node_did: String,
-    pub objective: String,
-    pub status: String,
-    pub token_budget: Option<i64>,
-    pub tokens_used: i64,
-    pub active_time_seconds: i64,
-    pub consecutive_blocked_audits: i64,
-    pub continuation_sequence: i64,
-    pub wrapup_requested: bool,
-    pub wrapup_completed: bool,
-    pub last_blocked_reason: Option<String>,
-    pub last_failure: Option<String>,
-    pub completion_evidence: Option<String>,
-    pub created_at: Option<String>,
-    pub updated_at: Option<String>,
-}
+pub use gents_protocol::goal::GoalSnapshot;
 
-impl GoalSnapshot {
-    pub fn from_document(goal: &GoalDocument, now: DateTime<Utc>) -> Self {
-        Self {
-            goal_id: goal.goal_id.clone(),
-            session_id: goal.session_id.clone(),
-            node_did: goal.node_did.clone(),
-            objective: goal.objective.clone(),
-            status: goal.status.clone(),
-            token_budget: goal.token_budget,
-            tokens_used: goal.tokens_used.unwrap_or_default().max(0),
-            active_time_seconds: goal.current_active_time_seconds(now),
-            consecutive_blocked_audits: goal.consecutive_blocked_audits.unwrap_or_default().max(0),
-            continuation_sequence: goal.continuation_sequence(),
-            wrapup_requested: goal.wrapup_requested.unwrap_or(false),
-            wrapup_completed: goal.wrapup_completed.unwrap_or(false),
-            last_blocked_reason: goal.last_blocked_reason.clone(),
-            last_failure: goal.last_failure.clone(),
-            completion_evidence: goal.completion_evidence.clone(),
-            created_at: goal.created_at.clone(),
-            updated_at: goal.updated_at.clone(),
-        }
+pub fn snapshot(goal: &GoalDocument, now: DateTime<Utc>) -> GoalSnapshot {
+    GoalSnapshot {
+        goal_id: goal.goal_id.clone(),
+        session_id: goal.session_id.clone(),
+        node_did: goal.node_did.clone(),
+        objective: goal.objective.clone(),
+        status: goal.status.clone(),
+        token_budget: goal.token_budget,
+        tokens_used: goal.tokens_used.unwrap_or_default().max(0),
+        active_time_seconds: goal.current_active_time_seconds(now),
+        consecutive_blocked_audits: goal.consecutive_blocked_audits.unwrap_or_default().max(0),
+        continuation_sequence: goal.continuation_sequence(),
+        wrapup_requested: goal.wrapup_requested.unwrap_or(false),
+        wrapup_completed: goal.wrapup_completed.unwrap_or(false),
+        last_blocked_reason: goal.last_blocked_reason.clone(),
+        last_failure: goal.last_failure.clone(),
+        completion_evidence: goal.completion_evidence.clone(),
+        created_at: goal.created_at.clone(),
+        updated_at: goal.updated_at.clone(),
     }
 }
 
@@ -734,10 +713,7 @@ pub fn decide_task_goal_fire_recovery(
     }
 }
 
-/// Stable identity for one Task delivery that declares a durable Goal.
-///
-/// Length-prefixing matches `GoalAutomation.taskFireIdentity` and prevents
-/// delimiter aliases without introducing a second persisted identity scheme.
+/// Length-prefixing matches `GoalAutomation.taskFireIdentity`.
 #[doc(hidden)]
 pub fn task_goal_fire_identity(
     node_did: &str,
@@ -757,9 +733,6 @@ pub fn task_goal_fire_identity(
     }
 }
 
-/// Recover the delivery component from this owner's existing stable identity.
-/// Exact roundtrip validation keeps marker consumers independent of task names
-/// without accepting a second spelling of the identity format.
 pub(crate) fn task_goal_fire_key<'a>(request_id: &'a str, expected_owner: &str) -> Option<&'a str> {
     fn component(input: &str) -> Option<(&str, &str)> {
         let (length, rest) = input.split_once(':')?;
@@ -782,37 +755,6 @@ pub(crate) fn task_goal_fire_key<'a>(request_id: &'a str, expected_owner: &str) 
         return None;
     }
     Some(fire)
-}
-
-#[cfg(test)]
-mod task_fire_identity_decode_tests {
-    use super::*;
-    #[test]
-    fn delivery_roundtrips_unicode_delimiters_and_rejects_noncanonical_identity() {
-        let key = "group:one:é火";
-        let identity = task_goal_fire_identity("did:owner:é", "task:火", key);
-        assert_eq!(
-            task_goal_fire_key(&identity.request_id, "did:owner:é"),
-            Some(key)
-        );
-        assert_eq!(task_goal_fire_key(&identity.request_id, "did:other"), None);
-        assert_eq!(
-            task_goal_fire_key(&(identity.request_id.clone() + ":suffix"), "did:owner:é"),
-            None
-        );
-        assert_eq!(
-            task_goal_fire_key("task-goal-request:99999999999999999999999999:x", "x"),
-            None
-        );
-        assert_eq!(
-            task_goal_fire_key("task-goal-request:01:x:1:t:1:f", "x"),
-            None
-        );
-        assert_eq!(
-            task_goal_fire_key("task-goal-request:2:x:1:t:1:f", "x"),
-            None
-        );
-    }
 }
 
 #[doc(hidden)]
@@ -844,13 +786,34 @@ pub(crate) async fn load_goal_creation_claim_fingerprint(
     node_did: &str,
     session_id: &str,
 ) -> Result<Option<GoalCreationFingerprint>> {
+    let query = goal_creation_claim_query(node_did, session_id);
+    let response = graphql_with_transaction_retry(node, &query, "load goal creation claim").await?;
+    goal_creation_claim_fingerprint(&response)
+}
+
+pub(crate) async fn load_goal_creation_claim_fingerprint_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+) -> Result<Option<GoalCreationFingerprint>> {
+    let response = txn
+        .execute_local_response(&goal_creation_claim_query(node_did, session_id))
+        .await?;
+    goal_creation_claim_fingerprint(&response)
+}
+
+fn goal_creation_claim_query(node_did: &str, session_id: &str) -> String {
     let key = escape_graphql_string(&deterministic_goal_creation_key(node_did, session_id));
-    let query = format!(
+    format!(
         r#"{{ GoalCreationClaim(filter: {{ creation_key: {{ _eq: "{key}" }} }}, limit: 2) {{
             node_did session_id objective token_budget
         }} }}"#
-    );
-    let response = graphql_with_transaction_retry(node, &query, "load goal creation claim").await?;
+    )
+}
+
+fn goal_creation_claim_fingerprint(
+    response: &defra_node::QueryResponse,
+) -> Result<Option<GoalCreationFingerprint>> {
     #[derive(Deserialize)]
     struct ClaimRow {
         node_did: String,
@@ -858,7 +821,7 @@ pub(crate) async fn load_goal_creation_claim_fingerprint(
         objective: String,
         token_budget: Option<i64>,
     }
-    let claims: Vec<ClaimRow> = rows(&response, "GoalCreationClaim")?;
+    let claims: Vec<ClaimRow> = rows(response, "GoalCreationClaim")?;
     anyhow::ensure!(
         claims.len() <= 1,
         "goal creation key resolved to multiple claims"
@@ -919,19 +882,6 @@ struct StagedGoal {
     goal: GoalDocument,
 }
 
-/// Reconcile the immutable creation claim and Goal inside an existing
-/// transaction.
-///
-/// Model creation and atomic first-request submission use this seam. Operator
-/// `set_goal` remains a mutable upsert and intentionally does not mint an
-/// immutable creation claim. Ownership, objective/budget conflict semantics,
-/// deterministic identity, and physical-create arbitration stay single-owned
-/// for every create-only path.
-/// Opening an obligation on an already rooted session participates in the
-/// GraphRun owner's existing transaction fence. Initial graph root + Goal
-/// publication fences its root separately in the same factory transaction.
-/// Arbitrary independent pre-root Goal creation across HTTP transactions is
-/// not a supported posthoc association guarantee: absent scans do not conflict.
 async fn fence_opened_graph_goal_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     previous: Option<GoalState>,
@@ -1164,16 +1114,10 @@ async fn stage_goal_and_claim(
     Ok(staged)
 }
 
-/// Create the current principal/session goal without granting update semantics.
-///
 /// Ownership is deliberately not accepted as model input: both values come
-/// from the authenticated session hook. Exact retries return `Idempotent` and
-/// never reset lifecycle fields; a different immutable fingerprint is a typed
-/// conflict. The unique creation key prevents local concurrent retries from
-/// producing physical twins, while canonical scope checks retain safe behavior
-/// for twins received through P2P replication.
+/// from the authenticated session hook.
 pub async fn create_goal_for_session(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     session_id: &str,
     objective: &str,
@@ -1201,7 +1145,7 @@ pub async fn create_goal_for_session(
     let requested_fingerprint = goal_creation_fingerprint(&create_request);
     let objective = requested_fingerprint.objective.as_str();
 
-    let result = crate::config_client::ConfigAccess::transact_local(
+    let result = crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "goal.create_for_session",
@@ -1285,12 +1229,6 @@ pub(crate) const GOAL_BACKED_REQUEST_FINGERPRINT_FIELDS: &str = r#"
     runtime_issuer_did runtime_source_request_id runtime_source_kind
 "#;
 
-/// Stable logical request identity for goal-backed submission retries.
-///
-/// `created_at`, the admission signature, backend assignment, and lifecycle
-/// fields are deliberately excluded: they are either regenerated on an exact
-/// CLI retry or are runtime-mutated after publication. Every other signed
-/// semantic field is compared before an existing retry key is accepted.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub(crate) struct GoalBackedRequestFingerprint {
     request_id: String,
@@ -1575,12 +1513,6 @@ async fn stage_goal_backed_request(
     })
 }
 
-/// Atomically establish the durable goal and its first pending request.
-///
-/// This is the reusable graph/chat composition boundary. The signed request
-/// must already be bound to the same principal/session and carry a stable,
-/// unique `retry_key`. No request is externally visible until the goal claim,
-/// goal, and request commit together.
 pub async fn submit_goal_backed_request(
     access: &crate::ConfigAccess,
     node_did: &str,
@@ -1590,7 +1522,7 @@ pub async fn submit_goal_backed_request(
     request: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<GoalBackedRequestDisposition> {
     let result = access
-        .transact("goal.submit_backed_request", move |txn| {
+        .transact_write("goal.submit_backed_request", move |txn| {
             Box::pin(async move {
                 stage_goal_backed_request(
                     txn,
@@ -1622,11 +1554,6 @@ pub async fn submit_goal_backed_request(
     }
 }
 
-/// The `Goal`/`GoalCreationClaim` selection shared by
-/// `goal_backed_request_recovery_query` (combined with an `AgentRequest`
-/// selection in one round trip) and `goal_creation_claim_recovery_query`
-/// (issued alone, after a separate `AgentRequest` retry-key match) — same
-/// filters and fields, so this selection text exists exactly once.
 fn goal_creation_claim_selection(node_did: &str, session_id: &str) -> String {
     format!(
         r#"Goal(
@@ -1663,11 +1590,6 @@ fn goal_backed_request_recovery_query(
     ))
 }
 
-/// Decode the `AgentRequest` rows from a retry-key lookup, matching the
-/// unique row (if any) against `expected`. Fails closed if the retry key is
-/// not unique or if the persisted row's immutable fields differ from
-/// `expected`. Returns the row's document id if a matching row exists,
-/// `None` if none exists yet.
 fn decode_agent_request_by_retry_key(
     rows: &[serde_json::Value],
     expected: &GoalBackedRequestFingerprint,
@@ -1689,11 +1611,6 @@ fn decode_agent_request_by_retry_key(
         .map(Some)
 }
 
-/// Query one `AgentRequest` by `retry_key`, decode it into a
-/// `GoalBackedRequestFingerprint`, and compare it against `expected`.
-/// Shared by goal creation/continuation recovery, both of which query an
-/// `AgentRequest` by its unique `retry_key` and need the same fail-closed
-/// uniqueness and immutable-field checks before trusting an existing row.
 pub(crate) async fn load_agent_request_by_retry_key(
     node: &EmbeddedNode,
     retry_key: &str,
@@ -1710,11 +1627,6 @@ pub(crate) async fn load_agent_request_by_retry_key(
     decode_agent_request_by_retry_key(&rows(&response, "AgentRequest")?, expected)
 }
 
-/// Verify that the durable `Goal`/`GoalCreationClaim` rows in `response`
-/// match the goal a goal-backed request is meant to belong to. Separate
-/// from the `AgentRequest` retry-key match above: an existing request row
-/// only proves the request was staged, not that it landed on the goal this
-/// caller expects.
 fn verify_goal_creation_claim_cross_check(
     response: &serde_json::Value,
     node_did: &str,
@@ -1846,16 +1758,6 @@ fn goal_creation_claim_recovery_query(node_did: &str, session_id: &str) -> Strin
     )
 }
 
-/// Recover a goal-backed request by its retry key after an ambiguous local
-/// commit, using two round trips instead of `load_goal_backed_request_by_retry_key_from_access`'s
-/// one: first the shared `load_agent_request_by_retry_key` AgentRequest
-/// match, then — only once that matches — the `Goal`/`GoalCreationClaim`
-/// cross-check. This is safe to split because `stage_goal_backed_request`
-/// commits the goal, its creation claim, and the request in one durable
-/// transaction: if the `AgentRequest` row is visible with this retry key,
-/// the `Goal` and `GoalCreationClaim` rows committed alongside it are
-/// visible too, so there is no window where the first query could observe
-/// a match the second query then fails to find.
 async fn load_goal_backed_request_by_retry_key(
     node: &EmbeddedNode,
     node_did: &str,
@@ -1893,9 +1795,6 @@ async fn load_goal_backed_request_by_retry_key(
     }))
 }
 
-/// Stage a Task-declared Goal and its first request inside a caller's
-/// transaction, returning the exact request document, so the caller can bind
-/// another fact to that request in the same commit.
 pub(crate) async fn stage_goal_backed_request_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -1935,14 +1834,8 @@ pub(crate) async fn stage_goal_backed_request_in_txn(
     })
 }
 
-/// Embedded-runtime counterpart of [`submit_goal_backed_request`].
-///
-/// Trigger materialization uses this to publish a Task-declared Goal and its
-/// first request in one transaction authenticated as `actor`, then recover the
-/// exact request binding by its unique retry key if commit acknowledgement is
-/// ambiguous.
 pub async fn submit_goal_backed_request_local(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
     node_did: &str,
     session_id: &str,
@@ -1950,7 +1843,7 @@ pub async fn submit_goal_backed_request_local(
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<crate::lifecycle::EnqueuedAgentRequest> {
-    let staged = crate::config_client::ConfigAccess::transact_local(
+    let staged = crate::config_client::ConfigAccess::transact_local_write(
         node,
         Some(actor),
         "goal.submit_backed_request_local",
@@ -2069,14 +1962,14 @@ async fn decode_goal_rows(node: &EmbeddedNode, query: &str) -> Result<Vec<GoalDo
 }
 
 pub async fn set_goal(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     session_id: &str,
     objective: Option<&str>,
     status: Option<GoalStatus>,
     token_budget: Option<Option<i64>>,
 ) -> Result<GoalDocument> {
-    crate::config_client::ConfigAccess::transact_local(node, None, "goal.set", move |txn| {
+    crate::config_client::ConfigAccess::transact_local_write(node, None, "goal.set", move |txn| {
         Box::pin(async move {
             set_goal_in_txn(
                 txn,
@@ -2093,9 +1986,6 @@ pub async fn set_goal(
     .await
 }
 
-/// Configure a goal through the same transactional policy for local and HTTP access.
-/// `auto_resume` is the operator's opt-in to resume at the reported reset; `None`
-/// keeps the stored value. The model's goal tools never reach this argument.
 pub async fn set_goal_from_access(
     access: &crate::ConfigAccess,
     node_did: &str,
@@ -2106,7 +1996,7 @@ pub async fn set_goal_from_access(
     auto_resume: Option<bool>,
 ) -> Result<GoalDocument> {
     access
-        .transact("goal.set_from_access", move |txn| {
+        .transact_write("goal.set_from_access", move |txn| {
             Box::pin(async move {
                 set_goal_in_txn(
                     txn,
@@ -2148,8 +2038,6 @@ pub(crate) async fn load_canonical_goal_in_txn(
     Ok(goals.into_iter().next())
 }
 
-/// Trusted Task assignment runs only in the transaction that wins its request's
-/// claim. Ordinary Goal tools retain their explicit resume authority checks.
 pub(crate) async fn apply_claimed_task_goal_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     request: &crate::watcher::AgentRequest,
@@ -2321,6 +2209,10 @@ async fn set_goal_in_txn(
     token_budget: Option<Option<i64>>,
     auto_resume: Option<bool>,
 ) -> Result<GoalDocument> {
+    anyhow::ensure!(
+        objective.is_none_or(|value| !value.trim().is_empty()),
+        "goal objective must be non-empty"
+    );
     let existing = load_canonical_goal_in_txn(txn, node_did, session_id).await?;
     let objective = objective
         .map(str::trim)
@@ -2420,11 +2312,6 @@ async fn set_goal_in_txn(
         wrapup_requested: status == GoalStatus::BudgetLimited,
         wrapup_completed: status == GoalStatus::Complete,
     };
-    // Operator-owned goals intentionally remain mutable upserts and therefore
-    // do not mint the immutable model/submission creation claim. A later
-    // create-only call may adopt a matching operator goal transactionally;
-    // attaching the claim here would become stale as soon as `goal set`
-    // changes the objective or budget.
     let goal_id = deterministic_goal_id(node_did, session_id);
     let escaped_goal_id = escape_graphql_string(&goal_id);
     let escaped_node_did = escape_graphql_string(node_did);
@@ -2471,7 +2358,7 @@ async fn set_goal_in_txn(
     Ok(created)
 }
 
-pub async fn delete_goal(node: &EmbeddedNode, goal: &GoalDocument) -> Result<bool> {
+pub async fn delete_goal(node: &std::sync::Arc<EmbeddedNode>, goal: &GoalDocument) -> Result<bool> {
     let doc_id = escape_graphql_string(&goal.doc_id);
     let node_did = escape_graphql_string(&goal.node_did);
     let mutation = format!(
@@ -2479,7 +2366,9 @@ pub async fn delete_goal(node: &EmbeddedNode, goal: &GoalDocument) -> Result<boo
             delete_Goal(filter: {{ _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{node_did}" }} }}) {{ _docID }}
         }}"#
     );
-    let response = execute_goal_mutation_response(node, &mutation, "goal.delete").await?;
+    let response =
+        crate::config_client::ConfigAccess::write_local_response(node, "goal.delete", &mutation)
+            .await?;
     Ok(response
         .data
         .as_ref()
@@ -2487,12 +2376,8 @@ pub async fn delete_goal(node: &EmbeddedNode, goal: &GoalDocument) -> Result<boo
         .is_some_and(mutation_returned_rows))
 }
 
-/// Delete every replicated twin for an agent/session goal. Goal identity is
-/// intentionally not unique at the schema layer because DefraDB unique indexes
-/// do not provide a distributed P2P uniqueness guarantee; clear must therefore
-/// sweep the complete ownership scope rather than delete only the canonical row.
 pub async fn delete_goals_for_session(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     session_id: &str,
 ) -> Result<usize> {
@@ -2500,7 +2385,7 @@ pub async fn delete_goals_for_session(
     let session_id = escape_graphql_string(session_id);
     let node_did = &node_did;
     let session_id = &session_id;
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "goal.delete_for_session",
@@ -2537,11 +2422,8 @@ pub async fn delete_goals_for_session(
     .await
 }
 
-/// Apply controller-owned fields only while both the observed status and
-/// continuation sequence remain current. A resumed goal may have the same
-/// status as an older snapshot, but belongs to a newer continuation.
 pub async fn update_goal_fields_if_status(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     goal: &GoalDocument,
     expected_status: GoalStatus,
     fields: &str,
@@ -2563,7 +2445,7 @@ pub async fn update_goal_fields_if_status(
             ) {{ _docID }}
         }}"#
     );
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "goal.update_controller_fields",
@@ -2597,7 +2479,7 @@ pub async fn update_goal_fields_if_status(
 }
 
 pub async fn claim_continuation(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     goal: &GoalDocument,
     parent_request_id: &str,
 ) -> Result<bool> {
@@ -2627,8 +2509,12 @@ pub async fn claim_continuation(
             ) {{ _docID }}
         }}"#
     );
-    let response =
-        execute_goal_mutation_response(node, &mutation, "goal.claim_continuation").await?;
+    let response = crate::config_client::ConfigAccess::write_local_response(
+        node,
+        "goal.claim_continuation",
+        &mutation,
+    )
+    .await?;
     Ok(response
         .data
         .as_ref()
@@ -2636,11 +2522,8 @@ pub async fn claim_continuation(
         .is_some_and(mutation_returned_rows))
 }
 
-/// Atomically charge an infrastructure retry and claim its continuation.
-/// There is intentionally no durable phase in which a parent is charged but
-/// remains unclaimed, because recovery would otherwise charge it again.
 pub async fn claim_retry_continuation(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     goal: &GoalDocument,
     parent_request_id: &str,
     retry_count: i64,
@@ -2675,8 +2558,12 @@ pub async fn claim_retry_continuation(
             ) {{ _docID }}
         }}"#
     );
-    let response =
-        execute_goal_mutation_response(node, &mutation, "goal.claim_retry_continuation").await?;
+    let response = crate::config_client::ConfigAccess::write_local_response(
+        node,
+        "goal.claim_retry_continuation",
+        &mutation,
+    )
+    .await?;
     Ok(response
         .data
         .as_ref()
@@ -2684,16 +2571,17 @@ pub async fn claim_retry_continuation(
         .is_some_and(mutation_returned_rows))
 }
 
-/// Sum of tokens charged against the session's budget: the charged total,
-/// same as the request ledger (`crate::provider_usage::sum_charged_from_persisted_parts`).
 pub async fn session_token_usage(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     session_id: &str,
 ) -> Result<i64> {
-    crate::config_client::ConfigAccess::transact_local(node, None, "goal.session_usage", |txn| {
-        Box::pin(async move { session_token_usage_in_txn(txn, node_did, session_id).await })
-    })
+    crate::config_client::ConfigAccess::transact_local_readonly(
+        node,
+        None,
+        "goal.session_usage",
+        |txn| Box::pin(async move { session_token_usage_in_txn(txn, node_did, session_id).await }),
+    )
     .await
 }
 
@@ -2754,7 +2642,10 @@ async fn session_token_usage_in_txn(
     Ok(i64::try_from(charged).unwrap_or(i64::MAX))
 }
 
-pub async fn refresh_goal_usage(node: &EmbeddedNode, goal: &GoalDocument) -> Result<i64> {
+pub async fn refresh_goal_usage(
+    node: &std::sync::Arc<EmbeddedNode>,
+    goal: &GoalDocument,
+) -> Result<i64> {
     let tokens = session_token_usage(node, &goal.node_did, &goal.session_id)
         .await?
         .saturating_sub(goal.token_usage_baseline.unwrap_or_default().max(0))
@@ -2784,16 +2675,6 @@ pub async fn refresh_goal_usage(node: &EmbeddedNode, goal: &GoalDocument) -> Res
     Ok(tokens)
 }
 
-async fn execute_goal_mutation_response(
-    node: &EmbeddedNode,
-    mutation: &str,
-    operation: &'static str,
-) -> Result<QueryResponse> {
-    let response =
-        crate::config_client::ConfigAccess::write_local(node, operation, mutation).await?;
-    serde_json::from_value(response).context("decoding committed goal mutation response")
-}
-
 fn mutation_returned_rows(value: &serde_json::Value) -> bool {
     value.as_array().is_some_and(|rows| !rows.is_empty()) || value.get("_docID").is_some()
 }
@@ -2820,205 +2701,9 @@ fn optional_string_graphql_field(name: &str, value: Option<&str>) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn retry_fingerprint_compares_typed_input_but_not_regenerated_envelope() {
-        use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
-        let request = AgentRequestCreate::base(
-            gents_protocol::request_admission::RequestPurpose::Normal,
-            "request",
-            "did:key:owner",
-            "did:key:owner",
-            "behavior",
-            "session",
-            "continue",
-            "interactive",
-            "2026-09-09T00:00:00Z",
-            AgentRequestAdmissionRecord::local_self("did:key:owner"),
-        );
-        let expected = GoalBackedRequestFingerprint::from_create(&request).unwrap();
-        let mut regenerated = request.clone();
-        regenerated.created_at = "2026-09-09T00:01:00Z".into();
-        regenerated.admission.signature = vec![1, 2, 3];
-        assert_eq!(
-            expected,
-            GoalBackedRequestFingerprint::from_create(&regenerated).unwrap()
-        );
-        for input in [
-            serde_json::json!({"cwd":"/different"}),
-            serde_json::json!({"selected_skill_ids":["explicit-skill"]}),
-            serde_json::json!({"initial_title":{"text":"Task title","source":"task"}}),
-            serde_json::json!({"queue":{"source":"steering","policy":"append"}}),
-            serde_json::json!({"goal_continuation":{"sequence":1,"wrapup":false}}),
-        ] {
-            let mut changed = request.clone();
-            changed.input = serde_json::from_value(input).unwrap();
-            assert_ne!(
-                expected,
-                GoalBackedRequestFingerprint::from_create(&changed).unwrap()
-            );
-        }
-    }
-
-    #[test]
-    fn retry_fingerprint_distinguishes_workspace_owners_with_the_same_logical_id() {
-        use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
-        let mut request = AgentRequestCreate::base(
-            gents_protocol::request_admission::RequestPurpose::Normal,
-            "request",
-            "did:key:executor",
-            "did:key:executor",
-            "behavior",
-            "session",
-            "continue",
-            "interactive",
-            "2026-09-09T00:00:00Z",
-            AgentRequestAdmissionRecord::local_self("did:key:executor"),
-        );
-        request.workspace_id = Some("shared-label".into());
-        request.workspace_owner_node_did = Some("did:key:source-owner".into());
-        request.workspace_authority = Some("readOnly".into());
-        request.workspace_seal_hash = Some("same-seal".into());
-        let expected = GoalBackedRequestFingerprint::from_create(&request).unwrap();
-        request.workspace_owner_node_did = Some("did:key:different-owner".into());
-        assert_ne!(
-            expected,
-            GoalBackedRequestFingerprint::from_create(&request).unwrap()
-        );
-    }
-
-    #[test]
-    fn deterministic_id_separates_ambiguous_did_session_pairs() {
-        assert_ne!(
-            deterministic_goal_id("did:a", "bc"),
-            deterministic_goal_id("did:ab", "c")
-        );
-    }
-
-    #[test]
-    fn ambiguous_goal_submission_commit_recovers_only_an_exact_persisted_pair() {
-        let recovered = crate::lifecycle::materialize::EnqueuedAgentRequest {
-            doc_id: "doc-1".to_string(),
-            request_id: "request-1".to_string(),
-            session_id: "session-1".to_string(),
-        };
-        assert_eq!(
-            resolve_ambiguous_goal_submission_commit(
-                anyhow::anyhow!("commit acknowledgement lost"),
-                Ok(Some(recovered)),
-            )
-            .expect("exact committed pair must recover"),
-            GoalBackedRequestDisposition::Idempotent
-        );
-
-        let absent = resolve_ambiguous_goal_submission_commit(
-            anyhow::anyhow!("original commit error"),
-            Ok(None),
-        )
-        .expect_err("absent committed state must preserve the commit error");
-        assert_eq!(absent.to_string(), "original commit error");
-
-        let conflict = resolve_ambiguous_goal_submission_commit(
-            anyhow::anyhow!("commit acknowledgement lost"),
-            Err(anyhow::anyhow!("immutable request fingerprint conflicts")),
-        )
-        .expect_err("mismatched committed state must remain a conflict");
-        assert!(
-            conflict
-                .to_string()
-                .contains("immutable request fingerprint conflicts"),
-            "{conflict:#}"
-        );
-    }
-
-    #[test]
-    fn model_goal_create_is_owned_idempotent_and_budget_bounded() {
-        let request = GoalCreateRequest {
-            caller: "did:a".into(),
-            current_session: "session-a".into(),
-            requested_owner: "did:a".into(),
-            requested_session: "session-a".into(),
-            objective: "ship".into(),
-            objective_nonempty: true,
-            token_budget: Some(i64::MAX as i128),
-            goal_tools: true,
-            goal_create: true,
-        };
-        assert_eq!(
-            decide_model_goal_create(&request, None),
-            GoalCreateDisposition::Fresh
-        );
-        let fingerprint = goal_creation_fingerprint(&request);
-        assert_eq!(
-            decide_model_goal_create(&request, Some(&fingerprint)),
-            GoalCreateDisposition::Idempotent
-        );
-        assert_eq!(
-            decide_model_goal_create(
-                &GoalCreateRequest {
-                    requested_owner: "did:b".into(),
-                    ..request.clone()
-                },
-                None,
-            ),
-            GoalCreateDisposition::Denied
-        );
-        assert_eq!(
-            decide_model_goal_create(
-                &GoalCreateRequest {
-                    token_budget: Some(i64::MAX as i128 + 1),
-                    ..request
-                },
-                None,
-            ),
-            GoalCreateDisposition::Invalid
-        );
-    }
-
-    #[test]
-    fn blocked_audit_requires_three_distinct_requests_for_the_same_condition() {
-        let (first, accepted) = next_blocked_audit(0, None, None, "needs approval", "req-1");
-        assert_eq!((first, accepted), (1, false));
-
-        let (duplicate, accepted) = next_blocked_audit(
-            first,
-            Some("needs approval"),
-            Some("req-1"),
-            "needs approval",
-            "req-1",
-        );
-        assert_eq!((duplicate, accepted), (1, false));
-
-        let (second, accepted) = next_blocked_audit(
-            duplicate,
-            Some("needs approval"),
-            Some("req-1"),
-            "needs approval",
-            "req-2",
-        );
-        assert_eq!((second, accepted), (2, false));
-
-        let (third, accepted) = next_blocked_audit(
-            second,
-            Some("needs approval"),
-            Some("req-2"),
-            "needs approval",
-            "req-3",
-        );
-        assert_eq!((third, accepted), (3, true));
-
-        let (changed, accepted) = next_blocked_audit(
-            third,
-            Some("needs approval"),
-            Some("req-3"),
-            "network unavailable",
-            "req-4",
-        );
-        assert_eq!((changed, accepted), (1, false));
-    }
-
     #[tokio::test]
     async fn auto_resume_field_round_trips_through_the_live_schema() {
-        let node = EmbeddedNode::builder().build().await.unwrap();
+        let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::schema::ensure_runtime_schemas(&node).await.unwrap();
         let owner = "did:key:z6MkTestOwner";
         let goal = set_goal(&node, owner, "session", Some("ship"), None, None)
@@ -3043,7 +2728,7 @@ mod tests {
     async fn auto_resume_access() -> crate::ConfigAccess {
         let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::schema::ensure_runtime_schemas(&node).await.unwrap();
-        crate::ConfigAccess::Local(node)
+        crate::ConfigAccess::local(node)
     }
 
     #[tokio::test]
@@ -3064,9 +2749,7 @@ mod tests {
     #[tokio::test]
     async fn auto_resume_none_and_set_goal_keep_the_stored_value() {
         let access = auto_resume_access().await;
-        let crate::ConfigAccess::Local(node) = &access else {
-            unreachable!()
-        };
+        let node = access.local_node().expect("local test access");
         let owner = "did:key:z6MkTestOwner";
         set_goal_from_access(&access, owner, "s", Some("ship"), None, None, Some(true))
             .await

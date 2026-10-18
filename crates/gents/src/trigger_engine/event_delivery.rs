@@ -1,5 +1,3 @@
-//! Shared event selection and durable group observation for task triggers and
-//! callback bindings. Publication stays with each existing request/invocation owner.
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use gents_protocol::event_delivery::{EventConsumer, EventGroupState};
@@ -13,7 +11,8 @@ use crate::runtime_snapshot::{ResolvedEventTrigger, MAX_EVENT_TRIGGER_GROUP_DOCS
 
 pub(crate) const GROUP_RECOVERY_PAGE_SIZE: usize = 256;
 
-/// Borrow existing resolved/configuration owners; no second writable config.
+pub(crate) mod source_scan;
+
 #[derive(Clone, Copy)]
 pub(crate) enum Delivery<'a> {
     Trigger {
@@ -158,8 +157,6 @@ impl Delivery<'_> {
         Ok(())
     }
     pub(crate) fn config_key(&self) -> String {
-        // Membership changes start another clock; prompt/count/deadline changes
-        // retain the observed first-seen time, as the existing event contract requires.
         digest(&json!([
             self.collection(),
             self.filter(),
@@ -281,7 +278,7 @@ fn group_query(delivery: Delivery<'_>, correlation: &str) -> String {
 }
 
 pub(crate) async fn load_or_create_group(
-    node: &defra_node::EmbeddedNode,
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
     delivery: Delivery<'_>,
     correlation: &str,
 ) -> Result<GroupRecord> {
@@ -290,7 +287,7 @@ pub(crate) async fn load_or_create_group(
         !correlation.trim().is_empty(),
         "group correlation is missing"
     );
-    crate::config_client::ConfigAccess::transact_local(node,None,"event.group_clock",|txn| Box::pin(async move {
+    crate::config_client::ConfigAccess::transact_local_write(node,None,"event.group_clock",|txn| Box::pin(async move {
         let query=group_query(delivery,correlation);
         if let Some(row)=decode_group(&txn.execute(&query).await?,delivery,correlation)? {return Ok(row);}
         let state=EventGroupState {group_key:delivery.group_key(correlation),node_did:delivery.owner().into(),consumer:delivery.consumer(),correlation:correlation.into(),consumer_config_key:delivery.config_key(),first_seen_at:Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true),quiesced_at:None,quiesced_reason:None};
@@ -300,7 +297,7 @@ pub(crate) async fn load_or_create_group(
 }
 
 pub(crate) async fn quiesce_group(
-    node: &defra_node::EmbeddedNode,
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
     record: &GroupRecord,
     reason: &str,
 ) -> Result<()> {
@@ -326,7 +323,7 @@ pub(crate) enum GroupOutcome {
 }
 
 pub(crate) async fn evaluate_group(
-    node: &defra_node::EmbeddedNode,
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
     cache: &SourceSchemaCache,
     delivery: Delivery<'_>,
     correlation: &str,
@@ -406,16 +403,23 @@ pub(crate) async fn evaluate_group(
     })
 }
 fn expected_count(delivery: Delivery<'_>, docs: &[Value]) -> Result<Option<usize>> {
-    let Some(expected) = delivery.expected()? else {
+    expected_group_count(delivery.expected()?.as_ref(), docs)
+}
+
+pub(crate) fn expected_group_count(
+    expected: Option<&EventGroupCount>,
+    docs: &[Value],
+) -> Result<Option<usize>> {
+    let Some(expected) = expected else {
         return Ok(None);
     };
     match expected {
-        EventGroupCount::Fixed(count) => Ok(Some(usize::try_from(count)?)),
+        EventGroupCount::Fixed(count) => Ok(Some(usize::try_from(*count)?)),
         EventGroupCount::SourceField { source_field } => {
             let mut resolved = None;
             for doc in docs {
                 let value = doc
-                    .get(&source_field)
+                    .get(source_field)
                     .context("group member missing expected-count field")?;
                 let n =
                     crate::graphql::canonical_positive_count(value, MAX_EVENT_TRIGGER_GROUP_DOCS)
@@ -495,9 +499,6 @@ pub(crate) fn group_candidate_eligible(
         }
 }
 
-/// Requests themselves are the publication marker. Ordinary grouped requests
-/// retain the fire key as their ID; goal requests retain it through the existing
-/// goal identity owner. Task or goal-mode edits cannot erase a prior delivery.
 pub(crate) fn request_matches_fire_key(owner: &str, request_id: &str, fire_key: &str) -> bool {
     request_id == fire_key || crate::goal::task_goal_fire_key(request_id, owner) == Some(fire_key)
 }
@@ -615,7 +616,7 @@ mod tests {
 
     #[tokio::test]
     async fn shared_clock_survives_restart_and_quiescence_is_owner_scoped() {
-        let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         node.add_schema(gents_protocol::schemas::EVENT_GROUP_STATE)
             .await
             .unwrap();

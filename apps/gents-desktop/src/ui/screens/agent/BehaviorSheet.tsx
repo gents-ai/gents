@@ -1,5 +1,3 @@
-/* A new agent drafted beside another page: nothing is saved until Save,
-   and the page it came from gets the id. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { AgentEditor } from "./BehaviorEditor";
 import { newAgentView } from "./behaviorDraft";
@@ -14,12 +12,9 @@ export function AgentSheet({
 }: {
   deployment: NodeView;
   open: boolean;
-  /* the new agent's id, or null when discarded */
   onClose: (agentId: string | null) => void;
-  /* from a session's composer: saved enabled */
   enabled?: boolean;
 }) {
-  /* one draft per opening */
   const [draft, setDraft] = useState(() => newAgentView(deployment));
   const close = (id: string | null) => {
     onClose(id);

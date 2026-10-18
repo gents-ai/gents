@@ -3,20 +3,4 @@ import type { MessageReconstructionView } from "./MessageReconstructionView.js";
 import type { RenderedToolCallView } from "./RenderedToolCallView.js";
 import type { RequestOriginView } from "./RequestOriginView.js";
 
-export type RenderedTimelineItem = { "kind": "userMessage", itemKey: string, requestId?: string | null,
-/**
- * Whether this row stands for the person's turn of its request.
- * A request authors user rows that do not (workspace instructions
- * under `authored:{doc}:context`, tool delivery); consumers must
- * not let those replace or retire the turn's other stand-ins
- * (pending turn, the app's own copy of a sent message).
- */
-ownsTurn: boolean,
-/**
- * The request whose input this is; dedups its pending projection.
- */
-inputRequestId?: string | null, sequence: number | null, content: string | null, timestamp: string | null, reconstruction: MessageReconstructionView, } | { "kind": "assistantMessage", itemKey: string, sequence: number | null, content: string | null, reasoning: string | null, timestamp: string | null, reconstruction: MessageReconstructionView, } | { "kind": "toolGroup", itemKey: string, messageSequence: number | null, tools: Array<RenderedToolCallView>, } | { "kind": "pendingUserTurn", itemKey: string, requestId: string, content: string, selectedSkillIds: Array<string>, lifecycleState: string | null, foldedIntoRequestId: string | null, origin: RequestOriginView | null, createdAt: string | null, } | { "kind": "automatedInput", itemKey: string, requestId?: string | null,
-/**
- * The request whose input this is; dedups its pending projection.
- */
-inputRequestId?: string | null, sequence: number | null, origin: RequestOriginView, content: string | null, timestamp: string | null, reconstruction: MessageReconstructionView, } | { "kind": "liveAssistant", itemKey: string, content: string | null, reasoning: string | null, };
+export type RenderedTimelineItem = { "kind": "userMessage", itemKey: string, requestId?: string | null, ownsTurn: boolean, inputRequestId?: string | null, sequence: number | null, content: string | null, timestamp: string | null, reconstruction: MessageReconstructionView, } | { "kind": "assistantMessage", itemKey: string, sequence: number | null, content: string | null, reasoning: string | null, timestamp: string | null, reconstruction: MessageReconstructionView, } | { "kind": "toolGroup", itemKey: string, messageSequence: number | null, tools: Array<RenderedToolCallView>, } | { "kind": "pendingUserTurn", itemKey: string, requestId: string, content: string, selectedSkillIds: Array<string>, lifecycleState: string | null, foldedIntoRequestId: string | null, origin: RequestOriginView | null, createdAt: string | null, } | { "kind": "automatedInput", itemKey: string, requestId?: string | null, inputRequestId?: string | null, sequence: number | null, origin: RequestOriginView, content: string | null, timestamp: string | null, reconstruction: MessageReconstructionView, } | { "kind": "liveAssistant", itemKey: string, content: string | null, reasoning: string | null, };

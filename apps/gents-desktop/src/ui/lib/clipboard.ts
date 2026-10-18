@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 
-/** Copies text and says so for a moment. The clipboard may refuse; only a
-    copy that happened is claimed, and a second copy restarts the moment. */
 export function useCopied(ms = 1200) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);

@@ -5,6 +5,115 @@ use gents_protocol::schemas::AGENT_MESSAGE_NAME;
 use std::sync::Arc;
 
 #[tokio::test]
+async fn pending_edit_request_patch_reads_only_selected_and_replacement_documents() {
+    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    ensure_runtime_schemas(node.as_ref())
+        .await
+        .expect("schemas");
+    let access = gents::ConfigAccess::local(node.clone());
+    let response = access
+        .write(
+            "test.pending_edit_request_patch",
+            r#"mutation {
+                retired: create_AgentRequest(input: {
+                    request_id: "edit-retired",
+                    purpose: "normal",
+                    node_did: "did:test:agent",
+                    requester_did: "did:test:requester",
+                    agent_id: "default",
+                    session_id: "edit-session",
+                    content: "old text",
+                    lifecycle_state: "superseded",
+                    execution_origin: "interactive",
+                    created_at: "2026-09-01T00:00:00Z"
+                }) { _docID }
+                replacement: create_AgentRequest(input: {
+                    request_id: "edit-replacement",
+                    purpose: "normal",
+                    node_did: "did:test:agent",
+                    requester_did: "did:test:requester",
+                    agent_id: "default",
+                    session_id: "edit-session",
+                    content: "new text",
+                    lifecycle_state: "pending",
+                    execution_origin: "interactive",
+                    created_at: "2026-09-01T00:00:01Z"
+                }) { _docID }
+                unrelated: create_AgentRequest(input: {
+                    request_id: "other-session-request",
+                    purpose: "normal",
+                    node_did: "did:test:agent",
+                    requester_did: "did:test:requester",
+                    agent_id: "default",
+                    session_id: "other-session",
+                    content: "unrelated",
+                    lifecycle_state: "pending",
+                    execution_origin: "interactive",
+                    created_at: "2026-09-01T00:00:02Z"
+                }) { _docID }
+            }"#,
+        )
+        .await
+        .expect("seed edit and unrelated requests");
+    let doc_id = |alias: &str| {
+        response["data"][alias][0]["_docID"]
+            .as_str()
+            .expect("physical request identity")
+            .to_owned()
+    };
+    let selected = doc_id("retired");
+    let replacement = doc_id("replacement");
+    let patch = load_request_documents_on(&access, &[selected.clone(), replacement.clone()])
+        .await
+        .expect("exact edit request patch");
+
+    assert_eq!(
+        patch
+            .iter()
+            .filter_map(|row| row.doc_id.as_deref())
+            .collect::<std::collections::HashSet<_>>(),
+        [selected.as_str(), replacement.as_str()]
+            .into_iter()
+            .collect()
+    );
+    assert_eq!(patch.len(), 2, "unrelated session rows stay unread");
+    assert!(patch.iter().any(|row| {
+        row.request_id == "edit-retired"
+            && row.lifecycle_state
+                == Some(gents_protocol::request_lifecycle::RequestLifecycleState::Superseded)
+    }));
+    assert!(patch.iter().any(|row| {
+        row.request_id == "edit-replacement"
+            && row.lifecycle_state
+                == Some(gents_protocol::request_lifecycle::RequestLifecycleState::Pending)
+    }));
+    let existing_unrelated = serde_json::from_value(serde_json::json!({
+        "request_id": "already-local",
+        "purpose": "normal",
+        "node_did": "did:test:agent",
+        "requester_did": "did:test:requester",
+        "session_id": "another-session",
+        "content": "keep this local row",
+        "lifecycle_state": "pending",
+        "created_at": "2026-09-01T00:00:03Z"
+    }))
+    .expect("unrelated local request");
+    let merged = ClientStore::from_rows(ClientStoreRows {
+        requests: vec![existing_unrelated],
+        ..ClientStoreRows::default()
+    })
+    .merge_chat_patch(ClientStore::from_rows(ClientStoreRows {
+        requests: patch,
+        ..ClientStoreRows::default()
+    }));
+    assert_eq!(merged.requests.len(), 3);
+    assert!(merged
+        .requests
+        .iter()
+        .any(|row| row.request_id == "already-local"));
+}
+
+#[tokio::test]
 async fn fetch_doc_patch_returns_only_matching_rows() {
     let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
     ensure_runtime_schemas(node.as_ref())
@@ -40,8 +149,6 @@ async fn fetch_doc_patch_returns_only_matching_rows() {
     let response = node.execute(mutation).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    // DefraDB's create_* mutations return an array, so each value is
-    // [{_docID: "..."}] rather than {_docID: "..."}.
     let doc_ids: Vec<String> = response
         .data
         .as_ref()
@@ -203,12 +310,21 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
+    let access = gents::ConfigAccess::local(node.clone());
 
     let mutation = r#"mutation {
+        selected_session: create_AgentSession(input: {
+            session_id: "sess-selected",
+            node_did: "did:test:agent",
+            requester_did: "did:test:requester",
+            agent_id: "default",
+            created_at: "2026-07-24T00:00:00Z"
+        }) { _docID }
         first_request: create_AgentRequest(input: {
             request_id: "req-selected",
             purpose: "normal",
             node_did: "did:test:agent",
+            requester_did: "did:test:requester",
             agent_id: "default",
             session_id: "sess-selected",
             content: "selected",
@@ -216,10 +332,23 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
             execution_generation: "generation-selected",
             created_at: "2026-07-24T00:00:00Z"
         }) { _docID }
+        foreign_request_twin: create_AgentRequest(input: {
+            request_id: "req-selected",
+            purpose: "normal",
+            node_did: "did:test:agent",
+            requester_did: "did:test:foreign-requester",
+            agent_id: "default",
+            session_id: "sess-selected",
+            content: "foreign twin",
+            lifecycle_state: "processing",
+            execution_generation: "generation-foreign",
+            created_at: "2026-07-24T00:00:00Z"
+        }) { _docID }
         second_request: create_AgentRequest(input: {
             request_id: "req-unrelated",
             purpose: "normal",
             node_did: "did:test:agent",
+            requester_did: "did:test:requester",
             agent_id: "default",
             session_id: "sess-unrelated",
             content: "unrelated",
@@ -230,7 +359,30 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
     let response = node.execute(mutation).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let patch = load_chat_patch(node.as_ref(), "req-selected")
+    let selected_doc_id = response.data.as_ref().expect("mutation data")["first_request"][0]
+        ["_docID"]
+        .as_str()
+        .expect("physical request identity");
+    let observation = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+        "last_activity_at": "2026-07-24T00:00:01Z",
+        "latest_request": {
+            "request_doc_id": selected_doc_id,
+            "request_id": "req-selected",
+            "lifecycle_state": "processing"
+        }
+    }))
+    .expect("session observation literal");
+    let response = node
+        .execute(&format!(
+            r#"mutation {{ update_AgentSession(
+                filter: {{ node_did: {{ _eq: "did:test:agent" }}, session_id: {{ _eq: "sess-selected" }} }}
+                input: {{ observation: {observation} }}
+            ) {{ _docID }} }}"#
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+
+    let patch = load_chat_patch(&access, "did:test:agent", "sess-selected", None, None, &[])
         .await
         .expect("selected local chat patch");
     assert_eq!(patch.requests.len(), 1);
@@ -265,10 +417,97 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    let terminal_patch = load_chat_patch(node.as_ref(), "req-selected")
-        .await
-        .expect("terminal selected chat patch");
+    let terminal_patch = load_chat_patch(
+        &access,
+        "did:test:agent",
+        "sess-selected",
+        Some("req-selected"),
+        None,
+        &[],
+    )
+    .await
+    .expect("terminal selected chat patch");
     assert_eq!(terminal_patch.requests[0].terminal_output, Some(terminal));
+}
+
+#[test]
+fn selected_request_lookup_rejects_mixed_valid_and_malformed_rows() {
+    let lookup = super::super::SelectedRequestLookup {
+        query: String::new(),
+        expected_doc_id: None,
+        expected_request_id: None,
+    };
+    let data = serde_json::json!({
+        "AgentRequest": [
+            {
+                "_docID": "doc-valid",
+                "request_id": "valid",
+                "node_did": "did:test:agent",
+                "session_id": "session",
+                "requester_did": null
+            },
+            {
+                "_docID": "doc-malformed",
+                "request_id": 7,
+                "node_did": "did:test:agent",
+                "session_id": "session",
+                "requester_did": null
+            }
+        ]
+    });
+
+    assert!(lookup
+        .decode(&data, "did:test:agent", "session", None)
+        .is_err());
+}
+
+#[tokio::test]
+async fn load_chat_patch_uses_the_canonical_nullable_session_requester() {
+    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    ensure_runtime_schemas(node.as_ref())
+        .await
+        .expect("schemas");
+    let access = gents::ConfigAccess::local(node.clone());
+    let response = node
+        .execute(
+            r#"mutation {
+                session: create_AgentSession(input: {
+                    session_id: "sess-public",
+                    node_did: "did:test:agent",
+                    requester_did: null,
+                    agent_id: "default",
+                    created_at: "2026-07-24T00:00:00Z"
+                }) { _docID }
+                request: create_AgentRequest(input: {
+                    request_id: "req-public",
+                    purpose: "normal",
+                    node_did: "did:test:agent",
+                    requester_did: null,
+                    agent_id: "default",
+                    session_id: "sess-public",
+                    content: "public session",
+                    lifecycle_state: "completed",
+                    created_at: "2026-07-24T00:00:00Z"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+
+    let patch = load_chat_patch(
+        &access,
+        "did:test:agent",
+        "sess-public",
+        Some("req-public"),
+        None,
+        &[],
+    )
+    .await
+    .expect("canonical nullable requester resolves");
+    assert_eq!(patch.sessions.len(), 1);
+    assert_eq!(patch.sessions[0].requester_did, None);
+    assert_eq!(patch.requests.len(), 1);
+    assert_eq!(patch.requests[0].requester_did, None);
 }
 
 #[tokio::test]
@@ -277,7 +516,7 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
-    let access = gents::ConfigAccess::Local(node.clone());
+    let access = gents::ConfigAccess::local(node.clone());
     access
         .write(
             "test.title_request_patch",
@@ -326,12 +565,17 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
         .await
         .expect("title-only patch");
     assert_eq!(title_only.observed_documents, 1);
+    assert!(title_only
+        .missing_doc_ids
+        .as_ref()
+        .is_some_and(Vec::is_empty));
     assert!(title_only.store.requests.is_empty());
 
     let mixed = fetch_doc_patch(node.as_ref(), AGENT_REQUEST_NAME, &[normal_id, title_id])
         .await
         .expect("mixed patch");
     assert_eq!(mixed.observed_documents, 2);
+    assert!(mixed.missing_doc_ids.as_ref().is_some_and(Vec::is_empty));
     assert_eq!(mixed.store.requests.len(), 1);
     assert_eq!(mixed.store.requests[0].request_id, "patch-normal");
     assert_eq!(
@@ -349,6 +593,10 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
     .await
     .expect("mixed present/missing patch");
     assert_eq!(missing.observed_documents, 1);
+    assert_eq!(
+        missing.missing_doc_ids.as_ref().unwrap(),
+        &["physically-absent-request".to_owned()]
+    );
     assert!(missing.store.requests.is_empty());
     assert!(
         missing.observed_documents < 2,

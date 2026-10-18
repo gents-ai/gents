@@ -1,11 +1,9 @@
 //! Native premise experiment for the pinned DefraDB genesis-derived identity.
-//!
 //! This exercises the database directly, not the canonical writer's replay
-//! policy. A duplicate create is an error; the writer must resolve and verify
-//! the already-persisted immutable fact before treating a retry as replay.
+//! policy: a duplicate create is an error.
 
 use anyhow::{ensure, Context, Result};
-use gents::defra_node::{EmbeddedNode, ExecuteRetryPolicy, QueryRequest, QueryResponse};
+use gents::defra_node::{EmbeddedNode, QueryRequest, QueryResponse};
 use gents::session::canonical_rows::{
     decode_output_segment_row, output_segment_create_variables, AGENT_OUTPUT_SEGMENT_FIELDS,
     CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
@@ -51,10 +49,9 @@ fn segment(payload: &str) -> OutputSegment {
 }
 
 async fn create(node: &EmbeddedNode, value: &OutputSegment) -> QueryResponse {
-    node.execute_request_with_retry(
+    node.execute_request(
         QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
             .with_variables(output_segment_create_variables(value).unwrap()),
-        ExecuteRetryPolicy::default(),
     )
     .await
 }
@@ -100,8 +97,6 @@ async fn canonical_segment_genesis_is_immutable_under_concurrent_and_repeated_cr
     gents::schema::ensure_runtime_schemas(&node).await?;
     let original = segment("original");
 
-    // Race two *identical serialized genesis facts*. The database may report
-    // either conflict or duplicate on either contender; inspect actual IDs.
     let (first, second) = tokio::join!(create(&node, &original), create(&node, &original));
     let first_id = created_id(&first)?;
     let second_id = created_id(&second)?;
@@ -126,7 +121,6 @@ async fn canonical_segment_genesis_is_immutable_under_concurrent_and_repeated_cr
         "identical genesis yielded different acknowledged IDs: {first_id:?}, {second_id:?}"
     );
 
-    // A later duplicate must not be reported as a fresh successful create.
     let replay = create(&node, &original).await;
     ensure!(
         replay.has_errors(),
@@ -137,9 +131,6 @@ async fn canonical_segment_genesis_is_immutable_under_concurrent_and_repeated_cr
         "duplicate changed the original row"
     );
 
-    // Change only the authored bytes and corresponding extent, keeping the
-    // source coordinate and creation timestamp fixed. This is new genesis,
-    // not an update of the old physical document.
     let changed = segment("changed");
     let changed_response = create(&node, &changed).await;
     ensure!(
@@ -161,8 +152,6 @@ async fn canonical_segment_genesis_is_immutable_under_concurrent_and_repeated_cr
         after_change.contains(&persisted[0]) && after_change.contains(&(changed_id, changed)),
         "changed genesis overwrote or altered a physical row: {after_change:?}"
     );
-    // Feed the physical database facts into the production projection owner.
-    // Either closure may arrive first; neither may become a selected winner.
     let mut observed = after_change;
     for _ in 0..2 {
         let records = observed

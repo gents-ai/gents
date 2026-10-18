@@ -1,5 +1,3 @@
-//! Runtime wiring fence for request-local canonical transcript compaction.
-
 use super::*;
 use std::{sync::Arc, time::Duration};
 
@@ -81,8 +79,6 @@ pub(super) async fn compaction_runtime_reduces_valid_canonical_history() {
     assert!(checkpoint.request_doc_id.is_some());
     assert!(cursor < (SEEDED_TURNS as u32) * 2);
 
-    // This request reconstructs authorized provider input from the checkpoint
-    // and the remaining canonical tail.
     let second = run_request(&db, &agent, &session_id, "second").await;
     assert_eq!(second.lifecycle_state, RequestLifecycleState::Completed);
     assert!(backend.observed_requests(REQUEST_MARKER) >= 2);
@@ -156,7 +152,7 @@ async fn seed_bulky_history(node: &EmbeddedNode, node_did: &str, session_id: &st
 async fn boot_agent(db: &support::TestDb, endpoint: &str) -> BootedAgent {
     let identity: Arc<dyn gents::NodeIdentity> = Arc::new(test_identity("compaction-gate"));
     support::fixtures::bind_agent_backend(
-        db.node.as_ref(),
+        &db.node,
         identity.did(),
         AGENT_NAME,
         BACKEND_ID,

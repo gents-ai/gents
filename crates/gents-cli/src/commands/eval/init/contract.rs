@@ -1,7 +1,3 @@
-//! What the CLI tells the author. The authoring contract itself is the
-//! `eval_author` context's system prompt; the first turn carries only what
-//! changes per init: the subject dossier, the check catalog and the floors.
-
 use std::fmt::Write as _;
 
 use gents::eval::checks::CheckDescription;
@@ -9,22 +5,26 @@ use gents::eval::checks::CheckDescription;
 use super::dossier::Dossier;
 use super::validate::Floors;
 
-/// The first line of every turn that returns a failed draft to the author.
 pub(crate) const VALIDATION_PREFIX: &str =
     "The draft did not validate; revise and reply with a new draft.";
 
-/// Drafts that may fail validation before the interview gives up.
 pub(crate) const MAX_VALIDATION_ROUNDS: usize = 3;
 
-/// The author's first turn: `# Subject` (the dossier), `# Check catalog`
-/// (every check the registry ships, as JSON), and the floors the operator
-/// set.
 pub(crate) fn first_turn(
     dossier: &Dossier,
     catalog: &[CheckDescription],
     floors: &Floors,
 ) -> String {
     let mut text = dossier.text.trim_end().to_owned();
+    text.push_str("\n\n# Runtime captures\n\nRead-only documents captures may also name these runtime collections: ");
+    text.push_str(
+        &super::dossier::runtime_collections()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+    text.push_str(". Invalid-field errors list the available fields. Seeds must use the subject's collections.\n");
     text.push_str("\n\n# Check catalog\n\n```json\n");
     text.push_str(
         &serde_json::to_string_pretty(catalog).unwrap_or_else(|error| {
@@ -68,7 +68,6 @@ mod tests {
         assert!(!turn.contains("## How to reply with a draft"), "{turn}");
     }
 
-    /// A case in the shape the author's contract shows: one stage, one check.
     const EXAMPLE: &str = r#"{
         "case_id": "disk-warning",
         "split": "validation",

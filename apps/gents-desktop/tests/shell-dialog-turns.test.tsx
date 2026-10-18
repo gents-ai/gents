@@ -7,9 +7,6 @@ import type {
   SyncHealthView,
 } from "@source-inc/gents-desktop-client";
 
-/* Base UI keeps a closing popover mounted for its exit animation; jsdom has
-   none. This popover stays mounted after closing until the test acknowledges
-   the exit, and closes on an outside press like the real one. */
 const popoverControl = vi.hoisted(() => ({
   completions: new Map<string, () => void>(),
 }));
@@ -153,7 +150,6 @@ const context = {
   lastRequest: null,
 };
 
-/* the screen's app, holding a completed session */
 function sessionApp() {
   return testApp({
     snapshot: { bootstrap: {}, client: { deployments: [], syncHealth: healthy } },
@@ -178,7 +174,6 @@ function sessionApp() {
   });
 }
 
-/* the shell around the screen: the side panel is the shell's dock sheet */
 function Harness() {
   const [app] = useState(sessionApp);
   return (
@@ -218,11 +213,9 @@ describe("shell dialogs take turns (#1778)", () => {
     ).toBeVisible();
     expect(dialogs()).toHaveLength(1);
 
-    // The pane's More menu offers the trace surface: in a narrow window it opens a sheet.
     const [more] = screen.getAllByRole("button", { name: "More" });
     await user.click(more!);
     await user.click(await screen.findByRole("menuitem", { name: "Trace" }));
-    // The context popover is still leaving; the sheet waits for it.
     expect(dialogs()).toHaveLength(1);
     expect(
       screen.queryByRole("dialog", { name: "Side panel" }),

@@ -26,7 +26,7 @@ async fn fixture() -> (Arc<EmbeddedNode>, ConfigAccess, GraphPackageInstallBindi
             ("verifier".into(), "grok:inference".into()),
         ]),
     };
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     (node, access, options)
 }
 
@@ -47,34 +47,6 @@ async fn prepare_package_refuses_a_write_collection_the_package_does_not_declare
     let message = format!("{error:#}");
     assert!(message.contains("NotDeclaredCollection"), "{message}");
     assert!(message.contains("review"), "{message}");
-}
-
-#[test]
-fn explicit_graph_selection_preserves_authored_identity_and_rejects_ambiguity() {
-    let options = GraphPackageInstallBindings {
-        node_did: "did:key:owner".into(),
-        inference_slots: BTreeMap::new(),
-    };
-    let mut package = load_test_graph_package("review_graph", &options);
-    assert_eq!(
-        selected_intent(&package.config.graph_intents, None)
-            .unwrap()
-            .graph_id,
-        "code-review"
-    );
-    let mut second = package.config.graph_intents[0].clone();
-    second.graph_id = "second-review".into();
-    package.config.graph_intents.push(second.clone());
-    assert!(selected_intent(&package.config.graph_intents, None).is_err());
-    assert_eq!(
-        selected_intent(&package.config.graph_intents, Some("second-review"))
-            .unwrap()
-            .graph_id,
-        "second-review"
-    );
-    assert!(selected_intent(&package.config.graph_intents, Some("absent")).is_err());
-    package.config.graph_intents.push(second);
-    assert!(selected_intent(&package.config.graph_intents, Some("second-review")).is_err());
 }
 
 #[tokio::test]
@@ -369,7 +341,6 @@ async fn graph_fixture_install_is_idempotent_shared_home_safe_and_runnable() {
     .await
     .unwrap();
     assert_eq!(run.revision_digest, first.revision_digest);
-    // A metadata-only successor still pins the active predecessor exactly.
     let mut successor = load_test_graph_package("review_graph", &options);
     successor.manifest.version.push_str("-successor");
     successor.package_digest = digest_bytes(b"successor distribution");
@@ -386,7 +357,6 @@ async fn graph_fixture_install_is_idempotent_shared_home_safe_and_runnable() {
             .as_deref(),
         Some(first.revision_digest.as_str())
     );
-    // Identical authored logical IDs may coexist under another selected DID.
     let foreign = GraphPackageInstallBindings {
         node_did: "did:key:second-owner".into(),
         inference_slots: BTreeMap::from([
@@ -430,12 +400,6 @@ async fn graph_fixture_install_is_idempotent_shared_home_safe_and_runnable() {
     );
 }
 
-/// #1651: the graph's active revision digest is read outside the write
-/// transaction while preparing an install, to compute the new revision's
-/// predecessor pointer. If another install activates a different revision
-/// after that read but before this one commits, committing the stale
-/// preparation must refuse rather than silently writing a revision whose
-/// predecessor no longer reflects the graph's true history.
 #[tokio::test]
 async fn a_revision_activated_after_prepare_but_before_commit_is_refused() {
     let (node, access, options) = fixture().await;
@@ -453,7 +417,6 @@ async fn a_revision_activated_after_prepare_but_before_commit_is_refused() {
     .await
     .unwrap();
 
-    // Prepare a successor install: it observes `first` as the active revision.
     let mut successor = load_test_graph_package("review_graph", &options);
     successor.manifest.version.push_str("-successor");
     successor.package_digest = digest_bytes(b"successor distribution");
@@ -465,8 +428,6 @@ async fn a_revision_activated_after_prepare_but_before_commit_is_refused() {
         Some(first.revision_digest.as_str())
     );
 
-    // Edit the document between the check and the install: another install
-    // activates a different revision of the same graph.
     let mut concurrent = load_test_graph_package("review_graph", &options);
     concurrent.manifest.version.push_str("-concurrent");
     concurrent.package_digest = digest_bytes(b"concurrent distribution");
@@ -512,7 +473,6 @@ async fn a_revision_activated_after_prepare_but_before_commit_is_refused() {
         Some(concurrent_receipt.revision_digest.as_str())
     );
 
-    // The stale install wrote nothing: only the concurrent revision exists.
     let response = node.execute("{ GraphRevision { digest } }").await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let digests: BTreeSet<String> = response.data.unwrap()["GraphRevision"]

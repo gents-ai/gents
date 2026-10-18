@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::document_config::TaskHookPhase;
@@ -32,8 +33,6 @@ fn agent_result(name: &str) -> TaskAgentResult {
     }
 }
 
-/// An unscripted occurrence is observed to have exited zero, exactly as
-/// `TaskHooks.scriptedExec` observes it.
 fn scripted(case: &LeanTaskHookRunCase, hook_id: &str) -> LeanCommandResult {
     case.script
         .iter()
@@ -42,8 +41,6 @@ fn scripted(case: &LeanTaskHookRunCase, hook_id: &str) -> LeanCommandResult {
         .unwrap_or(LeanCommandResult::Exited { code: 0 })
 }
 
-/// Invocation log line written by the real process (or by the owned work)
-/// when it actually starts.
 fn log_line(invocation: &LeanHookInvocation) -> String {
     match invocation {
         LeanHookInvocation::Hook { hook_id } => format!("hook:{hook_id}"),
@@ -55,10 +52,6 @@ fn started_marker(dir: &Path, hook_id: &str) -> PathBuf {
     dir.join(format!("started-{hook_id}"))
 }
 
-/// A real host command whose observed result is the scripted one: it logs its
-/// own start, then exits with the scripted status, outlives its timeout, or
-/// waits to be cancelled. A launch failure is an absolute path that does not
-/// exist, so it cannot log.
 fn real_command(dir: &Path, log: &Path, hook_id: &str, result: &LeanCommandResult) -> Vec<String> {
     let record = format!(
         "printf 'hook:%s\\n' {hook_id} >> {log}",
@@ -83,9 +76,6 @@ fn real_command(dir: &Path, log: &Path, hook_id: &str, result: &LeanCommandResul
     vec!["sh".to_string(), "-c".to_string(), script]
 }
 
-/// Cancels each held command once it has started, through the source that
-/// production uses for its phase: a user interrupt for ordinary phases,
-/// runtime shutdown for cleanup.
 async fn cancel_held_commands(
     dir: PathBuf,
     held: Vec<(String, TaskHookPhase)>,
@@ -126,7 +116,7 @@ fn assert_attempts(case: &str, phase: &str, actual: &[HookAttempt], expected: &[
 
 struct RevokingExec<'a> {
     managed: ManagedTaskHookExec,
-    node: &'a defra_node::EmbeddedNode,
+    node: &'a Arc<defra_node::EmbeddedNode>,
     request_doc_id: &'a str,
     revoked: &'a [String],
 }
@@ -201,7 +191,7 @@ async fn generated_task_hook_run_cases_drive_real_host_commands() {
                         lifecycle.execution_generation().unwrap().to_owned(),
                     ),
                 ),
-            node: fixture.node.as_ref(),
+            node: &fixture.node,
             request_doc_id: &lifecycle.request().doc_id,
             revoked: &case.revoked,
         };

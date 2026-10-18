@@ -9,7 +9,6 @@ use super::*;
 use crate::error::InferenceError;
 use crate::llm::rig_compat::classify_completion_error;
 
-/// Answers one request with `status`, the extra `headers`, and `body`.
 pub(crate) async fn one_shot_server(
     status: &'static str,
     headers: &'static [(&'static str, &'static str)],
@@ -18,7 +17,6 @@ pub(crate) async fn one_shot_server(
     server_for(1, status, headers, body).await
 }
 
-/// Answers `requests` requests, one connection each, like [`one_shot_server`].
 pub(crate) async fn server_for(
     requests: usize,
     status: &'static str,
@@ -152,9 +150,6 @@ async fn success_passes_the_body_through() {
     );
 }
 
-/// Rig's Responses stream reduces a transport error to
-/// `ProviderError(error.to_string())`; the Codex usage-limit body and its reset
-/// still reach the classifier.
 #[tokio::test]
 async fn codex_usage_limit_survives_rig_responses_stream() {
     let url = one_shot_server(
@@ -196,8 +191,6 @@ async fn codex_usage_limit_survives_rig_responses_stream() {
     }
 }
 
-/// Seats without extra usage report overage `rejected` on ordinary responses;
-/// an overloaded 529 stays a transient transport failure.
 #[tokio::test]
 async fn overloaded_529_with_overage_rejected_stays_transient() {
     let url = one_shot_server(
@@ -223,8 +216,6 @@ async fn overloaded_529_with_overage_rejected_stays_transient() {
     }
 }
 
-/// Runs one streamed completion through Rig's OpenRouter client, built as
-/// `BackendClient::OpenRouter` is, and returns its first error.
 async fn openrouter_stream_error(url: &str) -> rig::completion::CompletionError {
     let client: rig::providers::openrouter::Client<
         crate::rendered_request::RenderedRequestCapturingHttpClient<ProviderHttpClient>,
@@ -301,7 +292,7 @@ fn usage_account(backend_id: &str) -> crate::usage_observation::UsageAccount {
 async fn usage_client(
     backend_id: &str,
 ) -> (std::sync::Arc<defra_node::EmbeddedNode>, ProviderHttpClient) {
-    let node = std::sync::Arc::new(crate::oauth_credential::test_support::test_node().await);
+    let node = crate::oauth_credential::test_support::test_node().await;
     let reporter =
         crate::usage_observation::UsageReporter::new(node.clone(), usage_account(backend_id));
     (
@@ -310,12 +301,11 @@ async fn usage_client(
     )
 }
 
-/// The usage write is spawned: poll the store for up to five seconds.
 pub(crate) async fn stored_usage_eventually(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     account: &crate::usage_observation::UsageAccount,
 ) -> Option<crate::usage_observation::StoredUsage> {
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         let stored = crate::usage_observation::load_usage(&access, account)
@@ -394,14 +384,14 @@ async fn usage_capture_rejected_records_error_source_and_keeps_the_marker() {
 
 #[tokio::test]
 async fn usage_capture_without_reporter_writes_nothing() {
-    let node = std::sync::Arc::new(crate::oauth_credential::test_support::test_node().await);
+    let node = crate::oauth_credential::test_support::test_node().await;
     let url = one_shot_server("200 OK", CODEX_USAGE_HEADERS, r#"{"ok":true}"#).await;
     ProviderHttpClient::default()
         .send::<Bytes, Bytes>(post(&url))
         .await
         .expect("200");
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let rows = crate::config_client::ConfigAccess::Local(node)
+    let rows = crate::config_client::ConfigAccess::local(node)
         .execute("{ ProviderAccountUsage { usage_key } }")
         .await
         .expect("read");

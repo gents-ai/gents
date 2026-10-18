@@ -1,11 +1,3 @@
-//! Effective tool timeouts: admitted Tools-document values under host ceilings.
-//!
-//! `ToolPolicy.effectiveBashForeground`, `effectiveCliTimeout`,
-//! `effectiveBackgroundLifetime`, `underCeiling`, `waitFor` and `lspActionFor`
-//! own these semantics; `generated_tool_timeout_cases_bind_native_resolution`
-//! binds the functions below to them. Inputs are already admitted by
-//! `Tools::validate`.
-
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -19,8 +11,6 @@ fn secs(value: i64) -> Duration {
     Duration::from_secs(u64::try_from(value).unwrap_or(0))
 }
 
-/// Bash foreground `(default, maximum)`. An authored default without an
-/// authored maximum fixes both; with neither authored the host pair applies.
 pub(crate) fn effective_bash_foreground(
     host_default: Duration,
     host_maximum: Duration,
@@ -40,8 +30,6 @@ pub(crate) fn effective_bash_foreground(
     )
 }
 
-/// An authored CLI timeout replaces the host registration's, clamped to the
-/// host foreground cap. Unauthored keeps the registration unchanged.
 pub(crate) fn effective_cli_timeout_secs(
     host_cap: Duration,
     registration_secs: u64,
@@ -53,7 +41,6 @@ pub(crate) fn effective_cli_timeout_secs(
     }
 }
 
-/// Lifetime of one `spawn_process` execution.
 pub(crate) fn effective_background_lifetime(background_timeout_secs: Option<i64>) -> Duration {
     let ceiling = Duration::from_secs(BACKGROUND_COMMAND_TIMEOUT_SECS);
     background_timeout_secs
@@ -62,7 +49,6 @@ pub(crate) fn effective_background_lifetime(background_timeout_secs: Option<i64>
         .min(ceiling)
 }
 
-/// An admitted `(default, maximum)` pair narrowed under a fixed ceiling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BoundedTimeout {
     pub default: Duration,
@@ -91,7 +77,6 @@ impl BoundedTimeout {
         }
     }
 
-    /// Observation wait policy for `wait_process`.
     pub(crate) fn wait(wait_timeout_secs: Option<i64>, max_wait_timeout_secs: Option<i64>) -> Self {
         Self::resolve(
             wait_timeout_secs,
@@ -102,7 +87,6 @@ impl BoundedTimeout {
         )
     }
 
-    /// LSP action timeout policy.
     pub(crate) fn lsp_action(timeout_secs: Option<i64>, max_timeout_secs: Option<i64>) -> Self {
         Self::resolve(
             timeout_secs,
@@ -120,18 +104,15 @@ impl BoundedTimeout {
         }
     }
 
-    /// Wait for one `wait_process` call; waiting never cancels the work.
     pub(crate) fn wait_for(&self, requested_secs: Option<u64>) -> Duration {
         self.requested(requested_secs, 1)
     }
 
-    /// Action timeout for one LSP call.
     pub(crate) fn action_for(&self, requested_secs: Option<u64>) -> Duration {
         self.requested(requested_secs, MIN_REQUESTED_ACTION_TIMEOUT_SECS)
     }
 }
 
-/// Lifetime and observation wait for one kind of background execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackgroundTimeoutPolicy {
     pub lifetime: Duration,
@@ -160,17 +141,13 @@ impl BackgroundTimeoutPolicy {
     }
 }
 
-/// Background policies from `host.bash` and each `remote.services[]` entry.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BackgroundTimeouts {
     pub bash: BackgroundTimeoutPolicy,
-    /// Keyed by MCP service id.
     pub remote: BTreeMap<String, BackgroundTimeoutPolicy>,
 }
 
 impl BackgroundTimeouts {
-    /// Policy for an execution of `tool_name`, dispatched to
-    /// `selected_service_id` when it is a remote call.
     pub(crate) fn for_execution(
         &self,
         tool_name: &str,
@@ -186,12 +163,10 @@ impl BackgroundTimeouts {
     }
 }
 
-/// Every Tools-document timeout, projected once for the capability owners.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolTimeouts {
     pub bash_timeout_secs: Option<i64>,
     pub bash_max_timeout_secs: Option<i64>,
-    /// Authored `host.cli[].timeout_secs`, keyed by CLI tool name.
     pub cli_timeout_secs: BTreeMap<String, i64>,
     pub background: BackgroundTimeouts,
     pub lsp_action: BoundedTimeout,

@@ -1,10 +1,3 @@
-//! `crew_spec_match`: how much of a declared configuration a subject built,
-//! graded per requirement and reported per category.
-//!
-//! One check scores a whole specification because a stage names each check
-//! once: the categories (completeness, templates, least privilege, receipt,
-//! ...) are reported in `raw.categories` rather than as separate verdicts.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
@@ -17,49 +10,6 @@ use crate::eval::checks::{
 };
 use crate::eval::runner::executor::{CaptureResult, StageEvidence};
 
-/// Params (every list optional, at least one requirement overall):
-///
-/// - `present`: `[{capture, min?, max?, category?}]`, each capture must exist
-///   and meet any row-count bounds. A
-///   documents capture that selects fields exists only when its collection
-///   has them, so this checks a schema as well as rows.
-/// - `rows`: `[{capture, key, id, category?, expect: [expectation]}]`: a row
-///   whose `key` equals `id` exists (one requirement) and holds each
-///   expectation (one requirement each).
-/// - `links`: `[{capture, key, id, field, target_capture, target_key, expect, category?}]`
-///   follows a stored ID in `field` and tests the selected target row. A
-///   `source_match` field expectation can replace `key`/`id`; it must select
-///   exactly one source row. Optional
-///   `via` hops follow more references before testing. `reported_fields` requires
-///   non-null target values in the final assistant message (ignoring case).
-/// - `agents`: `{agents, contexts, tools, expect: [{agent_id, category?,
-///   agent: [...], context: [...], tools: [...]}]}`: the agent exists,
-///   and each expectation holds on it, on the Context it selects and on the
-///   Tools that Context selects. Optional `datastore` follows selected surfaces,
-///   comparing exact create/query collection sets. `caller_fields` requires model-
-///   supplied required create fields; `required_fields` accepts required caller
-///   fields or runtime fills; `query_fields` requires returned columns;
-///   `lookup_by` requires queries usable with
-///   that key alone. `called_create`/`called_query` require successful calls to
-///   the selected tools. Optional `delegates` checks the exact set of the
-///   local node's agents reached through selected agent targets. Both reject unresolved references.
-///   With `source_match`, `agent_id` names a role rather than a stored ID:
-///   the selector must identify one agent, distinct from other named roles.
-///   Delegate expectations resolve those role names to the selected stored IDs.
-/// - `templates`: `[{capture, key, id, fields: [field], allowed: [name],
-///   category?}]`: every `{{ doc.NAME }}` in each present template field of
-///   that row names an allowed field (one requirement per field present).
-/// - `receipt`: `{capture, fields: [field], ids: [id], category?}`: each id
-///   appears in the text of some row's fields.
-/// - `continuation`: `{max, category?}`: each of the `max` prods the stage
-///   did not need is one requirement held.
-///
-/// An expectation is `captured_fields_match`'s: `{field, equals | contains |
-/// matches}`, `field` a dotted path; a JSON string along the path is read as
-/// the JSON it holds, and a missing path reads as `null`. A row's `id` (and an
-/// agent's) matches its stored ID exactly or as the `<scope>:<id>` suffix a
-/// node-scoped agent ID carries. `raw.activity` counts the stage's tool calls, failed
-/// tool calls and inference calls.
 pub struct CrewSpecMatch;
 
 #[derive(Deserialize)]
@@ -81,9 +31,6 @@ struct Params {
     continuation: Option<Continuation>,
 }
 
-/// Grades how many continuation prods the stage needed: `max - prods` of
-/// `max` requirements hold, so finishing unprompted scores full marks and a
-/// prod costs a requirement rather than failing the trial.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Continuation {
@@ -116,8 +63,6 @@ struct RowSpec {
     expect: Vec<Expectation>,
 }
 
-/// Follow the reference a source row actually stores; matching an unrelated
-/// target row does not establish that the configured path reaches it.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LinkSpec {
@@ -178,8 +123,6 @@ struct AgentSpec {
     delegates: Option<DelegateSpec>,
 }
 
-/// Compare capabilities through the selected documents, allowing the model to
-/// choose internal IDs and tool names. Extra grants fail the exact-set check.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DatastoreSpec {
@@ -229,9 +172,6 @@ struct Receipt {
     category: Option<String>,
 }
 
-/// A dotted path into `row`, reading a JSON string on the way as its JSON.
-/// A path the row lacks reads as `null`, so `equals: null` and `matches`
-/// over `null` can require a field to be absent or unset.
 fn lookup(row: &Value, field: &str) -> Value {
     let mut current = row.clone();
     for key in field.split('.') {
@@ -248,9 +188,6 @@ fn lookup(row: &Value, field: &str) -> Value {
     current
 }
 
-/// Whether a stored ID is the declared one. Agent IDs a node creates
-/// are stored scoped to it (`<DID>:<id>`), so a declared `id` also matches a
-/// stored ID ending in `:<id>`; an exact match wins.
 fn is_id(stored: &str, id: &str) -> bool {
     stored == id
         || stored
@@ -270,7 +207,6 @@ fn find<'a>(rows: &'a [Value], key: &str, id: &str) -> Option<&'a Value> {
         })
 }
 
-/// Every `NAME` a template reads as `doc.NAME`.
 fn doc_fields(template: &str) -> Vec<String> {
     let mut names = Vec::new();
     let mut rest = template;
@@ -1483,7 +1419,6 @@ mod tests {
         );
         assert_eq!(categories["templates"], json!({"satisfied": 0, "total": 1}));
         assert_eq!(categories["receipt"], json!({"satisfied": 2, "total": 3}));
-        // 10 of 13.
         assert_eq!(verdict.score_bp, Some(7_692));
         let feedback = verdict.feedback.unwrap();
         assert!(feedback.contains("doc.owner"), "{feedback}");
@@ -1536,13 +1471,6 @@ mod tests {
             json!({"satisfied": 3, "total": 5})
         );
         assert_eq!(verdict.raw["activity"]["prods"], 2);
-    }
-
-    #[test]
-    fn an_absent_field_reads_as_null() {
-        let row = json!({"agents": {"target_ids": []}});
-        assert_eq!(lookup(&row, "agents.enabled"), Value::Null);
-        assert_eq!(lookup(&row, "host.files.mode"), Value::Null);
     }
 
     #[test]

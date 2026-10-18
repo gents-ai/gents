@@ -1,6 +1,3 @@
-//! Sealed Afterburner ActionPlan adapter. Callback ownership and journals stay
-//! with the callback lifecycle; artifact execution belongs to PluginExecutor.
-
 use std::collections::BTreeSet;
 
 use base64::engine::general_purpose::STANDARD;
@@ -18,7 +15,7 @@ use super::documents::CallbackModuleDoc;
 const WASM_PAGE_BYTES: u64 = 65536;
 const CALLBACK_MODULE_ID_DOMAIN: &[u8] = b"gents.callback.module.v1";
 
-/// Host ceilings independent of CallbackModule fields. Over-ceiling → Denied.
+/// Host ceilings independent of CallbackModule fields.
 pub const MAX_FUEL: u64 = 100_000_000;
 pub const MAX_MEMORY_PAGES: u32 = 256;
 pub const MAX_INPUT_BYTES: usize = 1_048_576;
@@ -32,8 +29,6 @@ pub struct CallbackModuleLimits {
     pub max_output_bytes: usize,
 }
 
-/// Content-addressed id over decoded bytes + canonical JSON args + ABI.
-/// Hashes the bytes themselves, never a host path.
 pub fn compute_module_id(wasm: &[u8], args: &Value, abi_version: i64) -> Result<String, String> {
     let args_json = canonical_json_string(args)?;
     let mut hasher = Sha256::new();
@@ -81,12 +76,10 @@ pub fn limits_from_module(module: &CallbackModuleDoc) -> Result<CallbackModuleLi
 
 /// Install/apply predicate for CallbackModule (fail closed).
 ///
-/// v1 is an **installer allowlist**, not a cryptographic signature: `signer_did`
-/// must be an enabled `Node` DID. `provenance` is a required non-empty
-/// operator note (pack name, review URL, etc.), not a signature over bytes.
-/// `CallbackBinding.principal_did` is the workspace writer and is not required
-/// to equal `signer_did`. Call this before first use. Recovery that already
-/// has a stored ActionPlan must not re-run it.
+/// v1 is an installer allowlist, not a cryptographic signature: `signer_did`
+/// must be an enabled `Node` DID; `provenance` is a required operator note,
+/// not a signature over bytes; `CallbackBinding.principal_did` need not equal
+/// `signer_did`. Recovery that already has a stored ActionPlan must not re-run.
 pub fn validate_callback_module(
     module: &CallbackModuleDoc,
     trusted_signers: &BTreeSet<String>,
@@ -233,7 +226,6 @@ fn bounded_usize(value: Option<i64>, field: &str, max: usize) -> Result<usize, S
     usize::try_from(n).map_err(|_| format!("CallbackModule.{field} exceeds usize"))
 }
 
-/// `None` only when the fixture build was explicitly skipped.
 #[cfg(test)]
 pub(crate) fn fixture_create_workspace_artifact() -> Option<&'static [u8]> {
     static ARTIFACT: std::sync::OnceLock<Option<Vec<u8>>> = std::sync::OnceLock::new();

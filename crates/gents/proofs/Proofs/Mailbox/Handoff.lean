@@ -6,16 +6,11 @@ import Proofs.RequestExecutionLease.Properties
 /-!
 # Session-bound mailbox handoff
 
-This composes existing owners for one explicit handoff. The stamped mailbox
-create produces the stored row receipt first; the ordinary tool-completion
-and request-terminal owners then run. It does not make all Ask/Gate notices
-terminalize their producer or introduce a waiting request state.
-
-An end-to-end native refinement would have to show that the owned loop observes
-the committed `file_mailbox_item` tool result before terminalizing. The current
-native regression checks the real storage receipt and explicit terminal owner
-sequence, but does not exercise an AgentToolCall row or the completion loop.
-This model does not treat a provider assertion or Boolean as a stored row.
+Composes existing owners for one explicit handoff: stamped mailbox create
+produces the stored row receipt first, then the tool-completion and
+request-terminal owners. Does not make Ask/Gate notices terminalize their
+producer or introduce a waiting request state. This model does not treat a
+provider assertion or Boolean as a stored row.
 -/
 namespace Mailbox.Handoff
 
@@ -39,9 +34,6 @@ def handoffKind : Kind → Bool
   | .ask | .gate => true
   | _ => false
 
-/-- A matching open-row retry may reuse its stored row, but a
-condition-coalesced row from another origin or session cannot satisfy the
-exact receipt check. -/
 def eligible (producer : Producer) (request : CreateRequest) : Bool :=
   handoffKind request.identity.kind && request.handling == .startRequest &&
       producer.tool.awaitMode == .foreground &&
@@ -55,8 +47,6 @@ def eligible (producer : Producer) (request : CreateRequest) : Bool :=
       request.identity.nodeDid == producer.nodeDid &&
       producer.tool.requestId == producer.requestId
 
-/-- An explicit, session-bound handoff only. The three calls are the existing
-stamped mailbox, tool lifecycle, and request lease owners, in that order. -/
 def fileAndComplete? (registry : RegistryState) (producer : Producer)
     (request : CreateRequest) (generation : Nat) : Option Receipt :=
   if !eligible producer request then none else
@@ -123,10 +113,6 @@ theorem successful_handoff_has_stored_question_and_terminal_producer
   · have hf : eligible producer request = false := Bool.eq_false_iff.mpr he
     simp [fileAndComplete?, hf] at h
 
-/-- The reply is a new signed request. Its source is the physical mailbox row,
-and the stored handoff session is mandatory rather than an optional route. The
-existing reply claim owner still decides authentication, tenancy, deadline,
-terminal idempotence, and one-request consumption. -/
 def claimLinkedReply? (receipt : Receipt) (item : Item)
     (envelope : ReplyEnvelope) (reply : ReplyEvidence) : Option Item := do
   if item.identity != receipt.question.identity ||
@@ -191,8 +177,6 @@ theorem failed_filing_cannot_complete_handoff :
       { openQuestion with context := ⟨"foreign", "node"⟩ } 7) = none := by
   native_decide
 
-/-- An old terminal condition row cannot masquerade as the current open
-question, even though both share the same owner/source prefix. -/
 theorem terminal_old_question_cannot_satisfy_current_handoff :
     let old := applyCreate {} (question "ask:1" "old-doc" 2 "old-session" "old?")
     let closed := terminalizePrefix old openQuestion.identity.ownerPrefix

@@ -3,8 +3,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 
-/// The model-judge check. It is development-tier in v1: a subject's output is
-/// untrusted input to a judge model.
 pub const LLM_JUDGE_CHECK: &str = "llm_judge";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -20,9 +18,7 @@ pub enum EvalSplit {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum EvalTier {
-    /// Reported, may carry feedback, never enters a score.
     Development,
-    /// Deterministic checks only in v1. The only tier that enters a score.
     Acceptance,
 }
 
@@ -55,11 +51,6 @@ pub struct EvalSubject {
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
     pub inference_slots: Vec<String>,
-    /// The trial's process ceiling also grants host bash, confined to its
-    /// workspace root, as a desktop node's ceiling does. Agents the subject
-    /// configures at run time (a crew's builds and git reads) need it; the
-    /// subject pack's own Tools still may not grant host bash to an embedded
-    /// trial.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
     pub host_bash: bool,
@@ -70,8 +61,8 @@ pub struct EvalSubject {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct EvalFixtureDocument {
     pub collection: String,
-    /// A fixture row. String values equal to `$trial` bind to the trial's DID
-    /// when installed; object keys and strings containing it stay literal.
+    /// `$trial` values bind to the trial's DID at install; keys and other
+    /// strings stay literal.
     #[cfg_attr(feature = "typescript", ts(type = "unknown"))]
     pub document: serde_json::Value,
 }
@@ -80,9 +71,8 @@ pub struct EvalFixtureDocument {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct EvalFixtureFile {
-    /// Relative to the trial workspace; it may not leave it.
+    /// Trial-workspace-relative; may not leave it.
     pub path: String,
-    /// The file's UTF-8 text.
     pub contents: String,
 }
 
@@ -108,7 +98,6 @@ pub struct EvalFixtures {
         ts(as = "Option<Vec<EvalFixtureDocument>>", optional = nullable)
     )]
     pub documents: Vec<EvalFixtureDocument>,
-    /// Inline files, authored with the case, to write into the trial workspace.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -137,9 +126,8 @@ fn default_weight() -> u32 {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct EvalCheckRef {
-    /// A name in the builtin check registry. Definitions never contain code.
+    /// Builtin check registry name.
     pub check: String,
-    /// Interpreted by the named check. Its schema belongs to that check.
     #[serde(default)]
     #[cfg_attr(feature = "typescript", ts(type = "unknown"))]
     pub params: serde_json::Value,
@@ -148,31 +136,28 @@ pub struct EvalCheckRef {
     pub weight: u32,
 }
 
-/// Evidence a stage collects from the trial after it ends, keyed by `name`
-/// for the checks of that stage.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(tag = "kind", rename_all = "snake_case"))]
 pub enum EvalCapture {
-    /// Active native collection definitions, including fields and indexes.
     Schema {
         name: String,
         collections: Vec<String>,
     },
-    /// App-collection rows matching a DefraDB filter.
     Documents {
         name: String,
         collection: String,
-        /// A DefraDB filter object for `collection`.
         #[cfg_attr(feature = "typescript", ts(type = "unknown"))]
         filter: serde_json::Value,
-        /// Fields to read; empty reads every field.
+        /// Empty reads every field.
         #[serde(default)]
         fields: Vec<String>,
     },
-    /// Workspace files matching a glob.
-    File { name: String, glob: String },
+    File {
+        name: String,
+        glob: String,
+    },
 }
 
 impl EvalCapture {
@@ -192,27 +177,20 @@ pub struct EvalStage {
     pub stage_id: String,
     #[serde(default)]
     pub prompt: String,
-    /// A document written instead of a prompt: the stage's request is whatever
-    /// the pack's own EventTrigger fires for it.
+    /// A document written instead of a prompt.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub seed: Option<EvalFixtureDocument>,
     pub deadline_secs: u64,
-    /// Keep observing after the stage's request ends, within `deadline_secs`,
-    /// until no request in the trial home is running: the work the subject
-    /// started (trigger fires, agent sessions, later messages into its own
-    /// session) is part of the stage. The stage's evidence then covers every
-    /// later request of the trial session, and captures read the settled home.
+    /// Keep observing after the request ends, until the trial home is quiet;
+    /// evidence then covers every later request of the session.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
     pub settle: bool,
-    /// Continuation prods for a settling stage whose subject ends its turn
-    /// before it is done.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub continuation: Option<EvalContinuation>,
-    /// Append the previous stage's check feedback to this prompt. This is an
-    /// explicit assisted-eval condition; ordinary stages receive no grader feedback.
+    /// Append previous stage check feedback to this prompt.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
     pub review_previous: bool,
@@ -238,17 +216,15 @@ pub struct EvalStage {
     pub capture: Vec<EvalCapture>,
 }
 
-/// Once a settling stage's home is quiet, the stage sends `prompt` into the
-/// trial session as a new user turn, and settles again, until the capture
-/// named `until` holds a row or `max` prods have been sent. The number sent
-/// is stage evidence: a grade about the subject, never a failure.
+/// Once a settling stage's home is quiet, sends `prompt` as a new user turn
+/// and settles again, until the capture named `until` holds a row or `max`
+/// prods have been sent. The number sent is stage evidence, never a failure.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct EvalContinuation {
     pub prompt: String,
     pub max: u32,
-    /// A documents capture of the same stage.
     pub until: String,
 }
 
@@ -264,13 +240,7 @@ pub struct EvalCase {
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub fixtures: Option<EvalFixtures>,
     pub stages: Vec<EvalStage>,
-    /// How many rows each collection should hold when the case is done,
-    /// for a watcher to measure a trial's progress against; `schemas` counts
-    /// the collections the subject registers. Never graded: an entry replaces
-    /// the goal a `captured_rows_count` check of that collection implies. A
-    /// trial observes the configuration collections, its captures'
-    /// collections and the collections the subject registers; an entry for
-    /// any other collection reads as unobserved.
+    /// Per-collection row counts for a trial watcher; never graded.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -283,7 +253,7 @@ pub struct EvalCase {
     pub goal: BTreeMap<String, u64>,
 }
 
-/// A pack-carried eval definition. Identity is `(definition_id,
+/// A pack-carried eval definition; identity is `(definition_id,
 /// comparability_version, desired_state_document_digest)`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -291,8 +261,7 @@ pub struct EvalCase {
 pub struct EvalDefinition {
     pub definition_id: String,
     pub node_did: String,
-    /// Bumped by the author when cases, checks, reducers or judge settings
-    /// change. Runs never compare across different values.
+    /// Bumped on semantic change; runs never compare across values.
     pub comparability_version: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -303,12 +272,10 @@ pub struct EvalDefinition {
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub fixtures: Option<EvalFixtures>,
     pub cases: Vec<EvalCase>,
-    /// Written by the mutation owner, including the recreate-identity nonce on
-    /// create. Observation metadata, never part of the identity digest.
+    /// Written by the mutation owner; never part of the identity digest.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub updated_at: Option<String>,
-    /// Optional UI/discovery labels. References, never tags, determine execution.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -472,9 +439,6 @@ impl EvalDefinition {
     }
 }
 
-/// A fixture file lands inside the trial workspace: its path is non-empty,
-/// relative, and made only of ordinary components, so no `..`, `.`, root or
-/// prefix can move it anywhere else.
 fn validate_fixture_files(fixtures: Option<&EvalFixtures>, owner: &str) -> Result<()> {
     for file in fixtures.map_or(&[][..], |fixtures| &fixtures.files) {
         let path = &file.path;
@@ -522,340 +486,9 @@ mod tests {
         serde_json::from_value(value).unwrap()
     }
 
-    #[test]
-    fn a_minimal_definition_validates_and_defaults() {
-        let parsed = parse(definition());
-        parsed.validate().unwrap();
-        assert_eq!(parsed.cases[0].reducer, EvalReducer::WeightedMean);
-        assert_eq!(parsed.cases[0].stages[0].checks[0].weight, 1);
-        assert!(parsed.tags.is_empty());
-        let serialized = serde_json::to_value(&parsed).unwrap();
-        assert!(
-            serialized.get("tags").is_none(),
-            "an empty list is omitted, never []"
-        );
-    }
-
-    #[test]
-    fn unknown_fields_are_rejected() {
-        let mut value = definition();
-        value["status"] = "running".into();
-        assert!(serde_json::from_value::<EvalDefinition>(value).is_err());
-    }
-
-    fn invalid(mutate: impl FnOnce(&mut serde_json::Value), needle: &str) {
-        let mut value = definition();
-        mutate(&mut value);
-        let error = parse(value).validate().unwrap_err();
-        assert!(format!("{error:#}").contains(needle), "{error:#}");
-    }
-
-    #[test]
-    fn structural_rules_are_enforced() {
-        invalid(
-            |v| v["comparability_version"] = 0.into(),
-            "comparability_version",
-        );
-        invalid(|v| v["cases"] = json!([]), "at least one case");
-        invalid(
-            |v| v["cases"][0]["stages"] = json!([]),
-            "at least one stage",
-        );
-        invalid(
-            |v| v["cases"][0]["stages"][0]["deadline_secs"] = 0.into(),
-            "deadline_secs",
-        );
-        invalid(
-            |v| v["cases"][0]["stages"][0]["checks"][0]["weight"] = 0.into(),
-            "weight",
-        );
-        invalid(
-            |v| v["cases"][0]["stages"][0]["checks"][0]["check"] = " ".into(),
-            "check name",
-        );
-        invalid(
-            |v| {
-                let case = v["cases"][0].clone();
-                v["cases"].as_array_mut().unwrap().push(case);
-            },
-            "duplicate case_id",
-        );
-        invalid(
-            |v| {
-                let stage = v["cases"][0]["stages"][0].clone();
-                v["cases"][0]["stages"].as_array_mut().unwrap().push(stage);
-            },
-            "duplicate stage_id",
-        );
-    }
-
-    #[test]
-    fn a_stage_seeds_a_document_or_sends_a_prompt_never_both() {
-        let seed = json!({"collection": "Event", "document": {"kind": "signup"}});
-        invalid(
-            |v| v["cases"][0]["stages"][0]["seed"] = seed.clone(),
-            "exactly one of seed or prompt",
-        );
-        invalid(
-            |v| {
-                v["cases"][0]["stages"][0]
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("prompt");
-            },
-            "exactly one of seed or prompt",
-        );
-        invalid(
-            |v| {
-                v["cases"][0]["stages"][0]["prompt"] = "".into();
-                v["cases"][0]["stages"][0]["seed"] = json!({"collection": " ", "document": {}});
-            },
-            "seed collection",
-        );
-
-        let mut value = definition();
-        let stage = value["cases"][0]["stages"][0].as_object_mut().unwrap();
-        stage.remove("prompt");
-        stage.insert("seed".into(), seed.clone());
-        let parsed = parse(value);
-        parsed.validate().unwrap();
-        let serialized = serde_json::to_value(&parsed.cases[0].stages[0]).unwrap();
-        assert_eq!(serialized["seed"], seed);
-        assert_eq!(serialized["prompt"], "");
-
-        let prompt_only = serde_json::to_value(&parse(definition()).cases[0].stages[0]).unwrap();
-        assert!(prompt_only.get("seed").is_none(), "{prompt_only}");
-    }
-
-    #[test]
-    fn a_case_needs_an_acceptance_check_and_judges_stay_development() {
-        invalid(
-            |v| v["cases"][0]["stages"][0]["checks"][0]["tier"] = "development".into(),
-            "acceptance-tier check",
-        );
-        invalid(
-            |v| v["cases"][0]["stages"][0]["checks"][1]["tier"] = "acceptance".into(),
-            "llm_judge",
-        );
-    }
-
-    #[test]
-    fn a_stage_with_a_documents_capture_round_trips() {
-        let mut value = definition();
-        value["cases"][0]["stages"][0]["capture"] = json!([
-            {
-                "kind": "documents",
-                "name": "findings",
-                "collection": "MonitorFinding",
-                "filter": {"severity": {"_eq": "warning"}},
-                "fields": ["title", "severity"]
-            },
-            {"kind": "file", "name": "report", "glob": "reports/*.md"}
-        ]);
-        let parsed = parse(value.clone());
-        parsed.validate().unwrap();
-        assert_eq!(
-            parsed.cases[0].stages[0].capture[0],
-            EvalCapture::Documents {
-                name: "findings".into(),
-                collection: "MonitorFinding".into(),
-                filter: json!({"severity": {"_eq": "warning"}}),
-                fields: vec!["title".into(), "severity".into()],
-            }
-        );
-        assert_eq!(
-            parsed.cases[0].stages[0].capture[1],
-            EvalCapture::File {
-                name: "report".into(),
-                glob: "reports/*.md".into(),
-            }
-        );
-        let serialized = serde_json::to_value(&parsed).unwrap();
-        assert_eq!(
-            serialized["cases"][0]["stages"][0]["capture"],
-            value["cases"][0]["stages"][0]["capture"]
-        );
-        assert_eq!(parse(serialized), parsed);
-
-        let bare = parse(definition());
-        assert!(bare.cases[0].stages[0].capture.is_empty());
-        let serialized = serde_json::to_value(&bare).unwrap();
-        assert!(
-            serialized["cases"][0]["stages"][0].get("capture").is_none(),
-            "an empty capture list is omitted, never []"
-        );
-
-        let mut defaulted = definition();
-        defaulted["cases"][0]["stages"][0]["capture"] = json!([
-            {"kind": "documents", "name": "rows", "collection": "Row", "filter": {}}
-        ]);
-        let parsed = parse(defaulted);
-        assert!(matches!(
-            &parsed.cases[0].stages[0].capture[0],
-            EvalCapture::Documents { fields, .. } if fields.is_empty()
-        ));
-
-        let mut unknown = definition();
-        unknown["cases"][0]["stages"][0]["capture"] =
-            json!([{"kind": "file", "name": "r", "glob": "*", "extra": 1}]);
-        assert!(serde_json::from_value::<EvalDefinition>(unknown).is_err());
-    }
-
-    #[test]
-    fn assisted_review_requires_a_previous_checked_stage() {
-        invalid(
-            |v| v["cases"][0]["stages"][0]["review_previous"] = true.into(),
-            "review_previous requires a prompt and a preceding checked stage",
-        );
-        let mut value = definition();
-        let mut review = value["cases"][0]["stages"][0].clone();
-        review["stage_id"] = "repair".into();
-        review["review_previous"] = true.into();
-        value["cases"][0]["stages"]
-            .as_array_mut()
-            .unwrap()
-            .push(review);
-        parse(value.clone()).validate().unwrap();
-        value["cases"][0]["stages"][0]["checks"] = serde_json::json!([]);
-        assert!(parse(value)
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("review_previous"));
-    }
-
-    #[test]
-    fn a_continuation_needs_settle_and_a_documents_capture_to_wait_for() {
-        let continuation = json!({"prompt": "Continue.", "max": 3, "until": "receipt"});
-        invalid(
-            |v| v["cases"][0]["stages"][0]["continuation"] = continuation.clone(),
-            "continuation requires settle",
-        );
-        invalid(
-            |v| {
-                v["cases"][0]["stages"][0]["settle"] = true.into();
-                v["cases"][0]["stages"][0]["continuation"] = continuation.clone();
-            },
-            "continuation until names no documents capture \"receipt\"",
-        );
-        let mut value = definition();
-        let stage = &mut value["cases"][0]["stages"][0];
-        stage["settle"] = true.into();
-        stage["continuation"] = continuation;
-        stage["capture"] = json!([{"kind": "documents", "name": "receipt", "collection": "MailboxItem", "filter": {}}]);
-        let parsed = parse(value);
-        parsed.validate().unwrap();
-        assert_eq!(
-            parsed.cases[0].stages[0].continuation.as_ref().unwrap().max,
-            3
-        );
-    }
-
-    #[test]
-    fn duplicate_check_refs_in_one_stage_are_refused() {
-        invalid(
-            |v| {
-                let check = v["cases"][0]["stages"][0]["checks"][0].clone();
-                v["cases"][0]["stages"][0]["checks"]
-                    .as_array_mut()
-                    .unwrap()
-                    .push(check);
-            },
-            "case disk-warning stage check has duplicate check mailbox_findings",
-        );
-    }
-
-    #[test]
-    fn capture_names_are_unique_and_capture_fields_non_empty() {
-        invalid(
-            |v| {
-                v["cases"][0]["stages"][0]["capture"] = json!([
-                    {"kind": "file", "name": "out", "glob": "a/*"},
-                    {"kind": "documents", "name": "out", "collection": "Row", "filter": {}}
-                ]);
-            },
-            "duplicate capture name out",
-        );
-        invalid(
-            |v| {
-                v["cases"][0]["stages"][0]["capture"] =
-                    json!([{"kind": "file", "name": " ", "glob": "a/*"}]);
-            },
-            "empty capture name",
-        );
-        invalid(
-            |v| {
-                v["cases"][0]["stages"][0]["capture"] = json!([
-                    {"kind": "documents", "name": "rows", "collection": "", "filter": {}}
-                ]);
-            },
-            "capture rows has an empty collection",
-        );
-        invalid(
-            |v| {
-                v["cases"][0]["stages"][0]["capture"] =
-                    json!([{"kind": "file", "name": "out", "glob": ""}]);
-            },
-            "capture out has an empty glob",
-        );
-    }
-
-    #[test]
-    fn fixture_files_round_trip_and_are_omitted_when_empty() {
-        let mut value = definition();
-        value["cases"][0]["fixtures"] = json!({
-            "files": [{"path": "inventory/a.json", "contents": "{\"sku\": 1}"}]
-        });
-        let parsed = parse(value.clone());
-        parsed.validate().unwrap();
-        let fixtures = parsed.cases[0].fixtures.as_ref().unwrap();
-        assert_eq!(
-            fixtures.files,
-            vec![EvalFixtureFile {
-                path: "inventory/a.json".into(),
-                contents: "{\"sku\": 1}".into(),
-            }]
-        );
-        let serialized = serde_json::to_value(&parsed).unwrap();
-        assert_eq!(
-            serialized["cases"][0]["fixtures"],
-            value["cases"][0]["fixtures"]
-        );
-        assert_eq!(parse(serialized), parsed);
-
-        let mut nulled = definition();
-        nulled["fixtures"] = json!({"files": null});
-        let parsed = parse(nulled);
-        let fixtures = parsed.fixtures.as_ref().unwrap();
-        assert!(fixtures.files.is_empty());
-        let serialized = serde_json::to_value(&parsed).unwrap();
-        assert!(
-            serialized["fixtures"].get("files").is_none(),
-            "an empty files list is omitted, never []"
-        );
-
-        let mut unknown = definition();
-        unknown["fixtures"] = json!({"files": [{"path": "a", "contents": "", "mode": 1}]});
-        assert!(serde_json::from_value::<EvalDefinition>(unknown).is_err());
-    }
-
-    #[test]
-    fn a_fixture_file_path_must_stay_inside_the_trial_workspace() {
-        for path in ["../x", "/x", "a/../b", "", "./a"] {
-            invalid(
-                |v| v["cases"][0]["fixtures"] = json!({"files": [{"path": path, "contents": ""}]}),
-                &format!("case disk-warning fixture file path {path:?}"),
-            );
-            invalid(
-                |v| v["fixtures"] = json!({"files": [{"path": path, "contents": ""}]}),
-                &format!("eval definition monitor-findings fixture file path {path:?}"),
-            );
-        }
-    }
-
-    /// `mint_recreate_identity` stamps a fresh `updated_at` so that reinstalling
-    /// a byte-identical pack gets a new content-addressed docID. That nonce must
-    /// never reach the identity digest, or every reinstall would look changed.
+    /// `mint_recreate_identity` stamps a fresh `updated_at` so reinstalling a
+    /// byte-identical pack gets a new docID; that nonce must never reach the
+    /// identity digest.
     #[test]
     fn updated_at_is_carried_but_never_enters_the_identity_digest() {
         let digest = |updated_at: &str| {

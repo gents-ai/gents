@@ -1,5 +1,3 @@
-//! A usage-limited Goal the operator opted in resumes by itself once the
-//! reset its provider reported has passed (Lean `resumeBy`, `Cause.resetReached`).
 use super::*;
 use crate::blocked_turn::{goal_stopped_in_txn, served_profile};
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
@@ -8,13 +6,8 @@ use crate::identity::NodeIdentity;
 use crate::oauth_credential::{resolve_oauth_credential_in_txn, AccountPick};
 use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit};
 
-/// Resume `goal` through the operator resume transaction when its reported
-/// reset is due at `now`; `None` when it is not. The transaction runs as the
-/// node and `identity` signs the child, as claimed publication does. The
-/// Goal's recorded limit gates the transaction, so nothing is read before
-/// that reset passes.
 pub async fn resume_at_reset(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
     goal: &GoalDocument,
     now: DateTime<Utc>,
@@ -25,13 +18,12 @@ pub async fn resume_at_reset(
         return Ok(None);
     }
     let (node_did, session_id) = (goal.node_did.as_str(), goal.session_id.as_str());
-    ConfigAccess::transact_local(node, None, "goal.resume_at_reset", move |txn| {
+    ConfigAccess::transact_local_write(node, None, "goal.resume_at_reset", move |txn| {
         Box::pin(stage_reset_resume(txn, identity, node_did, session_id, now))
     })
     .await
 }
 
-/// `ResetFacts.due`, read in the resume transaction, then `resume`.
 async fn stage_reset_resume(
     txn: &ConfigApplyTxn<'_>,
     identity: &dyn NodeIdentity,
@@ -74,8 +66,6 @@ async fn stage_reset_resume(
     let Some((_, backend)) = references.profile_with_backend(&profile)? else {
         return Ok(None);
     };
-    // The same sign-in: the account the backend names, enabled, connected
-    // before the limited call.
     let account_serves = backend.enabled
         && match &backend.auth {
             BackendAuth::NodeOAuth { account_ref } => {
@@ -104,7 +94,6 @@ async fn stage_reset_resume(
         .map(Some)
 }
 
-/// The reset a recorded usage limit names, if it names one.
 fn reported_reset(text: Option<&str>, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
     match classify_provider_limit(text?, now)? {
         ProviderLimit::UsageExhausted(limit) => limit.resets_at,

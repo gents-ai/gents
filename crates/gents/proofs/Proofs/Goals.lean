@@ -226,8 +226,6 @@ def decide
           if infrastructureRetries < 2 then .retry else .abandonWrapup
   | .paused | .blocked | .usageLimited | .complete => .none
 
--- Exhaustion prevents another ordinary recovery attempt. Budget-limited
--- wrap-up retries remain governed by their existing, separate bounded rule.
 theorem exhausted_active_never_retries
     (terminal : RequestTerminal) (idle child activity wrapup : Bool)
     (retries : Nat) (requested completed : Bool) :

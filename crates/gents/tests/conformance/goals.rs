@@ -205,7 +205,7 @@ fn generated_goal_transition_cases_fence_runtime_state_machine() {
 #[test]
 fn generated_goal_create_cases_fence_authority_and_idempotency() {
     let cases = lean_goal_create_cases();
-    assert_eq!(cases.len(), 14, "the durable-goal creation matrix drifted");
+    assert_eq!(cases.len(), 16, "the durable-goal creation matrix drifted");
     for case in cases {
         let request = GoalCreateRequest {
             caller: case.caller.clone(),
@@ -246,17 +246,11 @@ fn generated_goal_create_cases_fence_authority_and_idempotency() {
     }
 }
 
-/// Exercises declaration validation and deterministic fire identity through
-/// their production owners. No publication is performed here: atomic Goal and
-/// request visibility requires a separate transaction-backed integration fence.
 #[test]
 fn generated_task_goal_cases_fence_declaration_and_identity() {
     let cases = lean_task_goal_publication_cases();
     assert_eq!(cases.len(), 11, "the Task goal publication matrix drifted");
     for case in cases {
-        // Runtime goal budgets are i64, so a Lean budget beyond i64::MAX is
-        // unrepresentable and must stay invalid, exactly like the Lean
-        // `validBudget` bound.
         let declaration_valid = match case.goal_token_budget {
             Some(budget) => i64::try_from(budget).is_ok_and(|budget| {
                 gents::goal::validate_task_goal_declaration(

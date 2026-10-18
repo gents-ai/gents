@@ -1,8 +1,30 @@
 use super::*;
 use crate::storage_backend::incompatible_store;
+use storage::corekv::{AppendLog, Reader, Store, Writer};
 
 const ACCESS_TOKEN: &str = "at-rest-access-token-5f0c1d";
 const REFRESH_TOKEN: &str = "at-rest-refresh-token-9a7e42";
+
+fn arrival_log() -> AppendLog {
+    AppendLog::new(b"s/arrival/c1/head".to_vec(), b"s/arrival/c1/row/".to_vec())
+}
+
+async fn append_log_entry(store: &dyn Store, log: &AppendLog, entry: &[u8], once: &[u8]) {
+    let mut txn = store.new_txn(false).await.unwrap();
+    txn.append(log, entry, Some(once)).await.unwrap();
+    txn.commit().await.unwrap();
+}
+
+async fn read_log_head(store: &dyn Store, log: &AppendLog) -> Option<Vec<u8>> {
+    let txn = store.new_txn(true).await.unwrap();
+    let head = txn
+        .get(log.head_key())
+        .await
+        .unwrap()
+        .map(|value| value.to_vec());
+    txn.discard();
+    head
+}
 
 async fn write_credential(node: &defra_node::EmbeddedNode) {
     crate::schema::ensure_runtime_schemas(node)
@@ -74,7 +96,7 @@ async fn encrypted_local_budget_accepts_and_reopens_a_megabyte_document() {
             .await
             .unwrap(),
     );
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     access
         .add_schema("type BudgetDocument { payload: String }")
         .await
@@ -101,7 +123,7 @@ async fn encrypted_local_budget_accepts_and_reopens_a_megabyte_document() {
             .await
             .unwrap(),
     );
-    let result = ConfigAccess::Local(reopened.clone())
+    let result = ConfigAccess::local(reopened.clone())
         .execute("{ BudgetDocument { payload } }")
         .await
         .unwrap();
@@ -112,9 +134,6 @@ async fn encrypted_local_budget_accepts_and_reopens_a_megabyte_document() {
     reopened.shutdown().await;
 }
 
-/// The written credential's tokens reach disk only as ciphertext, while the
-/// same writes to an unencrypted store leave them readable, so the scan
-/// proves the encryption rather than the storage format.
 #[tokio::test]
 async fn an_encrypted_store_keeps_credential_tokens_off_disk_and_reopens_with_its_key() {
     let temp = tempfile::tempdir().unwrap();
@@ -148,9 +167,13 @@ async fn an_encrypted_store_keeps_credential_tokens_off_disk_and_reopens_with_it
     reopened.shutdown().await;
 
     let plain = temp.path().join("plain");
+    let mut plain_options = crate::storage_backend::regolith_options();
+    plain_options.engine = plain_options
+        .engine
+        .compression(regolith::CompressionType::None);
     let control = defra_node::EmbeddedNode::builder()
         .data_path(&plain)
-        .with_storage_backend(defra_node::StorageBackend::Regolith)
+        .with_regolith_options(plain_options)
         .build()
         .await
         .unwrap();
@@ -226,9 +249,6 @@ fn recorded_creation_intent_resumes_without_replacing_a_stores_missing_key() {
     assert!(!key_file.exists());
 }
 
-/// Only `errSecItemNotFound` proves the key is gone. A locked keychain or a
-/// denied prompt is a plain error that no host treats as a store refusal,
-/// so no reset or deletion is offered for it.
 #[test]
 fn only_a_definitely_absent_keychain_item_is_a_missing_key() {
     let data = Path::new("/tmp/gents-home/data");
@@ -277,6 +297,30 @@ async fn a_plaintext_home_upgrades_without_changing_identity_or_documents() {
     plain.shutdown().await;
     drop(plain);
 
+    let log = arrival_log();
+    let plaintext_store = storage::RegolithStore::open_with_options(
+        &data,
+        crate::storage_backend::regolith_options(),
+    )
+    .unwrap();
+    append_log_entry(
+        &plaintext_store,
+        &log,
+        b"first-arrival",
+        b"s/arrival/c1/doc/first-arrival",
+    )
+    .await;
+    append_log_entry(
+        &plaintext_store,
+        &log,
+        b"second-arrival",
+        b"s/arrival/c1/doc/second-arrival",
+    )
+    .await;
+    let plaintext_head = read_log_head(&plaintext_store, &log).await.unwrap();
+    plaintext_store.close().await.unwrap();
+    drop(plaintext_store);
+
     let key = open_home_store_key_with_custody(&home, &data, StoreKeyCustodyChoice::File)
         .await
         .unwrap();
@@ -301,6 +345,41 @@ async fn a_plaintext_home_upgrades_without_changing_identity_or_documents() {
     assert!(upgrade::pending_record(&data).unwrap().is_none());
     encrypted.shutdown().await;
     drop(encrypted);
+
+    let encrypted_store = storage::RegolithStore::open_with_options(
+        &data,
+        crate::storage_backend::regolith_options().with_encryption_key(*key.0),
+    )
+    .unwrap();
+    assert_eq!(
+        read_log_head(&encrypted_store, &log).await,
+        Some(plaintext_head.clone())
+    );
+    append_log_entry(
+        &encrypted_store,
+        &log,
+        b"duplicate-arrival",
+        b"s/arrival/c1/doc/second-arrival",
+    )
+    .await;
+    assert_eq!(
+        read_log_head(&encrypted_store, &log).await,
+        Some(plaintext_head.clone())
+    );
+    append_log_entry(
+        &encrypted_store,
+        &log,
+        b"third-arrival",
+        b"s/arrival/c1/doc/third-arrival",
+    )
+    .await;
+    assert_ne!(
+        read_log_head(&encrypted_store, &log).await,
+        Some(plaintext_head.clone())
+    );
+    encrypted_store.close().await.unwrap();
+    drop(encrypted_store);
+
     open_home_store_key(&home, &data)
         .await
         .expect("recorded custody survives reopening");

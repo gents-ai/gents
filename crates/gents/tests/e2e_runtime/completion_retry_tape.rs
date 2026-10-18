@@ -154,9 +154,6 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
         &format!("recover across a long backoff {marker}"),
     )
     .await;
-    // Allow setup and the first real HTTP failure to finish before expiring
-    // the lease. Scheduled retry pacing leaves a backoff window; it must not
-    // count as semantic progress or grant the next provider call ownership.
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let calls = fetch_inference_calls(db.node.as_ref(), request_id).await;
@@ -196,10 +193,7 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     ) {{ _docID }} }}"#,
         escape_graphql_string(&expired)
     );
-    let expired = db
-        .node
-        .execute_with_retry(&mutation, gents::defra_node::ExecuteRetryPolicy::default())
-        .await;
+    let expired = db.node.execute(&mutation).await;
     assert!(!expired.has_errors(), "{:?}", expired.errors);
     assert!(
         expired
@@ -247,9 +241,6 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     assert!(rows["AgentRequest"][0]["failure_reason"]
         .as_str()
         .is_some_and(|reason| reason.contains("execution lease expired")));
-    // Claim publishes authored admission input even when the provider returns
-    // no bytes. Retraction/closure records may also survive a failed attempt;
-    // neither is successful provider output from the forbidden retry.
     for segment in rows["AgentOutputSegment"].as_array().unwrap() {
         let source: gents_protocol::output::OutputSource =
             serde_json::from_value(segment["source"].clone()).unwrap();
@@ -267,7 +258,7 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     assert_eq!(call_states(&calls), vec!["failed"]);
     let timeline = build_timeline(db.node.as_ref(), request_id).await;
     assert!(!timeline.request.retry_summary.recovered);
-    let repeated = gents::RequestLifecycle::recover_all(db.node.as_ref(), &agent.node_did)
+    let repeated = gents::RequestLifecycle::recover_all(&db.node, &agent.node_did)
         .await
         .unwrap();
     assert_eq!(repeated.requests_recovered, 0);
@@ -280,8 +271,6 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     );
 }
 
-/// Scheduler delay can exhaust the claim deadline before the first dispatch;
-/// retry admission itself is checked with fixed time in the retry owner tests.
 #[tokio::test]
 async fn deadline_tight_fails_cleanly() {
     let marker = "deadline-tight";
@@ -397,8 +386,6 @@ async fn interactive_budget_is_quick() {
     )
     .await;
 
-    // The observation window follows the request's timing envelope; the
-    // elapsed assert below is the property under test and stays fixed.
     let terminal_state = wait_for_request_terminal_state(
         db.node.as_ref(),
         &request_doc_id,
@@ -430,9 +417,6 @@ async fn interactive_budget_is_quick() {
     agent.shutdown().await;
 }
 
-/// Stall responses hold the HTTP connection open without further bytes until
-/// the mock stops, so only the owned loop's provider idle window can end the
-/// attempt. The execution lease keeps its default: the window is independent.
 async fn start_stall_tape(
     marker: &str,
     responses: Vec<StreamResponse>,
@@ -452,7 +436,7 @@ async fn start_stall_tape(
     let test_name = format!("completion-retry-{marker}");
     let db = test_db(&test_name).await;
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity(&test_name));
-    upsert_retry_backend(db.node.as_ref(), identity.did(), backend.endpoint(), 1).await;
+    upsert_retry_backend(&db.node, identity.did(), backend.endpoint(), 1).await;
     let agent = Gents::builder()
         .node(db.node.clone())
         .identity(identity)
@@ -559,8 +543,6 @@ async fn provider_silent_between_chunks_retracts_and_retries() {
     .await;
 }
 
-/// A scheduled retry backs off for seconds; the stalled call must already be
-/// terminal (its admission slot returned) while that backoff is running.
 #[tokio::test]
 async fn stalled_call_is_terminal_before_the_retry_backoff_ends() {
     let marker = "stall-releases-permit";
@@ -765,7 +747,7 @@ async fn build_retry_agent_with_liveness(
     stream_liveness_timeout_secs: Option<u64>,
 ) -> Gents {
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity(test_name));
-    upsert_retry_backend(db.node.as_ref(), identity.did(), endpoint, max_concurrent).await;
+    upsert_retry_backend(&db.node, identity.did(), endpoint, max_concurrent).await;
     let mut behavior = Gents::builder()
         .node(db.node.clone())
         .identity(identity)
@@ -794,7 +776,7 @@ async fn spawn_agent(node: &EmbeddedNode, agent: Gents, node_did: String) -> Boo
 }
 
 async fn upsert_retry_backend(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     owner: &str,
     endpoint: &str,
     max_concurrent: i64,
@@ -820,7 +802,7 @@ async fn upsert_retry_backend(
         .collect(),
     )
     .unwrap();
-    ConfigAccess::transact_local(node, None, "test.install_provider_backend", |txn| {
+    ConfigAccess::transact_local_write(node, None, "test.install_provider_backend", |txn| {
         let plan = &plan;
         Box::pin(async move { gents::config_client::apply_desired_state_plan(txn, plan).await })
     })

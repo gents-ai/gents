@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use gents::agent::p2p_reconcile::session_input_edit::run_session_input_edit_reconciler;
+use gents::agent::p2p_reconcile::session_commands::run_session_command_reconciler;
 use gents::agent::p2p_reconcile::{
     enrollment_authority_channel, resolve_template, resolve_template_filters,
     run_enrollment_reconciler, run_pairing_reconciler, EmbeddedRemoteP2pAdmin, PairingDirection,
@@ -28,7 +28,7 @@ impl Drop for Stop {
 }
 
 async fn rows(db: &TestDb, collection: &str, filter: &str, fields: &str) -> Vec<serde_json::Value> {
-    ConfigAccess::Local(db.node.clone())
+    ConfigAccess::local(db.node.clone())
         .execute(&format!(
             "{{ {collection}(filter: {filter}) {{ {fields} }} }}"
         ))
@@ -79,7 +79,7 @@ async fn write_command(db: &TestDb, command: &SessionInputEdit) -> String {
         .as_ref()
         .map(|p| format!("\"{}\"", escape_graphql_string(p)))
         .unwrap_or("null".into());
-    let response = ConfigAccess::Local(db.node.clone()).write("test.signed_remote_edit", &format!(r#"mutation {{ create_AgentSessionInputEdit(input: {{
+    let response = ConfigAccess::local(db.node.clone()).write("test.signed_remote_edit", &format!(r#"mutation {{ create_AgentSessionInputEdit(input: {{
         command_id: "{}", requester_did: "{}", requester_peer_id: {}, node_did: "{}", session_id: "{}", intent_json: "{}"
     }}) {{ _docID }} }}"#, escape_graphql_string(&command.command_id), escape_graphql_string(&command.requester_did), peer,
         escape_graphql_string(&command.node_did), escape_graphql_string(&command.session_id),
@@ -138,7 +138,6 @@ async fn generated_remote_edits_replicate_signed_effect_and_receipt() {
         fence.authorization_sequence,
         &fence.authorization_expires_at,
     );
-    // The applied route is produced by the enrollment and pairing owners, never a test-authored grant.
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let applied = rows(
@@ -193,8 +192,6 @@ async fn generated_remote_edits_replicate_signed_effect_and_receipt() {
         .await
         .unwrap();
     let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    // Applied routes come only from the enrollment and pairing owners, so a
-    // withdrawn route is not reproducible here; revocation is.
     let cases = contract["session_input_edit_cases"]
         .as_array()
         .unwrap()
@@ -221,7 +218,7 @@ async fn generated_remote_edits_replicate_signed_effect_and_receipt() {
         prepared.push(remote.prepare(case).await);
     }
     let edit_cancel = cancel.child_token();
-    let edit_task = tokio::spawn(run_session_input_edit_reconciler(
+    let edit_task = tokio::spawn(run_session_command_reconciler(
         runtime.node.clone(),
         runtime.node_identity.clone(),
         edit_cancel.clone(),
@@ -231,8 +228,6 @@ async fn generated_remote_edits_replicate_signed_effect_and_receipt() {
     }
     edit_cancel.cancel();
     edit_task.await.unwrap().unwrap();
-    // The commands cross the live route before revocation. Application must
-    // re-read the current signed enrollment instead of trusting transport arrival.
     let mut prepared = Vec::new();
     for case in &revoked {
         prepared.push(remote.prepare(case).await);
@@ -249,12 +244,11 @@ async fn generated_remote_edits_replicate_signed_effect_and_receipt() {
         .await
         .unwrap()
         .is_none());
-    let revoked_task = tokio::spawn(run_session_input_edit_reconciler(
+    let revoked_task = tokio::spawn(run_session_command_reconciler(
         runtime.node.clone(),
         runtime.node_identity.clone(),
         cancel.clone(),
     ));
-    // Revocation also withdraws the return route; observe the receipt at its writer.
     for (case, modeled) in revoked.iter().zip(&prepared) {
         remote.assert_modeled(case, modeled, &runtime).await;
     }
@@ -287,8 +281,6 @@ fn model_ids(values: &serde_json::Value) -> Vec<u64> {
         .collect()
 }
 
-/// A session queue in native request IDs: active, folding, pending in order,
-/// and the terminal set.
 type QueueImage = (
     Option<String>,
     Vec<String>,
@@ -340,7 +332,7 @@ impl ModeledEdit {
         let active = in_state(&["claimed", "processing"]);
         assert!(active.len() <= 1, "one active request: {active:?}");
         let pending = gents::lifecycle::pending_user_queue(
-            &ConfigAccess::Local(runtime.node.clone()),
+            &ConfigAccess::local(runtime.node.clone()),
             runtime.node_identity.did(),
             &self.session_id,
             &self.command.requester_did,
@@ -370,8 +362,6 @@ impl ModeledEdit {
 }
 
 impl RemoteEdit<'_> {
-    /// Seeds the modeled initial queue on the runtime and replicates the client's
-    /// signed intent for the modeled command and authority.
     async fn prepare(&self, case: &serde_json::Value) -> ModeledEdit {
         let did = self.runtime.node_identity.did();
         let requester = self.client.node_identity.did();
@@ -388,7 +378,6 @@ impl RemoteEdit<'_> {
         let mut request_ids = std::collections::HashMap::new();
         let mut doc_ids = std::collections::HashMap::new();
         let initial = &case["initial"]["queue"];
-        // The public claim admits no folded run, so only an empty one is bound here.
         assert_eq!(initial["folding"], serde_json::json!([]), "{name}: folding");
         let active_id = initial["active"].as_u64().expect("modeled active request");
         let mut active = AgentRequestCreate::base(
@@ -407,7 +396,7 @@ impl RemoteEdit<'_> {
         gents::sign_agent_request_create(self.client.node_identity.as_ref(), &mut active)
             .await
             .unwrap();
-        let written = ConfigAccess::Local(self.runtime.node.clone())
+        let written = ConfigAccess::local(self.runtime.node.clone())
             .write("test.remote_active", &active.graphql_mutation().unwrap())
             .await
             .unwrap();
@@ -445,7 +434,7 @@ impl RemoteEdit<'_> {
             gents::sign_agent_request_create(self.client.node_identity.as_ref(), &mut original)
                 .await
                 .unwrap();
-            let written = ConfigAccess::Local(self.runtime.node.clone())
+            let written = ConfigAccess::local(self.runtime.node.clone())
                 .write("test.remote_pending", &original.graphql_mutation().unwrap())
                 .await
                 .unwrap();
@@ -465,6 +454,7 @@ impl RemoteEdit<'_> {
             .await;
         }
         let request = gents::DefraWatcher::new(self.runtime.node.clone(), did)
+            .expect("request watcher")
             .try_fetch_request(&active_doc)
             .await
             .unwrap()
@@ -480,6 +470,15 @@ impl RemoteEdit<'_> {
             active.claim().await.unwrap(),
             gents::lifecycle::ClaimOutcome::Claimed
         );
+        wait_row(
+            self.client,
+            "AgentRequest",
+            "_docID",
+            &active_doc,
+            "execution_generation",
+            "execution_generation",
+        )
+        .await;
         let model = &case["command"];
         let authority = &case["authority"];
         let (offset, count) = (
@@ -507,7 +506,7 @@ impl RemoteEdit<'_> {
                 .collect(),
         };
         let mut native = prepare_pending_user_edit(
-            &ConfigAccess::Local(self.client.node.clone()),
+            &ConfigAccess::local(self.client.node.clone()),
             self.client.node_identity.as_ref(),
             self.admission.clone(),
             did,
@@ -517,7 +516,6 @@ impl RemoteEdit<'_> {
         )
         .await
         .unwrap();
-        // Presigning requires the observed queue; the signed intent carries the modeled one.
         edit.expected_request_doc_ids = model_ids(&model["expected"])
             .iter()
             .map(|id| doc_ids[id].clone())
@@ -591,7 +589,6 @@ impl RemoteEdit<'_> {
         modeled
     }
 
-    /// Compares the observed receipt and the runtime queue with the modeled result.
     async fn assert_modeled(
         &self,
         case: &serde_json::Value,
@@ -662,7 +659,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
         .await
         .unwrap();
     let session = "edit-reopen-session";
-    ConfigAccess::Local(db.node.clone()).write("test.edit_reopen.session", &format!(
+    ConfigAccess::local(db.node.clone()).write("test.edit_reopen.session", &format!(
         r#"mutation {{ create_AgentSession(input: {{ session_id: "{}", node_did: "{}", requester_did: "{}", agent_id: "general", created_at: "2026-10-10T00:00:00Z" }}) {{ _docID }} }}"#,
         escape_graphql_string(session), escape_graphql_string(&did), escape_graphql_string(&did)
     )).await.unwrap();
@@ -691,7 +688,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
     gents::sign_agent_request_create(db.node_identity.as_ref(), &mut original)
         .await
         .unwrap();
-    let response = ConfigAccess::Local(db.node.clone())
+    let response = ConfigAccess::local(db.node.clone())
         .write(
             "test.edit_reopen.original",
             &original.graphql_mutation().unwrap(),
@@ -708,7 +705,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
         }],
     };
     let replacements = prepare_pending_user_edit(
-        &ConfigAccess::Local(db.node.clone()),
+        &ConfigAccess::local(db.node.clone()),
         db.node_identity.as_ref(),
         AgentRequestAdmissionRecord::local_self(&did),
         &did,
@@ -742,7 +739,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
     assert_eq!(db.node_identity.did(), did);
     let cancel = CancellationToken::new();
     let _stop = Stop(cancel.clone());
-    let task = tokio::spawn(run_session_input_edit_reconciler(
+    let task = tokio::spawn(run_session_command_reconciler(
         db.node.clone(),
         db.node_identity.clone(),
         cancel.clone(),
@@ -797,11 +794,10 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
     db.simulate_process_crash().await.unwrap();
     let cancel = CancellationToken::new();
     let _stop = Stop(cancel.clone());
-    // A distinct intent signed against the superseded queue, with its own replacements.
     let mut stale = command.clone();
     stale.command_id = "edit-after-reopen-stale".into();
     stale.replacements = prepare_pending_user_edit(
-        &ConfigAccess::Local(db.node.clone()),
+        &ConfigAccess::local(db.node.clone()),
         db.node_identity.as_ref(),
         AgentRequestAdmissionRecord::local_self(&did),
         &did,
@@ -824,7 +820,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
         .await
         .unwrap();
     write_command(&db, &stale).await;
-    let task = tokio::spawn(run_session_input_edit_reconciler(
+    let task = tokio::spawn(run_session_command_reconciler(
         db.node.clone(),
         db.node_identity.clone(),
         cancel.clone(),
@@ -919,7 +915,7 @@ async fn local_edit_command_as(
     gents::sign_agent_request_create(identity, &mut original)
         .await
         .unwrap();
-    let response = ConfigAccess::Local(db.node.clone())
+    let response = ConfigAccess::local(db.node.clone())
         .write(
             "test.duplicate_edit.original",
             &original.graphql_mutation().unwrap(),
@@ -936,7 +932,7 @@ async fn local_edit_command_as(
         }],
     };
     let replacements = prepare_pending_user_edit(
-        &ConfigAccess::Local(db.node.clone()),
+        &ConfigAccess::local(db.node.clone()),
         identity,
         AgentRequestAdmissionRecord::local_self(did),
         did,
@@ -1032,7 +1028,7 @@ async fn same_physical_edit_replicates_and_replays_once() {
     wait_for_command_documents(&replica, std::slice::from_ref(&runtime_id)).await;
     let cancel = CancellationToken::new();
     let _stop = Stop(cancel.clone());
-    let worker = tokio::spawn(run_session_input_edit_reconciler(
+    let worker = tokio::spawn(run_session_command_reconciler(
         runtime.node.clone(),
         runtime.node_identity.clone(),
         cancel.clone(),
@@ -1110,12 +1106,11 @@ async fn same_physical_edit_replicates_and_replays_once() {
 
     let cancel = CancellationToken::new();
     let _stop = Stop(cancel.clone());
-    let worker = tokio::spawn(run_session_input_edit_reconciler(
+    let worker = tokio::spawn(run_session_command_reconciler(
         runtime.node.clone(),
         runtime.node_identity.clone(),
         cancel.clone(),
     ));
-    // The second acknowledgement requires a later sweep of the persisted command.
     for suffix in ["replay-barrier-one", "replay-barrier-two"] {
         let (barrier, _) = local_edit_command(&runtime, suffix).await;
         let id = write_command(&runtime, &barrier).await;
@@ -1210,7 +1205,7 @@ async fn conflicting_offline_edits_preserve_queue_and_prior_receipt(
     let prior_receipt = if late_twin {
         let cancel = CancellationToken::new();
         let _stop = Stop(cancel.clone());
-        let worker = tokio::spawn(run_session_input_edit_reconciler(
+        let worker = tokio::spawn(run_session_command_reconciler(
             owner.node.clone(),
             identity.clone(),
             cancel.clone(),
@@ -1255,9 +1250,6 @@ async fn conflicting_offline_edits_preserve_queue_and_prior_receipt(
         }
     }
     let model: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    // Identical and differing signed intents are both distinct physical documents;
-    // the model abstracts either as an observed command-identity collision. A late
-    // twin follows a prior receipt for the same command ID in another session.
     let case = model["session_input_edit_cases"]
         .as_array()
         .unwrap()
@@ -1298,13 +1290,11 @@ async fn conflicting_offline_edits_preserve_queue_and_prior_receipt(
     .await;
     let cancel = CancellationToken::new();
     let _stop = Stop(cancel.clone());
-    let worker = tokio::spawn(run_session_input_edit_reconciler(
+    let worker = tokio::spawn(run_session_command_reconciler(
         owner.node.clone(),
         identity.clone(),
         cancel.clone(),
     ));
-    // A second acknowledged sentinel cannot belong to the sweep snapshot that
-    // acknowledged the first: both colliding documents have been visited.
     for suffix in ["collision-barrier-one", "collision-barrier-two"] {
         let (barrier, _) = local_edit_command_as(owner, identity.as_ref(), suffix).await;
         let id = write_command(owner, &barrier).await;

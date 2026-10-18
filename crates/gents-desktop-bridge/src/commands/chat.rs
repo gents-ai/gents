@@ -4,6 +4,39 @@ use uuid::Uuid;
 
 use super::super::types::{ChatSendRequest, ChatSendResult, SessionRenameRequest};
 
+pub async fn request_output(
+    core: &ClientCore,
+    node_did: String,
+    session_id: String,
+    request_id: String,
+) -> Result<crate::types::RequestOutputView> {
+    let output = request_output_state(
+        core.request_output(&node_did, &session_id, &request_id)
+            .await?,
+    );
+    Ok(crate::types::RequestOutputView {
+        node_did,
+        session_id,
+        request_id,
+        output,
+    })
+}
+
+fn request_output_state(
+    output: Option<gents::session::CanonicalRequestOutput>,
+) -> crate::types::RequestOutputStateView {
+    use crate::types::RequestOutputStateView as View;
+    use gents::session::CanonicalRequestOutput as Output;
+    match output {
+        Some(Output::TerminalMessage { presentation, .. }) => View::TerminalMessage { content: presentation.body_markdown },
+        Some(Output::TerminalNoMessage) => View::TerminalNoMessage,
+        Some(Output::Denied) => View::Unavailable { reason: "Access to this request's canonical answer was denied.".into() },
+        Some(Output::RetainedPartial(_)) => View::Unavailable { reason: "This turn ended without a complete reply. Read its transcript before starting another voice turn.".into() },
+        Some(Output::Conflicted | Output::Invalid | Output::Retracted) => View::Unavailable { reason: "This request's canonical answer cannot be presented. Check its transcript and runtime status.".into() },
+        None | Some(Output::Absent | Output::Live(_) | Output::Settling(_) | Output::Loading | Output::Published { .. }) => View::Loading,
+    }
+}
+
 pub async fn send_chat_message(
     core: &ClientCore,
     request: ChatSendRequest,
@@ -49,13 +82,16 @@ pub async fn send_chat_message(
         .unwrap_or_else(|| Uuid::new_v4().to_string());
 
     let input = core
-        .prepare_user_message_input(
+        .prepare_user_message_input_with_delivery(
             &node_did,
             &session_id,
             gents_protocol::request_input::RequestInput {
                 cwd: chat_folder(request.cwd.as_deref())?,
                 ..Default::default()
             },
+            request
+                .delivery
+                .unwrap_or(gents_protocol::request_input::QueueDelivery::Steer),
         )
         .await?;
 
@@ -73,18 +109,10 @@ pub async fn send_chat_message(
         )
         .await?;
 
-    Ok(ChatSendResult {
-        session_id,
-        request_id: submitted.request_id,
-        node_did: submitted.node_did,
-        agent_id: submitted.agent_id,
-    })
+    Ok(submitted.into())
 }
 
-/// The chat folder as a request cwd: absent when blank, else an existing
-/// absolute directory. The runtime still holds it under the agent's tool
-/// root ceiling at admission.
-fn chat_folder(raw: Option<&str>) -> Result<Option<String>> {
+pub(super) fn chat_folder(raw: Option<&str>) -> Result<Option<String>> {
     let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
     };
@@ -114,36 +142,21 @@ pub async fn rename_session(core: &ClientCore, request: SessionRenameRequest) ->
 
 #[cfg(test)]
 mod tests {
-    use super::chat_folder;
+    use super::request_output_state;
 
     #[test]
-    fn blank_folder_is_absent() {
-        assert_eq!(chat_folder(None).unwrap(), None);
-        assert_eq!(chat_folder(Some("  ")).unwrap(), None);
-    }
-
-    #[test]
-    fn existing_absolute_folder_is_kept_trimmed() {
-        let dir = tempfile::tempdir().unwrap();
-        let raw = dir.path().to_str().unwrap();
-        assert_eq!(
-            chat_folder(Some(&format!(" {raw} "))).unwrap().as_deref(),
-            Some(raw)
-        );
-    }
-
-    #[test]
-    fn relative_missing_or_file_folder_is_refused() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("f.txt");
-        std::fs::write(&file, "x").unwrap();
-        for bad in [
-            "relative/dir".to_string(),
-            dir.path().join("missing").display().to_string(),
-            file.display().to_string(),
-        ] {
-            assert!(chat_folder(Some(&bad)).is_err(), "{bad}");
-        }
+    fn terminal_diagnostic_history_cannot_keep_voice_waiting_for_a_complete_answer() {
+        let state = request_output_state(Some(
+            gents::session::CanonicalRequestOutput::RetainedPartial(Vec::new()),
+        ));
+        assert!(matches!(
+            state,
+            crate::types::RequestOutputStateView::Unavailable { .. }
+        ));
+        assert!(matches!(
+            request_output_state(None),
+            crate::types::RequestOutputStateView::Loading
+        ));
     }
 }
 

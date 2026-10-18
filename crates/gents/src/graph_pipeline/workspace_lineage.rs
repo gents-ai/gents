@@ -1,5 +1,3 @@
-//! Child of graph_pipeline::run: one derived workspace observation for both
-//! preflight and the existing native request publication transaction.
 use super::super::StageTarget;
 use super::*;
 use crate::lifecycle::WorkspaceLineage;
@@ -11,7 +9,6 @@ pub(crate) struct GraphWorkspaceResolution {
     explicit: WorkspaceLineage,
     authority: Option<String>,
     bootstrap: bool,
-    // Existing GraphRun owner consumes this same observation for generation CAS.
     pub(super) run: Value,
     pub(super) digest: String,
 }
@@ -242,8 +239,6 @@ pub(crate) async fn derive_graph_workspace(
     }))
 }
 
-/// Complete workspace-owner validation after the materializer has applied the
-/// existing workspace eligibility checks. Native publication calls the same finalizer.
 pub(crate) async fn finalize_graph_workspace(
     executor: &(impl GraphRunQuery + ?Sized),
     mut resolution: GraphWorkspaceResolution,
@@ -284,7 +279,6 @@ pub(crate) async fn finalize_graph_workspace(
     Ok(resolution)
 }
 
-/// Public composed resolver for native publication and production consumers.
 pub(crate) async fn resolve_graph_workspace(
     executor: &(impl GraphRunQuery + ?Sized),
     trigger_id: &str,
@@ -308,8 +302,6 @@ pub(crate) async fn resolve_graph_workspace(
     }
 }
 
-/// Revalidate the already signed tuple and share the already loaded run with
-/// its existing generation-write owner. The caller stages request writes in txn.
 pub(crate) async fn fence_root_workspace_in_txn(
     txn: &ConfigApplyTxn<'_>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
@@ -348,8 +340,6 @@ pub(crate) async fn fence_root_workspace_in_txn(
             "signed graph session differs from resolved continuation target"
         );
     }
-    // Planned authority without a workspace is projection evidence only;
-    // RequestSpec's workspace_ref(None) serializes the unbound physical tuple.
     let expected = if resolved.lineage.workspace_id.is_some() {
         resolved.lineage
     } else {

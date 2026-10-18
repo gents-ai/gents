@@ -1,30 +1,21 @@
-//! A draft becomes a definition (assembly) and is held to the contract, the
-//! check catalog and the subject (validation). Every failure is a message the
-//! author can act on; they go back to it verbatim.
-
 use std::collections::BTreeSet;
 
 use gents::document_config::{EvalCapture, EvalCase, EvalDefinition, EvalSplit};
 use gents::eval::checks::CheckRegistry;
 use serde_json::{json, Value};
 
-use super::dossier::Dossier;
+use super::dossier::{runtime_collections, Dossier};
 use super::draft::Draft;
 
-/// A draft the CLI completed into a definition: its id, owner, version and
-/// subject are the CLI's, its cases the author's.
 #[derive(Clone, Debug)]
 pub(crate) struct Assembled {
     pub(crate) definition: EvalDefinition,
 }
 
-/// Minimums the interview settled.
 pub(crate) struct Floors {
     pub(crate) validation_min: usize,
 }
 
-/// Step 2: the definition the draft describes. The author sets neither the
-/// subject nor the comparability version; whatever it carried is ignored.
 pub(crate) fn assemble(
     draft: &Draft,
     definition_id_flag: Option<&str>,
@@ -52,7 +43,6 @@ pub(crate) fn assemble(
         .map_err(|error| vec![format!("the draft is not an eval definition: {error}")])
 }
 
-/// Steps 3 to 6, in order, stopping at the first step with messages.
 pub(crate) fn validate(
     assembled: &Assembled,
     registry: &CheckRegistry,
@@ -75,7 +65,6 @@ pub(crate) fn validate(
     Ok(())
 }
 
-/// Step 4: every check is registered and its params satisfy its schema.
 fn catalog_conformance(definition: &EvalDefinition, registry: &CheckRegistry) -> BTreeSet<String> {
     definition
         .cases
@@ -84,9 +73,6 @@ fn catalog_conformance(definition: &EvalDefinition, registry: &CheckRegistry) ->
         .collect()
 }
 
-/// Step 4 for one case: the single owner of the rule, so `gents eval checks
-/// --validate-case` (a pack's own contract tests) and the author's draft
-/// validation cannot disagree on what the catalog admits.
 pub(crate) fn case_catalog_conformance(
     case: &EvalCase,
     registry: &CheckRegistry,
@@ -121,9 +107,6 @@ pub(crate) fn case_catalog_conformance(
     messages
 }
 
-/// Step 5: seeds and documents captures name the subject's collections
-/// (captures also their fields); file captures stay inside the trial
-/// workspace.
 fn capture_conformance(definition: &EvalDefinition, dossier: &Dossier) -> BTreeSet<String> {
     let mut messages = BTreeSet::new();
     for case in &definition.cases {
@@ -147,24 +130,36 @@ fn capture_conformance(definition: &EvalDefinition, dossier: &Dossier) -> BTreeS
                     capture.name()
                 );
                 match capture {
-                    // A stage may create the collections whose schemas it captures.
                     EvalCapture::Schema { .. } => {}
+                    EvalCapture::Documents { collection, .. }
+                        if gents_protocol::schemas::is_credential_collection(collection) =>
+                    {
+                        messages.insert(format!(
+                            "{at}: credential collection {collection:?} cannot be retained as capture evidence"
+                        ));
+                    }
                     EvalCapture::Documents {
                         collection,
                         fields,
                         filter,
                         ..
-                    } => match dossier.collections.get(collection) {
+                    } => match runtime_collections()
+                        .get(collection)
+                        .or_else(|| dossier.collections.get(collection))
+                    {
                         None => {
                             messages.insert(format!(
-                                "{at}: collection {collection:?} is not one the subject shows (known: {})",
+                                "{at}: collection {collection:?} is neither a runtime collection nor one the subject shows (subject collections: {})",
                                 known_collections(dossier)
                             ));
                         }
                         Some(known) => {
-                            for field in fields.iter().filter(|field| !known.contains(*field)) {
+                            for field in fields.iter().filter(|field| {
+                                field.as_str() != "_docID" && !known.contains(*field)
+                            }) {
                                 messages.insert(format!(
-                                    "{at}: collection {collection} has no field {field:?}"
+                                    "{at}: collection {collection} has no field {field:?} (known: {})",
+                                    known.iter().map(String::as_str).collect::<Vec<_>>().join(", ")
                                 ));
                             }
                             let mut keys = BTreeSet::new();
@@ -202,9 +197,6 @@ fn known_collections(dossier: &Dossier) -> String {
     }
 }
 
-/// The field names a DefraDB filter object tests: its keys, through the
-/// `_and`, `_or` and `_not` combinators. A field's own value holds operators
-/// (`_eq`, `_in`, …), not fields, and `_docID` names the document itself.
 fn filter_fields<'a>(filter: &'a Value, keys: &mut BTreeSet<&'a str>) {
     let Some(object) = filter.as_object() else {
         return;
@@ -225,7 +217,6 @@ fn filter_fields<'a>(filter: &'a Value, keys: &mut BTreeSet<&'a str>) {
     }
 }
 
-/// Step 6: every split is populated and validation meets its floor.
 fn split_shape(definition: &EvalDefinition, floors: &Floors) -> BTreeSet<String> {
     let mut messages = BTreeSet::new();
     let count = |split: EvalSplit| {
@@ -265,8 +256,6 @@ fn split_shape(definition: &EvalDefinition, floors: &Floors) -> BTreeSet<String>
     if unique.len() != definition.cases.len() {
         messages.insert("the draft repeats a case_id".to_owned());
     }
-    // A case's id names its sidecar file, so it is checked here, before
-    // anything is written, and not left to the pack loader afterwards.
     for case_id in unique {
         if !gents::pack::is_valid_pack_name(&case_id.replace('-', "_")) {
             messages.insert(format!(
@@ -288,8 +277,6 @@ pub(crate) mod tests {
     pub(crate) const OWNER: &str = "did:key:owner";
     pub(crate) const SLOT: &str = "primary";
 
-    /// The canary subject, with the collection its fixture schema installs at
-    /// trial time.
     pub(crate) fn dossier() -> Dossier {
         Dossier {
             pack_name: "eval_canary".into(),
@@ -329,7 +316,6 @@ pub(crate) mod tests {
         })
     }
 
-    /// One case per split: the smallest draft that validates at floor one.
     pub(crate) fn good() -> Draft {
         Draft {
             definition_id: Some("canary-quality".into()),
@@ -363,7 +349,6 @@ pub(crate) mod tests {
     fn a_good_draft_validates_and_assembly_owns_subject_and_version() {
         assert_eq!(check(&good(), &FLOOR_ONE), Ok(()));
 
-        // What the author set for the subject or the version never lands.
         let reply = format!(
             "```json\n{}\n```",
             json!({
@@ -430,6 +415,105 @@ pub(crate) mod tests {
         first_stage(&mut draft)["capture"][0]["fields"] = json!(["item_id", "colour"]);
         let message = only_message(&draft, &FLOOR_ONE);
         assert!(message.contains("colour"), "{message}");
+    }
+
+    #[test]
+    fn runtime_captures_use_canonical_fields_without_becoming_subject_seeds() {
+        for (collection, fields) in [
+            (
+                "AgentRequest",
+                vec!["_docID", "request_id", "lifecycle_state", "input"],
+            ),
+            ("Tools", vec!["tools_id", "host", "datastore"]),
+            (
+                "TriggerFire",
+                vec!["fire_key", "request_id", "source_doc_id"],
+            ),
+            ("FireOutcome", vec!["fire_key", "request_id"]),
+        ] {
+            let mut draft = good();
+            let capture = &mut first_stage(&mut draft)["capture"][0];
+            capture["collection"] = json!(collection);
+            capture["fields"] = json!(fields);
+            assert_eq!(check(&draft, &FLOOR_ONE), Ok(()), "{collection}");
+
+            let stage = first_stage(&mut draft);
+            stage["prompt"] = json!("");
+            stage["seed"] = json!({"collection": collection, "document": {}});
+            let message = only_message(&draft, &FLOOR_ONE);
+            assert!(message.contains("seed: collection"), "{message}");
+        }
+    }
+
+    #[test]
+    fn unknown_runtime_fields_and_filters_are_rejected() {
+        let mut draft = good();
+        let capture = &mut first_stage(&mut draft)["capture"][0];
+        capture["collection"] = json!("AgentRequest");
+        capture["fields"] = json!(["request_id", "missing_field"]);
+        let message = only_message(&draft, &FLOOR_ONE);
+        assert!(message.contains("missing_field"), "{message}");
+        assert!(message.contains("known:"), "{message}");
+
+        let capture = &mut first_stage(&mut draft)["capture"][0];
+        capture["fields"] = json!(["_docID", "request_id"]);
+        capture["filter"] = json!({"_and": [
+            {"node_did": {"_eq": OWNER}},
+            {"_not": {"missing_field": {"_eq": "value"}}}
+        ]});
+        let message = only_message(&draft, &FLOOR_ONE);
+        assert!(
+            message.contains("filter key \"missing_field\""),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn runtime_captures_reject_credential_backend_collection() {
+        let mut draft = good();
+        let capture = &mut first_stage(&mut draft)["capture"][0];
+        capture["collection"] = json!("InferenceBackend");
+        capture["fields"] = json!(["backend_id", "auth"]);
+        let message = only_message(&draft, &FLOOR_ONE);
+        assert!(message.contains("InferenceBackend"), "{message}");
+        assert!(message.contains("credential collection"), "{message}");
+    }
+
+    #[test]
+    fn subject_declarations_cannot_replace_canonical_runtime_fields() {
+        let mut subject = dossier();
+        subject
+            .collections
+            .insert("Tools".into(), BTreeSet::from(["invented".into()]));
+        let mut draft = good();
+        let capture = &mut first_stage(&mut draft)["capture"][0];
+        capture["collection"] = json!("Tools");
+        capture["fields"] = json!(["invented"]);
+        let definition = assemble(&draft, None, OWNER, SLOT).unwrap().definition;
+        let messages = capture_conformance(&definition, &subject);
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        assert!(messages
+            .first()
+            .unwrap()
+            .contains("has no field \"invented\""));
+    }
+
+    #[test]
+    fn credential_collections_cannot_be_captured_through_subject_declarations() {
+        for collection in gents_protocol::schemas::CREDENTIAL_COLLECTION_NAMES {
+            let mut subject = dossier();
+            subject
+                .collections
+                .insert((*collection).into(), BTreeSet::from(["credential".into()]));
+            let mut draft = good();
+            let capture = &mut first_stage(&mut draft)["capture"][0];
+            capture["collection"] = json!(collection);
+            capture["fields"] = json!(["credential"]);
+            let definition = assemble(&draft, None, OWNER, SLOT).unwrap().definition;
+            let messages = capture_conformance(&definition, &subject);
+            assert_eq!(messages.len(), 1, "{messages:?}");
+            assert!(messages.first().unwrap().contains("credential collection"));
+        }
     }
 
     #[test]
@@ -521,7 +605,6 @@ pub(crate) mod tests {
     fn the_definition_rules_run_before_catalog_captures_and_splits() {
         let mut draft = good();
         draft.cases[1]["case_id"] = json!("train-a");
-        // Also an unknown check and a missing split: only step 3 answers.
         first_stage(&mut draft)["checks"][0]["check"] = json!("no_such");
         let message = only_message(&draft, &Floors { validation_min: 6 });
         assert!(message.contains("duplicate case_id train-a"), "{message}");

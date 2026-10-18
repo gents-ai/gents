@@ -30,7 +30,7 @@ impl Fixture {
         node.add_schema("type BoardTask { title: String lane: String }")
             .await
             .unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let home = tempfile::tempdir().unwrap();
         install_board(
             home.path(),
@@ -86,7 +86,7 @@ impl Fixture {
         }])
         .unwrap();
         self.access
-            .transact("test.ux_data.surface", |txn| {
+            .transact_write("test.ux_data.surface", |txn| {
                 let plan = &plan;
                 Box::pin(async move { apply_desired_state_plan(txn, plan).await })
             })

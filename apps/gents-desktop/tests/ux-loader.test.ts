@@ -46,6 +46,7 @@ beforeEach(() => {
   resetSdkImportMap();
   installInProcessSandbox();
   vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 afterEach(() => {
   for (const id of Object.keys(uxPluginRecords())) retireRuntimeUxPlugin(id);

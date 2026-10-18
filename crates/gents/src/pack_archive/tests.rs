@@ -7,10 +7,6 @@ use super::format::{append_entry, write_pack_with};
 use super::*;
 use crate::pack::{declared_paths, validate_manifest};
 
-/// Copies a fixture pack (`tests/fixtures/packs/<name>`) into a fresh temp
-/// directory, so a test that mutates its copy never touches the checked-in
-/// fixture, and reading it back does not race other tests over the same
-/// files. A plugin fixture's artifact is a generated stand-in.
 fn fixture_pack_dir(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     crate::test_support::fixture_pack_copy(name, &serde_json::json!({}))
 }
@@ -28,8 +24,6 @@ fn fixture_manifest(name: &str) -> crate::pack::PackManifest {
     .expect("parse manifest")
 }
 
-/// A raw `.pack` with exactly these entries, in this order, for building
-/// files the writer would never produce.
 fn raw_pack(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut builder = tar::Builder::new(Vec::new());
     for (path, data) in entries {
@@ -41,7 +35,6 @@ fn raw_pack(entries: &[(&str, &[u8])]) -> Vec<u8> {
     gz.finish().expect("finish")
 }
 
-/// The entries of a real pack, as (path, bytes), in file order.
 fn entries_of(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(bytes));
     archive
@@ -109,12 +102,6 @@ fn every_fixture_pack_keeps_its_digest_through_a_pack_file() {
     }
 }
 
-/// [`digest_declared_assets`] and `pack_dir` share one implementation, so the
-/// test above compares a fixture's digest to itself and cannot catch a
-/// regression in the digest format both sides would make the same way. This
-/// pins one literal, independently-computed digest so a real change to the
-/// format (byte order, entry framing, path normalisation) fails loudly here
-/// even if the two call sites stay in lockstep.
 #[test]
 fn assets_fixture_digest_matches_a_pinned_golden_value() {
     let (_guard, root) = fixture_pack_dir("assets_fixture");
@@ -135,6 +122,21 @@ fn packing_twice_gives_the_same_bytes() {
         "a rebuild that changes nothing changes no bytes"
     );
     assert_eq!(first_header, second_header);
+}
+
+#[cfg(unix)]
+#[test]
+fn pack_writer_refuses_a_declared_asset_symlink_outside_the_pack() {
+    let (_guard, root) = fixture_pack_dir("assets_fixture");
+    let outside = tempfile::tempdir().unwrap();
+    let sentinel = outside.path().join("sentinel.txt");
+    std::fs::write(&sentinel, "external sentinel contents").unwrap();
+    let readme = root.join("README.md");
+    std::fs::remove_file(&readme).unwrap();
+    std::os::unix::fs::symlink(&sentinel, &readme).unwrap();
+
+    let error = pack_dir(&root).expect_err("must not follow an external asset symlink");
+    assert!(format!("{error:#}").contains("outside"), "{error:#}");
 }
 
 #[test]
@@ -268,9 +270,6 @@ fn a_missing_declared_asset_is_refused_when_the_pack_is_built() {
 
 #[test]
 fn a_path_that_escapes_the_pack_is_refused() {
-    // `tar::Header::set_path` refuses a `..` component outright, so a hostile
-    // entry is written at the raw-byte level to prove this reader's own check
-    // refuses it too.
     let mut header = tar::Header::new_ustar();
     header.set_size(4);
     header.set_mode(0o644);

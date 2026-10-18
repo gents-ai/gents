@@ -35,7 +35,6 @@ pub(crate) struct LeanClientShellCase {
     pub(crate) desktop_expect_pending_turn: Option<bool>,
 }
 
-/// `ClientShell.SessionTurn.Row`: one request row of a session.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanSessionTurnRow {
@@ -46,16 +45,20 @@ pub(crate) struct LeanSessionTurnRow {
     pub(crate) folded_into: Option<usize>,
     pub(crate) queued_after: Option<usize>,
     pub(crate) retry_parent: Option<usize>,
+    pub(crate) retry_parent_doc: Option<usize>,
+    pub(crate) completed: bool,
+    pub(crate) public_input: bool,
+    pub(crate) authored_input_materialized: bool,
 }
 
-/// `SessionTurnCases`: rows in arrival order, the last being newest, and the
-/// turn, queue and folded requests `SessionTurn` computes from them.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanSessionTurnCase {
     pub(crate) name: String,
     pub(crate) rows: Vec<LeanSessionTurnRow>,
+    pub(crate) expected_read_docs: Vec<usize>,
     pub(crate) expected_turn_doc: usize,
+    pub(crate) expected_answer_doc: usize,
     pub(crate) expected_queued_docs: Vec<usize>,
     pub(crate) expected_folded_requests: Vec<usize>,
 }

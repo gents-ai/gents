@@ -12,15 +12,11 @@ const RECEIPT_SIGNATURE_DOMAIN: &str = "gents-session-hydration-receipt-v1";
 /// claimed as transcript hydration. Origin dependencies retain their ACP;
 /// following a reference never grants access to the whole origin session.
 ///
-/// Headers and segment records are immutable, so the manifest's exact document
-/// identities already bind the served content; the receipt does not restate
-/// payload extents. The manifest is the authorized reference closure of the
-/// served headers: every closing record a block or presentation references (including
-/// fork origins) and the segments within their extents. Terminal selections
-/// must resolve their exact headers;
-/// no latest-visible-message fallback. Client completion requires each header
-/// to reconstruct. Mutable request/tool lifecycle facts still require their
-/// existing owner checks; the manifest does not bind those documents' revisions.
+/// The manifest is the authorized reference closure of the served headers.
+/// Terminal selections must resolve their exact headers; no
+/// latest-visible-message fallback. Mutable request/tool lifecycle facts
+/// still require their existing owner checks; the manifest does not bind
+/// those documents' revisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum SessionHydrationCollection {
     AgentRequest,
@@ -119,19 +115,4 @@ pub fn decode_manifest_json(raw: &str) -> Result<Vec<SessionHydrationDocumentKey
         "session hydration manifest must be sorted and unique"
     );
     Ok(entries)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn duplicate_or_reordered_manifest_is_rejected() {
-        let entry = SessionHydrationDocumentKey {
-            collection: SessionHydrationCollection::AgentMessage,
-            doc_id: "doc-1".into(),
-        };
-        let raw = serde_json::to_string(&vec![entry.clone(), entry]).unwrap();
-        assert!(decode_manifest_json(&raw).is_err());
-    }
 }

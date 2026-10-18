@@ -1,7 +1,3 @@
-//! Generated journal observations exercise the existing action-journal owner.
-//! Invocation state, result emission and transactional rejection are separate
-//! callback execution obligations; no test-local invocation model lives here.
-
 use crate::lean_vocab_test::{lean_callback_cases, lean_callback_retry_cases};
 use gents::workspace::{action_journal_prefix_legal, retry_allowed, ActionJournalEntry};
 

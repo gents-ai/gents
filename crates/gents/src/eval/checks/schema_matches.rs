@@ -4,9 +4,6 @@ use serde_json::{json, Value};
 use super::{graded, graded_reason_codes, grader, Check, CheckDescription, CheckVerdict};
 use crate::eval::runner::{CaptureResult, StageEvidence};
 
-/// Grades persisted schema requirements derived by the pinned native SDL parser.
-/// Additional fields/indexes and generated identifiers are not requirements.
-/// This checks deployment, not query execution or index performance.
 pub struct SchemaMatches;
 
 #[derive(Deserialize)]
@@ -269,7 +266,7 @@ mod tests {
     #[tokio::test]
     async fn native_schema_evidence_grades_indexes_relations_and_wrong_contracts() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let sdl = r#"
           type Author { name: String books: [Book] }
           type Book {

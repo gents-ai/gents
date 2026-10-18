@@ -28,7 +28,7 @@ async fn timeline_canonical_messages_share_one_request_payload_scan() {
         .await;
     }
 
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let (messages, scans) = crate::session::count_request_output_scans(
         super::event_loaders::resolve_timeline_messages_for_session(
             &access,
@@ -87,7 +87,7 @@ async fn timeline_resolves_fork_origin_payloads_without_cross_request_membership
     .await
     .unwrap();
 
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let (messages, scans) = crate::session::count_request_output_scans(
         super::event_loaders::resolve_timeline_messages_for_session(
             &access,
@@ -118,12 +118,12 @@ async fn timeline_batches_request_local_events_and_restores_request_sequence_ord
     let response = node
         .execute(
             r#"mutation {
-                create_InferenceCall(input: { call_id: "call-b-2", request_id: "req-b", request_doc_id: "doc-b", call_seq: 2, attempt: 0, call_state: "completed", call_kind: "chat" }) { _docID }
-                create_InferenceCall(input: { call_id: "call-b-1", request_id: "req-b", request_doc_id: "doc-b", call_seq: 1, attempt: 0, call_state: "completed", call_kind: "chat" }) { _docID }
-                create_InferenceCall(input: { call_id: "call-a-1", request_id: "req-a", request_doc_id: "doc-a", call_seq: 1, attempt: 0, call_state: "completed", call_kind: "chat" }) { _docID }
-                create_ProviderContextReduction(input: { reduction_key: "reduction-b-2", request_id: "req-b", request_doc_id: "doc-b", session_id: "s-1", reduction_index: 2, turn_index: 1, messages_compacted: 0, original_tokens: 0, compacted_tokens: 0 }) { _docID }
-                create_ProviderContextReduction(input: { reduction_key: "reduction-b-1", request_id: "req-b", request_doc_id: "doc-b", session_id: "s-1", reduction_index: 1, turn_index: 1, messages_compacted: 0, original_tokens: 0, compacted_tokens: 0 }) { _docID }
-                create_ProviderContextReduction(input: { reduction_key: "reduction-a-1", request_id: "req-a", request_doc_id: "doc-a", session_id: "s-1", reduction_index: 1, turn_index: 1, messages_compacted: 0, original_tokens: 0, compacted_tokens: 0 }) { _docID }
+                seed_InferenceCall_1: create_InferenceCall(input: { call_id: "call-b-2", request_id: "req-b", request_doc_id: "doc-b", call_seq: 2, attempt: 0, call_state: "completed", call_kind: "chat" }) { _docID }
+                seed_InferenceCall_2: create_InferenceCall(input: { call_id: "call-b-1", request_id: "req-b", request_doc_id: "doc-b", call_seq: 1, attempt: 0, call_state: "completed", call_kind: "chat" }) { _docID }
+                seed_InferenceCall_3: create_InferenceCall(input: { call_id: "call-a-1", request_id: "req-a", request_doc_id: "doc-a", call_seq: 1, attempt: 0, call_state: "completed", call_kind: "chat" }) { _docID }
+                seed_ProviderContextReduction_1: create_ProviderContextReduction(input: { reduction_key: "reduction-b-2", request_id: "req-b", request_doc_id: "doc-b", session_id: "s-1", reduction_index: 2, turn_index: 1, messages_compacted: 0, original_tokens: 0, compacted_tokens: 0 }) { _docID }
+                seed_ProviderContextReduction_2: create_ProviderContextReduction(input: { reduction_key: "reduction-b-1", request_id: "req-b", request_doc_id: "doc-b", session_id: "s-1", reduction_index: 1, turn_index: 1, messages_compacted: 0, original_tokens: 0, compacted_tokens: 0 }) { _docID }
+                seed_ProviderContextReduction_3: create_ProviderContextReduction(input: { reduction_key: "reduction-a-1", request_id: "req-a", request_doc_id: "doc-a", session_id: "s-1", reduction_index: 1, turn_index: 1, messages_compacted: 0, original_tokens: 0, compacted_tokens: 0 }) { _docID }
             }"#,
         )
         .await;
@@ -133,7 +133,7 @@ async fn timeline_batches_request_local_events_and_restores_request_sequence_ord
         response.errors
     );
 
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let request_doc_ids = vec!["doc-a".to_owned(), "doc-b".to_owned()];
     let inference_calls =
         super::event_loaders::load_timeline_inference_calls_for_requests(&access, &request_doc_ids)
@@ -353,7 +353,7 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
             additional_params: None,
         })],
     };
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let earlier_tools = event_loaders::load_timeline_tool_observations_for_session(
         &access,
         "did:test:timeline",
@@ -369,8 +369,6 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
         .expect("canonical accepted tool publication");
     assert_eq!(published.accepted_tools.len(), 1);
 
-    // Publication between the tool snapshot and immutable dependency reads
-    // must not introduce a tool whose admission was absent from that snapshot.
     let later_messages = resolve_timeline_messages_for_session(
         &access,
         "did:test:timeline",
@@ -392,7 +390,7 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
     .unwrap()
     .is_empty());
 
-    let rows = load_run_timeline_rows(&ConfigAccess::Local(node.clone()), "pending-tool-request")
+    let rows = load_run_timeline_rows(&ConfigAccess::local(node.clone()), "pending-tool-request")
         .await
         .expect("accepted pending call must remain timeline-readable");
     let tool = rows.tool_calls.first().expect("one accepted tool");
@@ -435,9 +433,6 @@ fn direct_child_without_tool_lineage_is_valid_but_half_bridge_is_rejected() {
     assert!(error.to_string().contains("incomplete parent tool lineage"));
 }
 
-/// Resolving one accepted call reads only its accepted message: an unrelated,
-/// unresolvable message elsewhere in the same session fails the session-wide
-/// reader but not this exact binding.
 #[tokio::test]
 async fn accepted_tool_arguments_read_only_the_accepted_message() {
     use crate::tool_call_lifecycle::admission_fixture::{
@@ -516,7 +511,7 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
     };
     let variables =
         crate::session::canonical_rows::transcript_message_create_variables(&unresolvable).unwrap();
-    ConfigAccess::transact_local(node.as_ref(), None, "test.unrelated_message", |txn| {
+    ConfigAccess::transact_local_write(&node, None, "test.unrelated_message", |txn| {
         let variables = variables.clone();
         Box::pin(async move {
             txn.execute_with_variables(
@@ -530,39 +525,33 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
     .await
     .expect("persist unrelated message");
 
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     assert!(
         load_session_tool_calls(&access, &node_did, &session_id, requester_did.as_deref())
             .await
             .is_err(),
         "premise: the session-wide reader resolves every message in the session"
     );
-    let first = load_accepted_tool_arguments(
+    let accepted = load_accepted_tool_calls(
         &access,
         &node_did,
         &session_id,
         requester_did.as_deref(),
-        &first_doc,
+        &[first_doc.clone(), second_doc.clone()],
     )
     .await
-    .expect("first binding reads only its accepted message");
-    assert_eq!(first.len(), 1);
+    .expect("selected bindings read only their accepted messages");
+    assert_eq!(accepted.len(), 2);
+    let accepted = accepted
+        .into_iter()
+        .map(|call| (call.doc_id.unwrap(), call.args))
+        .collect::<BTreeMap<_, _>>();
     assert_eq!(
-        serde_json::from_str::<Value>(&first[0]).unwrap(),
+        serde_json::from_str::<Value>(&accepted[&first_doc]).unwrap(),
         serde_json::json!({"agent": "general", "prompt": "work"})
     );
-    let second = load_accepted_tool_arguments(
-        &access,
-        &node_did,
-        &session_id,
-        requester_did.as_deref(),
-        &second_doc,
-    )
-    .await
-    .expect("second binding reads only its accepted message");
-    assert_eq!(second.len(), 1);
     assert_eq!(
-        serde_json::from_str::<Value>(&second[0]).unwrap(),
+        serde_json::from_str::<Value>(&accepted[&second_doc]).unwrap(),
         second_arguments
     );
     assert!(load_accepted_tool_arguments(

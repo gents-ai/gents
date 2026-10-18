@@ -1,30 +1,6 @@
-//! Task A1 — two-node P2P event-trigger e2e test.
-//!
-//! This qualifies the ONE unproven assumption underpinning the on-host
-//! Diagnose->Act->Verify loop: **does a document that arrives on a node via
-//! P2P replication fire that node's `Trigger` as a `created` event?**
-//!
-//! The EventSource subscribes to DefraDB's global update bus and treats a
-//! first-observed `doc_id` as a `created` fire, so a P2P-merged doc *should*
-//! fire — but the existing-docs seed-cap and the subscription-vs-merge timing
-//! could suppress it. This test answers that empirically.
-//!
-//! Topology:
-//!   - Node A (`db_writer`): a bare writer node, P2P enabled, no agent.
-//!   - Node B (`db_agent`): runs the `Gents` + an `Trigger` watching
-//!     `ReplicatedEvent`.
-//!
-//! Ordering matters: the source doc is written on A only AFTER B's trigger is
-//! reconciled into the active snapshot AND A->B replication is established, so
-//! the merged doc is a fresh first-observation on B (the `created` path).
-//!
-//! This test owns its own source schema (`ReplicatedEvent`) so it does not
-//! collide with the single-node `event_trigger_e2e.rs` `WebhookEvent` schema.
-//!
-//! Mirrors `event_trigger_e2e.rs` (the single-node vertical) for the agent /
-//! trigger / assertion shape, and `state_machine_conformance/r5_cross_deployment.rs`
-//! for the two-node P2P replicator plumbing (`install_one_way_replicator`,
-//! `wait_for_listen_addr`, `wait_for_connected_peer`).
+//! Owns its own `ReplicatedEvent` source schema: the single-node
+//! `event_trigger_e2e.rs` uses `WebhookEvent` in the same process-global
+//! DefraDB schema registry.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -65,7 +41,7 @@ async fn register_replicated_event_schema(node: &EmbeddedNode) {
 }
 
 async fn create_task(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     owner: &str,
     task_id: &str,
     agent_id: &str,
@@ -93,7 +69,7 @@ async fn create_task(
 }
 
 async fn create_event_trigger_with_filter(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     owner: &str,
     trigger_id: &str,
     task_id: &str,
@@ -140,7 +116,6 @@ async fn wait_for_runtime_snapshot<F>(
 where
     F: Fn(&RuntimeSnapshot) -> bool,
 {
-    // Generous deadline: the control watcher debounce is 5s plus settle.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
         let last_snapshot = fetch_runtime_snapshot(node, node_did).await;
@@ -263,7 +238,7 @@ async fn fetch_event_trigger(node: &EmbeddedNode, trigger_id: &str) -> EventTrig
     row
 }
 
-async fn write_replicated_event(node: &EmbeddedNode, external_id: &str, kind: &str) -> String {
+async fn write_replicated_event(node: &Arc<EmbeddedNode>, external_id: &str, kind: &str) -> String {
     let escaped_external_id = escape_graphql_string(external_id);
     let escaped_kind = escape_graphql_string(kind);
     // Dynamically-added collections on DefraDB expose `add_<Collection>` as
@@ -303,8 +278,6 @@ async fn write_replicated_event(node: &EmbeddedNode, external_id: &str, kind: &s
         .unwrap_or_else(|| panic!("ReplicatedEvent mutation returned no _docID: {field}"))
 }
 
-/// Direct query of the source collection on a node — used as the
-/// replication-vs-firing diagnostic when the AgentRequest poll times out.
 async fn query_replicated_events(node: &EmbeddedNode) -> Vec<Value> {
     let response = node
         .execute(r#"{ ReplicatedEvent { external_id kind } }"#)
@@ -317,10 +290,6 @@ async fn query_replicated_events(node: &EmbeddedNode) -> Vec<Value> {
         .cloned()
         .unwrap_or_default()
 }
-
-// --- Two-node P2P replicator plumbing (copied verbatim from
-// `state_machine_conformance/r5_cross_deployment.rs` — these helpers cannot be
-// `use`d across the integration-test crates, so they are duplicated here). ---
 
 async fn install_one_way_replicator(
     sender: &EmbeddedNode,
@@ -375,24 +344,19 @@ async fn install_one_way_replicator(
         .expect("install sender to receiver replicator");
 }
 
-/// Two-node P2P: a `ReplicatedEvent` doc written on node A replicates to node B
-/// and must fire B's `Trigger` as a `created` event, landing exactly one
-/// `AgentRequest` on B with the rendered prompt and matching trigger lineage.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn p2p_replicated_doc_fires_event_trigger() {
     let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
-    // Node A: bare writer node (P2P enabled, no agent).
     let db_writer = test_p2p_db("event-trigger-p2p-writer").await;
     register_replicated_event_schema(db_writer.node.as_ref()).await;
 
-    // Node B: the agent node (P2P enabled).
     let db_agent = test_p2p_db("event-trigger-p2p-agent").await;
     register_replicated_event_schema(db_agent.node.as_ref()).await;
 
     let identity = Arc::new(test_identity("event-trigger-p2p-agent"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_agent_backend(
-        db_agent.node.as_ref(),
+        &db_agent.node,
         identity.did(),
         "backend-event-trigger-p2p",
         mock_endpoint.endpoint(),
@@ -414,16 +378,14 @@ async fn p2p_replicated_doc_fires_event_trigger() {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
-    // Baseline reconcile — the generation our post-insert reconcile must exceed.
     let startup = wait_for_runtime_snapshot(db_agent.node.as_ref(), &node_did, |s| {
         is_routed_ready_after(s, 0)
     })
     .await;
     let initial_generation = startup.active_generation;
 
-    // Task + Trigger on node B, watching ReplicatedEvent.
     create_task(
-        db_agent.node.as_ref(),
+        &db_agent.node,
         &node_did,
         TASK_ID,
         &default_agent_id,
@@ -431,7 +393,7 @@ async fn p2p_replicated_doc_fires_event_trigger() {
     )
     .await;
     create_event_trigger_with_filter(
-        db_agent.node.as_ref(),
+        &db_agent.node,
         &node_did,
         TRIGGER_ID,
         TASK_ID,
@@ -445,8 +407,6 @@ async fn p2p_replicated_doc_fires_event_trigger() {
     })
     .await;
 
-    // Establish A -> B replication for ReplicatedEvent AFTER the trigger is live
-    // so the merged doc is a fresh first-observation on B.
     install_one_way_replicator(
         db_writer.node.as_ref(),
         db_agent.node.as_ref(),
@@ -454,13 +414,8 @@ async fn p2p_replicated_doc_fires_event_trigger() {
     )
     .await;
 
-    // Write the source doc on node A; it must replicate to B and fire B's trigger.
-    let source_doc_id =
-        write_replicated_event(db_writer.node.as_ref(), EXTERNAL_ID, "signup").await;
+    let source_doc_id = write_replicated_event(&db_writer.node, EXTERNAL_ID, "signup").await;
 
-    // Assert B materialized exactly one event-driven AgentRequest with the
-    // rendered template. If this poll times out, we run a replication-vs-firing
-    // diagnostic to distinguish a plumbing gap from the real product gap.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     let requests = loop {
         let rows = query_agent_requests_for_trigger(db_agent.node.as_ref(), TRIGGER_ID).await;
@@ -468,7 +423,6 @@ async fn p2p_replicated_doc_fires_event_trigger() {
             break rows;
         }
         if tokio::time::Instant::now() >= deadline {
-            // Diagnostic: did the doc replicate to B at all?
             let replicated_on_b = query_replicated_events(db_agent.node.as_ref()).await;
             let replicated_on_a = query_replicated_events(db_writer.node.as_ref()).await;
             panic!(
@@ -517,8 +471,6 @@ async fn p2p_replicated_doc_fires_event_trigger() {
         "request_id must be populated: {request:?}"
     );
 
-    // The runtime-owned bookkeeping writeback should also land on B's trigger,
-    // referencing the replicated source doc's id.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     let fired = loop {
         let row = fetch_event_trigger(db_agent.node.as_ref(), TRIGGER_ID).await;
@@ -545,7 +497,6 @@ async fn p2p_replicated_doc_fires_event_trigger() {
         fired.last_error.as_deref().unwrap_or("").is_empty(),
         "last_error must be cleared on a successful fire: {fired:?}"
     );
-    // Apply-owned fields must not be clobbered by the runtime writeback.
     assert_eq!(fired.task_id.as_deref(), Some(TASK_ID));
     assert_eq!(fired.source_collection.as_deref(), Some("ReplicatedEvent"));
     assert_eq!(fired.event_kind.as_deref(), Some("created"));

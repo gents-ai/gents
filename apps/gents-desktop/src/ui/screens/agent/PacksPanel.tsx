@@ -1,6 +1,3 @@
-/* Packs for this agent: what is installed and whether it is current, the
-   registry to find more, and the registry account. Every action is the same
-   operation `gents pack` runs, through the desktop bridge. */
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
@@ -15,14 +12,12 @@ import type {
 import { useApp } from "@/app/AppContext";
 import { ChoiceRow } from "./editors";
 import { Group, Row } from "./rows";
+import { errorText } from "../../../lib/errorText";
 
-const message = (error: unknown) =>
-  error instanceof Error ? error.message : String(error);
-
-/* An install or update that would replace documents someone edited stops
-   and names them; the person chooses to keep or overwrite. */
+/** An install or update that would replace documents someone edited stops and
+ * names them; the person chooses keep or overwrite. */
 function editedChoice(error: unknown): boolean {
-  return message(error).includes("--overwrite");
+  return errorText(error).includes("--overwrite");
 }
 
 export function PacksPanel() {
@@ -44,7 +39,7 @@ export function PacksPanel() {
       setInstalled(report.packs);
     } catch (error) {
       setInstalled([]);
-      toast.error(message(error));
+      toast.error(errorText(error));
     }
     try {
       const report = await actions.listPackPluginSlots();
@@ -52,7 +47,7 @@ export function PacksPanel() {
       setProfiles(report.profiles.filter((profile) => profile.usable));
     } catch (error) {
       setSlots([]);
-      toast.error(message(error));
+      toast.error(errorText(error));
     }
     try {
       const me = await actions.readPackAccount();
@@ -74,7 +69,7 @@ export function PacksPanel() {
       setHasMore(report.has_more);
       setPage(next);
     } catch (error) {
-      toast.error(message(error));
+      toast.error(errorText(error));
     } finally {
       setBusy(null);
     }
@@ -91,7 +86,7 @@ export function PacksPanel() {
       toast.success(`Installed ${pack}`);
       await refresh();
     } catch (error) {
-      const text = message(error);
+      const text = errorText(error);
       if (
         text.includes("--grant-authority") &&
         window.confirm(`${text}\n\nAllow it?`)
@@ -119,11 +114,11 @@ export function PacksPanel() {
     } catch (error) {
       if (editedChoice(error)) {
         const overwrite = window.confirm(
-          `${message(error)}\n\nOK replaces them, Cancel keeps your edits.`,
+          `${errorText(error)}\n\nOK replaces them, Cancel keeps your edits.`,
         );
         return update(pack, overwrite ? "overwrite" : "keep");
       }
-      toast.error(message(error));
+      toast.error(errorText(error));
     } finally {
       setBusy(null);
     }
@@ -137,7 +132,7 @@ export function PacksPanel() {
       toast.success(`Removed ${pack}`);
       await refresh();
     } catch (error) {
-      toast.error(message(error));
+      toast.error(errorText(error));
     } finally {
       setBusy(null);
     }
@@ -149,7 +144,7 @@ export function PacksPanel() {
       await actions.bindPackPlugin(plugin, profile || null);
       await refresh();
     } catch (error) {
-      toast.error(message(error));
+      toast.error(errorText(error));
     } finally {
       setBusy(null);
     }
@@ -162,14 +157,16 @@ export function PacksPanel() {
       setToken("");
       await refresh();
     } catch (error) {
-      toast.error(message(error));
+      toast.error(errorText(error));
     } finally {
       setBusy(null);
     }
   }
 
   async function signOut() {
-    await actions.signOutOfPackRegistry().catch((error) => toast.error(message(error)));
+    await actions
+      .signOutOfPackRegistry()
+      .catch((error) => toast.error(errorText(error)));
     await refresh();
   }
 
@@ -235,7 +232,7 @@ export function PacksPanel() {
       <Group title="Registry">
         <Row label="Search">
           <form
-            className="flex gap-2"
+            className="flex items-center gap-2"
             onSubmit={(event) => {
               event.preventDefault();
               void search(1);
@@ -247,7 +244,7 @@ export function PacksPanel() {
               placeholder="Packs and plugins"
               aria-label="Search the registry"
             />
-            <Button type="submit" size="sm" disabled={busy !== null}>
+            <Button type="submit" disabled={busy !== null}>
               Search
             </Button>
           </form>
@@ -299,18 +296,15 @@ export function PacksPanel() {
           </Row>
         ) : (
           <Row label="Sign in" description="A token from your registry dashboard">
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2">
               <Input
                 type="password"
                 value={token}
                 onChange={(event) => setToken(event.target.value)}
+                placeholder="Registry token"
                 aria-label="Registry token"
               />
-              <Button
-                size="sm"
-                disabled={!token.trim() || busy !== null}
-                onClick={signIn}
-              >
+              <Button disabled={!token.trim() || busy !== null} onClick={signIn}>
                 Sign in
               </Button>
             </div>
