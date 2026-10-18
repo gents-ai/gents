@@ -37,6 +37,7 @@ fn binding(
             artifact_digest: "artifact".into(),
             input_digest: format!("input-{}", value.action),
             path: resolved.target.clone(),
+            is_dir: resolved.is_dir,
             access,
         },
     }

@@ -358,7 +358,9 @@ pub fn pending_requests(home: &Path) -> Result<Vec<Request>> {
             );
             if let Some(binding) = &request.binding {
                 if let Err(error) = workspace::validate_binding(home, binding) {
-                    if error.is::<workspace::SelectionChanged>() {
+                    if error.is::<workspace::SelectionChanged>()
+                        || error.is::<allowed::PathChanged>()
+                    {
                         continue;
                     }
                     return Err(error);
@@ -388,6 +390,7 @@ fn validate_request_binding(request: &Request) -> Result<()> {
         anyhow::ensure!(
             action.plugin == request.plugin
                 && action.path == Path::new(&request.path)
+                && action.is_dir == request.is_dir
                 && action.access == request.access
                 && folder == Some(request.folder.as_path()),
             "the approval question does not match its workspace binding"

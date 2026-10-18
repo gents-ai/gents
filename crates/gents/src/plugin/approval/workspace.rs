@@ -82,6 +82,8 @@ impl Settings {
     }
 }
 
+/// The canonical target and its kind are frozen when consent is requested.
+/// Both must still match before an answer can authorize the bound action.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct BindingAction {
@@ -89,6 +91,7 @@ pub(crate) struct BindingAction {
     pub artifact_digest: String,
     pub input_digest: String,
     pub path: PathBuf,
+    pub is_dir: bool,
     pub access: crate::pack::BindAccess,
 }
 
@@ -109,6 +112,8 @@ pub(crate) fn validate_binding(home: &Path, binding: &Binding) -> Result<Setting
     if !policy::approval_scope_matches(&available, &binding.scope) {
         return Err(SelectionChanged.into());
     }
+    crate::plugin::allowed::canonical_target(&binding.scope.workspace.path, Some(true))?;
+    crate::plugin::allowed::canonical_target(&binding.action.path, Some(binding.action.is_dir))?;
     settings.context("workspace permissions are unavailable")
 }
 
@@ -118,8 +123,8 @@ pub(crate) fn consume_decision(
     received: &Binding,
     allowed: bool,
 ) -> Result<bool> {
-    let settings = get(home, &expected.scope.workspace)?;
-    let available: Vec<_> = settings.iter().map(Settings::scope).collect();
+    let settings = validate_binding(home, expected)?;
+    let available = [settings.scope()];
     policy::consume_approval(&available, expected, received, allowed)
         .ok_or_else(|| SelectionChanged.into())
 }
@@ -245,7 +250,7 @@ pub(crate) fn grant_at_least(
     path: &Path,
     access: crate::pack::BindAccess,
 ) -> Result<()> {
-    let entry = crate::plugin::allowed::prepare_grant(home, path, access)?;
+    let entry = crate::plugin::allowed::prepare_answered_grant(home, path, access)?;
     let _lock = lock(home)?;
     let mut stored = read(home)?;
     let settings = stored

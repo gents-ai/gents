@@ -55,7 +55,11 @@ pub(super) fn settings(home: &Path) -> Result<Option<super::Settings>> {
         home.canonicalize().context("resolving the approval home")? == context.home,
         "the plugin and request have different approval homes"
     );
-    super::get(&context.home, &context.workspace)
+    let settings = super::get(&context.home, &context.workspace)?;
+    if settings.is_some() {
+        crate::plugin::allowed::canonical_target(&context.workspace.path, Some(true))?;
+    }
+    Ok(settings)
 }
 
 #[cfg(test)]

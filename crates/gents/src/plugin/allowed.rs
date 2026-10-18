@@ -67,13 +67,18 @@ pub fn add(home: &Path, path: &Path, access: BindAccess) -> Result<AllowedDir> {
 }
 
 /// An approval may widen a grant, but never downgrade a concurrent grant.
+/// The path is the canonical target captured by the question before waiting.
 /// All allowed-folder mutations share the same native exclusive lock.
 pub(super) fn grant_at_least(home: &Path, path: &Path, access: BindAccess) -> Result<AllowedDir> {
     put(home, path, access, true)
 }
 
 fn put(home: &Path, path: &Path, access: BindAccess, preserve_wider: bool) -> Result<AllowedDir> {
-    let entry = prepare_grant(home, path, access)?;
+    let entry = if preserve_wider {
+        prepare_answered_grant(home, path, access)?
+    } else {
+        prepare_grant(home, path, access)?
+    };
     let _lock = lock(home)?;
     let mut dirs = list(home)?;
     let entry = put_entry(&mut dirs, entry, preserve_wider);
@@ -92,6 +97,44 @@ pub(super) fn prepare_grant(home: &Path, path: &Path, access: BindAccess) -> Res
     );
     ensure_scope_path(&path, user_home().as_deref(), home)?;
     Ok(AllowedDir { path, access })
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("The requested path changed or is unavailable: {}. Retry the action with its current path.", .0.display())]
+pub(super) struct PathChanged(pub PathBuf);
+
+/// Consent records hold canonical targets; a later alias cannot select a
+/// different target under an existing grant.
+pub(super) fn canonical_target(path: &Path, directory: Option<bool>) -> Result<PathBuf> {
+    let current = path
+        .canonicalize()
+        .map_err(|_| PathChanged(path.to_owned()))?;
+    if current != path
+        || directory.is_some_and(|expected| {
+            if expected {
+                !current.is_dir()
+            } else {
+                !current.is_file()
+            }
+        })
+    {
+        return Err(PathChanged(path.to_owned()).into());
+    }
+    Ok(current)
+}
+
+/// A queued answer names the canonical path captured before the wait.
+/// Following a replacement symlink would grant access to another target.
+pub(super) fn prepare_answered_grant(
+    home: &Path,
+    path: &Path,
+    access: BindAccess,
+) -> Result<AllowedDir> {
+    let entry = prepare_grant(home, path, access)?;
+    if entry.path != path {
+        return Err(PathChanged(path.to_owned()).into());
+    }
+    Ok(entry)
 }
 
 pub(super) fn put_entry(
@@ -215,9 +258,7 @@ impl Scope {
         user_home: Option<&Path>,
     ) -> Result<Self> {
         for entry in &entries {
-            let path = entry
-                .path
-                .canonicalize()
+            let path = canonical_target(&entry.path, None)
                 .with_context(|| format!("allowed path {} is unavailable", entry.path.display()))?;
             ensure_scope_path(&path, user_home, gents_home)?;
         }
@@ -237,10 +278,7 @@ impl Scope {
         self.entries
             .iter()
             .filter(|entry| {
-                entry
-                    .path
-                    .canonicalize()
-                    .is_ok_and(|root| target.starts_with(root))
+                canonical_target(&entry.path, None).is_ok_and(|root| target.starts_with(root))
             })
             .map(|entry| entry.access)
             .max()
