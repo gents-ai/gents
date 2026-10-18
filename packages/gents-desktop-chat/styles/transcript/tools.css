@@ -178,6 +178,28 @@
     height: 6px;
   }
 
+  .tool-activity-body .tool-item-dot-success {
+    background: var(--color-text-muted);
+    opacity: 0.5;
+  }
+
+  .tool-activity-body .tool-item-summary .tool-item-mode,
+  .tool-activity-body .tool-item:not([open]) .tool-item-status-success,
+  .tool-activity-body .tool-item:not([open]) .tool-exit:not(.is-error) {
+    display: none;
+  }
+
+  .tool-activity-body .tool-kind {
+    color: var(--color-text-muted);
+    font-weight: 400;
+    letter-spacing: normal;
+    text-transform: none;
+  }
+
+  .tool-activity-body .tool-primary {
+    font-weight: 400;
+  }
+
   .tool-group {
     display: grid;
     overflow: hidden;
