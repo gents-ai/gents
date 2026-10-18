@@ -276,30 +276,31 @@ async fn list_background_tools_reports_running_live_output_bytes() {
     //   L171-176: `(output.len() as u64, 0)` over `canonical_tool_output`).
     // - `available_bytes` / `preview` expose the same canonical evidence
     //   and coordinate with read_process, which slices the identical
-    //   rendering (total_bytes == available_bytes, output agreement below).
+    //   rendering (agreement asserted below at the mid-run observation).
     // Base behavior was timing-dependent: an early poll caught the 4-byte
-    // "live" Open observation while a poll after completion saw 53. The
-    // child is now flock-gated: it prints "live", then blocks until this
-    // test releases the lock, so the mid-run canonical total is
-    // deterministically 4 ("live") and the post-release total is
-    // deterministically 8 ("live\ndone" — the canonical rendering joins
-    // the two tool-output extents with a newline).
-    let lock_dir = tempdir.path().join("gate");
-    let lock_path = lock_dir.join("gate.lock");
-    let prepared = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(format!("mkdir -p {}", lock_dir.display()))
-        .status()
-        .expect("prepare gate dir");
-    assert!(prepared.success());
+    // "live" Open observation while a poll after completion saw the full
+    // terminal rendering (53 in the failing run). The child is now gated
+    // by a release FILE (portable: no flock — separate-process flock -u
+    // cannot release the child fd, and macOS lacks flock): it prints
+    // "live", then polls for the release file's existence in a bounded
+    // loop, so the mid-run observation is deterministic. The parent writes
+    // the release file only after its assertions; if an assertion fails,
+    // the bounded loop expires and the child's tool timeout reaps it. No
+    // post-release byte arithmetic is asserted.
+    let release_path = tempdir.path().join("release-gate");
+    std::fs::create_dir_all(tempdir.path()).expect("tempdir exists");
+    // POSIX-safe single-quoted path (tempdir paths contain no single
+    // quotes; assert to keep that invariant load-bearing).
+    assert!(!release_path.to_string_lossy().contains('\''));
+    let quoted = format!("'{}'", release_path.display());
     let handle = background_tool_with_args(
         &hook,
         "bg-live-output",
         "bash_unrestricted",
         json!({
             "command": format!(
-                "printf live; exec 9>{}; flock 9; printf done",
-                lock_path.display()
+                "printf live; i=0; while [ ! -e {quoted} ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done; printf done",
+                quoted = quoted
             ),
             "args": [],
             "timeout_secs": 20
@@ -308,8 +309,8 @@ async fn list_background_tools_reports_running_live_output_bytes() {
     .await;
     let tool_call_id = handle["tool_call_id"].as_str().unwrap();
 
-    // First observation happens while the child is blocked after "live":
-    // exactly 4 canonical bytes are observable.
+    // First observation happens while the child is gate-blocked after
+    // printing "live": exactly 4 canonical bytes are observable.
     let mut entry = json!({});
     for attempt in 0..40 {
         let result =
@@ -346,13 +347,12 @@ async fn list_background_tools_reports_running_live_output_bytes() {
     assert_eq!(read["total_bytes"].as_u64(), Some(4));
     assert_eq!(read["output"].as_str(), Some("live"));
 
-    // Release the gate: the child prints "done" and completes.
-    let released = std::process::Command::new("flock")
-        .arg("-u")
-        .arg(&lock_path)
-        .status()
-        .expect("release gate");
-    assert!(released.success());
+    // Release the gate: the child observes the file, prints "done", and
+    // completes. Its exit status is asserted via wait_process; no byte
+    // count is asserted for the terminal state.
+    tokio::fs::write(&release_path, b"release")
+        .await
+        .expect("write release file");
 
     let waited = wait_tool(&hook, "wait-live-output", tool_call_id).await;
     assert_eq!(waited["status"].as_str(), Some("completed"));
