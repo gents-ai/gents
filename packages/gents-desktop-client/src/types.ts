@@ -69,6 +69,8 @@ export type {
   GrokLoginResult,
   GrokLoginRequest,
   GrokLoginUrl,
+  SessionForkBeforeRequest,
+  SessionForkResult,
   SessionRenameRequest,
   DesktopInitRequest,
   TriggerSaveRequest,

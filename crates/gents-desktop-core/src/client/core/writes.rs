@@ -928,6 +928,42 @@ impl ClientCore {
         }))
     }
 
+    /// A client replica cannot establish an idle source or complete history;
+    /// editing requires the runtime's authenticated transaction endpoint.
+    pub async fn fork_session_before_message(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        message_key: &str,
+    ) -> Result<gents::session::ForkOutcome> {
+        let node_did = normalize_required("node_did", node_did)?;
+        let session_id = normalize_required("session_id", session_id)?;
+        anyhow::ensure!(!message_key.trim().is_empty(), "message_key is required");
+        let peer = self
+            .peer_record_for_chat_write(node_did, Utc::now())
+            .await?;
+        ensure_peer_chat_ready_at(node_did, peer.as_ref(), Utc::now())?;
+        let requester = self.requester_did(
+            peer.as_ref()
+                .context("chat target has no current owned peer route")?,
+        );
+        let access = self.operator_graphql(node_did)
+            .map(ConfigAccess::Graphql)
+            .context("Editing a message requires a direct runtime connection. Reconnect the local runtime and try again.")?;
+        gents::session::fork_on(
+            &access,
+            gents::session::ForkParams {
+                source_session_id: session_id,
+                boundary: gents::session::ForkBoundary::BeforeMessageKey(message_key),
+                caller_node_did: node_did,
+                caller_requester_did: Some(&requester),
+                target_agent_id: None,
+            },
+        )
+        .await
+        .map_err(Into::into)
+    }
+
     pub async fn rename_session(
         &self,
         node_did: &str,
