@@ -68,43 +68,58 @@ impl Fixture {
 
     /// POST-failure diagnostic: read-after-the-fact snapshot of selected
     /// persisted request lifecycle fields for the failing request. Uses the
-    /// same safe bounded query pattern as the existing lifecycle tests
-    /// (single-row filter on _docID via first_row, exact field list).
-    /// Sanitized by construction: lifecycle/generation/deadline tokens and
-    /// wall time only — no message content, identities, secrets, or full
-    /// row dumps. NOT atomic guard evidence: the row is read after the
-    /// failure and may have changed.
-    async fn post_failure_request_snapshot(&self, request_doc_id: &str) -> Result<String> {
+    /// existing safe bounded query pattern (single-row filter on _docID,
+    /// narrow serde_json::Value projection following the request_state
+    /// lookup in tool_call_lifecycle/query.rs) and emits ONLY the explicit
+    /// selected fields — never a full row dump. Sanitized by construction:
+    /// lifecycle/generation/deadline tokens and wall time only — no message
+    /// content, identities, secrets, or full row dumps. NOT atomic guard
+    /// evidence: the row is read after the failure and may have changed.
+    /// The whole snapshot future is capped at 1s (best-effort diagnostic cap
+    /// only; no lease/test budget increase, no retries): on timeout a marker
+    /// is returned and the original begin error stays in the panic.
+    async fn post_failure_request_snapshot(&self, request_doc_id: &str) -> String {
         let snapshot_started = chrono::Utc::now();
         let escaped = crate::graphql::escape_graphql_string(request_doc_id);
-        let response = self.node.execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ lifecycle_state execution_generation execution_lease_expires_at execution_lease_secs }} }}"#
-        )).await;
-        anyhow::ensure!(
-            !response.has_errors(),
-            "post-failure request snapshot query failed: {:?}",
-            response.errors
-        );
-        let row = match crate::graphql::first_row::<gents_protocol::row::AgentRequestRow>(
-            &response,
-            "AgentRequest",
-        )?
-        .context("post-failure request snapshot: request row missing")
-        {
-            Ok(row) => row,
-            Err(_) => {
-                return Ok("request row missing at snapshot time".to_string());
+        let query_future = async {
+            let response = self.node.execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ lifecycle_state execution_generation execution_lease_expires_at execution_lease_secs }} }}"#
+            )).await;
+            if response.has_errors() {
+                return Err(format!("snapshot query errors: {:?}", response.errors));
             }
+            let rows = response
+                .data
+                .as_ref()
+                .and_then(|data| data.get("AgentRequest"))
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let Some(row) = rows.first() else {
+                return Ok(None);
+            };
+            // Emit ONLY the explicitly selected fields; never the full row.
+            Ok(Some((
+                row.get("lifecycle_state")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                row.get("execution_generation")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                row.get("execution_lease_expires_at")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                row.get("execution_lease_secs")
+                    .and_then(serde_json::Value::as_i64),
+            )))
         };
-        Ok(format!(
-            "snapshot_started_at={}; lifecycle_state={:?}; execution_generation={:?}; \
-             execution_lease_expires_at={:?}; execution_lease_secs={:?}",
-            snapshot_started.to_rfc3339(),
-            row.lifecycle_state,
-            row.execution_generation,
-            row.execution_lease_expires_at,
-            row.execution_lease_secs,
-        ))
+        let snapshot = render_snapshot(
+            snapshot_started,
+            tokio::time::timeout(std::time::Duration::from_secs(1), query_future)
+                .await
+                .map_err(|_| ()),
+        );
+        snapshot
     }
 
     async fn abandoned_request(&self, interrupt_requested: bool) -> String {
@@ -112,16 +127,11 @@ impl Fixture {
         let mut lifecycle = self.claimed(Duration::from_secs(1)).await;
         let writer =
             crate::streaming::DefraStreamWriter::new(self.node.clone(), self.did(), Duration::ZERO);
-        // Diagnostic-only failure enrichment (adjudicated): the real
-        // begin_owned_execution path, 1s lease, and failing behavior are
-        // preserved; on error we report the expected execution generation,
-        // monotonic claim-through-begin elapsed, and a POST-failure
-        // (non-atomic, read-after-the-fact) snapshot of selected persisted
-        // request lifecycle fields plus current wall time. No message
-        // content, identities, secrets, or full row dumps; the snapshot is
-        // explicitly labeled as evidence collected after the failure, not
-        // atomic-guard evidence. Snapshot failure never hides the original
-        // begin error.
+        // The real begin path, 1s lease, sleeps, assertions, and failing
+        // behavior are preserved; the enrichment below is diagnostic-only
+        // (adjudicated): expected generation, monotonic claim-through-begin
+        // elapsed, and a POST-failure snapshot (not atomic guard evidence),
+        // capped at 1s so the original begin error always reaches the panic.
         if let Err(begin_error) = lifecycle.begin_owned_execution(&writer).await {
             let expected_generation = lifecycle
                 .execution_generation()
@@ -129,11 +139,7 @@ impl Fixture {
                 .to_string();
             let elapsed = claim_started.elapsed();
             let request_doc_id = lifecycle.request().doc_id.clone();
-            let post_failure_snapshot = self
-                .post_failure_request_snapshot(&request_doc_id)
-                .unwrap_or_else(|snapshot_error| {
-                    format!("<snapshot query failed: {snapshot_error}>")
-                });
+            let post_failure_snapshot = self.post_failure_request_snapshot(&request_doc_id).await;
             panic!(
                 "begin_owned_execution failed in abandoned_request fixture: {begin_error}; \
                  expected execution generation: {expected_generation}; \
@@ -586,5 +592,83 @@ async fn recovered_cleanup_outside_an_admitted_root_is_refused() {
             store.list().is_empty(),
             "{name}: the refused record is dropped"
         );
+    }
+}
+
+/// Pure rendering of the POST-failure snapshot result, separated so the
+/// formatting branches (selected fields / missing row / query failure / 1s
+/// timeout marker) are testable without a node process. `result` is the
+/// outer timeout result (Err = 1s cap hit); the inner value is the query
+/// outcome. Emits only the explicitly selected fields — never a full row.
+fn render_snapshot(
+    snapshot_started: chrono::DateTime<chrono::Utc>,
+    result: Result<
+        Result<Option<(Option<String>, Option<String>, Option<String>, Option<i64>)>, String>,
+        (),
+    >,
+) -> String {
+    match result {
+        Ok(Ok(Some((lifecycle_state, generation, expires_at, lease_secs)))) => format!(
+            "snapshot_started_at={}; lifecycle_state={}; execution_generation={}; \
+             execution_lease_expires_at={}; execution_lease_secs={}",
+            snapshot_started.to_rfc3339(),
+            lifecycle_state.unwrap_or_else(|| "<missing>".to_string()),
+            generation.unwrap_or_else(|| "<missing>".to_string()),
+            expires_at.unwrap_or_else(|| "<missing>".to_string()),
+            lease_secs
+                .map(|secs| secs.to_string())
+                .unwrap_or_else(|| "<missing>".to_string()),
+        ),
+        Ok(Ok(None)) => "request row missing at snapshot time".to_string(),
+        Ok(Err(query_error)) => format!("<snapshot query failed: {query_error}>"),
+        Err(()) => "<snapshot timed out after 1s>".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod render_snapshot_tests {
+    use super::render_snapshot;
+    use chrono::TimeZone;
+
+    fn ts() -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc.with_ymd_and_hms(2026, 5, 20, 12, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn renders_selected_fields_only() {
+        let rendered = render_snapshot(
+            ts(),
+            Ok(Ok(Some((
+                Some("running".to_string()),
+                Some("gen-7".to_string()),
+                Some("2026-05-20T12:00:01Z".to_string()),
+                Some(1),
+            )))),
+        );
+        assert!(rendered.contains("snapshot_started_at=2026-05-20T12:00:00"));
+        assert!(rendered.contains("lifecycle_state=running"));
+        assert!(rendered.contains("execution_generation=gen-7"));
+        assert!(rendered.contains("execution_lease_expires_at=2026-05-20T12:00:01Z"));
+        assert!(rendered.contains("execution_lease_secs=1"));
+        assert!(!rendered.contains("request_id"));
+    }
+
+    #[test]
+    fn renders_missing_fields_and_missing_row() {
+        let partial = render_snapshot(ts(), Ok(Ok(Some((None, None, None, None)))));
+        assert!(partial.contains("lifecycle_state=<missing>"));
+        assert!(partial.contains("execution_lease_secs=<missing>"));
+
+        let absent = render_snapshot(ts(), Ok(Ok(None)));
+        assert_eq!(absent, "request row missing at snapshot time");
+    }
+
+    #[test]
+    fn renders_query_failure_and_timeout_markers() {
+        let failed = render_snapshot(ts(), Ok(Err("boom".to_string())));
+        assert_eq!(failed, "<snapshot query failed: boom>");
+
+        let timed_out = render_snapshot(ts(), Err(()));
+        assert_eq!(timed_out, "<snapshot timed out after 1s>");
     }
 }
