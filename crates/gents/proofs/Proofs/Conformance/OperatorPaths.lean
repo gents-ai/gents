@@ -6,6 +6,7 @@ open Lean
 
 def casesJson : Json := toJson <|
   ([ ("ordinary", false, some false), ("ordinaryAlias", false, some false),
+     ("writeOnly", false, some false),
      ("missing", false, some false), ("named", true, some true),
      ("uncreatedNamed", true, some false), ("alias", false, some true),
      ("queueAlias", false, some true), ("unavailable", false, none),
