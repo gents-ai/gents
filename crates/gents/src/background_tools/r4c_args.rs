@@ -104,6 +104,14 @@ pub(crate) struct ListBackgroundToolsResponse {
     pub(crate) read_at: DateTime<Utc>,
     pub(crate) truncated: bool,
     pub(crate) entries: Vec<ListBackgroundToolsEntry>,
+    /// Rows selected by the list query but dropped before becoming entries
+    /// (decode failure, authorization mismatch, projection filter), with
+    /// the reason. Truthful observability for absence: an empty `entries`
+    /// plus a non-empty `dropped` distinguishes "no background calls exist"
+    /// from "rows exist and were filtered out". Absent from the public
+    /// envelope shape; consumed by tests and diagnostics.
+    #[serde(skip)]
+    pub(crate) dropped: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Serialize)]
