@@ -71,8 +71,10 @@ function originLabel(origin: RequestOriginView): string {
 
 export function UserMessageItem({
   item,
+  onEdit,
 }: {
   item: UserMessage | AutomatedInput;
+  onEdit?: (item: UserMessage) => void;
 }) {
   const content = normalizeTranscriptText(item.content);
   return (
@@ -81,6 +83,30 @@ export function UserMessageItem({
         <div className="message-role">
           {item.kind === "automatedInput" ? originLabel(item.origin) : "user"}
           <MessageTime value={item.timestamp} />
+          {item.kind === "userMessage" &&
+          item.reconstruction.state === "ready" &&
+          content &&
+          onEdit ? (
+            <button
+              type="button"
+              className="message-edit"
+              aria-label="Edit message"
+              title="Edit message"
+              onClick={() => onEdit(item)}
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                aria-hidden="true"
+              >
+                <path d="m16 3 5 5M3 21l1-6L16 3a3.5 3.5 0 0 1 5 5L9 20l-6 1Z" />
+              </svg>
+            </button>
+          ) : null}
           {item.reconstruction.state === "ready" && content ? (
             <CopyButton className="message-copy" getText={() => content} />
           ) : null}
