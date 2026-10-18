@@ -82,8 +82,8 @@ impl Settings {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct BindingAction {
     pub plugin: String,
     pub artifact_digest: String,
@@ -92,13 +92,57 @@ pub(crate) struct BindingAction {
     pub access: crate::pack::BindAccess,
 }
 
+pub(crate) type Binding = Grant<WorkspaceKey, BindingAction>;
+
+pub(crate) struct BindingDecision {
+    pub route: Route,
+    pub binding: Binding,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("Workspace permissions changed. Retry the action with the current permissions.")]
+pub(crate) struct SelectionChanged;
+
+pub(crate) fn validate_binding(home: &Path, binding: &Binding) -> Result<Settings> {
+    let settings = get(home, &binding.scope.workspace)?;
+    let available: Vec<_> = settings.iter().map(Settings::scope).collect();
+    if !policy::approval_scope_matches(&available, &binding.scope) {
+        return Err(SelectionChanged.into());
+    }
+    settings.context("workspace permissions are unavailable")
+}
+
+pub(crate) fn consume_decision(
+    home: &Path,
+    expected: &Binding,
+    received: &Binding,
+    allowed: bool,
+) -> Result<bool> {
+    let settings = get(home, &expected.scope.workspace)?;
+    let available: Vec<_> = settings.iter().map(Settings::scope).collect();
+    policy::consume_approval(&available, expected, received, allowed)
+        .ok_or_else(|| SelectionChanged.into())
+}
+
+pub(crate) fn allowed_scope(
+    home: &Path,
+    workdir: Option<&Path>,
+    user_home: Option<&Path>,
+) -> Result<crate::plugin::allowed::Scope> {
+    let mut entries = crate::plugin::allowed::list(home)?;
+    if let Some(settings) = context::settings(home)? {
+        entries.extend(settings.dirs);
+    }
+    crate::plugin::allowed::Scope::from_entries(home, entries, workdir, user_home)
+}
+
 /// Installed plugin admission still enforces its manifold. This decision
 /// controls only consent for the exact bound input under that ceiling.
 pub(crate) fn binding_route(
     home: &Path,
     action: BindingAction,
     covered: bool,
-) -> Result<Option<Route>> {
+) -> Result<Option<BindingDecision>> {
     let Some(settings) = context::settings(home)? else {
         return Ok(None);
     };
@@ -112,14 +156,12 @@ pub(crate) fn binding_route(
         crosses_boundary: !covered,
         grant: None,
     };
-    Ok(Some(policy::reviewed_route(
-        &input,
-        Review::Unavailable,
-        &Grant {
-            scope: current,
-            action,
-        },
-    )))
+    let binding = Grant {
+        scope: current,
+        action,
+    };
+    let route = policy::reviewed_route(&input, Review::Unavailable, &binding);
+    Ok(Some(BindingDecision { route, binding }))
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -131,8 +173,12 @@ struct Stored {
 pub(in crate::plugin) const FILE: &str = "workspace-approvals.json";
 pub(in crate::plugin) const LOCK: &str = "workspace-approvals.lock";
 
+pub fn preferences_file(home: &Path) -> PathBuf {
+    home.join(FILE)
+}
+
 fn read(home: &Path) -> Result<Stored> {
-    match std::fs::read(home.join(FILE)) {
+    match std::fs::read(preferences_file(home)) {
         Ok(bytes) => {
             let stored: Stored = serde_json::from_slice(&bytes)
                 .context("the workspace permissions file is unreadable")?;
@@ -164,16 +210,7 @@ pub fn save_mode(
     mode: Mode,
     review_task_id: Option<&str>,
 ) -> Result<Settings> {
-    std::fs::create_dir_all(home).context("preparing workspace permissions")?;
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(home.join(LOCK))
-        .context("opening the workspace permissions lock")?;
-    let _lock =
-        crate::file_lock::FileLock::exclusive(lock).context("locking workspace permissions")?;
+    let _lock = lock(home)?;
     let mut stored = read(home)?;
     let previous = stored.entries.iter().find(|entry| entry.workspace == *key);
     anyhow::ensure!(
@@ -198,6 +235,44 @@ pub fn save_mode(
     };
     stored.entries.retain(|entry| entry.workspace != *key);
     stored.entries.push(settings.clone());
+    save(home, &stored)?;
+    Ok(settings)
+}
+
+pub(crate) fn grant_at_least(
+    home: &Path,
+    binding: &Binding,
+    path: &Path,
+    access: crate::pack::BindAccess,
+) -> Result<()> {
+    let entry = crate::plugin::allowed::prepare_grant(home, path, access)?;
+    let _lock = lock(home)?;
+    let mut stored = read(home)?;
+    let settings = stored
+        .entries
+        .iter_mut()
+        .find(|entry| entry.workspace == binding.scope.workspace)
+        .ok_or(SelectionChanged)?;
+    if !policy::approval_scope_matches(&[settings.scope()], &binding.scope) {
+        return Err(SelectionChanged.into());
+    }
+    crate::plugin::allowed::put_entry(&mut settings.dirs, entry, true);
+    save(home, &stored)
+}
+
+fn lock(home: &Path) -> Result<crate::file_lock::FileLock> {
+    std::fs::create_dir_all(home).context("preparing workspace permissions")?;
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(home.join(LOCK))
+        .context("opening the workspace permissions lock")?;
+    crate::file_lock::FileLock::exclusive(lock).context("locking workspace permissions")
+}
+
+fn save(home: &Path, stored: &Stored) -> Result<()> {
     let staged = tempfile::NamedTempFile::new_in(home).context("staging workspace permissions")?;
     serde_json::to_writer(staged.as_file(), &stored).context("encoding workspace permissions")?;
     staged
@@ -205,9 +280,9 @@ pub fn save_mode(
         .sync_all()
         .context("flushing workspace permissions")?;
     staged
-        .persist(home.join(FILE))
+        .persist(preferences_file(home))
         .context("saving workspace permissions")?;
-    Ok(settings)
+    Ok(())
 }
 
 #[cfg(test)]

@@ -31,16 +31,16 @@ fn the_prompt_names_the_plugin_the_exact_path_and_the_access() {
 fn preparing_a_watch_does_not_advertise_a_listener_or_stale_an_existing_one() {
     let home = tempfile::tempdir().unwrap();
     prepare_listener(home.path()).unwrap();
-    assert!(!listener_fresh(home.path()));
+    assert!(!listener_fresh(home.path(), Queue::Unscoped));
     mark_listening(home.path()).unwrap();
-    let before = std::fs::metadata(listener_file(home.path()))
+    let before = std::fs::metadata(Queue::Unscoped.listener_file(home.path()))
         .unwrap()
         .modified()
         .unwrap();
     prepare_listener(home.path()).unwrap();
-    assert!(listener_fresh(home.path()));
+    assert!(listener_fresh(home.path(), Queue::Unscoped));
     assert_eq!(
-        std::fs::metadata(listener_file(home.path()))
+        std::fs::metadata(Queue::Unscoped.listener_file(home.path()))
             .unwrap()
             .modified()
             .unwrap(),
@@ -56,16 +56,16 @@ fn queue_reads_do_not_advertise_or_refresh_a_listener() {
 
     let request = request(home.path());
     write_atomic(
-        &request_file(home.path(), &request.id),
+        &Queue::Unscoped.request_file(home.path(), &request.id),
         &serde_json::to_vec(&request).unwrap(),
     )
     .unwrap();
     assert_eq!(pending_requests(home.path()).unwrap(), [request.clone()]);
-    assert!(!listener_file(home.path()).exists());
+    assert!(!Queue::Unscoped.listener_file(home.path()).exists());
 
     assert_eq!(pending(home.path()).unwrap(), [request.clone()]);
-    assert!(listener_fresh(home.path()));
-    let mark = listener_file(home.path());
+    assert!(listener_fresh(home.path(), Queue::Unscoped));
+    let mark = Queue::Unscoped.listener_file(home.path());
     let fresh = mark.metadata().unwrap().modified().unwrap();
     pending_requests(home.path()).unwrap();
     assert_eq!(mark.metadata().unwrap().modified().unwrap(), fresh);
@@ -77,9 +77,9 @@ fn queue_reads_do_not_advertise_or_refresh_a_listener() {
         .set_modified(std::time::UNIX_EPOCH)
         .unwrap();
     assert_eq!(pending_requests(home.path()).unwrap(), [request.clone()]);
-    assert!(!listener_fresh(home.path()));
+    assert!(!listener_fresh(home.path(), Queue::Unscoped));
     assert_eq!(pending(home.path()).unwrap(), [request]);
-    assert!(listener_fresh(home.path()));
+    assert!(listener_fresh(home.path(), Queue::Unscoped));
 }
 
 #[tokio::test]
@@ -174,7 +174,7 @@ fn a_question_cannot_impersonate_another_queue_entry() {
     let home = tempfile::tempdir().unwrap();
     let request = request(home.path());
     write_atomic(
-        &request_file(home.path(), "different"),
+        &Queue::Unscoped.request_file(home.path(), "different"),
         &serde_json::to_vec(&request).unwrap(),
     )
     .unwrap();
@@ -191,14 +191,16 @@ fn an_expired_question_cannot_publish_an_answer_or_a_persistent_grant() {
     request.expires_at_ms = now_ms().saturating_sub(1);
     request.created_at_ms = request.expires_at_ms.saturating_sub(1);
     write_atomic(
-        &request_file(home.path(), &request.id),
+        &Queue::Unscoped.request_file(home.path(), &request.id),
         &serde_json::to_vec(&request).unwrap(),
     )
     .unwrap();
     assert!(pending_requests(home.path()).unwrap().is_empty());
     assert!(decide(home.path(), &request.id, Answer::AlwaysFolder).is_err());
     assert!(allowed::list(home.path()).unwrap().is_empty());
-    assert!(!decision_file(home.path(), &request.id).exists());
+    assert!(!Queue::Unscoped
+        .decision_file(home.path(), &request.id)
+        .exists());
 }
 
 #[test]
@@ -208,7 +210,7 @@ fn questions_without_a_waiter_deadline_fail_with_a_version_error() {
     let mut value = serde_json::to_value(&request).unwrap();
     value.as_object_mut().unwrap().remove("expires_at_ms");
     write_atomic(
-        &request_file(home.path(), &request.id),
+        &Queue::Unscoped.request_file(home.path(), &request.id),
         &serde_json::to_vec(&value).unwrap(),
     )
     .unwrap();
@@ -228,10 +230,10 @@ fn incompatible_responders_and_orphaned_questions_do_not_share_the_current_queue
     let question = incompatible.join("unanswered.json");
     let bytes = br#"{"id":"unanswered","created_at_ms":0}"#;
     std::fs::write(&question, bytes).unwrap();
-    assert!(!listener_fresh(home.path()));
+    assert!(!listener_fresh(home.path(), Queue::Unscoped));
     assert!(pending_requests(home.path()).unwrap().is_empty());
     mark_listening(home.path()).unwrap();
-    assert!(listener_fresh(home.path()));
+    assert!(listener_fresh(home.path(), Queue::Unscoped));
     assert_eq!(std::fs::read(question).unwrap(), bytes);
     assert!(decide(home.path(), "unanswered", Answer::AlwaysFolder).is_err());
 }
@@ -266,7 +268,7 @@ fn concurrent_answers_deliver_only_one_decision() {
     let outside = tempfile::tempdir().unwrap();
     let request = request(outside.path());
     write_atomic(
-        &request_file(home.path(), &request.id),
+        &Queue::Unscoped.request_file(home.path(), &request.id),
         &serde_json::to_vec(&request).unwrap(),
     )
     .unwrap();
@@ -284,9 +286,10 @@ fn concurrent_answers_deliver_only_one_decision() {
         (once.join().unwrap(), always.join().unwrap())
     });
     assert_ne!(results.0.is_ok(), results.1.is_ok());
-    let decision: Decision =
-        serde_json::from_slice(&std::fs::read(decision_file(home.path(), &request.id)).unwrap())
-            .unwrap();
+    let decision: Decision = serde_json::from_slice(
+        &std::fs::read(Queue::Unscoped.decision_file(home.path(), &request.id)).unwrap(),
+    )
+    .unwrap();
     assert_eq!(decision.allow, results.1.is_ok());
     assert_eq!(
         !allowed::list(home.path()).unwrap().is_empty(),

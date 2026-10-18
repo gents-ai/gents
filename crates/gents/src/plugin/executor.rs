@@ -305,7 +305,7 @@ impl PluginExecutor {
         let user_home = allowed::user_home();
         let resolved = allowed::resolve(requested, context.workdir, user_home.as_deref(), home)
             .map_err(refuse)?;
-        let scope = allowed::Scope::load(home, context.workdir, user_home.as_deref())
+        let scope = approval::workspace::allowed_scope(home, context.workdir, user_home.as_deref())
             .map_err(|error| refuse(format!("{error:#}")))?;
         let access = binding.call_access(input);
         let granted = scope.granted(&resolved.target);
@@ -323,18 +323,19 @@ impl PluginExecutor {
                 covered,
             )
             .map_err(|error| refuse(format!("{error:#}")))?;
-            let allowed = match route {
+            let allowed = match route.as_ref().map(|decision| decision.route) {
                 Some(gents_loop::tool_policy::workspace_permissions::Route::Allow) => true,
                 Some(gents_loop::tool_policy::workspace_permissions::Route::Deny) => false,
                 _ => match approval::consent(context.interactive) {
                     approval::Consent::Deny => false,
                     approval::Consent::Ask => {
-                        let request = approval::Request::new(
+                        let mut request = approval::Request::new(
                             &plugin,
                             &resolved,
                             access,
                             context.session_id.map(str::to_owned),
                         );
+                        request.binding = route.map(|decision| decision.binding);
                         approval::ask(home, &request, approval::WAIT)
                             .await
                             .map_err(|error| refuse(format!("{error:#}")))?
@@ -351,10 +352,11 @@ impl PluginExecutor {
                 )));
             }
         }
-        let folder_allowed = allowed::Scope::load(home, context.workdir, user_home.as_deref())
-            .map_err(|error| refuse(format!("{error:#}")))?
-            .granted(resolved.folder())
-            .is_some();
+        let folder_allowed =
+            approval::workspace::allowed_scope(home, context.workdir, user_home.as_deref())
+                .map_err(|error| refuse(format!("{error:#}")))?
+                .granted(resolved.folder())
+                .is_some();
         allowed::bind(&resolved, access, folder_allowed)
             .map(Some)
             .map_err(refuse)
