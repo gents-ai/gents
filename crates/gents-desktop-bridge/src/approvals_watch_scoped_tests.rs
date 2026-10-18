@@ -28,16 +28,20 @@ impl Workspace {
             BindAccess::ReadWrite,
             Some("session".into()),
         );
-        let mut value = serde_json::to_value(request).unwrap();
-        value["binding"] = serde_json::json!({
-            "scope": settings.scope(),
-            "action": {
-                "plugin": "team/files",
-                "artifactDigest": "artifact",
-                "inputDigest": "input",
-                "path": path,
-                "isDir": false,
-                "access": BindAccess::ReadWrite,
+        let value = serde_json::json!({
+            "id": request.id, "session_id": request.session_id,
+            "created_at_ms": request.created_at_ms, "expires_at_ms": request.expires_at_ms,
+            "binding": {
+                "scope": settings.scope(),
+                "action": {
+                    "kind": "plugin",
+                    "plugin": "team/files",
+                    "artifactDigest": "artifact",
+                    "inputDigest": "input",
+                    "path": path,
+                    "isDir": false,
+                    "access": BindAccess::ReadWrite,
+                },
             },
         });
         Self {
@@ -69,6 +73,17 @@ impl Workspace {
             None,
         )
         .unwrap();
+    }
+
+    fn command(&self) -> Request {
+        let mut value = serde_json::to_value(&self.request).unwrap();
+        value["binding"]["action"] = serde_json::json!({
+            "kind": "command", "argv": ["echo", "approved"],
+            "cwd": self.settings.workspace.path,
+            "root": self.root.path().canonicalize().unwrap(),
+            "policy": gents::toolset::CommandExecutionPolicy::write_capable(),
+        });
+        serde_json::from_value(value).unwrap()
     }
 }
 
@@ -136,7 +151,10 @@ async fn remembered_workspace_access_reaches_the_waiter_without_widening_global_
         .unwrap()
         .unwrap();
     assert_eq!(settings.dirs.len(), 1);
-    assert_eq!(settings.dirs[0].path, fixture.request.folder);
+    assert_eq!(
+        settings.dirs[0].path.as_path(),
+        fixture.request.filesystem().unwrap().folder
+    );
     assert_eq!(settings.dirs[0].access, BindAccess::ReadWrite);
     let other = fixture.root.path().join("other");
     std::fs::create_dir_all(&other).unwrap();
@@ -161,6 +179,39 @@ async fn changing_permissions_cancels_the_waiting_question() {
         .to_string()
         .contains("Workspace permissions changed"));
     assert!(!fixture.question_file().exists());
+}
+
+#[tokio::test]
+async fn command_questions_resume_once_without_granting_filesystem_access() {
+    use crate::plugin_access::{ApprovalSubjectView, PluginApprovalView};
+    let fixture = Workspace::new();
+    let request = fixture.command();
+    approval::mark_listening(&fixture.home).unwrap();
+    let (send, mut receive) = mpsc::channel(1);
+    let _watch = QueueWatch::start(&fixture.home, send).unwrap();
+    let mut pending = PendingQueue::default();
+    let waiting = approval::ask(&fixture.home, &request, Duration::from_secs(10));
+    let answer = async {
+        until_pending_changes(&fixture.home, &mut pending, &mut receive).await;
+        let questions = approval::pending_requests(&fixture.home).unwrap();
+        let view = PluginApprovalView::from(&questions[0]);
+        assert!(matches!(view.subject, ApprovalSubjectView::Command { .. }));
+        assert_eq!(view.answers, [Answer::Once, Answer::Deny]);
+        assert!(approval::decide(&fixture.home, &request.id, Answer::AlwaysFolder).is_err());
+        assert_eq!(approval::pending_requests(&fixture.home).unwrap().len(), 1);
+        approval::decide(&fixture.home, &request.id, Answer::Once).unwrap();
+    };
+    let (allowed, ()) = tokio::join!(waiting, answer);
+    assert!(allowed.unwrap());
+    assert!(!fixture.question_file().exists());
+    assert!(gents::plugin::allowed::list(&fixture.home)
+        .unwrap()
+        .is_empty());
+    assert!(workspace::get(&fixture.home, &fixture.settings.workspace)
+        .unwrap()
+        .unwrap()
+        .dirs
+        .is_empty());
 }
 
 #[tokio::test]
@@ -221,8 +272,8 @@ fn a_changed_file_cannot_consume_an_approval_for_the_original_path() {
     fixture.file();
     let other = fixture.root.path().join("other.txt");
     std::fs::write(&other, b"other document").unwrap();
-    std::fs::remove_file(&fixture.request.path).unwrap();
-    std::os::unix::fs::symlink(&other, &fixture.request.path).unwrap();
+    std::fs::remove_file(fixture.request.filesystem().unwrap().path).unwrap();
+    std::os::unix::fs::symlink(&other, fixture.request.filesystem().unwrap().path).unwrap();
     assert!(approval::decide(&fixture.home, &fixture.request.id, Answer::Once).is_err());
     file_question(&fixture.home, "unaffected");
     let pending = approval::pending_requests(&fixture.home).unwrap();
@@ -239,11 +290,11 @@ fn a_changed_folder_cannot_receive_a_remembered_workspace_grant() {
     std::fs::create_dir_all(&other).unwrap();
     std::fs::write(other.join("document.txt"), b"other document").unwrap();
     std::fs::rename(
-        &fixture.request.folder,
+        fixture.request.filesystem().unwrap().folder,
         fixture.root.path().join("original"),
     )
     .unwrap();
-    std::os::unix::fs::symlink(&other, &fixture.request.folder).unwrap();
+    std::os::unix::fs::symlink(&other, fixture.request.filesystem().unwrap().folder).unwrap();
     assert!(approval::decide(&fixture.home, &fixture.request.id, Answer::AlwaysFolder).is_err());
     assert!(workspace::get(&fixture.home, &fixture.settings.workspace)
         .unwrap()
@@ -264,7 +315,7 @@ async fn a_changed_path_retires_its_waiting_question() {
     let waiting = approval::ask(&fixture.home, &fixture.request, Duration::from_secs(10));
     let remove = async {
         until_pending_changes(&fixture.home, &mut pending, &mut receive).await;
-        std::fs::remove_file(&fixture.request.path).unwrap();
+        std::fs::remove_file(fixture.request.filesystem().unwrap().path).unwrap();
     };
     let (result, ()) = tokio::join!(waiting, remove);
     assert!(result.unwrap_err().to_string().contains("path changed"));
@@ -275,8 +326,8 @@ async fn a_changed_path_retires_its_waiting_question() {
 fn a_file_replaced_by_a_directory_cannot_receive_the_file_approval() {
     let fixture = Workspace::new();
     fixture.file();
-    std::fs::remove_file(&fixture.request.path).unwrap();
-    std::fs::create_dir(&fixture.request.path).unwrap();
+    std::fs::remove_file(fixture.request.filesystem().unwrap().path).unwrap();
+    std::fs::create_dir(fixture.request.filesystem().unwrap().path).unwrap();
     assert!(approval::decide(&fixture.home, &fixture.request.id, Answer::AlwaysPath).is_err());
     assert!(workspace::get(&fixture.home, &fixture.settings.workspace)
         .unwrap()

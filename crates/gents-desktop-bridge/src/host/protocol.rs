@@ -10,7 +10,7 @@ use crate::types::{
 
 /// Change the version for incompatible framing or operation semantics.
 /// Additional commands are negotiated through the initialization inventory.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_PENDING_CALLS: usize = 32;
 
