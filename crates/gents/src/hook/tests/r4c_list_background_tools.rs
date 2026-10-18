@@ -337,17 +337,30 @@ async fn list_background_tools_reports_running_live_output_bytes() {
     // POSIX-safe single-quoted path (tempdir paths contain no single
     // quotes; assert to keep that invariant load-bearing).
     assert!(!release_path.to_string_lossy().contains('\''));
-    let quoted = format!("'{}'", release_path.display());
+    // Simple approved executable invocation per TPM direction: the gate
+    // loop lives in a script file written by the test, invoked as
+    // command=/bin/sh with the script path as a separate argument. This
+    // avoids the /bin/sh -lc inline compound-string path (validator treats
+    // an empty `args` as a shell string; the identical-shape sleep command
+    // worked at combinedc3984a342, so the inline while compound is the
+    // remaining variable). The script content is the same gate: print
+    // live, bounded wait for the release file, print done.
+    let script_path = tempdir.path().join("gate-child.sh");
+    std::fs::write(
+        &script_path,
+        format!(
+            "#!/bin/sh\nprintf live\ni=0\nwhile [ ! -e '{release}' ] && [ \"$i\" -lt 200 ]; do\n  sleep 0.05\n  i=$((i+1))\ndone\nprintf done\n",
+            release = release_path.display()
+        ),
+    )
+    .expect("write gate script");
     let handle = background_tool_with_args(
         &hook,
         "bg-live-output",
         "bash_unrestricted",
         json!({
-            "command": format!(
-                "printf live; i=0; while [ ! -e {quoted} ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done; printf done",
-                quoted = quoted
-            ),
-            "args": [],
+            "command": "/bin/sh",
+            "args": [script_path.to_string_lossy().to_string()],
             "timeout_secs": 20
         }),
     )
@@ -437,7 +450,12 @@ async fn list_background_tools_reports_running_live_output_bytes() {
         .expect("write release file");
 
     let waited = wait_tool(&hook, "wait-live-output", tool_call_id).await;
-    assert_eq!(waited["status"].as_str(), Some("completed"));
+    assert_eq!(
+        waited["status"].as_str(),
+        Some("completed"),
+        "child failed at terminal state; canonical terminal envelope: {}",
+        serde_json::to_string(&waited).unwrap()
+    );
 }
 
 #[tokio::test]
