@@ -262,7 +262,7 @@ fn authenticated_entry<'a>(
 
 pub(crate) fn goal_session_is_idle(rows: &[AgentRequestRow]) -> bool {
     rows.iter().all(|row| {
-        row.purpose == Some(RequestPurpose::TitleAudit)
+        row.purpose.is_some_and(RequestPurpose::is_auxiliary)
             || row
                 .lifecycle_state
                 .is_some_and(RequestLifecycleState::is_terminal)

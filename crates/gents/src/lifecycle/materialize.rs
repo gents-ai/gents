@@ -418,7 +418,8 @@ pub(crate) fn build_request(
             gents_protocol::request_admission::RequestPurpose::Normal => {
                 i64::from(DEFAULT_REQUEST_MAX_RETRIES)
             }
-            gents_protocol::request_admission::RequestPurpose::TitleAudit => 0,
+            gents_protocol::request_admission::RequestPurpose::TitleAudit
+            | gents_protocol::request_admission::RequestPurpose::AccessReview => 0,
         },
         |link| link.max_retries,
     );

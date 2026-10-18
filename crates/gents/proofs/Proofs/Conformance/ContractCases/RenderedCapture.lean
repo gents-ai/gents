@@ -387,7 +387,8 @@ def captureOrderCases : List CaptureOrderCase :=
   , orderCase "turn_dominates_attempt" .inference 1 0 5 .inference 1 1 0
   , orderCase "kind_rank_dominates_seq" .inference 9 9 9 .compaction 1 0 0
   , orderCase "fallback_ranks_after_compaction" .compaction 5 0 0 .compactionFallback 1 0 0
-  , orderCase "oneshot_ranks_last" .title 1 0 0 .oneshot 1 0 0
+  , orderCase "oneshot_follows_title" .title 1 0 0 .oneshot 1 0 0
+  , orderCase "access_review_preserves_existing_kind_order" .oneshot 9 9 9 .accessReview 1 0 0
   , orderCase "equal_keys_do_not_order" .inference 1 2 3 .inference 1 2 3
   ]
 
@@ -398,7 +399,8 @@ theorem captureOrderCases_pinned :
       , ("turn_dominates_attempt", true)
       , ("kind_rank_dominates_seq", true)
       , ("fallback_ranks_after_compaction", true)
-      , ("oneshot_ranks_last", true)
+      , ("oneshot_follows_title", true)
+      , ("access_review_preserves_existing_kind_order", true)
       , ("equal_keys_do_not_order", false)
       ] := by
   rfl

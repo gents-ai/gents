@@ -301,7 +301,8 @@ def titleRequestAdmissionCases : List TitleRequestAdmissionCase :=
   let stalePhysical := { titleEvidence with auxiliaryParent := some stalePhysicalParent }
   [ titleRequestAdmissionCase "valid-access-review-parent-processing" review signedReview
       (some titleEvidence) .processing
-  , titleRequestAdmissionCase "access-review-purpose-signature-replay" review signed
+  , titleRequestAdmissionCase "access-review-purpose-signature-replay" review
+      (signTitleAdmission { review with purpose := .titleAudit })
       (some titleEvidence) .processing
   , titleRequestAdmissionCase "access-review-observation-unavailable" review signedReview
       (some titleEvidence) .processing "b" false

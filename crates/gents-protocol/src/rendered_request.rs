@@ -72,6 +72,8 @@ pub enum CaptureScopeKind {
     Title,
     /// The one-shot runner.
     OneShot,
+    /// A workspace access review with audit-only output.
+    AccessReview,
 }
 
 impl CaptureScopeKind {
@@ -82,6 +84,7 @@ impl CaptureScopeKind {
             Self::CompactionFallback => "compaction_fallback",
             Self::Title => "title",
             Self::OneShot => "oneshot",
+            Self::AccessReview => "access_review",
         }
     }
 
@@ -92,7 +95,19 @@ impl CaptureScopeKind {
             "compaction_fallback" => Some(Self::CompactionFallback),
             "title" => Some(Self::Title),
             "oneshot" => Some(Self::OneShot),
+            "access_review" => Some(Self::AccessReview),
             _ => None,
+        }
+    }
+
+    pub const fn request_purpose(self) -> crate::request_admission::RequestPurpose {
+        use crate::request_admission::RequestPurpose;
+        match self {
+            Self::Title => RequestPurpose::TitleAudit,
+            Self::AccessReview => RequestPurpose::AccessReview,
+            Self::Inference | Self::Compaction | Self::CompactionFallback | Self::OneShot => {
+                RequestPurpose::Normal
+            }
         }
     }
 }

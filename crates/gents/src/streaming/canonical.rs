@@ -312,9 +312,9 @@ pub(crate) async fn close_provider_attempt_at(
                             "partial close replay changed its closure candidate"
                         );
                     }
-                    if request.purpose
-                        == Some(gents_protocol::request_admission::RequestPurpose::TitleAudit)
-                    {
+                    if request.purpose.is_some_and(
+                        gents_protocol::request_admission::RequestPurpose::is_auxiliary,
+                    ) {
                         match existing.segment.close.as_ref() {
                             Some(SourceClose::Closed { .. }) => validate_closed_source_extent(
                                 &records,
@@ -343,8 +343,9 @@ pub(crate) async fn close_provider_attempt_at(
                     )
                     .await;
                 }
-                if request.purpose
-                    == Some(gents_protocol::request_admission::RequestPurpose::TitleAudit)
+                if request
+                    .purpose
+                    .is_some_and(gents_protocol::request_admission::RequestPurpose::is_auxiliary)
                     && closures.len() > 1
                 {
                     return Err(ReconstructionError::ConflictingClosures {
@@ -1273,10 +1274,12 @@ pub(crate) fn validate_source_purpose(
     purpose: gents_protocol::request_admission::RequestPurpose,
     source: &OutputSource,
 ) -> Result<()> {
-    let title = matches!(source, OutputSource::ProviderTurn { scope, .. }
-        if scope.kind == gents_protocol::rendered_request::CaptureScopeKind::Title);
+    let expected = match source {
+        OutputSource::ProviderTurn { scope, .. } => scope.kind.request_purpose(),
+        _ => gents_protocol::request_admission::RequestPurpose::Normal,
+    };
     anyhow::ensure!(
-        title == (purpose == gents_protocol::request_admission::RequestPurpose::TitleAudit),
+        purpose == expected,
         "output source does not match its request purpose"
     );
     Ok(())

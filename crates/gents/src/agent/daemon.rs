@@ -411,7 +411,7 @@ impl<M: ProviderModel> AgentDaemon<M> {
                 }
             };
 
-            if request.purpose == gents_protocol::request_admission::RequestPurpose::TitleAudit {
+            if request.purpose.is_auxiliary() {
                 self.spawn_title_audit_request(&mut title_tasks, request, shutdown.clone());
                 continue;
             }
