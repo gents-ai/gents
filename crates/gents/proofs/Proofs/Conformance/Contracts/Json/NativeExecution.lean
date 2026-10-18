@@ -691,7 +691,7 @@ def accessReviewCases : List Case :=
   , mkCase "normal_request_rejects_access_review_source" (world 5)
       [.appendRaw 1 5 (AuxiliaryCases.observed .accessReview),
        .appendRaw 1 6 (raw 102 0 0 6)]
-  , mkCase "access_review_interruption_retains_partial_audit" reviewProcessing
+  , mkCase "access_review_partial_output_is_audit_only" reviewProcessing
       [.appendRaw 1 5 (AuxiliaryCases.observed .accessReview),
        .closePartial 6 7
          ⟨{ AuxiliaryCases.close .accessReview .«partial» with createdAt := 6 }, none⟩,
@@ -814,7 +814,8 @@ def recoveryItemJson (value : RecoveryItem) : String :=
     (value.message.map canonicalMessageJson).getD "null" ++ "}"
 
 private def auxiliaryBindingJson (binding : Handover.AuxiliaryBinding) : String :=
-  "{\"physical_request\":" ++ toString binding.physicalRequest ++
+  "{\"purpose\":" ++ jsonString binding.purpose.toWire ++
+    ",\"physical_request\":" ++ toString binding.physicalRequest ++
     ",\"logical_request\":" ++ toString binding.logicalRequest ++
     ",\"parent_physical\":" ++ toString binding.parentPhysical ++
     ",\"parent_logical\":" ++ toString binding.parentLogical ++

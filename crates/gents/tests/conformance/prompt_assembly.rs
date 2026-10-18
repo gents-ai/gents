@@ -969,6 +969,9 @@ fn native_replay_tag(
                     crate::lean_vocab_test::LeanAuxiliaryKind::Title => {
                         gents_protocol::rendered_request::CaptureScopeKind::Title
                     }
+                    crate::lean_vocab_test::LeanAuxiliaryKind::AccessReview => {
+                        gents_protocol::rendered_request::CaptureScopeKind::AccessReview
+                    }
                 },
                 seq: *scope,
             },

@@ -267,7 +267,7 @@ async fn fork_in_txn(
         let purpose =
             gents_protocol::request_admission::RequestPurpose::try_from(text(&request, "purpose")?)
                 .map_err(anyhow::Error::msg)?;
-        if purpose == gents_protocol::request_admission::RequestPurpose::TitleAudit {
+        if purpose.is_auxiliary() {
             continue;
         }
         if RequestLifecycleState::parse(text(&request, "lifecycle_state")?)?.is_active_runtime() {

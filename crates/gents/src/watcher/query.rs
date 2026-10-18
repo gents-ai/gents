@@ -247,7 +247,7 @@ impl DefraWatcher {
             PreclaimSignal::None => {}
         }
 
-        if request.purpose == gents_protocol::request_admission::RequestPurpose::TitleAudit {
+        if request.purpose.is_auxiliary() {
             return Ok(true);
         }
 
@@ -369,7 +369,8 @@ fn claimable_pending_rows_from_rows(rows: Vec<AgentRequestRow>) -> Vec<AgentRequ
     let blocked_sessions = rows
         .iter()
         .filter(|row| {
-            row.purpose != Some(gents_protocol::request_admission::RequestPurpose::TitleAudit)
+            !row.purpose
+                .is_some_and(gents_protocol::request_admission::RequestPurpose::is_auxiliary)
         })
         .filter(|row| !is_pending(row))
         .filter_map(|row| row.session_id.clone())
@@ -399,8 +400,9 @@ fn claimable_pending_rows_from_rows(rows: Vec<AgentRequestRow>) -> Vec<AgentRequ
         let session_blocked = blocked_sessions.contains(session_id);
 
         if row_is_pending {
-            let title =
-                row.purpose == Some(gents_protocol::request_admission::RequestPurpose::TitleAudit);
+            let auxiliary = row
+                .purpose
+                .is_some_and(gents_protocol::request_admission::RequestPurpose::is_auxiliary);
             match preclaim_signal(&row) {
                 PreclaimSignal::Terminal => claimable.push(row.clone()),
                 PreclaimSignal::Malformed => {
@@ -411,12 +413,12 @@ fn claimable_pending_rows_from_rows(rows: Vec<AgentRequestRow>) -> Vec<AgentRequ
                     );
                 }
                 PreclaimSignal::None => {
-                    if title || (!session_blocked && !pending_session_seen) {
+                    if auxiliary || (!session_blocked && !pending_session_seen) {
                         claimable.push(row.clone());
                     }
                 }
             }
-            if !title {
+            if !auxiliary {
                 seen_pending_sessions.insert(session_id.to_string());
             }
         }

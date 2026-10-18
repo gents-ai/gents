@@ -40,6 +40,7 @@ fn modeled_scope(case: &LeanAuxiliaryOutputCase) -> (CaptureScope, usize, u32) {
         LeanAuxiliaryKind::Compaction => CaptureScopeKind::Compaction,
         LeanAuxiliaryKind::CompactionFallback => CaptureScopeKind::CompactionFallback,
         LeanAuxiliaryKind::Title => CaptureScopeKind::Title,
+        LeanAuxiliaryKind::AccessReview => CaptureScopeKind::AccessReview,
     };
     (
         CaptureScope { kind, seq: *scope },

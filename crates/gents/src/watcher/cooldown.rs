@@ -60,9 +60,7 @@ fn mark_processed(
     request: &AgentRequest,
     now: Instant,
 ) {
-    let queue_session = (request.purpose
-        != gents_protocol::request_admission::RequestPurpose::TitleAudit)
-        .then(|| request.session_id.clone());
+    let queue_session = (!request.purpose.is_auxiliary()).then(|| request.session_id.clone());
     if let Some(session) = &queue_session {
         processed_request_ids.retain(|request_id, mark| {
             request_id == &request.request_id || mark.queue_session.as_ref() != Some(session)

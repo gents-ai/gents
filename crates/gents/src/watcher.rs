@@ -146,21 +146,20 @@ pub fn validate_agent_request(req: &AgentRequest) -> Result<()> {
     let has_parent_tc = req.caused_by_parent_tool_call_id.is_some();
     let has_parent_req_doc = req.caused_by_parent_request_doc_id.is_some();
     let has_parent_tc_doc = req.caused_by_parent_tool_call_doc_id.is_some();
-    let title_parent_link =
-        req.purpose == gents_protocol::request_admission::RequestPurpose::TitleAudit;
-    if title_parent_link {
+    let auxiliary_parent_link = req.purpose.is_auxiliary();
+    if auxiliary_parent_link {
         anyhow::ensure!(
             has_parent_req
                 && has_parent_req_doc
                 && !has_parent_tc
                 && !has_parent_tc_doc
                 && req.request_hop == 0,
-            "title audit requires parent-only provenance, not delegated authority"
+            "auxiliary request requires parent-only provenance, not delegated authority"
         );
     }
     let request_only_control_link = has_parent_req
         && !has_parent_tc
-        && (title_parent_link
+        && (auxiliary_parent_link
             || req.input.queue.as_ref().is_some_and(|queue| {
                 matches!(
                     queue.source,

@@ -162,7 +162,7 @@ fn project_catalog(
     })
 }
 
-/// A title call enters the parent-inclusive total only through its
+/// An auxiliary call enters the parent-inclusive total only through its
 /// historically verified signed parent link.
 pub async fn load_parent_inclusive_audit_usage(
     node: &EmbeddedNode,
@@ -203,23 +203,23 @@ pub async fn load_parent_inclusive_audit_usage(
     let response = graphql_with_transaction_retry(
         node,
         &format!(
-            r#"{{ AgentRequest(filter: {{ caused_by_parent_request_doc_id: {{ _eq: "{parent_doc}" }}, purpose: {{ _eq: "title-audit" }} }}) {{ {} }} }}"#,
+            r#"{{ AgentRequest(filter: {{ caused_by_parent_request_doc_id: {{ _eq: "{parent_doc}" }}, purpose: {{ _in: ["title-audit", "access-review"] }} }}) {{ {} }} }}"#,
             crate::request_admission::SIGNED_REQUEST_FIELDS
         ),
-        "load title audit usage receipts",
+        "load auxiliary audit usage receipts",
     )
     .await?;
-    let titles: Vec<AgentRequestRow> = required_rows(&response, "AgentRequest")?;
+    let auxiliaries: Vec<AgentRequestRow> = required_rows(&response, "AgentRequest")?;
     let mut request_ids = BTreeMap::new();
     request_ids.insert(parent_doc_id.to_owned(), parent_id.to_owned());
-    for title in &titles {
-        crate::request_admission::verify_historical_title_receipt(title, parent)?;
-        let title_doc = nonempty(title.doc_id.as_deref(), "title physical request")?;
+    for request in &auxiliaries {
+        crate::request_admission::verify_historical_auxiliary_receipt(request, parent)?;
+        let request_doc = nonempty(request.doc_id.as_deref(), "auxiliary physical request")?;
         anyhow::ensure!(
             request_ids
-                .insert(title_doc.to_owned(), title.request_id.clone())
+                .insert(request_doc.to_owned(), request.request_id.clone())
                 .is_none(),
-            "duplicate title request physical identity"
+            "duplicate auxiliary request physical identity"
         );
     }
 
@@ -233,7 +233,7 @@ pub async fn load_parent_inclusive_audit_usage(
         &format!(
             r#"{{ InferenceCall(filter: {{ request_doc_id: {{ _in: [{docs}] }} }}) {{ _docID node_did call_id request_doc_id request_id backend_id call_state ended_at prompt_tokens completion_tokens }} }}"#
         ),
-        "load exact parent and title inference usage",
+        "load exact parent and auxiliary inference usage",
     )
     .await?;
     let raw_calls = response
@@ -249,7 +249,7 @@ pub async fn load_parent_inclusive_audit_usage(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lean_vocab_test::{LeanRequestPurpose, LeanTitleUsageCase, LeanTitleUsageResult};
+    use crate::lean_vocab_test::{LeanTitleUsageCase, LeanTitleUsageResult};
 
     #[test]
     fn request_index_rows_preserve_exact_node_usage_and_ignore_malformed_twins() {
@@ -298,7 +298,8 @@ mod tests {
             case.parent.logical.to_string(),
         );
         for fact in &case.signed_purposes {
-            if fact.purpose == LeanRequestPurpose::TitleAudit {
+            if gents_protocol::request_admission::RequestPurpose::from(fact.purpose).is_auxiliary()
+            {
                 request_ids.insert(
                     format!("request-{}", fact.physical),
                     case.title_bindings
@@ -391,6 +392,7 @@ mod tests {
         let names = [
             "normal_public_usage",
             "title_audit_only",
+            "access_review_usage_is_parent_inclusive_audit_only",
             "normal_plus_title_parent_inclusive",
             "title_late_usage_after_parent_terminal",
             "exact_duplicate_call_counts_once",

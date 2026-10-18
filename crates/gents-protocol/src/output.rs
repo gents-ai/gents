@@ -46,7 +46,8 @@ impl OutputSource {
                     scope: CaptureScope {
                         kind: CaptureScopeKind::Compaction
                             | CaptureScopeKind::CompactionFallback
-                            | CaptureScopeKind::Title,
+                            | CaptureScopeKind::Title
+                            | CaptureScopeKind::AccessReview,
                         ..
                     },
                     ..

@@ -15,10 +15,7 @@ use crate::lean_vocab_test::{
 use crate::schema::ensure_runtime_schemas;
 
 fn native_purpose(purpose: LeanRequestPurpose) -> RequestPurpose {
-    match purpose {
-        LeanRequestPurpose::Normal => RequestPurpose::Normal,
-        LeanRequestPurpose::TitleAudit => RequestPurpose::TitleAudit,
-    }
+    purpose.into()
 }
 
 fn model_text_fields(hex_fields: &[String]) -> Vec<String> {
@@ -234,10 +231,10 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
             Some(model_text_fields(&case.request.model_trigger_fields_hex).join(""));
     }
 
-    assert_eq!(
-        case.admission.model_signed_fields_hex, case.admission.model_expected_fields_hex,
-        "covered cases must have exact modeled signed fields"
-    );
+    let actual_purpose = create.purpose;
+    let signed_fields = model_text_fields(&case.admission.model_signed_fields_hex);
+    create.purpose = RequestPurpose::try_from(signed_fields[2].as_str())
+        .expect("modeled signed purpose has a native representation");
     if !case.admission.signature_valid {
         super::sign_agent_request_create(identity.as_ref(), &mut create)
             .await
@@ -249,10 +246,11 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
             .expect("sign modeled title request");
     }
 
+    create.purpose = actual_purpose;
     let doc_id = insert_request(&node, &create).await;
     let queued = super::load_request_for_admission_test(node.as_ref(), &doc_id)
         .await
-        .expect("load queued request");
+        .unwrap_or_else(|error| panic!("{}: load queued request: {error:#}", case.name));
     if !case.pending_deadline_absent {
         update_request_field(&node, &doc_id, "deadline", &case.request.created_at).await;
     }
@@ -289,8 +287,15 @@ async fn generated_title_admission_cases_bind_representable_fresh_verifier_subse
             | "forged-physical-parent"
             | "tool-linked-parent"
             | "signed-purpose-mutation"
-            | "missing-parent-evidence" => unbound += 1,
-            "valid-title-parent-completed"
+            | "missing-parent-evidence"
+            | "access-review-observation-unavailable" => unbound += 1,
+            "valid-access-review-parent-processing"
+            | "access-review-purpose-signature-replay"
+            | "access-review-stale-parent-document"
+            | "access-review-parent-session-mismatch"
+            | "access-review-queue-control-forbidden"
+            | "access-review-local-self-forbidden"
+            | "valid-title-parent-completed"
             | "valid-title-parent-processing"
             | "present-preclaim-deadline"
             | "forged-requester"
@@ -312,6 +317,6 @@ async fn generated_title_admission_cases_bind_representable_fresh_verifier_subse
             other => panic!("unclassified generated title admission case: {other}"),
         }
     }
-    assert_eq!(covered, 16, "all representable generated cases must run");
-    assert_eq!(unbound, 7, "unbound cases must remain explicit");
+    assert_eq!(covered, 22, "all representable generated cases must run");
+    assert_eq!(unbound, 8, "unbound cases must remain explicit");
 }
