@@ -283,6 +283,7 @@ inductive CaptureScopeKind
   | compactionFallback
   | title
   | oneshot
+  | accessReview
   deriving Repr, DecidableEq
 
 def CaptureScopeKind.label : CaptureScopeKind → String
@@ -291,6 +292,7 @@ def CaptureScopeKind.label : CaptureScopeKind → String
   | .compactionFallback => "compaction_fallback"
   | .title => "title"
   | .oneshot => "oneshot"
+  | .accessReview => "access_review"
 
 /-- Declaration-order rank across kinds; not a temporal order. -/
 def CaptureScopeKind.rank : CaptureScopeKind → Nat
@@ -299,9 +301,10 @@ def CaptureScopeKind.rank : CaptureScopeKind → Nat
   | .compactionFallback => 2
   | .title => 3
   | .oneshot => 4
+  | .accessReview => 5
 
 def allCaptureScopeKinds : List CaptureScopeKind :=
-  [.inference, .compaction, .compactionFallback, .title, .oneshot]
+  [.inference, .compaction, .compactionFallback, .title, .oneshot, .accessReview]
 
 structure CaptureScopeCase where
   label : String

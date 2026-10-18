@@ -661,17 +661,17 @@ theorem Trace.closureUnique {before after : World} (trace : Trace before after)
           exact closureUnique_of_segments_eq unique
             (by simpa using (congrArg (fun w : World => w.segments)
               (Handover.successful_claim_frame before world actor now activation hc)))
-  | activateTitle actor now activation scope budget deadline h =>
+  | activateAuxiliary actor now activation scope budget deadline h =>
       rename_i before after
-      unfold SessionComposition.activateTitle at h
-      cases hc : Handover.claimTitle before actor now activation with
+      unfold SessionComposition.activateAuxiliary at h
+      cases hc : Handover.claimAuxiliary before actor now activation with
       | none => simp [hc] at h
       | some world =>
           simp [hc] at h
           cases h
           exact closureUnique_of_segments_eq unique
             (by simpa using (congrArg (fun w : World => w.segments)
-              (Handover.successful_title_claim_frame before world actor now activation hc)))
+              (Handover.successful_auxiliary_claim_frame before world actor now activation hc)))
   | finish actor acknowledged h =>
       rename_i before after
       unfold SessionComposition.finish at h

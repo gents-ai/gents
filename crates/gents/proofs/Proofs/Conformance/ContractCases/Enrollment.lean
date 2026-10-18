@@ -203,10 +203,10 @@ structure TitleRequestAdmissionCase where
   expectedPendingState : Option RequestState
   deriving Repr
 
-def titleParentLink : TitleParentLink :=
+def titleParentLink : AuxiliaryParentLink :=
   { requestId := "p", documentId := "P" }
 
-def titleParentEvidence : TitleParentEvidence :=
+def titleParentEvidence : AuxiliaryParentEvidence :=
   { link := titleParentLink, nodeDid := "a"
   , sessionId := "s", agentId := "b"
   , logicalBindingCurrent := true, physicalBindingCurrent := true }
@@ -217,7 +217,7 @@ def titleRequest : AgentRequestSemantics :=
   , agentId := "b", sessionId := "s"
   , content := "Generate a title", input := {}, createdAt := "2026-09-24T00:00:00Z"
   , triggerConfigDocumentId := "", retryFields := [], triggerFields := []
-  , parentFields := titleParentFields titleParentLink, workspace := {} }
+  , parentFields := auxiliaryParentFields titleParentLink, workspace := {} }
 
 def titleAdmissionUnsigned : AgentRequestAdmission :=
   { kind := .runtimeInternal, signerDid := "a"
@@ -235,7 +235,7 @@ def titleEvidence : RuntimeInternalEvidence :=
   , sourceBindingCurrent := true, triggerConfigDocumentBindingCurrent := false
   , sourceDocumentBindingCurrent := true
   , targetPolicyAllows := false
-  , titleParent := some titleParentEvidence }
+  , auxiliaryParent := some titleParentEvidence }
 
 def signTitleAdmission (request : AgentRequestSemantics)
     (admission : AgentRequestAdmission := titleAdmissionUnsigned) : AgentRequestAdmission :=
@@ -263,19 +263,21 @@ private def titleRequestAdmissionCase (name : String) (request : AgentRequestSem
       request admission none none false evidence branchFieldsExact pendingDeadlineAbsent
       ⟨false, CausalHop.defaultMaxRequestHop⟩ sessionAgent []
       (fun _ => false) (fun _ => false))
-  , expectedDisposition := titlePendingDisposition observationAvailable ({} : Enrollment.State)
+  , expectedDisposition := auxiliaryPendingDisposition observationAvailable ({} : Enrollment.State)
       request admission evidence sessionAgent branchFieldsExact pendingDeadlineAbsent
       CausalHop.defaultMaxRequestHop
-  , expectedPendingState := (titlePendingStep? observationAvailable ({} : Enrollment.State)
+  , expectedPendingState := (auxiliaryPendingStep? observationAvailable ({} : Enrollment.State)
       request admission evidence sessionAgent branchFieldsExact pendingDeadlineAbsent
       CausalHop.defaultMaxRequestHop titlePendingContext).map (·.state) }
 
 def titleRequestAdmissionCases : List TitleRequestAdmissionCase :=
   let signed := signTitleAdmission titleRequest
   let normal := { titleRequest with purpose := .normal }
+  let review := { titleRequest with purpose := .accessReview, content := "Review workspace access" }
+  let signedReview := signTitleAdmission review
   let forgedRequester := { titleRequest with requesterDid := "did:key:forged" }
   let wrongParent := { titleRequest with
-    parentFields := titleParentFields { titleParentLink with documentId := "forged-doc" } }
+    parentFields := auxiliaryParentFields { titleParentLink with documentId := "forged-doc" } }
   let toolParent := { titleRequest with
     parentFields := textFieldsToBytes ["some", titleParentLink.requestId,
       "some", titleParentLink.documentId, "some", "forged-tool", "some", "forged-tool-doc"] }
@@ -292,12 +294,28 @@ def titleRequestAdmissionCases : List TitleRequestAdmissionCase :=
     input := ({ initialTitle := some suppliedTitleValue } : RequestInput) }
   let retry := { titleRequest with retryFields := textFieldsToBytes ["retry-parent"] }
   let trigger := { titleRequest with triggerFields := textFieldsToBytes ["trigger"] }
-  let noParent := { titleEvidence with titleParent := none }
+  let noParent := { titleEvidence with auxiliaryParent := none }
   let wrongSessionParent := { titleParentEvidence with sessionId := "different-session" }
-  let wrongSession := { titleEvidence with titleParent := some wrongSessionParent }
+  let wrongSession := { titleEvidence with auxiliaryParent := some wrongSessionParent }
   let stalePhysicalParent := { titleParentEvidence with physicalBindingCurrent := false }
-  let stalePhysical := { titleEvidence with titleParent := some stalePhysicalParent }
-  [ titleRequestAdmissionCase "valid-title-parent-completed" titleRequest signed (some titleEvidence)
+  let stalePhysical := { titleEvidence with auxiliaryParent := some stalePhysicalParent }
+  [ titleRequestAdmissionCase "valid-access-review-parent-processing" review signedReview
+      (some titleEvidence) .processing
+  , titleRequestAdmissionCase "access-review-purpose-signature-replay" review signed
+      (some titleEvidence) .processing
+  , titleRequestAdmissionCase "access-review-observation-unavailable" review signedReview
+      (some titleEvidence) .processing "b" false
+  , titleRequestAdmissionCase "access-review-stale-parent-document" review signedReview
+      (some stalePhysical) .processing
+  , titleRequestAdmissionCase "access-review-parent-session-mismatch" review signedReview
+      (some wrongSession) .processing
+  , titleRequestAdmissionCase "access-review-queue-control-forbidden"
+      { review with input := queued.input }
+      (signTitleAdmission { review with input := queued.input }) (some titleEvidence) .processing
+  , titleRequestAdmissionCase "access-review-local-self-forbidden" review
+      (signTitleAdmission review { titleAdmissionUnsigned with kind := .localSelf })
+      (some titleEvidence) .processing
+  , titleRequestAdmissionCase "valid-title-parent-completed" titleRequest signed (some titleEvidence)
   , titleRequestAdmissionCase "valid-title-parent-processing" titleRequest signed
       (some titleEvidence) .processing
   , titleRequestAdmissionCase "ordinary-signed-control-preserved" normal
@@ -356,7 +374,9 @@ def titlePurposeWireCases : List TitlePurposeWireCase :=
   [ makeCase "missing-purpose-is-invalid" none
   , makeCase "unknown-purpose-is-invalid" (some "titleAudit")
   , makeCase "normal-purpose-explicit" (some "normal")
-  , makeCase "title-purpose-explicit" (some "title-audit") ]
+  , makeCase "title-purpose-explicit" (some "title-audit")
+  , makeCase "access-review-purpose-explicit" (some "access-review")
+  , makeCase "access-review-camel-case-is-invalid" (some "accessReview") ]
 
 open Enrollment
 
