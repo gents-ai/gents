@@ -5,6 +5,16 @@ export type ActionEntry = {
   launcher?: RenderedToolCallView;
 };
 
+export function actionStatus(tool: RenderedToolCallView): string {
+  const status = tool.statusKind.toLowerCase();
+  return status === "error" &&
+    ["userCancelled", "interrupted", "unknown"].includes(
+      tool.cancelCause?.cause ?? "",
+    )
+    ? "cancelled"
+    : status;
+}
+
 export function actionItemKeys({ tool, launcher }: ActionEntry): string[] {
   return launcher ? [tool.itemKey, launcher.itemKey] : [tool.itemKey];
 }
