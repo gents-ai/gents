@@ -127,6 +127,13 @@ function ActivityDetails({
 
 export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
   const [selected, setSelected] = useState<ActionEntry | null>(null);
+  const buttons = useRef(new Map<string, HTMLButtonElement>());
+  const focusAfterClose = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (selected || !focusAfterClose.current) return;
+    buttons.current.get(focusAfterClose.current)?.focus();
+    focusAfterClose.current = null;
+  }, [selected]);
   if (tools.length === 0) return null;
   const sections: ActionEntry[][] = [];
   for (const entry of actionEntries(tools)) {
@@ -156,6 +163,12 @@ export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
         return (
           <button
             key={entry.tool.itemKey}
+            ref={(element) => {
+              for (const item of entries) {
+                if (element) buttons.current.set(item.tool.itemKey, element);
+                else buttons.current.delete(item.tool.itemKey);
+              }
+            }}
             type="button"
             className={`tool-activity-row${running ? " is-running" : ""}${failed ? " has-errors" : ""}`}
             aria-haspopup="dialog"
@@ -200,7 +213,10 @@ export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
               ? undefined
               : selected.tool.itemKey
           }
-          onClose={() => setSelected(null)}
+          onClose={() => {
+            focusAfterClose.current = selected.tool.itemKey;
+            setSelected(null);
+          }}
         />
       ) : null}
     </>
