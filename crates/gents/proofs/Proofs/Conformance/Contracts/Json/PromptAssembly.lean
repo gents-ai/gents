@@ -577,7 +577,7 @@ def promptAssemblyServiceTierCasesJson : String :=
   jsonArray (PromptAssembly.ServiceTier.cases.map fun witness =>
     let expected := PromptAssembly.ServiceTier.decide witness.family witness.requested
     "{\"family\":" ++ jsonString witness.family.wireName ++
-    ",\"requested\":" ++ jsonOptionalString (witness.requested.map (·.wireName)) ++
+    ",\"requested\":" ++ jsonOptionalString (witness.requested.map (·.configName)) ++
     ",\"allowed\":" ++ boolString expected.allowed ++
     ",\"wire\":" ++ jsonOptionalString expected.wire ++ "}")
 
