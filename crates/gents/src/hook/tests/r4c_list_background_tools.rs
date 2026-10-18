@@ -148,6 +148,27 @@ async fn wait_tool(hook: &DefraSessionHook, internal_call_id: &str, tool_call_id
     )
 }
 
+/// wait_process with an explicit bounded timeout_secs (no polling loop):
+/// the failure diagnostic path uses 1s so an unfinished child is reported
+/// as wait_timeout with its current evidence instead of blocking 30s.
+async fn wait_tool_with_timeout(
+    hook: &DefraSessionHook,
+    internal_call_id: &str,
+    tool_call_id: &str,
+    timeout_secs: u64,
+) -> Value {
+    skip_reason_json(
+        accepted_call(
+            hook,
+            "wait_process",
+            Some(format!("model-{internal_call_id}")),
+            internal_call_id,
+            &json!({ "tool_call_id": tool_call_id, "timeout_secs": timeout_secs }).to_string(),
+        )
+        .await,
+    )
+}
+
 async fn read_tool(hook: &DefraSessionHook, internal_call_id: &str, tool_call_id: &str) -> Value {
     skip_reason_json(
         accepted_call(
@@ -155,7 +176,7 @@ async fn read_tool(hook: &DefraSessionHook, internal_call_id: &str, tool_call_id
             "read_process",
             Some(format!("model-{internal_call_id}")),
             internal_call_id,
-            &json!({ "tool_call_id": tool_call_id, "offset": 0, "max_tokens": 1024 }).to_string(),
+            &json!({ "tool_call_id": tool_call_id, "offset": 0, "max_tokens": 64 }).to_string(),
         )
         .await,
     )
@@ -414,6 +435,31 @@ async fn list_background_tools_reports_running_live_output_bytes() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
+    // Failure diagnostics run BEFORE any observations/mid-run asserts and
+    // use an explicit found-boolean (entry starts as json!({}), so is_null
+    // can never be true - reviewer-caught bug in 452e0c4a).
+    let found = !entry.as_object().is_some_and(|o| o.is_empty());
+    if !found {
+        let waited_failure = wait_tool_with_timeout(
+            &hook,
+            "wait-failure",
+            tool_call_id,
+            1, // explicit timeout_secs=1: bounded, not 10 loops at the 30s default
+        )
+        .await;
+        let read_failure = read_tool(&hook, "read-failure", tool_call_id).await;
+        panic!(
+            "gate window closed with an empty observation list; \
+             tool_call_id {tool_call_id} never appeared in any list response; \
+             last response: {last_response}; \
+             persisted-row snapshot: {}; \
+             wait envelope (timeout_secs=1): {}; \
+             bounded read (min 64 tokens): {}",
+            serde_json::to_string(&persisted_row_snapshot(&hook, tool_call_id).await).unwrap(),
+            serde_json::to_string(&waited_failure).unwrap(),
+            read_failure["output"].as_str().unwrap_or("<no output>")
+        );
+    }
     assert!(
         !observations.is_empty(),
         "tool_call_id {tool_call_id} never appeared in any list response; \
@@ -421,34 +467,6 @@ async fn list_background_tools_reports_running_live_output_bytes() {
          persisted-row snapshot: {}",
         serde_json::to_string(&persisted_row_snapshot(&hook, tool_call_id).await).unwrap()
     );
-    // Failure-branch terminal inspection BEFORE mid-run asserts: if the
-    // child reached a terminal state without ever presenting the expected
-    // running/4-byte observation, capture its canonical terminal envelope
-    // via the model tools (wait_process bounded, then read_process) so the
-    // actual exit/error reason is visible. Sanitized in the panic message:
-    // status/error tokens only, no raw payload echo beyond the bounded
-    // read output.
-    if entry.is_null() {
-        let mut waited_failure = json!(null);
-        for attempt in 0..10 {
-            waited_failure =
-                wait_tool(&hook, &format!("wait-failure-{attempt}"), tool_call_id).await;
-            if waited_failure["status"].as_str().is_some_and(|status| {
-                status == "completed" || status == "failed" || status == "cancelled"
-            }) {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        }
-        let read_failure = read_tool(&hook, "read-failure", tool_call_id).await;
-        panic!(
-            "gate-window closed without the expected mid-run observation; \
-             terminal envelope: {}; \
-             bounded read (last 1024 bytes): {}",
-            serde_json::to_string(&waited_failure).unwrap(),
-            read_failure["output"].as_str().unwrap_or("<no output>")
-        );
-    }
     assert_eq!(entry["tool_name"].as_str(), Some("bash_unrestricted"),
         "no running observation with stdout_bytes==4 within the gate window; per-attempt status/bytes: {observations:?}; last response: {last_response}");
     assert_eq!(entry["status"].as_str(), Some("running"));
