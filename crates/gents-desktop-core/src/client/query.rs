@@ -324,10 +324,14 @@ impl SelectedRequestLookup {
                 "canonical session head did not resolve to its exact physical request"
             );
         }
-        anyhow::ensure!(
-            !selected.is_empty(),
-            "selected request refresh found no physical request for the canonical session owner"
-        );
+        if selected.is_empty() {
+            // A signed client request can arrive after its independently created session.
+            return Err(crate::error::BridgeError::new(
+                crate::error::BridgeErrorCode::ProjectionPending,
+                "selected request has not reached the session owner yet",
+            )
+            .into());
+        }
         Ok(selected)
     }
 }
