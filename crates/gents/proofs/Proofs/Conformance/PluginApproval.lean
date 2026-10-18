@@ -120,7 +120,11 @@ def scopedCommandCases : List Json :=
   scopeObservations.flatMap fun available =>
   histories.map fun history => scopedCase .command false false available history
 
-def scopedCases : List Json := scopedFileCases ++ scopedCommandCases
+def scopedMutationCases : List Json :=
+  scopeObservations.flatMap fun available =>
+  histories.map fun history => scopedCase .fileMutation false true available history
+
+def scopedCases : List Json := scopedFileCases ++ scopedCommandCases ++ scopedMutationCases
 
 def casesJson : Json := toJson (unscopedCases ++ scopedCases)
 
@@ -128,6 +132,7 @@ example : histories.length = 33 := by native_decide
 example : unscopedCases.length = 1188 := by native_decide
 example : scopedFileCases.length = 660 := by native_decide
 example : scopedCommandCases.length = 165 := by native_decide
-example : scopedCases.length = 825 := by native_decide
+example : scopedMutationCases.length = 165 := by native_decide
+example : scopedCases.length = 990 := by native_decide
 
 end Conformance.PluginApproval
