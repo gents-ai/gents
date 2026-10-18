@@ -2032,7 +2032,14 @@ async fn linter_fallback_obeys_its_total_deadline() {
     let workspace = tempfile::tempdir().unwrap();
     let host = tempfile::tempdir().unwrap();
     let linter_path = host.path().join("hung-biome");
-    std::fs::write(&linter_path, "#!/bin/sh\nsleep 5\n").unwrap();
+    std::fs::write(
+        &linter_path,
+        r#"#!/bin/sh
+: > "$0.started"
+exec sleep 30
+"#,
+    )
+    .unwrap();
     let mut permissions = std::fs::metadata(&linter_path).unwrap().permissions();
     permissions.set_mode(0o755);
     std::fs::set_permissions(&linter_path, permissions).unwrap();
@@ -2060,45 +2067,50 @@ async fn linter_fallback_obeys_its_total_deadline() {
         "s-linter-deadline",
         vec![server.clone()],
     );
-    let started = std::time::Instant::now();
-    let result = super::actions::run_linter_diagnostics(
-        &config,
-        &[server.clone()],
-        &source,
-        std::time::Duration::from_millis(200),
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        super::actions::run_linter_diagnostics(
+            &config,
+            &[server.clone()],
+            &source,
+            std::time::Duration::from_millis(200),
+        ),
     )
-    .await;
+    .await
+    .expect("linter deadline did not terminate the process");
     assert!(result.is_none());
-    assert!(
-        started.elapsed() < std::time::Duration::from_secs(2),
-        "hung linter exceeded its action deadline: {:?}",
-        started.elapsed()
-    );
 
     let cancellation = tokio_util::sync::CancellationToken::new();
     let trigger = cancellation.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let started_marker = linter_path.with_extension("started");
+    match std::fs::remove_file(&started_marker) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => panic!("clearing the linter start marker: {error}"),
+    }
+    let cancel_when_running = async {
+        while !started_marker.exists() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
         trigger.cancel();
-    });
-    let started = std::time::Instant::now();
+    };
+    let servers = [server];
     let result = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
         None,
         cancellation,
         super::actions::run_linter_diagnostics(
             &config,
-            &[server],
+            &servers,
             &source,
-            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(60),
         ),
-    )
-    .await;
-    assert!(result.is_none());
-    assert!(
-        started.elapsed() < std::time::Duration::from_secs(2),
-        "cancelled linter did not stop promptly: {:?}",
-        started.elapsed()
     );
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::join!(result, cancel_when_running)
+    })
+    .await
+    .expect("cancellation did not terminate the running linter");
+    assert!(result.is_none());
 }
 
 #[test]
