@@ -34,17 +34,6 @@ export default defineConfig(async ({ mode }) => ({
   optimizeDeps: {
     include: ["@gents/shell"],
   },
-  /* the plugin sandbox document is a second page, served from 'self': the
-     frames load it and nothing else */
-  build: {
-    rollupOptions: {
-      input: {
-        main: fileURLToPath(new URL("./index.html", import.meta.url)),
-        sandbox: fileURLToPath(new URL("./ux-sandbox.html", import.meta.url)),
-      },
-    },
-  },
-
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

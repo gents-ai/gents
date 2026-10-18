@@ -11,8 +11,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { NavPanel } from "@/app/RailFlyout";
 import { Rail } from "@/app/Rail";
 import { registry } from "@/contrib/registry";
-import { AGENT_SECTIONS_AREA, NAV_AREA, type AgentSectionData } from "@/contrib/types";
-import type { NavItem } from "@/app/navRegistry";
+import {
+  AGENT_SECTIONS_AREA,
+  NAV_AREA,
+  type AgentSectionData,
+  type AgentSectionProps,
+} from "@/contrib/types";
+import type { NavContext, NavItem } from "@/app/navRegistry";
 import { AgentScreen } from "@/screens/agent/AgentScreen";
 import { node, publish, renderIn, testApp } from "./app-fixture";
 
@@ -114,7 +119,7 @@ describe("contributed nav rows", () => {
         source: "plugin:board",
         data: {
           ...boardRow,
-          to: ({ selectedNodeDid }) =>
+          to: ({ selectedNodeDid }: NavContext) =>
             selectedNodeDid
               ? { name: "agent", nodeDid: selectedNodeDid, section: "board:page" }
               : null,
@@ -227,7 +232,10 @@ describe("contributed agent sections", () => {
         id: "board:page",
         area: AGENT_SECTIONS_AREA,
         source: "plugin:board",
-        data: { ...section, render: (props) => <Page nodeDid={props.nodeDid} /> },
+        data: {
+          ...section,
+          render: (props: AgentSectionProps) => <Page nodeDid={props.nodeDid} />,
+        },
       }),
     );
     const app = testApp({ deployments: [node({ nodeDid: "did:key:a" })] });

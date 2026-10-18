@@ -114,7 +114,7 @@ describe("nav registry", () => {
     const row = byId("board");
     expect(row.active(agent)).toBe(true);
     expect(row.active(mailbox)).toBe(false);
-    expect(row.count?.({ mailboxCount: 3 })).toBe(3);
+    expect(row.count?.({ mailboxCount: 3, selectedNodeDid: null })).toBe(3);
     expect(row.placement).toBe("footer");
   });
 

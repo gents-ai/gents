@@ -14,6 +14,7 @@ import { uxHost } from "./plugin";
 import { onUxEvent } from "./events";
 import { patchUxPlugin, type UxDeclaredContributions } from "./plugins-store";
 import { unloadUxPlugin } from "./activate";
+import { frameNonce, loadRuntimeAssets, sandboxDocument } from "./frame-document";
 import { placeFrame, stageElement } from "./frame-stage";
 import { FrameViewport } from "./react/frame-viewport";
 import { DirectiveChip, HeaderActionButton } from "./react/shell-widgets";
@@ -70,9 +71,6 @@ export interface FrameTransport {
 
 export type TransportFactory = (key: string) => FrameTransport;
 
-/** the sandbox document the frames load; a second Vite entry served from 'self' */
-export const SANDBOX_URL = "/ux-sandbox.html";
-
 function createIframeTransport(key: string): FrameTransport {
   const iframe = document.createElement("iframe");
   /* scripts only: no same-origin (so the origin is opaque and the shell's
@@ -80,20 +78,40 @@ function createIframeTransport(key: string): FrameTransport {
   iframe.setAttribute("sandbox", "allow-scripts");
   iframe.setAttribute("title", `plugin ${key}`);
   iframe.dataset.uxFrame = key;
-  iframe.src = SANDBOX_URL;
   stageElement().appendChild(iframe);
   const channel = new MessageChannel();
   let handler: ((message: FrameToHost) => void) | null = null;
   const queued: HostToFrame[] = [];
   let connected = false;
+  let destroyed = false;
+  let runtime = "";
   channel.port1.onmessage = (event: MessageEvent<FrameToHost>) => handler?.(event.data);
   iframe.addEventListener("load", () => {
+    if (destroyed || !iframe.srcdoc) return;
     /* the frame's origin is opaque, so the only target that reaches it is "*";
-       the port travels with the connect message and is the channel from here */
-    iframe.contentWindow?.postMessage({ t: "connect" }, "*", [channel.port2]);
+       the port travels with the connect message and is the channel from
+       here, and the runtime's text travels with it (frame-document.ts) */
+    iframe.contentWindow?.postMessage({ t: "connect", runtime }, "*", [channel.port2]);
     connected = true;
     for (const message of queued.splice(0)) channel.port1.postMessage(message);
   });
+  /* the document is written by the shell: the frame fetches nothing. A
+     runtime that cannot be read surfaces as the frame's load failure, on
+     the plugin's row. */
+  void loadRuntimeAssets().then(
+    (assets) => {
+      if (destroyed) return;
+      runtime = assets.js;
+      iframe.srcdoc = sandboxDocument(frameNonce(), assets.css);
+    },
+    (error: unknown) => {
+      if (destroyed) return;
+      handler?.({
+        t: "failed",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  );
   return {
     element: iframe,
     post: (message) => {
@@ -104,6 +122,7 @@ function createIframeTransport(key: string): FrameTransport {
       handler = next;
     },
     destroy: () => {
+      destroyed = true;
       channel.port1.close();
       iframe.remove();
     },

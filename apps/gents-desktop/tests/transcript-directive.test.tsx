@@ -10,6 +10,7 @@ import { NO_PARENT } from "@/screens/parentWork";
 import { NO_WORKERS } from "@/screens/workers";
 import { renderIn, testApp } from "./app-fixture";
 import { assistantMessage, sessionSnapshot } from "./timeline-fixture";
+import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client";
 
 /* a plugin that claims `::hello` for the span of one test */
 function claimHello() {
@@ -171,13 +172,14 @@ describe("Markdown directive rendering", () => {
 });
 
 describe("where a directive may render", () => {
-  const panel = (items: Parameters<typeof sessionSnapshot>[0]["timelineItems"]) =>
+  const panel = (items: RenderedTimelineItem[]) =>
     renderIn(
       testApp(),
       <TranscriptPanel
         inFlight={false}
         stopping={false}
         scroller={null}
+        content={null}
         session={sessionSnapshot({ timelineItems: items })}
         workers={NO_WORKERS}
         parentWork={NO_PARENT}
@@ -187,7 +189,13 @@ describe("where a directive may render", () => {
 
   it("renders in the model's reply", () => {
     claimHello();
-    panel([assistantMessage({ sequence: 1, content: `::hello{name="reply"}` })]);
+    panel([
+      assistantMessage({
+        itemKey: "a1",
+        sequence: 1,
+        content: `::hello{name="reply"}`,
+      }),
+    ]);
     expect(screen.getByTestId("hello-card")).toHaveTextContent("hi reply");
   });
 
@@ -195,6 +203,7 @@ describe("where a directive may render", () => {
     claimHello();
     panel([
       assistantMessage({
+        itemKey: "a1",
         sequence: 1,
         reasoning: `::hello{name="thought"}`,
         content: "Done.",

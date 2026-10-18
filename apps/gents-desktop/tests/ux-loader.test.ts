@@ -18,11 +18,7 @@ import {
 import { registry } from "@/contrib/registry";
 import { SESSION_HEADER_ACTIONS_AREA } from "@/contrib/types";
 import { resetSdkImportMap } from "@/sdk/runtime";
-import {
-  installInProcessSandbox,
-  settle,
-  uninstallInProcessSandbox,
-} from "./sandbox-fixture";
+import { installInProcessSandbox, uninstallInProcessSandbox } from "./sandbox-fixture";
 
 const ALLOWED = ["@gents/ux-sdk", "react", "react/jsx-runtime"];
 
