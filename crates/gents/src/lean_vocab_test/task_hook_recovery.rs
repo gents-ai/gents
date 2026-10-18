@@ -86,7 +86,7 @@ impl Fixture {
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ lifecycle_state execution_generation execution_lease_expires_at execution_lease_secs }} }}"#
             )).await;
             if response.has_errors() {
-                return Err(format!("snapshot query errors: {:?}", response.errors));
+                return Err(());
             }
             let rows = response
                 .data
@@ -95,23 +95,7 @@ impl Fixture {
                 .and_then(serde_json::Value::as_array)
                 .cloned()
                 .unwrap_or_default();
-            let Some(row) = rows.first() else {
-                return Ok(None);
-            };
-            // Emit ONLY the explicitly selected fields; never the full row.
-            Ok(Some((
-                row.get("lifecycle_state")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned),
-                row.get("execution_generation")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned),
-                row.get("execution_lease_expires_at")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned),
-                row.get("execution_lease_secs")
-                    .and_then(serde_json::Value::as_i64),
-            )))
+            Ok(rows.first().and_then(|row| project_request_row(row)))
         };
         let snapshot = render_snapshot(
             snapshot_started,
@@ -595,6 +579,29 @@ async fn recovered_cleanup_outside_an_admitted_root_is_refused() {
     }
 }
 
+/// Pure projection of one persisted AgentRequest row onto the snapshot's
+/// selected fields. Used by the live query path AND the projection tests.
+/// Emits ONLY the explicitly selected fields; any other keys present in the
+/// row (identities, secrets, message content, unknown future fields) are
+/// ignored and never rendered.
+fn project_request_row(
+    row: &serde_json::Value,
+) -> Option<(Option<String>, Option<String>, Option<String>, Option<i64>)> {
+    Some((
+        row.get("lifecycle_state")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        row.get("execution_generation")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        row.get("execution_lease_expires_at")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        row.get("execution_lease_secs")
+            .and_then(serde_json::Value::as_i64),
+    ))
+}
+
 /// Pure rendering of the POST-failure snapshot result, separated so the
 /// formatting branches (selected fields / missing row / query failure / 1s
 /// timeout marker) are testable without a node process. `result` is the
@@ -620,7 +627,7 @@ fn render_snapshot(
                 .unwrap_or_else(|| "<missing>".to_string()),
         ),
         Ok(Ok(None)) => "request row missing at snapshot time".to_string(),
-        Ok(Err(query_error)) => format!("<snapshot query failed: {query_error}>"),
+        Ok(Err(())) => "<snapshot query failed>".to_string(),
         Err(()) => "<snapshot timed out after 1s>".to_string(),
     }
 }
@@ -651,6 +658,84 @@ mod render_snapshot_tests {
         assert!(rendered.contains("execution_lease_expires_at=2026-05-20T12:00:01Z"));
         assert!(rendered.contains("execution_lease_secs=1"));
         assert!(!rendered.contains("request_id"));
+    }
+
+    #[test]
+    fn projects_realistic_row_without_request_id_and_ignores_sensitive_keys() {
+        // Realistic full AgentRequest row shape WITHOUT request_id in the
+        // projection, plus extra sensitive/unknown keys that must never be
+        // rendered.
+        let row = serde_json::json!({
+            "_docID": "agent-request-doc-1",
+            "lifecycle_state": "claimed",
+            "execution_generation": "gen-9",
+            "execution_lease_expires_at": "2026-05-20T12:00:01.5Z",
+            "execution_lease_secs": 1,
+            "requester_did": "did:key:secret-owner",
+            "session_id": "session-secret",
+            "messages": [{"role": "user", "content": "sensitive"}],
+            "future_unknown_field": {"nested": "payload"}
+        });
+        let (lifecycle_state, generation, expires_at, lease_secs) =
+            project_request_row(&row).expect("row projects");
+        assert_eq!(lifecycle_state.as_deref(), Some("claimed"));
+        assert_eq!(generation.as_deref(), Some("gen-9"));
+        assert_eq!(expires_at.as_deref(), Some("2026-05-20T12:00:01.5Z"));
+        assert_eq!(lease_secs, Some(1));
+        // Rendered output must contain none of the ignored sensitive keys.
+        let rendered = render_snapshot(
+            ts(),
+            Ok(Ok(Some((
+                lifecycle_state,
+                generation,
+                expires_at,
+                lease_secs,
+            )))),
+        );
+        assert!(!rendered.contains("requester_did"));
+        assert!(!rendered.contains("session-secret"));
+        assert!(!rendered.contains("sensitive"));
+        assert!(!rendered.contains("future_unknown_field"));
+        assert!(!rendered.contains("agent-request-doc-1"));
+    }
+
+    #[test]
+    fn projects_partial_row_with_malformed_types_as_missing() {
+        // Wrong-typed / missing selected fields render as <missing>, and
+        // malformed types are simply ignored rather than panicking.
+        let row = serde_json::json!({
+            "lifecycle_state": 17,
+            "execution_generation": {"nested": true},
+            "execution_lease_secs": "not-a-number"
+        });
+        let (lifecycle_state, generation, expires_at, lease_secs) =
+            project_request_row(&row).expect("row projects even when typed wrong");
+        assert_eq!(lifecycle_state, None);
+        assert_eq!(generation, None);
+        assert_eq!(expires_at, None);
+        assert_eq!(lease_secs, None);
+    }
+
+    #[test]
+    fn empty_array_and_absent_key_project_to_missing_row() {
+        // Empty array: query succeeded but no row matched.
+        let empty: Vec<serde_json::Value> = Vec::new();
+        assert!(empty
+            .first()
+            .and_then(|row| project_request_row(row))
+            .is_none());
+
+        // Absent key: data object present without AgentRequest.
+        let data = serde_json::json!({ "SomethingElse": [] });
+        let rows = data
+            .get("AgentRequest")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(rows
+            .first()
+            .and_then(|row| project_request_row(row))
+            .is_none());
     }
 
     #[test]
