@@ -281,6 +281,7 @@ mod tests {
                 argv: vec!["fixture".into()],
                 cwd: first.workspace.path.clone(),
                 root: first.workspace.path.clone(),
+                writable_root: None,
                 policy: crate::toolset::CommandExecutionPolicy::write_capable(),
             },
             ceiling_allows: true,

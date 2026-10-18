@@ -245,3 +245,101 @@ async fn callers_without_workspace_preferences_keep_their_configured_policy() {
         .unwrap()
         .is_empty());
 }
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn workspace_command_sandbox_tracks_the_selected_permission_mode() {
+    let fixture = Fixture::new();
+    let project = fixture.root.path().join("project");
+    let sibling = fixture.root.path().join("sibling");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::create_dir(&sibling).unwrap();
+    let key = workspace::WorkspaceKey::canonical("node", "requester", "agent", &project).unwrap();
+    workspace::save_mode(fixture.home.path(), &key, 0, workspace::Mode::Ask, None).unwrap();
+    let scope = workspace::for_request(
+        Some(fixture.home.path()),
+        "node",
+        Some("requester"),
+        "agent",
+        Some(&project),
+    )
+    .unwrap();
+    let context =
+        ToolContext::new_with_base(fixture.root.path().to_owned(), Some(project.clone()), false)
+            .unwrap();
+    let tool = UnrestrictedBashTool::with_policy(
+        context,
+        Duration::from_secs(5),
+        Duration::from_secs(5),
+        1024,
+        CommandExecutionPolicy::write_capable()
+            .with_mode(CommandExecutionMode::WorkspaceWrite)
+            .with_network_mode(CommandNetworkMode::Disabled),
+    );
+    approval::mark_listening(fixture.home.path()).unwrap();
+    workspace::scope(
+        scope,
+        approval::scope_interactive(true, async {
+            for (directory, allowed) in [(&project, true), (&sibling, false)] {
+                let marker = directory.join("executed");
+                let call = Tool::call(
+                    &tool,
+                    BashArgs {
+                        command: "/usr/bin/touch".into(),
+                        args: vec![marker.to_str().unwrap().into()],
+                        cwd: Some(directory.to_str().unwrap().into()),
+                        timeout_secs: None,
+                        raw_json: true,
+                    },
+                );
+                let answer = async {
+                    let question = fixture.question().await;
+                    let workspace::BindingAction::Command { writable_root, .. } =
+                        &question.binding().unwrap().action
+                    else {
+                        panic!("expected a command approval")
+                    };
+                    assert_eq!(writable_root.as_deref(), Some(key.path.as_path()));
+                    approval::decide(fixture.home.path(), &question.id, Answer::Once).unwrap();
+                };
+                let (result, ()) = tokio::join!(call, answer);
+                let output: serde_json::Value = match result {
+                    Ok(output) if allowed => serde_json::from_str(&output).unwrap(),
+                    Err(ToolError::ReportedFailure {
+                        class: crate::tool_call_lifecycle::FailureClass::ToolReturnedError,
+                        text,
+                    }) if !allowed => serde_json::from_str(&text).unwrap(),
+                    other => panic!("unexpected command result: {other:?}"),
+                };
+                assert_eq!(output["ok"], allowed, "{output}");
+                assert_eq!(marker.exists(), allowed);
+            }
+            workspace::save_mode(
+                fixture.home.path(),
+                &key,
+                1,
+                workspace::Mode::FullAccess,
+                None,
+            )
+            .unwrap();
+            let marker = sibling.join("executed");
+            Tool::call(
+                &tool,
+                BashArgs {
+                    command: "/usr/bin/touch".into(),
+                    args: vec![marker.to_str().unwrap().into()],
+                    cwd: Some(sibling.to_str().unwrap().into()),
+                    timeout_secs: None,
+                    raw_json: true,
+                },
+            )
+            .await
+            .unwrap();
+            assert!(marker.is_file());
+        }),
+    )
+    .await;
+    assert!(approval::pending_requests(fixture.home.path())
+        .unwrap()
+        .is_empty());
+}

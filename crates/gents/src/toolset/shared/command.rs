@@ -388,9 +388,14 @@ pub(crate) async fn prepare_managed_command(
         &admitted.to_string_lossy(),
         &spawn_policy,
     )?;
-    let (program, argv, env, sandbox) =
+    let launch =
         prepare_command_launch(root, &admitted.to_string_lossy(), args, &spawn_policy).await?;
-    Ok((PathBuf::from(program), argv, env, sandbox))
+    Ok((
+        PathBuf::from(launch.program),
+        launch.args,
+        launch.environment,
+        launch.sandbox,
+    ))
 }
 
 pub(crate) async fn run_command(
@@ -412,27 +417,32 @@ pub(crate) async fn run_command(
         .collect::<Vec<_>>();
     let command_line = shell_join(&argv);
     let root = context.root();
-    let (program, command_args, environment, sandbox) =
-        prepare_command_launch(&root, command_name, args, &policy).await?;
-    crate::plugin::approval::workspace::authorize_command(&argv, &cwd, &root, &policy)
-        .await
-        .map_err(|error| {
-            ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
-        })?;
+    let launch = prepare_command_launch(&root, command_name, args, &policy).await?;
+    crate::plugin::approval::workspace::authorize_command(
+        &argv,
+        &cwd,
+        &root,
+        launch.writable_root.as_deref(),
+        &policy,
+    )
+    .await
+    .map_err(|error| {
+        ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
+    })?;
     let bounds = tool_execution_bounds(timeout);
     let live_output = bounds.live_output.clone();
     let request_deadline = bounds.request_deadline_at;
     let started = bounds.armed_at;
     let outcome = run_managed_exec(ManagedExecRequest {
-        argv: std::iter::once(program)
-            .chain(command_args)
+        argv: std::iter::once(launch.program)
+            .chain(launch.args)
             .collect::<Vec<_>>(),
         cwd: cwd.clone(),
         deadline_at: bounds.deadline_at,
         cancellation_token: bounds.cancellation_token,
         max_output_bytes: usize::MAX,
         stdin: Vec::new(),
-        environment: Some(environment),
+        environment: Some(launch.environment),
         tool_name: Some(tool_name.to_string()),
         live_output: live_output.clone(),
     })
@@ -513,7 +523,7 @@ pub(crate) async fn run_command(
         timeout_ms: millis(timeout),
         execution_mode: policy.mode,
         network_mode: policy.network_mode,
-        sandbox,
+        sandbox: launch.sandbox,
         stdout_capture_incomplete,
         stderr_capture_incomplete,
         stdout_truncation: stdout.metadata,
@@ -888,12 +898,20 @@ fn artifact_policy_denial(message: impl Into<String>) -> ToolError {
     ToolError::reported_failure(FailureClass::PolicyDenied, message.into())
 }
 
+struct CommandLaunch {
+    program: String,
+    args: Vec<String>,
+    environment: HashMap<String, String>,
+    sandbox: &'static str,
+    writable_root: Option<PathBuf>,
+}
+
 async fn prepare_command_launch(
     source_root: &Path,
     command: &str,
     args: &[String],
     policy: &CommandExecutionPolicy,
-) -> std::result::Result<(String, Vec<String>, HashMap<String, String>, &'static str), ToolError> {
+) -> std::result::Result<CommandLaunch, ToolError> {
     let mut environment = build_shell_env();
     let artifact = if policy.mode == CommandExecutionMode::ArtifactWrite {
         let scope = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
@@ -936,13 +954,24 @@ async fn prepare_command_launch(
     } else {
         None
     };
+    let workspace_root =
+        crate::plugin::approval::workspace::command_writable_root(source_root, policy).map_err(
+            |error| ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}")),
+        )?;
     let writable_root = artifact
         .as_ref()
         .map(|grant| grant.root())
-        .unwrap_or(source_root);
+        .unwrap_or(&workspace_root);
     let (program, argv, sandbox) =
         sandboxed_command_for_policy(writable_root, command, args, policy)?;
-    Ok((program, argv, environment, sandbox))
+    Ok(CommandLaunch {
+        program,
+        args: argv,
+        environment,
+        sandbox,
+        writable_root: (policy.mode == CommandExecutionMode::WorkspaceWrite)
+            .then(|| writable_root.to_owned()),
+    })
 }
 
 fn sandboxed_command_for_policy(

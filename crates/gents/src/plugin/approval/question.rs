@@ -103,6 +103,7 @@ impl Request {
                 cwd,
                 root,
                 policy,
+                ..
             }) => Some(CommandApproval {
                 argv,
                 cwd,

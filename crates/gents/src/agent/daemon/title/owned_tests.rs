@@ -457,6 +457,7 @@ async fn changing_the_review_task_while_it_runs_discards_its_allowance() {
             &["echo".into(), "fixture".into()],
             &project_path,
             &project_path,
+            None,
             &crate::toolset::CommandExecutionPolicy::write_capable(),
         )
         .await
@@ -699,6 +700,7 @@ async fn a_lost_review_worker_cancels_the_caller_and_retains_the_fatal_error() {
                 &["echo".into(), "fixture".into()],
                 &key.path,
                 &key.path,
+                None,
                 &crate::toolset::CommandExecutionPolicy::write_capable(),
             ),
         ),
