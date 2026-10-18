@@ -150,7 +150,7 @@ pub(super) fn build_rendered_timeline(
             .unwrap_or("assistant");
         let is_user = role.eq_ignore_ascii_case("user");
         let automated = message.origin.clone().filter(|_| is_user);
-        let is_background_control = is_user && message.runtime_control && automated.is_none();
+        let is_background_control = is_user && message.runtime_control;
         let unresolved = message.reconstruction_state != ReconstructionState::Ready;
         let keep = !is_background_control
             && (unresolved
@@ -368,6 +368,25 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn internal_completions_remain_hidden_when_their_origin_is_known() {
+        for text in [
+            "<tool-completion tool_call_id=\"spawned:call\" tool_name=\"bash_unrestricted\" status=\"completed\"><result>finished</result></tool-completion>",
+            "<tool-completion tool_call_id=\"spawned:call\" tool_name=\"bash_unrestricted\" status=\"failed\"><result>error: no bin target named `verad`</result><reason>tool_failed</reason></tool-completion>",
+            gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+        ] {
+            let message = MessageView {
+                runtime_control: true,
+                origin: Some(crate::types::RequestOriginView::BackgroundCompletion),
+                input_text: Some(text.into()),
+                ..user_message("internal-completion", 1, text)
+            };
+            assert!(build_rendered_timeline(&[message], &[], &[]).is_empty());
+            assert!(matches!(build_rendered_timeline(&[user_message("person", 1, text)], &[], &[]).as_slice(),
+                [RenderedTimelineItem::UserMessage { content: Some(content), .. }] if content == text));
+        }
     }
 
     #[test]

@@ -253,6 +253,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         InferenceProbeRequest,
         InferenceDiscoveryRequest,
         InferenceSetupState,
+        AgentModelSelectionRequest,
         InferenceRecommendationRequest,
         InferenceBackendRecommendationRequest,
         CodexLoginRequest,

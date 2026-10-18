@@ -187,6 +187,16 @@ pub(crate) struct LeanPromptAssemblyClaudeWireStartCase {
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+pub(crate) struct LeanPromptAssemblyServiceTierCase {
+    pub(crate) family: String,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) requested: Option<String>,
+    pub(crate) allowed: bool,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) wire: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub(crate) struct LeanPromptAssemblyResponsesStorageCase {
     pub(crate) name: String,
     pub(crate) family: String,

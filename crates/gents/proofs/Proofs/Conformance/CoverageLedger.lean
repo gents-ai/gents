@@ -1822,6 +1822,12 @@ def caseCoverage : List CoverageEntry :=
       "The four generated wire-start cases bind initial signature plus later delta, absent initial signature, ordered rejection of later thinking, and malformed signature type at the native SSE parser. The native test compares final content/error, not intermediate modeled steps or durable output capture.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "prompt_assembly_service_tier_cases"
+      "PromptAssemblyServiceTierCases"
+      "completion_factory::tests::generated_service_tier_cases_drive_loop_config"
+      "Generated decisions cover every provider family with unset, Standard and Fast selections. Native validation rejects unsupported carriers; supported cases compare the actual provider request body. Provider account/model eligibility and delivered speed are external.")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "prompt_assembly_responses_storage_cases"
       "PromptAssemblyResponsesStorageCases"
       "completion_factory::tests::generated_responses_storage_cases_drive_loop_config"

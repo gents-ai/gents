@@ -130,7 +130,9 @@ const CHATGPT_CODEX_CLIENT_VERSION: &str = "0.160.0";
 const CHATGPT_CODEX_CLIENT_VERSION_ENV: &str = "GENTS_CHATGPT_CODEX_CLIENT_VERSION";
 
 #[derive(Clone, Default)]
-pub struct ChatGptCodexPolicy;
+pub struct ChatGptCodexPolicy {
+    pub service_tier: Option<crate::config::ServiceTier>,
+}
 
 impl crate::oauth_http::OAuthHttpPolicy for ChatGptCodexPolicy {
     const REJECTION_STATUSES: &'static [u16] = &[401, 403];
@@ -157,6 +159,9 @@ impl crate::oauth_http::OAuthHttpPolicy for ChatGptCodexPolicy {
             }
             if let Some(patched) = patch_instructions_body(&body) {
                 body = patched;
+            }
+            if let Some(patched) = self.service_tier.and_then(|tier| tier.patch(&body).ok()) {
+                body = patched.into();
             }
             let call = crate::admission::current_call_join();
             let affinity = gents_loop::provider_input::routing_affinity::current();
@@ -361,6 +366,7 @@ pub async fn build_responses_client(
     node_did: &str,
     account_ref: Option<&str>,
     endpoint: &str,
+    service_tier: Option<crate::config::ServiceTier>,
 ) -> Result<
     rig::providers::openai::Client<
         ChatGptCodexHttpClient<
@@ -393,7 +399,8 @@ pub async fn build_responses_client(
         crate::rendered_request::RenderedRequestCapturingHttpClient::new(
             crate::provider_http::ProviderHttpClient::with_usage(Default::default(), usage),
         ),
-    );
+    )
+    .with_policy(ChatGptCodexPolicy { service_tier });
     crate::inference_http::build_openai_responses_client(
         "chatgpt-oauth-managed",
         &endpoint,
@@ -437,7 +444,7 @@ mod tests {
                     .header("x-codex-turn-state", "stale-token")
                     .body(Bytes::from_static(b"{}"))
                     .unwrap();
-                let req = ChatGptCodexPolicy.patch_request_body(req);
+                let req = ChatGptCodexPolicy::default().patch_request_body(req);
                 assert_eq!(
                     req.headers()
                         .get("session_id")
@@ -627,7 +634,7 @@ mod tests {
                 .header("x-codex-turn-state", "streaming-later")
                 .body(body)
                 .unwrap();
-            ChatGptCodexPolicy.patch_streaming(response);
+            ChatGptCodexPolicy::default().patch_streaming(response);
             let followup = client.prepare_for_test(request()).await.unwrap();
             assert_eq!(followup.headers()["x-codex-turn-state"], "buffered-first");
             assert!(followup.headers()["x-codex-turn-state"].is_sensitive());

@@ -57,21 +57,30 @@ where
 #[derive(Clone, Debug, Default)]
 pub struct ResponsesNormalizingHttpClient<H = ReqwestClient> {
     inner: H,
+    service_tier: Option<crate::config::ServiceTier>,
 }
 
 impl<H> ResponsesNormalizingHttpClient<H> {
     pub fn new(inner: H) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            service_tier: None,
+        }
     }
 
-    fn normalize_json_body<T>(req: Request<T>) -> Request<Bytes>
+    pub fn with_service_tier(mut self, tier: Option<crate::config::ServiceTier>) -> Self {
+        self.service_tier = tier;
+        self
+    }
+
+    fn normalize_json_body<T>(&self, req: Request<T>) -> Request<Bytes>
     where
         T: Into<Bytes>,
     {
         let (parts, body) = req.into_parts();
         let mut body = body.into();
         if parts.uri.path().ends_with("/responses") {
-            if let Some(normalized) = normalize_responses_body(&body) {
+            if let Some(normalized) = normalize_responses_body(&body, self.service_tier) {
                 body = normalized;
             }
         }
@@ -79,9 +88,15 @@ impl<H> ResponsesNormalizingHttpClient<H> {
     }
 }
 
-fn normalize_responses_body(body: &[u8]) -> Option<Bytes> {
+fn normalize_responses_body(
+    body: &[u8],
+    tier: Option<crate::config::ServiceTier>,
+) -> Option<Bytes> {
     let mut value = serde_json::from_slice::<serde_json::Value>(body).ok()?;
     crate::llm::responses_normalize::normalize_responses_assistant_items(&mut value);
+    if let Some(tier) = tier {
+        tier.apply(&mut value).ok()?;
+    }
     serde_json::to_vec(&value).ok().map(Bytes::from)
 }
 
@@ -99,7 +114,7 @@ where
         U: WasmCompatSend + 'static,
     {
         let inner = self.inner.clone();
-        let req = Self::normalize_json_body(req);
+        let req = self.normalize_json_body(req);
         async move { HttpClientExt::send::<Bytes, U>(&inner, req).await }
     }
 
@@ -123,7 +138,7 @@ where
         T: Into<Bytes>,
     {
         let inner = self.inner.clone();
-        let req = Self::normalize_json_body(req);
+        let req = self.normalize_json_body(req);
         async move { HttpClientExt::send_streaming(&inner, req).await }
     }
 }

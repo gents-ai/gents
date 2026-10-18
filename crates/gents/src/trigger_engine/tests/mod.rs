@@ -576,6 +576,7 @@ fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> {
         backend_endpoint: "http://localhost:0/v1".to_string(),
         backend_auth: crate::document_config::BackendAuth::Unauthenticated,
         model_name: crate::config::DEFAULT_MODEL_NAME.to_string(),
+        service_tier: None,
         resolved_reasoning_efforts: None,
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         max_output_tokens: crate::config::DEFAULT_MAX_OUTPUT_TOKENS,

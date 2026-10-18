@@ -1758,6 +1758,33 @@ impl ClientCore {
         }
     }
 
+    pub async fn select_agent_model(
+        &self,
+        node_did: &str,
+        agent_id: &str,
+        backend_id: &str,
+        model_name: &str,
+        reasoning_effort: Option<gents::config::ReasoningEffort>,
+        service_tier: Option<gents::config::ServiceTier>,
+    ) -> Result<gents::InferenceProfile> {
+        let access = self.operator_access(node_did)?;
+        let saved = mutations::select_agent_model_on(
+            &access,
+            node_did,
+            agent_id,
+            backend_id,
+            model_name,
+            reasoning_effort,
+            service_tier,
+        )
+        .await?;
+        if self.refresh_config_source(node_did).await.is_err() {
+            tracing::warn!("Model saved; client observation will resynchronize");
+            self.store.request_resync(Some(node_did));
+        }
+        Ok(saved)
+    }
+
     pub async fn save_inference_profile(&self, row: &gents::InferenceProfile) -> Result<()> {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_inference_profile_on(&access, row).await {
