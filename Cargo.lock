@@ -4828,6 +4828,7 @@ name = "gents-client-host"
 version = "0.21.0-rc0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "bytes",
  "clap",
@@ -4839,6 +4840,7 @@ dependencies = [
  "gents-protocol",
  "libc",
  "portable-pty",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
