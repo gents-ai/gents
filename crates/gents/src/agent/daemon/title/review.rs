@@ -114,6 +114,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AuxiliaryTask<M> {
                             action_id: invocation.action_id.clone(),
                             policy: policy.text.clone(),
                             action: serde_json::json!({
+                                "workspace": invocation.binding.scope.workspace.path,
                                 "subject": invocation.binding.action,
                                 "input": invocation.payload,
                             }),
@@ -188,6 +189,8 @@ impl<M: crate::llm::rig_compat::ProviderModel> AuxiliaryTask<M> {
 pub(in crate::agent::daemon) struct ReviewInput {
     pub(super) action_id: String,
     pub(super) policy: String,
+    /// The consent workspace can be narrower than the configured tool root;
+    /// both are required to review an action's effects under that boundary.
     pub(super) action: serde_json::Value,
     pub(super) conversation: Vec<String>,
 }
