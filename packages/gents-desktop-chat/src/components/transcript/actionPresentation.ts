@@ -5,6 +5,10 @@ export type ActionEntry = {
   launcher?: RenderedToolCallView;
 };
 
+export function actionItemKeys({ tool, launcher }: ActionEntry): string[] {
+  return launcher ? [tool.itemKey, launcher.itemKey] : [tool.itemKey];
+}
+
 function object(value: string | null) {
   if (!value) return null;
   try {
