@@ -1845,6 +1845,41 @@ fn count(total: usize) -> u32 {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn a_seed_wait_resolves_as_soon_as_reconciliation_reports_an_error() {
+        let home = EmbeddedHome::create_temp("seed-reconcile-error")
+            .await
+            .unwrap();
+        let (sender, ready) = watch::channel(None);
+        let observer = EventSourcesReady(sender);
+        let seed = FixtureDocument {
+            collection: "MissingSeedCollection".into(),
+            document: json!({"label": "not submitted"}),
+        };
+        let error = {
+            let waiting = seed_and_await_fire(
+                &home,
+                &ready,
+                &seed,
+                Duration::from_secs(2),
+                "trial",
+                "stage",
+            );
+            tokio::pin!(waiting);
+            assert!(futures::poll!(waiting.as_mut()).is_pending());
+            observer.on_event_sources_reconciled(1, "fixture", Err("missing seed collection"));
+            let std::task::Poll::Ready(result) = futures::poll!(waiting.as_mut()) else {
+                panic!("the reported reconciliation error did not end the seed wait");
+            };
+            result.unwrap_err()
+        };
+        assert_eq!(
+            error.to_string(),
+            "the trial runtime's event sources did not reconcile: missing seed collection"
+        );
+        close(home).await;
+    }
+
     fn assert_failure_class(
         observed: Option<OutcomeKind>,
         kind: OutcomeKind,
