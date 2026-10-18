@@ -65,7 +65,7 @@ describe("compact action history", () => {
       );
     expect(html("running")).toContain("Reading README.md");
     expect(html("success")).toContain("Explored files");
-    expect(html("error")).toContain("1 failed");
+    expect(html("error")).toContain("1 action failed");
     expect(html("unknown")).toContain("Action status unavailable");
     expect(html("unknown")).not.toContain("Explored");
   });
@@ -78,8 +78,19 @@ describe("compact action history", () => {
     const html = renderToStaticMarkup(
       createElement(CompactToolGroup, { tools: [row] }),
     );
-    expect(html).toContain("Running read_file");
+    expect(html).toContain("Running Read file");
     expect(html).not.toContain("README.md");
     expect(html).not.toContain("The complete file contents");
+  });
+
+  it("keeps finished actions visible beside current work", () => {
+    const html = renderToStaticMarkup(
+      createElement(CompactToolGroup, {
+        tools: [tool("past"), tool("current", "running")],
+      }),
+    );
+    expect(html.match(/class="tool-activity-row/g)).toHaveLength(2);
+    expect(html).toContain("Explored files");
+    expect(html).toContain("Reading README.md");
   });
 });

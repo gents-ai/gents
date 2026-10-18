@@ -154,17 +154,30 @@
 
   .tool-activity-body .tool-item-summary {
     gap: 8px;
-    padding: 9px 4px;
+    min-height: 36px;
+    padding: 8px;
+    border-radius: 6px;
   }
 
   .tool-activity-body .tool-item-summary-content {
-    flex-wrap: wrap;
-    gap: 6px;
+    flex-wrap: nowrap;
+    gap: 8px;
     font-size: var(--text-sm);
   }
 
   .tool-activity-body .tool-primary {
-    flex: 1 1 140px;
+    flex: 1 1 0;
+    font-weight: 400;
+  }
+
+  .tool-activity-body .tool-item {
+    border-bottom: 0;
+  }
+
+  .tool-activity-body .tool-item[open] {
+    margin-block: 4px 8px;
+    border: 1px solid var(--border-default);
+    border-radius: 8px;
   }
 
   .tool-activity-body .tool-item-dot {
@@ -177,56 +190,75 @@
     opacity: 0.5;
   }
 
-  .tool-activity-body .tool-item-summary .tool-item-mode,
-  .tool-activity-body .tool-item .tool-item-status-success,
-  .tool-activity-body .tool-item .tool-exit:not(.is-error) {
-    display: none;
-  }
-
   .tool-activity-body .tool-kind {
     color: var(--color-text-muted);
     font-weight: 400;
     letter-spacing: normal;
     text-transform: none;
+    font-size: 11px;
   }
 
-  .tool-activity-body .tool-primary {
-    font-weight: 400;
+  .tool-action-status {
+    flex: none;
+    color: var(--color-text-muted);
+    font-size: 11px;
   }
 
-  .tool-activity-body .tool-item-summary-content {
-    flex-wrap: nowrap;
+  .tool-action-status.is-error {
+    color: var(--color-error);
   }
-  .tool-activity-body .tool-primary {
-    flex: 1 1 0;
-  }
+
   .tool-activity-body .tool-item-body {
-    gap: 12px;
-    padding: 4px 4px 16px 18px;
+    gap: 10px;
+    padding: 4px 12px 12px 22px;
   }
+
   .tool-activity-body .tool-detail-label {
     font-size: 11px;
     text-transform: none;
     letter-spacing: normal;
   }
+
   .tool-activity-body .tool-payload {
+    max-height: 240px;
     padding: 10px;
-    border: 0;
+    border: 1px solid var(--border-default);
     border-radius: 6px;
     background: var(--color-surface-muted);
     font-size: 12px;
     line-height: 1.5;
   }
+
   .tool-activity-body .tool-payload-section:first-child .tool-payload {
     max-height: 100px;
   }
+
+  .tool-activity-body .tool-output-notice {
+    margin: 0;
+    padding: 6px 0;
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
+  }
+
+  .tool-launch-details {
+    margin: 0 12px 12px 22px;
+  }
+
+  .tool-launch-details > summary,
+  .tool-execution-details > summary {
+    padding: 4px 0;
+    color: var(--color-text-muted);
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .tool-launch-details .tool-item-body {
+    padding: 8px 0 0;
+  }
+
   .tool-execution-details {
     color: var(--color-text-muted);
     font-size: 11px;
-  }
-  .tool-execution-details > summary {
-    cursor: pointer;
-    padding: 4px 0;
   }
   .tool-execution-details dl {
     display: grid;
@@ -299,7 +331,18 @@
     transition: transform var(--motion-fast) ease;
   }
 
-  .tool-item[open] .tool-item-action {
+  .tool-item-action svg {
+    display: block;
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .tool-item[open] > .tool-item-summary .tool-item-action {
     transform: rotate(90deg);
   }
 
