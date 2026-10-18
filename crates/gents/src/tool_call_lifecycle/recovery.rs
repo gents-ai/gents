@@ -678,17 +678,18 @@ mod tests {
     /// authority for the completed arm: a session-message settlement's
     /// assignment handoff survives a crash-before-notice redrive
     /// byte-identically, while a bare native `completionPending` stays
-    /// reasonless. Source snapshot cannot change on replay because the
+    /// reasonless. The source snapshot cannot change on replay because the
     /// projection reads only the persisted suffix, never live state.
     #[test]
     fn projection_completed_arm_replays_the_persisted_reason() {
+        // The real private row shape; no test-only re-encoding is exposed.
         let row = |status: &str| TerminalBackgroundToolRow {
             doc_id: "tool-doc".into(),
-            request_id: Some("parent".into()),
-            request_doc_id: Some("parent-doc".into()),
-            node_did: Some("did:test".into()),
+            request_id: None,
+            request_doc_id: None,
+            node_did: None,
             requester_did: None,
-            session_id: Some("session".into()),
+            session_id: None,
             tool_call_id: None,
             tool_name: crate::toolset::AGENT_NEW_TOOL_NAME.into(),
             status: status.into(),

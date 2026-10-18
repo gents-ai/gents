@@ -131,7 +131,7 @@ def liveAssignmentStatuses : List String :=
   ["active", "paused", "blocked", "usage_limited", "budget_limited"]
 
 theorem active_reason_differs_from_absent :
-    AssignmentHandoff.live "active".toReason ≠ AssignmentHandoff.absent.toReason := by
+    (AssignmentHandoff.live "active").toReason ≠ AssignmentHandoff.absent.toReason := by
   intro h
   simp [AssignmentHandoff.toReason] at h
 

@@ -242,6 +242,65 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
         let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
         let caused_state = match cause {
             "requestCompleted" => {
+                // The session-message handoff cases carry the assignment
+                // observation in their name: each binds a Goal state in the
+                // caused session before the child terminalizes, matching the
+                // Lean sessionMessageRecoveryCase handoff argument.
+                let caused_session_id = {
+                    let doc_id = crate::graphql::escape_graphql_string(
+                        &message.caused_request_doc_id,
+                    );
+                    let response = admission.node.execute(&format!(
+                        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}}" }} }}, limit: 1) {{ session_id }} }}"#
+                    ))
+                    .await;
+                    assert!(!response.has_errors(), "{name}: {:?}", response.errors);
+                    response.data.unwrap()["AgentRequest"][0]["session_id"]
+                        .as_str()
+                        .expect("the caused request names its session")
+                        .to_owned()
+                };
+                let handoff_status = match name {
+                    "session_message_request_completed_no_goal_to_completed" => None,
+                    "session_message_request_completed_unknown_goal_to_completed" => None,
+                    "session_message_request_completed_live_goal_to_completed" => {
+                        crate::goal::set_goal(
+                            &admission.node,
+                            &admission.node_did,
+                            &caused_session_id,
+                            Some("hold"),
+                            Some(crate::goal::GoalStatus::Active),
+                            None,
+                        )
+                        .await
+                        .expect("persist an active Goal in the caused session");
+                        Some(crate::goal::GoalStatus::Active)
+                    }
+                    "session_message_request_completed_blocked_goal_to_completed" => {
+                        crate::goal::set_goal(
+                            &admission.node,
+                            &admission.node_did,
+                            &caused_session_id,
+                            Some("hold"),
+                            Some(crate::goal::GoalStatus::Blocked),
+                            None,
+                        )
+                        .await
+                        .expect("persist a blocked Goal in the caused session");
+                        Some(crate::goal::GoalStatus::Blocked)
+                    }
+                    _ => None,
+                };
+                if handoff_status == Some(crate::goal::GoalStatus::Active)
+                    || handoff_status == Some(crate::goal::GoalStatus::Blocked)
+                {
+                    crate::test_support::install_test_agent(
+                        &admission.node,
+                        &admission.node_did,
+                        "general",
+                    )
+                    .await;
+                }
                 complete_child(
                     &admission.node,
                     &message.caused_request_id,
@@ -284,6 +343,30 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
         assert_eq!(row["status"], "completed", "{name}");
         if case.terminal_state == "cancelled" {
             assert_eq!(row["cancel_cause"], "interrupted", "{name}");
+        }
+        // The completed session-message settlement persists its assignment
+        // handoff as the row's completionPending:<reason> suffix; the
+        // Rust-driven mapping assertion pins each generated case's emitted
+        // notification reason to the Lean sessionMessageHandoffReason
+        // vocabulary.
+        if cause == "requestCompleted" {
+            let expected_suffix = match name {
+                "session_message_request_completed_to_completed" => "completionPending",
+                "session_message_request_completed_no_goal_to_completed" => {
+                    "completionPending:assignment_absent"
+                }
+                "session_message_request_completed_unknown_goal_to_completed" => {
+                    "completionPending:assignment_unknown"
+                }
+                "session_message_request_completed_live_goal_to_completed" => {
+                    "completionPending:assignment_active"
+                }
+                "session_message_request_completed_blocked_goal_to_completed" => {
+                    "completionPending:assignment_blocked"
+                }
+                other => panic!("{other}: unhandled completed session-message case"),
+            };
+            assert_eq!(row["status"], expected_suffix, "{name}");
         }
         let session_id = admission.tool.session_id().to_owned();
         let (notifications, _) =

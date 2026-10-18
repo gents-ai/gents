@@ -417,6 +417,7 @@ mod turn_assignment_tests {
         let PublishedSessionMessage {
             admission,
             caused_request_id,
+            caused_request_doc_id,
             ..
         } = crate::tool_call_lifecycle::admission_fixture::published_session_message(
             crate::tool_call_lifecycle::admission_fixture::PublishedAdmissionOptions {
@@ -434,7 +435,7 @@ mod turn_assignment_tests {
         crate::test_support::install_test_agent(node, did, "general").await;
         // The caused session carries an active Goal: a finished turn with a
         // live assignment is not assignment success.
-        crate::goal::set_goal(node, did, &caused_session_id_admission(&admission, &caused_request_id).await, Some("hold"), Some(crate::goal::GoalStatus::Active), None)
+        crate::goal::set_goal(node, did, &caused_session_id(node, &caused_request_doc_id).await, Some("hold"), Some(crate::goal::GoalStatus::Active), None)
             .await
             .expect("persist an active Goal in the caused session");
         crate::tool_call_lifecycle::admission_fixture::complete_child(
@@ -462,9 +463,11 @@ mod turn_assignment_tests {
         // Crash-before-notice replay: the row's persisted suffix is the
         // authoritative snapshot; the redrive re-renders the same reason.
         let redrive =
-            ToolCallLifecycle::reconcile_background_completion_side_effects(node, did)
-                .await
-                .unwrap();
+            crate::tool_call_lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(
+                node, did,
+            )
+            .await
+            .unwrap();
         assert_eq!(
             redrive.side_effects_converged, 0,
             "side effects already converged; the replay republishes nothing"
@@ -480,6 +483,7 @@ mod turn_assignment_tests {
         let PublishedSessionMessage {
             admission,
             caused_request_id,
+            caused_request_doc_id,
             ..
         } = crate::tool_call_lifecycle::admission_fixture::published_session_message(
             crate::tool_call_lifecycle::admission_fixture::PublishedAdmissionOptions {
@@ -523,6 +527,7 @@ mod turn_assignment_tests {
         let PublishedSessionMessage {
             admission,
             caused_request_id,
+            caused_request_doc_id,
             ..
         } = crate::tool_call_lifecycle::admission_fixture::published_session_message(
             crate::tool_call_lifecycle::admission_fixture::PublishedAdmissionOptions {
@@ -538,7 +543,7 @@ mod turn_assignment_tests {
         let did = &admission.node_did;
         let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
         crate::test_support::install_test_agent(node, did, "general").await;
-        crate::goal::set_goal(node, did, &caused_session_id_admission(&admission, &caused_request_id).await, Some("done"), Some(crate::goal::GoalStatus::Complete), None)
+        crate::goal::set_goal(node, did, &caused_session_id(node, &caused_request_doc_id).await, Some("done"), Some(crate::goal::GoalStatus::Complete), None)
             .await
             .expect("persist a complete Goal in the caused session");
         crate::tool_call_lifecycle::admission_fixture::complete_child(
@@ -572,6 +577,7 @@ mod turn_assignment_tests {
         let PublishedSessionMessage {
             admission,
             caused_request_id,
+            caused_request_doc_id,
             ..
         } = crate::tool_call_lifecycle::admission_fixture::published_session_message(
             crate::tool_call_lifecycle::admission_fixture::PublishedAdmissionOptions {
@@ -586,9 +592,9 @@ mod turn_assignment_tests {
         let node = &admission.node;
         let did = &admission.node_did;
         let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
-        let session_id = admission.tool.session_id.clone();
+        let session_id = admission.tool.session_id().to_owned();
         crate::test_support::install_test_agent(node, did, "general").await;
-        crate::goal::set_goal(node, did, &caused_session_id_admission(&admission, &caused_request_id).await, Some("hold"), Some(crate::goal::GoalStatus::Active), None)
+        crate::goal::set_goal(node, did, &caused_session_id(node, &caused_request_doc_id).await, Some("hold"), Some(crate::goal::GoalStatus::Active), None)
             .await
             .expect("persist an active Goal in the caused session");
         crate::tool_call_lifecycle::admission_fixture::complete_child(
@@ -639,11 +645,12 @@ mod turn_assignment_tests {
         );
 
         // The redrive re-renders from the row's persisted suffix.
-        let report = crate::tool_call_lifecycle::reconcile_background_completion_side_effects(
-            node, did,
-        )
-        .await
-        .unwrap();
+        let report =
+            crate::tool_call_lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(
+                node, did,
+            )
+            .await
+            .unwrap();
         assert_eq!(report.side_effects_converged, 1);
         let notifications = session_message_notifications(node, did, &session_id).await;
         assert_eq!(notifications.len(), 1);
@@ -725,15 +732,14 @@ async fn session_message_notifications(
 /// The caused session of the fixture's session message, where Goal state is
 /// observed: `turn_assignment_handoff` reads the Goal of the session the
 /// caused request runs in, read from the caused AgentRequest row itself.
-async fn caused_session_id_admission(
-    admission: &crate::tool_call_lifecycle::admission_fixture::PublishedAdmission,
-    caused_request_id: &str,
+async fn caused_session_id(
+    node: &Arc<EmbeddedNode>,
+    caused_request_doc_id: &str,
 ) -> String {
-    let request_id = escape_graphql_string(caused_request_id);
-    let response = admission
-        .node
+    let doc_id = escape_graphql_string(caused_request_doc_id);
+    let response = node
         .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ session_id }} }}"#
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ session_id }} }}"#
         ))
         .await;
     assert!(
@@ -747,32 +753,3 @@ async fn caused_session_id_admission(
         .to_owned()
 }
 
-#[cfg(test)]
-mod handoff_persisted_suffix_tests {
-    /// The projection's completed arm must pass through a persisted reason
-    /// while a bare `completionPending` stays reasonless, without touching
-    /// the production function's private state.
-    #[test]
-    fn projection_completed_arm_passes_through_the_persisted_suffix() {
-        let row = |status: &str| {
-            serde_json::from_value::<crate::tool_call_lifecycle::recovery::TerminalBackgroundToolRowForTest>(
-                serde_json::json!({
-                    "_docID": "tool-doc",
-                    "tool_name": crate::toolset::AGENT_NEW_TOOL_NAME,
-                    "status": status,
-                    "lifecycle_state": "completed"
-                })
-            )
-            .unwrap()
-        };
-        let bare = crate::tool_call_lifecycle::recovery::background_completion_projection(
-            &row("completionPending"),
-        );
-        assert_eq!(bare, Some(("completed", None)));
-        let suffixed =
-            crate::tool_call_lifecycle::recovery::background_completion_projection(
-                &row("completionPending:assignment_active"),
-            );
-        assert_eq!(suffixed, Some(("completed", Some("assignment_active"))));
-    }
-}
