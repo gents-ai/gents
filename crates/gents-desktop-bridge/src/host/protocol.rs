@@ -164,6 +164,10 @@ pub enum ClientCommand {
         #[serde(rename = "nodeHome")]
         node_home: Option<String>,
     },
+    #[serde(rename = "client_workspace_permissions")]
+    WorkspacePermissions {
+        request: super::permissions::WorkspacePermissionsRequest,
+    },
     #[serde(rename = "client_plugin_approval_subscribe")]
     ApprovalSubscribe {
         #[serde(rename = "nodeDid")]
@@ -243,6 +247,7 @@ impl ClientCommand {
         "client_speech_recognize",
         "client_speech_synthesize",
         "client_connect_local",
+        "client_workspace_permissions",
         "client_plugin_approval_subscribe",
         "client_plugin_approval_unsubscribe",
         "client_plugin_approval_pending",
@@ -279,6 +284,7 @@ impl ClientCommand {
                 | Self::SpeechTools { .. }
                 | Self::SpeechRecognize { .. }
                 | Self::SpeechSynthesize { .. }
+                | Self::WorkspacePermissions { .. }
                 | Self::ApprovalPending { .. }
                 | Self::SessionSnapshot(_)
                 | Self::SessionLiveDelta(_)

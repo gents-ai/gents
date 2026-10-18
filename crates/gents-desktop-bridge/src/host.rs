@@ -3,6 +3,7 @@ mod approvals;
 mod connection;
 #[cfg(any(unix, windows))]
 pub mod local;
+pub mod permissions;
 pub mod protocol;
 #[cfg(any(unix, windows))]
 mod service;
@@ -464,6 +465,9 @@ impl ClientHost {
                 .await
                 .map_err(|error| BridgeError::untyped(error.to_string()))?;
                 encode(())
+            }
+            ClientCommand::WorkspacePermissions { request } => {
+                encode(permissions::state(&self.core, request).await?)
             }
             ClientCommand::ApprovalSubscribe { node_did, token } => {
                 approvals.subscribe(&self.core, &node_did, &token).await?;

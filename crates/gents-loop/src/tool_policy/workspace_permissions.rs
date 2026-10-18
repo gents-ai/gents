@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(rename = "WorkspacePermissionMode"))]
 pub enum Mode {
     #[default]
     Ask,
