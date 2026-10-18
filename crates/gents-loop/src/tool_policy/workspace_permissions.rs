@@ -38,6 +38,7 @@ pub struct Grant<W, A> {
 pub enum ApprovalKind {
     Filesystem,
     Command,
+    FileMutation,
 }
 
 pub fn answer_allowed(kind: ApprovalKind, remembered: bool) -> bool {

@@ -49,6 +49,13 @@ fn binding(
                 root: root.to_owned(),
                 policy: crate::toolset::CommandExecutionPolicy::write_capable(),
             },
+            policy::ApprovalKind::FileMutation => workspace::BindingAction::FileMutation {
+                tool: "write_file".into(),
+                input_digest: format!("input-{}", value.action),
+                path: resolved.target.clone(),
+                root: root.to_owned(),
+                existed: true,
+            },
         },
     }
 }

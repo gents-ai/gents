@@ -5,8 +5,10 @@ use serde::{Deserialize, Serialize};
 
 mod command;
 mod context;
+mod file;
 pub(crate) use command::authorize_command;
 pub(crate) use context::{carry, for_request, scope};
+pub(crate) use file::authorize_file_mutation;
 
 use gents_loop::tool_policy::workspace_permissions::{self as policy, Grant, Input, Review, Route};
 
@@ -108,6 +110,13 @@ pub(crate) enum BindingAction {
         root: PathBuf,
         policy: crate::toolset::CommandExecutionPolicy,
     },
+    FileMutation {
+        tool: String,
+        input_digest: String,
+        path: PathBuf,
+        root: PathBuf,
+        existed: bool,
+    },
 }
 
 impl BindingAction {
@@ -121,6 +130,16 @@ impl BindingAction {
                 ..
             } => Some(super::FilesystemApproval::new(
                 plugin, path, *is_dir, *access,
+            )),
+            Self::FileMutation { tool, path, .. } => Some(super::FilesystemApproval::new(
+                match tool.as_str() {
+                    "write_file" => "Write file",
+                    "edit_file" => "Edit file",
+                    _ => tool,
+                },
+                path,
+                false,
+                crate::pack::BindAccess::ReadWrite,
             )),
             Self::Command { .. } => None,
         }
@@ -145,6 +164,27 @@ impl BindingAction {
                     "the command working directory is outside its tool root"
                 );
             }
+            Self::FileMutation {
+                path,
+                root,
+                existed,
+                ..
+            } => {
+                crate::plugin::allowed::canonical_target(root, Some(true))?;
+                let context = crate::toolset::ToolContext::new(root.clone(), false)?;
+                let resolved = context.resolve_path_allow_create(
+                    path.to_str()
+                        .context("the file approval path is not valid UTF-8")?,
+                )?;
+                anyhow::ensure!(
+                    resolved == *path && path.try_exists()? == *existed,
+                    "The file approval target changed. Retry the file change."
+                );
+                anyhow::ensure!(
+                    !existed || path.is_file(),
+                    "The file approval target is not a regular file."
+                );
+            }
         }
         Ok(())
     }
@@ -155,6 +195,33 @@ pub(crate) type Binding = Grant<WorkspaceKey, BindingAction>;
 pub(crate) struct BindingDecision {
     pub route: Route,
     pub binding: Binding,
+}
+
+async fn authorize_binding(
+    home: &Path,
+    decision: BindingDecision,
+    denied: &str,
+) -> Result<Binding> {
+    use super::{Consent, Request};
+
+    validate_binding(home, &decision.binding)?;
+    let allowed = match decision.route {
+        Route::Allow => true,
+        Route::Deny => false,
+        Route::Ask | Route::Review => match super::consent(super::interactive()) {
+            Consent::Deny => false,
+            Consent::Ask => {
+                let session_id =
+                    crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+                        .and_then(|context| context.session_id);
+                let request = Request::for_binding(decision.binding.clone(), session_id);
+                super::ask(home, &request, super::WAIT).await?
+            }
+        },
+    };
+    anyhow::ensure!(allowed, "{denied}");
+    validate_binding(home, &decision.binding)?;
+    Ok(decision.binding)
 }
 
 #[derive(Debug, thiserror::Error)]

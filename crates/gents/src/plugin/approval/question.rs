@@ -114,10 +114,10 @@ impl Request {
     }
 
     pub(super) fn kind(&self) -> ApprovalKind {
-        if self.command().is_some() {
-            ApprovalKind::Command
-        } else {
-            ApprovalKind::Filesystem
+        match self.binding().map(|binding| &binding.action) {
+            Some(workspace::BindingAction::Command { .. }) => ApprovalKind::Command,
+            Some(workspace::BindingAction::FileMutation { .. }) => ApprovalKind::FileMutation,
+            _ => ApprovalKind::Filesystem,
         }
     }
 
@@ -141,6 +141,12 @@ impl Request {
     }
 
     pub fn prompt(&self) -> String {
+        if let Some(workspace::BindingAction::FileMutation { tool, path, .. }) =
+            self.binding().map(|binding| &binding.action)
+        {
+            let verb = if tool == "edit_file" { "Edit" } else { "Write" };
+            return format!("{verb} {}?", path.display());
+        }
         if let Some(command) = self.command() {
             return format!(
                 "Run {} in {}?",

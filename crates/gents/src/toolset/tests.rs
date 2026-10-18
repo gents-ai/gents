@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use crate::test_support::EnvVarGuard;
 
+mod workspace_file_permissions;
 #[cfg(unix)]
 mod workspace_permissions;
 

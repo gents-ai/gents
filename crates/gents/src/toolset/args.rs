@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ListFilesArgs {
@@ -49,7 +49,7 @@ pub(super) struct GrepArgs {
     pub raw_json: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub(super) struct WriteFileArgs {
     pub path: String,
     pub content: String,
@@ -61,7 +61,7 @@ pub(super) struct WriteFileArgs {
     pub overwrite: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub(super) struct EditFileArgs {
     pub path: String,
     pub old_text: String,
