@@ -286,7 +286,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                         &message.caused_request_doc_id,
                     );
                     let response = admission.node.execute(&format!(
-                        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}}" }} }}, limit: 1) {{ session_id }} }}"#
+                        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ session_id }} }}"#
                     ))
                     .await;
                     assert!(!response.has_errors(), "{name}: {:?}", response.errors);

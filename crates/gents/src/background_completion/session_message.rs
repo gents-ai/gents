@@ -303,6 +303,7 @@ pub(crate) async fn settle_session_message_row(
 mod turn_assignment_tests {
     use super::*;
     use crate::tool_call_lifecycle::admission_fixture::PublishedSessionMessage;
+    use crate::tool_call_lifecycle::AwaitMode;
 
     fn handoff(
         turn_completed: bool,
@@ -452,7 +453,7 @@ mod turn_assignment_tests {
             "the handoff reason persists in the row's durable settlement record"
         );
 
-        let notifications = session_message_notifications(node, did, &admission.tool.session_id).await;
+        let notifications = session_message_notifications(node, did, &admission.tool.session_id()).await;
         assert_eq!(notifications.len(), 1);
         assert!(
             notifications[0].contains("<reason>assignment_active</reason>"),
@@ -511,7 +512,7 @@ mod turn_assignment_tests {
             row["status"], "completionPending:assignment_absent",
             "a no-goal session never reads as assignment success"
         );
-        let notifications = session_message_notifications(node, did, &admission.tool.session_id).await;
+        let notifications = session_message_notifications(node, did, &admission.tool.session_id()).await;
         assert_eq!(notifications.len(), 1);
         assert!(
             notifications[0].contains("<reason>assignment_absent</reason>"),
@@ -558,7 +559,7 @@ mod turn_assignment_tests {
             row["status"], "completionPending",
             "assignment_complete is the reasonless success form"
         );
-        let notifications = session_message_notifications(node, did, &admission.tool.session_id).await;
+        let notifications = session_message_notifications(node, did, &admission.tool.session_id()).await;
         assert_eq!(notifications.len(), 1);
         assert!(
             !notifications[0].contains("<reason>"),
@@ -623,7 +624,12 @@ mod turn_assignment_tests {
             .unwrap()
         {
             crate::session_message::CausedObservation::Bound(caused) => caused,
-            other => panic!("expected a bound caused request, got {other:?}"),
+            crate::session_message::CausedObservation::Unbound(reason) => {
+                panic!("expected a bound caused request, got Unbound({reason})")
+            }
+            crate::session_message::CausedObservation::NotVisible => {
+                panic!("expected a bound caused request, got NotVisible")
+            }
         };
         let caused_doc_id = caused.doc_id.as_deref().unwrap().to_owned();
         let Some(terminal) =
