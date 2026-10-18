@@ -46,6 +46,7 @@ import Proofs.Conformance.Contracts.Json.PairingReconcile
 import Proofs.Conformance.Contracts.Json.Enrollment
 import Proofs.Conformance.TitleUsage
 import Proofs.Conformance.TitleAdmission
+import Proofs.Conformance.TitleText
 import Proofs.Conformance.Contracts.Json.PromptAssembly
 import Proofs.Conformance.Contracts.Json.RenderedCapture
 import Proofs.Conformance.Contracts.Json.DurableReduction
@@ -253,6 +254,7 @@ def snapshotJson : String :=
       ++ titleRequestAdmissionCasesJson ++ ","
     ++ "\"title_request_purpose_wire_cases\":"
       ++ titlePurposeWireCasesJson ++ ","
+    ++ "\"title_text_cases\":" ++ Conformance.TitleText.casesJson ++ ","
     ++ "\"title_usage_cases\":"
       ++ Conformance.TitleUsage.casesJson ++ ","
     ++ "\"title_admission_join_cases\":"

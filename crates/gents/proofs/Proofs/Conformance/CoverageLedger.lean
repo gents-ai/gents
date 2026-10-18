@@ -1731,6 +1731,11 @@ def caseCoverage : List CoverageEntry :=
       "CanonicalDispatchObservationCases"
       "agent::loop_stream::tests::policy_rejection_settles_pending_call_without_dispatch_election")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "title_text_cases"
+      "TitleTextCases"
+      "session::title_text::tests::generated_title_text_cases_bind_native_presentation")
+      "canonical-output" [Surface.operatorUi, Surface.runtimeInternal]
   , tagged (followUpCoverage
       "title_admission_join_cases"
       "TitleAdmissionJoinCases"
