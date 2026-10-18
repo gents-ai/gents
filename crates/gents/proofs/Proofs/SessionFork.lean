@@ -20,6 +20,38 @@ structure History where
   compactions : List Compaction
   deriving DecidableEq, Repr
 
+def isUserTurn (message : MessageEnvelope) : Bool :=
+  message.header.role == .user && message.blocks.any fun
+    | .toolResult _ _ _ _ => false
+    | _ => true
+
+/-- Editors name the canonical message key rather than a position in a paged
+transcript. The selected user turn and its suffix are excluded from the child;
+missing, ambiguous, assistant, and tool-result-only anchors cannot select a cut.
+Existing fork publication still owns source authorization, idleness, coherent
+history, child identity, and origin retention. -/
+def editCut (source : History) (messageKey : String) : Option Nat :=
+  match source.messages.filter (·.key == messageKey) with
+  | [message] => if isUserTurn message then some message.sequence else none
+  | _ => none
+
+theorem exact_edit_cut (source : History) (key : String) (message : MessageEnvelope)
+    (unique : source.messages.filter (·.key == key) = [message])
+    (user : isUserTurn message = true) :
+    editCut source key = some message.sequence := by
+  simp [editCut, unique, user]
+
+theorem missing_edit_anchor (source : History) (key : String)
+    (missing : source.messages.filter (·.key == key) = []) :
+    editCut source key = none := by
+  simp [editCut, missing]
+
+theorem ambiguous_edit_anchor (source : History) (key : String)
+    (first second : MessageEnvelope) (rest : List MessageEnvelope)
+    (ambiguous : source.messages.filter (·.key == key) = first :: second :: rest) :
+    editCut source key = none := by
+  simp [editCut, ambiguous]
+
 def copyMessage (child : AgentSession.Scope) (childId : DocId)
     (childKey : String → String) (message : MessageEnvelope) : MessageEnvelope :=
   { message with
