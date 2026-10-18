@@ -14,15 +14,19 @@ export const TimelineItem = memo(function TimelineItem({
   item,
   animateAssistantReveal,
   compactTools,
+  onEditUserMessage,
 }: {
   item: RenderedTimelineItem;
   animateAssistantReveal?: boolean;
   compactTools?: boolean;
+  onEditUserMessage?: (
+    item: Extract<RenderedTimelineItem, { kind: "userMessage" }>,
+  ) => void;
 }) {
   switch (item.kind) {
     case "userMessage":
     case "automatedInput":
-      return <UserMessageItem item={item} />;
+      return <UserMessageItem item={item} onEdit={onEditUserMessage} />;
     case "assistantMessage":
       return (
         <AssistantMessageItem
