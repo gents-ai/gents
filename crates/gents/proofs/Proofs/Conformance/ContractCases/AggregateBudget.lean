@@ -25,6 +25,7 @@ structure AggregateTokenBudgetCase where
   chargedTokens : Nat
   chargeResult : String
   nextUsed : Option Nat
+  abandonedUsed : Option Nat
   postChargeAction : String
   deriving Repr
 
@@ -43,12 +44,6 @@ private def chargeResultName : ChargeResult → String
   | .within _ => "within"
   | .exhausted _ => "exhausted"
   | .overrun _ => "overrun"
-
-private def chargeResultLedger : ChargeResult → Option Ledger
-  | .missing => none
-  | .within ledger => some ledger
-  | .exhausted ledger => some ledger
-  | .overrun ledger => some ledger
 
 private def postChargeActionName : PostChargeAction → String
   | .continue => "continue"
@@ -194,7 +189,8 @@ private def toCase (witness : AggregateTokenBudgetWitness) : AggregateTokenBudge
       witness.configuredMaxOutputTokens)
   , chargedTokens := report.chargedTotal
   , chargeResult := chargeResultName result
-  , nextUsed := (chargeResultLedger result).map Ledger.used
+  , nextUsed := (sharedCharge (some ledger) witness.usage).map Ledger.used
+  , abandonedUsed := (sharedCharge (abandonShared (some ledger)) witness.usage).map Ledger.used
   , postChargeAction := postChargeActionName (postChargeAction result witness.terminalValid) }
 
 def aggregateTokenBudgetCases : List AggregateTokenBudgetCase :=

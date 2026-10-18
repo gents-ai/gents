@@ -34,6 +34,7 @@ def aggregateTokenBudgetCaseJson (witness : AggregateTokenBudgetCase) : String :
     ++ "\"charged_tokens\":" ++ toString witness.chargedTokens ++ ","
     ++ "\"charge_result\":" ++ jsonString witness.chargeResult ++ ","
     ++ "\"next_used\":" ++ optionalNatJson witness.nextUsed
+    ++ ",\"abandoned_used\":" ++ optionalNatJson witness.abandonedUsed
     ++ ",\"post_charge_action\":" ++ jsonString witness.postChargeAction
     ++ "}"
 
