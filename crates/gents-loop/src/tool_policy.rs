@@ -1,3 +1,4 @@
+pub mod access_review;
 pub mod workspace_permissions;
 
 use anyhow::{bail, Result};

@@ -113,6 +113,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) goal_observation_cases: Vec<serde_json::Value>,
     pub(crate) workspace_permission_write_cases: Vec<serde_json::Value>,
     pub(crate) workspace_permission_cases: Vec<serde_json::Value>,
+    pub(crate) access_review_cases: Vec<serde_json::Value>,
     pub(crate) plugin_approval_cases: Vec<serde_json::Value>,
     pub(crate) goal_objective_whitespace_codepoints: Vec<u32>,
     pub(crate) task_goal_publication_cases: Vec<LeanTaskGoalPublicationCase>,

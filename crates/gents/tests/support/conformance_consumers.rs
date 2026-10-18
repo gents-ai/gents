@@ -252,6 +252,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_workspace_permission_cases",
         },
         ConformanceConsumer::RustTest {
+            id: "tool_policy::access_review::tests::generated_access_review_cases_drive_native_reply_and_routing",
+            package: "gents-loop",
+            source_path: "crates/gents-loop/src/tool_policy/access_review.rs",
+            module_path: "tool_policy::access_review::tests",
+            function: "generated_access_review_cases_drive_native_reply_and_routing",
+        },
+        ConformanceConsumer::RustTest {
             id: "tool_policy::workspace_permissions::tests::generated_workspace_permission_write_cases",
             package: "gents-loop",
             source_path: "crates/gents-loop/src/tool_policy/workspace_permissions.rs",
