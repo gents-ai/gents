@@ -28,7 +28,6 @@ impl Drop for StartupChild {
 }
 
 pub async fn serve(paths: DesktopPaths, editor_store: bool, interactive: bool) -> Result<()> {
-    let listener = local::LocalListener::bind(&paths).await?;
     let provider = editor_store.then(|| {
         Arc::new(crate::editor_store::Provider::new(
             paths.root().to_owned(),
@@ -49,6 +48,13 @@ pub async fn serve(paths: DesktopPaths, editor_store: bool, interactive: bool) -
             if let Some(provider) = &provider {
                 let _ = provider.failed(&error).await;
             }
+            return Err(error);
+        }
+    };
+    let listener = match local::LocalListener::bind(core.paths()).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            core.shutdown().await?;
             return Err(error);
         }
     };
