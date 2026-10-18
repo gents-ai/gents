@@ -87,10 +87,10 @@ def activate (state : World) (actor : Gate.Actor) (now : Time)
   let world ← Handover.claimAndActivate state actor now activation
   some { world with retry := initialRetry activation.request.document now scope budget deadline }
 
-def activateTitle (state : World) (actor : Gate.Actor) (now : Time)
-    (activation : Handover.TitleActivation) (scope : Nat)
+def activateAuxiliary (state : World) (actor : Gate.Actor) (now : Time)
+    (activation : Handover.AuxiliaryActivation) (scope : Nat)
     (budget : CompletionRetry.Budget) (deadline : Option Time) : Option World := do
-  let world ← Handover.claimTitle state actor now activation
+  let world ← Handover.claimAuxiliary state actor now activation
   some { world with retry := initialRetry activation.binding.physicalRequest now scope budget deadline }
 
 theorem goal_claim_requires_publication_route
@@ -163,10 +163,10 @@ inductive Trace : World → World → Prop where
       (activation : Handover.Activation) (scope : Nat)
       (budget : CompletionRetry.Budget) (deadline : Option Time)
       (h : activate before actor now activation scope budget deadline = some after) : Trace before after
-  | activateTitle {before after : World} (actor : Gate.Actor) (now : Time)
-      (activation : Handover.TitleActivation) (scope : Nat)
+  | activateAuxiliary {before after : World} (actor : Gate.Actor) (now : Time)
+      (activation : Handover.AuxiliaryActivation) (scope : Nat)
       (budget : CompletionRetry.Budget) (deadline : Option Time)
-      (h : activateTitle before actor now activation scope budget deadline = some after) :
+      (h : activateAuxiliary before actor now activation scope budget deadline = some after) :
       Trace before after
   | finish {before after : World} (actor : Gate.Actor)
       (acknowledged : List BackgroundCompletion.NotificationBinding)
@@ -232,19 +232,19 @@ theorem activate_preserves_nextSequence
       cases h
       exact Handover.successful_claim_preserves_nextSeq before session actor now activation hc
 
-theorem activateTitle_preserves_nextSequence
+theorem activateAuxiliary_preserves_nextSequence
     (before after : World) (actor : Gate.Actor) (now : Time)
-    (activation : Handover.TitleActivation) (scope : Nat)
+    (activation : Handover.AuxiliaryActivation) (scope : Nat)
     (budget : CompletionRetry.Budget) (deadline : Option Time)
-    (h : activateTitle before actor now activation scope budget deadline = some after) :
+    (h : activateAuxiliary before actor now activation scope budget deadline = some after) :
     after.transcript.nextSeq = before.transcript.nextSeq := by
-  unfold activateTitle at h
-  cases hc : Handover.claimTitle before actor now activation with
+  unfold activateAuxiliary at h
+  cases hc : Handover.claimAuxiliary before actor now activation with
   | none => simp [hc] at h
   | some claimed =>
       simp [hc] at h
       cases h
-      rw [Handover.successful_title_claim_frame before claimed actor now activation hc]
+      rw [Handover.successful_auxiliary_claim_frame before claimed actor now activation hc]
 
 theorem finish_preserves_nextSequence
     (before after : World) (actor : Gate.Actor)
@@ -282,8 +282,8 @@ theorem Trace.nextSequence_monotone {before after : World} (trace : Trace before
       simpa using Nat.le_of_eq hs.symm
   | activate actor now activation scope budget deadline h =>
       rw [activate_preserves_nextSequence _ _ actor now activation scope budget deadline h]
-  | activateTitle actor now activation scope budget deadline h =>
-      rw [activateTitle_preserves_nextSequence _ _ actor now activation scope budget deadline h]
+  | activateAuxiliary actor now activation scope budget deadline h =>
+      rw [activateAuxiliary_preserves_nextSequence _ _ actor now activation scope budget deadline h]
   | finish actor acknowledged h => rw [finish_preserves_nextSequence _ _ actor acknowledged h]
   | activateGoal actor now result published generation duration leaseDeadline scope budget deadline h =>
       rename_i prior next

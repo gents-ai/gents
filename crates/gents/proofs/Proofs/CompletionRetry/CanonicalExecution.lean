@@ -10,7 +10,8 @@ open CanonicalOutput
 def expectedCoordinate (purpose : RequestPurpose) (state : CompletionRetry.State) : Coordinate :=
   ⟨state.request, match purpose with
     | .normal => .provider state.scope state.turn state.attempt
-    | .titleAudit => .auxiliary .title state.scope state.turn state.attempt⟩
+    | .titleAudit => .auxiliary .title state.scope state.turn state.attempt
+    | .accessReview => .auxiliary .accessReview state.scope state.turn state.attempt⟩
 
 def sourceMatches (purpose : RequestPurpose) (state : CompletionRetry.State)
     (closing : Segment) : Bool :=

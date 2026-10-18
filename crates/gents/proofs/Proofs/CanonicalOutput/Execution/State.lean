@@ -32,7 +32,8 @@ structure GoalChildReceipt where
   authenticated : Bool
   deriving DecidableEq, Repr
 
-structure TitleBinding where
+structure AuxiliaryBinding where
+  purpose : RequestPurpose := .titleAudit
   physicalRequest : DocId
   logicalRequest : RequestId
   parentPhysical : DocId
@@ -42,8 +43,8 @@ structure TitleBinding where
   authenticated : Bool
   deriving DecidableEq, Repr
 
-structure TitleActivation where
-  binding : TitleBinding
+structure AuxiliaryActivation where
+  binding : AuxiliaryBinding
   generation : Generation
   duration : Time
   deadline : Time
@@ -53,7 +54,7 @@ inductive ClaimEvidence where
   | backgroundWake (snapshot : BackgroundCompletion.WakeAttemptSnapshot)
   | ordinary
   | goalChild (receipt : GoalChildReceipt)
-  | titleAudit (binding : TitleBinding)
+  | auxiliary (binding : AuxiliaryBinding)
   deriving DecidableEq, Repr
 
 structure Activation where

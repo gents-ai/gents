@@ -20,9 +20,9 @@ private structure SignedPurpose where
   physical : CanonicalOutput.DocId
   purpose : RequestPurpose
 
-private structure TitleBindingFact where
+private structure AuxiliaryBindingFact where
   physical : CanonicalOutput.DocId
-  binding : TitleBinding
+  binding : AuxiliaryBinding
 
 private structure UsageAction where
   callId : Nat
@@ -33,7 +33,7 @@ private structure Case where
   parent : ParentScope
   rows : RawRows
   purposes : List SignedPurpose
-  bindings : List TitleBindingFact
+  bindings : List AuxiliaryBindingFact
   action : Option UsageAction := none
 
 private def parent : ParentScope :=
@@ -54,18 +54,29 @@ private def mkRow (callId physical logical : Nat) (usage : Option Usage) : Nat �
 private def usage : Usage := { promptTokens := 3, completionTokens := 5 }
 private def otherUsage : Usage := { promptTokens := 4, completionTokens := 5 }
 
-private def binding : CanonicalOutput.Execution.Handover.TitleBinding :=
+private def binding : CanonicalOutput.Execution.Handover.AuxiliaryBinding :=
   { physicalRequest := 11, logicalRequest := 21
   , parentPhysical := 10, parentLogical := 20
   , node := 30, session := 40, authenticated := true }
 
-private def bindingFact (b : TitleBinding) : TitleBindingFact :=
+private def bindingFact (b : AuxiliaryBinding) : AuxiliaryBindingFact :=
   { physical := 11, binding := b }
 
 private def titlePurpose : SignedPurpose := ⟨11, .titleAudit⟩
 private def normalPurpose : SignedPurpose := ⟨10, .normal⟩
 
 private def titleUsageCases : List Case := [
+  { name := "access_review_usage_is_parent_inclusive_audit_only", parent := parent,
+    rows := [mkRow 7 11 21 (some usage)], purposes := [⟨11, .accessReview⟩],
+    bindings := [bindingFact { binding with purpose := .accessReview }] },
+  { name := "access_review_cannot_replay_title_binding", parent := parent,
+    rows := [mkRow 7 11 21 (some usage)], purposes := [⟨11, .accessReview⟩],
+    bindings := [bindingFact binding] },
+  { name := "title_cannot_replay_access_review_binding", parent := parent,
+    rows := [mkRow 7 11 21 (some usage)], purposes := [titlePurpose],
+    bindings := [bindingFact { binding with purpose := .accessReview }] },
+  { name := "access_review_missing_binding_fails_closed", parent := parent,
+    rows := [mkRow 7 11 21 (some usage)], purposes := [⟨11, .accessReview⟩], bindings := [] },
   { name := "normal_public_usage", parent := parent,
     rows := [mkRow 1 10 20 (some usage)], purposes := [normalPurpose], bindings := [] },
   { name := "title_audit_only", parent := parent,
@@ -116,8 +127,8 @@ private def purposeLookup (facts : List SignedPurpose)
     (physical : CanonicalOutput.DocId) : Option RequestPurpose :=
   (facts.find? (fun fact => fact.physical == physical)).map (·.purpose)
 
-private def bindingLookup (facts : List TitleBindingFact)
-    (physical : CanonicalOutput.DocId) : Option TitleBinding :=
+private def bindingLookup (facts : List AuxiliaryBindingFact)
+    (physical : CanonicalOutput.DocId) : Option AuxiliaryBinding :=
   (facts.find? (fun fact => fact.physical == physical)).map (·.binding)
 
 private def applyAction (rows : RawRows) : Option UsageAction → RawRows
@@ -149,16 +160,17 @@ private def parentJson (value : ParentScope) : Json := Json.mkObj
    ("node", toJson value.node), ("session", toJson value.session),
    ("state", toJson value.state.toDefraDB)]
 
-private def bindingJson (value : CanonicalOutput.Execution.Handover.TitleBinding) : Json :=
+private def bindingJson (value : CanonicalOutput.Execution.Handover.AuxiliaryBinding) : Json :=
   Json.mkObj
-    [("physical", toJson value.physicalRequest),
+    [("purpose", toJson value.purpose.toWire),
+     ("physical", toJson value.physicalRequest),
      ("logical", toJson value.logicalRequest),
      ("parent_physical", toJson value.parentPhysical),
      ("parent_logical", toJson value.parentLogical),
      ("node", toJson value.node), ("session", toJson value.session),
      ("authenticated", toJson value.authenticated)]
 
-private def bindingFactJson (value : TitleBindingFact) : Json :=
+private def bindingFactJson (value : AuxiliaryBindingFact) : Json :=
   Json.mkObj
     [("physical", toJson value.physical),
      ("binding", bindingJson value.binding)]
@@ -178,9 +190,9 @@ private def resultJson : Except CatalogError Totals → Json
       [("kind", toJson "error"), ("error", toJson "conflicting_call_id")]
   | .error .missingPurpose => Json.mkObj
       [("kind", toJson "error"), ("error", toJson "missing_purpose")]
-  | .error .missingTitleBinding => Json.mkObj
+  | .error .missingAuxiliaryBinding => Json.mkObj
       [("kind", toJson "error"), ("error", toJson "missing_title_binding")]
-  | .error .invalidTitleBinding => Json.mkObj
+  | .error .invalidAuxiliaryBinding => Json.mkObj
       [("kind", toJson "error"), ("error", toJson "invalid_title_binding")]
 
 private def evaluate (c : Case) (rows : RawRows) : Except CatalogError Totals :=
@@ -215,9 +227,9 @@ theorem exact_duplicate_and_conflict_witnesses :
 
 theorem wrong_physical_and_logical_witnesses :
     evaluateNamed "same_logical_wrong_physical" =
-      some (.error .invalidTitleBinding, .error .invalidTitleBinding) ∧
+      some (.error .invalidAuxiliaryBinding, .error .invalidAuxiliaryBinding) ∧
     evaluateNamed "same_physical_wrong_logical" =
-      some (.error .invalidTitleBinding, .error .invalidTitleBinding) := by
+      some (.error .invalidAuxiliaryBinding, .error .invalidAuxiliaryBinding) := by
   native_decide
 
 theorem unrelated_parent_is_excluded_not_invalid :
@@ -227,14 +239,14 @@ theorem unrelated_parent_is_excluded_not_invalid :
 
 theorem unauthenticated_binding_is_invalid :
     evaluateNamed "unauthenticated_title_binding" =
-      some (.error .invalidTitleBinding, .error .invalidTitleBinding) := by
+      some (.error .invalidAuxiliaryBinding, .error .invalidAuxiliaryBinding) := by
   native_decide
 
 theorem missing_dependencies_do_not_become_zero_totals :
     evaluateNamed "missing_signed_purpose" =
       some (.error .missingPurpose, .error .missingPurpose) ∧
     evaluateNamed "missing_authenticated_title_binding" =
-      some (.error .missingTitleBinding, .error .missingTitleBinding) := by
+      some (.error .missingAuxiliaryBinding, .error .missingAuxiliaryBinding) := by
   native_decide
 
 private def caseJson (c : Case) : Json := Json.mkObj
