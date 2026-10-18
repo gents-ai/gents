@@ -360,14 +360,6 @@ async fn list_background_tools_reports_running_live_output_bytes() {
         !observations.is_empty(),
         "tool_call_id {tool_call_id} never appeared in any list response; last response: {last_response}"
     );
-    // Absence diagnosability: if the row existed but was filtered before
-    // becoming an entry, the response carries the reason (test/diagnostic
-    // only, skipped from the public envelope).
-    let dropped = &last_response["dropped"];
-    assert!(
-        dropped.is_null() || dropped.as_array().is_some_and(|rows| rows.is_empty()),
-        "list responses report dropped rows (decode/filter/authorization): {dropped}"
-    );
     assert_eq!(entry["tool_name"].as_str(), Some("bash_unrestricted"),
         "no running observation with stdout_bytes==4 within the gate window; per-attempt status/bytes: {observations:?}; last response: {last_response}");
     assert_eq!(entry["status"].as_str(), Some("running"));

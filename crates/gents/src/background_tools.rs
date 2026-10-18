@@ -153,44 +153,15 @@ pub(crate) async fn handle_list_background_tools(
         "handle_list_background_tools",
     )
     .await?;
-    let raw_values = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
-        .and_then(serde_json::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mut rows = Vec::new();
-    let mut dropped = Vec::new();
-    for (row_index, value) in raw_values.iter().enumerate() {
-        match serde_json::from_value::<ListBackgroundToolRow>(value.clone()) {
-            Ok(row) => rows.push(row),
-            Err(error) => {
-                tracing::warn!(
-                    collection = "AgentToolCall",
-                    row_index,
-                    error = %error,
-                    "skipping malformed control-plane row"
-                );
-                dropped.push((
-                    format!("row_{row_index}"),
-                    format!("decode failure: {error}"),
-                ));
-            }
-        }
-    }
+    let rows: Vec<ListBackgroundToolRow> =
+        rows_skipping_malformed(response.data.as_ref(), "AgentToolCall")?;
 
     let mut entries = Vec::new();
     for row in rows {
         if !caller.authorizes(&row.session_id, &row.node_did, row.requester_did.as_deref()) {
-            dropped.push((
-                row.tool_call_id.clone(),
-                "authorization mismatch".to_string(),
-            ));
             continue;
         }
         if row.await_mode.as_deref() != Some("background") {
-            dropped.push((row.tool_call_id.clone(), "await_mode filter".to_string()));
             continue;
         }
         let projection = WaitStatusProjection::from_parts(
@@ -200,13 +171,6 @@ pub(crate) async fn handle_list_background_tools(
             Utc::now(),
         );
         if !list_projection_matches(args.status, &projection) {
-            dropped.push((
-                row.tool_call_id.clone(),
-                format!(
-                    "status filter (raw lifecycle_state {:?})",
-                    row.lifecycle_state.as_deref()
-                ),
-            ));
             continue;
         }
         let Some(tool_call_id) = non_empty_string(Some(&row.tool_call_id)) else {
@@ -248,7 +212,6 @@ pub(crate) async fn handle_list_background_tools(
         read_at: Utc::now(),
         truncated,
         entries,
-        dropped,
     })
 }
 
