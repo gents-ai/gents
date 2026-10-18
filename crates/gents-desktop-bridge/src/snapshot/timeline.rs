@@ -374,6 +374,7 @@ mod tests {
     fn internal_completions_remain_hidden_when_their_origin_is_known() {
         for text in [
             "<tool-completion tool_call_id=\"spawned:call\" tool_name=\"bash_unrestricted\" status=\"completed\"><result>finished</result></tool-completion>",
+            "<tool-completion tool_call_id=\"spawned:call\" tool_name=\"bash_unrestricted\" status=\"failed\"><result>error: no bin target named `verad`</result><reason>tool_failed</reason></tool-completion>",
             gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
         ] {
             let message = MessageView {
