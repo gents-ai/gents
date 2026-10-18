@@ -161,6 +161,46 @@ async fn read_tool(hook: &DefraSessionHook, internal_call_id: &str, tool_call_id
     )
 }
 
+/// Test-only persisted-row snapshot, ACP-scoped to this test's session and
+/// sanitized: state tokens, await_mode token, and booleans only (no raw
+/// timestamps or payloads). Distinguishes at failure time whether the
+/// spawned row (a) was never persisted / has a different identity, (b)
+/// exists but is stuck pending, (c) exists and failed, or (d) is running
+/// with unexpected bytes.
+async fn persisted_row_snapshot(hook: &DefraSessionHook, handle_tool_call_id: &str) -> Value {
+    let session_id = hook.session_id().await.expect("session id");
+    let session = crate::graphql::escape_graphql_string(&session_id);
+    let response = hook
+        .node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }} }}, order: {{ _docID: asc }}) {{ tool_call_id tool_name lifecycle_state await_mode started_at completed_at }} }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "persisted row snapshot query failed: {:?}",
+        response.errors
+    );
+    let rows = response.data["AgentToolCall"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let sanitized: Vec<Value> = rows
+        .iter()
+        .map(|row| {
+            json!({
+                "tool_call_id_matches_handle": row["tool_call_id"].as_str() == Some(handle_tool_call_id),
+                "tool_name": row["tool_name"].as_str(),
+                "lifecycle_state": row["lifecycle_state"].as_str(),
+                "await_mode": row["await_mode"].as_str(),
+                "has_started_at": row["started_at"].as_str().is_some(),
+                "has_completed_at": row["completed_at"].as_str().is_some(),
+            })
+        })
+        .collect();
+    json!({ "row_count": rows.len(), "rows": sanitized })
+}
+
 async fn list_background_tools(
     hook: &DefraSessionHook,
     internal_call_id: &str,
@@ -358,7 +398,10 @@ async fn list_background_tools_reports_running_live_output_bytes() {
     }
     assert!(
         !observations.is_empty(),
-        "tool_call_id {tool_call_id} never appeared in any list response; last response: {last_response}"
+        "tool_call_id {tool_call_id} never appeared in any list response; \
+         last response: {last_response}; \
+         persisted-row snapshot: {}",
+        serde_json::to_string(&persisted_row_snapshot(&hook, tool_call_id).await).unwrap()
     );
     assert_eq!(entry["tool_name"].as_str(), Some("bash_unrestricted"),
         "no running observation with stdout_bytes==4 within the gate window; per-attempt status/bytes: {observations:?}; last response: {last_response}");
