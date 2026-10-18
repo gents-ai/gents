@@ -163,10 +163,13 @@ async fn tools_in_flight(txn: &ConfigApplyTxn<'_>, scope: &str) -> Result<Value>
 /// `RequestInput::default()` (canonical writer), so storage represents them as
 /// absent or null; `AgentRequestRow` decodes that through `Option`. A present
 /// value must still satisfy the strict input contract and fails loudly.
+///
+/// Errors are constructed fresh from the request id only: the serde cause can
+/// embed raw persisted values, so it is never chained into the error.
 fn decode_queued_input(row: &Value) -> Result<gents_protocol::request_input::RequestInput> {
     let input: Option<gents_protocol::request_input::RequestInput> =
-        serde_json::from_value(row["input"].clone()).with_context(|| {
-            format!(
+        serde_json::from_value(row["input"].clone()).map_err(|_| {
+            anyhow!(
                 "decoding queued session input for request {}",
                 row["request_id"]
             )
@@ -504,12 +507,27 @@ mod tests {
             gents_protocol::request_input::QueueSource::Steering
         );
         // A present value that violates the strict input contract stays an
-        // error naming the request; it must not decode silently or leak the
-        // raw persisted input.
-        let malformed = json!({"request_id": request_id, "input": {"unmodeled": "x"}});
-        let error = decode_queued_input(&malformed).unwrap_err();
-        assert!(error.to_string().contains(request_id), "{error:#}");
-        assert!(!error.to_string().contains("unmodeled"));
+        // error naming the request; it must not decode silently, and the
+        // error must be payload-free on every rendering: the serde cause can
+        // embed raw persisted values, so no rendering may leak them.
+        let secret = "sentinel-secret-payload";
+        for malformed_input in [
+            json!({"unmodeled": secret}),
+            json!(format!("string where a struct was required: {secret}")),
+        ] {
+            let row = json!({"request_id": request_id, "input": malformed_input});
+            let error = decode_queued_input(&row).unwrap_err();
+            for rendered in [
+                error.to_string(),
+                format!("{error:#}"),
+                format!("{error:?}"),
+            ] {
+                assert!(rendered.contains(request_id), "{rendered}");
+                assert!(!rendered.contains(secret), "{rendered}");
+                assert!(!rendered.contains("unmodeled"), "{rendered}");
+                assert!(!rendered.contains("invalid type"), "{rendered}");
+            }
+        }
     }
 
     #[tokio::test]
