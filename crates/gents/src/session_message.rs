@@ -138,6 +138,26 @@ pub(crate) async fn render_body(
         MessageBody::Task(task) => task,
     };
     let task_id = task.task_id.trim();
+    let Some(task_document) = load_configured_task(node, caller_node_did, task_id).await? else {
+        return Ok(Err(format!("task '{task_id}' is not configured")));
+    };
+    if task_document.emit_outcome {
+        return Ok(Err("emit_outcome Tasks require document-triggered delivery or explicit CLI/desktop Task admission; agent_new/agent_message Task bodies do not emit outcomes".into()));
+    }
+    Ok(render_task_body(
+        &task_document,
+        caller_node_did,
+        target_agent_id,
+        target_session_id,
+        task.input.as_ref(),
+    ))
+}
+
+pub(crate) async fn load_configured_task(
+    node: &Arc<EmbeddedNode>,
+    caller_node_did: &str,
+    task_id: &str,
+) -> Result<Option<crate::document_config::Task>> {
     let loaded = crate::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
@@ -161,14 +181,18 @@ pub(crate) async fn render_body(
         },
     )
     .await?;
-    let Some(loaded) = loaded else {
-        return Ok(Err(format!("task '{task_id}' is not configured")));
-    };
-    let task_document: crate::document_config::Task =
-        serde_json::from_value(loaded).context("decode configured Task")?;
-    if task_document.emit_outcome {
-        return Ok(Err("emit_outcome Tasks require document-triggered delivery or explicit CLI/desktop Task admission; agent_new/agent_message Task bodies do not emit outcomes".into()));
-    }
+    loaded
+        .map(|value| serde_json::from_value(value).context("decode configured Task"))
+        .transpose()
+}
+
+pub(crate) fn render_task_body(
+    task_document: &crate::document_config::Task,
+    caller_node_did: &str,
+    target_agent_id: &str,
+    target_session_id: &str,
+    input: Option<&serde_json::Value>,
+) -> Result<RenderedBody, String> {
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let (node_scope, ctx_scope) =
         crate::template::task_node_ctx(caller_node_did, target_agent_id, &now);
@@ -177,7 +201,7 @@ pub(crate) async fn render_body(
         request: None,
         event: serde_json::Value::Null,
         doc: None,
-        args: Some(task.input.clone().unwrap_or(serde_json::json!({}))),
+        args: Some(input.cloned().unwrap_or(serde_json::json!({}))),
         group: None,
         node: node_scope,
         ctx: ctx_scope,
@@ -189,10 +213,10 @@ pub(crate) async fn render_body(
         &scope,
     ) {
         Ok(rendered) => rendered,
-        Err(error) => return Ok(Err(format!("task {error}"))),
+        Err(error) => return Err(format!("task {error}")),
     };
     let goal = objective.map(|objective| (objective, task_document.goal_token_budget));
-    Ok(Ok(RenderedBody { content, goal }))
+    Ok(RenderedBody { content, goal })
 }
 
 pub(crate) async fn resolve_send_target(
