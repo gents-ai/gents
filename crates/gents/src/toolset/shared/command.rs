@@ -405,6 +405,7 @@ pub(crate) async fn run_command(
     max_output_chars: usize,
 ) -> std::result::Result<String, ToolError> {
     let policy = effective_command_policy(policy);
+    validate_command_policy(command_name, args, &policy)?;
     let cwd = context.resolve_existing_dir(cwd)?;
     let argv = std::iter::once(command_name.to_string())
         .chain(args.iter().cloned())
@@ -413,6 +414,11 @@ pub(crate) async fn run_command(
     let root = context.root();
     let (program, command_args, environment, sandbox) =
         prepare_command_launch(&root, command_name, args, &policy).await?;
+    crate::plugin::approval::workspace::authorize_command(&argv, &cwd, &root, &policy)
+        .await
+        .map_err(|error| {
+            ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
+        })?;
     let bounds = tool_execution_bounds(timeout);
     let live_output = bounds.live_output.clone();
     let request_deadline = bounds.request_deadline_at;
