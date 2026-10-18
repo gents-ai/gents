@@ -757,71 +757,71 @@ mod turn_assignment_tests {
         assert_eq!(terminal.completion_reason(), None);
         assert_eq!(terminal.notification_status(), "completed");
     }
-}
 
-async fn tool_call_row(node: &Arc<EmbeddedNode>, tool_doc_id: &str) -> serde_json::Value {
-    let escaped = escape_graphql_string(tool_doc_id);
-    let response = node
+    async fn tool_call_row(node: &Arc<EmbeddedNode>, tool_doc_id: &str) -> serde_json::Value {
+        let escaped = escape_graphql_string(tool_doc_id);
+        let response = node
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ status lifecycle_state }} }}"#
         ))
         .await;
-    assert!(!response.has_errors(), "{:#?}", response.errors);
-    response.data.unwrap()["AgentToolCall"][0].clone()
-}
+        assert!(!response.has_errors(), "{:#?}", response.errors);
+        response.data.unwrap()["AgentToolCall"][0].clone()
+    }
 
-async fn session_message_notifications(
-    node: &Arc<EmbeddedNode>,
-    did: &str,
-    session_id: &str,
-) -> Vec<String> {
-    let escaped = escape_graphql_string(session_id);
-    let response = node
+    async fn session_message_notifications(
+        node: &Arc<EmbeddedNode>,
+        did: &str,
+        session_id: &str,
+    ) -> Vec<String> {
+        let escaped = escape_graphql_string(session_id);
+        let response = node
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID }} }}"#
         ))
         .await;
-    assert!(!response.has_errors(), "{:#?}", response.errors);
-    let mut notifications = Vec::new();
-    for row in response.data.unwrap()["AgentMessage"].as_array().unwrap() {
-        let (_, message) = crate::session::load_canonical_message_from_node(
-            node,
-            row["_docID"].as_str().unwrap(),
-            did,
-            Some(did),
-        )
-        .await
-        .expect("reconstruct canonical session message");
-        if let crate::llm::message::Message::User { content } = message {
-            for item in content {
-                if let crate::llm::message::UserContent::Text(text) = item {
-                    if text.text.contains("<tool-completion") {
-                        notifications.push(text.text);
+        assert!(!response.has_errors(), "{:#?}", response.errors);
+        let mut notifications = Vec::new();
+        for row in response.data.unwrap()["AgentMessage"].as_array().unwrap() {
+            let (_, message) = crate::session::load_canonical_message_from_node(
+                node,
+                row["_docID"].as_str().unwrap(),
+                did,
+                Some(did),
+            )
+            .await
+            .expect("reconstruct canonical session message");
+            if let crate::llm::message::Message::User { content } = message {
+                for item in content {
+                    if let crate::llm::message::UserContent::Text(text) = item {
+                        if text.text.contains("<tool-completion") {
+                            notifications.push(text.text);
+                        }
                     }
                 }
             }
         }
+        notifications
     }
-    notifications
-}
 
-/// The caused session of the fixture's session message, where Goal state is
-/// observed: `turn_assignment_handoff` reads the Goal of the session the
-/// caused request runs in, read from the caused AgentRequest row itself.
-async fn caused_session_id(node: &Arc<EmbeddedNode>, caused_request_doc_id: &str) -> String {
-    let doc_id = escape_graphql_string(caused_request_doc_id);
-    let response = node
+    /// The caused session of the fixture's session message, where Goal state is
+    /// observed: `turn_assignment_handoff` reads the Goal of the session the
+    /// caused request runs in, read from the caused AgentRequest row itself.
+    async fn caused_session_id(node: &Arc<EmbeddedNode>, caused_request_doc_id: &str) -> String {
+        let doc_id = escape_graphql_string(caused_request_doc_id);
+        let response = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ session_id }} }}"#
         ))
         .await;
-    assert!(
-        !response.has_errors(),
-        "caused request lookup: {:#?}",
-        response.errors
-    );
-    response.data.unwrap()["AgentRequest"][0]["session_id"]
-        .as_str()
-        .expect("the caused request names its session")
-        .to_owned()
+        assert!(
+            !response.has_errors(),
+            "caused request lookup: {:#?}",
+            response.errors
+        );
+        response.data.unwrap()["AgentRequest"][0]["session_id"]
+            .as_str()
+            .expect("the caused request names its session")
+            .to_owned()
+    }
 }
