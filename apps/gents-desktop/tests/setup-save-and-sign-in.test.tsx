@@ -515,6 +515,34 @@ describe("add another account", () => {
     expect(api.applyConfigComponents).not.toHaveBeenCalled();
   });
 
+  it("resumes model discovery with a saved Claude sign-in without opening the browser again", async () => {
+    const harness = createDesktopUiHarness({ scenario: "empty-fleet" });
+    const discoverInferenceModels = vi.fn(
+      harness.adapter.discoverInferenceModels.bind(harness.adapter),
+    );
+    const { api } = addForm("anthropic", { discoverInferenceModels });
+    const user = userEvent.setup();
+    await user.click(
+      await screen.findByRole("button", { name: "Use saved account: Personal" }),
+    );
+    expect(await screen.findByText("Connected as Personal")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Find models" }));
+    await waitFor(() => expect(discoverInferenceModels).toHaveBeenCalledTimes(1));
+    expect(discoverInferenceModels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeDid: NODE_DID,
+        authMethod: "claude_oauth",
+        accountRef: null,
+      }),
+    );
+    expect(
+      await screen.findByRole("region", { name: "Model selection" }),
+    ).toBeVisible();
+    await user.click(screen.getByRole("option", { name: "claude-sonnet-5" }));
+    expect(screen.getByRole("button", { name: "Change model" })).toBeEnabled();
+    expect(api.claudeLogin).not.toHaveBeenCalled();
+  });
+
   it("draws the hint after a refreshed sign-in and stays open", async () => {
     const hint = "Signed in to Work again. To add another account, sign out first.";
     const { onDone } = addForm("anthropic", {

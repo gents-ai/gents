@@ -32,7 +32,6 @@ export function createProviders({ api, store, client }: ProviderParams) {
         return views;
       },
       () => {
-        if (current()) providers.accountsRead(store, nodeDid, []);
         return null;
       },
     );
@@ -93,7 +92,7 @@ export function createProviders({ api, store, client }: ProviderParams) {
       };
     },
     loadProviderUsage(nodeDid: string) {
-      return readUsage(nodeDid, false, null)?.catch(() => undefined);
+      return readUsage(nodeDid, true, null)?.catch(() => undefined);
     },
     refreshProviderUsage(nodeDid: string, provider: string | null) {
       return readUsage(nodeDid, true, provider);

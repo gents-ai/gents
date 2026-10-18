@@ -2,6 +2,7 @@ import type { Dispatch } from "react";
 import type {
   InferenceAuthMethod,
   InferenceProviderOption,
+  ProviderAccountView,
 } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
@@ -14,6 +15,7 @@ import {
 } from "@gents/ui/components/select";
 import { Spinner } from "@gents/ui/components/spinner";
 import { useApp } from "@/app/AppContext";
+import { PROVIDER_CREDENTIAL_KIND } from "@/lib/providerLogin";
 import { Field } from "./parts";
 import {
   oauthProviderFor,
@@ -57,6 +59,7 @@ export function ConnectionFields({
     signIn: () => void;
     cancelSignIn: () => void;
     useAnotherAccount: () => void;
+    useSavedAccount: (account: ProviderAccountView) => void;
     retrySave: () => void;
     discover: () => void;
   };
@@ -72,6 +75,14 @@ export function ConnectionFields({
   const discovery = form.model.discovery;
   const authOptions = option?.authOptions ?? [];
   const oauthProvider = connection ? oauthProviderFor(connection.authMethod) : null;
+  const savedAccounts = oauthProvider
+    ? stored.filter(
+        (account) =>
+          account.provider === PROVIDER_CREDENTIAL_KIND[oauthProvider] &&
+          account.enabled &&
+          !account.pendingSave,
+      )
+    : [];
   const connectionReady = Boolean(
     connection?.endpoint.trim() &&
     (oauthProvider
@@ -136,6 +147,16 @@ export function ConnectionFields({
               </div>
             ) : (
               <>
+                {savedAccounts.map((account) => (
+                  <Button
+                    key={account.credentialId}
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() => ops.useSavedAccount(account)}
+                  >
+                    Use saved account: {account.label}
+                  </Button>
+                ))}
                 {purpose === "add-backend" ? (
                   <Field label="Account label">
                     <Input

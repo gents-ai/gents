@@ -503,7 +503,7 @@ pub async fn read_account_usage(
     node: Arc<EmbeddedNode>,
     node_did: &str,
     backend: &InferenceBackend,
-    _trigger: UsageTrigger,
+    trigger: UsageTrigger,
     endpoints: &UsageEndpoints,
     now: DateTime<Utc>,
 ) -> Result<UsageRead> {
@@ -533,7 +533,9 @@ pub async fn read_account_usage(
     let last_read = load(&access, &target)
         .await?
         .and_then(|stored| stored.read_at);
-    if last_read.is_some_and(|read_at| now - read_at < READ_SKIP_WINDOW) {
+    if trigger == UsageTrigger::Open
+        && last_read.is_some_and(|read_at| now - read_at < READ_SKIP_WINDOW)
+    {
         return Ok(UsageRead::SkippedRecent);
     }
 
