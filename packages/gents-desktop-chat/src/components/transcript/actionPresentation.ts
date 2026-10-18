@@ -48,7 +48,8 @@ export function actionEntries(tools: RenderedToolCallView[]): ActionEntry[] {
     if (launchers.length !== 1 || children?.length !== 1) continue;
     const launcher = launchers[0]!;
     const child = children[0]!;
-    if (launcher === child || child.awaitMode !== "background") continue;
+    if (launcher === child || child.awaitMode !== "background" || child.denial)
+      continue;
     paired.set(child, launcher);
     hidden.add(launcher);
   }

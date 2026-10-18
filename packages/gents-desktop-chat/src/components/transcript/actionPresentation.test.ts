@@ -70,6 +70,7 @@ describe("action presentation", () => {
     "foreground",
     "denied launcher",
     "failed launcher",
+    "denied command",
   ])("keeps unrelated or unavailable launches separate: %s", (condition) => {
     const tools = pair();
     const child = tools[1]!;
@@ -80,6 +81,16 @@ describe("action presentation", () => {
     if (condition === "denied launcher")
       tools[0]!.reconstruction = { state: "denied" };
     if (condition === "failed launcher") tools[0]!.statusKind = "error";
+    if (condition === "denied command") {
+      child.statusKind = "error";
+      child.denial = {
+        category: "workspace",
+        categoryLabel: "Access denied",
+        ruleId: "workspace-root",
+        reasonLine: "Outside the allowed root",
+        diagnostic: "Choose an allowed path",
+      };
+    }
     expect(actionEntries(tools)).toHaveLength(2);
     expect(actionTitle({ tool: child })).toBe("Shell command");
   });
