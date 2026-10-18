@@ -2942,6 +2942,7 @@ mod tests {
             parent.node_did.as_deref(),
             parent.agent_id.as_deref().expect("fixture agent"),
             parent.doc_id.as_deref().unwrap(),
+            None,
         )
         .await;
         let response = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{
@@ -3632,15 +3633,7 @@ mod tests {
             "",
         )
         .await;
-        crate::commands::grok_shim::test_fixtures::seed_started_session(
-            &node,
-            &node_did,
-            "opened",
-            Some(&node_did),
-            &agent_id,
-            &parent_doc,
-        )
-        .await;
+        let mut opening_doc = None;
         for (request_id, call_id, call_doc) in [
             ("zz-opening", "call-open", &open_call),
             ("aa-message", "call-message", &message_call),
@@ -3654,7 +3647,28 @@ mod tests {
                 caused_by_parent_request_id:"open-root", caused_by_parent_request_doc_id:"{parent}", caused_by_parent_tool_call_id:"{call_id}", caused_by_parent_tool_call_doc_id:"{call_doc}"
             }}) {{_docID}} }}"#)).await;
             ensure_no_errors(&response, "seed opened session request").unwrap();
+            if request_id == "zz-opening" {
+                opening_doc = Some(
+                    gents_protocol::graphql::extract_mutation_doc_id(
+                        &json!({"data":response.data}),
+                        "AgentRequest",
+                    )
+                    .unwrap(),
+                );
+            }
         }
+        // The session records its opener: `(created_at, _docID)` alone would
+        // tie these two requests on an unfixed document id.
+        crate::commands::grok_shim::test_fixtures::seed_started_session(
+            &node,
+            &node_did,
+            "opened",
+            Some(&node_did),
+            &agent_id,
+            &parent_doc,
+            opening_doc.as_deref(),
+        )
+        .await;
         let started = crate::caused_sessions::load_direct_caused_sessions(&node, &parent)
             .await
             .unwrap();

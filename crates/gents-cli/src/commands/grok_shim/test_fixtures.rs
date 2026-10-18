@@ -806,8 +806,17 @@ pub(super) async fn seed_started_session(
     requester_did: Option<&str>,
     agent_id: &str,
     parent_request_doc_id: &str,
+    opening_request_doc_id: Option<&str>,
 ) {
     use gents::graphql::escape_graphql_string;
+    let opening = opening_request_doc_id
+        .map(|doc_id| {
+            format!(
+                r#", opening_request_doc_id: "{}""#,
+                escape_graphql_string(doc_id)
+            )
+        })
+        .unwrap_or_default();
     let requester = requester_did
         .map(|did| format!("\"{}\"", escape_graphql_string(did)))
         .unwrap_or_else(|| "null".to_owned());
@@ -832,7 +841,7 @@ pub(super) async fn seed_started_session(
         .execute(&format!(
             r#"mutation {{ create_AgentSession(input: {{
                 session_id: "{}", node_did: "{}", requester_did: {requester}, agent_id: "{}",
-                created_at: "2026-09-01T00:00:00Z", provenance: {{parent_request_doc_id: "{}"}}
+                created_at: "2026-09-01T00:00:00Z", provenance: {{parent_request_doc_id: "{}"{opening}}}
             }}) {{ _docID }} }}"#,
             escape_graphql_string(session_id),
             escape_graphql_string(node_did),
