@@ -142,20 +142,24 @@ pub(crate) struct TurnAssignmentHandoff {
 }
 
 impl TurnAssignmentHandoff {
-    /// The `<reason>` vocabulary of the completion notification. This reason
-    /// is part of the replayed notification bytes, so the completionPending
-    /// redrive (`background_completion_projection`) must be able to reproduce
-    /// it for a row whose side effects did not converge; until that
-    /// projection re-derives session-message reasons from durable state, a
-    /// replay after a partial side-effect failure renders the reasonless
-    /// success form. Delivery is unaffected either way: the notification and
-    /// its wake are published atomically before any divergence is possible.
+    /// The `<reason>` vocabulary of the completion notification. Reasons are
+    /// durable-replay evidence: the redrive
+    /// (`tool_call_lifecycle::recovery::background_completion_projection`)
+    /// must reproduce them from the row's persisted
+    /// `completionPending:<reason>` status, which requires the status lane to
+    /// (a) persist this handoff reason in `settle_session_message` and
+    /// (b) pass the persisted suffix through the projection's `completed`
+    /// arm. Until that interface lands, a replay whose notice was never
+    /// created renders the reasonless form; replays of an existing notice
+    /// are already byte-stable (notification_delivery reuses stored text).
+    /// A reasonless notification is only authoritative as assignment success
+    /// once the handoff reason is durably reproducible.
     pub(crate) fn reason(&self) -> Option<&'static str> {
         if !self.turn_completed {
             return self.terminal_reason;
         }
         match self.assignment {
-            AssignmentObservation::None => None,
+            AssignmentObservation::None => Some("assignment_absent"),
             AssignmentObservation::Unknown => Some("assignment_unknown"),
             AssignmentObservation::Assigned(crate::goal::GoalStatus::Complete) => None,
             AssignmentObservation::Assigned(status) => Some(assignment_status_reason(status)),
@@ -341,9 +345,9 @@ mod turn_assignment_tests {
     }
 
     #[test]
-    fn a_completed_turn_without_a_goal_is_a_clean_success() {
+    fn a_completed_turn_without_a_goal_is_distinguished_from_assignment_success() {
         let handoff = handoff(true, AssignmentObservation::None, None);
-        assert_eq!(handoff.reason(), None);
+        assert_eq!(handoff.reason(), Some("assignment_absent"));
     }
 
     #[test]
@@ -389,6 +393,7 @@ mod turn_assignment_tests {
     #[test]
     fn the_live_reason_vocabulary_is_distinct_from_the_terminal_vocabulary() {
         let reasons: std::collections::BTreeSet<&str> = [
+            "assignment_absent",
             "assignment_active",
             "assignment_paused",
             "assignment_blocked",
@@ -398,7 +403,7 @@ mod turn_assignment_tests {
         ]
         .into_iter()
         .collect();
-        assert_eq!(reasons.len(), 6);
+        assert_eq!(reasons.len(), 7);
         for terminal in ["request_failed", "request_dead", "request_interrupted", "request_superseded"] {
             assert!(!reasons.contains(terminal));
         }
