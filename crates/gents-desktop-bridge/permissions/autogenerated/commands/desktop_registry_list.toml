@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-registry-list"
+description = "Enables the desktop_registry_list command without any pre-configured scope."
+commands.allow = ["desktop_registry_list"]
+
+[[permission]]
+identifier = "deny-desktop-registry-list"
+description = "Denies the desktop_registry_list command without any pre-configured scope."
+commands.deny = ["desktop_registry_list"]

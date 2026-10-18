@@ -2208,6 +2208,110 @@ Denies the desktop_provider_usage_read command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-registry-add`
+
+</td>
+<td>
+
+Enables the desktop_registry_add command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-registry-add`
+
+</td>
+<td>
+
+Denies the desktop_registry_add command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-registry-list`
+
+</td>
+<td>
+
+Enables the desktop_registry_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-registry-list`
+
+</td>
+<td>
+
+Denies the desktop_registry_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-registry-refresh`
+
+</td>
+<td>
+
+Enables the desktop_registry_refresh command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-registry-refresh`
+
+</td>
+<td>
+
+Denies the desktop_registry_refresh command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-registry-remove`
+
+</td>
+<td>
+
+Enables the desktop_registry_remove command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-registry-remove`
+
+</td>
+<td>
+
+Denies the desktop_registry_remove command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-request-resend`
 
 </td>
@@ -3111,6 +3215,32 @@ Open a web link in the person's own browser
 <td>
 
 Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:registries-read`
+
+</td>
+<td>
+
+The cached registry index: the master, the vertical registries it lists, and any added by hand
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:registries-admin`
+
+</td>
+<td>
+
+Refresh the registry index from the master, add a registry by hand, remove one
 
 </td>
 </tr>

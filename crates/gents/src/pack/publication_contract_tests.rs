@@ -18,6 +18,7 @@ async fn generated_local_publication_survives_notification_outcomes() {
                 false,
                 None,
                 &BTreeMap::new(),
+                None,
                 |_| async { Ok(()) },
             )
             .await
@@ -43,18 +44,34 @@ async fn generated_local_publication_survives_notification_outcomes() {
                 assert!(result.is_err());
             }
             "notification_success" => {
-                install(home.path(), &next, false, None, &bindings, |_| async {
-                    let _guard = crate::plugin::store::try_lock_store(home.path())?;
-                    Ok(())
-                })
+                install(
+                    home.path(),
+                    &next,
+                    false,
+                    None,
+                    &bindings,
+                    None,
+                    |_| async {
+                        let _guard = crate::plugin::store::try_lock_store(home.path())?;
+                        Ok(())
+                    },
+                )
                 .await
                 .unwrap();
             }
             "notification_failure" => {
-                let result = install(home.path(), &next, false, None, &bindings, |_| async {
-                    let _guard = crate::plugin::store::try_lock_store(home.path())?;
-                    anyhow::bail!("notification response unavailable")
-                })
+                let result = install(
+                    home.path(),
+                    &next,
+                    false,
+                    None,
+                    &bindings,
+                    None,
+                    |_| async {
+                        let _guard = crate::plugin::store::try_lock_store(home.path())?;
+                        anyhow::bail!("notification response unavailable")
+                    },
+                )
                 .await;
                 assert!(result.is_err());
             }
@@ -65,6 +82,7 @@ async fn generated_local_publication_survives_notification_outcomes() {
                     false,
                     None,
                     &bindings,
+                    None,
                     |_| async {
                         {
                             let _guard = crate::plugin::store::try_lock_store(home.path())?;
@@ -111,9 +129,15 @@ async fn home_removal_excludes_reinstall_until_pin_and_records_are_removed() {
     let home = tempfile::tempdir().unwrap();
     let (_dir, _, archive) = fixture("1.0.0", false);
     let bindings = BTreeMap::new();
-    install(home.path(), &archive, false, None, &bindings, |_| async {
-        Ok(())
-    })
+    install(
+        home.path(),
+        &archive,
+        false,
+        None,
+        &bindings,
+        None,
+        |_| async { Ok(()) },
+    )
     .await
     .unwrap();
     let prepare_error = super::plugin_lifecycle::remove_local(
@@ -171,9 +195,15 @@ async fn home_removal_excludes_reinstall_until_pin_and_records_are_removed() {
     assert!(crate::plugin::store::list_records(home.path())
         .unwrap()
         .is_empty());
-    install(home.path(), &archive, false, None, &bindings, |_| async {
-        Ok(())
-    })
+    install(
+        home.path(),
+        &archive,
+        false,
+        None,
+        &bindings,
+        None,
+        |_| async { Ok(()) },
+    )
     .await
     .unwrap();
     assert!(

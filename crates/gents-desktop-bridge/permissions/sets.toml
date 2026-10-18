@@ -103,6 +103,16 @@ description = "Installed packs, registry search and package pages, the signed-in
 permissions = ["allow-desktop-pack-installed", "allow-desktop-pack-search", "allow-desktop-pack-info", "allow-desktop-pack-whoami", "allow-desktop-pack-plugin-slots"]
 
 [[set]]
+identifier = "registries-read"
+description = "The cached registry index: the master, the vertical registries it lists, and any added by hand"
+permissions = ["allow-desktop-registry-list"]
+
+[[set]]
+identifier = "registries-admin"
+description = "Refresh the registry index from the master, add a registry by hand, remove one"
+permissions = ["allow-desktop-registry-refresh", "allow-desktop-registry-add", "allow-desktop-registry-remove"]
+
+[[set]]
 identifier = "packs-admin"
 description = "Install, update and remove packs, bind a plugin to an inference profile, and sign in to the registry"
 permissions = ["allow-desktop-pack-install", "allow-desktop-pack-update", "allow-desktop-pack-remove", "allow-desktop-pack-login", "allow-desktop-pack-logout", "allow-desktop-pack-plugin-bind"]
@@ -252,6 +262,8 @@ permissions = [
   "external-links",
   "packs-read",
   "packs-admin",
+  "registries-read",
+  "registries-admin",
   "allowed-dirs-read",
   "allowed-dirs-admin",
 ]

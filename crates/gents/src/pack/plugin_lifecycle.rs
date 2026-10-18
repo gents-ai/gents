@@ -17,6 +17,7 @@ pub async fn install<F: Future<Output = Result<()>>>(
     consent: bool,
     owner: Option<&str>,
     bindings: &BTreeMap<String, String>,
+    registry: Option<&str>,
     notify: impl FnOnce(PackIdentity) -> F,
 ) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>)> {
     let manifest = archive.manifest();
@@ -56,6 +57,7 @@ pub async fn install<F: Future<Output = Result<()>>>(
                     })
                     .collect(),
                 installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                registry: registry.map(str::to_owned),
             };
             if let Err(error) = super::write_home_install(home, &record) {
                 let restored = match previous {
@@ -209,6 +211,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            None,
             |_| async { anyhow::bail!("notification failed") },
         )
         .await
@@ -227,6 +230,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            None,
             |_| async { Ok(()) },
         )
         .await
@@ -237,9 +241,15 @@ pub(crate) mod tests {
         let (_dir2, _, updated) = fixture("2.0.0", false);
         let cancelled = tokio::time::timeout(
             std::time::Duration::from_millis(50),
-            install(home.path(), &updated, false, None, &BTreeMap::new(), |_| {
-                std::future::pending::<Result<()>>()
-            }),
+            install(
+                home.path(),
+                &updated,
+                false,
+                None,
+                &BTreeMap::new(),
+                None,
+                |_| std::future::pending::<Result<()>>(),
+            ),
         )
         .await;
         assert!(cancelled.is_err());
@@ -263,6 +273,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            None,
             |_| async { Ok(()) }
         )
         .await
@@ -275,6 +286,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            None,
             |_| async { Ok(()) },
         )
         .await
@@ -288,6 +300,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            None,
             |_| async { Ok(()) }
         )
         .await

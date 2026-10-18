@@ -178,3 +178,26 @@ pub async fn whoami(home: PathBuf, registry: Option<String>) -> Result<Value> {
     }))
     .await
 }
+
+/* ---- registries: the index the Packs panel's picker reads ---- */
+
+pub fn registry_list(home: &std::path::Path) -> Result<Value> {
+    crate::commands::registry::list(home)
+}
+
+pub async fn registry_refresh(home: PathBuf) -> Result<Value> {
+    crate::commands::registry::refresh(&home, None).await
+}
+
+pub fn registry_add(
+    home: &std::path::Path,
+    id: &str,
+    url: &str,
+    label: Option<&str>,
+) -> Result<Value> {
+    crate::commands::registry::add(home, id, url, label)
+}
+
+pub fn registry_remove(home: &std::path::Path, id: &str) -> Result<Value> {
+    crate::commands::registry::remove(home, id)
+}

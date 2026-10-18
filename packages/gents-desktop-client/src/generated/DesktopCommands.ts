@@ -88,6 +88,7 @@ import type { ProviderAccountRetrySaveRequest } from "./ProviderAccountRetrySave
 import type { ProviderAccountView } from "./ProviderAccountView.js";
 import type { ProviderAccountsRequest } from "./ProviderAccountsRequest.js";
 import type { ProviderUsageReadRequest } from "./ProviderUsageReadRequest.js";
+import type { RegistryAddRequest } from "./RegistryAddRequest.js";
 import type { RequestResendResultView } from "./RequestResendResultView.js";
 import type { RequestTimelineView } from "./RequestTimelineView.js";
 import type { ScheduleDeleteRequest } from "./ScheduleDeleteRequest.js";
@@ -201,6 +202,10 @@ export type DesktopCommands = {
   desktop_provider_account_retry_save: { args: { request: ProviderAccountRetrySaveRequest }; result: ProviderAccountView };
   desktop_provider_accounts_list: { args: { request: ProviderAccountsRequest }; result: Array<ProviderAccountView> };
   desktop_provider_usage_read: { args: { request: ProviderUsageReadRequest }; result: Array<BackendUsageView> };
+  desktop_registry_add: { args: { request: RegistryAddRequest }; result: JsonValue };
+  desktop_registry_list: { args: Record<string, never>; result: JsonValue };
+  desktop_registry_refresh: { args: Record<string, never>; result: JsonValue };
+  desktop_registry_remove: { args: { id: string }; result: JsonValue };
   desktop_request_resend: { args: { requestId: string; nodeDid?: string | null }; result: RequestResendResultView };
   desktop_request_retry: { args: { requestId: string; nodeDid?: string | null }; result: ChatSendResult };
   desktop_request_timeline: { args: { nodeDid: string; requestId: string }; result: RequestTimelineView };

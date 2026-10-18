@@ -106,6 +106,7 @@ impl PackInstaller {
                 false,
                 Some(self.core.node_did()),
                 &inference.bindings,
+                None,
                 |identity| {
                     let access = access.clone();
                     let node_did = self.core.node_did().to_owned();

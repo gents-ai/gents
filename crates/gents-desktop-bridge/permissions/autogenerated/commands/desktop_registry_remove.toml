@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-registry-remove"
+description = "Enables the desktop_registry_remove command without any pre-configured scope."
+commands.allow = ["desktop_registry_remove"]
+
+[[permission]]
+identifier = "deny-desktop-registry-remove"
+description = "Denies the desktop_registry_remove command without any pre-configured scope."
+commands.deny = ["desktop_registry_remove"]

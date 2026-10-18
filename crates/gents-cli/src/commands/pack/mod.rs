@@ -93,19 +93,41 @@ pub(crate) struct PackSource {
 
 enum Source {
     Local,
-    Installed,
-    Store,
+    /// `registry` is the record's own, else the store's origin for the
+    /// digest.
+    Installed {
+        registry: Option<String>,
+    },
+    /// `registry` is the store's origin for the digest: the registry a
+    /// preview or an earlier attempt fetched it from.
+    Store {
+        registry: Option<String>,
+    },
     Registry {
         namespace: String,
         name: String,
         version: String,
         artifact_digest: String,
+        /// The registry URL it came from, recorded on the install so an
+        /// update asks the same one.
+        url: String,
     },
 }
 
 impl PackSource {
     pub(crate) fn manifest(&self) -> &PackManifest {
         self.archive.manifest()
+    }
+
+    /// The registry this pack came from, for the install record: the one
+    /// just fetched from, or the one a store hit or an existing install
+    /// remembers; `None` for a pack that only ever arrived as a file.
+    pub(crate) fn registry_url(&self) -> Option<&str> {
+        match &self.from {
+            Source::Registry { url, .. } => Some(url),
+            Source::Installed { registry } | Source::Store { registry } => registry.as_deref(),
+            Source::Local => None,
+        }
     }
 
     pub(crate) fn digest(&self) -> &str {
@@ -123,8 +145,8 @@ impl PackSource {
     pub(crate) fn label(&self) -> &'static str {
         match &self.from {
             Source::Local => "local",
-            Source::Installed => "installed",
-            Source::Store => "store",
+            Source::Installed { .. } => "installed",
+            Source::Store { .. } => "store",
             Source::Registry { .. } => "registry",
         }
     }
@@ -136,6 +158,7 @@ impl PackSource {
                 name,
                 version,
                 artifact_digest,
+                ..
             } => format!(
                 "{} ({namespace}/{name}@{version}, artifact sha256:{artifact_digest})",
                 self.label()
@@ -276,13 +299,28 @@ pub(crate) async fn resolve_pack_source(
         .collect();
     let options = ResolveOptions {
         home: Some(home),
-        registry_url: registry::resolve_registry_url(registry_override),
+        registry_url: gents::pack_registry::resolve_registry_url_in(home, registry_override)?,
         installed: &installed,
     };
+    let registry_url = options.registry_url.clone();
     let resolved = resolve_named(spec, &options).await?;
+    let origin = || gents::pack_store::PackStore::new(home).origin(resolved.archive.digest());
     let from = match resolved.from {
-        ResolvedFrom::Installed => Source::Installed,
-        ResolvedFrom::Store => Source::Store,
+        ResolvedFrom::Installed => {
+            let parsed = gents::pack_resolve::parse_pack_spec(spec)?;
+            let coordinate = format!("{}/{}", parsed.namespace, parsed.name);
+            let recorded = gents::pack::read_home_install(home, &coordinate)?
+                .and_then(|record| record.registry);
+            Source::Installed {
+                registry: match recorded {
+                    Some(url) => Some(url),
+                    None => origin()?,
+                },
+            }
+        }
+        ResolvedFrom::Store => Source::Store {
+            registry: origin()?,
+        },
         ResolvedFrom::Registry {
             artifact_digest,
             version,
@@ -293,6 +331,7 @@ pub(crate) async fn resolve_pack_source(
                 name: parsed.name.to_owned(),
                 version,
                 artifact_digest,
+                url: registry_url,
             }
         }
     };
@@ -733,6 +772,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                 args.grant_authority,
                 slot_owner.as_deref(),
                 &requested,
+                pack.registry_url(),
                 |identity| {
                     let home = &home;
                     async move {

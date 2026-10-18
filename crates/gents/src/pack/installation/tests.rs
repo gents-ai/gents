@@ -793,6 +793,7 @@ async fn a_delayed_plugin_notification_projects_the_current_home_pin() {
             assets: "packs/.materialized/acme/demo/current".into(),
             plugins: current.plugins.clone(),
             installed_at: "2026-01-01T00:00:00Z".into(),
+            registry: None,
         },
     )
     .unwrap();

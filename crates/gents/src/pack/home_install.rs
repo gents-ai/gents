@@ -14,6 +14,11 @@ pub struct HomePackInstall {
     pub assets: String,
     pub plugins: Vec<InstalledPackPlugin>,
     pub installed_at: String,
+    /// The registry URL the pack was fetched from, so `update` and
+    /// `outdated` ask the same registry. Absent for a local file or
+    /// directory install, or a record written before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<String>,
 }
 
 fn checked_coordinate(coordinate: &str) -> Result<(&str, &str)> {
@@ -121,6 +126,7 @@ mod tests {
             assets: "packs/subject_pack/aaaa".into(),
             plugins: vec![],
             installed_at: "2026-01-01T00:00:00Z".into(),
+            registry: None,
         }
     }
 
