@@ -202,7 +202,10 @@ async fn closing_editor_input_releases_an_unready_installation() {
     .unwrap()
     .unwrap();
     assert_eq!(status.code(), Some(1), "{status}: {error}");
-    assert!(error.contains("editor secret storage disconnected"), "{error}");
+    assert!(
+        error.contains("editor secret storage disconnected"),
+        "{error}"
+    );
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             match gents::home::lock_store(paths.root(), paths.node_data_dir()) {
