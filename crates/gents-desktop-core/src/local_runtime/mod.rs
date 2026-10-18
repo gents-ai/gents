@@ -1,5 +1,8 @@
 mod http;
 mod identity;
+mod workspace_permissions;
+
+pub use workspace_permissions::workspace_permission_support;
 
 #[cfg(test)]
 mod tests;

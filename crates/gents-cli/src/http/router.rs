@@ -638,6 +638,10 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
         };
         map.insert("enrollment".to_string(), json!(enrollment));
         map.insert(
+            gents::plugin::approval::workspace::STATUS_SUPPORT_FIELD.to_owned(),
+            json!(gents::plugin::approval::workspace::support()),
+        );
+        map.insert(
             gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FIELD.to_string(),
             replicated_schema_status(&state.replicated_schema),
         );
@@ -985,9 +989,12 @@ mod tests {
             let body = axum::body::to_bytes(response.into_body(), usize::MAX)
                 .await
                 .expect("status body");
-            serde_json::from_slice::<Value>(&body).expect("status json")
-                [gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD]
-                .clone()
+            let body = serde_json::from_slice::<Value>(&body).expect("status json");
+            assert_eq!(
+                body[gents::plugin::approval::workspace::STATUS_SUPPORT_FIELD],
+                json!(gents::plugin::approval::workspace::support()),
+            );
+            body[gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD].clone()
         }
         let mut state = state();
         state.graphql = GraphqlEndpoint::anonymous("http://127.0.0.1:9/api/v0/graphql");
