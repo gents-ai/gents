@@ -311,23 +311,57 @@ async fn list_background_tools_reports_running_live_output_bytes() {
 
     // First observation happens while the child is gate-blocked after
     // printing "live": exactly 4 canonical bytes are observable.
+    //
+    // Root-cause instrumentation (closeout-status-accounting failure at
+    // line 330): the previous loop ran only 40x50ms (2s) — shorter than
+    // the child's own gate budget — and on exhaustion the code asserted
+    // against an empty json!({}), discarding every actual response. The
+    // loop now spans the gate window (60x100ms = 6s < 10s gate ceiling)
+    // and, if no entry matches, panics with the LAST captured list
+    // response plus the tracked per-attempt observation of this
+    // tool_call_id (status and stdout_bytes over time), so failures are
+    // diagnosed from evidence, not inference.
     let mut entry = json!({});
-    for attempt in 0..40 {
+    let mut last_response = json!(null);
+    let mut observations: Vec<(String, u64, String)> = Vec::new();
+    for attempt in 0..60 {
         let result =
             list_background_tools(&hook, &format!("list-live-output-{attempt}"), json!({})).await;
         let entries = result["entries"].as_array().expect("entries");
         if let Some(candidate) = entries
             .iter()
             .find(|entry| entry["tool_call_id"].as_str() == Some(tool_call_id))
+        {
+            observations.push((
+                candidate["status"]
+                    .as_str()
+                    .unwrap_or("<missing>")
+                    .to_string(),
+                candidate["stdout_bytes"].as_u64().unwrap_or(u64::MAX),
+                candidate["available_bytes"]
+                    .as_u64()
+                    .map(|bytes| bytes.to_string())
+                    .unwrap_or_else(|| "<missing>".to_string()),
+            ));
+        }
+        last_response = result.clone();
+        if let Some(matched) = entries
+            .iter()
+            .find(|entry| entry["tool_call_id"].as_str() == Some(tool_call_id))
             .filter(|entry| entry["status"].as_str() == Some("running"))
             .filter(|entry| entry["stdout_bytes"].as_u64().unwrap_or_default() == 4)
         {
-            entry = candidate.clone();
+            entry = matched.clone();
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
-    assert_eq!(entry["tool_name"].as_str(), Some("bash_unrestricted"));
+    assert!(
+        !observations.is_empty(),
+        "tool_call_id {tool_call_id} never appeared in any list response; last response: {last_response}"
+    );
+    assert_eq!(entry["tool_name"].as_str(), Some("bash_unrestricted"),
+        "no running observation with stdout_bytes==4 within the gate window; per-attempt status/bytes: {observations:?}; last response: {last_response}");
     assert_eq!(entry["status"].as_str(), Some("running"));
     assert_eq!(
         entry["stdout_bytes"].as_u64(),
