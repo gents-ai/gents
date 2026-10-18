@@ -272,10 +272,20 @@ describe("example plugins", () => {
       data: {
         call: async (listing, nodeDid, surface, tool, args) => {
           calls.push([listing, nodeDid, surface, tool, args]);
+          /* the tool pages: the moves come two at a time with a next_offset,
+             and the board must see all three to put the task in its lane */
           if (tool === "list_tasks")
             return { kind: "query", output: { results: tasks, count: 3 } };
-          if (tool === "list_moves")
-            return { kind: "query", output: { results: moves, count: 3 } };
+          if (tool === "list_moves") {
+            const offset = (args.offset as number | undefined) ?? 0;
+            const page = moves.slice(offset, offset + 2);
+            const output: Record<string, unknown> = {
+              results: page,
+              count: page.length,
+            };
+            if (page.length === 2) output.next_offset = offset + 2;
+            return { kind: "query", output };
+          }
           return {
             kind: "create",
             output: { collection: "BoardTask", document_id: "bae-1", document: args },
@@ -305,7 +315,9 @@ describe("example plugins", () => {
     expect(calls.map((c) => c.slice(0, 4))).toEqual([
       ["examples/board_pack/board", "did:key:n", "board", "list_tasks"],
       ["examples/board_pack/board", "did:key:n", "board", "list_moves"],
+      ["examples/board_pack/board", "did:key:n", "board", "list_moves"],
     ]);
+    expect(calls.map((c) => c[4])).toEqual([{}, {}, { offset: 2 }]);
     const lane = (name: string) =>
       [...mount.querySelectorAll(".gents-board-lane")]
         .find((el) => el.querySelector("h4")?.textContent?.startsWith(name))!

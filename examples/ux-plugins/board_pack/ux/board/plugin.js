@@ -54,8 +54,10 @@ function fold(tasks, moves) {
    client-updated (an agent wrote through the same surface) and on a
    bounded interval while the page is mounted */
 function useBoard(ctx) {
-  const tasks = useQuery(ctx, SURFACE, 'list_tasks', { args: { limit: 1000 } })
-  const moves = useQuery(ctx, SURFACE, 'list_moves', { args: { limit: 1000 } })
+  // every page of each: the tool answers 1,000 rows at a time and the hook
+  // walks next_offset; the fold needs the whole move history for a lane
+  const tasks = useQuery(ctx, SURFACE, 'list_tasks', { pages: 'all' })
+  const moves = useQuery(ctx, SURFACE, 'list_moves', { pages: 'all' })
   const addTask = useWrite(ctx, SURFACE, 'add_task')
   const moveTask = useWrite(ctx, SURFACE, 'move_task')
   const rows = useMemo(

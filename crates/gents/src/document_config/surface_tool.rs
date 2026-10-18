@@ -401,7 +401,10 @@ pub(crate) fn validate_query_tool_declarations(
                     field.name
                 )
             })?;
-            if matches!(field.name.trim(), "fields" | "limit" | "field_page") {
+            if matches!(
+                field.name.trim(),
+                "fields" | "limit" | "offset" | "order" | "field_page"
+            ) {
                 return Err(anyhow::anyhow!(
                     "query_tools[{i}] (tool {:?}) filter_fields[{j}] {:?} collides with a reserved query argument",
                     decl.tool_name,
@@ -550,7 +553,7 @@ mod tests {
 
     #[test]
     fn query_decl_rejects_reserved_filter_names() {
-        for name in ["fields", "limit", "field_page"] {
+        for name in ["fields", "limit", "offset", "order", "field_page"] {
             let decl = QueryToolDecl {
                 tool_name: "query_finding".into(),
                 collection: "Finding".into(),
