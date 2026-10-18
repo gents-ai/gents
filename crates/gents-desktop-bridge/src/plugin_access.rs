@@ -20,25 +20,61 @@ pub struct PluginApprovalsView {
 pub struct PluginApprovalView {
     pub id: String,
     pub prompt: String,
-    pub folder: std::path::PathBuf,
-    pub path: String,
-    pub is_dir: bool,
+    pub subject: ApprovalSubjectView,
+    pub answers: Vec<approval::Answer>,
     pub session_id: Option<String>,
-    pub access: BindAccess,
     #[ts(type = "number")]
     pub expires_at_ms: u64,
 }
 
+#[derive(Debug, Serialize, TS)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ApprovalSubjectView {
+    Filesystem {
+        path: std::path::PathBuf,
+        folder: std::path::PathBuf,
+        #[serde(rename = "isDir")]
+        is_dir: bool,
+        access: BindAccess,
+    },
+    Command {
+        argv: Vec<String>,
+        cwd: std::path::PathBuf,
+        root: std::path::PathBuf,
+        #[serde(rename = "executionMode")]
+        execution_mode: gents::toolset::CommandExecutionMode,
+        #[serde(rename = "networkMode")]
+        network_mode: gents::toolset::CommandNetworkMode,
+    },
+}
+
 impl From<&approval::Request> for PluginApprovalView {
     fn from(request: &approval::Request) -> Self {
+        let subject = if let Some(file) = request.filesystem() {
+            ApprovalSubjectView::Filesystem {
+                path: file.path.to_owned(),
+                folder: file.folder.to_owned(),
+                is_dir: file.is_dir,
+                access: file.access,
+            }
+        } else {
+            let command = request
+                .command()
+                .expect("a non-filesystem approval has a command");
+            ApprovalSubjectView::Command {
+                argv: command.argv.to_vec(),
+                cwd: command.cwd.to_owned(),
+                root: command.root.to_owned(),
+                execution_mode: command.policy.mode,
+                network_mode: command.policy.network_mode,
+            }
+        };
         Self {
             id: request.id.clone(),
             prompt: request.prompt(),
-            folder: request.folder.clone(),
-            path: request.path.clone(),
-            is_dir: request.is_dir,
+            subject,
+            answers: request.answers(),
             session_id: request.session_id.clone(),
-            access: request.access,
             expires_at_ms: request.expires_at_ms,
         }
     }
