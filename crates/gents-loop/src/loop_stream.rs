@@ -584,6 +584,7 @@ where
                         }
                         if let Some(budget) = aggregate_token_budget.as_ref() {
                             let ledger = budget.snapshot()?;
+                            budget.invalidate()?;
                             Err(StreamingError::Completion(
                                 CompletionError::ProviderError(format!(
                                     "aggregate_token_usage_missing: limit={}, used={}; \
@@ -721,6 +722,7 @@ where
                 .filter(|_| !saw_final_usage_event)
             {
                 let ledger = budget.snapshot()?;
+                budget.invalidate()?;
                 aggregate_usage_failure = Some(format!(
                     "aggregate_token_usage_missing: limit={}, used={}; \
                      provider stream ended without a final usage event",
