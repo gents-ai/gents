@@ -7,9 +7,9 @@
 //!   at `BACKGROUND_WAKE_RETRY_MAX_SECONDS` (60s) and a negative persisted
 //!   retry count clamps to the 5s base instead of panicking or inverting.
 //! - `background_wake_next_retry_at` returns `None` for an absent or malformed
-//!   `terminalized_at`. Per `retry_is_due` in the same file, `None` is
-//!   fail-open: the candidate is immediately due for redrive, so a corrupted
-//!   terminal timestamp can never park a failed background wake permanently.
+//!   `terminalized_at` (no panic, no invented delay). How `None` maps to
+//!   redrive due-ness is decided by the private `retry_is_due` and is not
+//!   exercised here.
 //!
 //! These tests exercise the public production functions directly (no copied
 //! logic). They pin scheduling invariants only; they make no claim about
@@ -61,12 +61,10 @@ fn background_wake_backoff_stays_bounded_for_extreme_retry_counts() {
 }
 
 #[test]
-fn absent_or_malformed_terminal_timestamp_fails_open_to_immediate_redrive() {
-    // No persisted terminal timestamp: there is no backoff anchor.
+fn absent_or_malformed_terminal_timestamp_returns_none() {
+    // No persisted terminal timestamp yields no backoff anchor.
     assert_eq!(background_wake_next_retry_at(None, 1), None);
-    // A malformed timestamp must not panic and must not invent a delay. The
-    // production `retry_is_due` treats `None` as immediately due, so redrive
-    // eligibility is never blocked by an unparseable terminal timestamp.
+    // A malformed timestamp yields None: no panic, no invented delay.
     assert_eq!(
         background_wake_next_retry_at(Some("not-a-timestamp"), 1),
         None
