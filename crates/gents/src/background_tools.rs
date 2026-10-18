@@ -102,6 +102,8 @@ struct ReadToolOutputRow {
     await_mode: Option<String>,
     lifecycle_state: Option<String>,
     request_doc_id: Option<String>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
 }
 
 pub(crate) enum ReadToolOutputOutcome {
@@ -260,6 +262,8 @@ pub(crate) async fn read_tool_output_slice(
                 requester_did
                 await_mode
                 lifecycle_state
+                started_at
+                completed_at
             }}
         }}"#
     );
@@ -288,7 +292,10 @@ pub(crate) async fn read_tool_output_slice(
     );
     let status = projection.status_token().to_string();
     let exited = projection.lifecycle.is_terminal();
-    let _ = live_outputs;
+    // Live-output registry is unused here: elapsed/status come from the
+    // authoritative persisted lifecycle projection, and output evidence
+    // comes from the canonical output owner below.
+    let _ = &live_outputs;
     let combined = canonical_tool_output(
         node,
         &row.doc_id,
@@ -584,6 +591,38 @@ fn non_empty_string(value: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_tool_output_row_decodes_missing_and_malformed_timestamps() {
+        // Missing started_at/completed_at must decode as None (not drop the
+        // row); the projection then renders elapsed as unknown truthfully.
+        let row: ReadToolOutputRow = serde_json::from_value(serde_json::json!({
+            "_docID": "tool-doc-1",
+            "tool_call_id": "call-1",
+            "tool_name": "spawn_process",
+            "lifecycle_state": "running"
+        }))
+        .expect("missing timestamp fields decode to None");
+        assert_eq!(row.started_at, None);
+        assert_eq!(row.completed_at, None);
+        assert_eq!(row.lifecycle_state.as_deref(), Some("running"));
+
+        // Malformed (non-RFC3339) timestamps must decode verbatim as
+        // strings, preserving the lifecycle state so the projection can
+        // truthfully render elapsed as unknown instead of dropping the row.
+        let malformed: ReadToolOutputRow = serde_json::from_value(serde_json::json!({
+            "_docID": "tool-doc-2",
+            "tool_call_id": "call-2",
+            "tool_name": "spawn_process",
+            "lifecycle_state": "failed",
+            "started_at": "not-a-timestamp",
+            "await_mode": "background"
+        }))
+        .expect("malformed timestamp string must not drop the row");
+        assert_eq!(malformed.started_at.as_deref(), Some("not-a-timestamp"));
+        assert_eq!(malformed.completed_at, None);
+        assert_eq!(malformed.lifecycle_state.as_deref(), Some("failed"));
+    }
 
     #[test]
     fn process_control_requester_absence_is_exact_not_empty_string() {
