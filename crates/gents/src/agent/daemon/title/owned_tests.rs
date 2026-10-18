@@ -151,7 +151,7 @@ async fn access_review_uses_the_caller_ledger_without_tools_or_chat_publication(
     let tasks = super::super::auxiliary_tasks::AuxiliaryTasks::default();
     let (_shutdown, shutdown_rx) = watch::channel(false);
     let result = fixture
-        .task(provider, true)
+        .task(fixture.admitted(provider), true)
         .run_review(
             fixture.title.clone(),
             review_execution(&fixture, &action_id, Some(budget.clone())),
@@ -163,6 +163,17 @@ async fn access_review_uses_the_caller_ledger_without_tools_or_chat_publication(
     assert_eq!(result.as_deref(), Some(reply.as_str()));
     drain_reviews(&tasks, true).await;
     assert_eq!(budget.snapshot().unwrap().used, 8);
+    let recovered = crate::completion_factory::aggregate_token_budget_for_request(
+        &fixture.node,
+        &fixture.parent,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        recovered.snapshot().unwrap().used,
+        budget.snapshot().unwrap().used
+    );
     let requests = observed.lock().unwrap();
     assert_eq!(requests.len(), 1);
     assert!(requests[0].tools.is_empty());
@@ -283,7 +294,7 @@ async fn access_review_without_reported_usage_invalidates_the_callers_allowance(
     let tasks = super::super::auxiliary_tasks::AuxiliaryTasks::default();
     let (_shutdown, shutdown_rx) = watch::channel(false);
     let error = fixture
-        .task(provider, true)
+        .task(fixture.admitted(provider), true)
         .run_review(
             fixture.title.clone(),
             review_execution(&fixture, &action_id, Some(budget.clone())),
@@ -295,6 +306,15 @@ async fn access_review_without_reported_usage_invalidates_the_callers_allowance(
     assert!(format!("{error:#}").contains("aggregate_token_usage_missing"));
     drain_reviews(&tasks, false).await;
     assert!(budget.snapshot().is_err());
+    let recovered = crate::completion_factory::aggregate_token_budget_for_request(
+        &fixture.node,
+        &fixture.parent,
+    )
+    .await
+    .unwrap_err();
+    assert!(recovered
+        .to_string()
+        .contains("requires reported provider usage"));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.session_message_count().await, 0);
     assert_eq!(
@@ -579,6 +599,27 @@ struct TitleFixture {
 }
 
 impl TitleFixture {
+    fn admitted<M>(&self, model: M) -> crate::admission::AdmittedCompletionModel<M> {
+        let registry = crate::admission::AdmissionRegistry::new(self.node.clone());
+        let backend = self.agent_config.backend_id.as_ref().unwrap();
+        registry.reconcile(
+            1,
+            &std::collections::HashMap::from([(
+                backend.clone(),
+                crate::admission::BackendAdmissionConfig {
+                    backend_id: backend.clone(),
+                    max_concurrent: 1,
+                    max_queue_depth: 0,
+                    enabled: true,
+                    probe_status: "healthy".into(),
+                    measured_unhealthy: false,
+                    config_fingerprint: "scripted".into(),
+                },
+            )]),
+        );
+        crate::admission::AdmittedCompletionModel::new(model, registry, "scripted")
+    }
+
     async fn new() -> Self {
         Self::with_auxiliary(RequestPurpose::TitleAudit, None, None).await
     }

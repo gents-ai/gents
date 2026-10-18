@@ -53,11 +53,14 @@ def sumWhere (observation : Observation) (eligible : UsageRow → Bool) : Nat ×
       if eligible (observation.row callId) then
         (rowUsage (observation.row callId)).completionTokens else 0)
 
+def normalBelongsTo (observation : Observation) (parent : ParentScope)
+    (row : UsageRow) : Bool :=
+  decide (observation.purpose parent.physical = some .normal ∧
+    row.persisted.call.requestId = parent.logical ∧
+    row.physicalRequest = parent.physical)
+
 def normalPublic (observation : Observation) (parent : ParentScope) : Nat × Nat :=
-  sumWhere observation fun row =>
-    decide (observation.purpose parent.physical = some .normal ∧
-      row.persisted.call.requestId = parent.logical ∧
-      row.physicalRequest = parent.physical)
+  sumWhere observation (normalBelongsTo observation parent)
 
 def auxiliarySelfBindingValid (row : UsageRow) (binding : AuxiliaryBinding) : Bool :=
   decide (binding.purpose.isAuxiliary = true ∧ binding.authenticated = true ∧
@@ -200,6 +203,31 @@ def validateAndProject (records : List (Nat × UsageRow))
         pure ⟨normalPublic observation parent, parentInclusiveAudit observation parent⟩
       else throw .conflictingCallId
 
+inductive BudgetError where
+  | catalog (error : CatalogError)
+  | unreportedUsage
+  deriving DecidableEq, Repr
+
+/-- Restart uses the authenticated parent-inclusive catalog. A missing or zero
+usage report cannot establish a remaining provider allowance, even for a failed
+or cancelled call. Late positive usage can make that allowance observable again;
+the parent terminal state never discards paid review work. -/
+def recoverBudget (records : List (Nat × UsageRow))
+    (purpose : CanonicalOutput.DocId → Option RequestPurpose)
+    (auxiliaryBinding : CanonicalOutput.DocId → Option AuxiliaryBinding)
+    (parent : ParentScope) : Except BudgetError Nat := do
+  let totals ← (validateAndProject records purpose auxiliaryBinding parent).mapError .catalog
+  let unique ← (validateCatalog records).mapError .catalog
+  match unique with
+  | [] => pure 0
+  | first :: rest =>
+      let observation := uniqueObservation first rest purpose auxiliaryBinding
+      if unique.any (fun (_, row) =>
+          (normalBelongsTo observation parent row || auxiliaryBelongsTo observation parent row) &&
+          !(row.persisted.usage.any (fun usage => decide (0 < usage.chargedTotal)))) then
+        throw .unreportedUsage
+      pure (totals.parentInclusiveAudit.1 + totals.parentInclusiveAudit.2)
+
 theorem parent_inclusive_decomposes (observation : Observation) (parent : ParentScope) :
     parentInclusiveAudit observation parent =
       ((normalPublic observation parent).1 + (auxiliaryChildren observation parent).1,
@@ -218,6 +246,14 @@ theorem parent_terminal_does_not_drop_late_usage (observation : Observation)
     (parent : ParentScope) (terminal : RequestState) :
     parentInclusiveAudit observation { parent with state := terminal } =
       parentInclusiveAudit observation parent := by
+  rfl
+
+theorem parent_terminal_preserves_recoverable_budget (records : List (Nat × UsageRow))
+    (purpose : CanonicalOutput.DocId → Option RequestPurpose)
+    (auxiliaryBinding : CanonicalOutput.DocId → Option AuxiliaryBinding)
+    (parent : ParentScope) (terminal : RequestState) :
+    recoverBudget records purpose auxiliaryBinding { parent with state := terminal } =
+      recoverBudget records purpose auxiliaryBinding parent := by
   rfl
 
 theorem observe_usage_after_terminal (row : UsageRow) (usage : Usage) :

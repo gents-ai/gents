@@ -109,12 +109,10 @@ fn add_usage(total: &mut AuditUsageTokens, usage: AuditUsageTokens) -> Result<()
     Ok(())
 }
 
-fn project_catalog(
-    parent_doc_id: &str,
-    parent_id: &str,
+fn coherent_calls(
     request_ids: &BTreeMap<String, String>,
     calls: Vec<CallRow>,
-) -> Result<ParentAuditUsage> {
+) -> Result<BTreeMap<String, CallRow>> {
     let mut by_call = BTreeMap::<String, CallRow>::new();
     let mut by_doc = BTreeMap::<String, String>::new();
     for call in calls {
@@ -145,6 +143,16 @@ fn project_catalog(
         }
     }
 
+    Ok(by_call)
+}
+
+fn project_catalog(
+    parent_doc_id: &str,
+    parent_id: &str,
+    request_ids: &BTreeMap<String, String>,
+    calls: Vec<CallRow>,
+) -> Result<ParentAuditUsage> {
+    let by_call = coherent_calls(request_ids, calls)?;
     let mut normal_public = AuditUsageTokens::default();
     let mut parent_inclusive_audit = AuditUsageTokens::default();
     for call in by_call.values() {
@@ -162,12 +170,81 @@ fn project_catalog(
     })
 }
 
+fn project_budget_catalog(
+    request_ids: &BTreeMap<String, String>,
+    calls: Vec<CallRow>,
+) -> Result<u64> {
+    coherent_calls(request_ids, calls)?
+        .values()
+        .try_fold(0_u64, |used, call| {
+            anyhow::ensure!(
+                call.prompt_tokens.is_some() && call.completion_tokens.is_some(),
+                "budget restart requires reported provider usage for call {}",
+                call.call_id
+            );
+            let usage = totals_for_call(call)?;
+            let charged = usage
+                .prompt_tokens
+                .checked_add(usage.completion_tokens)
+                .context("budget restart usage overflow")?;
+            anyhow::ensure!(
+                charged > 0,
+                "budget restart requires reported provider usage for call {}",
+                call.call_id
+            );
+            used.checked_add(charged)
+                .context("budget restart usage overflow")
+        })
+}
+
+struct ParentUsageCatalog {
+    parent_doc_id: String,
+    parent_id: String,
+    max_total_tokens: Option<i64>,
+    request_ids: BTreeMap<String, String>,
+    calls: Vec<CallRow>,
+}
+
 /// An auxiliary call enters the parent-inclusive total only through its
 /// historically verified signed parent link.
 pub async fn load_parent_inclusive_audit_usage(
     node: &EmbeddedNode,
     exact_parent: &AgentRequestRow,
 ) -> Result<ParentAuditUsage> {
+    let catalog = load_parent_catalog(node, exact_parent).await?;
+    project_catalog(
+        &catalog.parent_doc_id,
+        &catalog.parent_id,
+        &catalog.request_ids,
+        catalog.calls,
+    )
+}
+
+pub(crate) async fn load_parent_inclusive_budget_usage(
+    node: &EmbeddedNode,
+    request: &crate::watcher::AgentRequest,
+) -> Result<u64> {
+    let scope = AgentRequestRow {
+        doc_id: Some(request.doc_id.clone()),
+        request_id: request.request_id.clone(),
+        node_did: Some(request.node_did.clone()),
+        requester_did: request.requester_did.clone(),
+        agent_id: Some(request.agent_id.clone()),
+        session_id: Some(request.session_id.clone()),
+        ..Default::default()
+    };
+    let catalog = load_parent_catalog(node, &scope).await?;
+    anyhow::ensure!(
+        catalog.max_total_tokens == request.max_total_tokens,
+        "budget restart disagrees with the execution owner's pinned limit"
+    );
+    project_budget_catalog(&catalog.request_ids, catalog.calls)
+}
+
+async fn load_parent_catalog(
+    node: &EmbeddedNode,
+    exact_parent: &AgentRequestRow,
+) -> Result<ParentUsageCatalog> {
     let parent_doc_id = nonempty(exact_parent.doc_id.as_deref(), "parent physical request")?;
     let parent_id = nonempty(Some(&exact_parent.request_id), "parent logical request")?;
     let agent = nonempty(exact_parent.node_did.as_deref(), "parent agent")?;
@@ -243,7 +320,13 @@ pub async fn load_parent_inclusive_audit_usage(
         .and_then(serde_json::Value::as_array)
         .context("audit usage query omitted InferenceCall rows")?;
     let calls = decode_calls_for_node(raw_calls, agent)?;
-    project_catalog(parent_doc_id, parent_id, &request_ids, calls)
+    Ok(ParentUsageCatalog {
+        parent_doc_id: parent_doc_id.to_owned(),
+        parent_id: parent_id.to_owned(),
+        max_total_tokens: parent.max_total_tokens,
+        request_ids,
+        calls,
+    })
 }
 
 #[cfg(test)]
@@ -406,6 +489,62 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing model usage case {name}"));
             assert_totals(case, false);
             assert_totals(case, true);
+        }
+    }
+
+    #[test]
+    fn generated_budget_recovery_cases_bind_signed_catalog_usage() {
+        use crate::lean_vocab_test::LeanUsageBudgetResult;
+
+        let names = [
+            "empty_budget_has_no_spend",
+            "normal_public_usage",
+            "normal_plus_title_parent_inclusive",
+            "normal_missing_usage_blocks_budget_restart",
+            "access_review_usage_is_parent_inclusive_audit_only",
+            "access_review_missing_usage_blocks_budget_restart",
+            "access_review_zero_usage_blocks_budget_restart",
+            "access_review_late_usage_restores_budget_observation",
+            "failed_access_review_usage_still_reduces_budget",
+            "title_late_usage_after_parent_terminal",
+            "exact_duplicate_call_counts_once",
+            "conflicting_call_id_fails_closed",
+        ];
+        let cases = crate::lean_vocab_test::lean_title_usage_cases();
+        for name in names {
+            let case = cases.iter().find(|case| case.name == name).unwrap();
+            for after in [false, true] {
+                let (request_ids, calls) = native_catalog(case, after);
+                let result = project_budget_catalog(&request_ids, calls);
+                let expected = if after {
+                    &case.budget_after
+                } else {
+                    &case.budget_before
+                };
+                match expected {
+                    LeanUsageBudgetResult::Ok { used } => {
+                        assert_eq!(result.unwrap(), *used, "{name}");
+                    }
+                    LeanUsageBudgetResult::Error { error } => {
+                        let failure = result.unwrap_err();
+                        if error == "unreported_usage" {
+                            assert!(
+                                failure
+                                    .to_string()
+                                    .contains("requires reported provider usage"),
+                                "{name}: {failure}"
+                            );
+                        } else {
+                            assert_eq!(error, "conflicting_call_id");
+                            assert_eq!(
+                                failure.to_string(),
+                                "one call ID has conflicting persisted rows",
+                                "{name}"
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 }
