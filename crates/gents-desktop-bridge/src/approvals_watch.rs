@@ -121,6 +121,8 @@ fn changes_queue(event: &Event, queue: &Path) -> bool {
 
 /// notify 8.2 purges device event history when an FSEvents stream stops;
 /// macOS uses kqueue to keep approval watcher lifetimes independent.
+/// Its nonrecursive directory watches can grow recursively after changes, so
+/// watch roots must stay inside the approval tree to bound descriptor use.
 struct QueueWatch {
     watcher: RecommendedWatcher,
     queue: PathBuf,
@@ -145,7 +147,6 @@ impl QueueWatch {
             }
         })?;
         // Keep watching the parent across queue removal or atomic replacement.
-        watcher.watch(&parent, RecursiveMode::NonRecursive)?;
         watcher.watch(
             queue.parent().context("approval queue has no parent")?,
             RecursiveMode::NonRecursive,
