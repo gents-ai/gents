@@ -846,9 +846,104 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )
         .await?;
     }
+    if matches!(journey, Journey::Conversation | Journey::Editor) {
+        exercise_message_edit(&mut client, &mut id, node_did, session, agent_id).await?;
+    }
     client.close().await;
     stop(&mut host).await?;
     stop(&mut runtime).await?;
+    Ok(())
+}
+
+async fn exercise_message_edit(
+    client: &mut Attachment,
+    id: &mut u32,
+    node_did: &str,
+    source: &str,
+    agent: &str,
+) -> Result<()> {
+    let before = read_session(client, id, node_did, source).await?;
+    let message = before["timelineItems"]
+        .as_array()
+        .and_then(|items| items.iter().find(|item| item["kind"] == "userMessage"))
+        .context("completed source has no authored user message")?;
+    let padded = format!(
+        " {} ",
+        message["itemKey"]
+            .as_str()
+            .context("canonical message key")?
+    );
+    let invalid = client
+        .try_call(
+            *id,
+            "desktop_session_fork_before_message",
+            json!({"request": {
+                "nodeDid": node_did, "sessionId": source, "messageKey": padded
+            }}),
+        )
+        .await;
+    *id += 1;
+    ensure!(
+        invalid.is_err(),
+        "message-key whitespace changed canonical identity"
+    );
+    let fork = client
+        .call(
+            *id,
+            "desktop_session_fork_before_message",
+            json!({"request": {
+                "nodeDid": node_did, "sessionId": source, "messageKey": message["itemKey"]
+            }}),
+        )
+        .await;
+    *id += 1;
+    let child = fork["sessionId"].as_str().context("missing fork receipt")?;
+    ensure!(
+        child != source && fork["nodeDid"] == node_did,
+        "fork receipt crossed source scope"
+    );
+    let sent = client
+        .call(
+            *id,
+            "desktop_chat_send",
+            json!({"request": {
+                "nodeDid": node_did, "sessionId": child, "agentId": agent,
+                "content": "Return the edited fixture response."
+            }}),
+        )
+        .await;
+    *id += 1;
+    ensure!(
+        sent["sessionId"] == child,
+        "edited input was not sent to the branch"
+    );
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let branch = read_session(client, id, node_did, child).await?;
+            if branch["turnState"] == "completed" {
+                let users = branch["timelineItems"]
+                    .as_array()
+                    .context("child timeline")?
+                    .iter()
+                    .filter(|item| item["kind"] == "userMessage")
+                    .collect::<Vec<_>>();
+                ensure!(
+                    users.len() == 1
+                        && users[0]["content"] == "Return the edited fixture response.",
+                    "the edited branch retained the replaced user turn: {branch}"
+                );
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .context("edited branch did not complete")??;
+    let after = read_session(client, id, node_did, source).await?;
+    ensure!(
+        after["timelineItems"] == before["timelineItems"],
+        "editing mutated the original conversation"
+    );
     Ok(())
 }
 
