@@ -61,6 +61,7 @@ export function createBridgeHttpAdapter(
     dismissMailboxItem: unsupported("dismissMailboxItem"),
     resendRequest: unsupported("resendRequest"),
     retryRequest: unsupported("retryRequest"),
+    forkSessionBeforeMessage: unsupported("forkSessionBeforeMessage"),
     saveSkillConfig: unsupported("saveSkillConfig"),
     deleteSkillConfig: unsupported("deleteSkillConfig"),
     deleteTaskConfig: unsupported("deleteTaskConfig"),
