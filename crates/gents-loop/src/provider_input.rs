@@ -29,12 +29,19 @@ impl ServiceTier {
         }
     }
 
+    pub fn wire_value(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Fast => "priority",
+        }
+    }
+
     /// Rig's Responses DTO accepts fewer tiers than the provider. Apply the
     /// native selection after DTO conversion, before accounting and capture.
     pub fn apply(self, body: &mut Value) -> Result<()> {
         body.as_object_mut()
             .context("provider request must be an object")?
-            .insert("service_tier".into(), self.as_str().into());
+            .insert("service_tier".into(), self.wire_value().into());
         Ok(())
     }
 
