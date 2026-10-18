@@ -1003,4 +1003,37 @@ describe("ChatTranscriptPanel states", () => {
       screen.queryByRole("button", { name: "Load older messages" }),
     ).not.toBeInTheDocument();
   });
+  it("keeps the reader in place when a background request replaces the active request", () => {
+    const timelineItems = [
+      userMessage({
+        itemKey: "user-1",
+        requestId: "request-1",
+        content: "Work on this project",
+      }),
+      liveAssistant({ itemKey: "answer", content: "Progress" }),
+    ];
+    const { rerender } = render(
+      <ChatTranscriptPanel
+        selectedSessionId="s1"
+        session={makeSession({ latestRequestId: "request-1", timelineItems })}
+      />,
+    );
+    const panel = screen.getByTestId("transcript-panel");
+    Object.defineProperties(panel, {
+      scrollHeight: { configurable: true, value: 1000 },
+      scrollTop: { configurable: true, writable: true, value: 100 },
+      clientHeight: { configurable: true, value: 400 },
+    });
+    fireEvent.scroll(panel);
+    rerender(
+      <ChatTranscriptPanel
+        selectedSessionId="s1"
+        session={makeSession({ latestRequestId: "background-2", timelineItems })}
+      />,
+    );
+    expect(panel.scrollTop).toBe(100);
+    expect(
+      screen.getByRole("button", { name: "Scroll to bottom" }),
+    ).toBeInTheDocument();
+  });
 });
