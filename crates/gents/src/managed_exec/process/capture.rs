@@ -81,7 +81,7 @@ async fn read_capped<R>(
         let exited_before_read = child_exited.load(std::sync::atomic::Ordering::Acquire);
         let read_started = Instant::now();
         let next = if exited_before_read {
-            match reader.read(&mut buf).now_or_never() {
+            match tokio::task::unconstrained(reader.read(&mut buf)).now_or_never() {
                 Some(result) => result,
                 None => {
                     let remaining = POST_EXIT_DRAIN_READ_BUDGET.saturating_sub(post_exit_read_time);
@@ -92,30 +92,16 @@ async fn read_capped<R>(
                     match tokio::time::timeout(remaining, reader.read(&mut buf)).await {
                         Ok(result) => result,
                         Err(_) => {
-                            // A delayed capture task can first be polled after
-                            // the timer has expired, even when the pipe is now
-                            // at EOF. Check once without waiting before treating
-                            // the drain as incomplete.
+                            // Ready pipe data and EOF remain drainable after a
+                            // scheduling delay; only further waiting is bounded.
+                            post_exit_read_time = POST_EXIT_DRAIN_READ_BUDGET;
                             match tokio::task::unconstrained(reader.read(&mut buf)).now_or_never() {
-                                Some(Ok(0)) => break,
-                                Some(Ok(read)) => {
-                                    {
-                                        let mut output = lock_output(&output);
-                                        let remaining =
-                                            max_bytes.saturating_sub(output.bytes.len());
-                                        let take = remaining.min(read);
-                                        output.bytes.extend_from_slice(&buf[..take]);
-                                        output.truncated = true;
-                                    }
-                                    if let Some((writer, stream)) = &live_output {
-                                        writer.append(*stream, &buf[..read]).await;
-                                    }
-                                }
-                                Some(Err(_)) | None => {
+                                Some(result) => result,
+                                None => {
                                     lock_output(&output).truncated = true;
+                                    break;
                                 }
                             }
-                            break;
                         }
                     }
                 }
@@ -216,13 +202,14 @@ mod tests {
         polls: Arc<std::sync::atomic::AtomicUsize>,
         ready_at: tokio::time::Instant,
         ready: bool,
+        payload: Option<&'static [u8]>,
     }
 
     impl AsyncRead for EofAfterReadiness {
         fn poll_read(
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
-            _: &mut ReadBuf<'_>,
+            buf: &mut ReadBuf<'_>,
         ) -> Poll<std::io::Result<()>> {
             self.polls
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -240,6 +227,9 @@ mod tests {
                 return Poll::Pending;
             }
             if self.ready {
+                if let Some(payload) = self.payload.take() {
+                    buf.put_slice(payload);
+                }
                 Poll::Ready(Ok(()))
             } else {
                 Poll::Pending
@@ -247,8 +237,7 @@ mod tests {
         }
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn delayed_capture_accepts_eof_ready_after_its_drain_deadline_expires() {
+    async fn capture_after_expired_readiness(payload: Option<&'static [u8]>) -> OutputCapture {
         let keepalive = tokio::spawn(async {
             loop {
                 tokio::task::yield_now().await;
@@ -262,6 +251,7 @@ mod tests {
                 polls: Arc::clone(&polls),
                 ready_at,
                 ready: false,
+                payload,
             }),
             1024,
             None,
@@ -277,7 +267,20 @@ mod tests {
 
         let output = join_capture_after_child_exit(task).await;
         keepalive.abort();
+        output
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn delayed_capture_accepts_eof_ready_after_its_drain_deadline_expires() {
+        let output = capture_after_expired_readiness(None).await;
         assert!(output.bytes.is_empty());
+        assert!(!output.truncated);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn delayed_capture_drains_ready_bytes_and_eof_after_its_deadline() {
+        let output = capture_after_expired_readiness(Some(b"git-tree\n")).await;
+        assert_eq!(output.bytes, b"git-tree\n");
         assert!(!output.truncated);
     }
 }
