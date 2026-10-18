@@ -66,7 +66,8 @@ def orphanedBackgroundRecoveryCase
   }
 
 def sessionMessageRecoveryCase
-    (name : String) (cause : ToolRecoveryCause) : RecoverySweepCase :=
+    (name : String) (cause : ToolRecoveryCause)
+    (handoff : Recovery.AssignmentHandoff := .complete) : RecoverySweepCase :=
   let row : ToolCallRecoveryRow :=
     { call := { r6NativeToolFixture with operation := .sessionMessage }
     , cause := cause }
@@ -80,7 +81,11 @@ def sessionMessageRecoveryCase
       (toolCallRecoveryMeasure true row)
       (toolCallRecoveryMeasure true recovered)) with
     recoveryCause := some cause.toContract
-    notificationReason := cause.notificationReason
+    notificationReason :=
+      if cause.toContract = "requestCompleted" then
+        Recovery.sessionMessageHandoffReason true handoff
+      else
+        cause.notificationReason
   }
 
 def taskHookRecordRecoveryCase
