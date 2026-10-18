@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
+use gents_desktop_bridge::host::local;
 use gents_desktop_core::client::DesktopPaths;
 use serde_json::{json, Value};
 use tokio::process::Command;
@@ -33,6 +34,7 @@ async fn an_editor_cache_miss_stops_before_identity_or_store_startup() {
     let store: Value = serde_json::from_slice(&store).unwrap();
     assert_eq!(store["kind"], "store");
     assert_eq!(store["record"]["custody"], "macos-keychain");
+    assert!(local::connect(&paths).await.is_err());
     let original_record = std::fs::read(paths.store_encryption_path()).unwrap();
     let mut second = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
         .args(["--stdio", "--editor-store", "--home"])
