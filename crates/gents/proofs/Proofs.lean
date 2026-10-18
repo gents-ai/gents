@@ -10,6 +10,7 @@ import Proofs.Request
 import Proofs.RequestExecutionLease
 import Proofs.InferenceCall
 import Proofs.TitleAdmission
+import Proofs.TitleText
 import Proofs.CrossMachineComposed
 import Proofs.Fleet
 import Proofs.AgentSession
