@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "session::title_text::tests::generated_title_text_cases_bind_native_presentation",
+            package: "gents",
+            source_path: "crates/gents/src/session/title_text.rs",
+            module_path: "session::title_text::tests",
+            function: "generated_title_text_cases_bind_native_presentation",
+        },
+        ConformanceConsumer::RustTest {
             id: "client::mutations::manage::principal::editor::tests::config_editor_matches_executable_lean_contract",
             package: "gents-desktop-core",
             source_path: "crates/gents-desktop-core/src/client/mutations/manage/principal/editor.rs",
