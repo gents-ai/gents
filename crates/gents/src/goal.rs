@@ -1054,6 +1054,7 @@ async fn stage_goal_and_claim(
     }
 
     let status = initial_state.status;
+    let baseline = session_token_usage_in_txn(txn, node_did, session_id).await?;
     let active_started_field = optional_string_graphql_field(
         "active_started_at",
         status.accrues_active_time().then_some(now),
@@ -1063,7 +1064,7 @@ async fn stage_goal_and_claim(
             goal_id: "{}", creation_key: "{}",
             session_id: "{escaped_session}", node_did: "{escaped_did}",
             objective: "{}", status: "{}", {}
-            tokens_used: 0, active_time_seconds: 0, {active_started_field}
+            tokens_used: 0, token_usage_baseline: {baseline}, active_time_seconds: 0, {active_started_field}
             consecutive_blocked_audits: {}, continuation_sequence: 0,
             wrapup_requested: {}, wrapup_completed: {},
             infrastructure_retry_count: 0, created_at: "{}", updated_at: "{}"
@@ -1091,7 +1092,7 @@ async fn stage_goal_and_claim(
             status: status.as_str().to_string(),
             token_budget,
             tokens_used: Some(0),
-            token_usage_baseline: Some(0),
+            token_usage_baseline: Some(baseline),
             assignment_root_request_doc_id: None,
             active_time_seconds: Some(0),
             active_started_at: status.accrues_active_time().then(|| now.to_string()),
@@ -2319,6 +2320,7 @@ async fn set_goal_in_txn(
     let escaped_objective = escape_graphql_string(&objective);
     let escaped_now = escape_graphql_string(&now_string);
     let budget_field = optional_int_graphql_field("token_budget", budget);
+    let baseline = session_token_usage_in_txn(txn, node_did, session_id).await?;
     let active_started_field = optional_string_graphql_field(
         "active_started_at",
         status.accrues_active_time().then_some(now_string.as_str()),
@@ -2333,6 +2335,7 @@ async fn set_goal_in_txn(
                 status: "{status}",
                 {budget_field}
                 tokens_used: 0,
+                token_usage_baseline: {baseline},
                 active_time_seconds: 0,
                 {active_started_field}
                 consecutive_blocked_audits: {blocked_audits},
@@ -2646,10 +2649,19 @@ pub async fn refresh_goal_usage(
     node: &std::sync::Arc<EmbeddedNode>,
     goal: &GoalDocument,
 ) -> Result<i64> {
-    let tokens = session_token_usage(node, &goal.node_did, &goal.session_id)
-        .await?
-        .saturating_sub(goal.token_usage_baseline.unwrap_or_default().max(0))
-        .max(0);
+    let session_usage = session_token_usage(node, &goal.node_did, &goal.session_id).await?;
+    // Rows created before baseline accounting have no stored baseline; adopt the
+    // current session usage so pre-goal spend is never charged, and persist the
+    // snapshot once so subsequent refreshes charge only new spend.
+    let missing_baseline = goal.token_usage_baseline.is_none();
+    let baseline = goal
+        .token_usage_baseline
+        .map(|baseline| baseline.max(0))
+        .unwrap_or(session_usage);
+    let baseline_repair = missing_baseline
+        .then(|| format!("token_usage_baseline: {baseline},"))
+        .unwrap_or_default();
+    let tokens = session_usage.saturating_sub(baseline).max(0);
     let now = Utc::now();
     let now_string = now.to_rfc3339();
     let active_time = goal.current_active_time_seconds(now);
@@ -2668,7 +2680,7 @@ pub async fn refresh_goal_usage(
         goal,
         status,
         &format!(
-            "tokens_used: {tokens}, active_time_seconds: {active_time}, {active_started_field} updated_at: \"{updated_at}\""
+            "tokens_used: {tokens}, {baseline_repair}active_time_seconds: {active_time}, {active_started_field} updated_at: \"{updated_at}\""
         ),
     )
     .await?;

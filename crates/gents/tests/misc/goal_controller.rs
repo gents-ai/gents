@@ -2112,6 +2112,16 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
 async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     let db = test_db("goal-budget-wrapup").await;
     seed_completed_request(&db, "parent-budget").await;
+    set_goal(
+        &db.node,
+        db.node_identity.did(),
+        SESSION,
+        Some("Stop at the durable budget"),
+        Some(GoalStatus::Active),
+        Some(Some(10)),
+    )
+    .await
+    .expect("set goal");
     let usage = format!(
         r#"mutation {{
         local_usage: add_InferenceCall(input: {{
