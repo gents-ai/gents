@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use gents::defra_node::{EmbeddedNode, HttpConfig};
 use gents::goal::{
     claim_continuation, claim_retry_continuation, create_goal_for_session,
     delete_goals_for_session, load_canonical_goal, load_goals_for_session, session_token_usage,
@@ -9,7 +10,8 @@ use gents::goal::{
     CreateGoalForSessionOutcome, GoalStatus,
 };
 use gents::{
-    ActiveRuntimeSnapshot, ConfigAccess, GoalSource, TriggerSource, UpdateSubscriptionSource,
+    ActiveRuntimeSnapshot, ConfigAccess, GoalSource, KeyIdentity, TriggerSource,
+    UpdateSubscriptionSource,
 };
 use serde::Deserialize;
 use tokio::sync::watch;
@@ -1707,6 +1709,87 @@ async fn fresh_goal_with_zero_prior_usage_starts_charging_from_zero() {
         .expect("goal exists");
     assert_eq!(charged.token_usage_baseline, Some(0));
     assert_eq!(charged.tokens_used, Some(450));
+}
+
+#[tokio::test]
+async fn set_goal_over_http_transactions_computes_the_same_baseline() {
+    // C1 regression: set_goal_from_access and stage_goal_backed_request can
+    // run over an HTTP ConfigAccess; the baseline helper must not require
+    // embedded-only native responses inside the transaction.
+    let address = free_address();
+    let home = tempfile::tempdir().expect("temp dir");
+    let identity = gents::KeyIdentity::load_or_create(home.path().join("principal.key"), None)
+        .expect("key identity");
+    let did = identity.did().to_string();
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .data_path(home.path().join("data"))
+            .with_http(HttpConfig::with_addr(address))
+            .with_node_identity_did(&did)
+            .build()
+            .await
+            .expect("served node"),
+    );
+    let endpoint = format!("http://{address}/api/v0/graphql");
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !gents_protocol::graphql::graphql_endpoint_available(
+            &endpoint,
+            gents_protocol::graphql::GraphqlRequestOptions {
+                timeout: Duration::from_secs(1),
+                max_attempts: 1,
+                retry_backoff: Duration::ZERO,
+            },
+        )
+        .await
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("HTTP listener");
+    let access = ConfigAccess::graphql_as(endpoint.clone(), did.clone());
+
+    create_request_for_agent_with_signed_fields(
+        node.as_ref(),
+        &did,
+        "http-baseline-request",
+        SESSION,
+        "completed",
+        "2026-07-15T00:00:00Z",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    seed_usage(
+        &node,
+        &did,
+        "http-baseline-request",
+        "http-baseline-call",
+        1000,
+        50,
+    )
+    .await;
+
+    let goal = set_goal_from_access(
+        &access,
+        &did,
+        SESSION,
+        Some("HTTP baseline"),
+        None,
+        None,
+        None,
+    )
+    .await
+    .expect("set goal over HTTP");
+    assert_eq!(goal.token_usage_baseline, Some(1050));
+    assert_eq!(goal.tokens_used, Some(0));
+}
+
+async fn free_address() -> std::net::SocketAddr {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+    listener.local_addr().expect("ephemeral address")
 }
 
 async fn seed_usage(

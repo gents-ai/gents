@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 
@@ -2600,9 +2601,12 @@ async fn session_token_usage_in_txn(
             AgentRequest(filter: {{ purpose: {{ _eq: "normal" }}, node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }} }}) {{ request_id }}
         }}"#
     );
-    let response = txn.execute_local_response(&request_query).await?;
-    let mut request_ids = rows::<serde_json::Value>(&response, "AgentRequest")?
+    let response = txn.execute(&request_query).await?;
+    let mut request_ids = response
+        .pointer("/data/AgentRequest")
+        .and_then(Value::as_array)
         .into_iter()
+        .flatten()
         .filter_map(|row| {
             row.get("request_id")
                 .and_then(|value| value.as_str())
@@ -2633,9 +2637,18 @@ async fn session_token_usage_in_txn(
         #[serde(default)]
         completion_tokens: Option<i64>,
     }
-    let response = txn.execute_local_response(&query).await?;
-    let usage_rows: Vec<UsageRow> =
-        rows(&response, "InferenceCall").context("decoding goal inference usage")?;
+    let response = txn.execute(&query).await?;
+    let usage_rows: Vec<UsageRow> = response
+        .pointer("/data/InferenceCall")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .cloned()
+                .map(serde_json::from_value)
+                .collect::<std::result::Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .context("decoding goal inference usage")?;
     let charged = crate::provider_usage::sum_charged_from_persisted_parts(
         usage_rows
             .into_iter()
