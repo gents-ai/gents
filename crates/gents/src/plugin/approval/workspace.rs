@@ -368,8 +368,8 @@ struct Stored {
     entries: Vec<Settings>,
 }
 
-pub(in crate::plugin) const FILE: &str = "workspace-approvals.json";
-pub(in crate::plugin) const LOCK: &str = "workspace-approvals.lock";
+pub(in crate::plugin) const FILE: &str = crate::home::WORKSPACE_APPROVALS_FILE_NAME;
+pub(in crate::plugin) const LOCK: &str = crate::home::WORKSPACE_APPROVALS_LOCK_FILE_NAME;
 
 pub fn preferences_file(home: &Path) -> PathBuf {
     home.join(FILE)
