@@ -1007,12 +1007,25 @@ impl PackInstaller {
                     crate::pack::local::open(&crate::pack::local::LocalName::Path(&path), home)?
                 }
             };
+            // Local built artifacts flow through the same canonical
+            // installers as registry-resolved packs: documents through
+            // prepare/install_prepared_document_pack, graphs through
+            // load_graph + install_loaded_graph_package, plugins-only through
+            // plugins_pack. Plugin authority is unchanged: preview reports
+            // installation_blockers and commit refuses them unless the
+            // operator grants authority, so a locally built pack (e.g. one
+            // declaring child_process or bind_dir capabilities) cannot
+            // silently authorize itself.
             anyhow::ensure!(
                 matches!(
                     archive.manifest().metadata.kind,
-                    crate::pack::PackKind::Plugins
+                    crate::pack::PackKind::Graph
+                        | crate::pack::PackKind::Documents
+                        | crate::pack::PackKind::Plugins
                 ),
-                "native local lifecycle currently accepts plugins-only artifacts"
+                "pack {:?} is {:?}; the model-facing installer supports document, graph and plugins-only packs",
+                archive.manifest().name,
+                archive.manifest().metadata.kind
             );
             return Ok(ConfigPackDistribution(
                 crate::pack_resolve::ResolvedNamedPack {

@@ -7464,3 +7464,427 @@ async fn native_pack_local_paths_and_approval_fail_closed() {
             .is_err()
     );
 }
+
+/// The local built lifecycle accepts the same pack kinds the registry
+/// lifecycle accepts. A documents pack (documents + plugins + inference
+/// slots) reached by explicit path must preview and install through the
+/// canonical document installer, with plugin authority still fenced behind
+/// operator blockers: the pack's plugin is refused at commit until the
+/// grant exists in the plugin home, so the exact downloaded-style artifact
+/// bytes flow through the same digest-pinned receipt.
+#[tokio::test]
+async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin_authority() {
+    let (fixture, directory) = crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
+    let manifest_path = directory.join("manifest.json");
+    let mut manifest: Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    manifest.as_object_mut().unwrap().remove("schemas");
+    // Make this a genuinely mixed pack: the documents pack ships a plugin
+    // that asks for network authority, so the operator fence is exercised.
+    // The fixture compiler replaces plugin artifacts, so the plugin is
+    // written by hand after the copy.
+    let plugins = json!([{
+        "name": "fixture_notifier",
+        "description": "Deterministic native pack fixture plugin asking for outbound HTTP",
+        "artifact": "plugins/fixture_notifier.afb",
+        "language": "rust",
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+        "manifold": {"fs": "None", "net": {"OutboundHttp": ["https://example.invalid"]}, "env": "None", "crypto": false, "child_process": false}
+    }]);
+    manifest["plugins"] = plugins.clone();
+    manifest["assets"] = json!(manifest["assets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .cloned()
+        .chain(std::iter::once(Value::String(
+            "plugins/fixture_notifier.afb".into(),
+        )))
+        .collect::<Vec<_>>());
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let plugins_dir = directory.join("plugins");
+    std::fs::create_dir_all(&plugins_dir).unwrap();
+    let wat = crate::plugin::tests::constant_output_wat(br#"{"native_mixed_echo":"ok"}"#);
+    std::fs::write(
+        plugins_dir.join("fixture_notifier.afb"),
+        crate::plugin::tests::build_plugin_afb(&wat),
+    )
+    .unwrap();
+
+    // The artifact on disk is a built .pack, reached by explicit path.
+    let (bytes, _) = crate::pack_archive::pack_dir(&directory).unwrap();
+    let artifact = fixture.path().join("local_mixed.pack");
+    std::fs::write(&artifact, &bytes).unwrap();
+
+    let (home, plugins) = crate::test_support::home_with_pack_dir(&directory);
+    let (node, did, tools) =
+        pack_tool_with_local_read("local-mixed-documents", plugins, fixture.path()).await;
+
+    // get: reports kind, digest and the operator blocker for the plugin.
+    let get: Value = serde_json::from_str(
+        &config_call(&tools, &["pack", "get", artifact.to_str().unwrap()])
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(get["manifest"]["kind"], "documents");
+    assert_eq!(get["installable"], true);
+    assert_eq!(get["source"], "store");
+    let digest = get["artifact_digest"].as_str().unwrap().to_owned();
+    assert_eq!(
+        get["installation_blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|blocker| blocker["plugin"] == "fixture_notifier")
+            .count(),
+        1,
+        "{get}"
+    );
+
+    // preview: no slot bound yet -> missing_inference_slots, not committed.
+    let missing: Value = serde_json::from_str(
+        &config_call(
+            &tools,
+            &["pack", "preview", "install", artifact.to_str().unwrap()],
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(missing["ready"], false);
+    assert_eq!(missing["missing_inference_slots"], json!(["worker"]));
+    assert_eq!(missing["committed"], false);
+
+    // preview with the slot bound: ready, digest-pinned apply_with, and the
+    // plugin blocker still reported for the operator.
+    let preview: Value = serde_json::from_str(
+        &config_call(
+            &tools,
+            &[
+                "pack",
+                "preview",
+                "install",
+                artifact.to_str().unwrap(),
+                "--inference-slot",
+                "worker=setup:inference",
+            ],
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(preview["ready"], false, "{preview}");
+    assert_eq!(preview["apply_with"], Value::Null);
+    assert_eq!(preview["missing_inference_slots"], Value::Null);
+    assert_eq!(
+        preview["installation_blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|blocker| blocker["plugin"] == "fixture_notifier")
+            .count(),
+        1,
+        "{preview}"
+    );
+    assert_eq!(preview["artifact_digest"], Value::String(digest.clone()));
+
+    // Commit without the operator grant is refused; nothing installs.
+    let refused = config_call(
+        &tools,
+        &[
+            "pack",
+            "install",
+            artifact.to_str().unwrap(),
+            "--digest",
+            &digest,
+            "--inference-slot",
+            "worker=setup:inference",
+        ],
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("operator authorization"),
+        "{refused}"
+    );
+    let access = crate::config_client::ConfigAccess::local(node.clone());
+    assert!(
+        crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // The operator authorizes this exact artifact through the plugin grant
+    // owner: the home's plugin store records a grant covering the declared
+    // manifold. Model input cannot create it; the commit fence reads it.
+    let plugin_declaration: crate::pack::PackPlugin =
+        serde_json::from_value(manifest["plugins"][0].clone()).unwrap();
+    let granted = crate::plugin::authority::declared_manifold(&plugin_declaration).unwrap();
+    crate::plugin::store::write_record(
+        home.path(),
+        &crate::plugin::store::InstalledPlugin {
+            namespace: "fixture".into(),
+            name: "fixture_notifier".into(),
+            version: "1.0.0".into(),
+            digest: "sha256:operator-grant".into(),
+            language: "rust".into(),
+            declaration: plugin_declaration,
+            granted: Some(granted),
+            instructions: None,
+            owner_pack_coordinate: None,
+            owner_pack_digest: None,
+            model_binding: None,
+        },
+    )
+    .unwrap();
+    let installed: Value = serde_json::from_str(
+        &config_call(
+            &tools,
+            &[
+                "pack",
+                "install",
+                artifact.to_str().unwrap(),
+                "--digest",
+                &digest,
+                "--inference-slot",
+                "worker=setup:inference",
+            ],
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(installed["effective"]["digest"], Value::String(digest.clone()));
+    assert!(node.get_collection("FixtureJob").unwrap().is_some());
+    let record = crate::plugin::store::read_record(home.path(), "fixture", "fixture_notifier")
+        .unwrap();
+    assert_eq!(record.owner_pack_coordinate.as_deref(), Some("fixture/documents_fixture"));
+    assert!(
+        record.granted.is_some(),
+        "the operator grant the fence required is on the installed record"
+    );
+}
+
+/// A graph pack reached by explicit local path flows through the same
+/// graph installer as registry-resolved packs: plugins publish after
+/// blockers are resolved, the graph installs, activates and its revision
+/// digest matches the artifact digest the preview pinned.
+#[tokio::test]
+async fn native_pack_local_path_installs_graph_pack() {
+    let (_fixture, directory) = crate::test_support::fixture_pack_copy("prepared_graph", &json!({}));
+    // Keep the pack's plugin sealed (no limits, no manifold) so the commit
+    // exercises the document/graph install path without an operator grant.
+    let manifest_path = directory.join("manifest.json");
+    let mut manifest: Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["plugins"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("limits");
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let (_home, plugins) = crate::test_support::home_with_pack_dir(&directory);
+    let (node, did, tools) =
+        pack_tool_with_local_read("local-graph-pack", plugins, &directory).await;
+    let artifact = directory.join("prepared_graph.pack");
+    let (bytes, _) = crate::pack_archive::pack_dir(&directory).unwrap();
+    std::fs::write(&artifact, &bytes).unwrap();
+
+    let get: Value = serde_json::from_str(
+        &config_call(&tools, &["pack", "get", artifact.to_str().unwrap()])
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(get["manifest"]["kind"], "graph");
+    assert_eq!(get["installable"], true);
+    let digest = get["artifact_digest"].as_str().unwrap().to_owned();
+
+    // preview: missing slot first.
+    let missing: Value = serde_json::from_str(
+        &config_call(
+            &tools,
+            &["pack", "preview", "install", artifact.to_str().unwrap()],
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(missing["ready"], false);
+    assert_eq!(missing["missing_inference_slots"], json!(["worker"]));
+
+    let preview: Value = serde_json::from_str(
+        &config_call(
+            &tools,
+            &[
+                "pack",
+                "preview",
+                "install",
+                artifact.to_str().unwrap(),
+                "--inference-slot",
+                "worker=setup:inference",
+            ],
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(preview["ready"], true, "{preview}");
+    // Graph packs pin and verify by their own revision digest; the effective
+    // record's digest is the activated graph revision, while the artifact
+    // digest the preview pinned is what --digest must match.
+    assert_eq!(preview["artifact_digest"], Value::String(digest.clone()));
+
+    // Commit is refused without --digest (digest pinning).
+    assert!(config_call(
+        &tools,
+        &[
+            "pack",
+            "install",
+            artifact.to_str().unwrap(),
+            "--inference-slot",
+            "worker=setup:inference"
+        ]
+    )
+    .await
+    .is_err());
+
+    let installed: Value = serde_json::from_str(
+        &config_call(
+            &tools,
+            &[
+                "pack",
+                "install",
+                artifact.to_str().unwrap(),
+                "--digest",
+                &digest,
+                "--inference-slot",
+                "worker=setup:inference",
+            ],
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        installed["install"]["revision_digest"],
+        installed["activation"]["active_digest"]
+    );
+    assert_eq!(
+        installed["effective"]["package"]["package_digest"],
+        Value::String(digest.clone())
+    );
+    assert!(
+        crate::pack::read_installed_pack(&access_of(&node), &did, "fixture/prepared_graph")
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    // update through the local path re-pins the same artifact.
+    let updated: Value = serde_json::from_str(
+        &config_call(
+            &tools,
+            &[
+                "pack",
+                "update",
+                artifact.to_str().unwrap(),
+                "--digest",
+                &digest,
+                "--inference-slot",
+                "worker=setup:inference",
+            ],
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        updated["effective"]["package"]["package_digest"],
+        Value::String(digest)
+    );
+
+    config_call(&tools, &["pack", "remove", "fixture/prepared_graph"])
+        .await
+        .unwrap();
+    assert!(
+        crate::pack::read_installed_pack(&access_of(&node), &did, "fixture/prepared_graph")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// A plugins-only pack keeps the pre-existing local path behavior: preview
+/// reports blockers under an untrusted namespace and commit stays blocked
+/// until the operator grant exists in the plugin home.
+#[tokio::test]
+async fn native_pack_local_path_plugins_only_still_requires_operator_grant() {
+    let (workspace, artifact, _) = crate::pack::plugin_lifecycle::tests::fixture("1.0.0", true);
+    let home = tempfile::tempdir().unwrap();
+    let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+        home.path().to_owned(),
+    )));
+    let workspace = &workspace;
+    let (_node, _did, tools) =
+        pack_tool_with_local_read("local-plugins-only", plugins, workspace.path()).await;
+    let path = artifact.to_str().unwrap().to_owned();
+
+    let preview: Value = serde_json::from_str(
+        &config_call(&tools, &["pack", "preview", "install", &path])
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(preview["ready"], false, "{preview}");
+    assert_eq!(preview["apply_with"], Value::Null);
+    assert!(!preview["installation_blockers"].as_array().unwrap().is_empty());
+    assert!(
+        crate::plugin::store::list_records(home.path()).unwrap().is_empty(),
+        "preview must not publish plugins"
+    );
+}
+
+fn access_of(node: &std::sync::Arc<defra_node::EmbeddedNode>) -> crate::config_client::ConfigAccess {
+    crate::config_client::ConfigAccess::local(node.clone())
+}
+
+/// A pack tool whose invoking agent holds effective file read authority over
+/// `root` (process ceiling ReadOnly plus an effective tools grant), the
+/// authority the local built-artifact path requires before it opens a .pack.
+async fn pack_tool_with_local_read(
+    label: &str,
+    plugins: Arc<crate::plugin::executor::PluginExecutor>,
+    root: &std::path::Path,
+) -> (std::sync::Arc<defra_node::EmbeddedNode>, String, Vec<Box<dyn ToolDyn>>) {
+    let node = build_agent_node().await;
+    let identity = node_identity(label);
+    let node_did = identity.did().to_string();
+    crate::test_support::install_test_agent(&node, &node_did, "setup").await;
+    let mut tool_config = config(&["tools"]);
+    tool_config.agent_id = "setup".to_string();
+    tool_config.enable_pack_install = true;
+    tool_config.process_ceiling.file_mode = crate::tool_surface::FileToolMode::ReadOnly;
+    tool_config.process_ceiling.root = Some(root.to_owned());
+    let tools = build_self_config_tools(
+        node.clone(),
+        node_did.clone(),
+        Some(identity),
+        &tool_config,
+        plugins,
+    );
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .unwrap();
+    tool.call(
+        json!({"argv":["tools","update"],"set":{"host":{"root":root,"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}})
+            .to_string(),
+    )
+    .await
+    .unwrap();
+    (node, node_did, tools)
+}
