@@ -1,8 +1,41 @@
 import Lean
 import Proofs.ToolPolicy.WorkspacePermissions
+import Proofs.GoalAutomation
 
 namespace ToolPolicy.AccessReview
 open Lean WorkspacePermissions
+
+structure TaskPolicy where
+  node : String
+  task : String
+  agent : String
+  prompt : String
+  enabled : Bool
+  hooks : Bool
+  outcome : Bool
+  goal : Bool
+  schema : Bool
+
+/-- A review borrows a Task's policy text, not its execution side effects.
+Tasks requiring hooks, goals, outcomes, or a different output contract cannot
+silently lose those requirements when selected as a reviewer. -/
+def taskEligible (node task agent : String) (policy : TaskPolicy) : Bool :=
+  policy.node == node && policy.task == task && policy.agent == agent &&
+    !(GoalAutomation.canonicalObjective policy.prompt).isEmpty && policy.enabled &&
+    !policy.hooks && !policy.outcome && !policy.goal && !policy.schema
+
+theorem task_hooks_cannot_run_as_a_review (node task agent : String) (policy : TaskPolicy)
+    (hooks : policy.hooks = true) : taskEligible node task agent policy = false := by
+  simp [taskEligible, hooks]
+
+theorem disabled_task_cannot_review (node task agent : String) (policy : TaskPolicy)
+    (disabled : policy.enabled = false) : taskEligible node task agent policy = false := by
+  simp [taskEligible, disabled]
+
+theorem another_agent_cannot_supply_review_policy (node task agent : String)
+    (policy : TaskPolicy) (different : policy.agent ≠ agent) :
+    taskEligible node task agent policy = false := by
+  simp [taskEligible, different]
 
 /-- The reply names the invocation supplied by the native caller. A model
 cannot select an action, widen its scope, or authorize a later invocation.

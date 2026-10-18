@@ -79,4 +79,45 @@ private def completionCases : List Json :=
 
 def casesJson : Json := toJson (replyCases ++ traceCases ++ routeCases ++ completionCases)
 
+private def taskCaseJson (policy : ToolPolicy.AccessReview.TaskPolicy)
+    (budgetOnly : Bool := false) : Json := Json.mkObj [
+  ("node", toJson "node"), ("taskId", toJson "review"), ("agent", toJson "agent"),
+  ("document", Json.mkObj [
+    ("node_did", toJson policy.node), ("task_id", toJson policy.task),
+    ("agent_id", toJson policy.agent), ("prompt_template", toJson policy.prompt),
+    ("enabled", toJson policy.enabled), ("emit_outcome", toJson policy.outcome),
+    ("hooks", if policy.hooks then toJson [Json.mkObj [
+      ("hook_id", toJson "setup"), ("phase", toJson "before"),
+      ("command", toJson ["fixture"])]] else toJson ([] : List Json)),
+    ("goal_objective_template", if policy.goal && !budgetOnly then toJson "goal" else Json.null),
+    ("goal_token_budget", if policy.goal && budgetOnly then toJson (500 : Nat) else Json.null),
+    ("output_schema_ref", if policy.schema then toJson "schema" else Json.null)]),
+  ("eligible", toJson (ToolPolicy.AccessReview.taskEligible "node" "review" "agent" policy))]
+
+def taskCasesJson : Json :=
+  let base : ToolPolicy.AccessReview.TaskPolicy :=
+    ⟨"node", "review", "agent", "Review workspace access.", true, false, false, false, false⟩
+  let combinations := [false, true].flatMap fun sameNode =>
+    [false, true].flatMap fun sameTask =>
+    [false, true].flatMap fun sameAgent =>
+    [false, true].flatMap fun enabled =>
+    [false, true].flatMap fun hooks =>
+    [false, true].flatMap fun outcome =>
+    [false, true].flatMap fun goal =>
+    [false, true].map fun schema => taskCaseJson
+      { base with
+        node := if sameNode then "node" else "other-node"
+        task := if sameTask then "review" else "other-task"
+        agent := if sameAgent then "agent" else "other-agent"
+        enabled := enabled
+        hooks := hooks
+        outcome := outcome
+        goal := goal
+        schema := schema }
+  toJson (combinations ++ [taskCaseJson { base with prompt := "" },
+    taskCaseJson { base with prompt := " \n\t" },
+    taskCaseJson { base with goal := true } true] ++
+    GoalAutomation.objectiveWhitespaceCodepoints.map (fun value =>
+      taskCaseJson { base with prompt := String.singleton (Char.ofNat value) }))
+
 end Conformance.AccessReview

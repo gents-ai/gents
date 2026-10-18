@@ -1047,10 +1047,11 @@ def caseCoverage : List CoverageEntry :=
       "InferenceRegistryCases"
       "admission::registry::contract_tests::generated_inference_registry_cases_drive_real_permits")
       "inference-call" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
+  , tagged (consumerWithFollowUp
       "title_usage_cases"
       "TitleUsageCases"
-      "Model-derived physical-call and historical title-claim inputs cover normal-public versus parent-inclusive totals, late usage after parent terminal, duplicate-call idempotence, conflicting catalog rejection, missing facts, invalid self-binding, and valid foreign-parent exclusion. Native request-purpose, claim provenance and inference-row joins are not bound; no native accounting consumer is claimed.")
+      "toolset::title_audit_usage::tests::generated_budget_recovery_cases_bind_signed_catalog_usage"
+      "The catalog consumer binds parent-inclusive spending, missing and zero usage, late reports and duplicate-call accounting. Historical receipt authentication and foreign-parent filtering remain separate native admission boundaries.")
       "inference-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "backend_health_cases"
@@ -1832,6 +1833,12 @@ def caseCoverage : List CoverageEntry :=
       "AccessReviewCases"
       "tool_policy::access_review::tests::generated_access_review_cases_drive_native_reply_and_routing"
       "Generated JSON replies bind exact invocation IDs, complete decisions and UTF-8 byte limits. Traces bind denial windows and scoped routing. Signed review execution, physical request binding, cancellation, tool and hook exclusion, and reviewer accuracy require native adapter checks.")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "access_review_task_cases"
+      "AccessReviewTaskCases"
+      "agent::daemon::title::review::task::tests::generated_task_policies_bind_the_configured_task_fields"
+      "Generated Task documents bind exact node, task and agent selection, enabled policy text and excluded execution effects. Store lookup, template evaluation, stale-policy rejection and provider behavior remain native adapter boundaries.")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "workspace_permission_cases"
