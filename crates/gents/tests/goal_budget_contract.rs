@@ -30,6 +30,7 @@ use gents::goal::{
 use gents::{GOAL_SCHEMA, TASK_SCHEMA};
 
 const UNCAPPED_GOAL_JSON: &str = r#"{
+    "_docID": "bafyrei_contract_goal_uncapped",
     "goal_id": "goal-uncapped",
     "session_id": "session-uncapped",
     "node_did": "did:key:zNODE",
@@ -41,6 +42,7 @@ const UNCAPPED_GOAL_JSON: &str = r#"{
 }"#;
 
 const CAPPED_GOAL_JSON: &str = r#"{
+    "_docID": "bafyrei_contract_goal_capped",
     "goal_id": "goal-capped",
     "session_id": "session-capped",
     "node_did": "did:key:zNODE",
@@ -95,7 +97,10 @@ fn goal_document_omitted_budget_deserializes_as_none_not_a_sentinel() {
 
     // Explicit null is the same contract as omission: uncapped.
     let explicit_null: GoalDocument = serde_json::from_str(
-        &UNCAPPED_GOAL_JSON.replace("\"status\": \"active\",", "\"status\": \"active\",\n    \"token_budget\": null,"),
+        &UNCAPPED_GOAL_JSON.replace(
+            "\"status\": \"active\",",
+            "\"status\": \"active\",\n    \"token_budget\": null,",
+        ),
     )
     .expect("goal document with explicit null budget");
     assert_eq!(explicit_null.token_budget, None);

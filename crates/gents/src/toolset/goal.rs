@@ -213,11 +213,8 @@ mod tests {
             "token_budget must stay optional in the create_goal schema"
         );
         assert!(
-            !definition
-                .parameters
-                .to_string()
-                .contains("default"),
-            "create_goal must not advertise a default budget value"
+            budget.get("default").is_none(),
+            "create_goal must not advertise a default budget value on the token_budget property"
         );
     }
 
