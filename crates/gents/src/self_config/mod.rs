@@ -1250,6 +1250,15 @@ impl PackInstaller {
             &environment,
         )
         .await?;
+        // Inference slot bindings pick provider accounts exactly like the
+        // graph lifecycle: every selected profile must be account-free or on
+        // its provider's default account. Fence before the preview return or
+        // any installation side effect so a documents pack cannot publish
+        // records or plugins through a binding the graph path would refuse.
+        self.fence_bindings(&prepared.inference.bindings).await?;
+        for dependency in &prepared.dependencies {
+            self.fence_bindings(&dependency.1.inference_slots).await?;
+        }
         let mut schemas = Vec::new();
         for path in crate::pack::document_pack_schema_paths(distribution.manifest())? {
             let sdl = std::str::from_utf8(distribution.0.archive.asset(path)?)?;

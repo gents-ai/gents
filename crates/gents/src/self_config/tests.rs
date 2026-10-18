@@ -7888,3 +7888,268 @@ async fn pack_tool_with_local_read(
     .unwrap();
     (node, node_did, tools)
 }
+
+/// Installs two ChatGptCodex OAuth backends for `owner` — the provider's
+/// default account and another account of the same provider — with one
+/// inference profile each, plus the enabled credentials the default-account
+/// resolver needs to keep the account-free reference as the provider
+/// default. Binding to `p-default` is allowed; `p-other` selects another
+/// account and must be refused.
+async fn install_chat_account_fences(node: &Arc<EmbeddedNode>, owner: &str) {
+    let access = crate::config_client::ConfigAccess::local(node.clone());
+    for (id, auth) in [
+        ("chat-original", json!({"kind":"node_oauth"})),
+        ("chat-b", json!({"kind":"node_oauth","account_ref":"acct-b"})),
+    ] {
+        let backend: crate::InferenceBackend = serde_json::from_value(json!({
+            "node_did": owner, "backend_id": id, "name": id,
+            "provider_kind": "ChatGptCodex", "endpoint": "http://127.0.0.1:1/v1",
+            "auth": auth,
+        }))
+        .unwrap();
+        crate::config_client::write_inference_backend_document(&access, &backend)
+            .await
+            .unwrap();
+    }
+    for (id, backend) in [("p-default", "chat-original"), ("p-other", "chat-b")] {
+        let profile: crate::document_config::InferenceProfile = serde_json::from_value(json!({
+            "node_did": owner, "profile_id": id, "backend_id": backend,
+            "model_name": "test-model",
+        }))
+        .unwrap();
+        crate::config_client::write_inference_profile_document(&access, &profile)
+            .await
+            .unwrap();
+    }
+    let provider = crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
+    let base_id = crate::oauth_credential::oauth_credential_id(owner, provider);
+    for (account_ref, connected) in [(None, false), (Some("acct-b"), true)] {
+        let credential = crate::oauth_credential::OAuthCredential {
+            doc_id: None,
+            credential_id: match account_ref {
+                Some(account_ref) => format!("{base_id}:{account_ref}"),
+                None => base_id.clone(),
+            },
+            node_did: owner.to_string(),
+            provider: provider.to_string(),
+            access_token: "access-TEST".into(),
+            refresh_token: "refresh-TEST".into(),
+            id_token: None,
+            account_id: None,
+            chatgpt_plan_type: None,
+            is_fedramp: false,
+            access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            last_refresh: None,
+            enabled: true,
+            account_ref: account_ref.map(str::to_string),
+            connected_at: connected.then(chrono::Utc::now),
+            provider_account_key: None,
+            label: None,
+        };
+        crate::oauth_credential::upsert_oauth_credential(node, &credential)
+            .await
+            .unwrap();
+    }
+}
+
+/// A documents pack enforces the same inference account authority as the
+/// graph lifecycle: a slot bound to a profile whose backend selects another
+/// account of one provider is refused at preview and at commit — before any
+/// schema or installation side effect — while the provider's default account
+/// and an account-free backend install.
+#[tokio::test]
+async fn pack_documents_install_refuses_non_default_account_inference_bindings() {
+    let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
+    let (node, did, tools) = pack_tool("documents-account-fence", plugins).await;
+    install_chat_account_fences(&node, &did).await;
+    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let get: Value = serde_json::from_str(
+        &config_call(&tools, &["pack", "get", "fixture/documents_fixture"])
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let digest = get["artifact_digest"].as_str().unwrap().to_owned();
+
+    // Preview refuses the non-default account binding.
+    let refused = config_call(
+        &tools,
+        &[
+            "pack",
+            "preview",
+            "install",
+            "fixture/documents_fixture",
+            "--inference-slot",
+            "worker=p-other",
+        ],
+    )
+    .await
+    .unwrap_err();
+    assert!(refused.to_string().contains("selects another"), "{refused}");
+    assert!(
+        crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        node.get_collection("FixtureJob").unwrap().is_none(),
+        "refused preview must not publish the pack's schemas"
+    );
+
+    // Commit refuses the same binding even with the pinned digest.
+    let refused = config_call(
+        &tools,
+        &[
+            "pack",
+            "install",
+            "fixture/documents_fixture",
+            "--digest",
+            &digest,
+            "--inference-slot",
+            "worker=p-other",
+        ],
+    )
+    .await
+    .unwrap_err();
+    assert!(refused.to_string().contains("selects another"), "{refused}");
+    assert!(
+        crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        node.get_collection("FixtureJob").unwrap().is_none(),
+        "refused commit must not publish the pack's schemas"
+    );
+
+    // The provider's default account and the account-free setup backend are
+    // both admitted, and the pack installs under the pinned digest.
+    for profile in ["p-default", "setup:inference"] {
+        let preview: Value = serde_json::from_str(
+            &config_call(
+                &tools,
+                &[
+                    "pack",
+                    "preview",
+                    "install",
+                    "fixture/documents_fixture",
+                    "--inference-slot",
+                    &format!("worker={profile}"),
+                ],
+            )
+            .await
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(preview["ready"], true, "{profile}: {preview}");
+    }
+    let installed: Value = serde_json::from_str(
+        &config_call(
+            &tools,
+            &[
+                "pack",
+                "install",
+                "fixture/documents_fixture",
+                "--digest",
+                &digest,
+                "--inference-slot",
+                "worker=p-default",
+            ],
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(installed["effective"]["digest"], Value::String(digest));
+    assert!(node.get_collection("FixtureJob").unwrap().is_some());
+}
+
+/// A documents pack's graph dependency bindings are fenced with the same
+/// account authority as the root pack's slots: a dependency slot bound to a
+/// non-default-account profile refuses preview and commit before any record
+/// or plugin side effect, and the all-default binding installs.
+#[tokio::test]
+async fn pack_documents_dependency_inference_bindings_respect_account_authority() {
+    let (home, plugins) = crate::test_support::home_with_fixture_pack("dependent_fixture");
+    let (_fixture, directory) = crate::test_support::fixture_pack_copy("review_graph", &json!({}));
+    let (bytes, _) = crate::pack_archive::pack_dir(&directory).unwrap();
+    crate::pack_store::PackStore::new(home.path())
+        .import(&bytes[..], None)
+        .unwrap();
+    let (node, did, tools) = pack_tool("documents-dependency-fence", plugins).await;
+    install_chat_account_fences(&node, &did).await;
+    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let get: Value = serde_json::from_str(
+        &config_call(&tools, &["pack", "get", "fixture/dependent_fixture"])
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let digest = get["artifact_digest"].as_str().unwrap().to_owned();
+
+    // The dependency's slot selects another account: preview and commit both
+    // refuse while the root pack's own binding stays on the default account.
+    let slots = [
+        "--inference-slot",
+        "worker=p-default",
+        "--inference-slot",
+        "coordinator=p-default",
+        "--inference-slot",
+        "verifier=p-other",
+    ];
+    let mut preview_argv = vec!["pack", "preview", "install", "fixture/dependent_fixture"];
+    preview_argv.extend(slots);
+    let refused = config_call(&tools, &preview_argv).await.unwrap_err();
+    assert!(refused.to_string().contains("selects another"), "{refused}");
+    let mut install_argv = vec![
+        "pack",
+        "install",
+        "fixture/dependent_fixture",
+        "--digest",
+        &digest,
+    ];
+    install_argv.extend(slots);
+    let refused = config_call(&tools, &install_argv).await.unwrap_err();
+    assert!(refused.to_string().contains("selects another"), "{refused}");
+    for coordinate in ["fixture/dependent_fixture", "fixture/review_graph"] {
+        assert!(
+            crate::pack::read_installed_pack(&access, &did, coordinate)
+                .await
+                .unwrap()
+                .is_none(),
+            "{coordinate} must not install through a refused dependency binding"
+        );
+    }
+
+    // All-default bindings are admitted and install both packs.
+    let slots = [
+        "--inference-slot",
+        "worker=p-default",
+        "--inference-slot",
+        "coordinator=p-default",
+        "--inference-slot",
+        "verifier=p-default",
+    ];
+    let mut preview_argv = vec!["pack", "preview", "install", "fixture/dependent_fixture"];
+    preview_argv.extend(slots);
+    let preview: Value =
+        serde_json::from_str(&config_call(&tools, &preview_argv).await.unwrap()).unwrap();
+    assert_eq!(preview["ready"], true, "{preview}");
+    let mut install_argv = vec![
+        "pack",
+        "install",
+        "fixture/dependent_fixture",
+        "--digest",
+        &digest,
+    ];
+    install_argv.extend(slots);
+    config_call(&tools, &install_argv).await.unwrap();
+    assert!(
+        crate::pack::read_installed_pack(&access, &did, "fixture/review_graph")
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
