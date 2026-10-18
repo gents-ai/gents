@@ -71,7 +71,8 @@ pub(crate) fn effective_command_policy(policy: &CommandExecutionPolicy) -> Comma
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CommandExecutionPolicy {
     pub mode: CommandExecutionMode,
     pub allowed_argv_prefixes: Vec<Vec<String>>,
@@ -1573,7 +1574,7 @@ fn millis(duration: Duration) -> u64 {
     millis.min(u128::from(u64::MAX)) as u64
 }
 
-fn shell_join(argv: &[String]) -> String {
+pub(crate) fn shell_join(argv: &[String]) -> String {
     argv.iter()
         .map(|arg| shell_quote(arg))
         .collect::<Vec<_>>()

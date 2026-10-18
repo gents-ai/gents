@@ -10,7 +10,7 @@ impl Queue {
     pub(super) const ALL: [Self; 2] = [Self::Unscoped, Self::Workspace];
 
     pub(super) fn for_request(request: &Request) -> Self {
-        if request.binding.is_some() {
+        if request.binding().is_some() {
             Self::Workspace
         } else {
             Self::Unscoped

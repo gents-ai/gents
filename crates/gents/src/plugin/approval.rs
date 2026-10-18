@@ -1,5 +1,7 @@
+mod question;
 mod queue;
 pub mod workspace;
+pub use question::{CommandApproval, FilesystemApproval, Request};
 use queue::Queue;
 
 use std::path::{Path, PathBuf};
@@ -9,6 +11,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::allowed;
+#[cfg(test)]
 use crate::pack::BindAccess;
 
 // Consent gates plugin calls inside the existing OS-user trust boundary; it does not isolate same-user shell commands.
@@ -79,62 +82,23 @@ pub(crate) fn consent(interactive: bool) -> Consent {
     consent_route(interactive, composed())
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Request {
-    pub id: String,
-    pub plugin: String,
-    pub path: String,
-    pub folder: PathBuf,
-    #[serde(default)]
-    pub is_dir: bool,
-    pub access: BindAccess,
-    #[serde(default)]
-    pub session_id: Option<String>,
-    pub created_at_ms: u64,
-    /// The waiting call publishes its actual deadline, including shorter waits.
-    /// Queue entries without this field cannot be answered by this version.
-    pub expires_at_ms: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) binding: Option<workspace::Binding>,
-}
-
-impl Request {
-    pub fn new(
-        plugin: &str,
-        resolved: &allowed::Resolved,
-        access: BindAccess,
-        session_id: Option<String>,
-    ) -> Self {
-        let created_at_ms = now_ms();
-        Self {
-            id: uuid::Uuid::new_v4().simple().to_string(),
-            plugin: plugin.to_owned(),
-            path: resolved.target.display().to_string(),
-            folder: resolved.folder().to_path_buf(),
-            is_dir: resolved.is_dir,
-            access,
-            session_id,
-            created_at_ms,
-            expires_at_ms: created_at_ms.saturating_add(WAIT.as_millis() as u64),
-            binding: None,
-        }
-    }
-
-    pub fn prompt(&self) -> String {
-        let verb = match self.access {
-            BindAccess::Read => "read",
-            BindAccess::ReadWrite => "read and write",
-        };
-        format!("Allow {} to {verb} {}?", self.plugin, self.path)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum Answer {
+    #[serde(rename = "once")]
     Once,
+    #[serde(rename = "file")]
     AlwaysPath,
+    #[serde(rename = "always")]
     AlwaysFolder,
+    #[serde(rename = "deny")]
     Deny,
+}
+
+impl Answer {
+    fn remembered(self) -> bool {
+        matches!(self, Self::AlwaysPath | Self::AlwaysFolder)
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -257,7 +221,6 @@ impl Drop for Cleanup<'_> {
 
 pub async fn ask(home: &Path, request: &Request, wait: Duration) -> Result<bool> {
     anyhow::ensure!(valid_id(&request.id), "invalid plugin approval question id");
-    validate_request_binding(request)?;
     let queue = Queue::for_request(request);
     let started = tokio::time::Instant::now();
     let now = now_ms();
@@ -282,7 +245,7 @@ pub async fn ask(home: &Path, request: &Request, wait: Duration) -> Result<bool>
                 "the plugin approval question id is already in use"
             );
         }
-        if let Some(binding) = &request.binding {
+        if let Some(binding) = request.binding() {
             workspace::validate_binding(home, binding)?;
         }
         write_atomic(
@@ -297,7 +260,7 @@ pub async fn ask(home: &Path, request: &Request, wait: Duration) -> Result<bool>
     };
     let mut pause = Duration::from_millis(20);
     loop {
-        if let Some(binding) = &request.binding {
+        if let Some(binding) = request.binding() {
             workspace::validate_binding(home, binding)?;
         }
         if let Some(allowed) = read_decision(home, request)? {
@@ -311,7 +274,10 @@ pub async fn ask(home: &Path, request: &Request, wait: Duration) -> Result<bool>
             if queue == Queue::Workspace {
                 anyhow::bail!("no matching client on this runtime's home is listening to answer; open access requests in an updated client and retry");
             }
-            anyhow::bail!("no chat or desktop on this server's home is listening to answer; allow it with `gents plugin dirs add {}`", request.folder.display());
+            let file = request
+                .filesystem()
+                .context("the unscoped approval has no filesystem target")?;
+            anyhow::bail!("no chat or desktop on this server's home is listening to answer; allow it with `gents plugin dirs add {}`", file.folder.display());
         }
         tokio::time::sleep(pause).await;
         pause = (pause * 2).min(Duration::from_millis(250));
@@ -351,12 +317,11 @@ pub fn pending_requests(home: &Path) -> Result<Vec<Request>> {
             }
             let request: Request = serde_json::from_value(value).context("the plugin approval question format is unsupported or invalid; use matching runtime and client versions")?;
             anyhow::ensure!(queue.matches(&request), "the approval question is in the wrong queue; use matching runtime and client versions");
-            validate_request_binding(&request)?;
             anyhow::ensure!(
                 ids.insert(request.id.clone()),
                 "the approval queue contains duplicate question identities"
             );
-            if let Some(binding) = &request.binding {
+            if let Some(binding) = request.binding() {
                 if let Err(error) = workspace::validate_binding(home, binding) {
                     if error.is::<workspace::SelectionChanged>()
                         || error.is::<allowed::PathChanged>()
@@ -379,26 +344,6 @@ pub fn pending_requests(home: &Path) -> Result<Vec<Request>> {
     Ok(requests)
 }
 
-fn validate_request_binding(request: &Request) -> Result<()> {
-    if let Some(binding) = &request.binding {
-        let action = &binding.action;
-        let folder = if request.is_dir {
-            Some(action.path.as_path())
-        } else {
-            action.path.parent()
-        };
-        anyhow::ensure!(
-            action.plugin == request.plugin
-                && action.path == Path::new(&request.path)
-                && action.is_dir == request.is_dir
-                && action.access == request.access
-                && folder == Some(request.folder.as_path()),
-            "the approval question does not match its workspace binding"
-        );
-    }
-    Ok(())
-}
-
 fn read_question(home: &Path, id: &str) -> Result<(Queue, Request)> {
     let mut found = None;
     for queue in Queue::ALL {
@@ -413,7 +358,6 @@ fn read_question(home: &Path, id: &str) -> Result<(Queue, Request)> {
             queue.matches(&request),
             "the approval question is in the wrong queue"
         );
-        validate_request_binding(&request)?;
         anyhow::ensure!(
             found.is_none(),
             "the approval queue contains duplicate question identities"
@@ -432,7 +376,7 @@ fn read_decision(home: &Path, request: &Request) -> Result<Option<bool>> {
     };
     let decision: Decision =
         serde_json::from_slice(&bytes).context("the operator's answer is unreadable")?;
-    let allowed = match (&request.binding, &decision.binding) {
+    let allowed = match (request.binding(), decision.binding.as_ref()) {
         (Some(expected), Some(received)) => {
             workspace::consume_decision(home, expected, received, decision.allow)?
         }
@@ -468,26 +412,33 @@ fn decide_with_clock(
         !queue.decision_file(home, id).try_exists()?,
         "the plugin approval question was already answered"
     );
-    if let Some(binding) = &request.binding {
+    if let Some(binding) = request.binding() {
         workspace::validate_binding(home, binding)?;
     }
-    let remembered = match answer {
-        Answer::AlwaysPath if !request.is_dir => Some(PathBuf::from(&request.path)),
-        Answer::AlwaysPath | Answer::AlwaysFolder => Some(request.folder.clone()),
-        Answer::Once | Answer::Deny => None,
-    };
-    if let Some(path) = remembered {
-        if let Some(binding) = &request.binding {
-            workspace::grant_at_least(home, binding, &path, request.access)?;
+    anyhow::ensure!(
+        request.allows_answer(answer),
+        "this action only supports allow once or deny"
+    );
+    if answer.remembered() {
+        let file = request
+            .filesystem()
+            .context("this approval cannot remember filesystem access")?;
+        let path = if answer == Answer::AlwaysPath && !file.is_dir {
+            file.path
         } else {
-            allowed::grant_at_least(home, &path, request.access)?;
+            file.folder
+        };
+        if let Some(binding) = request.binding() {
+            workspace::grant_at_least(home, binding, path, file.access)?;
+        } else {
+            allowed::grant_at_least(home, path, file.access)?;
         }
     }
     write_atomic(
         &queue.decision_file(home, id),
         &serde_json::to_vec(&Decision {
             allow: answer != Answer::Deny,
-            binding: request.binding,
+            binding: request.binding().cloned(),
         })?,
     )
 }

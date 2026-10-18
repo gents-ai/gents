@@ -33,6 +33,17 @@ pub struct Grant<W, A> {
     pub action: A,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ApprovalKind {
+    Filesystem,
+    Command,
+}
+
+pub fn answer_allowed(kind: ApprovalKind, remembered: bool) -> bool {
+    kind == ApprovalKind::Filesystem || !remembered
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Input<W, A> {

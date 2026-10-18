@@ -313,7 +313,7 @@ impl PluginExecutor {
         if !covered {
             let route = approval::workspace::binding_route(
                 home,
-                approval::workspace::BindingAction {
+                approval::workspace::BindingAction::Plugin {
                     plugin: plugin.clone(),
                     artifact_digest: record.digest.clone(),
                     input_digest: json_digest(input),
@@ -330,13 +330,13 @@ impl PluginExecutor {
                 _ => match approval::consent(context.interactive) {
                     approval::Consent::Deny => false,
                     approval::Consent::Ask => {
-                        let mut request = approval::Request::new(
-                            &plugin,
-                            &resolved,
-                            access,
-                            context.session_id.map(str::to_owned),
-                        );
-                        request.binding = route.map(|decision| decision.binding);
+                        let session_id = context.session_id.map(str::to_owned);
+                        let request = match route {
+                            Some(decision) => {
+                                approval::Request::for_binding(decision.binding, session_id)
+                            }
+                            None => approval::Request::new(&plugin, &resolved, access, session_id),
+                        };
                         approval::ask(home, &request, approval::WAIT)
                             .await
                             .map_err(|error| refuse(format!("{error:#}")))?

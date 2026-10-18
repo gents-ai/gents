@@ -47,7 +47,7 @@ fn binding(
                 argv: vec!["fixture-command".into(), format!("action-{}", value.action)],
                 cwd: root.to_owned(),
                 root: root.to_owned(),
-                policy_digest: "policy".into(),
+                policy: crate::toolset::CommandExecutionPolicy::write_capable(),
             },
         },
     }
