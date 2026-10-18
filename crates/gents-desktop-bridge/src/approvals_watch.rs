@@ -125,18 +125,25 @@ fn changes_queue(event: &Event, queue: &Path) -> bool {
 /// watch roots must stay inside the approval tree to bound descriptor use.
 struct QueueWatch {
     watcher: RecommendedWatcher,
-    queue: PathBuf,
+    queues: [PathBuf; 2],
 }
 
 impl QueueWatch {
     fn start(home: &Path, changes: mpsc::Sender<()>) -> Result<Self> {
         approval::prepare_listener(home)?;
         let parent = home.canonicalize().context("resolving the approval home")?;
-        let queue = approval::queue_dir(&parent);
-        let watched_queue = queue.clone();
+        let queues = approval::queue_dirs(&parent);
+        let watched_queues = queues.clone();
+        let preferences = approval::workspace::preferences_file(&parent);
         let mut watcher = notify::recommended_watcher(move |event: notify::Result<Event>| {
             let changed = match event {
-                Ok(event) => changes_queue(&event, &watched_queue),
+                Ok(event) => {
+                    watched_queues
+                        .iter()
+                        .any(|queue| changes_queue(&event, queue))
+                        || (!matches!(event.kind, EventKind::Access(_))
+                            && event.paths.iter().any(|path| path == &preferences))
+                }
                 Err(error) => {
                     tracing::warn!(%error, "plugin approval filesystem watch failed");
                     true
@@ -148,23 +155,26 @@ impl QueueWatch {
         })?;
         // Keep watching the parent across queue removal or atomic replacement.
         watcher.watch(
-            queue.parent().context("approval queue has no parent")?,
+            queues[0].parent().context("approval queue has no parent")?,
             RecursiveMode::NonRecursive,
         )?;
-        watcher.watch(&queue, RecursiveMode::Recursive)?;
-        Ok(Self { watcher, queue })
+        for queue in &queues {
+            watcher.watch(queue, RecursiveMode::Recursive)?;
+        }
+        Ok(Self { watcher, queues })
     }
 
     fn reattach(&mut self, home: &Path) -> Result<()> {
         approval::prepare_listener(home)?;
-        let root = self
-            .queue
+        let root = self.queues[0]
             .parent()
             .context("approval queue has no parent")?;
         let _ = self.watcher.unwatch(root);
         self.watcher.watch(root, RecursiveMode::NonRecursive)?;
-        let _ = self.watcher.unwatch(&self.queue);
-        self.watcher.watch(&self.queue, RecursiveMode::Recursive)?;
+        for queue in &self.queues {
+            let _ = self.watcher.unwatch(queue);
+            self.watcher.watch(queue, RecursiveMode::Recursive)?;
+        }
         Ok(())
     }
 }
