@@ -287,7 +287,7 @@ pub(crate) fn binding_route(
         scope: current,
         action,
     };
-    let route = policy::reviewed_route(&input, Review::Unavailable, &binding);
+    let route = context::review_route(&input, Review::Unavailable, &binding);
     Ok(Some(BindingDecision { route, binding }))
 }
 
