@@ -1847,7 +1847,7 @@ impl ClientCore {
         node: &str,
         agent: &str,
         preferred: Option<&str>,
-    ) -> Result<String> {
+    ) -> Result<gents::plugin::approval::workspace::ReviewTaskSelection> {
         let record = self
             .sync_state
             .records()

@@ -18,7 +18,19 @@ impl Fixture {
         let project = directory.path().join("project");
         std::fs::create_dir(&project).unwrap();
         let key = WorkspaceKey::canonical("node", "requester", "agent", &project).unwrap();
-        workspace::save_mode(&home, &key, 0, Mode::AutoReview, Some("review")).unwrap();
+        workspace::save_mode(
+            &home,
+            &key,
+            0,
+            Mode::AutoReview,
+            Some(&workspace::ReviewTaskSelection::for_task(
+                &crate::document_config::Task {
+                    task_id: "review".into(),
+                    ..workspace::default_review_task("node", "agent")
+                },
+            )),
+        )
+        .unwrap();
         Self {
             _directory: directory,
             home,
@@ -74,7 +86,7 @@ async fn reviews_are_serialized_and_routine_actions_skip_the_reviewer() {
         let observed = observed.clone();
         move |invocation| {
             let index = calls.fetch_add(1, Ordering::SeqCst);
-            assert_eq!(invocation.task_id, "review");
+            assert_eq!(invocation.task.task_id, "review");
             assert_eq!(
                 invocation.payload,
                 serde_json::json!({"command":"echo", "args":["fixture"]})

@@ -85,7 +85,7 @@ fn observe(
         .iter()
         .map(|scope| workspace::Settings {
             workspace: key(root, scope.workspace),
-            selection: policy::Preference::<String> {
+            selection: policy::Preference {
                 revision: scope.revision,
                 mode: policy::Mode::Ask,
                 review_task: None,

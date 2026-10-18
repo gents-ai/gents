@@ -37,7 +37,7 @@ pub async fn prepare_access_review_task_on(
     node: &str,
     agent: &str,
     preferred: Option<&str>,
-) -> Result<String> {
+) -> Result<gents::plugin::approval::workspace::ReviewTaskSelection> {
     use gents::plugin::approval::workspace::{default_review_task, review_task_policy};
 
     let default = default_review_task(node, agent);
@@ -65,7 +65,7 @@ pub async fn prepare_access_review_task_on(
                 None => anyhow::bail!("The configured access reviewer is missing. Restore its Task in Runtime Settings."),
             };
             review_task_policy(&task, node, task_id, agent, "access-review")?;
-            Ok(task.task_id)
+            Ok(gents::plugin::approval::workspace::ReviewTaskSelection::for_task(&task))
         })
     }).await
 }
@@ -816,13 +816,21 @@ mod tests {
             id
         );
         let mut task = gents::plugin::approval::workspace::default_review_task(owner, "agent");
-        assert_eq!(task.task_id, id);
+        assert_eq!(task.task_id, id.task_id);
         task.prompt_template = "Ask about changes outside the requested project.".into();
         upsert_task_on(&access, &task).await?;
-        prepare_access_review_task_on(&access, owner, "agent", None).await?;
+        let updated = prepare_access_review_task_on(&access, owner, "agent", None).await?;
+        assert_eq!(updated.task_id, id.task_id);
+        assert_ne!(updated.policy_digest, id.policy_digest);
+        task.display_name = Some("Workspace access review".into());
+        upsert_task_on(&access, &task).await?;
+        assert_eq!(
+            prepare_access_review_task_on(&access, owner, "agent", None).await?,
+            updated
+        );
         let saved = access
             .transact_readonly("test.access_review.read", |txn| {
-                let id = &id;
+                let id = &id.task_id;
                 Box::pin(async move {
                     read_desired_state_record_in_txn(txn, Collection::Task, owner, id).await
                 })

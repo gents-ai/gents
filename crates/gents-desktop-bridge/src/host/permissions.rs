@@ -130,10 +130,13 @@ pub(super) async fn save(
             core.prepare_access_review_task(
                 &local.key.node_did,
                 &local.key.agent_id,
-                local
-                    .settings
-                    .as_ref()
-                    .and_then(|settings| settings.selection.review_task.as_deref()),
+                local.settings.as_ref().and_then(|settings| {
+                    settings
+                        .selection
+                        .review_task
+                        .as_ref()
+                        .map(|task| task.task_id.as_str())
+                }),
             )
             .await
             .map_err(super::backend_error)?,
@@ -144,7 +147,7 @@ pub(super) async fn save(
     let home = local.home.clone();
     let key = local.key.clone();
     let settings = tokio::task::spawn_blocking(move || {
-        workspace::save_mode(&home, &key, expected, request.mode, reviewer.as_deref())
+        workspace::save_mode(&home, &key, expected, request.mode, reviewer.as_ref())
     })
     .await
     .map_err(|error| super::backend_error(error.into()))?

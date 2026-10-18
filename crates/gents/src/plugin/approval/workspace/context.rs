@@ -10,7 +10,7 @@ use gents_loop::tool_policy::access_review::History;
 
 pub(crate) struct ReviewInvocation {
     pub action_id: String,
-    pub task_id: String,
+    pub task: super::ReviewTaskSelection,
     pub binding: super::Binding,
     pub payload: serde_json::Value,
 }
@@ -94,10 +94,10 @@ pub(super) async fn resolve_review(
         return Ok(Route::Ask);
     }
     let verdict = match (&context.reviewer, settings.selection.review_task) {
-        (Some(reviewer), Some(task_id)) => {
+        (Some(reviewer), Some(task)) => {
             let invocation = ReviewInvocation {
                 action_id: action_id.to_owned(),
-                task_id,
+                task,
                 binding: decision.binding.clone(),
                 payload: decision
                     .review_payload

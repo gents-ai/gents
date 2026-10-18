@@ -1,6 +1,35 @@
 use anyhow::Result;
+use sha2::{Digest, Sha256};
 
 use crate::document_config::Task;
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewTaskSelection {
+    pub task_id: String,
+    pub policy_digest: String,
+}
+
+impl ReviewTaskSelection {
+    /// Display metadata does not change consent. Eligibility independently
+    /// rejects execution effects; the fingerprint binds the selected template.
+    pub fn for_task(task: &Task) -> Self {
+        Self {
+            task_id: task.task_id.clone(),
+            policy_digest: format!("{:x}", Sha256::digest(task.prompt_template.as_bytes())),
+        }
+    }
+}
+
+pub fn review_task_matches_selection(
+    task: &Task,
+    selection: &ReviewTaskSelection,
+    node: &str,
+    agent: &str,
+) -> bool {
+    review_task_is_eligible(task, node, &selection.task_id, agent)
+        && ReviewTaskSelection::for_task(task) == *selection
+}
 
 pub fn review_task_is_eligible(task: &Task, node: &str, task_id: &str, agent: &str) -> bool {
     let Task {
