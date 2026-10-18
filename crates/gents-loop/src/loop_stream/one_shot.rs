@@ -332,9 +332,20 @@ where
                             (identity.1, identity.2) == (turn, attempt),
                             "auxiliary ready changed source"
                         );
+                        let has_tools = matches!(&message, Message::Assistant { content, .. }
+                            if content.iter().any(|block| matches!(block, AssistantContent::ToolCall(_))));
+                        let accepted = crate::tool_policy::access_review::accepts_completion(
+                            identity.0.kind.request_purpose(), has_tools,
+                        );
                         emit_auxiliary(identity, AuxiliaryOutputEvent::TurnReady { message })
                             .await?;
                         active_auxiliary = None;
+                        // The producer can dispatch tools after this yield.
+                        // Retain its final usage and audit before rejecting intent.
+                        anyhow::ensure!(
+                            accepted,
+                            "detached auxiliary request cannot call tools"
+                        );
                     }
                 }
                 LoopStreamItem::TurnRetracted { turn, attempt, .. } => {

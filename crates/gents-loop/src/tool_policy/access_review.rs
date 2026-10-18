@@ -2,6 +2,13 @@ use serde::Deserialize;
 
 use super::workspace_permissions::{self as policy, Grant, Input, Review, Route};
 
+pub(crate) fn accepts_completion(
+    purpose: gents_protocol::request_admission::RequestPurpose,
+    has_tools: bool,
+) -> bool {
+    !has_tools || !purpose.is_auxiliary()
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Reply {
@@ -113,6 +120,12 @@ mod tests {
         Trace {
             steps: Vec<Step>,
         },
+        Completion {
+            purpose: gents_protocol::request_admission::RequestPurpose,
+            #[serde(rename = "hasTools")]
+            has_tools: bool,
+            expected: bool,
+        },
         Route {
             input: Input<u64, u64>,
             history: Vec<Review>,
@@ -149,6 +162,13 @@ mod tests {
                         assert_eq!(history.verdicts, step.history);
                         assert_eq!(history.blocked(), step.blocked);
                     }
+                }
+                Case::Completion {
+                    purpose,
+                    has_tools,
+                    expected,
+                } => {
+                    assert_eq!(accepts_completion(purpose, has_tools), expected);
                 }
                 Case::Route {
                     input,
