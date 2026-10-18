@@ -195,6 +195,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         crate::host::speech::SpeechRecognizeRequest,
         crate::host::speech::SpeechSynthesizeRequest,
         crate::host::permissions::WorkspacePermissionsRequest,
+        crate::host::permissions::WorkspacePermissionsSaveRequest,
         crate::host::permissions::WorkspacePermissionsState,
         crate::host::protocol::ClientMessage,
         crate::host::protocol::ClientCommand,

@@ -168,6 +168,10 @@ pub enum ClientCommand {
     WorkspacePermissions {
         request: super::permissions::WorkspacePermissionsRequest,
     },
+    #[serde(rename = "client_workspace_permissions_save")]
+    WorkspacePermissionsSave {
+        request: super::permissions::WorkspacePermissionsSaveRequest,
+    },
     #[serde(rename = "client_plugin_approval_subscribe")]
     ApprovalSubscribe {
         #[serde(rename = "nodeDid")]
@@ -248,6 +252,7 @@ impl ClientCommand {
         "client_speech_synthesize",
         "client_connect_local",
         "client_workspace_permissions",
+        "client_workspace_permissions_save",
         "client_plugin_approval_subscribe",
         "client_plugin_approval_unsubscribe",
         "client_plugin_approval_pending",
