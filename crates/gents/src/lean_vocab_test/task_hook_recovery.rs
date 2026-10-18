@@ -66,11 +66,81 @@ impl Fixture {
         lifecycle
     }
 
+    /// POST-failure diagnostic: read-after-the-fact snapshot of selected
+    /// persisted request lifecycle fields for the failing request. Uses the
+    /// same safe bounded query pattern as the existing lifecycle tests
+    /// (single-row filter on _docID via first_row, exact field list).
+    /// Sanitized by construction: lifecycle/generation/deadline tokens and
+    /// wall time only — no message content, identities, secrets, or full
+    /// row dumps. NOT atomic guard evidence: the row is read after the
+    /// failure and may have changed.
+    async fn post_failure_request_snapshot(&self, request_doc_id: &str) -> Result<String> {
+        let snapshot_started = chrono::Utc::now();
+        let escaped = crate::graphql::escape_graphql_string(request_doc_id);
+        let response = self.node.execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ lifecycle_state execution_generation execution_lease_expires_at execution_lease_secs }} }}"#
+        )).await;
+        anyhow::ensure!(
+            !response.has_errors(),
+            "post-failure request snapshot query failed: {:?}",
+            response.errors
+        );
+        let row = match crate::graphql::first_row::<gents_protocol::row::AgentRequestRow>(
+            &response,
+            "AgentRequest",
+        )?
+        .context("post-failure request snapshot: request row missing")
+        {
+            Ok(row) => row,
+            Err(_) => {
+                return Ok("request row missing at snapshot time".to_string());
+            }
+        };
+        Ok(format!(
+            "snapshot_started_at={}; lifecycle_state={:?}; execution_generation={:?}; \
+             execution_lease_expires_at={:?}; execution_lease_secs={:?}",
+            snapshot_started.to_rfc3339(),
+            row.lifecycle_state,
+            row.execution_generation,
+            row.execution_lease_expires_at,
+            row.execution_lease_secs,
+        ))
+    }
+
     async fn abandoned_request(&self, interrupt_requested: bool) -> String {
+        let claim_started = std::time::Instant::now();
         let mut lifecycle = self.claimed(Duration::from_secs(1)).await;
         let writer =
             crate::streaming::DefraStreamWriter::new(self.node.clone(), self.did(), Duration::ZERO);
-        lifecycle.begin_owned_execution(&writer).await.unwrap();
+        // Diagnostic-only failure enrichment (adjudicated): the real
+        // begin_owned_execution path, 1s lease, and failing behavior are
+        // preserved; on error we report the expected execution generation,
+        // monotonic claim-through-begin elapsed, and a POST-failure
+        // (non-atomic, read-after-the-fact) snapshot of selected persisted
+        // request lifecycle fields plus current wall time. No message
+        // content, identities, secrets, or full row dumps; the snapshot is
+        // explicitly labeled as evidence collected after the failure, not
+        // atomic-guard evidence. Snapshot failure never hides the original
+        // begin error.
+        if let Err(begin_error) = lifecycle.begin_owned_execution(&writer).await {
+            let expected_generation = lifecycle
+                .execution_generation()
+                .unwrap_or("<none>")
+                .to_string();
+            let elapsed = claim_started.elapsed();
+            let request_doc_id = lifecycle.request().doc_id.clone();
+            let post_failure_snapshot = self
+                .post_failure_request_snapshot(&request_doc_id)
+                .unwrap_or_else(|snapshot_error| {
+                    format!("<snapshot query failed: {snapshot_error}>")
+                });
+            panic!(
+                "begin_owned_execution failed in abandoned_request fixture: {begin_error}; \
+                 expected execution generation: {expected_generation}; \
+                 monotonic claim-through-begin elapsed: {elapsed:?}; \
+                 POST-failure request snapshot (not atomic guard evidence): {post_failure_snapshot}"
+            );
+        }
         let doc_id = lifecycle.request().doc_id.clone();
         if interrupt_requested {
             crate::interrupt::interrupt_request_by_doc_id(
