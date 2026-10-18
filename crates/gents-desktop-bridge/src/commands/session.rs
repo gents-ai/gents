@@ -164,6 +164,9 @@ pub async fn session_snapshot(
                 ));
             }
             Err(error) => {
+                if let Some(error) = error.downcast_ref::<BridgeError>() {
+                    return Err(error.clone());
+                }
                 tracing::warn!(
                     target: "gents_desktop::chat",
                     node_did,
