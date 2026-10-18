@@ -25,17 +25,32 @@ fn row(
 
 #[test]
 fn project_filters_to_background_await_mode_only() {
-    let mut toolcall_rows = vec![
+    // Distinction proven (bridge-corrected.log failure): the filter is
+    // correct; this fixture previously left tc_fg's await_mode as the
+    // default "background" from row(), so two rows legitimately projected
+    // and expected==1 was wrong. tc_fg is now explicitly foreground, and
+    // the malformed-timestamp row (tc_garbage-style rows elsewhere) is
+    // covered by project_preserves_pending_and_unknown_without_relabelling.
+    let foreground = ToolCallRow {
+        await_mode: Some("foreground".into()),
+        ..row("tc_fg", Some("running"), Some("2026-05-20T12:00:00Z"), None)
+    };
+    let toolcall_rows = vec![
         row("tc_bg", Some("running"), Some("2026-05-20T12:00:00Z"), None),
-        row("tc_fg", Some("running"), Some("2026-05-20T12:00:00Z"), None),
+        foreground,
+        ToolCallRow {
+            await_mode: None,
+            ..row(
+                "tc_no_mode",
+                Some("running"),
+                Some("2026-05-20T12:00:00Z"),
+                None,
+            )
+        },
     ];
-    let mut no_mode = toolcall_rows[1].clone();
-    no_mode.tool_call_id = "tc_no_mode".into();
-    no_mode.await_mode = None;
-    toolcall_rows.push(no_mode);
     let projected =
         project_backgrounded_tools(&toolcall_rows, &liveness_with(Vec::new(), Vec::new()));
-    assert_eq!(projected.len(), 1);
+    assert_eq!(projected.len(), 1, "only the background row projects");
     assert_eq!(projected[0].tool_call_id, "tc_bg");
 }
 

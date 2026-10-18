@@ -148,6 +148,19 @@ async fn wait_tool(hook: &DefraSessionHook, internal_call_id: &str, tool_call_id
     )
 }
 
+async fn read_tool(hook: &DefraSessionHook, internal_call_id: &str, tool_call_id: &str) -> Value {
+    skip_reason_json(
+        accepted_call(
+            hook,
+            "read_process",
+            Some(format!("model-{internal_call_id}")),
+            internal_call_id,
+            &json!({ "tool_call_id": tool_call_id, "offset": 0, "max_tokens": 1024 }).to_string(),
+        )
+        .await,
+    )
+}
+
 async fn list_background_tools(
     hook: &DefraSessionHook,
     internal_call_id: &str,
@@ -254,19 +267,49 @@ async fn list_background_tools_reports_running_live_output_bytes() {
         registry(tools, &["bash_unrestricted"]),
     )
     .await;
+    // Byte semantics under test (explicit contract):
+    // - `stdout_bytes` / `stderr_bytes` are the DEPRECATED COMBINED LEGACY
+    //   fields: they carry the length of the CANONICAL rendering of all
+    //   output observed so far (never per-channel accounting; stderr is
+    //   hard-coded 0). At base 02351da4d the list handler counted exactly
+    //   the same thing (git show 02351da4d:crates/gents/src/background_tools.rs
+    //   L171-176: `(output.len() as u64, 0)` over `canonical_tool_output`).
+    // - `available_bytes` / `preview` expose the same canonical evidence
+    //   and coordinate with read_process, which slices the identical
+    //   rendering (total_bytes == available_bytes, output agreement below).
+    // Base behavior was timing-dependent: an early poll caught the 4-byte
+    // "live" Open observation while a poll after completion saw 53. The
+    // child is now flock-gated: it prints "live", then blocks until this
+    // test releases the lock, so the mid-run canonical total is
+    // deterministically 4 ("live") and the post-release total is
+    // deterministically 8 ("live\ndone" — the canonical rendering joins
+    // the two tool-output extents with a newline).
+    let lock_dir = tempdir.path().join("gate");
+    let lock_path = lock_dir.join("gate.lock");
+    let prepared = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("mkdir -p {}", lock_dir.display()))
+        .status()
+        .expect("prepare gate dir");
+    assert!(prepared.success());
     let handle = background_tool_with_args(
         &hook,
         "bg-live-output",
         "bash_unrestricted",
         json!({
-            "command": "printf live; sleep 2; printf done",
+            "command": format!(
+                "printf live; exec 9>{}; flock 9; printf done",
+                lock_path.display()
+            ),
             "args": [],
-            "timeout_secs": 5
+            "timeout_secs": 20
         }),
     )
     .await;
     let tool_call_id = handle["tool_call_id"].as_str().unwrap();
 
+    // First observation happens while the child is blocked after "live":
+    // exactly 4 canonical bytes are observable.
     let mut entry = json!({});
     for attempt in 0..40 {
         let result =
@@ -275,18 +318,41 @@ async fn list_background_tools_reports_running_live_output_bytes() {
         if let Some(candidate) = entries
             .iter()
             .find(|entry| entry["tool_call_id"].as_str() == Some(tool_call_id))
-            .filter(|entry| entry["stdout_bytes"].as_u64().unwrap_or_default() >= 4)
+            .filter(|entry| entry["status"].as_str() == Some("running"))
+            .filter(|entry| entry["stdout_bytes"].as_u64().unwrap_or_default() == 4)
         {
             entry = candidate.clone();
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
-
     assert_eq!(entry["tool_name"].as_str(), Some("bash_unrestricted"));
     assert_eq!(entry["status"].as_str(), Some("running"));
-    assert_eq!(entry["stdout_bytes"].as_u64(), Some(4));
+    assert_eq!(
+        entry["stdout_bytes"].as_u64(),
+        Some(4),
+        "canonical bytes observed while the child is gate-blocked after printing 'live'"
+    );
     assert_eq!(entry["stderr_bytes"].as_u64(), Some(0));
+    assert_eq!(
+        entry["available_bytes"].as_u64(),
+        Some(4),
+        "available_bytes agrees with the deprecated legacy count on the same canonical rendering"
+    );
+    assert_eq!(entry["preview"].as_str(), Some("live"));
+
+    // Coordinate with read_process on the identical canonical evidence.
+    let read = read_tool(&hook, "read-live-output", tool_call_id).await;
+    assert_eq!(read["total_bytes"].as_u64(), Some(4));
+    assert_eq!(read["output"].as_str(), Some("live"));
+
+    // Release the gate: the child prints "done" and completes.
+    let released = std::process::Command::new("flock")
+        .arg("-u")
+        .arg(&lock_path)
+        .status()
+        .expect("release gate");
+    assert!(released.success());
 
     let waited = wait_tool(&hook, "wait-live-output", tool_call_id).await;
     assert_eq!(waited["status"].as_str(), Some("completed"));
