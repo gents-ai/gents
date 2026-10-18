@@ -169,7 +169,7 @@ async fn tools_in_flight(txn: &ConfigApplyTxn<'_>, scope: &str) -> Result<Value>
 fn decode_queued_input(row: &Value) -> Result<gents_protocol::request_input::RequestInput> {
     let input: Option<gents_protocol::request_input::RequestInput> =
         serde_json::from_value(row["input"].clone()).map_err(|_| {
-            anyhow!(
+            anyhow::anyhow!(
                 "decoding queued session input for request {}",
                 row["request_id"]
             )
