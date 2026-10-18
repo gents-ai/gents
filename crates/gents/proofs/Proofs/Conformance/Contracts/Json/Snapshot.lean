@@ -1,5 +1,6 @@
 import Proofs.Conformance.RequestPatchPublicationCases
 import Proofs.Conformance.AccessReview
+import Proofs.Conformance.OperatorPaths
 import Proofs.Conformance.WorkspaceCommandRoot
 import Proofs.Conformance.ClientDataPublicationCases
 import Proofs.Conformance.ClientObservationScope
@@ -131,6 +132,7 @@ def snapshotJson : String :=
     ++ "\"workspace_permission_write_cases\":" ++ workspacePermissionWriteCasesJson ++ ","
     ++ "\"workspace_permission_cases\":" ++ workspacePermissionCasesJson ++ ","
     ++ "\"workspace_command_root_cases\":" ++ Conformance.WorkspaceCommandRoot.casesJson.compress ++ ","
+    ++ "\"operator_path_cases\":" ++ Conformance.OperatorPaths.casesJson.compress ++ ","
     ++ "\"access_review_cases\":" ++ Conformance.AccessReview.casesJson.compress ++ ","
     ++ "\"access_review_task_cases\":" ++ Conformance.AccessReview.taskCasesJson.compress ++ ","
     ++ "\"plugin_approval_cases\":" ++ Conformance.PluginApproval.casesJson.compress ++ ","

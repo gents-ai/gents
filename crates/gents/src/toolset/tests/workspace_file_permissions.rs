@@ -366,3 +366,105 @@ async fn replacing_a_pending_creation_parent_with_a_symlink_invalidates_consent(
     assert!(!fixture.key.path.join("file.txt").exists());
     fixture.assert_clear();
 }
+
+#[tokio::test]
+async fn operator_file_aliases_cannot_be_read_or_changed_with_full_access() {
+    use crate::toolset::args::ReadFileArgs;
+    let fixture = Fixture::new(Some(workspace::Mode::FullAccess));
+    crate::plugin::allowed::protect(fixture.home.path());
+    let settings = workspace::preferences_file(fixture.home.path());
+    let original = std::fs::read(&settings).unwrap();
+    let alias = fixture.key.path.join("project-settings.json");
+    std::fs::hard_link(&settings, &alias).unwrap();
+    let context = ToolContext::new(fixture.root.path().to_owned(), false).unwrap();
+    let read = fixture
+        .run(Tool::call(
+            &ReadFileTool::new(context.clone(), 1024),
+            ReadFileArgs {
+                path: alias.to_str().unwrap().into(),
+                start_line: None,
+                end_line: None,
+                max_chars: None,
+                raw_json: true,
+            },
+        ))
+        .await;
+    assert!(read.unwrap_err().to_string().contains("operator"));
+    let write = fixture
+        .run(Tool::call(
+            &WriteFileTool::new(context.clone()),
+            WriteFileArgs {
+                path: alias.to_str().unwrap().into(),
+                content: "replaced".into(),
+                expected_content_hash: None,
+                overwrite: true,
+                raw_json: true,
+            },
+        ))
+        .await;
+    assert!(write.unwrap_err().to_string().contains("operator"));
+    let edit = fixture
+        .run(Tool::call(
+            &EditFileTool::new(context),
+            EditFileArgs {
+                path: alias.to_str().unwrap().into(),
+                old_text: String::from_utf8(original.clone()).unwrap(),
+                new_text: "replaced".into(),
+                replace_all: false,
+                raw_json: true,
+                dry_run: false,
+                match_mode: None,
+                operation: None,
+                expected_content_hash: None,
+            },
+        ))
+        .await;
+    assert!(edit.unwrap_err().to_string().contains("operator"));
+    assert_eq!(std::fs::read(&settings).unwrap(), original);
+    assert_eq!(std::fs::read(&alias).unwrap(), original);
+    fixture.assert_clear();
+}
+
+#[tokio::test]
+async fn ordinary_project_hard_links_remain_readable_and_editable() {
+    use crate::toolset::args::ReadFileArgs;
+    let fixture = Fixture::new(Some(workspace::Mode::FullAccess));
+    crate::plugin::allowed::protect(fixture.home.path());
+    let path = fixture.key.path.join("source.txt");
+    let alias = fixture.key.path.join("alias.txt");
+    std::fs::write(&path, "hello world").unwrap();
+    std::fs::hard_link(&path, &alias).unwrap();
+    let context = ToolContext::new(fixture.root.path().to_owned(), false).unwrap();
+    let read = fixture
+        .run(Tool::call(
+            &ReadFileTool::new(context.clone(), 1024),
+            ReadFileArgs {
+                path: alias.to_str().unwrap().into(),
+                start_line: None,
+                end_line: None,
+                max_chars: None,
+                raw_json: true,
+            },
+        ))
+        .await
+        .unwrap();
+    assert!(read.contains("hello world"));
+    fixture.edit(&alias, false, None).await.unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello reader");
+    fixture
+        .run(Tool::call(
+            &WriteFileTool::new(context),
+            WriteFileArgs {
+                path: alias.to_str().unwrap().into(),
+                content: "updated".into(),
+                expected_content_hash: None,
+                overwrite: true,
+                raw_json: true,
+            },
+        ))
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "updated");
+    assert_eq!(std::fs::read_to_string(&alias).unwrap(), "updated");
+    fixture.assert_clear();
+}
