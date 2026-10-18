@@ -319,7 +319,8 @@ async fn workspace_command_uses_the_configured_review_task_and_the_callers_ledge
     .unwrap()
     .unwrap()
     .with_reviewer(reviewer.callback.clone());
-    let tool_context = crate::toolset::ToolContext::new(key.path.clone(), false).unwrap();
+    let tool_root = key.path.parent().unwrap().to_owned();
+    let tool_context = crate::toolset::ToolContext::new(tool_root.clone(), false).unwrap();
     let (program, arguments) = if cfg!(windows) {
         (
             "cmd.exe",
@@ -335,7 +336,7 @@ async fn workspace_command_uses_the_configured_review_task_and_the_callers_ledge
             "bash_unrestricted",
             program,
             &arguments,
-            None,
+            key.path.to_str(),
             Duration::from_secs(5),
             &crate::toolset::CommandExecutionPolicy::write_capable()
                 .with_mode(crate::toolset::CommandExecutionMode::Unrestricted),
@@ -358,6 +359,26 @@ async fn workspace_command_uses_the_configured_review_task_and_the_callers_ledge
     let calls = calls.lock().unwrap();
     assert_eq!(calls.len(), 1);
     assert!(calls[0].tools.is_empty());
+    let input = calls[0]
+        .chat_history
+        .iter()
+        .find_map(|message| {
+            let rig::message::Message::User { content } = message else {
+                return None;
+            };
+            content.iter().find_map(|part| {
+                let rig::message::UserContent::Text(text) = part else {
+                    return None;
+                };
+                serde_json::from_str::<super::review::ReviewInput>(&text.text).ok()
+            })
+        })
+        .unwrap();
+    assert_eq!(input.action["workspace"], serde_json::json!(key.path));
+    assert_eq!(
+        input.action["subject"]["root"],
+        serde_json::json!(tool_root)
+    );
     drop(calls);
     assert_eq!(fixture.session_message_count().await, 0);
     assert!(crate::plugin::approval::pending_requests(home.path())

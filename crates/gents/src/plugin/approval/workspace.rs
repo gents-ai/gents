@@ -6,13 +6,15 @@ use serde::{Deserialize, Serialize};
 mod command;
 mod context;
 mod file;
+mod review_task;
 pub(crate) use command::authorize_command;
 pub(crate) use context::{carry, for_request, scope, ReviewInvocation, Reviewer};
 pub(crate) use file::authorize_file_mutation;
+pub use review_task::{default_review_task, review_task_is_eligible, review_task_policy};
 
 use gents_loop::tool_policy::workspace_permissions::{self as policy, Grant, Input, Review, Route};
 
-pub use gents_loop::tool_policy::workspace_permissions::{Mode, Preference, Scope};
+pub use gents_loop::tool_policy::workspace_permissions::{Mode, Preference, Scope, SelectionError};
 
 pub const CONTRACT_VERSION: u32 = 1;
 pub const STATUS_SUPPORT_FIELD: &str = "workspace_permissions";
