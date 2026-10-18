@@ -570,8 +570,11 @@ mod turn_assignment_tests {
     }
 
     /// The persisted suffix, not live assignment state, is the replay
-    /// authority: simulating a crash between settlement and notice-creation
-    /// and redriving must re-render the same assignment reason.
+    /// authority: settlement persists `completionPending:<reason>` and a
+    /// crash before the notice leaves it outstanding; the redrive re-renders
+    /// the suffix byte-identically and advances the row to `completed`. The
+    /// replayed reason is invariant across a Goal status change between
+    /// settlement and redrive (the source snapshot never changes on replay).
     #[tokio::test]
     async fn crash_before_notice_redrive_renders_the_persisted_assignment_reason() {
         let PublishedSessionMessage {
@@ -594,7 +597,8 @@ mod turn_assignment_tests {
         let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
         let session_id = admission.tool.session_id().to_owned();
         crate::test_support::install_test_agent(node, did, "general").await;
-        crate::goal::set_goal(node, did, &caused_session_id(node, &caused_request_doc_id).await, Some("hold"), Some(crate::goal::GoalStatus::Active), None)
+        let goal_session_id = caused_session_id(node, &caused_request_doc_id).await;
+        crate::goal::set_goal(node, did, &goal_session_id, Some("hold"), Some(crate::goal::GoalStatus::Active), None)
             .await
             .expect("persist an active Goal in the caused session");
         crate::tool_call_lifecycle::admission_fixture::complete_child(
@@ -635,6 +639,9 @@ mod turn_assignment_tests {
             .settle_session_message(&terminal, handoff_reason)
             .await
             .unwrap());
+        // Pre-delivery persisted snapshot: the suffix is durable before any
+        // notification exists (lifecycle state is terminal; only the notice
+        // side effect is outstanding).
         let row = tool_call_row(node, &tool_doc_id).await;
         assert_eq!(row["status"], "completionPending:assignment_active");
         assert!(
@@ -643,6 +650,13 @@ mod turn_assignment_tests {
                 .is_empty(),
             "no notice exists yet: this is the crash-before-notice state"
         );
+
+        // The assignment changes under the replay (the Goal completes), but
+        // the redrive must re-render the persisted suffix, never re-observe
+        // live state.
+        crate::goal::set_goal(node, did, &goal_session_id, Some("hold"), Some(crate::goal::GoalStatus::Complete), None)
+            .await
+            .expect("the Goal completes after settlement");
 
         // The redrive re-renders from the row's persisted suffix.
         let report =
@@ -656,7 +670,7 @@ mod turn_assignment_tests {
         assert_eq!(notifications.len(), 1);
         assert!(
             notifications[0].contains("<reason>assignment_active</reason>"),
-            "replay renders the persisted assignment reason: {}",
+            "replay renders the persisted assignment reason, not live state: {}",
             notifications[0]
         );
         let row = tool_call_row(node, &tool_doc_id).await;
