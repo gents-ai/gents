@@ -201,7 +201,6 @@ mod runtime;
 mod session_automated;
 #[path = "tests/session_basic.rs"]
 mod session_basic;
-mod session_titles;
 #[path = "tests/session_queue.rs"]
 mod session_queue;
 #[path = "tests/session_stale_rows.rs"]
@@ -210,5 +209,7 @@ mod session_stale_rows;
 mod session_state;
 #[path = "tests/session_timeline.rs"]
 mod session_timeline;
+#[path = "tests/session_titles.rs"]
+mod session_titles;
 #[path = "tests/sync.rs"]
 mod sync;
