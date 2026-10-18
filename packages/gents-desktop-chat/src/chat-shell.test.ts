@@ -317,6 +317,14 @@ function localWorkflowFromContract(
   contractCase: LeanClientShellCase,
 ): ChatWorkflowState {
   switch (contractCase.frontend_local_workflow_kind) {
+    case "turnInProgress":
+      return {
+        kind: "turnInProgress",
+        nodeDid: nodeDid(contractCase.frontend_selected_node_did)!,
+        sessionId: sessionId(contractCase.frontend_local_workflow_session)!,
+        requestId: requestId(contractCase.frontend_local_workflow_request),
+        turnState: contractCase.frontend_local_workflow_turn_state!,
+      };
     case "ready":
       return { kind: "ready" };
     case "submittingRequest":
@@ -399,7 +407,7 @@ describe("projectChatShell", () => {
     "matches generated Lean ClientShell projection contracts",
     async () => {
       const contractCases = await loadLeanClientShellCases();
-      expect(contractCases).toHaveLength(27);
+      expect(contractCases).toHaveLength(29);
       expect(
         contractCases.some(
           (contractCase) =>

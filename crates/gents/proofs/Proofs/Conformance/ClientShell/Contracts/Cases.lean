@@ -333,7 +333,24 @@ def clientShellCases : List ClientShellContractCase :=
     }
   let switchedStaleLocal :=
     { staleBeforeSwitch with selection := { staleBeforeSwitch.selection with session := some sid2 } }
-  [ let pre := selectedShell (some sid1)
+  let cachedRunningCase := fun (name : String) (nextStore : LocalStore) =>
+    let pre := selectedShell (some sid1)
+    let previous := storeWith [sessionObs sid1 (some reqOld) (some turnRunning)]
+    let input := ShellInput.snapshot nextStore
+    let post := step pre input previous .healthy ctxReady
+    let priorActive := activeRequestForFrontend pre.selection
+      (selectedObservation pre previous) pre.workflow
+    let prior := frontendWorkflowFromProjection pre previous ctxReady priorActive
+    let result := clientShellCaseFromStep name "canonical_request_handoff"
+      pre input previous .healthy ctxReady pre post nextStore
+    { result with
+      frontendLocalWorkflowKind := prior.kind
+      frontendLocalWorkflowSession := prior.sessionId
+      frontendLocalWorkflowRequest := prior.requestId
+      frontendLocalWorkflowTurnState := prior.turnState }
+  [ cachedRunningCase "running_request_hands_off_to_next_request" storeNewRunning
+  , cachedRunningCase "running_request_hands_off_to_completed_successor" storeNewCompleted
+  , let pre := selectedShell (some sid1)
     let input := ShellInput.user .requestNewSession
     let post := step pre input storeNewCompleted .healthy ctxReady
     clientShellCaseFromStep
