@@ -108,10 +108,69 @@ async fn an_editor_cache_miss_stops_before_identity_or_store_startup() {
     );
 }
 
+/// Child::wait closes stdin. Keep it open until the store lock is released so
+/// EOF cannot win the SIGTERM race; then close it to release Tokio's blocking
+/// stdin read before waiting for the attachment's runtime to exit.
 #[tokio::test]
 async fn terminating_an_editor_attachment_releases_its_unready_installation() {
     let directory = tempfile::tempdir().unwrap();
     let paths = DesktopPaths::from_root(directory.path().join("cancelled editor"));
+    let mut child = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
+        .args(["--stdio", "--editor-store", "--home"])
+        .arg(paths.root())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let input = child.stdin.take().unwrap();
+    let mut output = FramedRead::new(child.stdout.take().unwrap(), LengthDelimitedCodec::new());
+    let first = tokio::time::timeout(Duration::from_secs(30), output.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let first: Value = serde_json::from_slice(&first).unwrap();
+    assert_eq!(first["kind"], "store");
+    // SAFETY: this is the live attachment created above; it installed its
+    // termination handler before requesting the private store exchange.
+    assert_eq!(
+        unsafe { libc::kill(child.id().unwrap() as libc::pid_t, libc::SIGTERM) },
+        0
+    );
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match gents::home::lock_store(paths.root(), paths.node_data_dir()) {
+                Ok(guard) => {
+                    drop(guard);
+                    break;
+                }
+                Err(error) if error.is::<gents::home::StoreLockHeld>() => {
+                    tokio::time::sleep(Duration::from_millis(10)).await
+                }
+                Err(error) => panic!("unexpected client lock error: {error}"),
+            }
+        }
+    })
+    .await
+    .expect("the cancelled startup retained its store lock");
+    drop(input);
+    let status = tokio::time::timeout(Duration::from_secs(10), child.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(status.success(), "unexpected attachment exit: {status}");
+    assert!(!paths.identity_key_path().exists());
+    assert!(!paths.node_data_dir().join("MANIFEST").exists());
+}
+
+#[tokio::test]
+async fn closing_editor_input_releases_an_unready_installation() {
+    use tokio::io::AsyncReadExt;
+
+    let directory = tempfile::tempdir().unwrap();
+    let paths = DesktopPaths::from_root(directory.path().join("closed editor"));
     let mut child = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
         .args(["--stdio", "--editor-store", "--home"])
         .arg(paths.root())
@@ -129,17 +188,21 @@ async fn terminating_an_editor_attachment_releases_its_unready_installation() {
         .unwrap();
     let first: Value = serde_json::from_slice(&first).unwrap();
     assert_eq!(first["kind"], "store");
-    // SAFETY: this is the live attachment created above; it installed its
-    // termination handler before requesting the private store exchange.
-    assert_eq!(
-        unsafe { libc::kill(child.id().unwrap() as libc::pid_t, libc::SIGTERM) },
-        0
-    );
-    assert!(tokio::time::timeout(Duration::from_secs(10), child.wait())
+    drop(child.stdin.take());
+    let status = tokio::time::timeout(Duration::from_secs(10), child.wait())
         .await
         .unwrap()
-        .unwrap()
-        .success());
+        .unwrap();
+    let mut error = String::new();
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        child.stderr.take().unwrap().read_to_string(&mut error),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(status.code(), Some(1), "{status}: {error}");
+    assert!(error.contains("editor secret storage disconnected"), "{error}");
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             match gents::home::lock_store(paths.root(), paths.node_data_dir()) {
@@ -155,7 +218,7 @@ async fn terminating_an_editor_attachment_releases_its_unready_installation() {
         }
     })
     .await
-    .expect("the cancelled startup retained its store lock");
+    .expect("input EOF retained the client store lock");
     assert!(!paths.identity_key_path().exists());
     assert!(!paths.node_data_dir().join("MANIFEST").exists());
 }
