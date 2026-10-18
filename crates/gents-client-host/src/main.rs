@@ -14,10 +14,16 @@ struct Args {
     serve: bool,
     #[arg(long)]
     stdio: bool,
+    #[arg(long, hide = true)]
+    editor_store: bool,
+    #[arg(long, hide = true, requires = "editor_store")]
+    allow_keychain_prompts: bool,
     #[arg(long, conflicts_with_all = ["home", "serve", "stdio"])]
     describe: bool,
 }
 
+#[cfg(any(unix, windows))]
+mod editor_store;
 #[cfg(any(unix, windows))]
 mod native;
 
@@ -38,6 +44,7 @@ async fn main() -> Result<()> {
                 "os": std::env::consts::OS,
                 "arch": std::env::consts::ARCH,
                 "transportSupported": cfg!(any(unix, windows)),
+                "editorStoreBootstrapVersion": 1,
             }),
         )?;
         output.write_all(b"\n")?;
@@ -59,9 +66,9 @@ async fn main() -> Result<()> {
     };
     #[cfg(any(unix, windows))]
     return if args.serve {
-        native::serve(paths).await
+        native::serve(paths, args.editor_store, args.allow_keychain_prompts).await
     } else {
-        native::attach(paths).await
+        native::attach(paths, args.editor_store, args.allow_keychain_prompts).await
     };
     #[cfg(not(any(unix, windows)))]
     {

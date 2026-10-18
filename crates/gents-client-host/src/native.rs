@@ -6,14 +6,59 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use gents_desktop_bridge::host::{local, ClientHost};
-use gents_desktop_core::client::{ClientCore, DesktopPaths};
+use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
+use tokio::process::{Child, Command};
 use tokio_util::sync::CancellationToken;
 
-pub async fn serve(paths: DesktopPaths) -> Result<()> {
+/// A private bootstrap has no attachment owner until the core reports ready.
+/// Dropping its parent must also dismiss an outstanding system authentication
+/// request; after readiness the installation owns its ordinary idle lifetime.
+struct StartupChild {
+    process: Child,
+    ready: bool,
+}
+
+impl Drop for StartupChild {
+    fn drop(&mut self) {
+        if !self.ready {
+            let _ = self.process.start_kill();
+        }
+    }
+}
+
+pub async fn serve(paths: DesktopPaths, editor_store: bool, interactive: bool) -> Result<()> {
     let listener = local::LocalListener::bind(&paths).await?;
-    let core = Arc::new(ClientCore::start_with_paths(paths).await?);
+    let provider = editor_store.then(|| {
+        Arc::new(crate::editor_store::Provider::new(
+            paths.root().to_owned(),
+            interactive,
+            tokio::io::join(tokio::io::stdin(), tokio::io::stdout()),
+        ))
+    });
+    let options = match &provider {
+        Some(provider) => ClientCoreOptions {
+            store_key_provider: Some(provider.clone()),
+            ..Default::default()
+        },
+        None => ClientCoreOptions::default(),
+    };
+    let core = match ClientCore::start_with_paths_and_options(paths, options).await {
+        Ok(core) => Arc::new(core),
+        Err(error) => {
+            if let Some(provider) = &provider {
+                let _ = provider.failed(&error).await;
+            }
+            return Err(error);
+        }
+    };
+    if let Some(provider) = &provider {
+        if let Err(error) = provider.ready().await {
+            core.shutdown().await?;
+            return Err(error);
+        }
+    }
+    drop(provider);
     let stop = CancellationToken::new();
     let interrupt = stop.clone();
     let signal = tokio::spawn(async move {
@@ -32,13 +77,22 @@ pub async fn serve(paths: DesktopPaths) -> Result<()> {
 
 /// Windows named pipes cannot close only their write side. Stdio EOF must
 /// release both pipe handles so the installation can retire the attachment.
-pub async fn attach(paths: DesktopPaths) -> Result<()> {
+pub async fn attach(paths: DesktopPaths, editor_store: bool, interactive: bool) -> Result<()> {
+    let mut bootstrap = editor_store.then(|| {
+        crate::editor_store::frames(tokio::io::join(tokio::io::stdin(), tokio::io::stdout()))
+    });
     let connection = tokio::time::timeout(Duration::from_secs(90), async {
         if let Ok(connection) = local::connect(&paths).await {
+            if let Some(bootstrap) = &mut bootstrap {
+                crate::editor_store::send(bootstrap, &crate::editor_store::Message::Ready).await?;
+            }
             return Ok(connection);
         }
         let _startup = local::startup_lock(&paths).await?;
         if let Ok(connection) = local::connect(&paths).await {
+            if let Some(bootstrap) = &mut bootstrap {
+                crate::editor_store::send(bootstrap, &crate::editor_store::Message::Ready).await?;
+            }
             return Ok(connection);
         }
         let mut command = Command::new(std::env::current_exe()?);
@@ -49,6 +103,10 @@ pub async fn attach(paths: DesktopPaths) -> Result<()> {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::inherit());
+        if editor_store {
+            command.arg("--editor-store").stdin(Stdio::piped()).stdout(Stdio::piped());
+            if interactive { command.arg("--allow-keychain-prompts"); }
+        }
         #[cfg(unix)]
         command.as_std_mut().process_group(0);
         #[cfg(windows)]
@@ -56,14 +114,34 @@ pub async fn attach(paths: DesktopPaths) -> Result<()> {
             windows_sys::Win32::System::Threading::CREATE_NO_WINDOW
                 | windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP,
         );
-        let mut child = command
-            .spawn()
-            .context("starting the native client installation")?;
+        let mut child = StartupChild {
+            process: command.spawn().context("starting the native client installation")?,
+            ready: !editor_store,
+        };
+        if let Some(bootstrap) = &mut bootstrap {
+            use futures::SinkExt;
+            let input = child.process.stdin.take().context("missing private store input")?;
+            let output = child.process.stdout.take().context("missing private store output")?;
+            let mut private = crate::editor_store::frames(tokio::io::join(output, input));
+            loop {
+                let frame = crate::editor_store::receive(&mut private).await?;
+                let message: crate::editor_store::Message = serde_json::from_slice(&frame)
+                    .context("invalid store bootstrap message")?;
+                let ready = matches!(message, crate::editor_store::Message::Ready);
+                let failed = matches!(message, crate::editor_store::Message::Error { .. });
+                if ready { child.ready = true; }
+                bootstrap.send(frame.freeze()).await?;
+                if failed { bail!("local history needs attention in the editor"); }
+                if ready { break; }
+                let reply = crate::editor_store::receive(bootstrap).await?;
+                private.send(reply.freeze()).await?;
+            }
+        }
         loop {
             if let Ok(connection) = local::connect(&paths).await {
                 return Ok(connection);
             }
-            if let Some(status) = child.try_wait()? {
+            if let Some(status) = child.process.try_wait()? {
                 bail!("client host exited with {status}; inspect the Gents output for the startup error");
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -71,6 +149,7 @@ pub async fn attach(paths: DesktopPaths) -> Result<()> {
     })
     .await
     .context("waiting for the native client installation")??;
+    drop(bootstrap);
     let (mut reader, mut writer) = tokio::io::split(connection);
     let input = async {
         tokio::io::copy(&mut tokio::io::stdin(), &mut writer).await?;
