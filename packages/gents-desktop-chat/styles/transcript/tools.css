@@ -148,6 +148,7 @@
   }
 
   .tool-activity-body .tool-group {
+    overflow: clip;
     border: 0;
     border-radius: 0;
   }
@@ -171,7 +172,15 @@
   }
 
   .tool-activity-body .tool-item {
+    overflow: clip;
     border-bottom: 0;
+  }
+
+  .tool-activity-body .tool-item[open] > .tool-item-summary {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--color-surface-deep);
   }
 
   .tool-activity-body .tool-item[open] {
