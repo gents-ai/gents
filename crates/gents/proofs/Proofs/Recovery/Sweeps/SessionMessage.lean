@@ -133,6 +133,8 @@ def liveAssignmentStatuses : List String :=
 theorem active_reason_differs_from_absent :
     (AssignmentHandoff.live "active").toReason ≠ AssignmentHandoff.absent.toReason := by
   intro h
-  simp [AssignmentHandoff.toReason] at h
+  rw [show (AssignmentHandoff.live "active").toReason = "assignment_active" from rfl,
+      show AssignmentHandoff.absent.toReason = "assignment_absent" from rfl] at h
+  exact absurd h (by decide)
 
 end Recovery
