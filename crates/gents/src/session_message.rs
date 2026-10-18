@@ -1005,13 +1005,7 @@ mod agent_tools_tests {
                     &caused.agent_id,
                     caused.requester_did.as_deref(),
                     None,
-                    caused
-                        .caused_by_parent_request_doc_id
-                        .clone()
-                        .map(|parent| gents_protocol::session::SessionProvenance {
-                            parent_request_doc_id: Some(parent),
-                            ..Default::default()
-                        }),
+                    crate::lifecycle::materialize::created_session_provenance(&caused),
                     &created_at,
                 )
                 .await
@@ -1454,6 +1448,54 @@ mod agent_tools_tests {
             .await
             .unwrap();
         drop(caller_owner);
+        node.shutdown().await;
+        std::fs::remove_dir_all(&message.admission.path).unwrap();
+    }
+
+    /// A caused session records its opening request when it is created and
+    /// keeps it when a later request reaches the session.
+    #[tokio::test]
+    async fn caused_session_records_its_opening_request() {
+        let (message, _caller, caused) = started("opening-provenance").await;
+        let node = message.admission.node.clone();
+        let access = ConfigAccess::local(node.clone());
+        let provenance = || async {
+            crate::session_origin::load_session(
+                &access,
+                &caused.session_id,
+                caused.requester_did.as_deref(),
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .provenance
+            .unwrap()
+        };
+        let recorded = provenance().await;
+        assert_eq!(
+            recorded.parent_request_doc_id,
+            caused.caused_by_parent_request_doc_id
+        );
+        assert_eq!(
+            recorded.opening_request_doc_id.as_deref(),
+            Some(caused.doc_id.as_str())
+        );
+
+        let mut later = caused.clone();
+        later.doc_id = "bae-later-message".to_owned();
+        materialize_session(&node, &later).await;
+        assert_eq!(provenance().await, recorded);
+
+        let mut without_call = caused.clone();
+        without_call.caused_by_parent_tool_call_doc_id = None;
+        assert_eq!(
+            crate::lifecycle::materialize::created_session_provenance(&without_call)
+                .unwrap()
+                .opening_request_doc_id,
+            None
+        );
+        without_call.caused_by_parent_request_doc_id = None;
+        assert!(crate::lifecycle::materialize::created_session_provenance(&without_call).is_none());
         node.shutdown().await;
         std::fs::remove_dir_all(&message.admission.path).unwrap();
     }
