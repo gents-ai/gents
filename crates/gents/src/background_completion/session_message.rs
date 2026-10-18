@@ -281,7 +281,10 @@ pub(crate) async fn settle_session_message_row(
     // the completion redrive can re-render the same evidence.
     let handoff = turn_assignment_handoff(node, &caused, &terminal).await;
     let handoff_reason = handoff.reason();
-    if !lifecycle.settle_session_message(&terminal, handoff_reason).await? {
+    if !lifecycle
+        .settle_session_message(&terminal, handoff_reason)
+        .await?
+    {
         return Ok(false);
     }
     append_background_tool_completion(
@@ -406,7 +409,12 @@ mod turn_assignment_tests {
         .into_iter()
         .collect();
         assert_eq!(reasons.len(), 7);
-        for terminal in ["request_failed", "request_dead", "request_interrupted", "request_superseded"] {
+        for terminal in [
+            "request_failed",
+            "request_dead",
+            "request_interrupted",
+            "request_superseded",
+        ] {
             assert!(!reasons.contains(terminal));
         }
     }
@@ -436,15 +444,27 @@ mod turn_assignment_tests {
         crate::test_support::install_test_agent(node, did, "general").await;
         // The caused session carries an active Goal: a finished turn with a
         // live assignment is not assignment success.
-        crate::goal::set_goal(node, did, &caused_session_id(node, &caused_request_doc_id).await, Some("hold"), Some(crate::goal::GoalStatus::Active), None)
-            .await
-            .expect("persist an active Goal in the caused session");
+        crate::goal::set_goal(
+            node,
+            did,
+            &caused_session_id(node, &caused_request_doc_id).await,
+            Some("hold"),
+            Some(crate::goal::GoalStatus::Active),
+            None,
+        )
+        .await
+        .expect("persist an active Goal in the caused session");
         crate::tool_call_lifecycle::admission_fixture::complete_child(
-            node, &caused_request_id, did, "child done",
+            node,
+            &caused_request_id,
+            did,
+            "child done",
         )
         .await;
 
-        let settled = settle_running_session_message_rows(node, did).await.unwrap();
+        let settled = settle_running_session_message_rows(node, did)
+            .await
+            .unwrap();
         assert_eq!(settled, 1, "the caused terminal settles the row");
         // One settle call persists the suffix, publishes the notice and
         // advances the row: the converged form is `completed` with the
@@ -503,11 +523,16 @@ mod turn_assignment_tests {
         let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
         crate::test_support::install_test_agent(node, did, "general").await;
         crate::tool_call_lifecycle::admission_fixture::complete_child(
-            node, &caused_request_id, did, "child done",
+            node,
+            &caused_request_id,
+            did,
+            "child done",
         )
         .await;
 
-        let settled = settle_running_session_message_rows(node, did).await.unwrap();
+        let settled = settle_running_session_message_rows(node, did)
+            .await
+            .unwrap();
         assert_eq!(settled, 1);
         // One settle call persists the suffix, publishes the notice and
         // advances the row; the notice is where the absent-assignment
@@ -547,15 +572,27 @@ mod turn_assignment_tests {
         let did = &admission.node_did;
         let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
         crate::test_support::install_test_agent(node, did, "general").await;
-        crate::goal::set_goal(node, did, &caused_session_id(node, &caused_request_doc_id).await, Some("done"), Some(crate::goal::GoalStatus::Complete), None)
-            .await
-            .expect("persist a complete Goal in the caused session");
+        crate::goal::set_goal(
+            node,
+            did,
+            &caused_session_id(node, &caused_request_doc_id).await,
+            Some("done"),
+            Some(crate::goal::GoalStatus::Complete),
+            None,
+        )
+        .await
+        .expect("persist a complete Goal in the caused session");
         crate::tool_call_lifecycle::admission_fixture::complete_child(
-            node, &caused_request_id, did, "child done",
+            node,
+            &caused_request_id,
+            did,
+            "child done",
         )
         .await;
 
-        let settled = settle_running_session_message_rows(node, did).await.unwrap();
+        let settled = settle_running_session_message_rows(node, did)
+            .await
+            .unwrap();
         assert_eq!(settled, 1);
         let row = tool_call_row(node, &tool_doc_id).await;
         assert_eq!(row["status"], "completed");
@@ -600,11 +637,21 @@ mod turn_assignment_tests {
         let session_id = admission.tool.session_id().to_owned();
         crate::test_support::install_test_agent(node, did, "general").await;
         let goal_session_id = caused_session_id(node, &caused_request_doc_id).await;
-        crate::goal::set_goal(node, did, &goal_session_id, Some("hold"), Some(crate::goal::GoalStatus::Active), None)
-            .await
-            .expect("persist an active Goal in the caused session");
+        crate::goal::set_goal(
+            node,
+            did,
+            &goal_session_id,
+            Some("hold"),
+            Some(crate::goal::GoalStatus::Active),
+            None,
+        )
+        .await
+        .expect("persist an active Goal in the caused session");
         crate::tool_call_lifecycle::admission_fixture::complete_child(
-            node, &caused_request_id, did, "child done",
+            node,
+            &caused_request_id,
+            did,
+            "child done",
         )
         .await;
 
@@ -634,8 +681,9 @@ mod turn_assignment_tests {
         };
         let caused_doc_id = caused.doc_id.as_deref().unwrap().to_owned();
         let Some(terminal) =
-            crate::background_tools::load_caused_request_terminal(node, &caused_doc_id).await
-            .unwrap()
+            crate::background_tools::load_caused_request_terminal(node, &caused_doc_id)
+                .await
+                .unwrap()
         else {
             panic!("the completed child is a terminal observation");
         };
@@ -661,9 +709,16 @@ mod turn_assignment_tests {
         // The assignment changes under the replay (the Goal completes), but
         // the redrive must re-render the persisted suffix, never re-observe
         // live state.
-        crate::goal::set_goal(node, did, &goal_session_id, Some("hold"), Some(crate::goal::GoalStatus::Complete), None)
-            .await
-            .expect("the Goal completes after settlement");
+        crate::goal::set_goal(
+            node,
+            did,
+            &goal_session_id,
+            Some("hold"),
+            Some(crate::goal::GoalStatus::Complete),
+            None,
+        )
+        .await
+        .expect("the Goal completes after settlement");
 
         // The redrive re-renders from the row's persisted suffix.
         let report =
@@ -753,10 +808,7 @@ async fn session_message_notifications(
 /// The caused session of the fixture's session message, where Goal state is
 /// observed: `turn_assignment_handoff` reads the Goal of the session the
 /// caused request runs in, read from the caused AgentRequest row itself.
-async fn caused_session_id(
-    node: &Arc<EmbeddedNode>,
-    caused_request_doc_id: &str,
-) -> String {
+async fn caused_session_id(node: &Arc<EmbeddedNode>, caused_request_doc_id: &str) -> String {
     let doc_id = escape_graphql_string(caused_request_doc_id);
     let response = node
         .execute(&format!(

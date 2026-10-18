@@ -184,7 +184,11 @@ async fn seed_goal_status(
         r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{node_did}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#
     ))
     .await;
-    assert!(!response.has_errors(), "seed Goal status: {:?}", response.errors);
+    assert!(
+        !response.has_errors(),
+        "seed Goal status: {:?}",
+        response.errors
+    );
 }
 
 fn handoff_reason_for_case(name: &str) -> Option<&'static str> {
@@ -195,13 +199,9 @@ fn handoff_reason_for_case(name: &str) -> Option<&'static str> {
         "session_message_request_superseded_to_failed" => Some("request_superseded"),
         "session_message_request_completed_to_completed" => None,
         "session_message_request_completed_no_goal_to_completed" => Some("assignment_absent"),
-        "session_message_request_completed_unknown_goal_to_completed" => {
-            Some("assignment_unknown")
-        }
+        "session_message_request_completed_unknown_goal_to_completed" => Some("assignment_unknown"),
         "session_message_request_completed_live_goal_to_completed" => Some("assignment_active"),
-        "session_message_request_completed_blocked_goal_to_completed" => {
-            Some("assignment_blocked")
-        }
+        "session_message_request_completed_blocked_goal_to_completed" => Some("assignment_blocked"),
         other => panic!("{other}: unhandled session-message case"),
     }
 }
@@ -286,9 +286,8 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                 // observations. The fixture states must be distinct or the
                 // generated witnesses do not exercise the vocabulary.
                 let caused_session_id = {
-                    let doc_id = crate::graphql::escape_graphql_string(
-                        &message.caused_request_doc_id,
-                    );
+                    let doc_id =
+                        crate::graphql::escape_graphql_string(&message.caused_request_doc_id);
                     let response = admission.node.execute(&format!(
                         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ session_id }} }}"#
                     ))
@@ -343,12 +342,8 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                         )
                         .await
                         .expect("persist a Goal in the caused session");
-                        seed_goal_status(
-                            &admission.node,
-                            &goal,
-                            r#"status: "corrupted-status""#,
-                        )
-                        .await;
+                        seed_goal_status(&admission.node, &goal, r#"status: "corrupted-status""#)
+                            .await;
                     }
                     "session_message_request_completed_live_goal_to_completed" => {
                         crate::test_support::install_test_agent(
