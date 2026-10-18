@@ -118,6 +118,35 @@ describe("WorkerStep wait-status projection consumption", () => {
     await waitFor(() => expect(screen.getAllByText(/90s/).length).toBeGreaterThan(0));
   });
 
+  it("renders pending explicitly without relabeling it running", async () => {
+    const view = bgView({
+      toolCallId: "call-4",
+      lifecycleState: "pending",
+      waitStatus: {
+        lifecycle: "pending",
+        lifecycleStateRaw: "pending",
+        startedAt: "2026-05-20T12:00:00Z",
+        completedAt: null,
+        runningElapsedSeconds: 5,
+        terminalElapsedSeconds: null,
+      },
+    });
+    render(
+      <WorkerStep
+        tool={processTool("call-4")}
+        workers={{ ...NO_WORKERS, background: () => view }}
+      />,
+      { wrapper: withApp(fixtureApp([view])) },
+    );
+    await waitFor(() =>
+      expect(screen.getAllByText(/pending · 5s/).length).toBeGreaterThan(0),
+    );
+    // Pending must not render the hardcoded "running" label.
+    expect(
+      screen.queryByText(/^running · 5s$/),
+    ).toBeNull();
+  });
+
   it("renders unknown lifecycle without relabeling it running", async () => {
     const view = bgView({
       toolCallId: "call-3",
