@@ -7474,7 +7474,8 @@ async fn native_pack_local_paths_and_approval_fail_closed() {
 /// bytes flow through the same digest-pinned receipt.
 #[tokio::test]
 async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin_authority() {
-    let (fixture, directory) = crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
+    let (fixture, directory) =
+        crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
     let manifest_path = directory.join("manifest.json");
     let mut manifest: Value =
         serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
@@ -7605,9 +7606,7 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
     .await
     .unwrap_err();
     assert!(
-        refused
-            .to_string()
-            .contains("operator authorization"),
+        refused.to_string().contains("operator authorization"),
         "{refused}"
     );
     let access = crate::config_client::ConfigAccess::local(node.clone());
@@ -7658,11 +7657,17 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
         .unwrap(),
     )
     .unwrap();
-    assert_eq!(installed["effective"]["digest"], Value::String(digest.clone()));
+    assert_eq!(
+        installed["effective"]["digest"],
+        Value::String(digest.clone())
+    );
     assert!(node.get_collection("FixtureJob").unwrap().is_some());
-    let record = crate::plugin::store::read_record(home.path(), "fixture", "fixture_notifier")
-        .unwrap();
-    assert_eq!(record.owner_pack_coordinate.as_deref(), Some("fixture/documents_fixture"));
+    let record =
+        crate::plugin::store::read_record(home.path(), "fixture", "fixture_notifier").unwrap();
+    assert_eq!(
+        record.owner_pack_coordinate.as_deref(),
+        Some("fixture/documents_fixture")
+    );
     assert!(
         record.granted.is_some(),
         "the operator grant the fence required is on the installed record"
@@ -7675,7 +7680,8 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
 /// digest matches the artifact digest the preview pinned.
 #[tokio::test]
 async fn native_pack_local_path_installs_graph_pack() {
-    let (_fixture, directory) = crate::test_support::fixture_pack_copy("prepared_graph", &json!({}));
+    let (_fixture, directory) =
+        crate::test_support::fixture_pack_copy("prepared_graph", &json!({}));
     // Keep the pack's plugin sealed (no limits, no manifold) so the commit
     // exercises the document/graph install path without an operator grant.
     let manifest_path = directory.join("manifest.json");
@@ -7841,14 +7847,21 @@ async fn native_pack_local_path_plugins_only_still_requires_operator_grant() {
     .unwrap();
     assert_eq!(preview["ready"], false, "{preview}");
     assert_eq!(preview["apply_with"], Value::Null);
-    assert!(!preview["installation_blockers"].as_array().unwrap().is_empty());
+    assert!(!preview["installation_blockers"]
+        .as_array()
+        .unwrap()
+        .is_empty());
     assert!(
-        crate::plugin::store::list_records(home.path()).unwrap().is_empty(),
+        crate::plugin::store::list_records(home.path())
+            .unwrap()
+            .is_empty(),
         "preview must not publish plugins"
     );
 }
 
-fn access_of(node: &std::sync::Arc<defra_node::EmbeddedNode>) -> crate::config_client::ConfigAccess {
+fn access_of(
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+) -> crate::config_client::ConfigAccess {
     crate::config_client::ConfigAccess::local(node.clone())
 }
 
@@ -7859,7 +7872,11 @@ async fn pack_tool_with_local_read(
     label: &str,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
     root: &std::path::Path,
-) -> (std::sync::Arc<defra_node::EmbeddedNode>, String, Vec<Box<dyn ToolDyn>>) {
+) -> (
+    std::sync::Arc<defra_node::EmbeddedNode>,
+    String,
+    Vec<Box<dyn ToolDyn>>,
+) {
     let node = build_agent_node().await;
     let identity = node_identity(label);
     let node_did = identity.did().to_string();
@@ -7899,7 +7916,10 @@ async fn install_chat_account_fences(node: &Arc<EmbeddedNode>, owner: &str) {
     let access = crate::config_client::ConfigAccess::local(node.clone());
     for (id, auth) in [
         ("chat-original", json!({"kind":"node_oauth"})),
-        ("chat-b", json!({"kind":"node_oauth","account_ref":"acct-b"})),
+        (
+            "chat-b",
+            json!({"kind":"node_oauth","account_ref":"acct-b"}),
+        ),
     ] {
         let backend: crate::InferenceBackend = serde_json::from_value(json!({
             "node_did": owner, "backend_id": id, "name": id,
