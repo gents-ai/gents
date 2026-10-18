@@ -610,7 +610,7 @@ fn project_request_row(
 fn render_snapshot(
     snapshot_started: chrono::DateTime<chrono::Utc>,
     result: Result<
-        Result<Option<(Option<String>, Option<String>, Option<String>, Option<i64>)>, String>,
+        Result<Option<(Option<String>, Option<String>, Option<String>, Option<i64>)>, ()>,
         (),
     >,
 ) -> String {
@@ -634,7 +634,7 @@ fn render_snapshot(
 
 #[cfg(test)]
 mod render_snapshot_tests {
-    use super::render_snapshot;
+    use super::{project_request_row, render_snapshot};
     use chrono::TimeZone;
 
     fn ts() -> chrono::DateTime<chrono::Utc> {
@@ -750,8 +750,8 @@ mod render_snapshot_tests {
 
     #[test]
     fn renders_query_failure_and_timeout_markers() {
-        let failed = render_snapshot(ts(), Ok(Err("boom".to_string())));
-        assert_eq!(failed, "<snapshot query failed: boom>");
+        let failed = render_snapshot(ts(), Ok(Err(())));
+        assert_eq!(failed, "<snapshot query failed>");
 
         let timed_out = render_snapshot(ts(), Err(()));
         assert_eq!(timed_out, "<snapshot timed out after 1s>");
