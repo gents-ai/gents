@@ -6,6 +6,14 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- A session started by another session's tool call now records its opening
+  request in its provenance when it is created, so Codex threads, Grok cards
+  and the desktop show the request that opened it even when a later message
+  from the same cause lands in the same second. Sessions created earlier keep
+  the previous order by creation time and document id. Nodes that share
+  sessions must upgrade together: older versions cannot read sessions created
+  by this version, because their session provenance rejects unknown fields.
+
 ## 0.21.0-rc0 - 2026-10-17
 
 - `agent_list` now returns startup targets only. `agent_session_list` discovers
