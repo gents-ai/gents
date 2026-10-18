@@ -193,6 +193,13 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
         let request_id = request.request_id.clone();
         let session_id = request.session_id.clone();
         let agent_id = self.agent_config.agent_id.clone();
+        let approval_context = crate::plugin::approval::workspace::for_request(
+            self.approval_home.as_deref(),
+            &request.node_did,
+            request.requester_did.as_deref(),
+            &agent_id,
+            workspace.workspace_cwd.as_deref(),
+        )?;
         let backend_id = lifecycle.backend_id().to_string();
         let model_name = self.agent_config.model_name.clone();
         let inference = Box::pin(async {
@@ -895,7 +902,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                 false,
                 crate::plugin::approval::scope_interactive(
                     request.execution_origin.as_deref() == Some("interactive"),
-                    inference,
+                    crate::plugin::approval::workspace::scope(approval_context, inference),
                 ),
             ),
         )

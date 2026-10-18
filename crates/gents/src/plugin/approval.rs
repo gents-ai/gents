@@ -37,7 +37,7 @@ pub fn carry_interactive<F: std::future::Future>(
     future: F,
 ) -> impl std::future::Future<Output = F::Output> {
     let composed = composed();
-    let future = scope_interactive(interactive(), future);
+    let future = workspace::carry(scope_interactive(interactive(), future));
     async move {
         if composed {
             COMPOSED.scope((), future).await

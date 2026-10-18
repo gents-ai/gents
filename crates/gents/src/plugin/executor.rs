@@ -311,19 +311,35 @@ impl PluginExecutor {
         let granted = scope.granted(&resolved.target);
         let covered = granted.is_some_and(|granted| granted >= access);
         if !covered {
-            let allowed = match approval::consent(context.interactive) {
-                approval::Consent::Deny => false,
-                approval::Consent::Ask => {
-                    let request = approval::Request::new(
-                        &plugin,
-                        &resolved,
-                        access,
-                        context.session_id.map(str::to_owned),
-                    );
-                    approval::ask(home, &request, approval::WAIT)
-                        .await
-                        .map_err(|error| refuse(format!("{error:#}")))?
-                }
+            let route = approval::workspace::binding_route(
+                home,
+                approval::workspace::BindingAction {
+                    plugin: plugin.clone(),
+                    artifact_digest: record.digest.clone(),
+                    input_digest: json_digest(input),
+                    path: resolved.target.clone(),
+                    access,
+                },
+                covered,
+            )
+            .map_err(|error| refuse(format!("{error:#}")))?;
+            let allowed = match route {
+                Some(gents_loop::tool_policy::workspace_permissions::Route::Allow) => true,
+                Some(gents_loop::tool_policy::workspace_permissions::Route::Deny) => false,
+                _ => match approval::consent(context.interactive) {
+                    approval::Consent::Deny => false,
+                    approval::Consent::Ask => {
+                        let request = approval::Request::new(
+                            &plugin,
+                            &resolved,
+                            access,
+                            context.session_id.map(str::to_owned),
+                        );
+                        approval::ask(home, &request, approval::WAIT)
+                            .await
+                            .map_err(|error| refuse(format!("{error:#}")))?
+                    }
+                },
             };
             if !allowed {
                 return Err(refuse(not_allowed(

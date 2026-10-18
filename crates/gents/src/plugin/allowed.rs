@@ -266,6 +266,8 @@ pub fn protect(home: &Path) {
         file(&home),
         lock_file(&home),
         super::approval::lock_file(&home),
+        home.join(super::approval::workspace::FILE),
+        home.join(super::approval::workspace::LOCK),
         home.join(crate::home::PLUGIN_APPROVALS_DIR_NAME),
     ];
     if let Ok(mut protected) = PROTECTED.lock() {

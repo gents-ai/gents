@@ -3,6 +3,11 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+mod context;
+pub(crate) use context::{carry, for_request, scope};
+
+use gents_loop::tool_policy::workspace_permissions::{self as policy, Grant, Input, Review, Route};
+
 pub use gents_loop::tool_policy::workspace_permissions::{Mode, Preference, Scope};
 
 pub const CONTRACT_VERSION: u32 = 1;
@@ -77,14 +82,54 @@ impl Settings {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BindingAction {
+    pub plugin: String,
+    pub artifact_digest: String,
+    pub input_digest: String,
+    pub path: PathBuf,
+    pub access: crate::pack::BindAccess,
+}
+
+/// Installed plugin admission still enforces its manifold. This decision
+/// controls only consent for the exact bound input under that ceiling.
+pub(crate) fn binding_route(
+    home: &Path,
+    action: BindingAction,
+    covered: bool,
+) -> Result<Option<Route>> {
+    let Some(settings) = context::settings(home)? else {
+        return Ok(None);
+    };
+    let current = settings.scope();
+    let input = Input {
+        current: current.clone(),
+        configured_workspace: settings.workspace,
+        mode: settings.selection.mode,
+        action: action.clone(),
+        ceiling_allows: true,
+        crosses_boundary: !covered,
+        grant: None,
+    };
+    Ok(Some(policy::reviewed_route(
+        &input,
+        Review::Unavailable,
+        &Grant {
+            scope: current,
+            action,
+        },
+    )))
+}
+
 #[derive(Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Stored {
     entries: Vec<Settings>,
 }
 
-const FILE: &str = "workspace-approvals.json";
-const LOCK: &str = "workspace-approvals.lock";
+pub(in crate::plugin) const FILE: &str = "workspace-approvals.json";
+pub(in crate::plugin) const LOCK: &str = "workspace-approvals.lock";
 
 fn read(home: &Path) -> Result<Stored> {
     match std::fs::read(home.join(FILE)) {
