@@ -16,9 +16,10 @@ def Action.run (s : State) : Action → State × Bool
   | .cancel => (ToolPolicy.PluginApproval.cancel s, true)
 
 def Action.runScoped (available : List ToolPolicy.WorkspacePermissions.Scope)
-    (expected : ToolPolicy.WorkspacePermissions.Grant) (s : State) : Action → State × Bool
+    (expected : ToolPolicy.WorkspacePermissions.Grant)
+    (kind : ToolPolicy.WorkspacePermissions.ApprovalKind) (s : State) : Action → State × Bool
   | .decide id now choice =>
-      ToolPolicy.WorkspacePermissions.answerApproval available expected s id now choice
+      ToolPolicy.WorkspacePermissions.answerApproval available expected s id now choice kind
   | .cancel => (ToolPolicy.PluginApproval.cancel s, true)
 
 def answerName : Answer → String
@@ -93,27 +94,40 @@ def deliveryCases (decision : Option Bool) : List Json :=
       ("received", grantJson received),
       ("expected", toJson expected)]
 
-def scopedCases : List Json :=
-  [false, true].flatMap fun directory =>
-  [false, true].flatMap fun write =>
-  scopeObservations.flatMap fun available =>
-  histories.map fun history =>
+def scopedCase (kind : ToolPolicy.WorkspacePermissions.ApprovalKind)
+    (directory write : Bool) (available : List ToolPolicy.WorkspacePermissions.Scope)
+    (history : List Action) : Json :=
     let question : Question := ⟨"q1", 10, 20, directory, write⟩
     let initial : State := ⟨some question, none, none, none⟩
-    let run := Action.runScoped available approvalGrant
+    let run := Action.runScoped available approvalGrant kind
     let final := history.foldl (fun state action => (run state action).1) initial
     Json.mkObj [
       ("directory", toJson directory), ("write", toJson write),
       ("initial", stateJson initial), ("steps", toJson (traceJson run initial history)),
       ("scoped", Json.mkObj [
+        ("kind", toJson kind.wireName),
         ("available", toJson (available.map scopeJson)),
         ("expected", grantJson approvalGrant),
         ("deliveries", toJson (deliveryCases final.decision))])]
+
+def scopedFileCases : List Json :=
+  [false, true].flatMap fun directory =>
+  [false, true].flatMap fun write =>
+  scopeObservations.flatMap fun available =>
+  histories.map fun history => scopedCase .filesystem directory write available history
+
+def scopedCommandCases : List Json :=
+  scopeObservations.flatMap fun available =>
+  histories.map fun history => scopedCase .command false false available history
+
+def scopedCases : List Json := scopedFileCases ++ scopedCommandCases
 
 def casesJson : Json := toJson (unscopedCases ++ scopedCases)
 
 example : histories.length = 33 := by native_decide
 example : unscopedCases.length = 1188 := by native_decide
-example : scopedCases.length = 660 := by native_decide
+example : scopedFileCases.length = 660 := by native_decide
+example : scopedCommandCases.length = 165 := by native_decide
+example : scopedCases.length = 825 := by native_decide
 
 end Conformance.PluginApproval
