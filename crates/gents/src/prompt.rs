@@ -223,7 +223,10 @@ fn build_preamble(
 
 fn strip_title_generation_suffix(system_prompt: &str) -> &str {
     let trimmed = system_prompt.trim();
-    if let Some(stripped) = trimmed.strip_suffix(TITLE_GENERATION_SUFFIX) {
+    if let Some(stripped) = trimmed
+        .strip_suffix(TITLE_GENERATION_SUFFIX)
+        .or_else(|| trimmed.strip_suffix(crate::session::title_text::GENERATION_PREAMBLE))
+    {
         stripped.trim_end()
     } else {
         trimmed
