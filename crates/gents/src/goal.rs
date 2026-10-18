@@ -2649,19 +2649,10 @@ pub async fn refresh_goal_usage(
     node: &std::sync::Arc<EmbeddedNode>,
     goal: &GoalDocument,
 ) -> Result<i64> {
-    let session_usage = session_token_usage(node, &goal.node_did, &goal.session_id).await?;
-    // Rows created before baseline accounting have no stored baseline; adopt the
-    // current session usage so pre-goal spend is never charged, and persist the
-    // snapshot once so subsequent refreshes charge only new spend.
-    let missing_baseline = goal.token_usage_baseline.is_none();
-    let baseline = goal
-        .token_usage_baseline
-        .map(|baseline| baseline.max(0))
-        .unwrap_or(session_usage);
-    let baseline_repair = missing_baseline
-        .then(|| format!("token_usage_baseline: {baseline},"))
-        .unwrap_or_default();
-    let tokens = session_usage.saturating_sub(baseline).max(0);
+    let tokens = session_token_usage(node, &goal.node_did, &goal.session_id)
+        .await?
+        .saturating_sub(goal.token_usage_baseline.unwrap_or_default().max(0))
+        .max(0);
     let now = Utc::now();
     let now_string = now.to_rfc3339();
     let active_time = goal.current_active_time_seconds(now);
@@ -2680,7 +2671,7 @@ pub async fn refresh_goal_usage(
         goal,
         status,
         &format!(
-            "tokens_used: {tokens}, {baseline_repair}active_time_seconds: {active_time}, {active_started_field} updated_at: \"{updated_at}\""
+            "tokens_used: {tokens}, active_time_seconds: {active_time}, {active_started_field} updated_at: \"{updated_at}\""
         ),
     )
     .await?;
