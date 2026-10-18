@@ -100,39 +100,22 @@ enum Source {
     /// Named by digest or path (`sha256:`, `./x.pack`, `./dir`).
     Local,
     /// The coordinate's installed record named this digest, and the home's
-    /// store still holds it. `registry` is the record's own, else the
-    /// store's origin for the digest.
-    Installed { registry: Option<String> },
-    /// The home's pack store held it; no network call was made. `registry`
-    /// is the store's origin for the digest: the registry a preview or an
-    /// earlier attempt fetched it from.
-    Store { registry: Option<String> },
+    /// store still holds it.
+    Installed,
+    /// The home's pack store held it; no network call was made.
+    Store,
     /// Fetched from the registry, which stored and indexed it for next time.
     Registry {
         namespace: String,
         name: String,
         version: String,
         artifact_digest: String,
-        /// The registry URL it came from, recorded on the install so an
-        /// update asks the same one.
-        url: String,
     },
 }
 
 impl PackSource {
     pub(crate) fn manifest(&self) -> &PackManifest {
         self.archive.manifest()
-    }
-
-    /// The registry this pack came from, for the install record: the one
-    /// just fetched from, or the one a store hit or an existing install
-    /// remembers; `None` for a pack that only ever arrived as a file.
-    pub(crate) fn registry_url(&self) -> Option<&str> {
-        match &self.from {
-            Source::Registry { url, .. } => Some(url),
-            Source::Installed { registry } | Source::Store { registry } => registry.as_deref(),
-            Source::Local => None,
-        }
     }
 
     /// The pack's content digest: identical whichever way it arrived, which
@@ -154,8 +137,8 @@ impl PackSource {
     pub(crate) fn label(&self) -> &'static str {
         match &self.from {
             Source::Local => "local",
-            Source::Installed { .. } => "installed",
-            Source::Store { .. } => "store",
+            Source::Installed => "installed",
+            Source::Store => "store",
             Source::Registry { .. } => "registry",
         }
     }
@@ -169,7 +152,6 @@ impl PackSource {
                 name,
                 version,
                 artifact_digest,
-                ..
             } => format!(
                 "{} ({namespace}/{name}@{version}, artifact sha256:{artifact_digest})",
                 self.label()
@@ -341,28 +323,13 @@ pub(crate) async fn resolve_pack_source(
         .collect();
     let options = ResolveOptions {
         home: Some(home),
-        registry_url: gents::pack_registry::resolve_registry_url_in(home, registry_override)?,
+        registry_url: registry::resolve_registry_url(registry_override),
         installed: &installed,
     };
-    let registry_url = options.registry_url.clone();
     let resolved = resolve_named(spec, &options).await?;
-    let origin = || gents::pack_store::PackStore::new(home).origin(resolved.archive.digest());
     let from = match resolved.from {
-        ResolvedFrom::Installed => {
-            let parsed = gents::pack_resolve::parse_pack_spec(spec)?;
-            let coordinate = format!("{}/{}", parsed.namespace, parsed.name);
-            let recorded = gents::pack::read_home_install(home, &coordinate)?
-                .and_then(|record| record.registry);
-            Source::Installed {
-                registry: match recorded {
-                    Some(url) => Some(url),
-                    None => origin()?,
-                },
-            }
-        }
-        ResolvedFrom::Store => Source::Store {
-            registry: origin()?,
-        },
+        ResolvedFrom::Installed => Source::Installed,
+        ResolvedFrom::Store => Source::Store,
         ResolvedFrom::Registry {
             artifact_digest,
             version,
@@ -373,7 +340,6 @@ pub(crate) async fn resolve_pack_source(
                 name: parsed.name.to_owned(),
                 version,
                 artifact_digest,
-                url: registry_url,
             }
         }
     };
@@ -1005,7 +971,6 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                     .collect(),
                 installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                 ux: pack.manifest().metadata.ux.clone(),
-                registry: pack.registry_url().map(str::to_owned),
             };
             // The node record goes last, in one transaction: a failure
             // before it leaves the node untouched, and undoing the store and

@@ -47,51 +47,6 @@ fn an_imported_pack_is_stored_under_its_digest_and_reopens_verified() {
 }
 
 #[test]
-fn an_origin_is_recorded_per_digest_replaced_on_refetch_and_released_with_it() {
-    let home = tempfile::tempdir().unwrap();
-    let store = PackStore::new(home.path());
-    let (bytes, header) = store_test_pack();
-    store
-        .import(bytes.as_slice(), Some(&header.digest))
-        .unwrap();
-
-    assert_eq!(
-        store.origin(&header.digest).unwrap(),
-        None,
-        "a file import has no origin"
-    );
-    store
-        .record_origin(&header.digest, "https://legal.example/")
-        .unwrap();
-    assert_eq!(
-        store.origin(&header.digest).unwrap().as_deref(),
-        Some("https://legal.example"),
-        "stored without the trailing slash, as resolve_registry_url_in returns it"
-    );
-    store
-        .record_origin(&header.digest, "https://master.example")
-        .unwrap();
-    assert_eq!(
-        store.origin(&header.digest).unwrap().as_deref(),
-        Some("https://master.example")
-    );
-    let other = format!("sha256:{}", "f".repeat(64));
-    assert_eq!(store.origin(&other).unwrap(), None);
-    assert!(store.origin("not-a-digest").is_err());
-
-    assert!(store.release(&header.digest).unwrap());
-    assert_eq!(
-        store.origin(&header.digest).unwrap(),
-        None,
-        "released with the archive"
-    );
-    assert!(
-        !store.release(&header.digest).unwrap(),
-        "a second release is inert"
-    );
-}
-
-#[test]
 fn importing_the_same_pack_twice_keeps_one_file() {
     let home = tempfile::tempdir().unwrap();
     let store = PackStore::new(home.path());

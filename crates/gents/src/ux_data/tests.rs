@@ -166,7 +166,6 @@ fn install_board(home: &std::path::Path, data: Vec<UxDataSurface>) {
                 default_enabled: None,
                 data,
             }],
-            registry: None,
         },
     )
     .unwrap();

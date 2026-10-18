@@ -48,7 +48,6 @@ fn install_record(
             plugins,
             installed_at: "2026-01-01T00:00:00Z".into(),
             ux,
-            registry: Some("https://registry.example".into()),
         },
     )
     .unwrap();

@@ -12,7 +12,8 @@ use gents::pack_registry::credentials;
 use serde_json::json;
 
 use super::registry::{
-    read_stdin_line, registry_url, resolve_registry_token, resolve_token_flag, RegistryClient,
+    read_stdin_line, resolve_registry_token, resolve_registry_url, resolve_token_flag,
+    RegistryClient,
 };
 use crate::cli::{PackAccountArgs, PackInfoArgs, PackLoginArgs, PackOwnerArgs, PackYankArgs};
 
@@ -46,7 +47,7 @@ async fn login_with_password(
 }
 
 pub(crate) async fn login(args: PackLoginArgs) -> Result<()> {
-    let registry = registry_url(args.registry.as_deref(), args.home.as_deref())?;
+    let registry = resolve_registry_url(args.registry.as_deref());
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let client = RegistryClient::new(registry.clone());
     let token_flag = resolve_token_flag(args.token, args.token_stdin)?;
@@ -73,14 +74,14 @@ pub(crate) async fn login(args: PackLoginArgs) -> Result<()> {
 }
 
 pub(crate) fn logout(args: PackAccountArgs) -> Result<()> {
-    let registry = registry_url(args.registry.as_deref(), args.home.as_deref())?;
+    let registry = resolve_registry_url(args.registry.as_deref());
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let removed = credentials::remove(&home, &registry)?;
     crate::print_json(&json!({ "registry": registry, "signed_out": removed }))
 }
 
 pub(crate) async fn whoami(args: PackAccountArgs) -> Result<()> {
-    let registry = registry_url(args.registry.as_deref(), args.home.as_deref())?;
+    let registry = resolve_registry_url(args.registry.as_deref());
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let token = resolve_publish_token(None, &registry, &home)?;
     let me = RegistryClient::new(registry.clone()).me(&token).await?;
@@ -89,7 +90,7 @@ pub(crate) async fn whoami(args: PackAccountArgs) -> Result<()> {
 
 pub(crate) async fn info(args: PackInfoArgs) -> Result<()> {
     let (namespace, name) = super::split_namespace(&args.package);
-    let client = RegistryClient::new(registry_url(args.registry.as_deref(), None)?);
+    let client = RegistryClient::new(resolve_registry_url(args.registry.as_deref()));
     crate::print_json(&client.package(namespace, name).await?)
 }
 
@@ -101,7 +102,7 @@ pub(crate) async fn yank(args: PackYankArgs) -> Result<()> {
         )
     })?;
     let (namespace, name) = super::split_namespace(coordinate);
-    let registry = registry_url(args.registry.as_deref(), args.home.as_deref())?;
+    let registry = resolve_registry_url(args.registry.as_deref());
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let token_flag = resolve_token_flag(args.token, args.token_stdin)?;
     let token = resolve_publish_token(token_flag.as_deref(), &registry, &home)?;
@@ -113,7 +114,7 @@ pub(crate) async fn yank(args: PackYankArgs) -> Result<()> {
 
 pub(crate) async fn owner(args: PackOwnerArgs) -> Result<()> {
     let (namespace, name) = super::split_namespace(&args.package);
-    let registry = registry_url(args.registry.as_deref(), args.home.as_deref())?;
+    let registry = resolve_registry_url(args.registry.as_deref());
     let client = RegistryClient::new(registry.clone());
     let Some(username) = args.transfer else {
         let package = client.package(namespace, name).await?;

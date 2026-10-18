@@ -85,11 +85,6 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_plugin_call", "ux-plugins-call"),
         ("desktop_ux_data_surfaces", "ux-plugins-read"),
         ("desktop_ux_data_call", "ux-plugins-call"),
-        // registries-read / registries-admin
-        ("desktop_registry_list", "registries-read"),
-        ("desktop_registry_refresh", "registries-admin"),
-        ("desktop_registry_add", "registries-admin"),
-        ("desktop_registry_remove", "registries-admin"),
         // session-read
         ("desktop_session_snapshot", "session-read"),
         ("desktop_session_live_delta", "session-read"),
@@ -216,8 +211,6 @@ pub fn permission_set_inventory() -> Vec<PermissionSetContract> {
         ("allowed-dirs-admin", "mutate"),
         ("ux-plugins-read", "read"),
         ("ux-plugins-call", "mutate"),
-        ("registries-read", "read"),
-        ("registries-admin", "mutate"),
         ("fleet-admin", "mutate"),
         ("operations-read", "read"),
         ("interrupt-control", "mutate"),
@@ -505,10 +498,6 @@ mod tests {
             // the surfaces read lists declarations; the data call may create
             ("desktop_ux_data_surfaces", "read"),
             ("desktop_ux_data_call", "mutate"),
-            ("desktop_registry_list", "read"),
-            ("desktop_registry_refresh", "mutate"),
-            ("desktop_registry_add", "mutate"),
-            ("desktop_registry_remove", "mutate"),
             ("desktop_session_snapshot", "read"),
             ("desktop_session_live_delta", "read"),
             ("desktop_session_hydration_retry", "mutate"),

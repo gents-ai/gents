@@ -30,7 +30,6 @@ pub(crate) mod pack;
 pub(crate) mod plugin;
 pub(crate) mod provision;
 pub(crate) mod query;
-pub(crate) mod registry;
 pub(crate) mod request;
 pub(crate) mod reset;
 pub(crate) mod response;

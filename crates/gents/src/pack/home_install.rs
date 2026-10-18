@@ -31,11 +31,6 @@ pub struct HomePackInstall {
     /// written before the field existed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ux: Vec<crate::pack::PackUxPlugin>,
-    /// The registry URL the pack was fetched from, so `update` and
-    /// `outdated` ask the same registry. Absent for a local file or
-    /// directory install, or a record written before the field existed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub registry: Option<String>,
 }
 
 /// Splits `coordinate` into a namespace and name, refusing anything that
@@ -193,7 +188,6 @@ mod tests {
             plugins: vec![],
             installed_at: "2026-01-01T00:00:00Z".into(),
             ux: vec![],
-            registry: None,
         }
     }
 

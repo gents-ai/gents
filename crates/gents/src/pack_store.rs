@@ -27,10 +27,6 @@ use crate::pack_archive::{
 /// The name index directory, sibling of `sha256/` under the store root.
 const NAME_INDEX_DIR_NAME: &str = "by-name";
 
-/// The origin index directory, sibling of `sha256/`: `by-origin/{hex}` holds
-/// the registry URL the digest was last fetched from.
-const ORIGIN_INDEX_DIR_NAME: &str = "by-origin";
-
 /// The verified header an unpacked pack keeps beside its files; a dotfile,
 /// so it can never be mistaken for a pack asset.
 const UNPACKED_HEADER: &str = ".pack-header.json";
@@ -269,56 +265,6 @@ impl PackStore {
             || self.root.join(NAME_INDEX_DIR_NAME),
             |store| store.join(NAME_INDEX_DIR_NAME),
         )
-    }
-
-    /// `{home}/packs/store/by-origin/{hex}`, the origin index entry for `digest`.
-    fn origin_entry_path(&self, digest: &str) -> Result<PathBuf> {
-        let hex = digest_hex(digest)?;
-        Ok(self
-            .root
-            .parent()
-            .map_or_else(
-                || self.root.join(ORIGIN_INDEX_DIR_NAME),
-                |store| store.join(ORIGIN_INDEX_DIR_NAME),
-            )
-            .join(hex))
-    }
-
-    /// Records that `digest` was fetched from `registry_url`, replacing an
-    /// earlier origin. The store is content-addressed and a digest is the
-    /// same archive whichever way it arrived, so a later install that finds
-    /// it here (a preview, a refused-then-granted retry, a reinstall) would
-    /// otherwise not know which registry to return to for updates.
-    pub fn record_origin(&self, digest: &str, registry_url: &str) -> Result<()> {
-        let target = self.origin_entry_path(digest)?;
-        let dir = target
-            .parent()
-            .context("an origin index entry has no directory")?;
-        std::fs::create_dir_all(dir)
-            .with_context(|| format!("creating the pack origin index at {}", dir.display()))?;
-        let mut staged = tempfile::Builder::new()
-            .prefix(".staging-")
-            .tempfile_in(dir)
-            .with_context(|| format!("staging a pack origin entry in {}", dir.display()))?;
-        staged
-            .write_all(registry_url.trim_end_matches('/').as_bytes())
-            .context("writing a pack origin entry")?;
-        staged
-            .persist(&target)
-            .map_err(|error| error.error)
-            .with_context(|| format!("storing the pack origin entry at {}", target.display()))?;
-        Ok(())
-    }
-
-    /// The registry `digest` was last fetched from, when a fetch recorded
-    /// one; `None` for a pack that arrived as a file or directory.
-    pub fn origin(&self, digest: &str) -> Result<Option<String>> {
-        let path = self.origin_entry_path(digest)?;
-        match std::fs::read_to_string(&path) {
-            Ok(url) => Ok(Some(url.trim().to_owned()).filter(|url| !url.is_empty())),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
-        }
     }
 
     /// Where `header` is filed in the name index, or `None` when its
@@ -741,14 +687,6 @@ impl PackStore {
                 }
             }
             None => self.remove_name_entries_for_digest(digest)?,
-        }
-        let origin = self.origin_entry_path(digest)?;
-        match std::fs::remove_file(&origin) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(error).with_context(|| format!("removing {}", origin.display()))
-            }
         }
         Ok(released)
     }

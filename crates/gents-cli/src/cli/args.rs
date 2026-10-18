@@ -184,13 +184,6 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: UxCommand,
     },
-    #[command(
-        about = "The pack registries this home knows: the master's index of vertical registries plus any added by hand"
-    )]
-    Registry {
-        #[command(subcommand)]
-        command: RegistryCommand,
-    },
     #[command(about = "Run and observe installed graphs")]
     Graph {
         #[command(subcommand)]
@@ -349,7 +342,7 @@ pub(crate) struct PackShowArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(
         long,
-        help = "A registry URL, or an id from `gents registry list`. Defaults to GENTS_REGISTRY, then the public registry"
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
     )]
     pub(crate) registry: Option<String>,
     #[arg(
@@ -543,7 +536,7 @@ pub(crate) struct PackDiffArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(
         long,
-        help = "A registry URL, or an id from `gents registry list`. Defaults to GENTS_REGISTRY, then the public registry"
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
     )]
     pub(crate) registry: Option<String>,
 }
@@ -718,7 +711,7 @@ pub(crate) struct PackFetchArgs {
     pub(crate) out: Option<std::path::PathBuf>,
     #[arg(
         long,
-        help = "A registry URL, or an id from `gents registry list`. Defaults to GENTS_REGISTRY, then the public registry"
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
     )]
     pub(crate) registry: Option<String>,
 }
@@ -748,7 +741,7 @@ pub(crate) struct PackSearchArgs {
     pub(crate) page: u32,
     #[arg(
         long,
-        help = "A registry URL, or an id from `gents registry list`. Defaults to GENTS_REGISTRY, then the public registry"
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
     )]
     pub(crate) registry: Option<String>,
 }
@@ -759,7 +752,7 @@ pub(crate) struct PackPublishArgs {
     pub(crate) file: PathBuf,
     #[arg(
         long,
-        help = "A registry URL, or an id from `gents registry list`. Defaults to GENTS_REGISTRY, then the public registry"
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
     )]
     pub(crate) registry: Option<String>,
     #[arg(
@@ -801,7 +794,7 @@ pub(crate) struct PackLoginArgs {
     pub(crate) token_stdin: bool,
     #[arg(
         long,
-        help = "A registry URL, or an id from `gents registry list`. Defaults to GENTS_REGISTRY, then the public registry"
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
     )]
     pub(crate) registry: Option<String>,
     #[arg(long, help = "Home to save the login in")]
@@ -812,7 +805,7 @@ pub(crate) struct PackLoginArgs {
 pub(crate) struct PackAccountArgs {
     #[arg(
         long,
-        help = "A registry URL, or an id from `gents registry list`. Defaults to GENTS_REGISTRY, then the public registry"
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
     )]
     pub(crate) registry: Option<String>,
     #[arg(long, help = "Home holding your saved registry login")]
@@ -825,7 +818,7 @@ pub(crate) struct PackInfoArgs {
     pub(crate) package: String,
     #[arg(
         long,
-        help = "A registry URL, or an id from `gents registry list`. Defaults to GENTS_REGISTRY, then the public registry"
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
     )]
     pub(crate) registry: Option<String>,
 }
@@ -848,7 +841,7 @@ pub(crate) struct PackOwnerArgs {
     pub(crate) yes: bool,
     #[arg(
         long,
-        help = "A registry URL, or an id from `gents registry list`. Defaults to GENTS_REGISTRY, then the public registry"
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
     )]
     pub(crate) registry: Option<String>,
     #[arg(
@@ -874,7 +867,7 @@ pub(crate) struct PackYankArgs {
     pub(crate) undo: bool,
     #[arg(
         long,
-        help = "A registry URL, or an id from `gents registry list`. Defaults to GENTS_REGISTRY, then the public registry"
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
     )]
     pub(crate) registry: Option<String>,
     #[arg(
@@ -898,7 +891,7 @@ pub(crate) struct PackOutdatedArgs {
     pub(crate) scope: GraphScopeArgs,
     #[arg(
         long,
-        help = "Check every pack at this registry (a URL, or an id from `gents registry list`). Without it a pack is checked where it was installed from, else GENTS_REGISTRY, then the public registry"
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
     )]
     pub(crate) registry: Option<String>,
 }
@@ -925,7 +918,7 @@ pub(crate) struct PackUpdateArgs {
     pub(crate) scope: GraphScopeArgs,
     #[arg(
         long,
-        help = "Check every pack at this registry (a URL, or an id from `gents registry list`). Without it a pack is checked where it was installed from, else GENTS_REGISTRY, then the public registry"
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
     )]
     pub(crate) registry: Option<String>,
     #[command(flatten)]
@@ -1195,55 +1188,6 @@ pub(crate) enum PluginCommand {
         #[command(subcommand)]
         command: PluginDirsCommand,
     },
-}
-
-#[derive(clap::Subcommand)]
-pub(crate) enum RegistryCommand {
-    /// Show the cached registry index: the master, every registry it lists, and any added by hand.
-    List(RegistryListArgs),
-    /// Fetch the master registry's index of vertical registries and cache it.
-    Refresh(RegistryRefreshArgs),
-    /// Add a registry by hand (shown as unlisted; allowed) or replace one added earlier.
-    Add(RegistryAddArgs),
-    /// Remove a registry added by hand.
-    Remove(RegistryRemoveArgs),
-}
-
-#[derive(clap::Args)]
-pub(crate) struct RegistryListArgs {
-    #[arg(long, help = "Home whose index to show; defaults to ~/.gents")]
-    pub(crate) home: Option<PathBuf>,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct RegistryRefreshArgs {
-    #[arg(
-        long,
-        help = "The master registry to fetch the index from; defaults to the configured one"
-    )]
-    pub(crate) master: Option<String>,
-    #[arg(long, help = "Home whose index to refresh; defaults to ~/.gents")]
-    pub(crate) home: Option<PathBuf>,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct RegistryAddArgs {
-    #[arg(help = "A short snake_case id, usable as --registry <id>")]
-    pub(crate) id: String,
-    #[arg(help = "The registry's https URL")]
-    pub(crate) url: String,
-    #[arg(long, help = "A display label; defaults to the id")]
-    pub(crate) label: Option<String>,
-    #[arg(long, help = "Home whose index to change; defaults to ~/.gents")]
-    pub(crate) home: Option<PathBuf>,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct RegistryRemoveArgs {
-    #[arg(help = "The id of a registry added by hand")]
-    pub(crate) id: String,
-    #[arg(long, help = "Home whose index to change; defaults to ~/.gents")]
-    pub(crate) home: Option<PathBuf>,
 }
 
 #[derive(clap::Subcommand)]
