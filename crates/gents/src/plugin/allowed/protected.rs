@@ -95,7 +95,13 @@ fn regular_file(path: &Path) -> io::Result<Handle> {
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NONBLOCK);
     }
-    let file = options.open(path)?;
+    let file = match options.open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            options.read(false).write(true).open(path)?
+        }
+        Err(error) => return Err(error),
+    };
     if !file.metadata()?.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,

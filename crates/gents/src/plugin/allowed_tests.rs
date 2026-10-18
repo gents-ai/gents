@@ -9,7 +9,7 @@ fn generated_operator_path_cases_protect_names_and_file_aliases() {
     }
 
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().operator_path_cases;
-    assert_eq!(cases.len(), 9);
+    assert_eq!(cases.len(), 10);
     for value in cases {
         let case: Case = serde_json::from_value(value.clone()).unwrap();
         let world = world();
@@ -23,6 +23,14 @@ fn generated_operator_path_cases_protect_names_and_file_aliases() {
         let mut target = world.root.join("work/a.txt");
         match case.kind.as_str() {
             "ordinary" => {}
+            "writeOnly" => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o200))
+                        .unwrap();
+                }
+            }
             "ordinaryAlias" => {
                 let alias = world.root.join("work/alias.txt");
                 std::fs::hard_link(&target, &alias).unwrap();

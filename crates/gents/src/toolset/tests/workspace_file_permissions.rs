@@ -468,3 +468,36 @@ async fn ordinary_project_hard_links_remain_readable_and_editable() {
     assert_eq!(std::fs::read_to_string(&alias).unwrap(), "updated");
     fixture.assert_clear();
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn write_only_project_files_remain_overwritable() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new(Some(workspace::Mode::FullAccess));
+    crate::plugin::allowed::protect(fixture.home.path());
+    let path = fixture.key.path.join("write-only.txt");
+    std::fs::write(&path, "original").unwrap();
+    let original = std::fs::metadata(&path).unwrap().permissions();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o200)).unwrap();
+    let context = ToolContext::new(fixture.root.path().to_owned(), false).unwrap();
+    let result = fixture
+        .run(Tool::call(
+            &WriteFileTool::new(context),
+            WriteFileArgs {
+                path: path.to_str().unwrap().into(),
+                content: "updated".into(),
+                expected_content_hash: None,
+                overwrite: true,
+                raw_json: true,
+            },
+        ))
+        .await;
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o200
+    );
+    std::fs::set_permissions(&path, original).unwrap();
+    result.unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "updated");
+    fixture.assert_clear();
+}
