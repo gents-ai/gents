@@ -967,7 +967,7 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         retry_keys[1].rsplit_once(':').unwrap().0,
         "unrelated transcript writes must not advance the queue-local generation"
     );
-    let mut watcher = DefraWatcher::new(node.clone(), &did);
+    let mut watcher = DefraWatcher::new(node.clone(), &did).expect("request watcher");
     let second_request = watcher.next_request().await.unwrap().unwrap();
     assert_ne!(second_request.request_id, first_id);
     let mut second_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
@@ -1086,7 +1086,6 @@ async fn append_sequence_index_fetches_only_latest_header() {
     assert_eq!(fetched, vec![49, 1]);
     for (row_session, sequence, key) in [
         (session, "null", "null-sequence"),
-        (session, "49", "duplicate-maximum"),
         ("only-null-sequence", "null", "only-null"),
     ] {
         crate::config_client::ConfigAccess::write_local(
@@ -1100,6 +1099,18 @@ async fn append_sequence_index_fetches_only_latest_header() {
             ),
         ).await.unwrap();
     }
+    let duplicate = crate::config_client::ConfigAccess::write_local(
+        &db.node,
+        "test.sequence_index_duplicate",
+        &format!(
+            r#"mutation {{ create_AgentMessage(input: {{node_did: "{}", session_id: "{}", message_key: "duplicate-maximum", sequence: 49}}) {{_docID}} }}"#,
+            escape_graphql_string(db.node_did()),
+            escape_graphql_string(session),
+        ),
+    )
+    .await
+    .expect_err("a committed session sequence cannot be claimed twice");
+    assert!(format!("{duplicate:#}").contains("unique index"));
     for row_session in [session, "only-null-sequence"] {
         let indexed =
             super::super::atomic_inputs::append_sequence_query(db.node_did(), row_session);
@@ -1110,7 +1121,7 @@ async fn append_sequence_index_fetches_only_latest_header() {
         assert_eq!(
             access.execute(&indexed).await.unwrap()["data"]["AgentMessage"],
             access.execute(&original).await.unwrap()["data"]["AgentMessage"],
-            "index ordering must preserve nullable sequence and duplicate-maximum results",
+            "index ordering must preserve nullable sequence results",
         );
     }
     let txn = ConfigApplyTxn::begin_local(&db.node, None).await.unwrap();

@@ -272,8 +272,6 @@ pub(super) fn empty_rate_limits() -> codex::RateLimitSnapshot {
     }
 }
 
-/// Stored-usage windows by Codex slot label: fresh windows only; credits only
-/// when fresh and both of Codex's booleans are known.
 pub(super) fn rate_limits_from_usage(
     stored: Option<&StoredUsage>,
     now: DateTime<Utc>,

@@ -165,8 +165,6 @@ pub(super) fn decode_gents_tool_call_progress(row: &Value) -> Option<GentsToolCa
     })
 }
 
-/// Attach presentation bytes only after the canonical owner validates their
-/// physical tool binding; a terminal lifecycle without a durable result stays pending.
 pub(super) async fn hydrate_gents_tool_call_progress(
     access: &ConfigAccess,
     row: &Value,

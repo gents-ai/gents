@@ -1980,13 +1980,12 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         ),
                     };
                     let segment = native.provider_segment(record, generation)?;
-                    let response = native.node.execute_request_with_retry(
+                    let response = native.node.execute_request(
                         defra_node::QueryRequest::new(
                             crate::session::canonical_rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
                         ).with_variables(
                             crate::session::canonical_rows::output_segment_create_variables(&segment)?,
                         ),
-                        defra_node::ExecuteRetryPolicy::default(),
                     ).await;
                     anyhow::ensure!(
                         !response.has_errors(),
@@ -3384,10 +3383,9 @@ async fn canonical_tool_output_uses_modeled_physical_source_facts() {
                 .unwrap();
             let response = native
                 .node
-                .execute_request_with_retry(
+                .execute_request(
                     defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                         .with_variables(output_segment_create_variables(&segment).unwrap()),
-                    defra_node::ExecuteRetryPolicy::default(),
                 )
                 .await;
             assert!(

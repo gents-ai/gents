@@ -1,4 +1,3 @@
-/* Packages must not reference host-private brand variables. */
 @layer tokens {
   :root {
     --font-heading: system-ui, sans-serif;

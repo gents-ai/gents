@@ -99,9 +99,6 @@ impl RuntimeStatusOwner {
 pub(crate) struct RuntimeStatusHandle {
     node: Arc<defra_node::EmbeddedNode>,
     state: Arc<Mutex<RuntimeStatusRow>>,
-    /// The row this process last wrote; later writes name only the fields that
-    /// differ from it, because DefraDB commits every field an update names.
-    persisted: Arc<Mutex<Option<RuntimeStatusRow>>>,
     readiness: NodeReadinessPublisherHandle,
 }
 
@@ -120,7 +117,6 @@ impl RuntimeStatusHandle {
             Self {
                 node,
                 state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
-                persisted: Arc::default(),
                 readiness,
             },
         )
@@ -143,7 +139,6 @@ impl RuntimeStatusHandle {
             Self {
                 node,
                 state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
-                persisted: Arc::default(),
                 readiness,
             },
         )
@@ -159,7 +154,6 @@ impl RuntimeStatusHandle {
         let handle = Self {
             node,
             state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
-            persisted: Arc::default(),
             readiness,
         };
         handle
@@ -183,7 +177,6 @@ impl RuntimeStatusHandle {
             Self {
                 node,
                 state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
-                persisted: Arc::default(),
                 readiness,
             },
         )
@@ -341,16 +334,12 @@ impl RuntimeStatusHandle {
             );
         }
         *guard = next.clone();
-        let mut persisted = self.persisted.lock().await;
-        // A failed, timed-out or cancelled write may still commit.
-        let previous = persisted.take();
-        match upsert_runtime_status(&self.node, previous.as_ref(), &next).await {
-            Ok(()) => *persisted = Some(next),
-            Err(error) => tracing::warn!(
+        if let Err(error) = upsert_runtime_status(&self.node, &next).await {
+            tracing::warn!(
                 node_did = %next.node_did,
                 error = %error,
                 "failed to persist NodeRuntime status"
-            ),
+            );
         }
     }
 }
@@ -383,22 +372,11 @@ fn runtime_status_fields(row: &RuntimeStatusRow) -> [(&'static str, String); 8] 
 
 async fn upsert_runtime_status(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
-    persisted: Option<&RuntimeStatusRow>,
     row: &RuntimeStatusRow,
 ) -> anyhow::Result<()> {
-    let fields = runtime_status_fields(row);
-    let previous = persisted.map(runtime_status_fields);
-    let render = |(name, value): &(&str, String)| format!("{name}: {value}");
-    let add = fields.iter().map(render).collect::<Vec<_>>().join(", ");
-    let update = fields
+    let fields = runtime_status_fields(row)
         .iter()
-        .enumerate()
-        .filter(|(index, field)| {
-            previous
-                .as_ref()
-                .is_none_or(|previous| previous[*index] != **field)
-        })
-        .map(|(_, field)| render(field))
+        .map(|(name, value)| format!("{name}: {value}"))
         .collect::<Vec<_>>()
         .join(", ");
     let node_did = escape_graphql_string(&row.node_did);
@@ -406,8 +384,8 @@ async fn upsert_runtime_status(
         r#"mutation {{
             upsert_NodeRuntime(
                 filter: {{ node_did: {{ _eq: "{node_did}" }} }},
-                add: {{ node_did: "{node_did}", {add} }},
-                update: {{ {update} }}
+                add: {{ node_did: "{node_did}", {fields} }},
+                update: {{ {fields} }}
             ) {{ _docID }}
         }}"#,
     );

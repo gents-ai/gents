@@ -997,6 +997,3 @@ fn ensure_pairing_status<'a>(
         status.pairing.last_mut().expect("pairing status inserted")
     }
 }
-
-#[cfg(test)]
-mod tests {}

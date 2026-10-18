@@ -38,25 +38,36 @@ impl RequestLifecycle {
 
     /// Owner-scoped terminal-convergence re-drive (#664).
     ///
-    /// Under `agent-target-host` replication the owner's terminal delta reaches
-    /// the requester via a single one-shot PushLog that can drop, and there is
-    /// no per-doc anti-entropy on a running peer (defradb.rs#1074) to
-    /// re-request it. This periodically re-asserts the current terminal value
-    /// of recently-terminalized routed requests: a same-value re-write is a
-    /// genuine higher-priority CRDT delta (it does not no-op), so a lagging
-    /// requester applies it (LWW).
+    /// Under `agent-target-host` replication a routed `AgentRequest` is replicated
+    /// to its `requester_did` peer. Safety already holds (the watcher
+    /// `node_did` filter never lets that peer claim a foreign replica), but
+    /// liveness depends on the terminal head reaching that peer. DefraDB
+    /// reports whether a replicator acknowledged a document's current heads,
+    /// so a request that every replicator carrying it acknowledged is retired
+    /// without re-assertion. Local-only requests, whose requester is
+    /// absent or the owner itself, are excluded: no peer acts on their request
+    /// state (#683).
     ///
-    /// BOUNDED, NOT CONVERGENCE-OBSERVING: the owner has no back-channel telling
-    /// it whether a peer caught up, so eligibility stops at
-    /// [`TERMINAL_REDRIVE_CAP`] across process restarts, ordered by
-    /// `terminalized_at ASC`; exhausted rows leave the query, so bounded batches
-    /// eventually cover an arbitrarily old late-terminalized request.
+    /// DefraDB authors no block for an unchanged field, so a re-assert is a
+    /// write of the attempts counter alone. Its composite block has the
+    /// terminal block as a DAG ancestor, so pushing it re-delivers the terminal
+    /// state to a peer that missed it.
     ///
-    /// SAFETY: `node_did` must be the runtime's own DID — only the owner
-    /// re-asserts its own documents; a peer-authored delta to a foreign doc
-    /// would fork the CRDT. `node_did` is never written (it is `@immutable`).
-    /// Local-only requests (requester absent or the owner itself) are excluded:
-    /// no peer acts on their request state (#683).
+    /// BOUNDED. An unacknowledged peer may stay offline indefinitely, so each
+    /// re-assert atomically advances the persisted `terminal_redrive_attempts`
+    /// counter, and eligibility stops at [`TERMINAL_REDRIVE_CAP`] across process
+    /// restarts. An acknowledged request is retired by writing the cap, so the
+    /// candidate query never rescans it. Candidate ordering is
+    /// `terminalized_at ASC`, not request creation time; exhausted rows leave the
+    /// query, so bounded batches eventually cover an arbitrarily old request
+    /// that terminalized late. A peer unavailable through the whole budget is
+    /// repaired by a bounded full replicator replay when the pairing reconnects
+    /// without acknowledging; that path authors no request delta.
+    ///
+    /// `node_did` MUST be the runtime's own DID: only the owner re-asserts its
+    /// own documents; peers stay passive (a peer-authored delta to a foreign doc
+    /// would fork the CRDT, not converge it). Only the attempts counter is
+    /// written.
     pub async fn redrive_terminal_convergence(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
@@ -80,6 +91,7 @@ impl RequestLifecycle {
                 ) {{
                     _docID
                     request_id
+                    requester_did
                     lifecycle_state
                     terminal_redrive_attempts
                 }}
@@ -97,11 +109,14 @@ impl RequestLifecycle {
 
         let rows: Vec<AgentRequestRow> = crate::graphql::rows(&resp, "AgentRequest")?;
 
-        let mut candidates: Vec<(String, String, RequestLifecycleState, u32)> = Vec::new();
+        let mut candidates: Vec<(String, String, String, RequestLifecycleState, u32)> = Vec::new();
         for row in rows {
             let doc_id = row
                 .doc_id
                 .context("terminal AgentRequest is missing _docID")?;
+            let requester_did = row
+                .requester_did
+                .context("routed AgentRequest is missing requester_did")?;
             let lifecycle_state = row
                 .lifecycle_state
                 .context("terminal AgentRequest is missing lifecycle_state")?;
@@ -112,19 +127,44 @@ impl RequestLifecycle {
                     u32::try_from(attempts)
                         .context("terminal AgentRequest terminal_redrive_attempts must fit in u32")
                 })?;
-            candidates.push((doc_id, row.request_id, lifecycle_state, attempts));
+            candidates.push((
+                doc_id,
+                row.request_id,
+                requester_did,
+                lifecycle_state,
+                attempts,
+            ));
         }
 
-        let scanned = candidates.len();
-        let mut reasserted = 0usize;
-        let mut failed = 0usize;
-        for (doc_id, request_id, lifecycle_state, attempts) in &candidates {
-            let next_attempts = attempts.saturating_add(1);
+        let acknowledged = if candidates.is_empty() || node.p2p_arc().is_none() {
+            std::collections::BTreeSet::new()
+        } else {
+            let documents = candidates
+                .iter()
+                .map(|(doc_id, _, requester_did, _, _)| (doc_id.clone(), requester_did.clone()))
+                .collect::<Vec<_>>();
+            crate::agent::p2p_reconcile::EmbeddedRemoteP2pAdmin::new(std::sync::Arc::clone(node))
+                .requester_acknowledged("AgentRequest", &documents)
+                .await
+                .unwrap_or_else(|error| {
+                    tracing::debug!(%error, "replication acknowledgement unavailable; re-driving every terminal candidate");
+                    std::collections::BTreeSet::new()
+                })
+        };
+
+        let mut report = TerminalRedriveReport {
+            scanned: candidates.len(),
+            ..Default::default()
+        };
+        for (doc_id, request_id, _, lifecycle_state, attempts) in &candidates {
+            let is_acknowledged = acknowledged.contains(doc_id);
+            let next_attempts = if is_acknowledged {
+                TERMINAL_REDRIVE_CAP
+            } else {
+                attempts.saturating_add(1)
+            };
             let escaped_doc_id = escape_graphql_string(doc_id);
             let escaped_lifecycle_state = escape_graphql_string(lifecycle_state.as_str());
-            // Defense-in-depth: keep the mutation owner-scoped even though the
-            // candidate query already is — a re-drive must never touch a
-            // foreign replica.
             let mutation = format!(
                 r#"mutation {{
                     update_AgentRequest(
@@ -138,10 +178,7 @@ impl RequestLifecycle {
                             lifecycle_state: {{ _eq: "{escaped_lifecycle_state}" }},
                             terminal_redrive_attempts: {{ _eq: {attempts} }}
                         }},
-                        input: {{
-                            lifecycle_state: "{escaped_lifecycle_state}",
-                            terminal_redrive_attempts: {next_attempts}
-                        }}
+                        input: {{ terminal_redrive_attempts: {next_attempts} }}
                     ) {{ _docID }}
                 }}"#,
             );
@@ -156,7 +193,7 @@ impl RequestLifecycle {
                 Ok(resp) => resp,
                 Err(error) => {
                     tracing::warn!(doc_id = %doc_id, request_id = %request_id, lifecycle_state = %lifecycle_state, %error, "failed to re-drive terminal request convergence");
-                    failed += 1;
+                    report.failed += 1;
                     continue;
                 }
             };
@@ -167,7 +204,11 @@ impl RequestLifecycle {
             if !updated {
                 continue;
             }
-            reasserted += 1;
+            if is_acknowledged {
+                report.acknowledged += 1;
+                continue;
+            }
+            report.reasserted += 1;
             tracing::debug!(
                 doc_id = %doc_id,
                 request_id = %request_id,
@@ -177,11 +218,7 @@ impl RequestLifecycle {
             );
         }
 
-        Ok(TerminalRedriveReport {
-            reasserted,
-            scanned,
-            failed,
-        })
+        Ok(report)
     }
 
     pub async fn repair_terminal_requests(

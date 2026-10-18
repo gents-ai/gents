@@ -174,8 +174,6 @@ fn retire_then_clear(
     Ok(result)
 }
 
-/// The desktop root is made absolute against `cwd` so a retry run from
-/// another directory selects the same state.
 fn select_desktop(
     flag: Option<std::path::PathBuf>,
     env: Option<std::ffi::OsString>,

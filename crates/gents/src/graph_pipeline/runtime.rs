@@ -58,7 +58,6 @@ pub struct ActivationReceipt {
     pub graph_id: String,
     pub previous_digest: Option<String>,
     pub active_digest: String,
-    pub generation: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -616,7 +615,7 @@ async fn query_graph_definition(
     let query = format!(
         r#"{{
             GraphDefinition(filter: {{ node_did: {{ _eq: "{}" }}, graph_id: {{ _eq: "{}" }} }}, limit: 2) {{
-                _docID graph_id node_did enabled active_revision_digest generation created_at updated_at
+                _docID graph_id node_did enabled active_revision_digest created_at updated_at
             }}
         }}"#,
         escape_graphql_string(owner_did),
@@ -806,7 +805,6 @@ async fn materialize_in_txn(
                     "node_did": owner_did,
                     "enabled": true,
                     "active_revision_digest": Value::Null,
-                    "generation": 0,
                     "created_at": now,
                     "updated_at": now,
                 }),
@@ -1088,10 +1086,6 @@ async fn activate_in_txn(
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let generation = definition
-        .get("generation")
-        .and_then(Value::as_i64)
-        .unwrap_or_default();
     let revision = query_graph_revision(txn, digest)
         .await?
         .context("candidate graph revision does not exist")?;
@@ -1122,7 +1116,6 @@ async fn activate_in_txn(
             graph_id: graph_id.to_owned(),
             previous_digest: current.clone(),
             active_digest: digest.to_owned(),
-            generation,
         });
     }
     if current.as_deref() != expected_previous {
@@ -1176,14 +1169,12 @@ async fn activate_in_txn(
         .get("_docID")
         .and_then(Value::as_str)
         .context("GraphDefinition is missing _docID")?;
-    let next_generation = generation.saturating_add(1);
     update_document(
         txn,
         "GraphDefinition",
         definition_doc_id,
         &json!({
             "active_revision_digest": digest,
-            "generation": next_generation,
             "updated_at": now,
         }),
     )
@@ -1193,7 +1184,6 @@ async fn activate_in_txn(
         graph_id: graph_id.to_owned(),
         previous_digest: current,
         active_digest: digest.to_owned(),
-        generation: next_generation,
     })
 }
 
@@ -2088,12 +2078,11 @@ mod tests {
         );
 
         let before = node
-            .execute("{ GraphDefinition { active_revision_digest generation } }")
+            .execute("{ GraphDefinition { active_revision_digest } }")
             .await;
         assert!(!before.has_errors(), "{:?}", before.errors);
         let before_row = before.data.unwrap()["GraphDefinition"][0].clone();
         assert!(before_row["active_revision_digest"].is_null());
-        assert_eq!(before_row["generation"], 0);
         assert_visible(&node, &materialized.trigger_ids[0], false).await;
 
         let activation = activate_graph_revision(
@@ -2106,7 +2095,6 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(activation.generation, 1);
         assert_visible(&node, &materialized.trigger_ids[0], true).await;
         assert_eq!(activation.previous_digest, None);
         assert_eq!(
@@ -2294,7 +2282,6 @@ mod tests {
             switched.previous_digest.as_deref(),
             Some(first.digest.as_str())
         );
-        assert_eq!(switched.generation, 2);
         assert_visible(&node, &materialized.trigger_ids[0], true).await;
 
         let now = chrono::Utc::now().to_rfc3339();

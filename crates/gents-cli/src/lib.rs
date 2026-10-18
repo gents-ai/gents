@@ -631,17 +631,13 @@ pub(crate) fn normalize_optional_string(value: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// Removes everything under the resolved home `home` except `keep` (the held
-/// store lock), so a runtime cannot take the store while it is wiped. `home`
-/// must come from [`overwritable_home`].
+/// `home` must come from [`overwritable_home`]; the held store lock is kept so
+/// a runtime cannot take the store while it is wiped.
 pub(crate) fn dangerously_overwrite_home(home: &Path, keep: &Path) -> Result<()> {
     remove_tree_except(home, keep)
         .with_context(|| format!("dangerously overwriting {}", home.display()))
 }
 
-/// Resolves the directory an overwrite of `home_dir` would wipe, through
-/// every symlink and `.`/`..` alias, and refuses the filesystem root and any
-/// ancestor of the user home. `None` when the home does not exist.
 pub(crate) fn overwritable_home(
     home_dir: &Path,
     user_home: Option<&Path>,

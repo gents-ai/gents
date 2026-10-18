@@ -1911,10 +1911,9 @@ mod tests {
                 created_at: (*created_at).to_string(),
             };
             let segment_response = node
-                .execute_request_with_retry(
+                .execute_request(
                     defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                         .with_variables(output_segment_create_variables(&segment).unwrap()),
-                    defra_node::ExecuteRetryPolicy::default(),
                 )
                 .await;
             assert!(
@@ -1958,10 +1957,9 @@ mod tests {
                 created_at: (*created_at).to_string(),
             };
             let message_response = node
-                .execute_request_with_retry(
+                .execute_request(
                     defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                         .with_variables(transcript_message_create_variables(&message).unwrap()),
-                    defra_node::ExecuteRetryPolicy::default(),
                 )
                 .await;
             assert!(

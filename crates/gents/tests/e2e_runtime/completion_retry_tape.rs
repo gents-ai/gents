@@ -193,10 +193,7 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     ) {{ _docID }} }}"#,
         escape_graphql_string(&expired)
     );
-    let expired = db
-        .node
-        .execute_with_retry(&mutation, gents::defra_node::ExecuteRetryPolicy::default())
-        .await;
+    let expired = db.node.execute(&mutation).await;
     assert!(!expired.has_errors(), "{:?}", expired.errors);
     assert!(
         expired

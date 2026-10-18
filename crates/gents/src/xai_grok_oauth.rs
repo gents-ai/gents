@@ -118,7 +118,6 @@ pub struct XaiGrokOAuthPolicy;
 impl crate::oauth_http::OAuthHttpPolicy for XaiGrokOAuthPolicy {
     const REJECTION_STATUSES: &'static [u16] = &[401];
 
-    /// Pre-set identity headers are never overwritten.
     fn merge_identity_headers(&self, headers: &mut HeaderMap) -> http_client::Result<()> {
         let identity = build_xai_grok_oauth_headers()
             .map_err(|error| http_client::Error::Instance(error.into()))?;

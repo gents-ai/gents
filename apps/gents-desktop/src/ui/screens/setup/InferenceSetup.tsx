@@ -50,7 +50,6 @@ export const PROVIDER_VISUALS: Record<
   openrouter: { icon: KeyRound, logo: "/logos/openrouter.svg" },
 };
 
-/* the visuals name every provider, so their keys are the providers */
 const PROVIDER_IDS: ReadonlySet<string> = new Set(Object.keys(PROVIDER_VISUALS));
 export const isProviderId = (value: string): value is ProviderId =>
   PROVIDER_IDS.has(value);

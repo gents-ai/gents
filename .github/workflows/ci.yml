@@ -473,8 +473,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: package-lock.json
+          package-manager-cache: false
 
       - name: Install workspace frontend dependencies
         run: npm ci
@@ -639,8 +638,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: package-lock.json
+          package-manager-cache: false
 
       - name: Install workspace frontend dependencies
         run: npm ci

@@ -544,7 +544,7 @@ impl GraphqlEnrollmentStore {
         &self,
         request: &EnrollmentRequestRecord,
     ) -> Result<DateTime<Utc>> {
-        let p2p = self.node.p2p_arc().context("runtime P2P is unavailable")?;
+        let p2p = crate::identity::node_p2p(&self.node).context("runtime P2P is unavailable")?;
         let local_peer = timeout(Duration::from_secs(20), p2p.local_peer_id())
             .await
             .context("timed out reading the enrollment server peer identity")?
@@ -555,24 +555,18 @@ impl GraphqlEnrollmentStore {
         );
         timeout(
             Duration::from_secs(20),
-            crate::identity::as_node_identity(
-                &self.node,
-                p2p.connect_peer(&request.candidate_ticket),
-            ),
+            p2p.connect_peer(&request.candidate_ticket),
         )
         .await
         .context("timed out connecting to enrollment candidate")?
         .map_err(anyhow::Error::msg)?;
         let peer =
             TransportPeerId::new(request.candidate_peer.clone()).map_err(anyhow::Error::msg)?;
-        let resolved = timeout(
-            Duration::from_secs(20),
-            crate::identity::as_node_identity(&self.node, p2p.resolve_peer_identity(&peer)),
-        )
-        .await
-        .context("timed out resolving enrollment candidate identity")?
-        .map_err(anyhow::Error::msg)?
-        .context("enrollment candidate has no authenticated identity")?;
+        let resolved = timeout(Duration::from_secs(20), p2p.resolve_peer_identity(&peer))
+            .await
+            .context("timed out resolving enrollment candidate identity")?
+            .map_err(anyhow::Error::msg)?
+            .context("enrollment candidate has no authenticated identity")?;
         anyhow::ensure!(
             resolved.to_string() == request.candidate_did,
             "candidate transport identity does not match its signed request DID"
@@ -722,7 +716,7 @@ impl GraphqlEnrollmentStore {
                 "suppressed stale enrollment terminal delivery");
             return true;
         }
-        let Some(p2p) = self.node.p2p_arc() else {
+        let Some(p2p) = crate::identity::node_p2p(&self.node) else {
             return true;
         };
         let documents = terminal_documents(decision_doc_id, revision_doc_id, route_receipt_doc_id);
@@ -734,12 +728,7 @@ impl GraphqlEnrollmentStore {
                 .await
                 .map_err(anyhow::Error::msg)
         };
-        match timeout(
-            Duration::from_secs(20),
-            crate::identity::as_node_identity(&self.node, delivery),
-        )
-        .await
-        {
+        match timeout(Duration::from_secs(20), delivery).await {
             Ok(Ok(())) => false,
             Ok(Err(error)) => {
                 tracing::warn!(error = %error, request_id = %request.request_id, "enrollment terminal committed; direct delivery will retry");

@@ -120,8 +120,6 @@ def identityCases : List (String × List Row × List Row × Option Nat) :=
           state := .active, foldedInto := none, queuedAfter := none, retryParent := none } ], none)
   ]
 
-def expectedRows (current incoming : List Row) : List Row := mergeRows current incoming
-
 theorem merge_keeps_distinct_physical_twins :
     ({ doc := some 3, node := some 7, requester := some 9, request := 200,
        state := RowState.active, foldedInto := none, queuedAfter := none, retryParent := none } : Row)

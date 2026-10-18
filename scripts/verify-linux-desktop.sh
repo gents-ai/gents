@@ -30,7 +30,7 @@ smoke() {
   chown "$smoke_user" "$smoke_root"
   install -d -o "$smoke_user" -m 0700 "$smoke_root/runtime" "$smoke_root/tmp"
   set +e
-  # shellcheck disable=SC2016 # The non-root shell resolves its positional arguments.
+  # shellcheck disable=SC2016
   timeout --kill-after=5s 20s runuser -u "$smoke_user" -- \
     env GENTS_HOME="$smoke_root/agent" GENTS_DESKTOP_HOME="$smoke_root/desktop" \
     XDG_RUNTIME_DIR="$smoke_root/runtime" TMPDIR="$smoke_root/tmp" APPIMAGE_EXTRACT_AND_RUN=1 \

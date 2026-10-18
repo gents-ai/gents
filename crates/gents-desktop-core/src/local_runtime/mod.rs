@@ -149,8 +149,7 @@ pub fn hosted_runtime_home(record: &crate::client::PeerRecord) -> Result<&Path> 
     Ok(home)
 }
 
-/// Signs the operator commands the co-hosted runtime's HTTP routes take,
-/// under the same checks as [`load_operator_node_identity`].
+/// Signs the operator commands the co-hosted runtime's HTTP routes take.
 pub fn operator_signer(
     record: &crate::client::PeerRecord,
 ) -> Result<Arc<dyn gents::identity::NodeIdentity>> {

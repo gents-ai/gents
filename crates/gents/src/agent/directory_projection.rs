@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
-use defra_node::{EmbeddedNode, EventName, QueryResponse};
+use defra_node::{EmbeddedNode, QueryResponse};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
@@ -192,13 +192,18 @@ pub async fn reconcile_directory_tick(
     Ok(outcome)
 }
 
+/// The source rows a directory sweep projects; its own NodeDirectoryEntry
+/// writes must not wake it again.
+const DIRECTORY_SOURCE_COLLECTIONS: [&str; 3] = ["Node", "NodeReadiness", "Agent"];
+
 pub async fn run_directory_projection(
     node: Arc<EmbeddedNode>,
     source_did: String,
     cancel: CancellationToken,
 ) -> Result<()> {
     let store = GraphqlDirectoryStore::new(node.clone());
-    let mut subscription = node.subscribe(&[EventName::Update]);
+    let mut subscription = crate::subscribe_collections(&node, DIRECTORY_SOURCE_COLLECTIONS)?;
+    let mut subscription_open = true;
     let mut interval =
         tokio::time::interval(crate::agent::p2p_reconcile::intervals::sweep_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -208,14 +213,11 @@ pub async fn run_directory_projection(
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
             _ = interval.tick() => sweep_directory(&store, &source_did).await,
-            message = subscription.recv() => {
-                if message.is_none() {
-                    tracing::warn!("directory projection update subscription closed; continuing with periodic sweeps");
+            batch = subscription.recv(), if subscription_open => {
+                if batch.is_none() {
+                    tracing::warn!("directory projection change subscription closed; continuing with periodic sweeps");
+                    subscription_open = false;
                     continue;
-                }
-                let dropped = subscription.check_and_reset_dropped();
-                if dropped > 0 {
-                    tracing::warn!(dropped, "directory projection update subscription dropped messages");
                 }
                 sweep_directory(&store, &source_did).await;
             }
@@ -664,17 +666,17 @@ mod tests {
         let node = Arc::new(EmbeddedNode::builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         let seed = r#"mutation {
-            create_Node(input: { node_did: "did:key:local", display_name: "Local",
+            local_node: create_Node(input: { node_did: "did:key:local", display_name: "Local",
                 default_agent_id: "coder", enabled: true, created_at: "2026-07-23T00:00:00Z" }) { _docID }
-            create_Node(input: { node_did: "did:key:disabled", enabled: false,
+            disabled_node: create_Node(input: { node_did: "did:key:disabled", enabled: false,
                 created_at: "2026-07-23T00:00:00Z" }) { _docID }
-            create_Agent(input: { node_did: "did:key:local", agent_id: "coder",
+            coder_agent: create_Agent(input: { node_did: "did:key:local", agent_id: "coder",
                 display_name: "Coder", inference_profile_id: "profile", enabled: true }) { _docID }
-            create_Agent(input: { node_did: "did:key:local", agent_id: "artist",
+            artist_agent: create_Agent(input: { node_did: "did:key:local", agent_id: "artist",
                 display_name: "Artist", inference_profile_id: "profile", enabled: true }) { _docID }
-            create_Agent(input: { node_did: "did:key:local", agent_id: "disabled",
+            disabled_agent: create_Agent(input: { node_did: "did:key:local", agent_id: "disabled",
                 inference_profile_id: "profile", enabled: false }) { _docID }
-            create_Agent(input: { node_did: "did:key:foreign", agent_id: "coder",
+            foreign_agent: create_Agent(input: { node_did: "did:key:foreign", agent_id: "coder",
                 display_name: "Foreign", inference_profile_id: "profile", enabled: true }) { _docID }
         }"#;
         crate::config_client::ConfigAccess::write_local_response(

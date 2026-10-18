@@ -150,6 +150,7 @@ impl RemoteSigner for TestRemoteSigner {
 
 #[tokio::test]
 async fn verify_resolves_did_key_without_prior_registration() {
+    use crypto::Key as _;
     use identity::FullIdentity as _;
     let raw_private_key = crypto::generate_ed25519().unwrap();
     let raw_public_key_bytes = raw_private_key.to_public_key().raw_owned();

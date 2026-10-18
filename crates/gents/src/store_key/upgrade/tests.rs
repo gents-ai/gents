@@ -46,18 +46,24 @@ async fn assert_contents(
     key: &StoreKey,
     entries: &[(Vec<u8>, Vec<u8>)],
 ) -> Result<()> {
-    let raw = RegolithStore::open(data)?;
-    let encrypted = EncryptedStore::new(raw.clone(), *key.0);
-    let plain = raw.new_txn(true).await?;
+    assert!(RegolithStore::open(data).is_err());
+    assert!(RegolithStore::open_with_options(
+        data,
+        crate::storage_backend::regolith_options().with_encryption_key([0x55; 32])
+    )
+    .is_err());
+    let encrypted = RegolithStore::open_with_options(
+        data,
+        crate::storage_backend::regolith_options().with_encryption_key(*key.0),
+    )?;
     let decrypted = encrypted.new_txn(true).await?;
     for (k, v) in entries {
         assert_eq!(decrypted.get(k).await?.as_deref(), Some(v.as_slice()));
-        assert_ne!(plain.get(k).await?.as_deref(), Some(v.as_slice()));
     }
-    plain.discard();
     decrypted.discard();
     encrypted.close().await?;
-    drop((encrypted, raw));
+    drop(encrypted);
+    assert_engine_files_hide_entries(data, entries)?;
     for relative in [
         "task-hooks/request.json",
         "background-processes/tool.json",
@@ -70,6 +76,44 @@ async fn assert_contents(
         fs::read_link(data.join("note-link"))?,
         PathBuf::from("unrelated/nested/note")
     );
+    Ok(())
+}
+
+fn assert_engine_files_hide_entries(data: &Path, entries: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
+    anyhow::ensure!(
+        data.join("MANIFEST").is_file(),
+        "encrypted engine MANIFEST is missing from {}",
+        data.display()
+    );
+
+    fn scan(path: &Path, secrets: &[&[u8]]) -> Result<()> {
+        if path.is_dir() {
+            for entry in fs::read_dir(path)? {
+                scan(&entry?.path(), secrets)?;
+            }
+        } else {
+            let bytes = fs::read(path)?;
+            for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
+                anyhow::ensure!(
+                    !bytes.windows(secret.len()).any(|window| window == *secret),
+                    "plaintext store entry found in engine file {}",
+                    path.display()
+                );
+            }
+        }
+        Ok(())
+    }
+
+    let secrets = entries
+        .iter()
+        .flat_map(|(key, value)| [key.as_slice(), value.as_slice()])
+        .collect::<Vec<_>>();
+    for entry in fs::read_dir(data)? {
+        let entry = entry?;
+        if engine_entry(&entry.file_name()) {
+            scan(&entry.path(), &secrets)?;
+        }
+    }
     Ok(())
 }
 
@@ -209,7 +253,10 @@ async fn partial_copy_restarts_and_a_lost_materialized_key_is_never_regenerated(
     let mut entries = plaintext(&data).await?;
     let key_file = temp.path().join("key");
     let (record, key) = prepare(&data, &key_file)?;
-    let stage = EncryptedStore::new(RegolithStore::open(staging_path(&data))?, *key.0);
+    let stage = RegolithStore::open_with_options(
+        staging_path(&data),
+        crate::storage_backend::regolith_options().with_encryption_key(*key.0),
+    )?;
     let mut write = stage.new_txn(false).await?;
     write.set(b"stale-entry", b"must not survive retry").await?;
     write.commit().await?;
@@ -236,7 +283,10 @@ async fn partial_copy_restarts_and_a_lost_materialized_key_is_never_regenerated(
     drop(source);
     encrypt_existing(&data, &record, &key).await?;
     assert_contents(&data, &key, &entries).await?;
-    let store = EncryptedStore::new(RegolithStore::open(&data)?, *key.0);
+    let store = RegolithStore::open_with_options(
+        &data,
+        crate::storage_backend::regolith_options().with_encryption_key(*key.0),
+    )?;
     let read = store.new_txn(true).await?;
     assert!(read.get(b"stale-entry").await?.is_none());
     assert!(read.get(&removed.0).await?.is_none());

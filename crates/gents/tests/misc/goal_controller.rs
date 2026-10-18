@@ -24,7 +24,7 @@ const SESSION: &str = "goal-session";
 const RESCAN: Duration = Duration::from_millis(20);
 
 async fn publish_canonical_terminal_activity(db: &TestDb, request_doc_id: &str, content: &str) {
-    use gents::defra_node::{ExecuteRetryPolicy, QueryRequest};
+    use gents::defra_node::QueryRequest;
     use gents::session::canonical_rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
@@ -112,10 +112,9 @@ async fn publish_canonical_terminal_activity(db: &TestDb, request_doc_id: &str, 
     };
     let created = db
         .node
-        .execute_request_with_retry(
+        .execute_request(
             QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
                 .with_variables(output_segment_create_variables(&segment).unwrap()),
-            ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(
@@ -161,10 +160,9 @@ async fn publish_canonical_terminal_activity(db: &TestDb, request_doc_id: &str, 
     };
     let created = db
         .node
-        .execute_request_with_retry(
+        .execute_request(
             QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
                 .with_variables(transcript_message_create_variables(&message).unwrap()),
-            ExecuteRetryPolicy::default(),
         )
         .await;
     assert!(
@@ -2116,7 +2114,7 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     seed_completed_request(&db, "parent-budget").await;
     let usage = format!(
         r#"mutation {{
-        add_InferenceCall(input: {{
+        local_usage: add_InferenceCall(input: {{
             call_id: "goal-budget-call",
             runtime_instance_id: "goal-test",
             request_id: "parent-budget",
@@ -2138,7 +2136,7 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
             completion_tokens: 5,
             cached_input_tokens: 90
         }}) {{ _docID }}
-        add_InferenceCall(input: {{
+        foreign_usage: add_InferenceCall(input: {{
             call_id: "goal-budget-call-foreign",
             runtime_instance_id: "goal-test-foreign",
             request_id: "parent-budget",
@@ -2629,7 +2627,8 @@ async fn a_database_update_leaves_a_passed_reset_to_the_rescan_tick() {
         goal_and_children(&db).await,
         (Some(GoalStatus::UsageLimited), 0)
     );
-    updates.publish_update("Goal", "goal-doc");
+    let goal_collection_id = gents::collection_ids(&db.node, ["Goal"]).unwrap().remove(0);
+    updates.publish_update(goal_collection_id, "goal-doc");
     assert!(tokio::time::timeout(pass, source.next_fire())
         .await
         .is_err());

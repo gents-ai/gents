@@ -61,7 +61,6 @@ pub(crate) struct CanonicalToolPresentation {
     pub(crate) live_output: Option<String>,
 }
 
-/// Resolve CLI tool presentation through the physical canonical owners.
 /// `include_result` must only be requested for a terminal tool lifecycle; a
 /// missing or malformed terminal delivery is an error rather than an empty
 /// preview.
@@ -141,9 +140,8 @@ pub(crate) fn request_terminal_query(request_id: &str, physical: Option<&str>) -
     )
 }
 
-/// Typed canonical request-output observation shared by CLI transports. The
-/// signed admission input remains on the request row and is never rewritten
-/// into response-shaped JSON.
+/// The signed admission input remains on the request row and is never
+/// rewritten into response-shaped JSON.
 pub(crate) async fn observe_canonical_request_output(
     graphql: &GraphqlEndpoint,
     request: &AgentRequestRow,
@@ -373,7 +371,6 @@ pub(crate) async fn prepare_agent_request(
     Ok(PreparedAgentRequest { create })
 }
 
-/// Atomically establish a session goal and publish its first runnable request.
 /// Exact retries use the same immutable submission key and converge to the
 /// already-committed pair; conflicting retries fail without mutating either
 /// document.
@@ -437,6 +434,7 @@ pub(crate) async fn create_goal_backed_agent_request(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(unix)]
 pub(crate) async fn create_goal_backed_agent_request_local(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     actor: identity::Did,
@@ -1290,7 +1288,8 @@ mod tests {
             }
             // The mutation committed, but its response was lost/replaced by a
             // transient error at the transport boundary.
-            return Json(json!({"errors": [{"message": "database is locked"}]})).into_response();
+            return Json(json!({"errors": [{"message": "transaction conflict. please retry"}]}))
+                .into_response();
         }
         let rows: Vec<Value> = state
             .durable_ids

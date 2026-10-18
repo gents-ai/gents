@@ -126,8 +126,6 @@ impl InferenceBackend {
         Ok(())
     }
 
-    /// Catalog authentication scope of this connection: `None` for shared
-    /// credentials, the owning node for node OAuth.
     pub fn catalog_scope(&self) -> Option<&str> {
         matches!(self.auth, BackendAuth::NodeOAuth { .. }).then_some(self.node_did.as_str())
     }
@@ -512,7 +510,9 @@ pub async fn record_model_catalog_in_txn(
         "ambiguous catalog authentication scope"
     );
     if let Some((index, old)) = matching.first() {
-        if chrono::DateTime::parse_from_rfc3339(&old.observed_at)? > observed_at {
+        if chrono::DateTime::parse_from_rfc3339(&old.observed_at)? > observed_at
+            || old.models == catalog.models
+        {
             return Ok(());
         }
         let index = *index;
@@ -560,8 +560,6 @@ pub async fn record_discovered_catalog_on(
     Ok(catalog)
 }
 
-// Only same-principal backends matching this provider, endpoint and
-// authentication selection receive the catalog.
 pub async fn record_connection_catalog_on(
     access: &crate::config_client::ConfigAccess,
     owner: &str,

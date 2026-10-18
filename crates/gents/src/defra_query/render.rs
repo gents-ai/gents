@@ -1,6 +1,3 @@
-// Field/operator names are validated as identifiers and all string literals
-// are escaped via escape_graphql_string, so untrusted input cannot break out
-// of the rendered query.
 use anyhow::{bail, Result};
 use serde_json::Value;
 

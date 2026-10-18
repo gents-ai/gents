@@ -1445,7 +1445,6 @@ mod tests {
     }
 
     #[cfg(target_os = "macos")]
-    #[cfg(target_os = "macos")]
     #[test]
     fn browser_clearing_cannot_overlap_custom_homes_or_process_locks() {
         let temp = tempfile::tempdir().unwrap();

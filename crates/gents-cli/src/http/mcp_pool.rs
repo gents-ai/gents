@@ -98,7 +98,7 @@ fn mcp_pool_query(node_did: &str) -> String {
             }}
             ToolServiceHealthState(
                 filter: {{ node_did: {{ _eq: "{node_did}" }} }},
-                order: {{ service_id: ASC }}
+                order: [{{ service_id: ASC }}, {{ updated_at: DESC }}, {{ _docID: ASC }}]
             ) {{
                 service_id
                 node_did
@@ -132,11 +132,14 @@ fn build_mcp_pool_snapshot(
     node_did: String,
     envelope: McpPoolEnvelope,
 ) -> McpPoolSnapshot {
-    let mut health_by_service = envelope
-        .health
-        .into_iter()
-        .map(|row| (row.service_id.clone(), row))
-        .collect::<BTreeMap<_, _>>();
+    // Twins of one service are not schema-unique; the query order puts the
+    // health checker's chosen row first.
+    let mut health_by_service = BTreeMap::new();
+    for row in envelope.health {
+        health_by_service
+            .entry(row.service_id.clone())
+            .or_insert(row);
+    }
     let mut totals = McpPoolTotals::default();
     let mut services = Vec::new();
 
@@ -205,5 +208,33 @@ fn count_health_status(totals: &mut McpPoolTotals, status: Option<&str>) {
         Some(ToolServiceHealthProjection::Stale) => totals.degraded += 1,
         Some(ToolServiceHealthProjection::Unreachable) => totals.unreachable += 1,
         None => totals.unknown += 1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn twin_health_rows_resolve_to_the_first_in_query_order() {
+        let envelope: McpPoolEnvelope = serde_json::from_value(serde_json::json!({
+            "ToolServiceRegistry": [{"service_id": "obs-mcp", "send_node_did": false}],
+            "ToolServiceHealthState": [
+                {"service_id": "obs-mcp", "status": "healthy", "updated_at": "2026-06-05T00:01:00Z"},
+                {"service_id": "obs-mcp", "status": "evicted", "updated_at": "2026-06-05T00:00:00Z"}
+            ]
+        }))
+        .unwrap();
+        let generated_at = DateTime::parse_from_rfc3339("2026-06-05T00:02:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let snapshot =
+            build_mcp_pool_snapshot(generated_at, "did:key:zAgent".to_string(), envelope);
+        assert_eq!(
+            snapshot.services[0].health_status.as_deref(),
+            Some("healthy")
+        );
+        assert!(mcp_pool_query("did:key:zAgent")
+            .contains("[{ service_id: ASC }, { updated_at: DESC }, { _docID: ASC }]"));
     }
 }

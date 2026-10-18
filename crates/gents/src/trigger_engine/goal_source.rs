@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -43,35 +42,6 @@ const GOAL_OBSERVED_COLLECTIONS: &[&str] = &[
     "NodeRuntime",
 ];
 
-fn goal_collection_names_by_id(node: &EmbeddedNode) -> Option<HashMap<String, String>> {
-    let mut names_by_id = HashMap::new();
-    for name in node.list_collections().ok()? {
-        let definition = node.get_collection(&name).ok()??;
-        names_by_id.insert(definition.collection_id, definition.name);
-    }
-    Some(names_by_id)
-}
-
-fn goal_document_batch_requires_rescan(
-    batch: &events::DocumentChangeBatch,
-    collection_names_by_id: Option<&HashMap<String, String>>,
-) -> bool {
-    if batch.resync_required {
-        return true;
-    }
-    if batch.changes.is_empty() {
-        return batch.updates != 0;
-    }
-    let Some(collection_names_by_id) = collection_names_by_id else {
-        return batch.updates != 0;
-    };
-    batch.changes.iter().any(|change| {
-        collection_names_by_id
-            .get(&change.collection_id)
-            .is_none_or(|name| GOAL_OBSERVED_COLLECTIONS.contains(&name.as_str()))
-    })
-}
-
 fn continuation_evidence_is_current(observed: &GoalDocument, current: &GoalDocument) -> bool {
     observed.doc_id == current.doc_id
         && observed.status == current.status
@@ -84,7 +54,6 @@ pub struct GoalSource {
     node: Arc<EmbeddedNode>,
     subscription_source: Arc<dyn UpdateSubscriptionSource>,
     subscription: Option<events::DocumentChangeSubscription>,
-    collection_names_by_id: Option<HashMap<String, String>>,
     cancel: CancellationToken,
     rescan_tick: tokio::time::Interval,
 }
@@ -111,7 +80,6 @@ impl GoalSource {
             node,
             subscription_source,
             subscription: None,
-            collection_names_by_id: None,
             cancel,
             rescan_tick,
         }
@@ -132,8 +100,16 @@ impl GoalSource {
 
     fn ensure_subscription(&mut self) {
         if self.subscription.is_none() {
-            self.subscription = Some(self.subscription_source.subscribe_document_changes());
-            self.collection_names_by_id = goal_collection_names_by_id(&self.node);
+            let collection_ids =
+                crate::collection_ids(&self.node, GOAL_OBSERVED_COLLECTIONS.iter().copied())
+                    .unwrap_or_else(|error| {
+                        tracing::warn!(%error, "goal source rescans on its interval only");
+                        Vec::new()
+                    });
+            self.subscription = Some(
+                self.subscription_source
+                    .subscribe_collection_changes(collection_ids),
+            );
             tracing::info!("goal source opened coalesced document-change subscription");
         }
     }
@@ -975,7 +951,6 @@ impl TriggerSource for GoalSource {
         Box::pin(async move {
             self.ensure_subscription();
             loop {
-                let collection_names_by_id = self.collection_names_by_id.as_ref();
                 let subscription = self
                     .subscription
                     .as_mut()
@@ -991,15 +966,9 @@ impl TriggerSource for GoalSource {
                     }
                     _ = self.rescan_tick.tick() => true,
                     batch = subscription.recv() => {
-                        let Some(batch) = batch else {
+                        if batch.is_none() {
                             tracing::warn!("goal source subscription channel closed; source exiting");
                             return None;
-                        };
-                        if !goal_document_batch_requires_rescan(
-                            &batch,
-                            collection_names_by_id,
-                        ) {
-                            continue;
                         }
                         false
                     }
@@ -1015,78 +984,7 @@ impl TriggerSource for GoalSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use events::{
-        Bus, ChannelBus, ChannelBusConfig, DocumentChange, DocumentChangeBatch, Message, Update,
-    };
     use gents_protocol::request_input::{GoalContinuationInput, RequestInput};
-
-    #[tokio::test]
-    async fn irrelevant_update_burst_coalesces_and_overflow_resync_always_scans() {
-        let names = HashMap::from([
-            ("goal-id".to_owned(), "Goal".to_owned()),
-            ("task-id".to_owned(), "Task".to_owned()),
-        ]);
-        let bus = ChannelBus::with_config(ChannelBusConfig::new().with_event_buffer_size(1));
-        let mut subscription = bus.subscribe_document_changes();
-        for _ in 0..10_000 {
-            let block = b"task-id:task-1".to_vec();
-            let cid = defra_core::block::generate_cid_from_bytes(&block).unwrap();
-            bus.publish(Message::update(Update::new(
-                "task-1".to_owned(),
-                cid,
-                "task-id".to_owned(),
-                block,
-                false,
-                false,
-            )));
-        }
-        let irrelevant_burst = subscription.recv().await.unwrap();
-        assert_eq!(irrelevant_burst.updates, 10_000);
-        assert_eq!(irrelevant_burst.changes.len(), 1);
-        assert!(
-            !goal_document_batch_requires_rescan(&irrelevant_burst, Some(&names)),
-            "a coalesced burst of known unrelated updates should not trigger Goal I/O"
-        );
-
-        for doc_id in ["task-2", "task-3"] {
-            let block = format!("task-id:{doc_id}").into_bytes();
-            let cid = defra_core::block::generate_cid_from_bytes(&block).unwrap();
-            bus.publish(Message::update(Update::new(
-                doc_id.to_owned(),
-                cid,
-                "task-id".to_owned(),
-                block,
-                false,
-                false,
-            )));
-        }
-        let overflow = subscription.recv().await.unwrap();
-        assert!(overflow.resync_required);
-        assert!(
-            goal_document_batch_requires_rescan(&overflow, Some(&names)),
-            "resync_required must trigger a full durable scan even without change rows"
-        );
-    }
-
-    #[test]
-    fn unknown_and_goal_dependency_changes_trigger_rescan() {
-        let names = HashMap::from([
-            ("goal-id".to_owned(), "Goal".to_owned()),
-            ("task-id".to_owned(), "Task".to_owned()),
-        ]);
-        for collection_id in ["goal-id", "schema-added-after-subscription"] {
-            let batch = DocumentChangeBatch {
-                changes: vec![DocumentChange {
-                    collection_id: collection_id.to_owned(),
-                    doc_id: "doc-1".to_owned(),
-                    has_local_write: true,
-                }],
-                resync_required: false,
-                updates: 1,
-            };
-            assert!(goal_document_batch_requires_rescan(&batch, Some(&names)));
-        }
-    }
 
     fn goal() -> GoalDocument {
         serde_json::from_value(serde_json::json!({

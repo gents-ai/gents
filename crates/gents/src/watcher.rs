@@ -201,13 +201,12 @@ pub trait Watcher: Send + Sync {
 pub struct DefraWatcher {
     node: Arc<EmbeddedNode>,
     node_did: String,
-    request_collection_id: Option<String>,
     subscription: events::DocumentChangeSubscription,
     processed_request_ids: cooldown::ProcessedRequests,
 }
 
 impl DefraWatcher {
-    pub fn new(node: Arc<EmbeddedNode>, node_did: &str) -> Self {
+    pub fn new(node: Arc<EmbeddedNode>, node_did: &str) -> Result<Self> {
         Self::with_subscription_source(node.clone(), node, node_did)
     }
 
@@ -215,20 +214,15 @@ impl DefraWatcher {
         subs: Arc<dyn UpdateSubscriptionSource>,
         node: Arc<EmbeddedNode>,
         node_did: &str,
-    ) -> Self {
-        let subscription = subs.subscribe_document_changes();
-        let request_collection_id = node
-            .get_collection("AgentRequest")
-            .ok()
-            .flatten()
-            .map(|collection| collection.collection_id);
-        Self {
+    ) -> Result<Self> {
+        let subscription =
+            subs.subscribe_collection_changes(crate::collection_ids(&node, ["AgentRequest"])?);
+        Ok(Self {
             node,
             node_did: node_did.to_string(),
-            request_collection_id,
             subscription,
             processed_request_ids: HashMap::new(),
-        }
+        })
     }
 }
 
@@ -241,34 +235,10 @@ impl EventDeliveryRuntimeContract for DefraWatcher {
     };
 }
 
-fn document_change_batch_wakes_request_scan(
-    batch: &events::DocumentChangeBatch,
-    request_collection_id: Option<&str>,
-) -> bool {
-    batch.resync_required
-        || request_collection_id.is_none_or(|id| {
-            batch
-                .changes
-                .iter()
-                .any(|change| change.collection_id == id)
-        })
-}
-
 async fn wait_for_request_change(
     subscription: &mut events::DocumentChangeSubscription,
-    request_collection_id: Option<&str>,
 ) -> Result<Option<events::DocumentChangeBatch>, tokio::time::error::Elapsed> {
-    // Unrelated output writes must not reset the deadline for aging/cooldown scans.
-    tokio::time::timeout(GOSSIP_FALLBACK_POLL, async {
-        loop {
-            let batch = subscription.recv().await?;
-            if document_change_batch_wakes_request_scan(&batch, request_collection_id) {
-                return Some(batch);
-            }
-            tokio::task::consume_budget().await;
-        }
-    })
-    .await
+    tokio::time::timeout(GOSSIP_FALLBACK_POLL, subscription.recv()).await
 }
 
 impl Watcher for DefraWatcher {
@@ -299,12 +269,7 @@ impl Watcher for DefraWatcher {
                 Err(e) => return Some(Err(e)),
             }
 
-            let batch = match wait_for_request_change(
-                &mut self.subscription,
-                self.request_collection_id.as_deref(),
-            )
-            .await
-            {
+            let batch = match wait_for_request_change(&mut self.subscription).await {
                 Ok(Some(batch)) => batch,
                 Ok(None) => return None,
                 Err(_timeout) => {

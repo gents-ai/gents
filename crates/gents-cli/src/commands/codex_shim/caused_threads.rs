@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use anyhow::Result;
 use gents_protocol::client_protocol::{project_persisted_attempt, ClientHeadProjection};
@@ -10,57 +10,12 @@ use crate::caused_sessions::{
     load_caused_session, load_caused_sessions, load_session_head, CausedSession, SessionScope,
 };
 
-const CAUSED_THREAD_COLLECTIONS: [&str; 4] = [
+pub(super) const CAUSED_THREAD_COLLECTIONS: [&str; 4] = [
     "AgentRequest",
     "Agent",
     "InferenceProfile",
     "InferenceBackend",
 ];
-
-#[derive(Clone, Debug)]
-pub(super) struct CausedThreadUpdateFilter {
-    collection_ids: HashSet<String>,
-    match_all_updates: bool,
-}
-
-impl CausedThreadUpdateFilter {
-    pub(super) fn from_state(state: &ShimState) -> Self {
-        let mut collection_ids = HashSet::new();
-        let mut match_all_updates = false;
-        for collection_name in CAUSED_THREAD_COLLECTIONS {
-            match state.node.get_collection(collection_name) {
-                Ok(Some(definition)) => {
-                    collection_ids.insert(definition.collection_id);
-                }
-                Ok(None) => {
-                    match_all_updates = true;
-                    tracing::warn!(
-                        collection_name,
-                        "Codex shim could not resolve a caused-thread collection; \
-                         falling back to invalidation on every document update"
-                    );
-                }
-                Err(error) => {
-                    match_all_updates = true;
-                    tracing::warn!(
-                        collection_name,
-                        %error,
-                        "Codex shim failed to resolve a caused-thread collection; \
-                         falling back to invalidation on every document update"
-                    );
-                }
-            }
-        }
-        Self {
-            collection_ids,
-            match_all_updates,
-        }
-    }
-
-    pub(super) fn affects_collection_id(&self, collection_id: &str) -> bool {
-        self.match_all_updates || self.collection_ids.contains(collection_id)
-    }
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct CausedThread {

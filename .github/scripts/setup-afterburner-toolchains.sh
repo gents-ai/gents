@@ -33,7 +33,6 @@ echo "$binaryen_sha256  $download_root/$binaryen_archive" | shasum -a 256 --chec
 tar -xzf "$download_root/$binaryen_archive" -C "$tool_root"
 ln -sf "$tool_root/binaryen-version_${binaryen_version}/bin/wasm-opt" "$bin_root/wasm-opt"
 
-# Distinct from setup-rust.sh's wasm32-unknown-unknown migration fixture target.
 rustup target add wasm32-wasip1
 
 "$bin_root/javy" --version

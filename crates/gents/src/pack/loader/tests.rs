@@ -216,7 +216,7 @@ fn every_fixture_pack_that_ships_a_config_loads_it_cleanly() {
         crate::pack::validate_manifest(&manifest.name, &manifest)
             .unwrap_or_else(|error| panic!("{name} manifest: {error:#}"));
         if manifest.config.is_none() {
-            continue; // an assets-kind pack ships no config to load
+            continue;
         }
         load_pack_config(
             &manifest,

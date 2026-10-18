@@ -3,14 +3,13 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
-use gents::UpdateSubscriptionSource;
 use gents_codex_protocol as codex;
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
 use tokio::sync::watch;
 
-use super::caused_threads::CausedThreadUpdateFilter;
+use super::caused_threads::CAUSED_THREAD_COLLECTIONS;
 use super::protocol::{
     send_notification, send_thread_status_changed, timestamp_seconds, turn_value_with_timing,
 };
@@ -80,9 +79,8 @@ async fn watch_loaded_root_continuations(
         .collect::<BTreeMap<_, _>>();
     let mut observed = BTreeSet::<String>::new();
     let mut initialized = false;
-    let mut updates = state.node.subscribe_updates();
+    let mut updates = gents::subscribe_collections(&state.node, CAUSED_THREAD_COLLECTIONS)?;
     let mut updates_closed = false;
-    let update_filter = CausedThreadUpdateFilter::from_state(state);
 
     loop {
         if !state.is_thread_loaded(thread_id).await || connection.outbound.is_closed() {
@@ -139,30 +137,12 @@ async fn watch_loaded_root_continuations(
             continue;
         }
 
-        loop {
-            let Some(message) = updates.recv().await else {
-                updates_closed = true;
-                tracing::warn!(
-                    thread_id,
-                    "Codex shim root continuation update subscription closed; polling"
-                );
-                break;
-            };
-            let dropped = updates.check_and_reset_dropped();
-            if dropped > 0 {
-                tracing::warn!(
-                    thread_id,
-                    dropped,
-                    "Codex shim root continuation update subscription dropped messages"
-                );
-                break;
-            }
-            if message
-                .as_update()
-                .is_some_and(|update| update_filter.affects_collection_id(&update.collection_id))
-            {
-                break;
-            }
+        if updates.recv().await.is_none() {
+            updates_closed = true;
+            tracing::warn!(
+                thread_id,
+                "Codex shim root continuation update subscription closed; polling"
+            );
         }
     }
 }

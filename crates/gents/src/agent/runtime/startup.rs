@@ -408,6 +408,18 @@ async fn run_agent_owned(
     .with_plugins(agent.plugins().clone());
     backend_registry::probe_and_promote_enabled_backends(&agent.node).await;
 
+    // Subscribe before reading startup configuration so racing commits remain pending.
+    let control_subscription = match agent
+        .document_runtime_context()
+        .map(|_| super::control_watcher::subscribe_control_changes(&agent.node))
+        .transpose()
+    {
+        Ok(subscription) => subscription,
+        Err(error) => {
+            runtime_status.publish_error(&format!("{error:#}")).await;
+            return Err(error);
+        }
+    };
     let resolved_snapshot = match resolve_startup_snapshot(&agent).await {
         Ok(snapshot) => snapshot,
         Err(error) => {
@@ -419,12 +431,6 @@ async fn run_agent_owned(
         runtime_status.publish_error(&format!("{error:#}")).await;
         return Err(error);
     }
-    // Subscribe before the MCP health checker can persist a transition that
-    // makes a required service runnable.
-    let control_subscription = agent
-        .document_runtime_context()
-        .is_some()
-        .then(|| agent.node.subscribe_document_changes());
     log_recovery(
         &agent.node,
         agent.node_did(),

@@ -1509,7 +1509,6 @@ describe("configuration panels", () => {
     expect(view.nav().route).toEqual(agentsRoute);
     expect(view.nav().canBack).toBe(false);
 
-    /* once saved, Back skips the draft for the list it was opened from */
     await user.click(screen.getByRole("button", { name: "New agent" }));
     await user.type(screen.getByLabelText("Display name"), "Reviewer");
     await user.click(screen.getByRole("button", { name: "Create" }));
@@ -1962,7 +1961,6 @@ describe("configuration panels", () => {
     expect(api.disconnectProviderAccount).not.toHaveBeenCalled();
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent("Disconnect Grok?");
-    /* the reason it is a dialog: it names what stops working */
     expect(dialog).toHaveTextContent("fail their next turn");
     await user.click(within(dialog).getByRole("button", { name: "Keep connected" }));
     expect(api.disconnectProviderAccount).not.toHaveBeenCalled();

@@ -109,8 +109,6 @@ async fn grown_replicator_collection_set_reinstalls_replicator() {
         vec![DiffOp::InstallReplicator("addr1".into())]
     );
 
-    // The control-plane layer merges in: same address, same filter, larger
-    // collection set plus the control subscription.
     *store.desired.lock().unwrap() = Ok(Some(PairingDesired {
         collections: set(&["Network"]),
         replicator_addresses: set(&["addr1"]),
@@ -130,7 +128,7 @@ async fn grown_replicator_collection_set_reinstalls_replicator() {
             DiffOp::InstallReplicator("addr1".into()),
         ]
     );
-    // The reinstalled replicator carries the merged collection set.
+
     assert_eq!(
         admin.replicators.lock().unwrap()["addr1"].collections,
         vec![

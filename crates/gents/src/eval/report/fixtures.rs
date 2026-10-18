@@ -1,5 +1,3 @@
-//! Hand-built eval documents for the report's unit tests.
-
 use serde_json::json;
 
 use crate::document_config::{EvalDefinition, EvalSplit, EvalTier};
@@ -42,7 +40,6 @@ pub(crate) fn definition(cases: &[&str]) -> EvalDefinition {
     .expect("the fixture definition parses")
 }
 
-/// A run frozen over every case of `definition`.
 pub(crate) fn record(
     run_id: &str,
     definition: &EvalDefinition,

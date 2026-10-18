@@ -19,9 +19,6 @@ export function formatPeerConnectionError(
   action: PeerConnectionAction,
   copy: Pick<FleetCopy, "runtimeProductName" | "cliBinaryName"> = {},
 ): string {
-  // The bridge classifies connectivity failures into
-  // BridgeErrorCode.endpointUnreachable and attaches the endpoint as a
-  // structured field — no message parsing on the TS side.
   const payload = asBridgeErrorPayload(error);
   const message = payload?.message ?? errorMessage(error);
   if (payload?.code !== "endpointUnreachable" || !payload.endpoint) {

@@ -3,7 +3,7 @@ mod automation;
 mod load;
 mod snapshot;
 
-pub(crate) use apply::apply_control_update;
+pub(crate) use apply::{apply_control_update, control_collection_names};
 pub(crate) use load::load_document_runtime_view;
 pub(crate) use snapshot::resolve_document_runtime_snapshot_from_view;
 
@@ -46,8 +46,6 @@ pub(crate) struct DocumentRuntimeView {
     pub(crate) callback_modules: HashMap<String, DocumentRecord<CallbackModule>>,
     pub(crate) repository_placements: HashMap<String, DocumentRecord<RepositoryPlacement>>,
     pub(crate) backend_observations: HashMap<String, InferenceBackendObservation>,
-    /// Backends whose provider_kind this build does not know, ID to kind. Their
-    /// rows are skipped; agents on them resolve as unavailable, not pending.
     pub(crate) unknown_kind_backends: HashMap<String, String>,
     pub(crate) oauth_credentials: HashMap<String, DocumentRecord<OAuthCredential>>,
 }

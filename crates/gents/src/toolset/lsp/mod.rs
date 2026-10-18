@@ -37,8 +37,6 @@ use actions::ActionRequest;
 use config::apply_overrides;
 
 pub const LSP_TOOL_NAME: &str = "lsp";
-/// Action timeout when neither the call nor `integrations.lsp.timeout_secs`
-/// sets one.
 pub const DEFAULT_ACTION_TIMEOUT_SECS: u64 = 20;
 /// Ceiling on any action timeout: servers needing longer are indexing, not
 /// answering; the call should fail and retry.

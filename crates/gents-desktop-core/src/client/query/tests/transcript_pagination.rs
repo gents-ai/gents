@@ -178,7 +178,7 @@ async fn transcript_pages_preserve_acp_scope_and_sequence_cursors() {
 }
 
 #[tokio::test]
-async fn transcript_page_rejects_same_session_sequence_twins() {
+async fn storage_rejects_same_session_sequence_twins() {
     let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
     ensure_runtime_schemas(node.as_ref())
         .await
@@ -189,15 +189,18 @@ async fn transcript_page_rejects_same_session_sequence_twins() {
     ]
     .join("\n");
     let response = node.execute(&format!("mutation {{ {twins} }}")).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-
-    let error = load_session_transcript_page(node.as_ref(), "twins", None, None, None, Some(2))
-        .await
-        .err()
-        .expect("same-session sequence twins must conflict");
-    assert!(error
-        .to_string()
-        .contains("canonical header origin: Conflict"));
+    assert!(
+        response.has_errors(),
+        "same-session sequence twins must be rejected"
+    );
+    assert!(
+        response
+            .errors
+            .iter()
+            .any(|error| error.message.contains("violates unique index")),
+        "unexpected storage rejection: {:?}",
+        response.errors
+    );
 }
 
 #[tokio::test]

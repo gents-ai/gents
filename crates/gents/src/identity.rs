@@ -4,8 +4,9 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
-use crypto::Key;
-use defra_core::signing::{RemoteSigner, SigningConfig, SigningKeyType};
+#[cfg(target_os = "macos")]
+use defra_core::signing::RemoteSigner;
+use defra_core::signing::{SigningConfig, SigningKeyType};
 use identity::{FullIdentity as _, Identity as _, RawIdentity};
 
 mod file_key;
@@ -176,20 +177,13 @@ pub fn can_mint_defradb_bearer(did: &str) -> bool {
     defra_core::signing::get_identity(did).is_some_and(|config| config.has_local_private_key())
 }
 
-/// Mirrors DefraDB's private `EmbeddedNode::as_node_identity`. DefraDB
-/// installs the ambient request identity for queries, transactions and schema
-/// changes but not its P2P operations handle, so access-controlled nodes deny
-/// in-process P2P administration as anonymous without this scope. Spawned
-/// tasks do not inherit the scope.
-pub async fn as_node_identity<F: std::future::Future>(
+/// P2P administration must carry the node DID explicitly across worker boundaries.
+pub fn node_p2p(
     node: &defra_node::EmbeddedNode,
-    operation: F,
-) -> F::Output {
-    defra_core::current_identity::with_scoped_identity(
-        node.node_identity_did().map(ToOwned::to_owned),
-        operation,
-    )
-    .await
+) -> Option<Arc<dyn defra_p2p_adapter::P2POperations>> {
+    let context = defra_core::RequestContext::default()
+        .with_identity(node.node_identity_did().map(ToOwned::to_owned));
+    node.p2p_arc().and_then(|p2p| p2p.bind_request(&context))
 }
 
 #[async_trait]
@@ -427,6 +421,8 @@ fn load_or_create_macos_keychain_raw_identity(
     label: &str,
     create_if_missing: bool,
 ) -> Result<RawIdentity> {
+    use crypto::Key as _;
+
     match macos_keychain_find(MACOS_KEYCHAIN_SERVICE, label)? {
         Ok(password) => RawIdentity::from_bytes(crypto::KeyType::Ed25519, &password)
             .map_err(anyhow::Error::from)
@@ -630,6 +626,7 @@ fn public_key_bytes_for_sec_key(key: &security_framework::key::SecKey) -> Result
     Ok(data.to_vec())
 }
 
+#[cfg(target_os = "macos")]
 fn did_for_secp256r1_public_key(public_key_bytes: &[u8]) -> Result<String> {
     let public_key = crypto::public_key_from_bytes(crypto::KeyType::Secp256r1, public_key_bytes)
         .map_err(anyhow::Error::from)?;

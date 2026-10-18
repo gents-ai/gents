@@ -1,6 +1,3 @@
-//! Pack build and test remain CLI operations because they invoke language
-//! toolchains.
-
 use std::path::PathBuf;
 
 use super::*;

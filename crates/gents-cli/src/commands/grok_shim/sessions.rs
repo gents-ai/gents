@@ -101,9 +101,6 @@ struct Cursor {
     query: String,
 }
 
-/// Scan bounded pages without silently dropping an older session behind a
-/// fixed request-count ceiling; ordered by actual persisted activity, not
-/// lexical UUID order.
 pub(super) async fn requests(
     node: &EmbeddedNode,
     principal: &str,
@@ -410,9 +407,6 @@ pub(super) async fn list(
     )
 }
 
-/// The leader dashboard is the stock client's server-hosted resume surface;
-/// selecting a roster entry sends `session/load` directly without a local
-/// JSONL file.
 pub(super) async fn roster(node: &EmbeddedNode, principal: &str, behavior: &str) -> Result<Value> {
     let mut sessions = Vec::new();
     for (_, _, row) in list_entries(node, principal, behavior, &ListParams::default()).await? {
@@ -507,8 +501,6 @@ mod tests {
 
     #[test]
     fn summary_fold_preserves_first_prompt_search_and_activity_in_any_scan_order() {
-        // Scan keys are UUIDs, not chronological coordinates: a later turn
-        // must contribute search/activity without replacing the first prompt.
         let rows: Vec<AgentRequestRow> = serde_json::from_value(json!([
             {"request_id":"z", "content":"original prompt", "created_at":"2026-09-01T00:00:00Z",
                 "terminalized_at":"2026-09-01T00:01:00Z", "lifecycle_state":"completed"},

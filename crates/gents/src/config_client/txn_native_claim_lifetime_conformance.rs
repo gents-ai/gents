@@ -101,13 +101,7 @@ fn assert_observation(
 ) {
     let claim_held = crate::home::lock_store(home, data).is_err();
     let gate = mutation_write_gate(node);
-    let mutation_gate_held = match gate.lock.clone().try_lock_owned() {
-        Ok(guard) => {
-            drop(guard);
-            false
-        }
-        Err(_) => true,
-    };
+    let mutation_gate_held = gate.permits.available_permits() < super::MUTATION_WRITE_GATE_CAPACITY;
     assert_eq!(
         claim_held, expected.claim_held,
         "{} store-claim state",
@@ -209,15 +203,21 @@ async fn run_paused_owned_schema(
     access: ConfigAccess,
     reached: Arc<Notify>,
     release: Arc<Notify>,
+    completed: Arc<Notify>,
 ) -> anyhow::Result<()> {
-    super::ConfigApplyTxn::with_owned_local_operation_pause(reached, release, async move {
-        tokio::time::timeout(
-            Duration::from_millis(25),
-            access.add_schema("type NativeClaimLifetimeSchemaProbe { value: String }"),
-        )
-        .await
-        .map_err(anyhow::Error::from)?
-    })
+    super::ConfigApplyTxn::with_owned_local_operation_completion(
+        reached,
+        release,
+        completed,
+        async move {
+            tokio::time::timeout(
+                Duration::from_millis(25),
+                access.add_schema("type NativeClaimLifetimeSchemaProbe { value: String }"),
+            )
+            .await
+            .map_err(anyhow::Error::from)?
+        },
+    )
     .await
 }
 
@@ -369,11 +369,19 @@ async fn lean_claimed_schema_owner_retains_store_lock_after_caller_timeout() {
     let (node, access, _signer, _release_on_panic) = signed_claimed_access(&home, &data).await;
     let reached = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
+    let completed = Arc::new(Notify::new());
     let caller_access = access.clone();
     let reached_for_task = Arc::clone(&reached);
     let release_for_task = Arc::clone(&release);
+    let completed_for_task = Arc::clone(&completed);
     let caller = tokio::spawn(async move {
-        run_paused_owned_schema(caller_access, reached_for_task, release_for_task).await
+        run_paused_owned_schema(
+            caller_access,
+            reached_for_task,
+            release_for_task,
+            completed_for_task,
+        )
+        .await
     });
     tokio::time::timeout(Duration::from_secs(10), reached.notified())
         .await
@@ -416,6 +424,9 @@ async fn lean_claimed_schema_owner_retains_store_lock_after_caller_timeout() {
     );
 
     release.notify_one();
+    tokio::time::timeout(Duration::from_secs(10), completed.notified())
+        .await
+        .expect("owned native schema operation returns before querying its schema");
     let final_observation = model_observation(&case, "gate_release_requested", 1);
     assert!(!final_observation.claim_held);
     assert!(!final_observation.mutation_gate_held);

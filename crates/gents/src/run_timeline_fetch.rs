@@ -869,7 +869,7 @@ mod tests {
         let request_doc_id = created_doc_id(&response, "create_AgentRequest");
         let call = |call_id: &str, seq: i64, backend_id: &str, kind: &str, started_at: &str| {
             format!(
-                r#"create_InferenceCall(input: {{
+                r#"call_{seq}: create_InferenceCall(input: {{
                     call_id: "{call_id}" request_id: "request-accounts"
                     request_doc_id: "{request_doc_id}" call_seq: {seq}
                     backend_id: "{backend_id}" node_did: "{did}" call_kind: "{kind}"

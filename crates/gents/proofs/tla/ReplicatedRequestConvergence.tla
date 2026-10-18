@@ -45,7 +45,8 @@ VARIABLES
   emitCount,
   peerOnline,
   replayPending,
-  replayCount
+  replayCount,
+  acked
 
 vars == <<
   reqState,
@@ -57,7 +58,8 @@ vars == <<
   emitCount,
   peerOnline,
   replayPending,
-  replayCount
+  replayCount,
+  acked
 >>
 
 IsTerminal(s) == s \in TerminalKind
@@ -75,6 +77,7 @@ TypeOK ==
   /\ peerOnline      \in [ReplicaHolder -> BOOLEAN]
   /\ replayPending   \in [ReplicaHolder -> BOOLEAN]
   /\ replayCount     \in [ReplicaHolder -> 0..1]
+  /\ acked           \in [ReplicaHolder -> BOOLEAN]
 
 Init ==
   /\ reqState        = [n \in Node |-> "Pending"]
@@ -87,33 +90,38 @@ Init ==
   /\ peerOnline      \in [ReplicaHolder -> BOOLEAN]
   /\ replayPending   = [peer \in ReplicaHolder |-> FALSE]
   /\ replayCount     = [peer \in ReplicaHolder |-> 0]
+  /\ acked           = [peer \in ReplicaHolder |-> FALSE]
 
 Claim ==
   /\ reqState[Owner] = "Pending"
   /\ reqState' = [reqState EXCEPT ![Owner] = "Claimed"]
   /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount, emitCount,
-                  peerOnline, replayPending, replayCount>>
+                  peerOnline, replayPending, replayCount, acked>>
 
 Process ==
   /\ reqState[Owner] = "Claimed"
   /\ reqState' = [reqState EXCEPT ![Owner] = "Processing"]
   /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount, emitCount,
-                  peerOnline, replayPending, replayCount>>
+                  peerOnline, replayPending, replayCount, acked>>
 
 Terminalize(k) ==
   /\ k \in TerminalKind
   /\ reqState[Owner] = "Processing"
   /\ reqState' = [reqState EXCEPT ![Owner] = k]
   /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount, emitCount,
-                  peerOnline, replayPending, replayCount>>
+                  peerOnline, replayPending, replayCount, acked>>
 
 FreshDeltaIds(k) == Cardinality(DeltaId \ deltaIdsUsed) >= k
 
 OnlinePeers == {peer \in ReplicaHolder : peerOnline[peer]}
 
+\* DefraDB reports whether a replicator acknowledged the owner's current
+\* heads, so the owner re-drives only while some party peer has not. Each
+\* re-drive authors a new head that every peer must acknowledge again.
 EmitTerminalDelta ==
   /\ IsTerminal(reqState[Owner])
   /\ emitCount < Cap
+  /\ \E peer \in ReplicaHolder : ~acked[peer]
   /\ AllDeltas = {}
   /\ FreshDeltaIds(1)
   /\ LET id == CHOOSE i \in DeltaId \ deltaIdsUsed : TRUE
@@ -122,6 +130,7 @@ EmitTerminalDelta ==
      IN /\ messages' = messages \cup wave
         /\ deltaIdsUsed' = deltaIdsUsed \cup {id}
         /\ emitCount'    = emitCount + 1
+  /\ acked' = [peer \in ReplicaHolder |-> FALSE]
   /\ UNCHANGED <<reqState, pendingInbound, dropCount, crashCount,
                   peerOnline, replayPending, replayCount>>
 
@@ -131,7 +140,7 @@ DeliverDelta(d) ==
   /\ messages'       = messages \ {d}
   /\ pendingInbound' = pendingInbound \cup {d}
   /\ UNCHANGED <<reqState, deltaIdsUsed, dropCount, crashCount, emitCount,
-                  peerOnline, replayPending, replayCount>>
+                  peerOnline, replayPending, replayCount, acked>>
 
 DropDelta(d) ==
   /\ d \in messages
@@ -139,12 +148,13 @@ DropDelta(d) ==
   /\ messages'  = messages \ {d}
   /\ dropCount' = dropCount + 1
   /\ UNCHANGED <<reqState, pendingInbound, deltaIdsUsed, crashCount, emitCount,
-                  peerOnline, replayPending, replayCount>>
+                  peerOnline, replayPending, replayCount, acked>>
 
 PersistDeltaOnPeer(d) ==
   /\ d \in pendingInbound
   /\ pendingInbound' = pendingInbound \ {d}
   /\ reqState'       = [reqState EXCEPT ![d.target] = d.value]
+  /\ acked'          = [acked EXCEPT ![d.target] = TRUE]
   /\ UNCHANGED <<messages, deltaIdsUsed, dropCount, crashCount, emitCount,
                   peerOnline, replayPending, replayCount>>
 
@@ -155,19 +165,32 @@ RecoverPeer(peer) ==
   /\ peerOnline'    = [peerOnline EXCEPT ![peer] = TRUE]
   /\ replayPending' = [replayPending EXCEPT ![peer] = TRUE]
   /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount,
-                  crashCount, emitCount, replayCount>>
+                  crashCount, emitCount, replayCount, acked>>
 
 ReplayTerminalSnapshot(peer) ==
   /\ ReplayOnRecovery
   /\ peer \in ReplicaHolder
   /\ peerOnline[peer]
   /\ replayPending[peer]
+  /\ ~acked[peer]
   /\ IsTerminal(reqState[Owner])
   /\ reqState'      = [reqState EXCEPT ![peer] = reqState[Owner]]
   /\ replayPending' = [replayPending EXCEPT ![peer] = FALSE]
   /\ replayCount'   = [replayCount EXCEPT ![peer] = 1]
+  /\ acked'         = [acked EXCEPT ![peer] = TRUE]
   /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount,
                   emitCount, peerOnline>>
+
+\* A reinstall would discard DefraDB's retry markers and acknowledgement
+\* records while delivering nothing the peer lacks.
+SkipAcknowledgedReplay(peer) ==
+  /\ ReplayOnRecovery
+  /\ peer \in ReplicaHolder
+  /\ replayPending[peer]
+  /\ acked[peer]
+  /\ replayPending' = [replayPending EXCEPT ![peer] = FALSE]
+  /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount,
+                  crashCount, emitCount, peerOnline, replayCount, acked>>
 
 CrashPeer(peer) ==
   /\ peer \in ReplicaHolder
@@ -175,13 +198,13 @@ CrashPeer(peer) ==
   /\ pendingInbound' = {d \in pendingInbound : d.target # peer}
   /\ crashCount'     = crashCount + 1
   /\ UNCHANGED <<reqState, messages, deltaIdsUsed, dropCount, emitCount,
-                  peerOnline, replayPending, replayCount>>
+                  peerOnline, replayPending, replayCount, acked>>
 
 CrashOwner ==
   /\ crashCount < MaxCrashes
   /\ crashCount' = crashCount + 1
   /\ UNCHANGED <<reqState, messages, pendingInbound, deltaIdsUsed, dropCount, emitCount,
-                  peerOnline, replayPending, replayCount>>
+                  peerOnline, replayPending, replayCount, acked>>
 
 PeerClaimsForeign(peer) ==
   /\ AllowPeerClaim
@@ -189,7 +212,7 @@ PeerClaimsForeign(peer) ==
   /\ reqState[peer] = "Pending"
   /\ reqState' = [reqState EXCEPT ![peer] = "Claimed"]
   /\ UNCHANGED <<messages, pendingInbound, deltaIdsUsed, dropCount, crashCount, emitCount,
-                  peerOnline, replayPending, replayCount>>
+                  peerOnline, replayPending, replayCount, acked>>
 
 SingleClaimer ==
   \A n \in ReplicaHolder :
@@ -209,6 +232,11 @@ DeltaIdsTracked ==
 StateBound ==
   Cardinality(deltaIdsUsed) <= Cap
 
+AckedImpliesConverged ==
+  \A peer \in ReplicaHolder :
+    acked[peer] => /\ IsTerminal(reqState[Owner])
+                   /\ reqState[peer] = reqState[Owner]
+
 ReplayBound ==
   \A peer \in ReplicaHolder : replayCount[peer] <= 1
 
@@ -222,6 +250,7 @@ Next ==
   \/ \E d \in pendingInbound : PersistDeltaOnPeer(d)
   \/ \E peer \in ReplicaHolder : RecoverPeer(peer)
   \/ \E peer \in ReplicaHolder : ReplayTerminalSnapshot(peer)
+  \/ \E peer \in ReplicaHolder : SkipAcknowledgedReplay(peer)
   \/ \E peer \in ReplicaHolder : PeerClaimsForeign(peer)
   \/ \E peer \in ReplicaHolder : CrashPeer(peer)
   \/ CrashOwner
@@ -230,6 +259,7 @@ Fairness ==
   /\ WF_vars(EmitTerminalDelta)
   /\ \A peer \in ReplicaHolder : WF_vars(RecoverPeer(peer))
   /\ \A peer \in ReplicaHolder : WF_vars(ReplayTerminalSnapshot(peer))
+  /\ \A peer \in ReplicaHolder : WF_vars(SkipAcknowledgedReplay(peer))
   /\ WF_vars(\E d \in messages : DeliverDelta(d))
   /\ WF_vars(\E d \in pendingInbound : PersistDeltaOnPeer(d))
 

@@ -54,8 +54,6 @@ impl std::fmt::Display for OpenError {
 
 impl std::error::Error for OpenError {}
 
-/// Open `url` in the person's browser. `Ok` means an opener was started, not
-/// that a window appeared; the caller keeps offering the URL either way.
 pub fn open_url(url: &str) -> Result<(), OpenError> {
     // macOS and Windows use their launch service in-process, so no package
     // environment reaches a child.

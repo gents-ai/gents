@@ -1,5 +1,3 @@
-//! The baseline subject pack and the candidate packs derived from it.
-//!
 //! Both packs are ordinary directory packs loaded and digested by the runner's
 //! own pack loader, so the digest the optimizer records is the digest the
 //! runner freezes.
@@ -29,19 +27,13 @@ pub struct MaterializedPack {
     pub digest: String,
     pub config: PackConfig,
     pub manifest: PackManifest,
-    /// Every declared asset, keyed by its path relative to `dir`.
     pub files: BTreeMap<String, Vec<u8>>,
     pub agent_id: String,
     pub target: TargetField,
-    /// The context the subject agent names, or the task being optimized.
     pub target_id: String,
-    /// The declared asset the target document reads its text from, when the
-    /// pack stores it as a sidecar rather than inline.
     pub prompt_asset: Option<String>,
 }
 
-/// Read the pack at `dir` as the subject of `agent_id`, optimizing the
-/// agent's context or, for a task target, that task.
 pub fn materialize_pack(
     dir: &Path,
     owner: &str,
@@ -146,7 +138,6 @@ pub(crate) fn task_seed_routes<'a>(
         })
 }
 
-/// The raw target field of `target_id`'s document in `pack_config.json`.
 fn raw_target<'a>(
     raw: &'a mut Value,
     target: TargetField,
@@ -238,10 +229,6 @@ pub fn baseline_text(pack: &MaterializedPack) -> Result<String> {
 
 /// Write the baseline's declared assets into `dir` with the target's text
 /// replaced by `text`, and read the result back as a pack.
-///
-/// A sidecar asset holds `text` byte for byte, since sidecars are never
-/// interpolated. An inline prompt is written in its escaped form
-/// ([`interpolate::escape`]) so that the loader reads back exactly `text`.
 ///
 /// `dir` is created; an existing one is refused rather than written over, so a
 /// round can never evaluate a directory another round left behind.
