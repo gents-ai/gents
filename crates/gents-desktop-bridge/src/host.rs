@@ -111,6 +111,17 @@ impl ClientHost {
             }
             ClientCommand::InferenceSetupState { node_did } => {
                 self.require_configured_runtime(&node_did).await?;
+                if matches!(
+                    self.core.options().operator_identity_interaction,
+                    gents_desktop_core::local_runtime::OperatorIdentityInteraction::Prevent
+                ) {
+                    return encode(
+                        self.core
+                            .read_inference_setup_state(&node_did)
+                            .await
+                            .map_err(backend_error)?,
+                    );
+                }
                 self.core
                     .operator_access(&node_did)
                     .map_err(backend_error)?;
@@ -182,7 +193,7 @@ impl ClientHost {
                 self.require_configured_runtime(&request.node_did).await?;
                 let access = self
                     .core
-                    .operator_graphql(&request.node_did)
+                    .operator_observation_graphql(&request.node_did)
                     .map(gents::ConfigAccess::Graphql)
                     .ok_or_else(|| {
                         anyhow::anyhow!("Connect this local runtime before managing its accounts.")

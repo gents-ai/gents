@@ -62,6 +62,7 @@ pub fn spawn_observer_with_selection(
     requester_did: String,
     subscription: DocumentChangeSubscription,
     selected_node_did_rx: watch::Receiver<Option<String>>,
+    identity_interaction: crate::local_runtime::OperatorIdentityInteraction,
 ) -> ObserverHandle {
     let (stop_tx, mut stop_rx) = watch::channel(false);
     let metrics = Arc::new(ObserverMetrics::default());
@@ -177,6 +178,7 @@ pub fn spawn_observer_with_selection(
                                 did,
                                 &peers,
                                 &requester_did,
+                                identity_interaction,
                             )
                             .await
                         }
@@ -185,6 +187,7 @@ pub fn spawn_observer_with_selection(
                                 node.as_ref(),
                                 &peers,
                                 &requester_did,
+                                identity_interaction,
                             )
                             .await
                         }

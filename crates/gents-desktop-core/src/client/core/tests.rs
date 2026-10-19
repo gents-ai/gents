@@ -491,6 +491,7 @@ async fn restart_clears_and_defers_persisted_enrollment_until_current_authority(
         core.node_arc(),
         Arc::clone(&p2p),
         Arc::new(core.node_identity().clone()),
+        core.options().operator_identity_interaction,
     ));
     let options = ClientCoreOptions {
         install_replicators_on_bootstrap: true,

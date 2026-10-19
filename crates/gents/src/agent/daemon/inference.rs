@@ -2035,6 +2035,7 @@ pub(super) mod tests {
                 member_peer: "peer-member".into(),
                 member_ticket: "ticket-member".into(),
                 owner_node: agent_config.node_did().to_string(),
+                profile: crate::agent::p2p_reconcile::templates::CLIENT_TEMPLATE.into(),
                 request_digest: format!("digest-{sequence}"),
                 authorization_sequence: sequence,
                 authorization_expires_at: "2099-01-01T00:00:00Z".into(),

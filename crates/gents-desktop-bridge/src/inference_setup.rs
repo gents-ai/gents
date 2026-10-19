@@ -10,30 +10,12 @@ use crate::error::{BridgeError, BridgeErrorCode};
 
 const LOG_TARGET: &str = "gents_desktop_bridge::inference_setup";
 
-#[derive(Debug, Clone, Serialize, ts_rs::TS)]
-#[serde(rename_all = "camelCase")]
-pub struct InferenceSetupState {
-    pub node_did: String,
-    pub node: crate::types::NodeView,
-    pub agents: Vec<crate::types::AgentView>,
-    pub agent_configs: Vec<crate::types::Agent>,
-    pub inference_backends: Vec<crate::types::InferenceBackendView>,
-    pub inference_profiles: Vec<crate::types::InferenceProfile>,
-    pub fast_mode_backend_ids: Vec<String>,
-}
+pub use gents_desktop_core::inference::InferenceSetupState;
 
 impl From<crate::types::DeploymentView> for InferenceSetupState {
     fn from(node: crate::types::DeploymentView) -> Self {
-        let fast_mode_backend_ids = node
-            .inference_backends
-            .iter()
-            .filter_map(|backend| {
-                let kind =
-                    gents::BackendProviderKind::parse_optional(backend.provider_kind.as_deref())
-                        .ok()?;
-                gents::config::supports_service_tier(kind).then(|| backend.backend_id.clone())
-            })
-            .collect();
+        let fast_mode_backend_ids =
+            gents_desktop_core::inference::fast_mode_backend_ids(&node.inference_backends);
         Self {
             fast_mode_backend_ids,
             node_did: node.node_did,

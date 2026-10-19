@@ -3430,6 +3430,7 @@ mod tests {
             core.node_arc(),
             Arc::clone(&p2p),
             Arc::clone(&principal),
+            core.options().operator_identity_interaction,
         ));
         let reconcile = || async {
             reconcile_status_enrollment_approvals(
@@ -3930,6 +3931,7 @@ mod tests {
             core.node_arc(),
             Arc::clone(&p2p),
             Arc::clone(&principal),
+            core.options().operator_identity_interaction,
         ));
         let reconcile = || async {
             reconcile_status_enrollment_approvals(
@@ -4007,6 +4009,7 @@ mod tests {
             core.node_arc(),
             Arc::clone(&p2p),
             Arc::clone(&principal),
+            core.options().operator_identity_interaction,
         ));
         let reconcile = || async {
             reconcile_status_enrollment_approvals(

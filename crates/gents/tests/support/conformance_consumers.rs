@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "agent::p2p_reconcile::enrollment_reconcile::tests::generated_client_observation_admission_matches_lean",
+            package: "gents",
+            source_path: "crates/gents/src/agent/p2p_reconcile/enrollment_reconcile.rs",
+            module_path: "agent::p2p_reconcile::enrollment_reconcile::tests",
+            function: "generated_client_observation_admission_matches_lean",
+        },
+        ConformanceConsumer::RustTest {
             id: "toolset::title_audit_usage::tests::generated_budget_recovery_cases_bind_signed_catalog_usage",
             package: "gents",
             source_path: "crates/gents/src/toolset/title_audit_usage.rs",

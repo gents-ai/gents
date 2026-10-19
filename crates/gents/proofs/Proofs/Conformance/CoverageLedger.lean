@@ -747,6 +747,11 @@ def caseCoverage : List CoverageEntry :=
       "client::core::enrollment::tests::generated_pending_request_satisfaction_matches_lean")
       "authenticated-enrollment" [Surface.operatorUi]
   , tagged (consumerCoverage
+      "client_observation_admission_cases"
+      "ClientObservationAdmission"
+      "agent::p2p_reconcile::enrollment_reconcile::tests::generated_client_observation_admission_matches_lean")
+      "authenticated-enrollment" [Surface.runtimeInternal, Surface.operatorUi]
+  , tagged (consumerCoverage
       "pending_user_turn_cases"
       "PendingUserTurnCases"
       "conformance::live_overlay::pending_user_turn_cases_match_lean_table")

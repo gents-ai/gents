@@ -85,7 +85,7 @@ pub async fn session_snapshot(
         .and_then(|node_did| core.transcript_node_scope(node_did));
     let operator_access = node_did
         .as_deref()
-        .and_then(|node_did| core.operator_graphql(node_did))
+        .and_then(|node_did| core.operator_observation_graphql(node_did))
         .map(gents::config_client::ConfigAccess::Graphql);
     let requester_scope = {
         let store = core.store().snapshot();

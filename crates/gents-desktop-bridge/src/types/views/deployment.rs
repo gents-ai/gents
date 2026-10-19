@@ -1,3 +1,5 @@
+pub use gents_desktop_core::inference::{AgentView, InferenceBackendView, NodeView};
+
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -133,32 +135,6 @@ impl Default for NodeReadinessView {
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct NodeView {
-    pub node_did: String,
-    pub display_name: Option<String>,
-    pub default_agent_id: Option<String>,
-    pub enabled: Option<bool>,
-    pub created_at: Option<String>,
-    pub created_by: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentView {
-    pub agent_id: String,
-    pub node_did: String,
-    pub display_name: String,
-    pub description: Option<String>,
-    pub context_id: Option<String>,
-    pub inference_profile_id: Option<String>,
-    pub enabled: bool,
-    pub is_default: bool,
-    pub tags: Vec<String>,
-    pub created_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
 pub struct AgentEnvironmentView {
     pub agent_id: String,
     pub display_name: String,
@@ -173,30 +149,6 @@ pub struct AgentEnvironmentView {
     pub skill_names: Vec<String>,
     pub session_count: usize,
     pub active_session_count: usize,
-}
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct InferenceBackendView {
-    pub backend_id: String,
-    pub name: Option<String>,
-    pub provider_kind: Option<String>,
-    pub openai_wire_api: Option<String>,
-    pub endpoint: Option<String>,
-    pub auth_kind: Option<String>,
-    pub connect_timeout_secs: Option<i64>,
-    pub discovery_timeout_secs: Option<i64>,
-    pub api_key_configured: bool,
-    pub api_key_env_var: Option<String>,
-    pub max_concurrent: Option<i64>,
-    pub max_queue_depth: Option<i64>,
-    pub enabled: Option<bool>,
-    pub tags: Vec<String>,
-    pub models: Vec<String>,
-    pub advertised_models: Vec<gents::document_config::AdvertisedModel>,
-    pub probe_status: Option<String>,
-    /// The account a subscription backend runs on; `None` is the original.
-    pub account_ref: Option<String>,
 }
 
 pub use gents::document_config::{
