@@ -331,6 +331,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         crate::tauri_commands::e2e::NativeE2eStatus,
         crate::tauri_commands::packs::PackInstallRequest,
         crate::tauri_commands::packs::PluginBindRequest,
+        crate::tauri_commands::packs::PackWireRequest,
         gents_server::packs::EditedDocuments,
         RequestTimelineView,
         ToolSurfaceExplanationView,

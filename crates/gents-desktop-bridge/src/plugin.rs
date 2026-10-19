@@ -99,6 +99,8 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::packs::desktop_pack_logout,
             tauri_commands::packs::desktop_pack_plugin_slots,
             tauri_commands::packs::desktop_pack_plugin_bind,
+            tauri_commands::packs::desktop_pack_wire,
+            tauri_commands::packs::desktop_pack_wire_sources,
             tauri_commands::allowed_dirs::desktop_allowed_dirs_list,
             tauri_commands::allowed_dirs::desktop_allowed_dirs_add,
             tauri_commands::allowed_dirs::desktop_allowed_dirs_remove,

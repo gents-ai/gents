@@ -86,6 +86,8 @@ export function createBridgeHttpAdapter(
     updatePack: unsupported("updatePack"),
     removePack: unsupported("removePack"),
     bindPackPlugin: unsupported("bindPackPlugin"),
+    wirePack: unsupported("wirePack"),
+    listPackWireSources: unsupported("listPackWireSources"),
     signInToPackRegistry: unsupported("signInToPackRegistry"),
     signOutOfPackRegistry: unsupported("signOutOfPackRegistry"),
     listAllowedFolders: unsupported("listAllowedFolders"),

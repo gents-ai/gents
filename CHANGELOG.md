@@ -6,6 +6,12 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- `gents pack wire` (with `--targets-from` and `--remove`), `gents pack install
+  --wire <agent>` and the desktop's Enable for agent action add a job plugin
+  to an agent's Tools with a reviewed job block, without turning on direct
+  `agent_new`; `pack install --expect-digest sha256:<hex>` refuses a pack whose
+  content differs; `gents diagnose` reports `plugin_jobs` checks; `gents init`
+  names the workflows install, and `gents init --workflows` performs it.
 - The desktop shows a plugin job's progress on its tool row (state, phases,
   agents and budget, the outcome or pause reason with the next step), with
   Stop and Pause buttons and an Answer button that prefills the composer; the

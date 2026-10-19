@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-pack-wire-sources"
+description = "Enables the desktop_pack_wire_sources command without any pre-configured scope."
+commands.allow = ["desktop_pack_wire_sources"]
+
+[[permission]]
+identifier = "deny-desktop-pack-wire-sources"
+description = "Denies the desktop_pack_wire_sources command without any pre-configured scope."
+commands.deny = ["desktop_pack_wire_sources"]

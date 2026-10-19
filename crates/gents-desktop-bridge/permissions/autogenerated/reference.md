@@ -1792,6 +1792,58 @@ Denies the desktop_pack_whoami command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-pack-wire`
+
+</td>
+<td>
+
+Enables the desktop_pack_wire command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-pack-wire`
+
+</td>
+<td>
+
+Denies the desktop_pack_wire command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-pack-wire-sources`
+
+</td>
+<td>
+
+Enables the desktop_pack_wire_sources command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-pack-wire-sources`
+
+</td>
+<td>
+
+Denies the desktop_pack_wire_sources command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-peer-enroll-status`
 
 </td>
@@ -3162,7 +3214,7 @@ Open a web link in the person's own browser
 </td>
 <td>
 
-Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model
+Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model or be wired
 
 </td>
 </tr>
@@ -3175,7 +3227,7 @@ Installed packs, registry search and package pages, the signed-in account, and w
 </td>
 <td>
 
-Install, update and remove packs, bind a plugin to an inference profile, and sign in to the registry
+Install, update and remove packs, wire a plugin to an agent, bind a plugin to an inference profile, and sign in to the registry
 
 </td>
 </tr>

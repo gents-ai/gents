@@ -636,6 +636,9 @@ pub(crate) enum PackCommand {
     Graph(PackGraphArgs),
     /// Install a pack into an initialized node; never seed or prune.
     Install(PackInstallArgs),
+    /// Wire an installed plugin into an agent's Tools and Context, or with
+    /// `--remove` take it back out.
+    Wire(PackWireArgs),
     /// Remove an installed pack of any kind, and whatever nothing else still uses.
     Remove(PackRemoveArgs),
     /// List installed packs with a newer version in the registry.
@@ -926,6 +929,30 @@ pub(crate) struct PackPruneArgs {
 }
 
 #[derive(clap::Args)]
+pub(crate) struct PackWireArgs {
+    #[arg(help = "An installed plugin, as <namespace>/<name>")]
+    pub(crate) plugin: String,
+    #[arg(long, help = "Agent whose Tools and Context to change")]
+    pub(crate) agent: String,
+    #[arg(
+        long = "targets-from",
+        value_name = "PACK",
+        action = clap::ArgAction::Append,
+        help = "Wire an installed pack's AgentTargets into the job block and trust the pack; repeat for each pack"
+    )]
+    pub(crate) targets_from: Vec<String>,
+    #[arg(
+        long,
+        help = "Take the wiring back out, leaving what other plugins still use"
+    )]
+    pub(crate) remove: bool,
+    #[arg(long, help = "Report what wiring would write, writing nothing")]
+    pub(crate) preview: bool,
+    #[command(flatten)]
+    pub(crate) scope: ScopeArgs,
+}
+
+#[derive(clap::Args)]
 pub(crate) struct PackInstallArgs {
     #[arg(help = "A local path/sha256:<hex>, an installed coordinate, or a registry name")]
     pub(crate) package: String,
@@ -970,6 +997,19 @@ pub(crate) struct PackInstallArgs {
         help = "Allow the files, network or environment the pack's plugins ask for"
     )]
     pub(crate) grant_authority: bool,
+    #[arg(
+        long,
+        value_name = "AGENT",
+        action = clap::ArgAction::Append,
+        help = "After the install, wire the pack's plugins into this agent's Tools and Context; repeat for each agent"
+    )]
+    pub(crate) wire: Vec<String>,
+    #[arg(
+        long = "expect-digest",
+        value_name = "sha256:HEX",
+        help = "Refuse the install, writing nothing, unless the pack's content digest is this one (see gents pack show)"
+    )]
+    pub(crate) expect_digest: Option<String>,
     /// Whether this install was requested for its own sake, rather than only
     /// as a documents pack's dependency; never a CLI flag.
     #[arg(skip = true)]
@@ -1757,6 +1797,13 @@ pub(crate) struct InitArgs {
         help = "Restrict the defra_query tool to these collections when a package enables it (repeatable); omit for all collections"
     )]
     pub(crate) defra_query_collections: Vec<String>,
+    #[arg(
+        long,
+        default_value_t = false,
+        conflicts_with = "identity_only",
+        help = "After init, install gents/rhai_workflows as an operator install and wire it into the default agent (grants the engine pack's declared authority)"
+    )]
+    pub(crate) workflows: bool,
 }
 
 impl InitArgs {

@@ -89,6 +89,9 @@ import type {
   PackInstallRequest,
   PackPluginSlot,
   PackSlotProfile,
+  PackWireRequest,
+  PackWireResult,
+  PackWireSources,
 } from "../types/packs.js";
 import type {
   AllowedFolderAccess,
@@ -371,6 +374,8 @@ export type DesktopApiAdapter = {
   updatePack: (pack: string, edited: PackEditedChoice) => Promise<void>;
   removePack: (pack: string) => Promise<void>;
   bindPackPlugin: (plugin: string, profile: string | null) => Promise<void>;
+  wirePack: (request: PackWireRequest) => Promise<PackWireResult>;
+  listPackWireSources: () => Promise<PackWireSources>;
   signInToPackRegistry: (token: string) => Promise<void>;
   signOutOfPackRegistry: () => Promise<void>;
   listAllowedFolders: () => Promise<AllowedFolders>;
@@ -399,6 +404,8 @@ export type PackCommand =
   | "updatePack"
   | "removePack"
   | "bindPackPlugin"
+  | "wirePack"
+  | "listPackWireSources"
   | "signInToPackRegistry"
   | "signOutOfPackRegistry";
 

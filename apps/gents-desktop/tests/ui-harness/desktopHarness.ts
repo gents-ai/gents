@@ -905,6 +905,18 @@ export function createDesktopUiHarness(
     async updatePack() {},
     async removePack() {},
     async bindPackPlugin() {},
+    async wirePack(request) {
+      return {
+        plugin: request.plugin,
+        agent: request.agent,
+        preview: request.preview,
+        authority: null,
+        report: { changed: [], job: null, warnings: [], next_call: null },
+      };
+    },
+    async listPackWireSources() {
+      return { plugins: [], target_packs: [] };
+    },
     async signInToPackRegistry() {},
     async signOutOfPackRegistry() {},
     async listAllowedFolders() {

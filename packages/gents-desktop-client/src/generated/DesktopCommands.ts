@@ -77,6 +77,7 @@ import type { PackPluginSlotsView } from "./PackPluginSlotsView.js";
 import type { PackRemoveView } from "./PackRemoveView.js";
 import type { PackSearchView } from "./PackSearchView.js";
 import type { PackUpdateView } from "./PackUpdateView.js";
+import type { PackWireRequest } from "./PackWireRequest.js";
 import type { PeerRemoveResponse } from "./PeerRemoveResponse.js";
 import type { PeerStatusFetchRequest } from "./PeerStatusFetchRequest.js";
 import type { PendingMessageSteerRequest } from "./PendingMessageSteerRequest.js";
@@ -188,6 +189,8 @@ export type DesktopCommands = {
   desktop_pack_search: { args: { query: string; page?: number | null; registry?: string | null }; result: PackSearchView };
   desktop_pack_update: { args: { package?: string | null; registry?: string | null; edited?: EditedDocuments | null }; result: PackUpdateView };
   desktop_pack_whoami: { args: { registry?: string | null }; result: PackAccountView };
+  desktop_pack_wire: { args: { request: PackWireRequest }; result: JsonValue };
+  desktop_pack_wire_sources: { args: Record<string, never>; result: JsonValue };
   desktop_peer_enroll_status: { args: { request: EnrollmentStatusRequest }; result: EnrollmentRequestView };
   desktop_peer_remove: { args: { peerId: string }; result: PeerRemoveResponse };
   desktop_peer_rename: { args: { peerId: string; label: string }; result: DesktopClientSnapshot };

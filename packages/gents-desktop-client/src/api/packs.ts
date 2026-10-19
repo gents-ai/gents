@@ -1,4 +1,10 @@
-import type { PackEditedChoice, PackInstallRequest } from "../types/packs.js";
+import type {
+  PackEditedChoice,
+  PackInstallRequest,
+  PackWireRequest,
+  PackWireResult,
+  PackWireSources,
+} from "../types/packs.js";
 import type { createDesktopInvoker } from "./invoke.js";
 import type { DesktopApiAdapter, PackCommand } from "./types.js";
 
@@ -25,6 +31,14 @@ export function createPackCommands(
       invokeDesktop("desktop_pack_plugin_bind", {
         request: { plugin, profile },
       }).then(() => undefined),
+    wirePack: (request: PackWireRequest) =>
+      invokeDesktop("desktop_pack_wire", { request }).then(
+        (report) => report as PackWireResult,
+      ),
+    listPackWireSources: () =>
+      invokeDesktop("desktop_pack_wire_sources").then(
+        (report) => report as PackWireSources,
+      ),
     signInToPackRegistry: (token: string) =>
       invokeDesktop("desktop_pack_login", { token }).then(() => undefined),
     signOutOfPackRegistry: () =>

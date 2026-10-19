@@ -28,6 +28,8 @@ const COMMANDS: &[&str] = &[
     "desktop_pack_logout",
     "desktop_pack_plugin_slots",
     "desktop_pack_plugin_bind",
+    "desktop_pack_wire",
+    "desktop_pack_wire_sources",
     "desktop_allowed_dirs_list",
     "desktop_allowed_dirs_add",
     "desktop_allowed_dirs_remove",

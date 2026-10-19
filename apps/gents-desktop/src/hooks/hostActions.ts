@@ -3,6 +3,7 @@ import type {
   DesktopApiAdapter,
   PackEditedChoice,
   PackInstallRequest,
+  PackWireRequest,
   PluginApprovalDecision,
 } from "@source-inc/gents-desktop-client";
 
@@ -21,6 +22,8 @@ export function createHostActions({ api }: { api: DesktopApiAdapter }) {
     removePack: (pack: string) => api.removePack(pack),
     bindPackPlugin: (plugin: string, profile: string | null) =>
       api.bindPackPlugin(plugin, profile),
+    wirePack: (request: PackWireRequest) => api.wirePack(request),
+    listPackWireSources: () => api.listPackWireSources(),
     signInToPackRegistry: (token: string) => api.signInToPackRegistry(token),
     signOutOfPackRegistry: () => api.signOutOfPackRegistry(),
     listAllowedFolders: () => api.listAllowedFolders(),

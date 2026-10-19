@@ -358,3 +358,609 @@ fn a_documents_dependency_plugin_is_released_with_its_dependent() -> Result<()> 
     );
     Ok(())
 }
+
+const FOREIGN_NODE: &str = "did:key:zWireFixtureForeign";
+
+/// An initialized offline home with the job plugin's pack and a content pack
+/// (one AgentTarget, no plugin) installed, and the agent `init` created.
+struct WireFixture {
+    tempdir: tempfile::TempDir,
+    home: std::path::PathBuf,
+    agent: String,
+}
+
+fn wire_target(id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "target_id": id,
+        "target_node_did": FOREIGN_NODE,
+        "agent_id": id,
+        "name": id,
+    })
+}
+
+fn edit_pack_config(
+    dir: &std::path::Path,
+    edit: impl FnOnce(&mut serde_json::Value),
+) -> Result<()> {
+    let path = dir.join("pack_config.json");
+    let mut config: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+    edit(&mut config);
+    write_json_file(&path, &config)
+}
+
+/// `reviewed_job` false ships the job pack's Tools entry without a `job` key.
+fn wire_fixture(reviewed_job: bool) -> Result<WireFixture> {
+    wire_fixture_with(reviewed_job, &[])
+}
+
+/// `wire_fixture` with `init_extra` appended to the `gents init` arguments.
+fn wire_fixture_with(reviewed_job: bool, init_extra: &[&str]) -> Result<WireFixture> {
+    let tempdir = tempfile::tempdir().context("creating wire tempdir")?;
+    let scratch = tempdir.path();
+    let home = scratch.join("agent-home");
+    let home_arg = dir_arg(&home);
+    let mut init_args = vec!["--node-name", "pack-wire", "--home", home_arg];
+    init_args.extend_from_slice(init_extra);
+    let initialized = run_init_json(scratch, &init_args)?;
+    let owner_did = node_did_from_init(&initialized)?;
+    let agent = initialized["default_agent_id"]
+        .as_str()
+        .context("init output missing default_agent_id")?
+        .to_owned();
+
+    let job_pack = scratch.join("job_plugin_fixture");
+    copy_dir_all(&fixture_pack_dir("job_plugin_fixture"), &job_pack)?;
+    let mut plugin_entry = serde_json::json!({"plugin": "fixture/job_fixture"});
+    if reviewed_job {
+        plugin_entry["job"] =
+            serde_json::json!({"agent_targets": ["wf-fixture"], "policy": {"dynamic": "off"}});
+    }
+    edit_pack_config(&job_pack, |config| {
+        *config = serde_json::json!({
+            "node": {},
+            "agent_targets": [wire_target("wf-fixture")],
+            "tools": [{
+                "tools_id": "job-fixture-caller",
+                "display_name": "Job fixture caller",
+                "integrations": {"plugins": [plugin_entry]},
+            }],
+        });
+    })?;
+
+    let content_pack = scratch.join("dependee_fixture");
+    copy_dir_all(&fixture_pack_dir("dependee_fixture"), &content_pack)?;
+    edit_pack_config(&content_pack, |config| {
+        config["agent_targets"] = serde_json::json!([wire_target("wf-content")]);
+    })?;
+
+    run_cli_text(scratch, &["pack", "build", dir_arg(&job_pack)])?;
+    for (pack, slots) in [
+        (&job_pack, Vec::new()),
+        (
+            &content_pack,
+            vec![
+                "--inference-slot".to_owned(),
+                format!("worker={owner_did}:default-profile"),
+            ],
+        ),
+    ] {
+        let mut args = vec![
+            "pack",
+            "install",
+            dir_arg(pack),
+            "--home",
+            home_arg,
+            "--registry",
+            UNROUTABLE_REGISTRY,
+        ];
+        args.extend(slots.iter().map(String::as_str));
+        run_cli_json(scratch, &args)?;
+    }
+    Ok(WireFixture {
+        tempdir,
+        home,
+        agent,
+    })
+}
+
+impl WireFixture {
+    fn wire(&self, extra: &[&str]) -> Result<serde_json::Value> {
+        let mut args = vec![
+            "pack",
+            "wire",
+            "fixture/job_fixture",
+            "--agent",
+            &self.agent,
+            "--home",
+            dir_arg(&self.home),
+        ];
+        args.extend_from_slice(extra);
+        run_cli_json(self.tempdir.path(), &args)
+    }
+
+    fn tools(&self, tools_id: &str) -> Result<serde_json::Value> {
+        run_cli_json(
+            self.tempdir.path(),
+            &[
+                "config",
+                "tools",
+                "show",
+                tools_id,
+                "--home",
+                dir_arg(&self.home),
+            ],
+        )
+    }
+
+    fn agent_tools(&self) -> Result<serde_json::Value> {
+        self.tools(&format!("{}-tools", self.agent))
+    }
+}
+
+fn wired_plugin(tools: &serde_json::Value) -> Option<&serde_json::Value> {
+    tools["integrations"]["plugins"]
+        .as_array()?
+        .iter()
+        .find(|entry| entry["plugin"] == "fixture/job_fixture")
+}
+
+fn plugin_coordinates(tools: &serde_json::Value) -> std::collections::BTreeSet<String> {
+    tools["integrations"]["plugins"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry["plugin"].as_str().map(str::to_owned))
+        .collect()
+}
+
+fn target_ids(tools: &serde_json::Value) -> std::collections::BTreeSet<String> {
+    tools["agents"]["target_ids"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|id| id.as_str().map(str::to_owned))
+        .collect()
+}
+
+#[test]
+fn pack_wire_writes_tools_and_context_in_one_transaction() -> Result<()> {
+    let fixture = wire_fixture(true)?;
+    fixture.wire(&[])?;
+    let plugin = gents::plugin::store::read_record(&fixture.home, "fixture", "job_fixture")?;
+    let tools = fixture.agent_tools()?;
+    let entry = wired_plugin(&tools).context("the agent's Tools does not list the plugin")?;
+    anyhow::ensure!(
+        entry["digest"] == plugin.digest.as_str(),
+        "the plugin is not pinned to the installed digest: {entry}"
+    );
+    Ok(())
+}
+
+#[test]
+fn pack_wire_uses_the_packs_reviewed_block() -> Result<()> {
+    let fixture = wire_fixture(true)?;
+    let reviewed = wired_plugin(&fixture.tools("job-fixture-caller")?)
+        .context("the job pack's Tools does not list the plugin")?["job"]
+        .clone();
+    let printed = fixture.wire(&[])?;
+    let tools = fixture.agent_tools()?;
+    let written = &wired_plugin(&tools).context("plugin not wired")?["job"];
+    anyhow::ensure!(
+        *written == reviewed && printed["report"]["job"] == reviewed,
+        "the written block {written} or the report {} differs from the reviewed {reviewed}",
+        printed["report"]["job"]
+    );
+    Ok(())
+}
+
+#[test]
+fn pack_wire_targets_from_adds_targets_and_trust() -> Result<()> {
+    let fixture = wire_fixture(true)?;
+    fixture.wire(&["--targets-from", "fixture/dependee_fixture"])?;
+    let tools = fixture.agent_tools()?;
+    let job = &wired_plugin(&tools).context("plugin not wired")?["job"];
+    anyhow::ensure!(
+        job["agent_targets"]
+            .as_array()
+            .is_some_and(|targets| targets.iter().any(|id| id == "wf-content"))
+            && target_ids(&tools).contains("wf-content")
+            && job["policy"]["trusted_packs"]
+                .as_array()
+                .is_some_and(|packs| packs.iter().any(|pack| pack == "fixture/dependee_fixture")),
+        "the content pack's target and trust were not wired: {tools}"
+    );
+    Ok(())
+}
+
+#[test]
+fn pack_wire_without_targets_writes_no_job_block() -> Result<()> {
+    let fixture = wire_fixture(false)?;
+    let printed = fixture.wire(&[])?;
+    let tools = fixture.agent_tools()?;
+    anyhow::ensure!(
+        wired_plugin(&tools).is_some_and(|entry| entry.get("job").is_none()),
+        "a job block was written without targets: {tools}"
+    );
+    anyhow::ensure!(
+        printed["report"]["next_call"]
+            .as_str()
+            .is_some_and(|call| call.contains("--targets-from <pack>")),
+        "the report does not name --targets-from: {printed}"
+    );
+    Ok(())
+}
+
+/// `checks.plugin_jobs` is reported, and its failure alone degrades `status`.
+#[test]
+fn diagnose_status_degrades_on_a_plugin_jobs_failure() -> Result<()> {
+    // A reachable backend keeps every other check green, so only plugin_jobs can degrade status.
+    let model_name = "mock-plugin-jobs-model";
+    let endpoint = MockModelEndpoint::start(model_name)?;
+    let fixture = wire_fixture_with(
+        false,
+        &[
+            "--model-name",
+            model_name,
+            "--inference-url",
+            endpoint.endpoint(),
+        ],
+    )?;
+    let diagnose = || {
+        run_cli_json(
+            fixture.tempdir.path(),
+            &["diagnose", "--home", dir_arg(&fixture.home)],
+        )
+    };
+    let before = diagnose()?;
+    anyhow::ensure!(
+        before["checks"]["plugin_jobs"]["ok"] == true && before["status"] == "ok",
+        "an unwired home is not healthy: {before}"
+    );
+    fixture.wire(&[])?;
+    let after = diagnose()?;
+    anyhow::ensure!(
+        after["checks"]["plugin_jobs"]["ok"] == false && after["status"] == "degraded",
+        "a plugin_jobs failure did not degrade status: {after}"
+    );
+    anyhow::ensure!(
+        after["checks"]["plugin_jobs"]["agents"][0]["checks"][0]["check"] == "job_block_missing",
+        "unexpected plugin_jobs row: {after}"
+    );
+    Ok(())
+}
+
+#[test]
+fn pack_wire_preview_writes_nothing() -> Result<()> {
+    let fixture = wire_fixture(true)?;
+    let before = fixture.agent_tools()?;
+    let previewed = fixture.wire(&["--preview"])?;
+    anyhow::ensure!(
+        fixture.agent_tools()? == before,
+        "a preview changed the agent's Tools"
+    );
+    let wired = fixture.wire(&[])?;
+    anyhow::ensure!(
+        previewed["preview"] == true && wired["preview"] == false,
+        "the preview flag is not reported: {previewed} {wired}"
+    );
+    anyhow::ensure!(
+        previewed["report"] == wired["report"],
+        "the preview report differs from the written one: {previewed} {wired}"
+    );
+    Ok(())
+}
+
+#[test]
+fn pack_wire_remove_reverses_only_unreferenced() -> Result<()> {
+    let fixture = wire_fixture(true)?;
+    let before = fixture.agent_tools()?;
+    fixture.wire(&["--targets-from", "fixture/dependee_fixture"])?;
+    let wired = fixture.agent_tools()?;
+    anyhow::ensure!(
+        wired_plugin(&wired).is_some(),
+        "the wire did not list the plugin: {wired}"
+    );
+    fixture.wire(&["--remove"])?;
+    let after = fixture.agent_tools()?;
+    anyhow::ensure!(
+        wired_plugin(&after).is_none()
+            && plugin_coordinates(&after) == plugin_coordinates(&before)
+            && target_ids(&after) == target_ids(&before),
+        "removing did not restore the plugin list and target ids: {after}"
+    );
+    Ok(())
+}
+
+#[test]
+fn pack_wire_refuses_an_agent_without_a_tools_document() -> Result<()> {
+    let fixture = wire_fixture(true)?;
+    let root = fixture.tempdir.path().join("config");
+    let (root_arg, home_arg) = (dir_arg(&root), dir_arg(&fixture.home));
+    run_cli_text(
+        fixture.tempdir.path(),
+        &["config", "export", "--root", root_arg, "--home", home_arg],
+    )?;
+    let path = root.join("pack_config.json");
+    let mut config = read_json_file(&path)?;
+    let context_id = format!("{}-context", fixture.agent);
+    let context = config["contexts"]
+        .as_array_mut()
+        .and_then(|contexts| {
+            contexts
+                .iter_mut()
+                .find(|c| c["context_id"] == context_id.as_str())
+        })
+        .context("the agent's Context is not in the export")?;
+    context
+        .as_object_mut()
+        .context("Context is not an object")?
+        .remove("tools_id");
+    write_json_file(&path, &config)?;
+    run_cli_json(
+        fixture.tempdir.path(),
+        &["config", "apply", "--root", root_arg, "--home", home_arg],
+    )?;
+
+    let refusal = run_cli_failure_stderr(
+        fixture.tempdir.path(),
+        &[
+            "pack",
+            "wire",
+            "fixture/job_fixture",
+            "--agent",
+            &fixture.agent,
+            "--home",
+            home_arg,
+        ],
+    )?;
+    anyhow::ensure!(
+        refusal.contains(&format!("gents tools explain --agent {}", fixture.agent)),
+        "the refusal does not name the next call: {refusal}"
+    );
+    Ok(())
+}
+
+const JOB_PACK: &str = "fixture/job_plugin_fixture";
+
+/// An initialized offline home with the job pack built in the scratch
+/// directory and nothing installed.
+fn uninstalled_job_pack() -> Result<WireFixture> {
+    let tempdir = tempfile::tempdir().context("creating install tempdir")?;
+    let scratch = tempdir.path();
+    let home = scratch.join("agent-home");
+    let initialized = run_init_json(
+        scratch,
+        &["--node-name", "pack-digest", "--home", dir_arg(&home)],
+    )?;
+    let agent = initialized["default_agent_id"]
+        .as_str()
+        .context("init output missing default_agent_id")?
+        .to_owned();
+    let job_pack = scratch.join("job_plugin_fixture");
+    copy_dir_all(&fixture_pack_dir("job_plugin_fixture"), &job_pack)?;
+    run_cli_text(scratch, &["pack", "build", dir_arg(&job_pack)])?;
+    Ok(WireFixture {
+        tempdir,
+        home,
+        agent,
+    })
+}
+
+impl WireFixture {
+    fn job_pack(&self) -> std::path::PathBuf {
+        self.tempdir.path().join("job_plugin_fixture")
+    }
+
+    fn job_pack_digest(&self) -> Result<String> {
+        let shown = run_cli_json(
+            self.tempdir.path(),
+            &["pack", "show", dir_arg(&self.job_pack())],
+        )?;
+        Ok(shown["digest"]
+            .as_str()
+            .context("pack show has no digest")?
+            .to_owned())
+    }
+
+    fn install_job_pack_args(&self, extra: &[&str]) -> Vec<String> {
+        let mut args = vec![
+            "pack".to_owned(),
+            "install".to_owned(),
+            dir_arg(&self.job_pack()).to_owned(),
+            "--home".to_owned(),
+            dir_arg(&self.home).to_owned(),
+            "--registry".to_owned(),
+            UNROUTABLE_REGISTRY.to_owned(),
+        ];
+        args.extend(extra.iter().map(|arg| (*arg).to_owned()));
+        args
+    }
+
+    fn install_job_pack(&self, extra: &[&str]) -> Result<serde_json::Value> {
+        let args = self.install_job_pack_args(extra);
+        run_cli_json(
+            self.tempdir.path(),
+            &args.iter().map(String::as_str).collect::<Vec<_>>(),
+        )
+    }
+
+    fn install_job_pack_failure(&self, extra: &[&str]) -> Result<String> {
+        let args = self.install_job_pack_args(extra);
+        run_cli_failure_stderr(
+            self.tempdir.path(),
+            &args.iter().map(String::as_str).collect::<Vec<_>>(),
+        )
+    }
+}
+
+#[test]
+fn pack_install_expect_digest_match_installs() -> Result<()> {
+    let fixture = uninstalled_job_pack()?;
+    let digest = fixture.job_pack_digest()?;
+    fixture.install_job_pack(&["--expect-digest", &digest])?;
+    anyhow::ensure!(
+        gents::pack::read_home_install(&fixture.home, JOB_PACK)?.is_some(),
+        "a matching --expect-digest did not install the pack"
+    );
+    Ok(())
+}
+
+#[test]
+fn pack_install_expect_digest_mismatch_writes_nothing() -> Result<()> {
+    let fixture = uninstalled_job_pack()?;
+    let digest = fixture.job_pack_digest()?;
+    let wrong = format!("sha256:{}", "0".repeat(64));
+    let stderr = fixture.install_job_pack_failure(&["--expect-digest", &wrong])?;
+    for needle in [wrong.as_str(), digest.as_str(), "gents pack show"] {
+        anyhow::ensure!(stderr.contains(needle), "{needle} missing from: {stderr}");
+    }
+    anyhow::ensure!(
+        gents::pack::read_home_install(&fixture.home, JOB_PACK)?.is_none()
+            && gents::plugin::store::list_records(&fixture.home)?.is_empty(),
+        "a refused digest left an install behind"
+    );
+    Ok(())
+}
+
+#[test]
+fn pack_install_wire_wires_the_agent() -> Result<()> {
+    let fixture = wire_fixture(true)?;
+    let reviewed = wired_plugin(&fixture.tools("job-fixture-caller")?)
+        .context("the job pack's Tools does not list the plugin")?["job"]
+        .clone();
+    let digest = fixture.job_pack_digest()?;
+    let printed =
+        fixture.install_job_pack(&["--expect-digest", &digest, "--wire", &fixture.agent])?;
+    let wired = &printed["wired"][0];
+    anyhow::ensure!(
+        wired["plugin"] == "fixture/job_fixture"
+            && wired["agent"] == fixture.agent.as_str()
+            && wired["report"]["job"] == reviewed,
+        "install did not print the wired report for the reviewed block: {printed}"
+    );
+    anyhow::ensure!(
+        wired_plugin(&fixture.agent_tools()?).is_some(),
+        "the agent's Tools does not list the plugin"
+    );
+    Ok(())
+}
+
+#[test]
+fn pack_install_wire_refuses_before_any_write_without_grant() -> Result<()> {
+    let fixture = wire_fixture(true)?;
+    let manifest_path = fixture.job_pack().join("manifest.json");
+    let mut manifest = read_json_file(&manifest_path)?;
+    manifest["plugins"][0]["manifold"] = serde_json::json!({
+        "fs": "None",
+        "net": {"OutboundHttp": ["api.example.com"]},
+        "env": "None",
+        "crypto": false,
+        "child_process": false,
+    });
+    write_json_file(&manifest_path, &manifest)?;
+    let records = serde_json::to_value(gents::plugin::store::list_records(&fixture.home)?)?;
+    let tools = fixture.agent_tools()?;
+
+    let stderr = fixture.install_job_pack_failure(&["--wire", &fixture.agent])?;
+    anyhow::ensure!(
+        stderr.contains("--grant-authority"),
+        "the refusal does not name --grant-authority: {stderr}"
+    );
+    anyhow::ensure!(
+        serde_json::to_value(gents::plugin::store::list_records(&fixture.home)?)? == records
+            && fixture.agent_tools()? == tools,
+        "a refused install changed the plugin store or the agent's Tools"
+    );
+    Ok(())
+}
+
+/// `gents init --workflows` on a home whose store holds an engine pack with a
+/// plugin that ships no reviewed job block installs it as the operator and
+/// prints the wire report naming `--targets-from`.
+#[test]
+fn init_workflows_installs_and_wires_the_engine_offline() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating init workflows tempdir")?;
+    let scratch = tempdir.path();
+    let home = scratch.join("agent-home");
+    let init_args = ["--node-name", "init-workflows", "--home", dir_arg(&home)];
+    run_init_json(scratch, &init_args)?;
+
+    let engine = scratch.join("rhai_workflows");
+    copy_dir_all(&fixture_pack_dir("job_plugin_fixture"), &engine)?;
+    let manifest_path = engine.join("manifest.json");
+    let mut manifest = read_json_file(&manifest_path)?;
+    manifest["namespace"] = "gents".into();
+    manifest["name"] = "rhai_workflows".into();
+    manifest["plugins"][0]["name"] = "workflow".into();
+    write_json_file(&manifest_path, &manifest)?;
+    edit_pack_config(&engine, |config| {
+        *config = serde_json::json!({
+            "node": {},
+            "tools": [{
+                "tools_id": "workflow-caller",
+                "display_name": "Workflow caller",
+                "integrations": {"plugins": [{"plugin": "gents/workflow"}]},
+            }],
+        });
+    })?;
+    run_cli_text(scratch, &["pack", "build", dir_arg(&engine)])?;
+    run_cli_json(
+        scratch,
+        &[
+            "pack",
+            "fetch",
+            dir_arg(&engine),
+            "--store",
+            "--home",
+            dir_arg(&home),
+        ],
+    )?;
+
+    let mut with_flag = init_args.to_vec();
+    with_flag.push("--workflows");
+    let printed = run_init_json(scratch, &with_flag)?;
+    let next_call = printed["workflows"]["wired"][0]["report"]["next_call"]
+        .as_str()
+        .context("init --workflows printed no next_call for a pack without a job block")?;
+    anyhow::ensure!(
+        next_call.contains("--targets-from"),
+        "next_call does not name --targets-from: {next_call}"
+    );
+    let record = gents::pack::read_home_install(&home, "gents/rhai_workflows")?
+        .context("init --workflows did not install the engine pack")?;
+    anyhow::ensure!(
+        record.installed_via == Some(gents::pack::home_install::InstalledVia::Operator),
+        "the engine pack is not an operator install: {record:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wire_sources_lists_job_plugins_and_target_packs() -> Result<()> {
+    let fixture = wire_fixture(true)?;
+    let sources = gents_server::packs::wire_sources(fixture.home.clone()).await?;
+    let plugins = sources["plugins"]
+        .as_array()
+        .context("wire_sources printed no plugins")?;
+    anyhow::ensure!(
+        plugins.contains(&serde_json::json!({
+            "plugin": "fixture/job_fixture",
+            "pack": "fixture/job_plugin_fixture",
+            "job": true,
+        })),
+        "the job plugin is not listed with its pack and job flag: {sources}"
+    );
+    let target_packs = sources["target_packs"]
+        .as_array()
+        .context("wire_sources printed no target_packs")?;
+    for expected in [
+        serde_json::json!({"pack": "fixture/dependee_fixture", "targets": ["wf-content"]}),
+        serde_json::json!({"pack": "fixture/job_plugin_fixture", "targets": ["wf-fixture"]}),
+    ] {
+        anyhow::ensure!(
+            target_packs.contains(&expected),
+            "target_packs does not hold {expected}: {sources}"
+        );
+    }
+    Ok(())
+}

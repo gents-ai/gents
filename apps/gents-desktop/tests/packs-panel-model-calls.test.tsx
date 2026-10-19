@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PacksPanel } from "../src/ui/screens/agent/PacksPanel";
 import { renderIn, testApp } from "./app-fixture";
+import { deployment } from "./config-panel-wiring/fixtures";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
@@ -31,7 +32,7 @@ function show(plugins: { plugin: string; slot: string; profile: string | null }[
         bindPackPlugin: bind,
       },
     }),
-    <PacksPanel />,
+    <PacksPanel deployment={deployment} />,
   );
 }
 
