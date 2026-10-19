@@ -64,6 +64,7 @@ class ArtifactTests(unittest.TestCase):
         self.assertIn('gents-client-host/runtime-e2e', command)
         self.assertIn('gents-desktop-bridge', command)
         self.assertIn('--no-default-features', command)
+        self.assertIn('--message-format=json-render-diagnostics', command)
         self.assertNotIn('--all-features', command)
         self.assertEqual(run.call_count, 1)
 

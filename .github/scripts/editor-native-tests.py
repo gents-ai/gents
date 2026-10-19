@@ -49,7 +49,7 @@ def compile_tests(root, manifest):
         subprocess.run(['cargo', 'test', '--locked', '-p', 'gents-client-host',
                         '-p', 'gents-desktop-bridge', '--no-default-features',
                         '--features', 'gents-client-host/runtime-e2e', '--no-run',
-                        '--message-format=json', '--timings', '--target-dir', str(root / 'target')], cwd=root, stdout=output, check=True)
+                        '--message-format=json-render-diagnostics', '--timings', '--target-dir', str(root / 'target')], cwd=root, stdout=output, check=True)
     manifest.write_text(json.dumps(artifacts(log, root, root / 'target'), indent=2) + '\n')
 
 
