@@ -2744,6 +2744,140 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_query_reads_job_fields() -> Result<()> {
+    use gents_protocol::job::{JobBudget, JobCeiling, JobOrigin, JobPin, JobProgress, JobState};
+
+    let served = McpGraphHome::start("mcp-job-fields", &["--enable-mcp"]).await?;
+    let access = gents::config_client::ConfigAccess::Graphql(support::graphql::served_endpoint(
+        &graphql_url(served.port),
+    ));
+    let did = served.owner_did.as_str();
+
+    let pin = JobPin {
+        script_id: "fixture-script".into(),
+        source_digest: "sha256:source".into(),
+        origin: JobOrigin::Installed,
+        engine_digest: "sha256:engine".into(),
+        plugin_ref: "fixture/workflow".into(),
+        agent_budget: 4,
+        handle: "call-mcp".into(),
+        cwd: "/fixture/cwd".into(),
+        adopted_at: 1_780_000_000_000,
+        args_digest: "sha256:args".into(),
+        chain_root_doc_id: String::new(),
+        resume_of: None,
+        replayed_from: None,
+        ceiling_at_pin: JobCeiling {
+            targets: vec!["general".into()],
+            max_live: 2,
+            max_spawns: 8,
+            max_messages_per_slot: 4,
+            result_bytes: 65_536,
+            max_wall_secs: 600,
+        },
+    };
+    let progress = JobProgress {
+        title: "Job call-mcp".into(),
+        state: JobState::Completed,
+        pause_reason: None,
+        phases: Vec::new(),
+        active: Vec::new(),
+        spawned: 2,
+        budget: JobBudget {
+            total: 4,
+            spent: 2,
+            remaining: 2,
+        },
+        last_event: "seeded".into(),
+        last_event_at: None,
+        question: None,
+        observed_terminal_children: 0,
+        revision: 1,
+    };
+    let step_state = json!({"fixture": "step-state"});
+    let mutation = format!(
+        r#"mutation($job_pin: JSON, $job_progress: JSON, $job_step_state: JSON) {{ create_AgentToolCall(input: {{
+            tool_call_key: "{key}", request_id: "request-call-mcp", request_doc_id: "",
+            session_id: "{session}", node_did: "{node_did}", tool_name: "workflow",
+            tool_call_id: "call-mcp", message_sequence: 1, await_mode: "background",
+            status: "completed", lifecycle_state: "completed",
+            started_at: "2026-06-01T10:00:00Z", completed_at: "2026-06-01T10:05:00Z",
+            job_pin: $job_pin, job_progress: $job_progress, job_step_state: $job_step_state
+        }}) {{ _docID }} }}"#,
+        key = escape_graphql_string("mcp-job:call-mcp"),
+        session = escape_graphql_string("mcp-job"),
+        node_did = escape_graphql_string(did),
+    );
+    let response = graphql_mutation_with_variables(
+        &access,
+        &mutation,
+        &json!({ "job_pin": pin, "job_progress": progress, "job_step_state": step_state }),
+    )
+    .await?;
+    let row_doc_id = gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentToolCall")?;
+
+    for slot in ["alpha", "beta"] {
+        let mutation = format!(
+            r#"mutation {{ create_AgentRequest(input: {{
+                request_id: "{request}", purpose: "normal", node_did: "{node_did}",
+                agent_id: "default", session_id: "{session}", retry_key: "{retry}",
+                content: "child {slot}", lifecycle_state: "failed", failure_reason: "seeded",
+                caused_by_parent_tool_call_doc_id: "{row}",
+                created_at: "2026-06-01T10:01:00Z", terminalized_at: "2026-06-01T10:02:00Z"
+            }}) {{ _docID }} }}"#,
+            request = escape_graphql_string(&format!("mcp-child-{slot}")),
+            node_did = escape_graphql_string(did),
+            session = escape_graphql_string(&format!("mcp-child-session-{slot}")),
+            retry = escape_graphql_string(&format!("mcp-child-retry-{slot}")),
+            row = escape_graphql_string(&row_doc_id),
+        );
+        graphql_mutation_with_variables(&access, &mutation, &json!({})).await?;
+    }
+
+    let client = served.client(None).await?;
+    let found = call_mcp_tool(
+        &client,
+        "query",
+        json!({"argv": ["find"], "collection": "AgentToolCall", "options": {
+            "fields": ["tool_call_key", "job_pin", "job_progress", "job_step_state"],
+            "filter": {"tool_call_key": {"_eq": "mcp-job:call-mcp"}}}}),
+    )
+    .await?
+    .map_err(|refusal| anyhow!(refusal))?;
+    assert_eq!(found["returned_count"].as_i64(), Some(1), "{found}");
+    let row = &found["results"][0];
+    let read_progress: JobProgress = serde_json::from_value(row["job_progress"].clone())
+        .context("job_progress decodes as JobProgress")?;
+    assert_eq!(read_progress, progress);
+    let read_pin: JobPin =
+        serde_json::from_value(row["job_pin"].clone()).context("job_pin decodes as JobPin")?;
+    assert_eq!(read_pin, pin);
+    assert_eq!(row["job_step_state"], step_state);
+
+    let children = call_mcp_tool(
+        &client,
+        "query",
+        json!({"argv": ["find"], "collection": "AgentRequest", "options": {
+            "fields": ["request_id", "caused_by_parent_tool_call_doc_id"],
+            "filter": {"caused_by_parent_tool_call_doc_id": {"_eq": row_doc_id}}}}),
+    )
+    .await?
+    .map_err(|refusal| anyhow!(refusal))?;
+    assert_eq!(children["returned_count"].as_i64(), Some(2), "{children}");
+    let mut ids: Vec<&str> = children["results"]
+        .as_array()
+        .context("results is an array")?
+        .iter()
+        .filter_map(|child| child["request_id"].as_str())
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(ids, ["mcp-child-alpha", "mcp-child-beta"]);
+
+    let _ = client.cancel().await;
+    Ok(())
+}
+
 const MCP_GRAPH_READ_TOOLS: [&str; 3] = ["list_graphs", "get_graph_run", "get_graph_result"];
 
 struct McpGraphHome {
