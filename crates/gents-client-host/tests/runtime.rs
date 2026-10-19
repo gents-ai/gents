@@ -650,6 +650,32 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         }
         let status = status.context("editor journey timed out")??;
         ensure!(status.success(), "editor journey exited with {status}");
+        let stopped = access
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ content session_id lifecycle_state }} }}"#,
+                gents::graphql::escape_graphql_string(node_did),
+            ))
+            .await?;
+        let stopped = stopped["data"]["AgentRequest"]
+            .as_array()
+            .context("stopped editor request rows")?
+            .iter()
+            .filter(|row| {
+                matches!(
+                    row["content"].as_str(),
+                    Some(
+                        "Verify the installed goal controls" | "Continue with the queued follow-up"
+                    )
+                )
+            })
+            .collect::<Vec<_>>();
+        ensure!(
+            stopped.len() == 2
+                && stopped[0]["content"] != stopped[1]["content"]
+                && stopped[0]["session_id"] == stopped[1]["session_id"]
+                && stopped.iter().all(|row| row["lifecycle_state"] == "interrupted"),
+            "both editor Stop actions must reach distinct requests in the same session: {stopped:?}"
+        );
         configured_actions::verify_editor_settings(&access, node_did, agent_id).await?;
         let submitted = access.execute(&format!(
             r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ content input }} }}"#,
