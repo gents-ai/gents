@@ -401,6 +401,9 @@ pub(crate) async fn agent_session_read(
         )?;
     let target = super::target_scope(&caller.node_did, &target);
     args.validate_target(&target)?;
+    // Captured before the first contributing lookup (active_session_request).
+    let observation_started_at =
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let active = crate::interrupt::active_session_request(
         node,
         &target.session_id,
@@ -416,11 +419,8 @@ pub(crate) async fn agent_session_read(
         let target = target.clone();
         let active = active.clone();
         let args = args.clone();
+        let observation_started_at = observation_started_at.clone();
         Box::pin(async move {
-            // Captured before any query runs: this is when the read began,
-            // not a claim that the response reflects a single atomic
-            // snapshot of session state.
-            let observation_started_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
             let scope = crate::session::session_scope_filter(&target.node_did, &target.session_id, target.requester_did.as_deref());
             let response = txn.execute(&format!("{{AgentSession(filter: {{{scope}}}, limit: 2) {{{}}}}}", crate::session::AGENT_SESSION_FIELDS)).await?;
             let sessions = rows(&response, "AgentSession")?;
