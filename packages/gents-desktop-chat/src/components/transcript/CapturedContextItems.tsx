@@ -24,7 +24,11 @@ function ContextDialog({
       ref={dialog}
       className="tool-activity-dialog captured-context-dialog"
       aria-labelledby={title}
-      onClose={onClose}
+      onClose={(event) => {
+        event.stopPropagation();
+        onClose();
+      }}
+      onCancel={(event) => event.stopPropagation()}
     >
       <header className="tool-activity-header">
         <h2 id={title}>{capturedContextLabel(context)}</h2>
