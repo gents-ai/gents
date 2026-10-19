@@ -11,7 +11,7 @@ import { writeDraft } from "../../hooks/draftStore";
 import { toastFailure } from "../lib/failure";
 import { useApp } from "../app/AppContext";
 
-const words = (value: string) => value.replaceAll("_", " ");
+const words = (value: string) => value.replace(/_/g, " ");
 
 export function JobProgressCell({ tool }: { tool: RenderedToolCallView }) {
   const { api, drafts, stores, view } = useApp();
