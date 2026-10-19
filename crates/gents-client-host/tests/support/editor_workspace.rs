@@ -147,6 +147,33 @@ pub async fn verify(
         provider_occurrences(provider, "", &attachment_context) == 1,
         "attachment-only snapshot must reach the provider once"
     );
+    let title_input = format!("First user request:\n{}\n\n", CAPTURED.trim());
+    let title_requests = provider
+        .captured_chat_requests()
+        .iter()
+        .filter(|request| {
+            request["messages"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|message| {
+                    message["role"] == "user"
+                        && match &message["content"] {
+                            Value::String(text) => text.starts_with(&title_input),
+                            Value::Array(parts) => parts.iter().any(|part| {
+                                part["text"]
+                                    .as_str()
+                                    .is_some_and(|text| text.starts_with(&title_input))
+                            }),
+                            _ => false,
+                        }
+                })
+        })
+        .count();
+    ensure!(
+        title_requests == 1,
+        "attachment-only title must use the frozen parent input once"
+    );
     ensure!(
         std::fs::read_to_string(root.join("second-project/context.rs"))? == DISK,
         "the editor fixture overwrote the unsaved source on disk"
@@ -158,6 +185,7 @@ pub async fn verify(
         "providerInputOccurrences":matches, "verifiedSignatures":3,
         "editedSessionId": edited_session, "attachmentOnlySessionId": attachment_session,
         "originalConversationPreserved":true, "attachmentOnlyProse":"",
+        "attachmentOnlyTitleInputVerified":true,
         "diskSourceUnchanged":true,
     }))
 }

@@ -1,3 +1,4 @@
+use gents_protocol::request_input::CapturedContext;
 use gents_protocol::session::{SessionTitle, SessionTitleSource};
 
 pub(crate) const GENERATION_PREAMBLE: &str = "Generate concise conversation titles. Return only a short, human-readable 3-8 word phrase in sentence case, with normal spaces. Preserve proper names and technical terms. Never call tools. Never explain.";
@@ -91,6 +92,22 @@ pub(crate) fn generation_prompt(request: &str, recent: &[String]) -> String {
     format!("First user request:\n{excerpt}\n\nRecent session titles to avoid repeating:\n{titles}")
 }
 
+pub(crate) fn generation_input(prose: &str, contexts: &[CapturedContext]) -> String {
+    if !prose.trim().is_empty() || contexts.is_empty() {
+        return prose.to_owned();
+    }
+    let captured = contexts
+        .iter()
+        .map(|context| context.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if captured.trim().is_empty() {
+        "Attached context".to_owned()
+    } else {
+        captured
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,7 +118,16 @@ mod tests {
         for case in contract["cases"].as_array().unwrap() {
             let raw = case["raw"].as_str().unwrap();
             let fallback = case["fallback"].as_str().unwrap();
-            let generated = generated_title(raw, fallback);
+            let captures: Vec<CapturedContext> =
+                serde_json::from_value(case["captures"].clone()).unwrap();
+            let input = generation_input(fallback, &captures);
+            assert_eq!(
+                input,
+                case["expected_input"].as_str().unwrap(),
+                "{}",
+                case["name"]
+            );
+            let generated = generated_title(raw, &input);
             assert_eq!(
                 generated,
                 case["expected_generated"].as_str().unwrap(),
@@ -131,7 +157,7 @@ mod tests {
                 .map(|title| title.as_str().unwrap().to_owned())
                 .collect::<Vec<_>>();
             assert_eq!(
-                generation_prompt(fallback, &recent),
+                generation_prompt(&input, &recent),
                 case["expected_prompt"].as_str().unwrap(),
                 "{}",
                 case["name"]
