@@ -89,7 +89,7 @@ async fn editor_preserves_live_session_and_draft_across_window_reload() -> Resul
 
 async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let cli = support::native_binary("gents")?;
-    let host = support::native_binary("gents-client-host")?;
+    let host_binary = support::native_binary("gents-client-host")?;
     if matches!(journey, Journey::Editor) {
         std::fs::write(
             root.join("AGENTS.md"),
@@ -215,7 +215,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let client_did = seed.node_identity().did().to_owned();
     seed.shutdown().await?;
     drop(seed);
-    let mut host_command = Command::new(&host);
+    let mut host_command = Command::new(&host_binary);
     host_command.args(["--serve", "--home"]).arg(paths.root());
     if matches!(journey, Journey::Editor) {
         host_command.arg("--editor-store");
@@ -635,7 +635,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             .arg(script)
             .arg(root)
             .arg(paths.root())
-            .arg(&host)
+            .arg(&host_binary)
             .arg(session)
             .stdout(Stdio::from(log.try_clone()?))
             .stderr(Stdio::from(log))
