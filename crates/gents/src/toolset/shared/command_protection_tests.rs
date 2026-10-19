@@ -134,7 +134,7 @@ async fn guarded_commands_build_and_run_a_rust_workspace() {
         std::fs::write(root.join("main.rs"), "fn main() { print!(\"built\"); }\n").unwrap();
         let args = vec![
             "-c".into(),
-            "\"$1\" build --offline --manifest-path \"$2/Cargo.toml\" --target-dir \"$2/target\" 2>&1 && \"$2/target/debug/guarded-build-fixture\"".into(),
+            "RUSTC_WRAPPER= RUSTC_WORKSPACE_WRAPPER= \"$1\" build --offline --manifest-path \"$2/Cargo.toml\" --target-dir \"$2/target\" 2>&1 && \"$2/target/debug/guarded-build-fixture\"".into(),
             "fixture".into(),
             env!("CARGO").into(),
             root.to_str().unwrap().into(),
