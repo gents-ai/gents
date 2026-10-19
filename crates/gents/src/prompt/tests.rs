@@ -176,21 +176,34 @@ fn preamble_includes_background_completion_guidance() {
     // Notifications are event-time snapshots, not durable outcomes.
     assert!(preamble.contains("## Background Completion Guidance"));
     assert!(preamble.contains("event-time snapshots"));
-    assert!(preamble.contains("not the same as a durable assignment"));
-    // Action-first: evidence of change up front, no ack/boilerplate burying it.
+    assert!(preamble.contains("is not a durable assignment"));
+    // Action-first: evidence up front; no ack/boilerplate burying it.
     assert!(preamble.contains("Lead with action"));
-    assert!(preamble.contains("Skip acknowledgments and scope or safety recaps"));
-    // Duplicates collapse to one durable report from the canonical record.
+    assert!(preamble.contains("Skip acknowledgments and boilerplate"));
+    // Duplicates collapse; superseded findings do not appear current.
     assert!(preamble.contains("Report each outcome once"));
-    assert!(preamble.contains("goal/task status, agent_session_read"));
-    // Stale recommendation must not appear current.
-    assert!(preamble.contains("Treat stale as stale"));
-    assert!(preamble.contains("as superseded, not current"));
-    // Canonical current status only when needed; unknown stays unknown.
-    assert!(preamble.contains("the status stays unknown"));
-    // No automatic authority; no scheduled polling.
-    assert!(preamble.contains("Never cancel, reassign"));
-    assert!(preamble.contains("do not poll on a schedule"));
+    assert!(preamble.contains("superseded, not current"));
+    // Canonical current status only when needed; unknown stays unknown;
+    // acknowledgment alone does not establish recovery.
+    assert!(preamble.contains("the action"));
+    assert!(preamble.contains("status stays unknown"));
+    assert!(preamble.contains("Acknowledgment alone is not recovery"));
+    // No new authority from notifications; only redundant re-polling is
+    // discouraged (authorized monitoring stays allowed).
+    assert!(preamble.contains("grant no new authority"));
+    assert!(preamble.contains("no reason to re-poll"));
+    assert!(preamble.contains("drill down only for missing decision evidence"));
+    // Guidance stays concise.
+    let guidance_start = preamble.find("## Background Completion Guidance").unwrap();
+    let guidance = &preamble[guidance_start..];
+    let guidance = &guidance[..guidance
+        .find("You have access to these tools")
+        .unwrap_or(guidance.len())];
+    assert!(
+        guidance.len() >= 400 && guidance.len() <= 650,
+        "guidance should stay concise, got {} bytes",
+        guidance.len()
+    );
 }
 
 #[test]
