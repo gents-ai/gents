@@ -78,6 +78,8 @@ jobs:
       - name: Install guard dependencies on manual Mac runner
         if: runner.os == 'macOS'
         run: |
+          export PATH="/opt/homebrew/bin:${PATH}"
+          echo /opt/homebrew/bin >> "${GITHUB_PATH}"
           if ! command -v shellcheck >/dev/null 2>&1; then
             brew install shellcheck
           fi
