@@ -1378,3 +1378,123 @@ async fn bootstrap_connect_waits_for_the_peer_connection_event() {
     .expect("the connection event ends the wait")
     .expect("peer connected");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> anyhow::Result<()> {
+    use gents::NodeIdentity;
+    use wiremock::{
+        matchers::{body_string_contains, method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+    let temp = tempfile::tempdir()?;
+    let home = temp.path().join("runtime");
+    std::fs::create_dir(&home)?;
+    let key = home.join("node.key");
+    let owner = gents::identity::KeyIdentity::load_or_create(&key, None)?;
+    let server = MockServer::start().await;
+    let graphql = format!("{}/api/v0/graphql", server.uri());
+    std::fs::write(
+        home.join("init.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "node_name":"owner", "node_did":owner.did(), "key_path":key,
+        }))?,
+    )?;
+    std::fs::write(
+        home.join("runtime.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "node_name":"owner", "node_did":owner.did(), "graphql":graphql,
+            "p2p_transport":"iroh", "p2p_peer_id":"owner-peer",
+        }))?,
+    )?;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/graphql"))
+        .and(body_string_contains("create_AgentRequest"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data":{"create_AgentRequest":[{"_docID":"owner-request"}]}
+        })))
+        .mount(&server)
+        .await;
+    let core = Arc::new(
+        ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(temp.path().join("client")),
+            ClientCoreOptions::local_simulated_route(),
+        )
+        .await?,
+    );
+    core.add_managed_enrollment_peer_for_test(owner.did(), &graphql, home.to_str().unwrap(), 1)
+        .await?;
+    let submitted = core
+        .submit_request("session", owner.did(), "send directly", Some("agent"))
+        .await?;
+    assert_eq!(
+        core.store().focused_request_id(),
+        Some(submitted.request_id.clone())
+    );
+    let response = gents::ConfigAccess::local(core.node_arc())
+        .execute(&format!(
+            "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{request_id}} }}",
+            gents::graphql::escape_graphql_string(&submitted.request_id),
+        ))
+        .await?;
+    assert_eq!(
+        response["data"]["AgentRequest"],
+        serde_json::json!([]),
+        "a successful owner write must not also create a replica request"
+    );
+    let requests = server.received_requests().await.unwrap();
+    let mutation: serde_json::Value = serde_json::from_slice(
+        &requests
+            .iter()
+            .find(|request| String::from_utf8_lossy(&request.body).contains("create_AgentRequest"))
+            .unwrap()
+            .body,
+    )?;
+    let query = mutation["query"].as_str().unwrap();
+    assert!(
+        query.contains(core.node_identity().did()),
+        "retain the enrolled desktop signer/requester"
+    );
+    assert!(
+        query.contains("enrollment"),
+        "retain signed enrollment admission"
+    );
+    let record = core
+        .sync_state
+        .records()
+        .into_iter()
+        .find(|record| record.node_did == owner.did())
+        .unwrap();
+    core.sync_state.set_pairing_ready(&record, false).await?;
+    let denied = core
+        .submit_request(
+            "denied-session",
+            owner.did(),
+            "must not fall back",
+            Some("agent"),
+        )
+        .await;
+    assert!(
+        denied
+            .as_ref()
+            .is_err_and(|error| error.to_string().contains("route is not ready")),
+        "the direct owner route must not bypass the existing write fence: {denied:?}"
+    );
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| {
+                String::from_utf8_lossy(&request.body).contains("create_AgentRequest")
+            })
+            .count(),
+        1
+    );
+    let response = gents::ConfigAccess::local(core.node_arc())
+        .execute("{ AgentRequest { request_id } }")
+        .await?;
+    assert_eq!(response["data"]["AgentRequest"], serde_json::json!([]));
+    core.shutdown().await?;
+    Ok(())
+}
