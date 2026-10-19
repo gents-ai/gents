@@ -134,9 +134,12 @@ impl CapturedContext {
             "content".to_owned(),
             serde_json::Value::String(content.clone()),
         );
-        Ok(Some(serde_json::from_value(serde_json::Value::Object(
-            fields,
-        ))?))
+        let context: Self = serde_json::from_value(serde_json::Value::Object(fields))?;
+        anyhow::ensure!(
+            context.is_well_formed(),
+            "captured context has an invalid buffer version or selection range"
+        );
+        Ok(Some(context))
     }
 
     pub fn from_message(message: &crate::message::Message) -> anyhow::Result<Vec<Self>> {
