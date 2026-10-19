@@ -14,6 +14,9 @@ export type ChatTranscriptPanelProps = {
   selectedSessionId: string | null;
   session: DesktopSessionSnapshot | null;
   optimisticPendingTurn?: OptimisticPendingTurn | null;
+  onEditUserMessage?: (
+    item: Extract<RenderedTimelineItem, { kind: "userMessage" }>,
+  ) => void;
   onRetryMessage?: (requestId: string) => void | Promise<void>;
   retryUnavailableHint?: string | null;
   onLoadOlder?: () => Promise<boolean>;
@@ -73,6 +76,7 @@ export function ChatTranscriptPanel({
   selectedSessionId,
   session,
   optimisticPendingTurn,
+  onEditUserMessage,
   onRetryMessage,
   retryUnavailableHint,
   onLoadOlder,
@@ -433,6 +437,7 @@ export function ChatTranscriptPanel({
             </div>
           ) : null}
           <MessageList
+            onEditUserMessage={onEditUserMessage}
             compactTools={compactTools}
             timelineItems={visibleTimelineItems}
             timelineIdentity={selectedSessionId}

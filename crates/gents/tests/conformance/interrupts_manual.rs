@@ -56,7 +56,7 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
         &db.node,
         ForkParams {
             source_session_id: &parent_session,
-            fork_at_user_turn: 0,
+            boundary: gents::session::ForkBoundary::UserTurn(0),
             caller_node_did: NODE_DID,
             caller_requester_did: None,
             target_agent_id: None,

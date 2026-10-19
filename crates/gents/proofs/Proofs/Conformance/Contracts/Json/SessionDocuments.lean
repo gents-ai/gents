@@ -187,6 +187,23 @@ private def forkJson (name : String) (source : SessionFork.History)
    ("published", (SessionFork.publish source scope target remap childKey cut authorization idle coherent).map
       historyJson |>.getD Json.null)]
 
+private def editBlockName {α : Type} : CanonicalOutput.MessageBlock α → String
+  | .text _ => "text"
+  | .reasoning _ _ => "reasoning"
+  | .toolCall _ _ _ _ _ _ _ => "toolCall"
+  | .toolResult _ _ _ _ => "toolResult"
+  | .media _ => "media"
+
+private def editAnchorJson (witness : EditAnchorCase) : Json := Json.mkObj
+  [("name", toJson witness.name), ("key", toJson witness.key),
+   ("messages", toJson (witness.source.messages.map fun message => Json.mkObj
+     [("key", toJson message.key), ("sequence", toJson message.sequence),
+      ("role", toJson (roleName message.header.role)),
+      ("blocks", toJson (message.blocks.map editBlockName))])),
+   ("cut", toJson (SessionFork.editCut witness.source witness.key)),
+   ("retained_count", toJson ((SessionFork.editCut witness.source witness.key).map fun cut =>
+      (SessionFork.copyPrefix witness.source child remap childKey cut).messages.length))]
+
 /-- Header-only fork inputs and computed durable outputs. Payload/tool/segment
 rows remain origin dependencies and are never copied or remapped. -/
 def sessionDocumentsJson : String := (Json.mkObj
@@ -232,6 +249,7 @@ def sessionDocumentsJson : String := (Json.mkObj
       selectionJson "absent_requester_exact" [old] 1 10 (some none),
       selectionJson "foreign_agent" [old] 9 10 none,
       selectionJson "foreign_session" [old] 1 9 none]),
+   ("edit_anchors", toJson (editAnchorCases.map editAnchorJson)),
    ("fork", toJson [
       forkJson "exact_copy" history child 1 true true true,
       forkJson "empty_prefix" history child 0 true true true,
