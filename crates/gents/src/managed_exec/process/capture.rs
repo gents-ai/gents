@@ -64,6 +64,62 @@ where
     }
 }
 
+#[cfg(unix)]
+struct NativePipe<R>(R);
+
+#[cfg(unix)]
+impl<R: AsyncRead + Unpin + std::os::fd::AsRawFd> AsyncRead for NativePipe<R> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let permit = std::task::ready!(tokio::task::coop::poll_proceed(cx));
+        let available = buf.initialize_unfilled();
+        // Tokio child pipes are nonblocking. Probe the owned descriptor because
+        // reactor readiness can lag an already-exited child under scheduler load.
+        let read = unsafe {
+            libc::read(
+                self.0.as_raw_fd(),
+                available.as_mut_ptr().cast(),
+                available.len(),
+            )
+        };
+        if read >= 0 {
+            permit.made_progress();
+            buf.advance(read as usize);
+            return std::task::Poll::Ready(Ok(()));
+        }
+        let error = std::io::Error::last_os_error();
+        if !matches!(
+            error.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+        ) {
+            return std::task::Poll::Ready(Err(error));
+        }
+        let result = std::pin::Pin::new(&mut self.0).poll_read(cx, buf);
+        if result.is_ready() {
+            permit.made_progress();
+        }
+        result
+    }
+}
+
+/// The reader must be a Tokio child pipe, whose descriptor is nonblocking.
+#[cfg(unix)]
+pub(super) fn spawn_native_capped<R>(
+    reader: Option<R>,
+    max_bytes: usize,
+    live_output: Option<(LiveToolOutputWriter, LiveOutputStream)>,
+) -> CaptureTask
+where
+    R: AsyncRead + Unpin + Send + std::os::fd::AsRawFd + 'static,
+{
+    spawn_optional_capped(reader.map(NativePipe), max_bytes, live_output)
+}
+
+/// Tokio's cooperative budget can yield even when a pipe has data or EOF ready.
+/// Post-exit probes bypass that budget; buffered output remains bounded by bytes.
 async fn read_capped<R>(
     mut reader: R,
     max_bytes: usize,
@@ -81,7 +137,7 @@ async fn read_capped<R>(
         let exited_before_read = child_exited.load(std::sync::atomic::Ordering::Acquire);
         let read_started = Instant::now();
         let next = if exited_before_read {
-            match reader.read(&mut buf).now_or_never() {
+            match tokio::task::unconstrained(reader.read(&mut buf)).now_or_never() {
                 Some(result) => result,
                 None => {
                     let remaining = POST_EXIT_DRAIN_READ_BUDGET.saturating_sub(post_exit_read_time);
@@ -92,30 +148,13 @@ async fn read_capped<R>(
                     match tokio::time::timeout(remaining, reader.read(&mut buf)).await {
                         Ok(result) => result,
                         Err(_) => {
-                            // A delayed capture task can first be polled after
-                            // the timer has expired, even when the pipe is now
-                            // at EOF. Check once without waiting before treating
-                            // the drain as incomplete.
                             match tokio::task::unconstrained(reader.read(&mut buf)).now_or_never() {
-                                Some(Ok(0)) => break,
-                                Some(Ok(read)) => {
-                                    {
-                                        let mut output = lock_output(&output);
-                                        let remaining =
-                                            max_bytes.saturating_sub(output.bytes.len());
-                                        let take = remaining.min(read);
-                                        output.bytes.extend_from_slice(&buf[..take]);
-                                        output.truncated = true;
-                                    }
-                                    if let Some((writer, stream)) = &live_output {
-                                        writer.append(*stream, &buf[..read]).await;
-                                    }
-                                }
-                                Some(Err(_)) | None => {
+                                Some(result) => result,
+                                None => {
                                     lock_output(&output).truncated = true;
+                                    break;
                                 }
                             }
-                            break;
                         }
                     }
                 }
@@ -187,6 +226,19 @@ mod tests {
     use std::task::{Context, Poll};
     use tokio::io::ReadBuf;
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn native_eof_is_visible_before_the_reactor_observes_exit() {
+        let (reader, writer) = std::os::unix::net::UnixStream::pair().unwrap();
+        reader.set_nonblocking(true).unwrap();
+        let reader = tokio::net::UnixStream::from_std(reader).unwrap();
+        writer.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut reader = NativePipe(reader);
+        let mut bytes = [0; 1];
+        let read = reader.read(&mut bytes).now_or_never();
+        assert!(matches!(read, Some(Ok(0))), "{read:?}");
+    }
+
     struct DelayedReadyRead(bool);
 
     impl AsyncRead for DelayedReadyRead {
@@ -212,17 +264,67 @@ mod tests {
         assert!(!output.truncated);
     }
 
+    struct CooperativeEof(bool);
+
+    impl AsyncRead for CooperativeEof {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            let permit = std::task::ready!(tokio::task::coop::poll_proceed(cx));
+            permit.made_progress();
+            if !self.0 {
+                self.0 = true;
+                for _ in 0..128 {
+                    if let Poll::Ready(permit) = tokio::task::coop::poll_proceed(cx) {
+                        permit.made_progress();
+                    }
+                }
+                std::thread::sleep(POST_EXIT_DRAIN_READ_BUDGET * 2);
+                buf.put_slice(b"x");
+            }
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn ready_eof_with_exhausted_cooperative_budget_is_complete() {
+        let task = spawn_optional_capped(Some(CooperativeEof(false)), 1024, None);
+        let output = join_capture_after_child_exit(task).await;
+        assert_eq!(output.bytes, b"x");
+        assert!(!output.truncated);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_descendant_held_pipe_without_eof_is_truncated() {
+        let (reader, _writer) = tokio::io::duplex(64);
+        let task = spawn_optional_capped(Some(reader), 1024, None);
+        let output = join_capture_after_child_exit(task).await;
+        assert!(output.bytes.is_empty());
+        assert!(output.truncated);
+    }
+
+    #[tokio::test]
+    async fn a_continuously_ready_pipe_still_has_a_bounded_drain() {
+        let task = spawn_optional_capped(Some(tokio::io::repeat(b'x')), 1024, None);
+        let output = join_capture_after_child_exit(task).await;
+        assert_eq!(output.bytes, vec![b'x'; 1024]);
+        assert!(output.truncated);
+    }
+
     struct EofAfterReadiness {
         polls: Arc<std::sync::atomic::AtomicUsize>,
         ready_at: tokio::time::Instant,
         ready: bool,
+        data: Option<&'static [u8]>,
     }
 
     impl AsyncRead for EofAfterReadiness {
         fn poll_read(
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
-            _: &mut ReadBuf<'_>,
+            buf: &mut ReadBuf<'_>,
         ) -> Poll<std::io::Result<()>> {
             self.polls
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -240,6 +342,9 @@ mod tests {
                 return Poll::Pending;
             }
             if self.ready {
+                if let Some(data) = self.data.take() {
+                    buf.put_slice(data);
+                }
                 Poll::Ready(Ok(()))
             } else {
                 Poll::Pending
@@ -249,6 +354,19 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn delayed_capture_accepts_eof_ready_after_its_drain_deadline_expires() {
+        let output = delayed_capture(None).await;
+        assert!(output.bytes.is_empty());
+        assert!(!output.truncated);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn delayed_capture_drains_data_and_eof_ready_after_its_deadline() {
+        let output = delayed_capture(Some(b"tree-hash\n")).await;
+        assert_eq!(output.bytes, b"tree-hash\n");
+        assert!(!output.truncated);
+    }
+
+    async fn delayed_capture(data: Option<&'static [u8]>) -> OutputCapture {
         let keepalive = tokio::spawn(async {
             loop {
                 tokio::task::yield_now().await;
@@ -262,6 +380,7 @@ mod tests {
                 polls: Arc::clone(&polls),
                 ready_at,
                 ready: false,
+                data,
             }),
             1024,
             None,
@@ -277,7 +396,6 @@ mod tests {
 
         let output = join_capture_after_child_exit(task).await;
         keepalive.abort();
-        assert!(output.bytes.is_empty());
-        assert!(!output.truncated);
+        output
     }
 }

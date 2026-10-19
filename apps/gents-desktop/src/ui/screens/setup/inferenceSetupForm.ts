@@ -229,6 +229,8 @@ export function setupFormReducer(form: SetupForm, event: SetupEvent): SetupForm 
     case "connected":
       return {
         ...form,
+        error: null,
+        authUrl: null,
         accounts: {
           ...form.accounts,
           signedIn: { ...form.accounts.signedIn, [event.provider]: event.account },

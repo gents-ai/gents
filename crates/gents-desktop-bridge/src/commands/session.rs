@@ -167,6 +167,7 @@ pub async fn session_snapshot(
                 tracing::warn!(
                     target: "gents_desktop::chat",
                     node_did,
+                    session_id = %session_id,
                     request_id,
                     error = %error,
                     "selected request projection unavailable"

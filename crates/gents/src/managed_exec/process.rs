@@ -19,7 +19,11 @@ mod job_object;
 mod process_group;
 mod registry;
 
-use capture::{join_capture_after_child_exit, spawn_optional_capped};
+use capture::join_capture_after_child_exit;
+#[cfg(unix)]
+use capture::spawn_native_capped as spawn_optional_capped;
+#[cfg(not(unix))]
+use capture::spawn_optional_capped;
 #[cfg(windows)]
 use job_object::{terminate_job, ManagedChildJob};
 #[cfg(unix)]
@@ -65,14 +69,7 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
         command.env_clear().envs(environment);
     }
 
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    command.process_group(0);
 
     let mut child = match command.spawn() {
         Ok(child) => ManagedChild::new(child),
@@ -413,14 +410,7 @@ pub(crate) async fn spawn_managed_process(
     if let Some(environment) = request.environment.as_ref() {
         command.env_clear().envs(environment);
     }
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    command.process_group(0);
 
     let mut child = command
         .spawn()

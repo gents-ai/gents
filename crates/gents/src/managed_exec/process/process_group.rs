@@ -7,6 +7,9 @@ use crate::managed_exec::output::KillReport;
 const TERM_GRACE: Duration = Duration::from_millis(100);
 const KILL_GRACE: Duration = Duration::from_millis(250);
 
+/// Spawn into a fresh process group using native spawn attributes. A pre-exec
+/// callback forces fork, where concurrent children can retain unrelated pipe
+/// writers until exec and prevent a completed command from observing EOF.
 pub(super) struct ManagedChild {
     pub(super) inner: Child,
     pgid: Option<i32>,

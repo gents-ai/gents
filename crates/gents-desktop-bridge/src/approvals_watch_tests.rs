@@ -385,3 +385,79 @@ async fn an_incompatible_question_does_not_advertise_a_prompt_listener() {
     task.abort();
     assert!(task.await.unwrap_err().is_cancelled());
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn unrelated_home_changes_do_not_exhaust_watch_descriptors() {
+    use std::os::unix::ffi::OsStrExt;
+    const CHILD: &str = "GENTS_APPROVAL_WATCH_FD_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "approvals_watch::tests::unrelated_home_changes_do_not_exhaust_watch_descriptors",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let mut limits = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: this subprocess owns its limits; the initialized rlimit storage is valid.
+    assert_eq!(
+        unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limits) },
+        0
+    );
+    limits.rlim_cur = 256.min(limits.rlim_max);
+    // SAFETY: only this test subprocess's soft limit changes, within its hard limit.
+    assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limits) }, 0);
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let home = tempfile::tempdir().unwrap();
+            let unrelated = home.path().join("unrelated-pack");
+            std::fs::create_dir(&unrelated).unwrap();
+            for index in 0..512 {
+                std::fs::write(
+                    unrelated.join(format!("schema-{index}.graphql")),
+                    "type Example",
+                )
+                .unwrap();
+            }
+            let (send, _receive) = mpsc::channel(1);
+            let _watch = QueueWatch::start(home.path(), send).unwrap();
+            std::fs::create_dir(home.path().join("unrelated-directory-change")).unwrap();
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            let unrelated = unrelated.canonicalize().unwrap();
+            for fd in 0..256 {
+                let mut path = [0 as libc::c_char; libc::MAXPATHLEN as usize];
+                // SAFETY: F_GETPATH writes at most MAXPATHLEN bytes and succeeds
+                // only with a terminated path; failed descriptors are ignored.
+                if unsafe { libc::fcntl(fd, libc::F_GETPATH, path.as_mut_ptr()) } == 0 {
+                    let path = unsafe { std::ffi::CStr::from_ptr(path.as_ptr()) };
+                    let path = Path::new(std::ffi::OsStr::from_bytes(path.to_bytes()));
+                    assert!(
+                        !path.starts_with(&unrelated),
+                        "approval watcher opened unrelated path {}",
+                        path.display()
+                    );
+                }
+            }
+            let _headroom: Vec<_> = (0..64)
+                .map(|_| std::fs::File::open(unrelated.join("schema-0.graphql")).unwrap())
+                .collect();
+            file_question(home.path(), "stillreadable");
+            assert_eq!(approval::pending_requests(home.path()).unwrap().len(), 1);
+        });
+}

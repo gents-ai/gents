@@ -1376,7 +1376,7 @@ pub(crate) enum AccountsCommand {
         output: OutputFormat,
         #[arg(
             long,
-            help = "Fail when usage cannot be read, as without a running runtime; accounts read in the last five minutes are still skipped"
+            help = "Read current usage even after a recent read; fail when usage cannot be read, as without a running runtime"
         )]
         refresh: bool,
     },
