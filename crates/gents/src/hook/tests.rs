@@ -43,6 +43,9 @@ mod r4c_list_background_tools;
 #[path = "tests/r4c_read_tool_output.rs"]
 mod r4c_read_tool_output;
 
+#[path = "tests/plugin_job_dispatch.rs"]
+mod plugin_job_dispatch;
+
 struct HookExecutionFixture {
     lifecycle: crate::lifecycle::RequestLifecycle,
     writer: crate::streaming::DefraStreamWriter,
@@ -4189,6 +4192,85 @@ async fn plugin_child_timeout_is_child_terminal_and_parent_completes() {
             "{name} {state}: {rows}"
         );
     }
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(data_path);
+}
+
+#[tokio::test]
+async fn plugin_child_naming_a_job_tool_is_refused_and_persisted_as_policy_denied() {
+    use gents_loop::SessionHook;
+
+    let data_path =
+        std::env::temp_dir().join(format!("plugin-child-job-tool-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_runtime_schemas(&node).await.unwrap();
+    let binding = crate::plugin_job::JobBinding {
+        tool_name: "workflow_run".into(),
+        plugin: crate::document_config::PluginToolRef {
+            plugin: "team/plugin".into(),
+            digest: None,
+            tool_calls: false,
+            input_fields: Vec::new(),
+            job: None,
+        },
+        settings: None,
+    };
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "did:test:plugin-owner",
+        FailurePolicy::FailClosed,
+    )
+    .with_job_tools(HashMap::from([("workflow_run".to_owned(), binding)]));
+    hook.on_completion_call(&user_text_message("compose tools"), &[])
+        .await;
+    let session_id = hook.session_id().await.unwrap();
+    bind_interruptible_request(
+        node.as_ref(),
+        &hook,
+        "plugin-child-job-tool-request",
+        &session_id,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+    let claimed_deadline = {
+        let fixtures = hook_execution_fixtures().lock().await;
+        fixtures[&hook_execution_fixture_key(&hook, "plugin-child-job-tool-request")]
+            .lifecycle
+            .claimed_deadline_at()
+            .unwrap()
+    };
+    hook.set_request_deadline_at(Some(claimed_deadline)).await;
+    accept_hook_tool_call(&hook, "plugin-parent", "plugin", "{}", None).await;
+    assert!(matches!(
+        hook.on_tool_call("plugin", None, "plugin-parent", "{}")
+            .await,
+        ToolCallHookAction::Continue
+    ));
+    let error = hook
+        .admit_tool_effect("plugin-parent", 1, "workflow_run", "{}")
+        .await
+        .unwrap_err();
+    assert!(
+        error.contains("call it directly outside the plugin"),
+        "{error}"
+    );
+    assert!(hook.effect_tool_calls.lock().await.is_empty());
+    let rows = node
+        .execute("query { AgentToolCall { tool_name lifecycle_state } }")
+        .await;
+    let rows = rows.data.unwrap()["AgentToolCall"].clone();
+    assert!(
+        rows.as_array().unwrap().iter().any(|row| {
+            row["tool_name"] == "workflow_run" && row["lifecycle_state"] == "failed"
+        }),
+        "{rows}"
+    );
     node.shutdown().await;
     let _ = std::fs::remove_dir_all(data_path);
 }

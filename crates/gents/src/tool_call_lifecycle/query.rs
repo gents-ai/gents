@@ -70,6 +70,8 @@ struct ToolCallRow {
     spawned_by_tool_call_doc_id: Option<String>,
     plugin_parent_tool_call_doc_id: Option<String>,
     plugin_effect_ordinal: Option<u32>,
+    #[serde(default)]
+    job_pin: Option<gents_protocol::job::JobPin>,
 }
 
 impl ToolCallLifecycle {
@@ -118,6 +120,7 @@ impl ToolCallLifecycle {
                     spawned_by_tool_call_doc_id
                     plugin_parent_tool_call_doc_id
                     plugin_effect_ordinal
+                    job_pin
         }}}}"#
         );
 
@@ -353,7 +356,7 @@ impl ToolCallLifecycle {
                 None
             },
             message_sequence: row.message_sequence,
-            kind: super::ToolRowKind::of(&row.tool_name),
+            kind: super::ToolRowKind::of_row(&row.tool_name, row.job_pin.is_some()),
             tool_name: row.tool_name,
             accepted_header_doc_id: Some(accepted.accepted_header_doc_id),
             arguments,

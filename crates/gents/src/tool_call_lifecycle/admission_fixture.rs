@@ -15,6 +15,8 @@ pub struct PublishedAdmissionOptions {
     pub request_created_at: Option<String>,
     pub tool_name: Option<String>,
     pub paired_client: bool,
+    /// Publish the row with a fixture `JobPin`, so it loads as
+    /// `ToolRowKind::PluginJob`.
     pub job_pin: bool,
 }
 
@@ -31,6 +33,56 @@ impl Default for PublishedAdmissionOptions {
             job_pin: false,
         }
     }
+}
+
+/// The `JobPin` every `job_pin: true` fixture row carries.
+pub(crate) fn fixture_job_pin() -> gents_protocol::job::JobPin {
+    gents_protocol::job::JobPin {
+        script_id: "fixture-script".to_owned(),
+        source_digest: "sha256:fixture-source".to_owned(),
+        origin: gents_protocol::job::JobOrigin::Installed,
+        engine_digest: "sha256:fixture-engine".to_owned(),
+        plugin_ref: "fixture-plugin".to_owned(),
+        agent_budget: 4,
+        handle: "fixture-handle".to_owned(),
+        cwd: "/fixture/cwd".to_owned(),
+        adopted_at: 1_700_000_000_000,
+        args_digest: "sha256:fixture-args".to_owned(),
+        chain_root_doc_id: "fixture-chain-root".to_owned(),
+        resume_of: None,
+        replayed_from: None,
+        ceiling_at_pin: gents_protocol::job::JobCeiling {
+            targets: vec!["general".to_owned()],
+            max_live: 2,
+            max_spawns: 8,
+            max_messages_per_slot: 4,
+            result_bytes: 65_536,
+            max_wall_secs: 600,
+        },
+    }
+}
+
+/// Write [`fixture_job_pin`] onto the tool-call row `tool_doc_id`.
+pub(crate) async fn write_fixture_job_pin(
+    node: &Arc<EmbeddedNode>,
+    tool_doc_id: &str,
+) -> anyhow::Result<()> {
+    let mutation = format!(
+        r#"mutation($job_pin: JSON) {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ job_pin: $job_pin }}) {{ _docID }} }}"#,
+        crate::graphql::escape_graphql_string(tool_doc_id),
+    );
+    let variables = serde_json::json!({ "job_pin": fixture_job_pin() });
+    crate::config_client::ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "test.admission_fixture.job_pin",
+        |txn| {
+            let (mutation, variables) = (&mutation, &variables);
+            Box::pin(async move { txn.execute_with_variables(mutation, variables).await })
+        },
+    )
+    .await?;
+    Ok(())
 }
 
 pub(crate) async fn publish_accepted_on_claimed_request(
@@ -478,6 +530,19 @@ pub async fn published_admission_with_owner(
     )?;
     if options.start_running {
         tool.start_running().await?;
+    }
+    if options.job_pin {
+        let doc_id = tool.doc_id().expect("published tool row").to_owned();
+        write_fixture_job_pin(&node, &doc_id).await?;
+        tool = ToolCallLifecycle::load_by_doc_id(
+            node.clone(),
+            &doc_id,
+            &node_did,
+            &format!("session-{name}"),
+            request.request().requester_did.as_deref(),
+        )
+        .await?
+        .expect("pinned tool row");
     }
     Ok((
         PublishedAdmission {

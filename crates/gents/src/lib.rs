@@ -14,7 +14,7 @@ pub mod backend_provider;
 pub mod backend_registry;
 pub mod background_completion;
 mod background_completion_diagnostics;
-pub(crate) mod background_tools;
+pub mod background_tools;
 pub mod blocked_turn;
 pub(crate) mod callback;
 pub mod chatgpt_codex;

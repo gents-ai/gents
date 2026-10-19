@@ -653,7 +653,7 @@ async fn a_round_asking_both_services_is_bad_output() {
     assert_eq!(call.outcome.verdict, PluginVerdict::BadOutput);
     assert_eq!(
         call.outcome.diagnostics,
-        "one round asks for exactly one of model_calls, http_calls, tool_calls or data_calls"
+        "one round asks for exactly one of model_calls, http_calls, tool_calls, data_calls or job_calls"
     );
 }
 

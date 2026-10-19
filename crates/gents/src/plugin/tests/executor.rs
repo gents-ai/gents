@@ -2110,3 +2110,372 @@ mod tool_writes {
         stamped.finish().await;
     }
 }
+
+mod job_calls {
+    use std::collections::BTreeMap;
+
+    use gents_protocol::job::{
+        ChildOutputResponse, JobResultResponse, JobState, PluginJobDeclaration, RoundResult,
+    };
+    use serde_json::{json, Value};
+
+    use super::*;
+    use crate::background_tools::ProcessControlScope;
+    use crate::config_client::ConfigAccess;
+    use crate::plugin::data::StampContext;
+    use crate::plugin::executor::PluginCall;
+    use crate::plugin::job_calls::JobCaller;
+    use crate::plugin::PluginVerdict;
+    use crate::plugin_job::driver::{settle_plugin_job, Settlement};
+    use crate::plugin_job::input::tests::{completed_request, open};
+    use crate::plugin_job::keys::{job_session_id, job_spawn_key};
+    use crate::tool_call_lifecycle::admission_fixture::{
+        fixture_job_pin, published_admission, PublishedAdmission, PublishedAdmissionOptions,
+    };
+    use crate::tool_call_lifecycle::AwaitMode;
+
+    const CHAIN: &str = "chain-row";
+
+    fn tool_output() -> StampContext {
+        StampContext::ToolOutput {
+            node_did: "did:test:test".into(),
+            session_id: "session".into(),
+            request_doc_id: "request".into(),
+            tool_call_doc_id: "tool".into(),
+        }
+    }
+
+    fn scope(session_id: &str) -> ProcessControlScope {
+        ProcessControlScope {
+            request_id: "caller".into(),
+            session_id: session_id.into(),
+            node_did: "did:test:test".into(),
+            requester_did: None,
+        }
+    }
+
+    /// Runs a plugin of `team/plugin` that asks for `requests` once and echoes
+    /// the answers.
+    async fn run(requests: Value, declared: bool, caller: JobCaller) -> PluginCall {
+        let canned = json!({"job_calls": {"requests": requests}});
+        let (home, mut record) = installed_plugin(
+            &asking_plugin_wat("job_calls", "job_results", &canned, false),
+            None,
+        );
+        record.declaration.job = PluginJobDeclaration(declared);
+        store::write_record(home.path(), &record).unwrap();
+        PluginExecutor::new(Some(home.path().to_owned()))
+            .call_with_jobs(&record, json!({}), caller)
+            .await
+            .unwrap()
+    }
+
+    fn answers<T: serde::de::DeserializeOwned>(
+        call: &PluginCall,
+    ) -> BTreeMap<String, RoundResult<T>> {
+        assert_eq!(
+            call.outcome.verdict,
+            PluginVerdict::Success,
+            "{}",
+            call.outcome.diagnostics
+        );
+        serde_json::from_value(call.outcome.output["job_results"].clone()).unwrap()
+    }
+
+    fn child_output(id: &str, slots: &[&str], offset: u64, limit: u64) -> Value {
+        json!({"id": id, "child_output": {"slots": slots, "offset": offset, "limit": limit}})
+    }
+
+    fn result_request(id: &str, row_doc_id: &str, offset: u64, limit: u64) -> Value {
+        json!({"id": id, "result": {"row_doc_id": row_doc_id, "offset": offset, "limit": limit}})
+    }
+
+    async fn child_node(text: &str) -> Arc<crate::defra_node::EmbeddedNode> {
+        let node = open().await;
+        completed_request(
+            &node,
+            CHAIN,
+            "done",
+            &job_session_id("root", "slot-a", 0),
+            &job_spawn_key("root", "slot-a", 0),
+            text,
+        )
+        .await;
+        node
+    }
+
+    /// A background job row pinned to `plugin_ref`.
+    async fn job_row(name: &str, plugin_ref: &str) -> PublishedAdmission {
+        let mut admission = published_admission(PublishedAdmissionOptions {
+            name: name.to_owned(),
+            real_identity: true,
+            await_mode: AwaitMode::Background,
+            job_pin: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        assert!(admission
+            .tool
+            .publish_background_receipt("started")
+            .await
+            .unwrap());
+        let mutation = format!(
+            r#"mutation($pin: JSON) {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ job_pin: $pin }}) {{ _docID }} }}"#,
+            admission.tool.doc_id().unwrap()
+        );
+        let pin = json!({"pin": gents_protocol::job::JobPin {
+            plugin_ref: plugin_ref.to_owned(),
+            ..fixture_job_pin()
+        }});
+        ConfigAccess::transact_local_write(&admission.node, None, "test.job_calls.pin", |txn| {
+            let (mutation, pin) = (&mutation, &pin);
+            Box::pin(async move { txn.execute_with_variables(mutation, pin).await })
+        })
+        .await
+        .unwrap();
+        admission
+    }
+
+    async fn settle(admission: &mut PublishedAdmission, text: &str) {
+        settle_plugin_job(&mut admission.tool, Settlement::Result(json!(text)))
+            .await
+            .unwrap();
+    }
+
+    async fn finish(admission: PublishedAdmission) {
+        admission.node.shutdown().await;
+        let _ = std::fs::remove_dir_all(admission.path);
+    }
+
+    fn row_scope(admission: &PublishedAdmission) -> ProcessControlScope {
+        ProcessControlScope {
+            request_id: "caller".into(),
+            session_id: admission.tool.session_id().into(),
+            node_did: admission.tool.node_did().into(),
+            requester_did: admission.tool.requester_did().map(str::to_owned),
+        }
+    }
+
+    fn page_of(call: &PluginCall) -> JobResultResponse {
+        match answers::<JobResultResponse>(call).remove("r").unwrap() {
+            RoundResult::Result { result } => result,
+            RoundResult::Error { error } => panic!("refused: {error}"),
+        }
+    }
+
+    fn refusal(call: &PluginCall) -> String {
+        match answers::<JobResultResponse>(call).remove("r").unwrap() {
+            RoundResult::Error { error } => error,
+            RoundResult::Result { .. } => panic!("expected a refusal"),
+        }
+    }
+
+    #[tokio::test]
+    async fn job_calls_child_output_pages_terminal_text_capped_at_result_bytes() {
+        let node = child_node("twelve bytes").await;
+        let caller = JobCaller::new(node.clone(), scope("session"), tool_output())
+            .with_children(vec![CHAIN.into()], 5);
+        let call = run(
+            json!([
+                child_output("head", &["slot-a"], 0, 100),
+                child_output("middle", &["slot-a"], 5, 100),
+                child_output("tail", &["slot-a"], 10, 100),
+                child_output("short", &["slot-a"], 0, 3),
+                child_output("missing", &["nope"], 0, 100),
+            ]),
+            true,
+            caller,
+        )
+        .await;
+        let answers = answers::<ChildOutputResponse>(&call);
+        let slot = |id: &str| match &answers[id] {
+            RoundResult::Result { result } => result.slots["slot-a"].clone(),
+            RoundResult::Error { error } => panic!("refused: {error}"),
+        };
+        assert_eq!(
+            (slot("head").text, slot("head").truncated),
+            ("twelv".into(), true)
+        );
+        assert_eq!(
+            (slot("middle").text, slot("middle").truncated),
+            ("e byt".into(), true)
+        );
+        assert_eq!(
+            (slot("tail").text, slot("tail").truncated),
+            ("es".into(), false)
+        );
+        assert_eq!(
+            (slot("short").text, slot("short").truncated),
+            ("twe".into(), true)
+        );
+        assert!(
+            matches!(&answers["missing"], RoundResult::Error { error } if error.contains("nope"))
+        );
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn job_calls_result_pages_a_result_over_4000_bytes_byte_identically() {
+        let text = "0123456789abcdef".repeat(563);
+        assert!(text.len() > 4000);
+        let mut admission = job_row("job-calls-result-pages", "team/plugin").await;
+        settle(&mut admission, &text).await;
+        let row = admission.tool.doc_id().unwrap().to_owned();
+        let mut paged = String::new();
+        loop {
+            let caller =
+                JobCaller::new(admission.node.clone(), row_scope(&admission), tool_output());
+            let offset = paged.len() as u64;
+            let call = run(
+                json!([result_request("r", &row, offset, 4000)]),
+                true,
+                caller,
+            )
+            .await;
+            let page = page_of(&call);
+            assert_eq!(page.row_doc_id, row);
+            assert_eq!(page.state, JobState::Completed);
+            assert_eq!((page.offset, page.total_bytes), (offset, text.len() as u64));
+            assert!(page.result.len() <= 4000);
+            paged.push_str(&page.result);
+            if !page.truncated {
+                break;
+            }
+        }
+        assert_eq!(paged, text);
+        finish(admission).await;
+    }
+
+    #[tokio::test]
+    async fn job_calls_result_refuses_a_row_outside_scope_or_of_another_plugin() {
+        let mut ours = job_row("job-calls-result-ours", "team/plugin").await;
+        settle(&mut ours, "done").await;
+        let row = ours.tool.doc_id().unwrap().to_owned();
+        let outsider = JobCaller::new(ours.node.clone(), scope("another-session"), tool_output());
+        let call = run(json!([result_request("r", &row, 0, 100)]), true, outsider).await;
+        assert!(refusal(&call).contains("scope"), "{}", refusal(&call));
+        let missing = JobCaller::new(ours.node.clone(), row_scope(&ours), tool_output());
+        let call = run(
+            json!([result_request("r", "no-such-row", 0, 100)]),
+            true,
+            missing,
+        )
+        .await;
+        assert!(refusal(&call).contains("scope"), "{}", refusal(&call));
+        finish(ours).await;
+
+        let mut theirs = job_row("job-calls-result-theirs", "other/plugin").await;
+        settle(&mut theirs, "done").await;
+        let row = theirs.tool.doc_id().unwrap().to_owned();
+        let caller = JobCaller::new(theirs.node.clone(), row_scope(&theirs), tool_output());
+        let call = run(json!([result_request("r", &row, 0, 100)]), true, caller).await;
+        assert!(
+            refusal(&call).contains("another plugin"),
+            "{}",
+            refusal(&call)
+        );
+        finish(theirs).await;
+    }
+
+    #[tokio::test]
+    async fn job_calls_result_on_a_running_row_is_not_terminal_with_the_next_call() {
+        let admission = job_row("job-calls-result-running", "team/plugin").await;
+        let row = admission.tool.doc_id().unwrap().to_owned();
+        let caller = JobCaller::new(admission.node.clone(), row_scope(&admission), tool_output());
+        let call = run(json!([result_request("r", &row, 0, 100)]), true, caller).await;
+        let error = refusal(&call);
+        assert!(error.starts_with("not_terminal"), "{error}");
+        assert!(error.contains("status"), "{error}");
+        finish(admission).await;
+    }
+
+    #[tokio::test]
+    async fn callback_invocation_is_not_offered_job_calls_result() {
+        let node = open().await;
+        let callback = StampContext::Callback {
+            node_did: "did:test:test".into(),
+        };
+        let requests = json!([result_request("r", "row", 0, 100)]);
+        let call = run(
+            requests.clone(),
+            true,
+            JobCaller::new(node.clone(), scope("session"), callback),
+        )
+        .await;
+        assert_eq!(call.outcome.verdict, PluginVerdict::Success);
+        assert!(call.outcome.output.get("job_calls").is_none());
+        assert!(call.outcome.output.get("job_results").is_none());
+
+        let call = run(
+            requests,
+            false,
+            JobCaller::new(node.clone(), scope("session"), tool_output()),
+        )
+        .await;
+        assert!(call.outcome.output.get("job_calls").is_none());
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn job_calls_answers_are_keyed_by_id_in_job_results() {
+        let mut admission = job_row("job-calls-keyed", "team/plugin").await;
+        settle(&mut admission, "stored").await;
+        let row = admission.tool.doc_id().unwrap().to_owned();
+        completed_request(
+            &admission.node,
+            CHAIN,
+            "done",
+            &job_session_id("root", "slot-a", 0),
+            &job_spawn_key("root", "slot-a", 0),
+            "child text",
+        )
+        .await;
+        let caller = JobCaller::new(admission.node.clone(), row_scope(&admission), tool_output())
+            .with_children(vec![CHAIN.into()], 64);
+        let call = run(
+            json!([
+                child_output("c", &["slot-a"], 0, 100),
+                result_request("r", &row, 0, 100)
+            ]),
+            true,
+            caller,
+        )
+        .await;
+        assert_eq!(call.outcome.verdict, PluginVerdict::Success);
+        let output = &call.outcome.output["job_results"];
+        assert_eq!(
+            output.as_object().unwrap().keys().collect::<Vec<_>>(),
+            ["c", "r"]
+        );
+        let RoundResult::Result { result } =
+            serde_json::from_value::<RoundResult<ChildOutputResponse>>(output["c"].clone())
+                .unwrap()
+        else {
+            panic!("child_output refused: {output}");
+        };
+        assert_eq!(result.slots.len(), 1);
+        assert_eq!(result.slots["slot-a"].text, "child text");
+        assert!(output["c"]["result"]["slots"]["slot-a"]
+            .get("truncated")
+            .is_none());
+        let RoundResult::Result { result } =
+            serde_json::from_value::<RoundResult<JobResultResponse>>(output["r"].clone()).unwrap()
+        else {
+            panic!("result refused: {output}");
+        };
+        assert_eq!(result.result, "stored");
+
+        let caller = JobCaller::new(admission.node.clone(), row_scope(&admission), tool_output());
+        let mut unknown = result_request("r", &row, 0, 1);
+        unknown["extra"] = json!(true);
+        let call = run(json!([unknown]), true, caller).await;
+        assert_eq!(call.outcome.verdict, PluginVerdict::BadOutput);
+        assert!(
+            call.outcome.diagnostics.contains("JobCall"),
+            "{}",
+            call.outcome.diagnostics
+        );
+        finish(admission).await;
+    }
+}

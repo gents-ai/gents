@@ -196,6 +196,12 @@ impl ToolSurface {
         self.remote_tools.as_ref()
     }
 
+    pub(crate) fn job_tools(
+        &self,
+    ) -> std::collections::HashMap<String, crate::plugin_job::JobBinding> {
+        crate::plugin_job::JobBinding::bind_all(&self.plugin_resolutions)
+    }
+
     pub fn allowed_mcp_service_ids(&self) -> &[String] {
         &self.allowed_mcp_service_ids
     }

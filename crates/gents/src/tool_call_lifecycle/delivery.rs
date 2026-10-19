@@ -85,6 +85,15 @@ pub(super) struct TerminalFields<'a> {
     pub completion_reason: Option<&'a str>,
 }
 
+/// A job row's progress, written at `expected_revision` in its terminal
+/// transaction once the terminal compare wins.
+#[derive(Clone)]
+pub(super) struct TerminalJobProgress {
+    pub expected_revision: u64,
+    pub guest: gents_protocol::job::JobProgress,
+    pub host: crate::plugin_job::records::HostProgressFacts,
+}
+
 #[derive(Clone)]
 pub(crate) struct ToolOutputBinding {
     pub(crate) node: std::sync::Arc<defra_node::EmbeddedNode>,
@@ -656,7 +665,10 @@ impl ToolCallLifecycle {
     pub(crate) fn background_receipt_binding(&self) -> Result<BackgroundReceiptBinding> {
         anyhow::ensure!(
             self.await_mode == super::AwaitMode::Background
-                && self.kind() == ToolRowKind::SessionMessage
+                && matches!(
+                    self.kind(),
+                    ToolRowKind::SessionMessage | ToolRowKind::PluginJob
+                )
                 && !self.is_spawned_background(),
             "background receipt requires an accepted background session-message row"
         );
@@ -700,7 +712,10 @@ impl ToolCallLifecycle {
     ) -> Result<bool> {
         let publish_native_result = !(expected != ToolCallState::Pending
             && self.await_mode == super::AwaitMode::Background
-            && self.kind() == ToolRowKind::SessionMessage
+            && matches!(
+                self.kind(),
+                ToolRowKind::SessionMessage | ToolRowKind::PluginJob
+            )
             && !self.is_spawned_background());
         self.terminalize_with_options(
             expected,
@@ -724,9 +739,12 @@ impl ToolCallLifecycle {
     ) -> Result<bool> {
         let publish_native_result = !(expected != ToolCallState::Pending
             && self.await_mode == super::AwaitMode::Background
-            && self.kind() == ToolRowKind::SessionMessage
+            && matches!(
+                self.kind(),
+                ToolRowKind::SessionMessage | ToolRowKind::PluginJob
+            )
             && !self.is_spawned_background());
-        self.terminalize_with_options(
+        self.terminalize_with_options_at(
             expected,
             fields,
             text,
@@ -735,8 +753,94 @@ impl ToolCallLifecycle {
             true,
             publish_native_result,
             operation,
+            None,
         )
         .await
+    }
+
+    /// The bridge terminal of [`Self::terminalize_bridge_with_delivery`] inside
+    /// a caller's transaction: the same `terminalize_transaction` compare, then
+    /// the job progress write when it wins. Changes nothing in memory.
+    pub(super) async fn terminalize_bridge_in_txn(
+        &self,
+        txn: &ConfigApplyTxn<'_>,
+        fields: TerminalFields<'_>,
+        text: &str,
+        receipt: Option<&gents_protocol::plugin::PluginExecutionReceipt>,
+        job_progress: Option<TerminalJobProgress>,
+        publish_native_result: bool,
+    ) -> Result<bool> {
+        let doc_id = self
+            .doc_id
+            .as_deref()
+            .context("canonical tool terminalization requires accepted physical tool identity")?;
+        let request_doc_id = self
+            .request_doc_id
+            .as_deref()
+            .context("canonical tool terminalization requires accepted request binding")?;
+        let accepted_header = self
+            .accepted_header_doc_id
+            .as_deref()
+            .context("canonical tool terminalization requires accepted header binding")?;
+        if !self.is_spawned_background() {
+            anyhow::ensure!(
+                self.arguments.is_some(),
+                "canonical direct tool terminalization requires accepted argument reference"
+            );
+        }
+        let output_budget = if fields.state == ToolCallState::Completed {
+            None
+        } else {
+            Some(self.output_budget().await)
+        };
+        let plugin_receipt =
+            receipt.map(|receipt| super::plugin_receipt::published(fields.state, receipt));
+        let plugin_effect = self.plugin_effect_terminal()?;
+        let published = terminalize_transaction(
+            txn,
+            doc_id,
+            request_doc_id,
+            accepted_header,
+            &self.node_did,
+            self.requester_did.as_deref(),
+            &self.session_id,
+            &self.tool_call_id,
+            self.call_id.as_deref(),
+            self.message_sequence,
+            self.arguments.as_ref(),
+            self.spawned_by_tool_call_doc_id.as_deref(),
+            plugin_effect.as_ref(),
+            &self.tool_name,
+            self.deadline_at,
+            self.started_at,
+            Utc::now(),
+            ToolCallState::Running,
+            fields,
+            &self.terminal_persistence_status(fields.completion_reason),
+            plugin_receipt.as_ref(),
+            text,
+            None,
+            None,
+            output_budget,
+            true,
+            publish_native_result,
+        )
+        .await?;
+        #[cfg(test)]
+        if take_terminal_failure_for_test(doc_id) {
+            return Err(crate::config_client::classified_conflict_for_test());
+        }
+        if let (true, Some(progress)) = (published, job_progress) {
+            crate::plugin_job::records::write_progress_in_txn(
+                txn,
+                doc_id,
+                progress.expected_revision,
+                progress.guest,
+                progress.host,
+            )
+            .await?;
+        }
+        Ok(published)
     }
 
     pub(super) async fn terminalize_with_presentation(

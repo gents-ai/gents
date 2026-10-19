@@ -716,13 +716,14 @@ pub mod data;
 pub mod executor;
 pub mod http_calls;
 pub mod install;
+pub mod job_calls;
 pub mod model_calls;
 pub mod mounts;
 mod rounds;
 mod service;
 pub mod store;
 pub mod tool;
-pub(crate) mod tool_calls;
+pub mod tool_calls;
 
 pub use afterburner_core::manifold::Manifold;
 

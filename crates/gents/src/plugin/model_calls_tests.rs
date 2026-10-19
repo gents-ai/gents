@@ -834,6 +834,7 @@ async fn fuel_is_spent_across_rounds() {
         http: None,
         tools: None,
         data: None,
+        jobs: None,
     };
     let outcome = drive(calls, json!({}), budget, round).await.unwrap();
     assert_eq!(outcome.verdict, PluginVerdict::OutOfFuel);

@@ -465,6 +465,9 @@ pub struct DefraSessionHook {
     remote_tools: Option<crate::document_config::RemoteTools>,
     goal_tools_enabled: bool,
     goal_creation_enabled: bool,
+    job_tools: HashMap<String, crate::plugin_job::JobBinding>,
+    /// The runtime's job driver, whose handles step 0 of a job tool runs on.
+    pub(crate) job_driver: Option<Arc<crate::plugin_job::driver::JobDriver>>,
     output_obligation_gate: Option<crate::agent::output_obligation::OutputObligationGate>,
     steering_input_source: Option<Arc<SteeringInputSource>>,
 }
@@ -634,6 +637,8 @@ impl DefraSessionHook {
             remote_tools: None,
             goal_tools_enabled: false,
             goal_creation_enabled: false,
+            job_tools: HashMap::new(),
+            job_driver: None,
             output_obligation_gate: None,
             steering_input_source: None,
         }
@@ -681,6 +686,8 @@ impl DefraSessionHook {
             remote_tools: None,
             goal_tools_enabled: false,
             goal_creation_enabled: false,
+            job_tools: HashMap::new(),
+            job_driver: None,
             output_obligation_gate: None,
             steering_input_source: None,
         })
@@ -712,6 +719,24 @@ impl DefraSessionHook {
     ) -> Self {
         self.goal_tools_enabled = goal_tools_enabled;
         self.goal_creation_enabled = goal_tools_enabled && goal_creation_enabled;
+        self
+    }
+
+    /// Bind the Agent's job tools; a plugin child call naming one is refused.
+    pub(crate) fn with_job_tools(
+        mut self,
+        job_tools: HashMap<String, crate::plugin_job::JobBinding>,
+    ) -> Self {
+        self.job_tools = job_tools;
+        self
+    }
+
+    /// Bind the runtime's job driver; a job tool is refused without it.
+    pub(crate) fn with_job_driver(
+        mut self,
+        driver: Arc<crate::plugin_job::driver::JobDriver>,
+    ) -> Self {
+        self.job_driver = Some(driver);
         self
     }
 
@@ -1053,7 +1078,14 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
             .await
             .map_err(|error| format!("cannot admit plugin effect: {error:#}"))?;
         let internal_id = child.plugin_effect_internal_id().to_owned();
-        if !crate::plugin::tool_calls::supported(tool_name) {
+        if !crate::plugin::tool_calls::supported(
+            tool_name,
+            &self
+                .job_tools
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<String>>(),
+        ) {
             let reason = format!(
                 "{tool_name} controls request, session or process lifecycle; call it directly outside the plugin"
             );

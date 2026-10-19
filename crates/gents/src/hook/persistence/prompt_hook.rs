@@ -175,6 +175,24 @@ impl DefraSessionHook {
             };
         }
 
+        if let Some(binding) = self.job_tools.get(tool_name) {
+            let result = self
+                .persist_job_tool_call(binding, tool_call_id, internal_call_id, args)
+                .instrument(tracing::info_span!(
+                    "tool.call",
+                    tool_name = %tool_name,
+                    tool_call_id = %internal_call_id,
+                ))
+                .await;
+            return match result {
+                Ok(action) => {
+                    self.record_success();
+                    action
+                }
+                Err(error) => self.on_tool_persistence_error("persist job tool call", &error),
+            };
+        }
+
         let result: anyhow::Result<()> = async {
             let (session_id, request_id, deadline_at, _seq) =
                 self.ensure_assistant_turn_sequence().await?;
@@ -213,6 +231,50 @@ impl DefraSessionHook {
             }
             Err(e) => self.on_tool_persistence_error("persist tool call", &e),
         }
+    }
+
+    /// Dispatch a job tool: step 0 runs in the foreground, and the call ends
+    /// here unless its output adopts a job.
+    async fn persist_job_tool_call(
+        &self,
+        binding: &crate::plugin_job::JobBinding,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+    ) -> anyhow::Result<ToolCallHookAction> {
+        let tool_name = binding.tool_name.as_str();
+        let (session_id, request_id, deadline_at, _seq) =
+            self.ensure_assistant_turn_sequence().await?;
+        let mut lifecycle = self
+            .adopt_accepted_tool_dispatch(
+                internal_call_id,
+                tool_call_id.as_deref(),
+                &request_id,
+                &session_id,
+                tool_name,
+                args,
+                deadline_at,
+                AwaitMode::Foreground,
+            )
+            .await?;
+        lifecycle.start_running().await?;
+        let payload = match serde_json::from_str(args) {
+            Ok(args) => {
+                crate::plugin_job::dispatch::run_step0(self, &mut lifecycle, binding, args).await?
+            }
+            Err(error) => {
+                let payload = invalid_tool_arguments_payload(
+                    tool_name,
+                    "/",
+                    format!("invalid {tool_name} arguments: {error}"),
+                );
+                lifecycle
+                    .fail(&payload, FailureClass::ArgumentInvalid)
+                    .await?;
+                payload
+            }
+        };
+        Ok(self.skip_tool_result(tool_name, payload))
     }
 
     pub async fn on_tool_admission_rejected(

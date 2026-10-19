@@ -142,3 +142,48 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
         node.shutdown().await;
     }
 }
+
+#[tokio::test]
+async fn wait_process_refuses_a_job_row_with_the_completion_message_text() {
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    let agent = "did:test:wait-job-row";
+    let hook = DefraSessionHook::with_identity(node.clone(), agent, FailurePolicy::FailClosed);
+    hook.on_completion_call(&user_text_message("Wait on a job"), &[])
+        .await;
+    let session = hook.session_id().await.unwrap();
+    bind_interruptible_request(
+        &node,
+        &hook,
+        "job-wait-request",
+        &session,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+    accept_hook_tool_call(&hook, "job-call", "plugin_job_tool", "{}", None).await;
+    let job = fetch_tool_call_row(&node, &session, "job-call").await;
+    let job_doc = job["_docID"].as_str().unwrap();
+    let flipped = node
+        .execute(&format!(
+            r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{job_doc}" }} }}, input: {{ await_mode: "background" }}) {{ _docID }} }}"#
+        ))
+        .await;
+    assert!(!flipped.has_errors(), "{:?}", flipped.errors);
+    crate::tool_call_lifecycle::admission_fixture::write_fixture_job_pin(&node, job_doc)
+        .await
+        .unwrap();
+
+    let args = r#"{"tool_call_id":"job-call"}"#;
+    accept_hook_tool_call(&hook, "wait-call", "wait_process", args, None).await;
+    let ToolCallHookAction::Skip { reason } = hook
+        .on_tool_call("wait_process", None, "wait-call", args)
+        .await
+    else {
+        panic!("wait_process must publish a structured refusal")
+    };
+    assert!(
+        reason.contains("its result arrives only as a completion message"),
+        "{reason}"
+    );
+    node.shutdown().await;
+}

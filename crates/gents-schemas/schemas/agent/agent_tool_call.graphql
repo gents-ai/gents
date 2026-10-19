@@ -30,6 +30,7 @@ type AgentToolCall @branchable {
     plugin_execution_receipt: JSON
     job_pin: JSON
     job_progress: JSON
+    job_step_state: JSON
     tool_failure_class: String
     denial_reason: String
     denied_argv: [String]

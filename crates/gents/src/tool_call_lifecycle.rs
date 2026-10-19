@@ -142,7 +142,8 @@ pub use query::{
     load_tool_call_arguments, load_tool_call_presentation, load_tool_call_result,
     render_tool_result, CanonicalToolCallPresentation,
 };
-mod plugin_receipt;
+pub(crate) mod plugin_receipt;
+pub use plugin_receipt::ReceiptDecision;
 mod recovery;
 pub(crate) mod runtime;
 mod transition;
@@ -177,18 +178,23 @@ pub use recovery::{
 };
 pub use transition::CausedRequestTerminal;
 pub use transition::IllegalToolCallTransition;
+pub(crate) use transition::PluginJobTerminal;
 
 /// Which owner terminates a tool-call row. A [`Self::SessionMessage`] row
 /// (Lean `ToolOperation.sessionMessage`) has no host process: its terminal
-/// is the terminal output of the request it caused.
+/// is the terminal output of the request it caused. A [`Self::PluginJob`] row
+/// (Lean `ToolOperation.pluginJob`) is the row whose `job_pin` is present.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ToolRowKind {
+pub enum ToolRowKind {
     Native,
     /// An `agent_new`/`agent_message` row. It has no deadline (Lean
     /// `session_message_row_left_running`): the stored `deadline_at` is the
     /// accepted dispatch deadline, never a terminal cause, so the caused
     /// request's result always reaches the calling session.
     SessionMessage,
+    /// A plugin job: a background row pinned by `job_pin`. The restart sweep
+    /// leaves it running and it never returns to the foreground.
+    PluginJob,
 }
 
 impl ToolRowKind {
@@ -198,6 +204,25 @@ impl ToolRowKind {
         } else {
             Self::Native
         }
+    }
+
+    /// The kind of a stored row: pluginJob exactly when `job_pin` is present.
+    pub(crate) fn of_row(tool_name: &str, has_job_pin: bool) -> Self {
+        if has_job_pin {
+            Self::PluginJob
+        } else {
+            Self::of(tool_name)
+        }
+    }
+
+    /// Whether the orphan sweep may settle a row of this kind and await mode.
+    pub fn in_orphan_sweep_scope(self, await_mode: AwaitMode) -> bool {
+        await_mode == AwaitMode::Background && self == Self::Native
+    }
+
+    /// Whether a running background row of this kind may flip to foreground.
+    pub fn may_foreground(self) -> bool {
+        !matches!(self, Self::SessionMessage | Self::PluginJob)
     }
 }
 
