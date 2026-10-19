@@ -192,19 +192,19 @@ impl DefraSessionHook {
                     budget: parsed.token_budget,
                 };
                 if parsed.reason.is_some() {
-                    json!({"accepted": false, "error": "reason is only accepted with status complete or blocked"})
+                    json!({"accepted": false, "error": "reason is only accepted with status complete or blocked; it is ignored and invalid with status active"})
                 } else if let Err(error) = fields.validate() {
                     json!({"accepted": false, "error": error.to_string()})
                 } else if pre.status != GoalStatus::Active {
                     let hint = match pre.status {
-                        GoalStatus::BudgetLimited => {
-                            "a budget_limited goal cannot be reactivated by update_goal"
+                        GoalStatus::Blocked | GoalStatus::Paused | GoalStatus::UsageLimited => {
+                            "an operator resumes it with `gents goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID identifies the current blocked/paused goal's request)"
                         }
                         GoalStatus::Complete => {
-                            "a complete goal is terminal and cannot be reopened by update_goal"
+                            "a complete goal is terminal and has no resume path"
                         }
-                        _ => {
-                            "an operator resumes it with `gents goal resume-request --from REQUEST_ID`"
+                        GoalStatus::BudgetLimited => {
+                            "a budget_limited goal cannot be reactivated and has no resume path"
                         }
                     };
                     json!({

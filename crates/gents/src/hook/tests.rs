@@ -1927,26 +1927,65 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
     )
     .await;
 
+    // Accepted active edit through the hook path: no status, objective updated,
+    // stale-race message absent. Complements the edit_active_goal contract tests
+    // (edited_fields_match_operator_updates_without_changing_goal_identity),
+    // which cover active-edit success and CAS/identity rejection at the edit layer.
+    {
+        crate::goal::set_goal(
+            &node,
+            "did:test:general",
+            &session_id,
+            Some("blocked-edit semantics"),
+            Some(crate::goal::GoalStatus::Active),
+            None,
+        )
+        .await
+        .expect("create active goal");
+        let call_id = "active-edit-accepted";
+        let args = r#"{"objective":"revised while active"}"#;
+        accept_hook_tool_call(&hook, &call_id, crate::goal::UPDATE_GOAL_TOOL_NAME, args, None)
+            .await;
+        let ToolCallHookAction::Skip { tool_result, .. } = hook
+            .on_tool_call(crate::goal::UPDATE_GOAL_TOOL_NAME, None, &call_id, args)
+            .await
+        else {
+            panic!("expected hook-managed skip for {call_id}");
+        };
+        assert!(
+            tool_result.contains("\"accepted\": true"),
+            "active edit must be accepted: {tool_result}"
+        );
+        let goal = crate::goal::load_canonical_goal(&node, "did:test:general", &session_id)
+            .await
+            .expect("load goal")
+            .expect("goal exists");
+        assert_eq!(goal.objective, "revised while active");
+        crate::goal::delete_goals_for_session(&node, "did:test:general", &session_id)
+            .await
+            .expect("clear goal");
+    }
+
     for (status, expected_hint) in [
         (
             crate::goal::GoalStatus::Blocked,
-            "gents goal resume-request --from REQUEST_ID",
+            "gents goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID identifies the current blocked/paused goal\'s request)",
         ),
         (
             crate::goal::GoalStatus::Paused,
-            "gents goal resume-request --from REQUEST_ID",
+            "gents goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID identifies the current blocked/paused goal\'s request)",
         ),
         (
             crate::goal::GoalStatus::UsageLimited,
-            "gents goal resume-request --from REQUEST_ID",
+            "gents goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID identifies the current blocked/paused goal\'s request)",
         ),
         (
             crate::goal::GoalStatus::Complete,
-            "a complete goal is terminal",
+            "a complete goal is terminal and has no resume path",
         ),
         (
             crate::goal::GoalStatus::BudgetLimited,
-            "a budget_limited goal cannot be reactivated",
+            "a budget_limited goal cannot be reactivated and has no resume path",
         ),
     ] {
         crate::goal::set_goal(
