@@ -372,7 +372,13 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_PROFILE_NAME,
-        gents_protocol::schemas::INFERENCE_PROFILE,
+        // Frozen verbatim rc0 SDL (the versioned step's SOURCE): fresh stores
+        // register this OLD SDL first, then the service_tier step patches them
+        // to the canonical NEW CID (steps_applied == 1). The lineage root pin
+        // below matches this SDL's content address. The live canonical SDL
+        // (with service_tier) is reached ONLY through the step, never
+        // registered directly by the baseline.
+        INFERENCE_PROFILE_RC0_SDL,
         // Lineage ROOT pin (compatibility review, rc0): the store's InferenceProfile
         // DAG must descend from the rc0 schema version below (SDL without
         // service_tier, INFERENCE_PROFILE_RC0_SDL). The fresh-apply CID (SDL with
@@ -625,7 +631,9 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
 ];
 
 /// Verbatim rc0 InferenceProfile SDL (`git show v0.21.0-rc0:...`), the lineage
-/// root for existing stores. The ONLY difference from the live SDL is the
+/// root for existing stores AND the frozen baseline source SDL: fresh stores
+/// register this (OLD CID), then the service_tier step patches them to the
+/// canonical live SDL (NEW CID). The ONLY difference from the live SDL is the
 /// absence of `service_tier`.
 pub const INFERENCE_PROFILE_RC0_SDL: &str = "\
 type InferenceProfile @branchable @index(fields: [\"node_did\", \"profile_id\"], unique: true) {

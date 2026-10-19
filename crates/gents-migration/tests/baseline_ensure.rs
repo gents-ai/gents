@@ -27,7 +27,44 @@ fn default_baseline_matches_ordered_protocol_catalog() {
         )
         .collect::<Vec<_>>();
 
-    assert_eq!(actual, expected, "baseline must use the canonical live SDL");
+    // Baseline SDLs equal the canonical live SDL, EXCEPT collections with a
+    // versioned step: there the baseline is deliberately the step's frozen
+    // source SDL (the pre-step canonical SDL), and the step patches it to the
+    // live SDL. InferenceProfile is that one collection: its baseline SDL is
+    // the frozen rc0 SDL (INFERENCE_PROFILE_RC0_SDL), and its step pins the
+    // live SDL's content address.
+    let versioned_collections: BTreeSet<&str> = gents_migration::DEFAULT_STEPS
+        .iter()
+        .filter_map(|step| step.collection())
+        .collect();
+    let mismatches: Vec<&str> = actual
+        .iter()
+        .zip(expected.iter())
+        .filter_map(|((name, actual_sdl), (expected_name, expected_sdl))| {
+            debug_assert_eq!(name, expected_name);
+            if versioned_collections.contains(name) {
+                // Versioned collection: baseline must be the step's frozen
+                // source SDL, not the live SDL. Assert exactly that.
+                if name == gents_protocol::schemas::INFERENCE_PROFILE_NAME {
+                    if *actual_sdl != gents_migration::INFERENCE_PROFILE_RC0_SDL {
+                        Some("InferenceProfile baseline SDL must be the frozen rc0 SDL")
+                    } else {
+                        None
+                    }
+                } else {
+                    Some("unexpected versioned collection without a declared frozen SDL")
+                }
+            } else if actual_sdl != expected_sdl {
+                Some(name)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert!(
+        mismatches.is_empty(),
+        "baseline SDL contract violated: {mismatches:?} — non-versioned collections must use the canonical live SDL; versioned collections must use their frozen step-source SDL"
+    );
     assert_eq!(
         gents_migration::DEFAULT_STEPS.len(),
         1,
