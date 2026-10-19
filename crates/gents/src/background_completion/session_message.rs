@@ -506,7 +506,6 @@ mod turn_assignment_tests {
         let PublishedSessionMessage {
             admission,
             caused_request_id,
-            caused_request_doc_id,
             ..
         } = crate::tool_call_lifecycle::admission_fixture::published_session_message(
             crate::tool_call_lifecycle::admission_fixture::PublishedAdmissionOptions {
