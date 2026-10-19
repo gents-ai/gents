@@ -1304,7 +1304,7 @@ mod tests {
     use crate::commands::grok_shim::projection::tools::PAGER_WAIT_FOR_EXIT_MESSAGE;
     use crate::commands::grok_shim::test_fixtures::seed_canonical_assistant_message;
     use crate::commands::grok_shim::test_fixtures::{
-        configure_runtime_agent, seed_background_receipt, seed_canonical_tool_call,
+        configure_runtime_agent, seed_job_row,
         streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse},
     };
     use crate::commands::grok_shim::turn::PromptBlock;
@@ -1456,111 +1456,6 @@ mod tests {
             .get("error")
             .is_some());
         service.turns.handle_disconnect().await.unwrap();
-    }
-
-    async fn seed_job_row(
-        node: &Arc<EmbeddedNode>,
-        node_did: &str,
-        session: &str,
-        call: &str,
-        handle: &str,
-        lifecycle: &str,
-        state: gents_protocol::job::JobState,
-    ) -> gents_protocol::job::JobView {
-        use gents_protocol::job::{JobBudget, JobCeiling, JobOrigin, JobPin, JobProgress};
-        let mut pin = JobPin {
-            script_id: "fixture-script".into(),
-            source_digest: "sha256:source".into(),
-            origin: JobOrigin::Installed,
-            engine_digest: "sha256:engine".into(),
-            plugin_ref: "fixture/workflow".into(),
-            agent_budget: 4,
-            handle: handle.into(),
-            cwd: "/fixture/cwd".into(),
-            adopted_at: 1_780_000_000_000,
-            args_digest: "sha256:args".into(),
-            chain_root_doc_id: String::new(),
-            resume_of: None,
-            replayed_from: None,
-            ceiling_at_pin: JobCeiling {
-                targets: vec!["general".into()],
-                max_live: 2,
-                max_spawns: 8,
-                max_messages_per_slot: 4,
-                result_bytes: 65_536,
-                max_wall_secs: 600,
-            },
-        };
-        let progress = JobProgress {
-            title: format!("Job {call}"),
-            state,
-            pause_reason: None,
-            phases: Vec::new(),
-            active: Vec::new(),
-            spawned: 2,
-            budget: JobBudget {
-                total: 4,
-                spent: 2,
-                remaining: 2,
-            },
-            last_event: "seeded".into(),
-            last_event_at: None,
-            question: None,
-            observed_terminal_children: 0,
-            revision: 1,
-        };
-        let ended = if lifecycle == "running" {
-            ""
-        } else {
-            r#"completed_at: "2026-06-01T10:05:00Z","#
-        };
-        let created = node
-            .execute(&format!(
-                r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "request-{call}", session_id: "{session}", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "test", content: "test", lifecycle_state: "pending", created_at: "2026-06-01T10:00:00Z"}}) {{ _docID }} }}"#
-            ))
-            .await;
-        ensure_no_errors(&created, "seed job request").unwrap();
-        let request: gents_protocol::row::AgentRequestRow = serde_json::from_value(json!({
-            "_docID": gents_protocol::graphql::extract_mutation_doc_id(
-                &json!({"data": created.data}),
-                "AgentRequest",
-            )
-            .unwrap(),
-            "request_id": format!("request-{call}"), "session_id": session,
-            "node_did": node_did, "requester_did": node_did,
-        }))
-        .unwrap();
-        let doc_id = seed_canonical_tool_call(
-            node, &request, call, "workflow", lifecycle, "{}", None, None, None, None,
-        )
-        .await;
-        pin.chain_root_doc_id = doc_id.clone();
-        let mutation = format!(
-            r#"mutation($job_pin: JSON, $job_progress: JSON) {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, input: {{
-                await_mode: "background", status: "{lifecycle}", deadline_at: "2126-06-01T10:00:00Z", {ended}
-                job_pin: $job_pin, job_progress: $job_progress
-            }}) {{ _docID }} }}"#
-        );
-        let variables = json!({ "job_pin": pin, "job_progress": progress });
-        ConfigAccess::transact_local_write(node, None, "test.grok.workflow.job", |txn| {
-            let (mutation, variables) = (&mutation, &variables);
-            Box::pin(async move { txn.execute_with_variables(mutation, variables).await })
-        })
-        .await
-        .unwrap();
-        if lifecycle == "running" {
-            seed_background_receipt(node, &request, &doc_id, call).await;
-        }
-        gents::plugin_job::view::load_job_view(
-            &ConfigAccess::local(node.clone()),
-            None,
-            gents::plugin_job::view::JobKey::Address {
-                session_id: session.into(),
-                tool_call_id: call.into(),
-            },
-        )
-        .await
-        .unwrap()
     }
 
     async fn workflow_session(session: &str) -> (tempfile::TempDir, AcpService) {

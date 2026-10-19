@@ -203,4 +203,69 @@ mod tests {
         assert_eq!(threads, ["child-a", "child-b"]);
         state.node.shutdown().await;
     }
+
+    #[tokio::test]
+    async fn generated_plugin_job_lineage_cases_drive_codex_threads() {
+        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        for case in snapshot["plugin_job_lineage_cases"].as_array().unwrap() {
+            let mut case = case.clone();
+            let queries = case["queries"].as_array().unwrap().clone();
+            let mut causes: Vec<&str> = queries
+                .iter()
+                .map(|query| query["cause_request_doc_id"].as_str().unwrap())
+                .collect();
+            causes.sort();
+            causes.dedup();
+            // A cause outside the case's rows is the calling request: it opens
+            // the calling session, ahead of the rows that name it.
+            let rows = case["rows"].as_array_mut().unwrap();
+            let mut roots = Vec::new();
+            for cause in causes {
+                let root = match rows.iter().find(|row| row["_docID"] == cause) {
+                    Some(row) => row["session_id"].as_str().unwrap().to_owned(),
+                    None => {
+                        rows.insert(
+                            0,
+                            serde_json::json!({
+                                "created_at": 1, "_docID": cause, "session_id": "parent",
+                                "is_public": true, "caused_by_parent_request_doc_id": null,
+                                "caused_by_parent_tool_call_doc_id": null,
+                                "opening_request_doc_id": null,
+                            }),
+                        );
+                        "parent".to_owned()
+                    }
+                };
+                if !roots.contains(&root) {
+                    roots.push(root);
+                }
+            }
+            let temp = tempfile::tempdir().expect("tempdir");
+            let state =
+                super::super::turn_projection::tests::notification_test_state(temp.path()).await;
+            crate::caused_sessions::fixtures::seed_lineage_case(
+                &state.node,
+                &case,
+                "did:test:notification",
+            )
+            .await;
+            let mut actual = load_caused_threads_for_root_ids(&state, &roots)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|thread| thread.session_id)
+                .collect::<Vec<_>>();
+            actual.sort();
+            let mut expected = queries
+                .iter()
+                .filter(|query| query["expected_opening_doc_id"].is_string())
+                .map(|query| query["session_id"].as_str().unwrap().to_owned())
+                .filter(|session| !roots.contains(session))
+                .collect::<Vec<_>>();
+            expected.sort();
+            expected.dedup();
+            assert_eq!(actual, expected, "{}", case["name"]);
+            state.node.shutdown().await;
+        }
+    }
 }

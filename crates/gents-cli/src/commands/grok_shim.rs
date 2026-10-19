@@ -16,7 +16,7 @@ mod session_record;
 mod sessions;
 mod task_control;
 #[cfg(test)]
-mod test_fixtures;
+pub(crate) mod test_fixtures;
 pub(crate) mod turn;
 mod usage;
 mod workflow_catalog;

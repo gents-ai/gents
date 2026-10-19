@@ -288,6 +288,8 @@ source consistency checks, not a separate runtime compatibility version.
   pin refuses any handle that is not the kind the scope resolved, so the swap
   race the pin already caught for symlinks fails closed promptly for FIFOs
   and kind swaps too.
+- Codex background-terminal clean and process kill now stop running background
+  tool calls.
 
 ## 0.20.0 - 2026-10-05
 
