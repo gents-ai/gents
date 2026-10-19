@@ -164,3 +164,45 @@ fn preamble_no_targets_block_when_empty() {
     assert!(!preamble.contains("## Agents"));
     assert!(!preamble.contains("agent_new"));
 }
+
+#[test]
+fn preamble_includes_background_completion_guidance() {
+    let preamble = build_preamble(
+        "You are a coordinator.",
+        "orchestrator",
+        &["agent_new"],
+        true,
+    );
+    // Notifications are event-time snapshots, not durable outcomes.
+    assert!(preamble.contains("## Background Completion Guidance"));
+    assert!(preamble.contains("event-time snapshots"));
+    assert!(preamble.contains("not the same as a durable assignment"));
+    // Canonical current status only when needed; unknown stays unknown.
+    assert!(preamble.contains("the status stays unknown"));
+    // No stale-failure repetition after proven recovery or acknowledgment.
+    assert!(preamble.contains("do not report or\nrepeat it"));
+    // Evidence-based action with provenance; no automatic authority.
+    assert!(preamble.contains("never cancel or reassign background work automatically"));
+    assert!(preamble.contains("never widen your own permissions"));
+    // No automatic redundant status polling; drilldown only for missing evidence.
+    assert!(preamble.contains("Do not poll for status on a schedule"));
+    assert!(preamble.contains("only when a decision is blocked on missing evidence"));
+}
+
+#[test]
+fn preamble_guidance_present_without_meta_tool_guidance() {
+    let preamble = build_preamble("You are a worker.", "worker", &["read_file"], false);
+    assert!(preamble.contains("## Background Completion Guidance"));
+}
+
+#[test]
+fn preamble_orders_guidance_before_tool_list() {
+    let preamble = build_preamble("Be helpful.", "general", &["bash"], true);
+    let guidance = preamble
+        .find("## Background Completion Guidance")
+        .expect("guidance present");
+    let tools = preamble
+        .find("You have access to these tools")
+        .expect("tool list present");
+    assert!(guidance < tools, "guidance must precede the tool list");
+}
