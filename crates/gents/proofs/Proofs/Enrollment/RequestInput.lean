@@ -42,6 +42,13 @@ runtime requests. -/
 def hasAuthoredInput (input : RequestInput) (prose : String) : Bool :=
   !prose.trim.isEmpty || !input.capturedContext.isEmpty
 
+/-- This observation prevents sending typed captures to a process that cannot
+decode them. It grants no authority; the selected runtime's identity, readiness
+and request admission retain their existing owners. Plain input does not need
+this new contract advertisement. -/
+def capturedInputCompatible (input : RequestInput) (runtimeVersion : Option Nat) : Bool :=
+  input.capturedContext.isEmpty || runtimeVersion == some 1
+
 /-- Runtime continuations remain in their parent's invocation directory. They
 do not replay the parent's title intent, queue position, captured context, or goal issuance facts.
 The executing host still validates the inherited directory against its policy. -/
