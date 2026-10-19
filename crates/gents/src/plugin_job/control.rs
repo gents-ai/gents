@@ -295,10 +295,11 @@ pub async fn control(
             message: "job control is local-only in v1; stop or pause the job from its session (`workflow stop|pause <handle>`), the desktop, Grok or Codex".into(),
         });
     };
-    let mut lifecycle = ToolCallLifecycle::load(node.node().clone(), &scope.session_id, tool_call_id)
-        .await
-        .map_err(unavailable)?
-        .ok_or(JobReadError::NotYetObservable)?;
+    let mut lifecycle =
+        ToolCallLifecycle::load(node.node().clone(), &scope.session_id, tool_call_id)
+            .await
+            .map_err(unavailable)?
+            .ok_or(JobReadError::NotYetObservable)?;
     if !scope.authorizes(
         lifecycle.session_id(),
         lifecycle.node_did(),

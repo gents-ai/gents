@@ -328,17 +328,10 @@ mod tests {
         guest: JobProgress,
         host: HostProgressFacts,
     ) -> anyhow::Result<JobProgress> {
-        ConfigAccess::transact_local_write(
-            &admission.node,
-            None,
-            "test.records.progress",
-            |txn| {
-                let (guest, host) = (guest.clone(), host.clone());
-                Box::pin(
-                    async move { write_progress_in_txn(txn, doc_id, expected, guest, host).await },
-                )
-            },
-        )
+        ConfigAccess::transact_local_write(&admission.node, None, "test.records.progress", |txn| {
+            let (guest, host) = (guest.clone(), host.clone());
+            Box::pin(async move { write_progress_in_txn(txn, doc_id, expected, guest, host).await })
+        })
         .await
     }
 

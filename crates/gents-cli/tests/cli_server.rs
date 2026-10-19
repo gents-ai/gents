@@ -2745,10 +2745,10 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mcp_query_reads_job_fields() -> Result<()> {
+async fn owner_reads_job_fields() -> Result<()> {
     use gents_protocol::job::{JobBudget, JobCeiling, JobOrigin, JobPin, JobProgress, JobState};
 
-    let served = McpGraphHome::start("mcp-job-fields", &["--enable-mcp"]).await?;
+    let served = McpGraphHome::start("owner-job-fields", &[]).await?;
     let access = gents::config_client::ConfigAccess::Graphql(support::graphql::served_endpoint(
         &graphql_url(served.port),
     ));
@@ -2835,18 +2835,18 @@ async fn mcp_query_reads_job_fields() -> Result<()> {
         graphql_mutation_with_variables(&access, &mutation, &json!({})).await?;
     }
 
-    let client = served.client(None).await?;
-    let found = call_mcp_tool(
-        &client,
-        "query",
-        json!({"argv": ["find"], "collection": "AgentToolCall", "options": {
-            "fields": ["tool_call_key", "job_pin", "job_progress", "job_step_state"],
-            "filter": {"tool_call_key": {"_eq": "mcp-job:call-mcp"}}}}),
-    )
-    .await?
-    .map_err(|refusal| anyhow!(refusal))?;
-    assert_eq!(found["returned_count"].as_i64(), Some(1), "{found}");
-    let row = &found["results"][0];
+    let found = access
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{tool_call_key: {{_eq: "{key}"}}}}) {{
+                tool_call_key job_pin job_progress job_step_state }} }}"#,
+            key = escape_graphql_string("mcp-job:call-mcp"),
+        ))
+        .await?;
+    let rows = found["data"]["AgentToolCall"]
+        .as_array()
+        .context("owner read returns AgentToolCall rows")?;
+    assert_eq!(rows.len(), 1, "{found}");
+    let row = &rows[0];
     let read_progress: JobProgress = serde_json::from_value(row["job_progress"].clone())
         .context("job_progress decodes as JobProgress")?;
     assert_eq!(read_progress, progress);
@@ -2855,26 +2855,22 @@ async fn mcp_query_reads_job_fields() -> Result<()> {
     assert_eq!(read_pin, pin);
     assert_eq!(row["job_step_state"], step_state);
 
-    let children = call_mcp_tool(
-        &client,
-        "query",
-        json!({"argv": ["find"], "collection": "AgentRequest", "options": {
-            "fields": ["request_id", "caused_by_parent_tool_call_doc_id"],
-            "filter": {"caused_by_parent_tool_call_doc_id": {"_eq": row_doc_id}}}}),
-    )
-    .await?
-    .map_err(|refusal| anyhow!(refusal))?;
-    assert_eq!(children["returned_count"].as_i64(), Some(2), "{children}");
-    let mut ids: Vec<&str> = children["results"]
+    let children = access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{caused_by_parent_tool_call_doc_id: {{_eq: "{row}"}}}}) {{
+                request_id }} }}"#,
+            row = escape_graphql_string(&row_doc_id),
+        ))
+        .await?;
+    let mut ids: Vec<&str> = children["data"]["AgentRequest"]
         .as_array()
-        .context("results is an array")?
+        .context("owner read returns AgentRequest rows")?
         .iter()
         .filter_map(|child| child["request_id"].as_str())
         .collect();
     ids.sort_unstable();
-    assert_eq!(ids, ["mcp-child-alpha", "mcp-child-beta"]);
+    assert_eq!(ids, ["mcp-child-alpha", "mcp-child-beta"], "{children}");
 
-    let _ = client.cancel().await;
     Ok(())
 }
 

@@ -502,7 +502,11 @@ mod tests {
         );
     }
 
-    async fn insert(node: &std::sync::Arc<EmbeddedNode>, collection: &str, value: serde_json::Value) -> String {
+    async fn insert(
+        node: &std::sync::Arc<EmbeddedNode>,
+        collection: &str,
+        value: serde_json::Value,
+    ) -> String {
         ConfigAccess::transact_local_write(node, None, "test.plugin_job_effects", |txn| {
             let value = &value;
             Box::pin(async move {

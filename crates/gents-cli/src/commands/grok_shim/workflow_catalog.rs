@@ -49,13 +49,11 @@ pub(super) async fn list(
     agent_id: &str,
     plugin_home: &Path,
 ) -> Result<Value> {
-    let tools = gents::ConfigAccess::transact_local_readonly(
-        &node,
-        None,
-        "grok.workflows_list",
-        |txn| Box::pin(async move { load_agent_tools_in_txn(txn, node_did, agent_id).await }),
-    )
-    .await?;
+    let tools =
+        gents::ConfigAccess::transact_local_readonly(&node, None, "grok.workflows_list", |txn| {
+            Box::pin(async move { load_agent_tools_in_txn(txn, node_did, agent_id).await })
+        })
+        .await?;
     let plugins: Vec<PluginToolRef> = tools
         .and_then(|tools| tools.integrations)
         .and_then(|integrations| integrations.plugins)

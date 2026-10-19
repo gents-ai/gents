@@ -9,7 +9,7 @@ mod inspect;
 mod local;
 pub(crate) mod registry;
 mod remove;
-pub(crate) use remove::remove;
+pub(crate) use remove::{remove, remove_home_install};
 mod scaffold;
 mod scenario;
 mod server;

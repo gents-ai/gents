@@ -686,11 +686,16 @@ async fn finish_progress(step: &Step0, row: &str) {
         pause_reason: None,
     };
     let (stored, host) = (&stored, &host);
-    crate::config_client::ConfigAccess::transact_local_write(&step.node, None, "test.finish", |txn| {
-        Box::pin(async move {
-            write_progress_in_txn(txn, row, stored.revision, stored.clone(), host.clone()).await
-        })
-    })
+    crate::config_client::ConfigAccess::transact_local_write(
+        &step.node,
+        None,
+        "test.finish",
+        |txn| {
+            Box::pin(async move {
+                write_progress_in_txn(txn, row, stored.revision, stored.clone(), host.clone()).await
+            })
+        },
+    )
     .await
     .unwrap();
 }

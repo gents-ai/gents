@@ -1,10 +1,12 @@
 use crate::support::graphql::{graphql_mutation_with_variables, served_endpoint};
+use crate::support::mocks::fake_llm::{ChatAction, FakeLlm, Responder};
 use crate::support::*;
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -15,7 +17,8 @@ use gents::session::canonical_rows::{
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 use gents_protocol::job::{
-    JobBudget, JobCeiling, JobOrigin, JobPauseReason, JobPin, JobProgress, JobState,
+    JobBudget, JobCeiling, JobEffects, JobGuestPin, JobOrigin, JobPauseReason, JobPin, JobProgress,
+    JobSpawn, JobState, JobStepOutput,
 };
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
@@ -24,6 +27,7 @@ use gents_protocol::output::{
 };
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 /// A home served by `gents server`, with the identity its job rows belong to.
@@ -32,30 +36,89 @@ pub(crate) struct ServedHome {
     pub(crate) home: PathBuf,
     pub(crate) graphql: String,
     pub(crate) node_did: String,
+    pub(crate) agent_id: String,
+    _llm: FakeLlm,
     _serve: ServeProcess,
 }
 
 impl ServedHome {
     pub(crate) async fn start() -> Result<Self> {
+        Self::start_with(Arc::new(|_: &Value| ChatAction::Hang), false).await
+    }
+
+    /// Serves a node whose provider is the scripted `responder`. `job_fixture`
+    /// makes bash read-write and installs and wires the job fixture pack with
+    /// the trusted-pack job block before the server starts.
+    pub(crate) async fn start_with(responder: Responder, job_fixture: bool) -> Result<Self> {
         let tempdir = tempfile::tempdir().context("creating tempdir")?;
         let home = tempdir.path().join("home");
         fs::create_dir_all(&home)?;
         let model_name = format!("mock-job-cli-{}", Uuid::new_v4().simple());
-        let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+        let llm = FakeLlm::start(&model_name, None, responder)?;
         let port = allocate_port()?;
         let graphql = graphql_url(port);
-        let init = run_init_json(
-            &home,
-            &[
-                "--node-name",
-                &format!("cli-job-{}", Uuid::new_v4().simple()),
-                "--model-name",
-                &model_name,
-                "--inference-url",
-                mock_endpoint.endpoint(),
-            ],
-        )?;
+        let node_name = format!("cli-job-{}", Uuid::new_v4().simple());
+        let mut init_args = vec![
+            "--node-name",
+            &node_name,
+            "--model-name",
+            &model_name,
+            "--inference-url",
+            llm.endpoint(),
+        ];
+        if job_fixture {
+            // A job child held by the provider must not take the only slot
+            // other sessions need while the job runs.
+            init_args.extend(["--write", "--max-concurrent", "4"]);
+        }
+        let init = run_init_json(&home, &init_args)?;
         let node_did = node_did_from_init(&init)?;
+        let agent_id = init["default_agent_id"]
+            .as_str()
+            .context("init output missing default_agent_id")?
+            .to_owned();
+        if job_fixture {
+            let pack = tempdir.path().join("job_plugin_fixture");
+            copy_dir_all(&fixture_pack_dir("job_plugin_fixture"), &pack)?;
+            write_json_file(
+                &pack.join("pack_config.json"),
+                &json!({
+                    "node": {},
+                    "agent_targets": [{
+                        "target_id": agent_id,
+                        "target_node_did": node_did,
+                        "agent_id": agent_id,
+                        "name": "job child",
+                    }],
+                    "tools": [{
+                        "tools_id": "job-fixture-caller",
+                        "display_name": "Job fixture caller",
+                        "integrations": {"plugins": [{
+                            "plugin": "fixture/job_fixture",
+                            "job": {
+                                "agent_targets": [agent_id],
+                                "policy": {"trusted_packs": ["fixture/job_plugin_fixture"]},
+                            },
+                        }]},
+                    }],
+                }),
+            )?;
+            let pack_arg = pack.to_str().context("pack path is not UTF-8")?;
+            run_cli_json(
+                &home,
+                &[
+                    "pack",
+                    "install",
+                    pack_arg,
+                    "--registry",
+                    "http://127.0.0.1:9",
+                ],
+            )?;
+            run_cli_json(
+                &home,
+                &["pack", "wire", "fixture/job_fixture", "--agent", &agent_id],
+            )?;
+        }
         let mut serve = spawn_server(&home, port)?;
         wait_for_port(port, &mut serve)?;
         wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
@@ -64,6 +127,8 @@ impl ServedHome {
             home,
             graphql,
             node_did,
+            agent_id,
+            _llm: llm,
             _serve: serve,
         })
     }
@@ -78,6 +143,14 @@ impl ServedHome {
         full.extend_from_slice(args);
         full.extend(["--graphql", &self.graphql]);
         run_job(&self.home, &full)
+    }
+
+    /// `gents goal <args>` against this node.
+    pub(crate) fn goal(&self, args: &[&str]) -> Result<Value> {
+        let mut full = vec!["goal"];
+        full.extend_from_slice(args);
+        full.extend(["--graphql", &self.graphql]);
+        run_cli_json(&self.home, &full)
     }
 }
 
@@ -578,5 +651,383 @@ async fn local_access_refuses_watch_and_stops_a_running_job_on_an_offline_home()
     )?;
     assert_eq!(code, Some(0), "{stderr}");
     assert!(stdout.starts_with("cancelled  stop applied"), "{stdout}");
+    Ok(())
+}
+
+fn last_user_text(request: &Value) -> String {
+    let text = request["messages"]
+        .as_array()
+        .and_then(|messages| messages.iter().rev().find(|m| m["role"] == "user"))
+        .map(|message| match &message["content"] {
+            Value::String(content) => content.clone(),
+            Value::Array(parts) => parts
+                .iter()
+                .filter_map(|part| part["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => String::new(),
+        });
+    text.unwrap_or_default()
+}
+
+fn tool_result_texts(request: &Value) -> Vec<String> {
+    request["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|message| message["role"] == "tool")
+        .map(|message| match &message["content"] {
+            Value::String(content) => content.clone(),
+            Value::Array(parts) => parts
+                .iter()
+                .filter_map(|part| part["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => String::new(),
+        })
+        .collect()
+}
+
+fn calls_tool(request: &Value, name: &str) -> bool {
+    request["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|message| message["tool_calls"].as_array())
+        .flatten()
+        .any(|call| call["function"]["name"] == name)
+}
+
+async fn children_of(graphql: &str, request_id: &str) -> Result<Vec<Value>> {
+    let response = graphql_query(
+        graphql,
+        &format!(
+            r#"{{
+        AgentRequest(filter: {{ {} }}) {{
+            request_id caused_by_trigger_kind caused_by_parent_request_id
+        }}
+    }}"#,
+            gents::session::public_request_filter(&format!(
+                r#"caused_by_parent_request_id: {{ _eq: "{}" }}"#,
+                escape_graphql_string(request_id)
+            ))
+        ),
+    )
+    .await?;
+    Ok(response
+        .pointer("/data/AgentRequest")
+        .and_then(Value::as_array)
+        .context("children of the held request")?
+        .clone())
+}
+
+/// A Goal-held Task does not continue while a job it watches runs: the
+/// background-completion delivery, not a goal child, carries it on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn goal_held_task_defers_while_job_runs() -> Result<()> {
+    const LAUNCH: &str = "launch the fixture job";
+    const CHILD: &str = "goal job child a";
+    const PREDECESSOR: &str = "ready the goal session";
+    const OBJECTIVE: &str = "watch the fixture job until it ends";
+    let s_job = format!("goal-job-session-{}", Uuid::new_v4().simple());
+    let s_goal = format!("goal-held-session-{}", Uuid::new_v4().simple());
+
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let released = Arc::new(AtomicBool::new(false));
+    let watch_address = Arc::new(Mutex::new(String::new()));
+    let spawn_handle = Arc::new(Mutex::new(String::new()));
+    // The responder is built before the node starts: (gents home, graphql, agent id).
+    let node = Arc::new(Mutex::new(None::<(String, String, String)>));
+    let asset = fs::read(fixture_pack_dir("job_plugin_fixture").join("fixture_assets/a.txt"))?;
+    let digest = format!("sha256:{:x}", Sha256::digest(&asset));
+
+    let responder: Responder = {
+        let gate = gate.clone();
+        let released = released.clone();
+        let watch_address = watch_address.clone();
+        let spawn_handle = spawn_handle.clone();
+        let node = node.clone();
+        Arc::new(move |request: &Value| {
+            let user = last_user_text(request);
+            let results = tool_result_texts(request);
+            let node_state = node.lock().unwrap().clone();
+            if user.contains(CHILD) {
+                return ChatAction::WaitThenSse(gate.clone(), completion_text_sse("child a done"));
+            }
+            if user.contains(LAUNCH) {
+                if !results.is_empty() {
+                    return ChatAction::Sse(completion_text_sse("job launched"));
+                }
+                let (_, _, agent_id) = node_state.expect("node state is set before submits");
+                let e0 = JobStepOutput::Effects {
+                    effects: JobEffects {
+                        pin: Some(JobGuestPin {
+                            script_id: "fixture".into(),
+                            source_digest: digest.clone(),
+                            agent_budget: 8,
+                            handle: "goal-job".into(),
+                        }),
+                        resume: None,
+                        spawn: vec![JobSpawn {
+                            slot: "a".into(),
+                            attempt: 0,
+                            target: agent_id,
+                            prompt: CHILD.into(),
+                            title: "a".into(),
+                            cwd: None,
+                        }],
+                        message: Vec::new(),
+                        interrupt: Vec::new(),
+                        progress: None,
+                        writes: Vec::new(),
+                        scratch: Vec::new(),
+                    },
+                };
+                let e1 = JobStepOutput::Result {
+                    result: json!("job done"),
+                    writes: Vec::new(),
+                    scratch: Vec::new(),
+                    progress: None,
+                    control: Vec::new(),
+                    pin: None,
+                    resume: None,
+                };
+                let holding = JobStepOutput::Effects {
+                    effects: JobEffects {
+                        pin: None,
+                        resume: None,
+                        spawn: Vec::new(),
+                        message: Vec::new(),
+                        interrupt: Vec::new(),
+                        progress: None,
+                        writes: Vec::new(),
+                        scratch: Vec::new(),
+                    },
+                };
+                let plan = json!([
+                    {"when": {"step": 0}, "output": serde_json::to_value(&e0).unwrap()},
+                    {"when": {"children": {"a": "completed"}}, "output": serde_json::to_value(&e1).unwrap()},
+                    {"when": {"children": {"a": "live"}}, "output": serde_json::to_value(&holding).unwrap()},
+                ]);
+                return ChatAction::Sse(tool_call_sse_with_id(
+                    "job-call-1",
+                    "job_fixture",
+                    &json!({"args": {"plan": plan}}).to_string(),
+                ));
+            }
+            if user.contains(PREDECESSOR) {
+                return ChatAction::Sse(completion_text_sse("goal session ready"));
+            }
+            let held_turn = request["messages"].to_string().contains(OBJECTIVE);
+            if held_turn && !released.load(Ordering::SeqCst) {
+                let (h, g, _) = node_state.expect("node state is set before submits");
+                return match results.len() {
+                    0 => ChatAction::Sse(tool_call_sse_with_id(
+                        "watch-spawn-1",
+                        "spawn_process",
+                        &json!({"tool_name": "bash_unrestricted", "args": {
+                            "command": cli_bin(),
+                            "args": ["job", "watch", watch_address.lock().unwrap().as_str(),
+                                "--until-terminal", "--home", h, "--graphql", g],
+                        }})
+                        .to_string(),
+                    )),
+                    1 => {
+                        let reply: Value = serde_json::from_str(&results[0]).unwrap_or_default();
+                        let handle = reply["tool_call_id"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned();
+                        *spawn_handle.lock().unwrap() = handle.clone();
+                        ChatAction::Sse(tool_call_sse_with_id(
+                            "watch-wait-1",
+                            "wait_process",
+                            &json!({"tool_call_id": handle, "timeout_secs": 2}).to_string(),
+                        ))
+                    }
+                    _ => ChatAction::Sse(completion_text_sse("waiting on the job")),
+                };
+            }
+            if released.load(Ordering::SeqCst)
+                && request["messages"]
+                    .to_string()
+                    .contains(gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT)
+            {
+                return if calls_tool(request, "update_goal") {
+                    ChatAction::Sse(completion_text_sse("goal complete"))
+                } else {
+                    ChatAction::Sse(tool_call_sse_with_id(
+                        "goal-done-1",
+                        "update_goal",
+                        r#"{"status":"complete"}"#,
+                    ))
+                };
+            }
+            ChatAction::Sse(completion_text_sse("session title"))
+        })
+    };
+
+    let served = ServedHome::start_with(responder, true).await?;
+    let g = served.graphql.clone();
+    let h = served
+        .home
+        .join(".gents")
+        .to_str()
+        .context("gents home is not UTF-8")?
+        .to_owned();
+    *node.lock().unwrap() = Some((h, g.clone(), served.agent_id.clone()));
+
+    // Launch the job in its own session; it is a background row once the launching request ends.
+    run_cli_json(
+        &served.home,
+        &[
+            "request",
+            "submit",
+            "--graphql",
+            &g,
+            "--node-did",
+            &served.node_did,
+            "--session-id",
+            &s_job,
+            "--content",
+            LAUNCH,
+            "--timeout-secs",
+            "60",
+            "--poll-secs",
+            "1",
+        ],
+    )?;
+    let job_rows = graphql_query(
+        &g,
+        &format!(
+            "{{ AgentToolCall(filter: {{ session_id: {{ _eq: \"{}\" }}, tool_name: {{ _eq: \"job_fixture\" }} }}) {{ tool_call_id }} }}",
+            escape_graphql_string(&s_job)
+        ),
+    )
+    .await?;
+    let job_call_id = job_rows
+        .pointer("/data/AgentToolCall/0/tool_call_id")
+        .and_then(Value::as_str)
+        .with_context(|| format!("job row: {job_rows}"))?;
+    *watch_address.lock().unwrap() = format!("{s_job}:{job_call_id}");
+
+    // Hold the Goal on the job.
+    let predecessor_receipt = run_cli_json(
+        &served.home,
+        &[
+            "request",
+            "submit",
+            "--graphql",
+            &g,
+            "--node-did",
+            &served.node_did,
+            "--session-id",
+            &s_goal,
+            "--content",
+            PREDECESSOR,
+            "--timeout-secs",
+            "60",
+            "--poll-secs",
+            "1",
+        ],
+    )?;
+    let predecessor = predecessor_receipt["request_id"]
+        .as_str()
+        .context("predecessor request id")?
+        .to_owned();
+    served.goal(&[
+        "set",
+        "--session",
+        &s_goal,
+        "--objective",
+        OBJECTIVE,
+        "--status",
+        "paused",
+        "--token-budget",
+        "200000",
+    ])?;
+    let resumed = served.goal(&[
+        "resume-request",
+        "--session",
+        &s_goal,
+        "--from",
+        &predecessor,
+    ])?;
+    assert_eq!(resumed["created"], true, "{resumed}");
+    let held = resumed["request_id"]
+        .as_str()
+        .context("held request id")?
+        .to_owned();
+    let goal = served.goal(&["show", "--session", &s_goal])?;
+    assert_eq!(goal["status"], "active", "{goal}");
+    let seq0 = goal["continuation_sequence"]
+        .as_u64()
+        .context("continuation_sequence")?;
+
+    // The intentional wait: the held turn's bounded wait times out while the job runs.
+    wait_for_request_lifecycle_state(&g, &held, &["completed"], Duration::from_secs(60)).await?;
+    let waits = wait_for_completed_tool_calls(&g, &s_goal, "wait_process", 1).await?;
+    let reply: Value = serde_json::from_str(&canonical_tool_result_text(&g, &waits[0]).await?)?;
+    assert_eq!(reply["status"], "running", "{reply}");
+    assert_eq!(reply["error"]["reason"], "wait_timeout", "{reply}");
+    assert_eq!(
+        reply["tool_call_id"].as_str(),
+        Some(spawn_handle.lock().unwrap().as_str()),
+        "{reply}"
+    );
+    for _ in 0..20 {
+        let children = children_of(&g, &held).await?;
+        assert!(
+            children.is_empty(),
+            "the Goal continued while the job ran: {children:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    // Release the job: the watch exits and the completion delivery carries the Goal on.
+    released.store(true, Ordering::SeqCst);
+    gate.add_permits(1);
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let delivery = loop {
+        let children = children_of(&g, &held).await?;
+        if let Some(first) = children.first() {
+            assert_eq!(children.len(), 1, "{children:?}");
+            break first.clone();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no delivery request after the job ended"
+        );
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
+    assert!(delivery["caused_by_trigger_kind"].is_null(), "{delivery}");
+    let delivery_id = delivery["request_id"]
+        .as_str()
+        .context("delivery request id")?;
+    assert!(
+        delivery_id.starts_with("background-completion-"),
+        "{delivery}"
+    );
+    wait_for_request_lifecycle_state(&g, delivery_id, &["completed"], Duration::from_secs(60))
+        .await?;
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let goal = loop {
+        let goal = served.goal(&["show", "--session", &s_goal])?;
+        if goal["status"] == "complete" {
+            break goal;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the Goal did not complete: {goal}"
+        );
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
+    assert_eq!(
+        goal["continuation_sequence"].as_u64(),
+        Some(seq0 + 1),
+        "{goal}"
+    );
+    assert_eq!(children_of(&g, &held).await?.len(), 1);
     Ok(())
 }

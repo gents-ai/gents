@@ -90,6 +90,24 @@ pub async fn install<F: Future<Output = Result<()>>>(
     Ok((record, installed))
 }
 
+/// Releases the plugin store records `coordinate` still owns at the digests its
+/// node record lists; records another pack or a newer install took over stay.
+pub fn release_plugin_records(
+    home: &Path,
+    coordinate: &str,
+    plugins: &[InstalledPackPlugin],
+) -> Result<Vec<InstalledPackPlugin>> {
+    let (namespace, _) = crate::pack_registry::split_pack_coordinate(coordinate);
+    let mut released = Vec::new();
+    for plugin in plugins {
+        if store::remove_record_if_owned(home, namespace, &plugin.name, coordinate, &plugin.digest)?
+        {
+            released.push(plugin.clone());
+        }
+    }
+    Ok(released)
+}
+
 pub struct LocalPackRemoval {
     pub record: HomePackInstall,
     pub plugins: Vec<InstalledPackPlugin>,

@@ -363,4 +363,38 @@ mod tests {
             "a Rust plugin compiles to a wasm32-wasip1 WASI command module"
         );
     }
+
+    fn committed_job_fixture_path() -> std::path::PathBuf {
+        crate::commands::pack::test_support::fixture_dir("job_plugin_fixture")
+            .join("plugins/job_fixture.afb")
+    }
+
+    fn build_job_fixture() -> Vec<u8> {
+        let _guard = crate::commands::afterburner_build::compile_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        crate::commands::pack::test_support::copy_tree(
+            &crate::commands::pack::test_support::fixture_dir("job_plugin_fixture"),
+            tmp.path(),
+        )
+        .unwrap();
+        build_pack(tmp.path(), Some(&tmp.path().join("out.pack"))).unwrap();
+        std::fs::read(tmp.path().join("plugins/job_fixture.afb")).unwrap()
+    }
+
+    #[test]
+    fn committed_job_fixture_artifact_matches_its_source() {
+        let committed = std::fs::read(committed_job_fixture_path()).unwrap_or_default();
+        assert!(
+            build_job_fixture() == committed,
+            "job_fixture.afb drifted from plugins/job_fixture/source; regenerate with: cargo test -p gents-cli --lib commands::pack::build::tests::write_job_fixture_artifact -- --ignored"
+        );
+    }
+
+    #[test]
+    #[ignore = "run explicitly to regenerate crates/gents/tests/fixtures/packs/job_plugin_fixture/plugins/job_fixture.afb"]
+    fn write_job_fixture_artifact() {
+        std::fs::write(committed_job_fixture_path(), build_job_fixture()).unwrap();
+    }
 }

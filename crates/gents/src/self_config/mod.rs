@@ -1491,8 +1491,8 @@ impl PackInstaller {
     /// Removes an installed graph package's `PackInstallation` record and
     /// everything it lists. Refused while any of its graphs has a run that
     /// has not reached a terminal status. Never resolves the package (no
-    /// store or registry lookup); releases no plugin bytes or archive; use
-    /// `gents pack remove` for that.
+    /// store or registry lookup); releases its home and plugin store records
+    /// but no plugin bytes or archive; use `gents pack remove` for that.
     async fn remove(&self, package: &str) -> anyhow::Result<String> {
         let args = PackInstallParams {
             package: package.to_owned(),
@@ -1510,7 +1510,9 @@ impl PackInstaller {
         );
         let coordinate = format!("{}/{}", spec.namespace, spec.name);
         if let Some(home) = self.home.as_deref() {
-            anyhow::ensure!(crate::pack::read_home_install(home, &coordinate)?.is_none(), "native removal of home-installed plugin/assets packs is unavailable; the existing pack removal owner must release plugin and home records together. Current installation is unchanged");
+            if let Some(record) = crate::pack::read_home_install(home, &coordinate)? {
+                anyhow::ensure!(!matches!(record.kind, crate::pack::PackKind::Assets | crate::pack::PackKind::Plugins), "native removal of home-installed plugin/assets packs is unavailable; the existing pack removal owner must release plugin and home records together. Current installation is unchanged");
+            }
         }
         let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let report = crate::pack::remove_pack(
@@ -1520,6 +1522,16 @@ impl PackInstaller {
             crate::pack::DriftPolicy::Refuse,
         )
         .await?;
+        if let Some(home) = self.home.as_deref() {
+            crate::pack::forget_home_install(home, &coordinate)?;
+            for removed in std::iter::once(&report).chain(&report.dependencies) {
+                crate::pack::plugin_lifecycle::release_plugin_records(
+                    home,
+                    &removed.pack,
+                    &removed.documents.plugins,
+                )?;
+            }
+        }
         ordered! {
             "pack": coordinate,
             "removed": report,
