@@ -1033,6 +1033,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     }
     emitted.insert(("client_settings_cases".into(), "ClientSettingsCases".into()));
     assert!(!snapshot.client_observation_scope_cases.is_empty());
+    assert!(!snapshot.client_observation_admission_cases.is_empty());
+    emitted.insert((
+        "client_observation_admission_cases".into(),
+        "ClientObservationAdmission".into(),
+    ));
     emitted.insert((
         "client_observation_scope_cases".into(),
         "ClientObservationScopeCases".into(),
