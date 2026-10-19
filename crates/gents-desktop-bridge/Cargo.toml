@@ -15,6 +15,10 @@ tauri-host = ["dep:tauri", "dep:tauri-plugin"]
 # + GENTS_NATIVE_E2E=1). Never in default; app forwards for E2E launchers only.
 native-e2e = ["tauri-host", "gents-server/native-e2e"]
 
+[[test]]
+name = "home_isolation"
+required-features = ["tauri-host"]
+
 [dependencies]
 anyhow.workspace = true
 bytes.workspace = true
