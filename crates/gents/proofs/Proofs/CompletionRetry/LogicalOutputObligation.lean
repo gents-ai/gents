@@ -1,12 +1,12 @@
 import Proofs.CompletionRetry.OutputObligation
-import Proofs.GraphPipeline.LogicalInvocation
+import Proofs.GoalAutomation.RequestAncestry
 
 namespace CompletionRetry.OutputObligation.Logical
-open GraphPipeline.LogicalInvocation
+open GoalAutomation.RequestAncestry
 
 /-- Membership reuses the existing finite physical ancestry projection.
 `Attempt.pinnedRoot` means an admitted invocation entry in this instantiation;
-non-graph automated roots are supported. This does not require a GraphRun.
+non-graph automated roots are supported. No run record of any kind is required.
 The runtime must verify existing request signatures/physical links; booleans
 are validation facts, not a new ACL or a cryptographic proof. -/
 
