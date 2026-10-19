@@ -136,7 +136,14 @@ pub(super) async fn trigger_engine_dispatch_matches_lean_generated_contract_case
             );
             assert_eq!(
                 rendered,
-                &format!("lean case {}", case.name),
+                if matches!(kind, TriggerKind::Schedule) {
+                    format!(
+                        "Scheduled task instructions (rendered from saved configuration):\n\nlean case {}",
+                        case.name
+                    )
+                } else {
+                    format!("lean case {}", case.name)
+                },
                 "Lean case {} rendered prompt drifted",
                 case.name
             );
