@@ -138,8 +138,10 @@ pub async fn verify(
             && attachment_context["workspaceUri"] == context["workspaceUri"]
             && attachment_context["range"] == context["range"]
             && attachment_context["unsaved"] == true
-            && attachment_context["version"].as_u64() > context["version"].as_u64(),
-        "attachment-only submission lost the newer captured snapshot"
+            && attachment_context["version"]
+                .as_u64()
+                .is_some_and(|version| version > 1),
+        "attachment-only submission lost its captured snapshot"
     );
     ensure!(
         provider_occurrences(provider, "", &attachment_context) == 1,
