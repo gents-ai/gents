@@ -118,6 +118,73 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     Uuid::parse_str(&thread_id)
         .with_context(|| format!("Codex TUI requires UUID thread ids, got {thread_id}"))?;
 
+    // The goal must exist before the sole user turn so its post-turn
+    // tokens_used has the right premise: fresh goals baseline against
+    // existing session usage (set_goal_in_txn), so a goal created before
+    // the turn attributes the turn's spend to itself. It is created
+    // Paused because paused goals still accrue tokens from explicit
+    // user turns (refresh_goal_usage has no status gate on tokens) while
+    // never autonomously continuing (paused yields GoalDecision::None),
+    // which keeps this a single-turn fixture.
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadGoalSet {
+            request_id: request_id(37),
+            params: codex::ThreadGoalSetParams {
+                thread_id: thread_id.clone(),
+                objective: Some("exercise GENTS-backed Codex goal state".to_string()),
+                status: Some(codex::ThreadGoalStatus::Paused),
+                token_budget: Some(Some(123)),
+            },
+        },
+    )
+    .await?;
+    let goal_set: codex::ThreadGoalSetResponse = read_typed_response(&mut ws, request_id(37))
+        .await
+        .context("reading thread/goal/set response")?;
+    assert_eq!(goal_set.goal.thread_id, thread_id);
+    assert_eq!(
+        goal_set.goal.objective,
+        "exercise GENTS-backed Codex goal state"
+    );
+    assert_eq!(
+        goal_set.goal.status,
+        codex::ThreadGoalStatus::Paused,
+        "goal should be created paused so it cannot autonomously continue: {goal_set:?}"
+    );
+    assert_eq!(goal_set.goal.token_budget, Some(123));
+    assert_eq!(
+        goal_set.goal.tokens_used, 0,
+        "a fresh goal must start with zero usage: {goal_set:?}"
+    );
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadGoalGet {
+            request_id: request_id(38),
+            params: codex::ThreadGoalGetParams {
+                thread_id: thread_id.clone(),
+            },
+        },
+    )
+    .await?;
+    let goal_get: codex::ThreadGoalGetResponse = read_typed_response(&mut ws, request_id(38))
+        .await
+        .context("reading thread/goal/get response")?;
+    let goal_get = goal_get
+        .goal
+        .expect("goal should exist before the first turn");
+    assert_eq!(goal_get.thread_id, thread_id);
+    assert_eq!(
+        goal_get.status,
+        codex::ThreadGoalStatus::Paused,
+        "goal should still be paused before the turn: {goal_get:?}"
+    );
+    assert_eq!(
+        goal_get.tokens_used, 0,
+        "no session usage should be attributed before the first turn: {goal_get:?}"
+    );
+
     let prompt = format!("Reply with exactly {}.", Uuid::new_v4().simple());
     send_client_request(
         &mut ws,
@@ -335,47 +402,6 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
         .await
         .context("reading thread/settings/update response")?;
 
-    send_client_request(
-        &mut ws,
-        codex::ClientRequest::ThreadGoalSet {
-            request_id: request_id(37),
-            params: codex::ThreadGoalSetParams {
-                thread_id: thread_id.clone(),
-                objective: Some("exercise GENTS-backed Codex goal state".to_string()),
-                status: Some(codex::ThreadGoalStatus::Active),
-                token_budget: Some(Some(123)),
-            },
-        },
-    )
-    .await?;
-    let goal_set: codex::ThreadGoalSetResponse = read_typed_response(&mut ws, request_id(37))
-        .await
-        .context("reading thread/goal/set response")?;
-    assert_eq!(goal_set.goal.thread_id, thread_id);
-    assert_eq!(
-        goal_set.goal.objective,
-        "exercise GENTS-backed Codex goal state"
-    );
-    assert_eq!(goal_set.goal.token_budget, Some(123));
-
-    send_client_request(
-        &mut ws,
-        codex::ClientRequest::ThreadGoalGet {
-            request_id: request_id(38),
-            params: codex::ThreadGoalGetParams {
-                thread_id: thread_id.clone(),
-            },
-        },
-    )
-    .await?;
-    let goal_get: codex::ThreadGoalGetResponse = read_typed_response(&mut ws, request_id(38))
-        .await
-        .context("reading thread/goal/get response")?;
-    assert_eq!(
-        goal_get.goal.as_ref().map(|goal| &goal.thread_id),
-        Some(&thread_id)
-    );
-
     let expected_git_sha = init_test_git_repo(&home_dir, "main")?;
     send_client_request(
         &mut ws,
@@ -508,6 +534,11 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     let goal_after_turn = goal_after_turn
         .goal
         .expect("goal should still exist after the turn");
+    assert_eq!(
+        goal_after_turn.status,
+        codex::ThreadGoalStatus::Paused,
+        "a paused goal must stay paused through the turn (no autonomous continuation): {goal_after_turn:?}"
+    );
     assert!(
         goal_after_turn.tokens_used > 0,
         "goal.tokens_used should reflect real session usage after a turn, got {}",
