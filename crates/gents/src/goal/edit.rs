@@ -1,5 +1,19 @@
 use super::*;
 
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(test, derive(Deserialize))]
+#[cfg_attr(test, serde(rename_all = "snake_case"))]
+pub(super) enum GoalEditOrigin {
+    Agent,
+    Client,
+}
+
+impl GoalEditOrigin {
+    pub(super) fn can_edit_status(self, status: GoalStatus) -> bool {
+        status == GoalStatus::Active || matches!(self, Self::Client) && status == GoalStatus::Paused
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct GoalEdit {
     pub objective: Option<String>,
@@ -10,7 +24,7 @@ impl GoalEdit {
     pub(crate) fn validate(&self) -> Result<()> {
         anyhow::ensure!(
             self.objective.is_some() || self.budget.is_some(),
-            "provide objective or token_budget to edit the active goal"
+            "provide objective or token_budget to edit the goal"
         );
         anyhow::ensure!(
             self.objective
@@ -33,15 +47,16 @@ pub(crate) async fn edit_active_goal(
 ) -> Result<Option<GoalDocument>> {
     fields.validate()?;
     crate::ConfigAccess::transact_local_write(node, None, "goal.edit_active", |txn| {
-        Box::pin(async move { stage_active_goal_edit(txn, observed, fields).await })
+        Box::pin(async move { stage_goal_edit(txn, observed, fields, GoalEditOrigin::Agent).await })
     })
     .await
 }
 
-pub(super) async fn stage_active_goal_edit(
+pub(super) async fn stage_goal_edit(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     observed: &GoalDocument,
     fields: &GoalEdit,
+    origin: GoalEditOrigin,
 ) -> Result<Option<GoalDocument>> {
     fields.validate()?;
     let Some(current) =
@@ -49,10 +64,11 @@ pub(super) async fn stage_active_goal_edit(
     else {
         return Ok(None);
     };
+    let status = current.parsed_status();
     if current.doc_id != observed.doc_id
         || current.goal_id != observed.goal_id
-        || current.parsed_status() != Some(GoalStatus::Active)
-        || observed.parsed_status() != Some(GoalStatus::Active)
+        || !status.is_some_and(|status| origin.can_edit_status(status))
+        || observed.parsed_status() != status
         || current.continuation_sequence() != observed.continuation_sequence()
     {
         return Ok(None);
