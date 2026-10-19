@@ -24,6 +24,8 @@ use console::ConsoleChild as Child;
 
 #[path = "support/configured_actions.rs"]
 mod configured_actions;
+#[path = "support/editor_history.rs"]
+mod editor_history;
 #[allow(dead_code)]
 #[path = "../../gents-cli/tests/support/mocks/fake_llm.rs"]
 mod fake_llm;
@@ -44,6 +46,8 @@ enum Journey {
     Editor,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorSteering,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    EditorHistory,
     Goal,
 }
 
@@ -52,6 +56,7 @@ impl Journey {
         match self {
             Self::Editor => Some("full"),
             Self::EditorSteering => Some("steering"),
+            Self::EditorHistory => Some("history"),
             _ => None,
         }
     }
@@ -111,7 +116,36 @@ async fn editor_steers_pending_input_into_the_active_request() -> Result<()> {
         .with_context(|| {
             std::fs::read_to_string(temp.path().join("editor.log")).unwrap_or_default()
         })?;
-    let artifacts = std::fs::read_to_string(temp.path().join("editor-artifacts-path"))?;
+    copy_editor_evidence(temp.path(), "editor-steering-canonical.json")
+}
+
+#[cfg(feature = "editor-e2e")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_pages_native_history_without_losing_the_reader_or_draft() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::EditorHistory)
+        .await
+        .with_context(|| {
+            [
+                "runtime.log",
+                "runtime.err",
+                "client-host.log",
+                "editor.log",
+            ]
+            .map(|name| {
+                format!(
+                    "{name}:\n{}",
+                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                )
+            })
+            .join("\n")
+        })?;
+    copy_editor_evidence(temp.path(), "editor-history-canonical.json")
+}
+
+#[cfg(feature = "editor-e2e")]
+fn copy_editor_evidence(root: &Path, name: &str) -> Result<()> {
+    let artifacts = std::fs::read_to_string(root.join("editor-artifacts-path"))?;
     let artifacts = std::fs::canonicalize(artifacts)?;
     let extension = std::env::var_os("GENTS_VSCODE_ROOT").context("extension root")?;
     ensure!(
@@ -120,10 +154,7 @@ async fn editor_steers_pending_input_into_the_active_request() -> Result<()> {
         )?),
         "editor evidence left its artifact directory"
     );
-    std::fs::copy(
-        temp.path().join("editor-steering-canonical.json"),
-        artifacts.join("editor-steering-canonical.json"),
-    )?;
+    std::fs::copy(root.join(name), artifacts.join(name))?;
     Ok(())
 }
 
@@ -150,6 +181,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         },
         None,
         Arc::new(move |request| {
+            if matches!(journey, Journey::EditorHistory) {
+                if let Some(reply) = editor_history::reply(&request) {
+                    return ChatAction::Sse(fake_llm::completion_text_sse(&reply));
+                }
+            }
             if matches!(journey, Journey::EditorSteering)
                 && request["messages"].to_string().contains(STEERING_INPUT)
             {
@@ -955,6 +991,36 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             root.join("editor-steering-canonical.json"),
             serde_json::to_vec_pretty(&evidence)?,
         )?;
+    }
+    if matches!(journey, Journey::EditorHistory) {
+        let evidence = editor_history::populate(
+            &mut client,
+            &mut id,
+            &access,
+            node_did,
+            session,
+            agent_id,
+            &client_did,
+        )
+        .await?;
+        std::fs::write(
+            root.join("editor-history-canonical.json"),
+            serde_json::to_vec_pretty(&evidence)?,
+        )?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        client
+            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .await;
+        id += 1;
+        run_editor_journey(
+            root,
+            &paths,
+            &host_binary,
+            session,
+            provider.endpoint(),
+            "history",
+        )
+        .await?;
     }
     if matches!(journey, Journey::Conversation) {
         configured_actions::exercise(
