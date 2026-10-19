@@ -67,13 +67,13 @@ private theorem digits_no_colon (fuel n : Nat) (ds : List Char)
       simp only [List.mem_cons, not_or]
       exact ⟨(digit_not_colon _ (Nat.mod_lt _ (by omega))).symm, h⟩
 
-private theorem repr_value (n : Nat) : decimalValue (Nat.toDigits 10 n) = n := by
+theorem repr_value (n : Nat) : decimalValue (Nat.toDigits 10 n) = n := by
   simpa [Nat.toDigits, decimalValue] using digits_value (n + 1) n [] (by omega)
 
 private theorem repr_no_colon (n : Nat) : ':' ∉ Nat.toDigits 10 n := by
   exact digits_no_colon (n + 1) n [] (by simp)
 
-private theorem before_colon (xs ys : List Char) (h : ':' ∉ xs) :
+theorem before_colon (xs ys : List Char) (h : ':' ∉ xs) :
     (xs ++ ':' :: ys).takeWhile (· != ':') = xs := by
   rw [List.takeWhile_append_of_pos]
   · simp

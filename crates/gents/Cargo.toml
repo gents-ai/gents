@@ -15,7 +15,7 @@ default = [
     "defra-node/wasmtime-runtime",
 ]
 agent-memory = []
-typescript = ["dep:ts-rs", "gents-loop/typescript"]
+typescript = ["dep:ts-rs", "gents-loop/typescript", "gents-protocol/typescript"]
 # Gates the optional live-inference collection out of default builds.
 live-e2e = []
 

@@ -76,7 +76,7 @@ def r6BudgetCase (name : String) (preLiveCount : Nat) :
 def r6RestartCase : R6BackgroundingCase :=
   let row : Recovery.RestartRow :=
     { awaitMode := .background
-    , sessionMessage := false
+    , kind := .native
     , parent := .live
     , deadlineExpired := false
     , process := .stopped

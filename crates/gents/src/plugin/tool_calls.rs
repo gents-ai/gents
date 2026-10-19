@@ -244,6 +244,7 @@ mod tests {
                 plugin: "team/plugin".into(),
                 digest: None,
                 input_fields: vec![],
+                job: None,
                 tool_calls: granted,
             };
             let plugin =
@@ -278,6 +279,7 @@ mod tests {
                 plugin: "team/plugin".into(),
                 digest: None,
                 input_fields: vec![],
+                job: None,
                 tool_calls: granted,
             };
             let plugin =

@@ -186,7 +186,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
         26
     );
     assert_eq!(lean_contract_snapshot().tool_preflight_cases.len(), 9);
-    assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 72);
+    assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 90);
     assert_eq!(lean_contract_snapshot().command_policy_cases.len(), 52);
     assert_eq!(lean_contract_snapshot().command_sandbox_cases.len(), 6);
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 14);
@@ -280,6 +280,9 @@ fn lean_boundary_metadata_is_typed_and_reviewable() {
         "boundary.graph-pipeline.foundation",
         "boundary.rendered-capture.assembled-request-artifact",
         "boundary.rendered-capture.key-encoding-injectivity",
+        "boundary.plugin-job.guest-determinism",
+        "boundary.plugin-job.single-step-driver",
+        "boundary.plugin-data.transaction",
     ]
     .into_iter()
     .map(str::to_string)

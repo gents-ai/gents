@@ -78,8 +78,8 @@ def sessionMessageRecoveryCase
       row.call.state.toDefraDB
       recovered.call.state.toDefraDB
       "session-message-stack-observer-arm"
-      (toolCallRecoveryMeasure true row)
-      (toolCallRecoveryMeasure true recovered)) with
+      (toolCallRecoveryMeasure .sessionMessage row)
+      (toolCallRecoveryMeasure .sessionMessage recovered)) with
     recoveryCause := some cause.toContract
     notificationReason :=
       if cause.toContract = "requestCompleted" then
@@ -250,14 +250,14 @@ def recoverySweepCases : List RecoverySweepCase :=
 def restartDispositionCase
     (name : String)
     (awaitMode : ToolExecution.AwaitMode)
-    (sessionMessage : Bool)
+    (kind : RowKind)
     (parent : ParentObservation)
     (theoremName : String)
     (deadlineExpired : Bool := false)
     (process : ManagedExec.StopOutcome := .stopped) : RestartDispositionCase :=
   let row : RestartRow :=
     { awaitMode := awaitMode
-    , sessionMessage := sessionMessage
+    , kind := kind
     , parent := parent
     , deadlineExpired := deadlineExpired
     , process := process
@@ -266,7 +266,7 @@ def restartDispositionCase
   { name := name
   , rustFunction := "ToolCallLifecycle::recover_all"
   , awaitMode := awaitMode.toDefraDB
-  , sessionMessage := sessionMessage
+  , kind := kind
   , parentObservation := parent.toContract
   , deadlineExpired := deadlineExpired
   , processOutcome := process.toContract
@@ -285,73 +285,73 @@ def restartDispositionCase
 def restartDispositionCases : List RestartDispositionCase :=
   [ restartDispositionCase
       "restart_native_background_live_parent_interrupted"
-      .background false .live
+      .background .native .live
       "Recovery.native_background_tool_live_parent_interrupted_on_restart"
   , restartDispositionCase
       "restart_native_background_unowned_process_lost"
-      .background false .live
+      .background .native .live
       "Recovery.native_background_unstopped_process_settles_lost"
       (process := .notOwned)
   , restartDispositionCase
       "restart_native_background_exited_process_lost"
-      .background false .otherTerminal
+      .background .native .otherTerminal
       "Recovery.native_background_unstopped_process_settles_lost"
       (process := .alreadyExited)
   , restartDispositionCase
       "restart_native_background_still_running_left_running"
-      .background false .live
+      .background .native .live
       "Recovery.native_background_still_running_left_running"
       (process := .stillRunning)
   , restartDispositionCase
       "restart_session_message_live_parent_left_running"
-      .background true .live
+      .background .sessionMessage .live
       "Recovery.session_message_row_left_running"
   , restartDispositionCase
       "restart_session_message_interrupted_parent_left_running"
-      .background true .interrupted
+      .background .sessionMessage .interrupted
       "Recovery.session_message_row_left_running"
   , restartDispositionCase
       "restart_session_message_failed_parent_left_running"
-      .background true .otherTerminal
+      .background .sessionMessage .otherTerminal
       "Recovery.session_message_row_left_running"
   , restartDispositionCase
       "restart_session_message_clean_complete_parent_left_running"
-      .background true .cleanlyCompleted
+      .background .sessionMessage .cleanlyCompleted
       "Recovery.session_message_row_left_running"
   , restartDispositionCase
       "restart_session_message_deadline_expired_left_running"
-      .background true .live
+      .background .sessionMessage .live
       "Recovery.session_message_row_left_running"
       (deadlineExpired := true)
   , restartDispositionCase
       "restart_native_background_deadline_expired_times_out"
-      .background false .live
+      .background .native .live
       "Recovery.deadline_precedes_restart_interrupt"
       (deadlineExpired := true)
   , restartDispositionCase
       "restart_native_background_interrupted_parent_lost_on_restart"
-      .background false .interrupted
+      .background .native .interrupted
       "Recovery.native_background_tool_interrupted_on_restart"
   , restartDispositionCase
       "restart_native_background_terminal_parent_lost_on_restart"
-      .background false .otherTerminal
+      .background .native .otherTerminal
       "Recovery.native_background_tool_interrupted_on_restart"
   , restartDispositionCase
       "restart_foreground_interrupted_parent_cancelled"
-      .foreground false .interrupted
+      .foreground .native .interrupted
       "Recovery.leave_running_iff_preserved_shapes"
   , restartDispositionCase
       "restart_foreground_live_parent_left_running"
-      .foreground false .live
+      .foreground .native .live
       "Recovery.leave_running_iff_preserved_shapes"
   , restartDispositionCase
       "restart_session_message_missing_parent_left_running"
-      .background true .missing
+      .background .sessionMessage .missing
       "Recovery.missing_parent_never_terminalizes"
       (deadlineExpired := true)
   , restartDispositionCase
       "restart_native_background_expired_missing_parent_deferred"
-      .background false .missing
+      .background .native .missing
       "Recovery.missing_parent_never_terminalizes"
       (deadlineExpired := true)
   ]

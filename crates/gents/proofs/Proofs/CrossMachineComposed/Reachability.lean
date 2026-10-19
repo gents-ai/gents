@@ -46,6 +46,14 @@ def detachedTool : ToolExecution.ToolCallContext :=
 def withDetachedTool : ComposedState :=
   { processing with tools := [detachedTool] }
 
+def detachedJobTool : ToolExecution.ToolCallContext :=
+  { pendingTool with
+    callId := 3
+    operation := .pluginJob }
+
+def withDetachedJobTool : ComposedState :=
+  { processing with tools := [detachedJobTool] }
+
 def runningTool : ToolExecution.ToolCallContext :=
   { pendingTool with state := .running, startedAt := some pendingTool.currentTime }
 
@@ -180,6 +188,23 @@ theorem trace_withDetachedTool : Trace initial withDetachedTool :=
     (Trace.step step_acquired (Trace.step step_processing
       (Trace.step step_withDetachedTool Trace.refl))))
 
+theorem step_withDetachedJobTool : Transition processing withDetachedJobTool := by
+  refine Transition.tool_spawn
+    (newTool := detachedJobTool)
+    rfl rfl rfl rfl rfl rfl rfl ?_ ?_ ?_ ?_
+  · simp [Coherent, detachedJobTool, pendingTool, withDetachedJobTool]
+  · intro _h_det
+    simp [Persistent, detachedJobTool, pendingTool, withDetachedJobTool, processing]
+  · intro t h_in
+    simp [processing, acquired, claimed, ready, initial] at h_in
+  · intro _h_fg h_existing
+    simp [processing, acquired, claimed, ready, initial] at h_existing
+
+theorem trace_withDetachedJobTool : Trace initial withDetachedJobTool :=
+  Trace.step step_ready (Trace.step step_claimed
+    (Trace.step step_acquired (Trace.step step_processing
+      (Trace.step step_withDetachedJobTool Trace.refl))))
+
 theorem trace_withRunningTool : Trace initial withRunningTool :=
   Trace.step step_ready (Trace.step step_claimed
     (Trace.step step_acquired (Trace.step step_processing
@@ -242,6 +267,21 @@ theorem detached_reachable_domain_nonempty :
   · simp [withDetachedTool]
   · simp [IsDetached, detachedTool, pendingTool]
   · simp [Persistent, detachedTool, pendingTool, withDetachedTool, processing]
+
+theorem detached_job_reachable_domain_nonempty :
+    ∃ pre toolPre,
+      Trace initial pre ∧
+      pre.WellFormed ∧
+      toolPre ∈ pre.tools ∧
+      IsDetached toolPre ∧
+      Persistent pre toolPre := by
+  refine ⟨withDetachedJobTool, detachedJobTool, ?_, ?_, ?_, ?_, ?_⟩
+  · exact trace_withDetachedJobTool
+  · exact wellFormed_from_initial trace_withDetachedJobTool
+  · simp [withDetachedJobTool]
+  · simp [IsDetached, detachedJobTool, pendingTool, ToolExecution.ToolOperation.isDetached]
+  · simp [Persistent, detachedJobTool, pendingTool, withDetachedJobTool, processing,
+      ToolExecution.ToolOperation.isDetached]
 
 def interruptLatched : ComposedState :=
   { withPendingTool with

@@ -120,6 +120,7 @@ fn tool_ref(digest: Option<&str>) -> PluginToolRef {
         plugin: "team/plugin".into(),
         digest: digest.map(str::to_owned),
         input_fields: Vec::new(),
+        job: None,
     }
 }
 
