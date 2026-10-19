@@ -9,6 +9,7 @@ use gents::goal::{
     set_goal, set_goal_from_access, update_goal_fields_if_status, CreateGoalForSessionError,
     CreateGoalForSessionOutcome, GoalStatus,
 };
+use gents::graphql::escape_graphql_string;
 use gents::{
     ActiveRuntimeSnapshot, ConfigAccess, GoalSource, NodeIdentity, TriggerSource,
     UpdateSubscriptionSource,
@@ -1806,12 +1807,19 @@ async fn seed_usage(
     prompt_tokens: i64,
     completion_tokens: i64,
 ) {
+    let request_doc_id = escape_graphql_string(
+        &crate::support::exact_request_doc_id(node.as_ref(), request_id).await,
+    );
+    let node_did = escape_graphql_string(node_did);
+    let request_id = escape_graphql_string(request_id);
+    let call_id = escape_graphql_string(call_id);
     let usage = format!(
         r#"mutation {{
             add_InferenceCall(input: {{
                 call_id: "{call_id}",
                 runtime_instance_id: "goal-baseline-test",
                 request_id: "{request_id}",
+                request_doc_id: "{request_doc_id}",
                 call_seq: 1,
                 backend_id: "backend-test",
                 agent_id: "test",
@@ -2206,6 +2214,8 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             r#"mutation {{ add_InferenceCall(input: {{
                 call_id: "over-budget-failed-call",
                 request_id: "{parent}",
+                request_doc_id: "{}",
+                backend_id: "backend-test",
                 node_did: "{}",
                 call_seq: 1,
                 attempt: 1,
@@ -2214,6 +2224,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
                 prompt_tokens: 100,
                 completion_tokens: 5
             }}) {{ _docID }} }}"#,
+            escape_graphql_string(&parent_doc),
             gents::graphql::escape_graphql_string(db.node_identity.did()),
         );
         let response = db.node.execute(&usage).await;
@@ -2432,12 +2443,16 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     )
     .await
     .expect("set goal");
+    let usage_request_doc = escape_graphql_string(
+        &crate::support::exact_request_doc_id(db.node.as_ref(), "parent-budget").await,
+    );
     let usage = format!(
         r#"mutation {{
         local_usage: add_InferenceCall(input: {{
             call_id: "goal-budget-call",
             runtime_instance_id: "goal-test",
             request_id: "parent-budget",
+            request_doc_id: "{usage_request_doc}",
             call_seq: 1,
             backend_id: "backend-test",
             agent_id: "test",
@@ -2460,6 +2475,7 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
             call_id: "goal-budget-call-foreign",
             runtime_instance_id: "goal-test-foreign",
             request_id: "parent-budget",
+            request_doc_id: "{usage_request_doc}",
             call_seq: 1,
             backend_id: "backend-test",
             agent_id: "test",
@@ -2598,12 +2614,16 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
 async fn session_token_usage_charges_cached_input_as_part_of_the_total() {
     let db = test_db("goal-cached-input").await;
     seed_completed_request(&db, "parent-cached").await;
+    let usage_request_doc = escape_graphql_string(
+        &crate::support::exact_request_doc_id(db.node.as_ref(), "parent-cached").await,
+    );
     let usage = format!(
         r#"mutation {{
         add_InferenceCall(input: {{
             call_id: "goal-cached-call",
             runtime_instance_id: "goal-test",
             request_id: "parent-cached",
+            request_doc_id: "{usage_request_doc}",
             call_seq: 1,
             backend_id: "backend-test",
             agent_id: "test",
@@ -3066,13 +3086,18 @@ async fn failed_wrapup_retries_twice_then_is_durably_abandoned() {
     )
     .await
     .expect("set goal");
+    let usage_request_doc = escape_graphql_string(
+        &crate::support::exact_request_doc_id(db.node.as_ref(), "parent-wrapup-retry").await,
+    );
     let response = db
         .node
         .execute(&format!(
             r#"mutation {{
                 add_InferenceCall(input: {{
                     call_id: "wrapup-budget-call",
+                    backend_id: "backend-test",
                     request_id: "parent-wrapup-retry",
+                    request_doc_id: "{usage_request_doc}",
                     node_did: "{}",
                     call_seq: 1,
                     attempt: 1,

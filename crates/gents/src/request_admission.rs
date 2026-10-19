@@ -1107,10 +1107,10 @@ fn required_row_string<'a>(value: Option<&'a str>, field: &str) -> AdmissionResu
     })
 }
 
-/// Lifecycle is included for callers decoding the row, but is not part of the
-/// signed payload.
-pub const SIGNED_REQUEST_FIELDS: &str = r#"
-_docID lifecycle_state request_id purpose node_did requester_did agent_id session_id
+macro_rules! signed_request_receipt_fields {
+    () => {
+        r#"
+_docID request_id purpose node_did requester_did agent_id session_id
                 retry_parent_request retry_parent_request_doc_id retry_root_request retry_key
                 content input max_total_tokens
                 execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_correlation
@@ -1124,7 +1124,17 @@ _docID lifecycle_state request_id purpose node_did requester_did agent_id sessio
                 enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence
                 enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id
                 runtime_source_kind
-"#;
+"#
+    };
+}
+
+/// Historical receipt verification does not depend on mutable lifecycle state.
+pub(crate) const SIGNED_REQUEST_RECEIPT_FIELDS: &str = signed_request_receipt_fields!();
+
+/// Lifecycle is included for callers decoding the row, but is not part of the
+/// signed payload.
+pub const SIGNED_REQUEST_FIELDS: &str =
+    concat!("lifecycle_state ", signed_request_receipt_fields!());
 
 async fn load_signed_request(
     node: &EmbeddedNode,

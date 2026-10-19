@@ -205,6 +205,81 @@ struct ParentUsageCatalog {
     calls: Vec<CallRow>,
 }
 
+fn project_goal_catalog(
+    request_ids: &BTreeMap<String, String>,
+    calls: Vec<CallRow>,
+) -> Result<u64> {
+    let calls = coherent_calls(request_ids, calls)?;
+    crate::provider_usage::sum_charged_from_persisted_parts(
+        calls
+            .values()
+            .map(|call| (call.prompt_tokens, call.completion_tokens)),
+    )
+}
+
+/// Review charges follow their signed physical parent in the same snapshot as
+/// the goal baseline. Title overhead is excluded from this product budget.
+pub(crate) async fn load_session_goal_usage(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+) -> Result<u64> {
+    let response = txn.execute(&format!(
+        r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, purpose: {{ _in: ["normal", "access-review"] }} }}) {{ {} }} }}"#,
+        escape_graphql_string(node_did), escape_graphql_string(session_id),
+        crate::request_admission::SIGNED_REQUEST_RECEIPT_FIELDS,
+    )).await?;
+    let requests: Vec<AgentRequestRow> = serde_json::from_value(
+        response
+            .pointer("/data/AgentRequest")
+            .context("goal usage query omitted AgentRequest rows")?
+            .clone(),
+    )
+    .context("decoding goal usage AgentRequest rows")?;
+    let mut by_doc = BTreeMap::new();
+    for request in &requests {
+        let doc = nonempty(request.doc_id.as_deref(), "goal physical request")?;
+        anyhow::ensure!(
+            by_doc.insert(doc, request).is_none(),
+            "duplicate goal request physical identity"
+        );
+    }
+    let mut request_ids = BTreeMap::new();
+    for request in &requests {
+        if request.purpose == Some(RequestPurpose::AccessReview) {
+            let parent_doc = nonempty(
+                request.caused_by_parent_request_doc_id.as_deref(),
+                "review parent",
+            )?;
+            let parent = by_doc
+                .get(parent_doc)
+                .context("goal review has no same-session parent")?;
+            crate::request_admission::verify_historical_auxiliary_receipt(request, parent)?;
+        }
+        request_ids.insert(
+            nonempty(request.doc_id.as_deref(), "goal physical request")?.to_owned(),
+            request.request_id.clone(),
+        );
+    }
+    if request_ids.is_empty() {
+        return Ok(0);
+    }
+    let docs = request_ids
+        .keys()
+        .map(|doc| format!("\"{}\"", escape_graphql_string(doc)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let response = txn.execute(&format!(
+        r#"{{ InferenceCall(filter: {{ node_did: {{ _eq: "{}" }}, request_doc_id: {{ _in: [{docs}] }} }}) {{ _docID node_did call_id request_doc_id request_id backend_id call_state ended_at prompt_tokens completion_tokens }} }}"#,
+        escape_graphql_string(node_did),
+    )).await?;
+    let raw_calls = response
+        .pointer("/data/InferenceCall")
+        .and_then(serde_json::Value::as_array)
+        .context("goal usage query omitted InferenceCall rows")?;
+    project_goal_catalog(&request_ids, decode_calls_for_node(raw_calls, node_did)?)
+}
+
 /// An auxiliary call enters the parent-inclusive total only through its
 /// historically verified signed parent link.
 pub async fn load_parent_inclusive_audit_usage(
@@ -470,6 +545,47 @@ mod tests {
         }
     }
 
+    fn assert_goal_usage_cases() {
+        use crate::lean_vocab_test::LeanUsageBudgetResult;
+
+        for name in [
+            "empty_budget_has_no_spend",
+            "normal_public_usage",
+            "title_audit_only",
+            "normal_plus_title_parent_inclusive",
+            "access_review_usage_is_parent_inclusive_audit_only",
+            "normal_review_and_title_have_separate_goal_charges",
+            "duplicate_review_call_has_one_goal_charge",
+            "access_review_late_usage_restores_budget_observation",
+            "failed_access_review_usage_still_reduces_budget",
+        ] {
+            let case = crate::lean_vocab_test::lean_title_usage_cases()
+                .iter()
+                .find(|case| case.name == name)
+                .unwrap();
+            for after in [false, true] {
+                let (mut ids, mut calls) = native_catalog(case, after);
+                let titles: Vec<_> = case
+                    .signed_purposes
+                    .iter()
+                    .filter(|fact| RequestPurpose::from(fact.purpose) == RequestPurpose::TitleAudit)
+                    .map(|fact| format!("request-{}", fact.physical))
+                    .collect();
+                ids.retain(|doc, _| !titles.contains(doc));
+                calls.retain(|call| ids.contains_key(&call.request_doc_id));
+                let expected = if after {
+                    &case.goal_after
+                } else {
+                    &case.goal_before
+                };
+                let LeanUsageBudgetResult::Ok { used } = expected else {
+                    panic!("unexpected model goal error for {name}: {expected:?}")
+                };
+                assert_eq!(project_goal_catalog(&ids, calls).unwrap(), *used, "{name}");
+            }
+        }
+    }
+
     #[test]
     fn generated_title_usage_cases_bind_native_catalog_and_late_usage() {
         let names = [
@@ -495,6 +611,8 @@ mod tests {
     #[test]
     fn generated_budget_recovery_cases_bind_signed_catalog_usage() {
         use crate::lean_vocab_test::LeanUsageBudgetResult;
+
+        assert_goal_usage_cases();
 
         let names = [
             "empty_budget_has_no_spend",

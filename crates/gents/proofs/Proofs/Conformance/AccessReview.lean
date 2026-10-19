@@ -77,7 +77,19 @@ private def completionCases : List Json :=
       ("kind", toJson "completion"), ("purpose", toJson purpose.toWire),
       ("hasTools", toJson hasTools), ("expected", toJson (!hasTools || permitsIntent))]
 
-def casesJson : Json := toJson (replyCases ++ traceCases ++ routeCases ++ completionCases)
+private def contextCases : List Json :=
+  let maxWord := 2^64 - 1
+  ([0, 32, 65500, 65536, 65537, maxWord] : List Nat).flatMap fun required =>
+  ([0, 64, 65536, maxWord] : List Nat).flatMap fun limit =>
+  ([[], [0], [1], [32, 32], [33, 32, 1], [65536], [65537],
+    [maxWord, 1], [1, maxWord], [maxWord, 0], [65500, 32],
+    [4, 4, 4, 4, 4]] : List (List Nat)).map fun costs => Json.mkObj [
+      ("kind", toJson "context"), ("required", toJson required),
+      ("limit", toJson limit), ("costs", toJson costs),
+      ("expected", toJson (ToolPolicy.AccessReview.selectContext required limit costs))]
+
+def casesJson : Json := toJson
+  (replyCases ++ traceCases ++ routeCases ++ completionCases ++ contextCases)
 
 private def taskCaseJson (policy : ToolPolicy.AccessReview.TaskPolicy)
     (budgetOnly : Bool := false) (approvedPrompt : Option String := none) : Json :=
