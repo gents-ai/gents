@@ -85,6 +85,9 @@ jobs:
       - name: Run build attribution parser self-test
         run: scripts/measure-gents-build-attribution.sh self-test
 
+      - name: Check runner build-space reclamation
+        run: python3 .github/scripts/test-rust-build-space.py
+
       - name: Run Harbor agent adapter tests
         run: python3 scripts/harbor/test_gents_agent.py
 
@@ -386,6 +389,7 @@ jobs:
         env:
           RUST_MIN_STACK: 16777216
         run: |
+          python3 .github/scripts/ensure-rust-build-space.py "$CARGO_TARGET_DIR"
           cargo build --profile test -p gents-cli -p gents-client-host -p gents-media-host --bins
           cargo test -p gents-client-host --features runtime-e2e --test runtime
 

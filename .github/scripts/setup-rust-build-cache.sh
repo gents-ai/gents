@@ -19,6 +19,7 @@ fi
 runner_cache_key="$(printf '%s' "${RUNNER_NAME}" | tr -c 'A-Za-z0-9._-' '_')"
 cargo_target_dir="${CARGO_TARGET_ROOT}/${runner_cache_key}"
 mkdir -p "${cargo_target_dir}"
+python3 "$(dirname "${BASH_SOURCE[0]}")/ensure-rust-build-space.py" "${cargo_target_dir}"
 echo "CARGO_TARGET_DIR=${cargo_target_dir}" >> "${GITHUB_ENV}"
 
 echo "Using CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}"
