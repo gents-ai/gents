@@ -175,6 +175,8 @@ pub(crate) struct LeanTitleUsageCase {
     pub(crate) expected_after: LeanTitleUsageResult,
     pub(crate) budget_before: LeanUsageBudgetResult,
     pub(crate) budget_after: LeanUsageBudgetResult,
+    pub(crate) goal_before: LeanUsageBudgetResult,
+    pub(crate) goal_after: LeanUsageBudgetResult,
 }
 
 #[derive(Debug, Deserialize)]

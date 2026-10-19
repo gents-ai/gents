@@ -89,6 +89,39 @@ def parentInclusiveAudit (observation : Observation) (parent : ParentScope) : Na
   let titles := auxiliaryChildren observation parent
   (normal.1 + titles.1, normal.2 + titles.2)
 
+/-- Access review is part of carrying out a user's work and consumes its goal
+budget. Session title generation is presentation overhead and remains audit-only.
+An auxiliary call is chargeable only through its authenticated physical parent. -/
+def goalBelongsTo (observation : Observation) (parent : ParentScope)
+    (row : UsageRow) : Bool :=
+  normalBelongsTo observation parent row ||
+    (observation.purpose row.physicalRequest == some .accessReview &&
+      auxiliaryBelongsTo observation parent row)
+
+def goalUsage (observation : Observation) (parent : ParentScope) : Nat × Nat :=
+  sumWhere observation (goalBelongsTo observation parent)
+
+theorem a_title_cannot_enter_a_goal_budget (observation : Observation)
+    (parent : ParentScope) (row : UsageRow)
+    (title : observation.purpose row.physicalRequest = some .titleAudit) :
+    goalBelongsTo observation parent row = false := by
+  simp only [goalBelongsTo, normalBelongsTo]
+  by_cases same : row.physicalRequest = parent.physical
+  · simp [same] at title ⊢
+    simp [title]
+  · simp [same, title]
+
+theorem a_review_without_a_parent_cannot_enter_a_goal_budget
+    (observation : Observation) (parent : ParentScope) (row : UsageRow)
+    (review : observation.purpose row.physicalRequest = some .accessReview)
+    (unbound : observation.auxiliaryBinding row.physicalRequest = none) :
+    goalBelongsTo observation parent row = false := by
+  simp only [goalBelongsTo, normalBelongsTo, auxiliaryBelongsTo, unbound]
+  by_cases same : row.physicalRequest = parent.physical
+  · simp [same] at review ⊢
+    simp [review]
+  · simp [same]
+
 inductive CatalogError where
   | mismatchedCallId
   | conflictingCallId
@@ -207,6 +240,18 @@ inductive BudgetError where
   | catalog (error : CatalogError)
   | unreportedUsage
   deriving DecidableEq, Repr
+
+def projectGoal (records : List (Nat × UsageRow))
+    (purpose : CanonicalOutput.DocId → Option RequestPurpose)
+    (auxiliaryBinding : CanonicalOutput.DocId → Option AuxiliaryBinding)
+    (parent : ParentScope) : Except CatalogError Nat := do
+  let _ ← validateAndProject records purpose auxiliaryBinding parent
+  let unique ← validateCatalog records
+  match unique with
+  | [] => pure 0
+  | first :: rest =>
+      let usage := goalUsage (uniqueObservation first rest purpose auxiliaryBinding) parent
+      pure (usage.1 + usage.2)
 
 /-- Restart uses the authenticated parent-inclusive catalog. A missing or zero
 usage report cannot establish a remaining provider allowance, even for a failed

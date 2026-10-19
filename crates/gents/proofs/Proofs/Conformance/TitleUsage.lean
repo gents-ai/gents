@@ -67,6 +67,16 @@ private def titlePurpose : SignedPurpose := ⟨11, .titleAudit⟩
 private def normalPurpose : SignedPurpose := ⟨10, .normal⟩
 
 private def titleUsageCases : List Case := [
+  { name := "normal_review_and_title_have_separate_goal_charges", parent := parent,
+    rows := [mkRow 1 10 20 (some usage), mkRow 7 11 21 (some usage),
+      mkRow 8 12 22 (some usage)],
+    purposes := [normalPurpose, ⟨11, .accessReview⟩, ⟨12, .titleAudit⟩],
+    bindings := [bindingFact { binding with purpose := .accessReview },
+      ⟨12, { binding with physicalRequest := 12, logicalRequest := 22 }⟩] },
+  { name := "duplicate_review_call_has_one_goal_charge", parent := parent,
+    rows := [mkRow 7 11 21 (some usage), mkRow 7 11 21 (some usage)],
+    purposes := [⟨11, .accessReview⟩],
+    bindings := [bindingFact { binding with purpose := .accessReview }] },
   { name := "empty_budget_has_no_spend", parent := parent,
     rows := [], purposes := [normalPurpose], bindings := [] },
   { name := "access_review_missing_usage_blocks_budget_restart", parent := parent,
@@ -225,6 +235,18 @@ private def budgetJson : Except BudgetError Nat → Json
   | .error .unreportedUsage => Json.mkObj
       [("kind", toJson "error"), ("error", toJson "unreported_usage")]
 
+private def evaluateGoal (c : Case) (rows : RawRows) : Except BudgetError Nat :=
+  (projectGoal rows (purposeLookup c.purposes) (bindingLookup c.bindings) c.parent).mapError .catalog
+
+theorem goal_budget_counts_review_and_excludes_title :
+    (titleUsageCases.find? (fun c => c.name ==
+      "normal_review_and_title_have_separate_goal_charges")).map
+        (fun c => evaluateGoal c c.rows) = some (.ok 16) ∧
+    (titleUsageCases.find? (fun c => c.name ==
+      "duplicate_review_call_has_one_goal_charge")).map
+        (fun c => evaluateGoal c c.rows) = some (.ok 8) := by
+  native_decide
+
 private def evaluateNamedBudget (name : String) :
     Option (Except BudgetError Nat × Except BudgetError Nat) :=
   (titleUsageCases.find? (fun c => c.name == name)).map fun c =>
@@ -308,7 +330,9 @@ private def caseJson (c : Case) : Json := Json.mkObj
    ("expected_before", resultJson (evaluate c c.rows)),
    ("expected_after", resultJson (evaluate c (applyAction c.rows c.action))),
    ("budget_before", budgetJson (evaluateBudget c c.rows)),
-   ("budget_after", budgetJson (evaluateBudget c (applyAction c.rows c.action)))]
+   ("budget_after", budgetJson (evaluateBudget c (applyAction c.rows c.action))),
+   ("goal_before", budgetJson (evaluateGoal c c.rows)),
+   ("goal_after", budgetJson (evaluateGoal c (applyAction c.rows c.action)))]
 
 def casesJson : String := (toJson (titleUsageCases.map caseJson)).compress
 

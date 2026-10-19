@@ -1056,7 +1056,7 @@ def caseCoverage : List CoverageEntry :=
       "title_usage_cases"
       "TitleUsageCases"
       "toolset::title_audit_usage::tests::generated_budget_recovery_cases_bind_signed_catalog_usage"
-      "The catalog consumer binds parent-inclusive spending, missing and zero usage, late reports and duplicate-call accounting. Historical receipt authentication and foreign-parent filtering remain separate native admission boundaries.")
+      "The catalog consumer binds parent-inclusive spending, missing and zero usage, late reports, duplicate-call accounting and goal charges that include reviews while excluding titles. Historical receipt authentication and foreign-parent filtering remain separate native admission boundaries.")
       "inference-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "backend_health_cases"
