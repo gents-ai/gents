@@ -202,7 +202,7 @@ fn captured_native_documents_and_provider_parts_match_the_model() {
             contexts, input.captured_context,
             "{name}: immutable document codec"
         );
-        let provider = gents::provider_input::captured_context_for_provider(native).unwrap();
+        let provider = gents_loop::provider_input::captured_context_for_provider(native).unwrap();
         let Message::User { content } = provider else {
             panic!("{name}: provider changed the role")
         };
