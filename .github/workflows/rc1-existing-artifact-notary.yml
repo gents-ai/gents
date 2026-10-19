@@ -1,28 +1,17 @@
-name: RC1 existing-artifact notarization (CI control)
+name: RC1 existing-artifact notary auth (CI control)
 
-# Control-plane-only workflow: notarizes an already built, already signed RC1
-# candidate without any product build, re-sign, release, or tag write. The
-# processed files are the fixed artifacts from gents-ai/gents build run
-# 39302246819 at application source SHA 08edd1bdfedca73fa28e648e4781ae03aeacf5e6.
-# Splits into: 1) repository guard, 2) auth-only notary preflight, 3) notary
-# submission of the existing DMG (explicitly admitted by dispatch input), and
-# 4) read-only stapling/validation of the original DMG against immutable work
-# copies. Submission runs at most once per workflow run; rerun of the submit
-# job is fail-closed (an earlier durable submission record causes a hard stop).
-# Registration on the default branch is what makes dispatch available to
-# members with write access; that registration itself is an Engineer-merged
-# change, never performed by the automation that authored this file.
+# Auth-only control-plane workflow for the fixed RC1 candidate from
+# gents-ai/gents build run 39302246819 at application source SHA
+# 08edd1bdfedca73fa28e648e4781ae03aeacf5e6. It performs exactly one thing: a
+# read-only `xcrun notarytool history` probe proving the App Store Connect
+# notary credential path works. There is deliberately NO submission, NO
+# stapling, NO release/tag write, NO product build, and NO artifact download
+# in this workflow; those are separate, independently reviewed future work.
+# Dispatch is trusted only from the pinned repository's default branch, which
+# requires an Engineer-merged registration of this file on that branch.
 
 on:
   workflow_dispatch:
-    inputs:
-      submit:
-        description: >-
-          Explicitly admit the one-shot notary submission of the fixed RC1
-          desktop DMG. Must be true for the submission job to run.
-        required: true
-        type: boolean
-        default: false
 
 concurrency:
   group: rc1-existing-artifact-notary
@@ -40,22 +29,10 @@ env:
   GENTS_REPO: gents-ai/gents
   GENTS_SOURCE_SHA: 08edd1bdfedca73fa28e648e4781ae03aeacf5e6
   GENTS_BUILD_RUN_ID: "39302246819"
-  GENTS_CLI_ARTIFACT_ID: "12217555726"
-  GENTS_CLI_TARBALL_SHA256: 71979526db36097b7b145398e7f7a7cfc47fb9d33ab5ea0a23eed7fe398caf55
-  GENTS_CLI_BINARY_SHA256: 5b488fc5af64f0a0112ab97b0894b2b7a2e4728df5b8c481a3f7c4b7aa3a2295
-  GENTS_DESKTOP_MANIFEST_SHA256: b53772b976b4572f5a79d177748dbad3eaee3b60e26e1d23e892bbd647aadcb2
-  GENTS_DESKTOP_DMG_SHA256: c6ee15a715e0a66a0d55ec435ddff127a52319bf10ad40ad1d6da134403245d7
-  GENTS_DESKTOP_DMG_BASENAME: gents-desktop_0.21.0-rc1_aarch64-signed-unnotarized-candidate.dmg
-  GENTS_DESKTOP_APP_BINARY_SHA256: 076ad259e4451eeb4a46b0af336278b472aeb6fea392f02f39231618d19dd2d3
-  GENTS_DESKTOP_CLI_BINARY_SHA256: 64f5f84e22ae0056fead492dcc42d695d928b1f272ee744ea99e9dd5c5454abf
-  GENTS_DESKTOP_BRIDGE_BINARY_SHA256: ff17f13c68272e5b833b0a8a42f3d46fbabb1eee6964fe85e388205a7f3b3deb
-  GENTS_CODESIGN_TEAM_ID: NXJ753WW5X
-  GENTS_CODESIGN_CERT_SHA1: 4855F05BB34BFB227F828F9856DA05D2D02E7D0F
-  GENTS_CODESIGN_CERT_SHA256: FFE161226E3BA89575FBB2FA4E0FFC2F7B0A7C99DE8FC2F696A24FB8D74F1BAF
 
 jobs:
   repository-guard:
-    name: Guard repository and dispatch inputs
+    name: Guard repository and dispatch context
     runs-on: [self-hosted, macOS, ARM64, studio, studio-1, ci-support]
     timeout-minutes: 10
     steps:
@@ -64,6 +41,11 @@ jobs:
           persist-credentials: false
 
       - name: Assert trusted dispatch context
+        env:
+          # Explicit trusted-context expression; the runner-provided
+          # default-branch environment variable is not used because its
+          # availability is not guaranteed across runner versions.
+          TRUSTED_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
@@ -74,26 +56,30 @@ jobs:
             echo "::error::Expected repository ${GENTS_REPO}, got ${GITHUB_REPOSITORY}."
             exit 1
           fi
-          if [[ "${GITHUB_REF_NAME}" != "${GITHUB_REPOSITORY_DEFAULT_BRANCH}" ]]; then
-            echo "::error::Dispatch is only trusted on the default branch '${GITHUB_REPOSITORY_DEFAULT_BRANCH}', got ref '${GITHUB_REF_NAME}'."
+          if [[ -z "${TRUSTED_DEFAULT_BRANCH}" ]]; then
+            echo "::error::github.event.repository.default_branch was empty; refusing to evaluate the branch guard."
+            exit 1
+          fi
+          if [[ "${GITHUB_REF_NAME}" != "${TRUSTED_DEFAULT_BRANCH}" ]]; then
+            echo "::error::Dispatch is only trusted on the default branch '${TRUSTED_DEFAULT_BRANCH}', got ref '${GITHUB_REF_NAME}'."
             exit 1
           fi
           if [[ -n "${GITHUB_HEAD_REF:-}" ]]; then
             echo "::error::Dispatch carries a head ref '${GITHUB_HEAD_REF}'; refusing untrusted pull_request context."
             exit 1
           fi
-          if [[ "${{ inputs.submit }}" != "true" ]]; then
-            echo "submit=false: submission job will be skipped; auth-only preflight remains available."
-          fi
 
-      - name: ShellCheck control scripts
+      - name: ShellCheck and syntax-check control scripts
         run: |
           set -euo pipefail
-          shellcheck .github/scripts/rc1-notary-verify.py
           shellcheck -s sh .github/scripts/rc1-notary-auth.sh
+          sh -n .github/scripts/rc1-notary-auth.sh
 
       - name: Run notary control self-tests
-        run: python3 .github/scripts/test-rc1-notary-verify.py
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/test-rc1-notary-verify.py
+          python3 .github/scripts/test-rc1-notary-workflow.py
 
   notary-auth-preflight:
     name: Notary auth-only preflight (history)
@@ -105,444 +91,16 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Materialize notary credentials in a private temp directory
+      - name: Run auth-only notary credential probe
         env:
           MACOS_NOTARY_API_KEY: ${{ secrets.MACOS_NOTARY_API_KEY }}
           MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
           MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
         run: |
           set -euo pipefail
-          missing=()
-          [[ -n "${MACOS_NOTARY_API_KEY}" ]] || missing+=("MACOS_NOTARY_API_KEY")
-          [[ -n "${MACOS_NOTARY_ISSUER_ID}" ]] || missing+=("MACOS_NOTARY_ISSUER_ID")
-          [[ -n "${MACOS_NOTARY_KEY_ID}" ]] || missing+=("MACOS_NOTARY_KEY_ID")
-          if [[ "${#missing[@]}" -gt 0 ]]; then
-            printf '::error::Missing required macOS notary secret(s): %s\n' "${missing[*]}"
-            exit 1
-          fi
-
-          notary_dir="${RUNNER_TEMP}/gents-rc1-notary-auth"
-          rm -rf "${notary_dir}"
-          # 0700: the .p8 must never be group/world readable at any point.
-          mkdir -m 0700 "${notary_dir}"
-          notary_key_path="${notary_dir}/AuthKey_${MACOS_NOTARY_KEY_ID}.p8"
-          printf '%s\n' "${MACOS_NOTARY_API_KEY}" > "${notary_key_path}"
-          chmod 0600 "${notary_key_path}"
-
-          cleanup() {
-            rc=$?
-            rm -rf -P "${notary_dir}" 2>/dev/null || rm -rf "${notary_dir}" || true
-            exit "${rc}"
-          }
-          trap cleanup EXIT
-
-          # Auth-only probe: default notarytool history. This exercises the
-          # App Store Connect API credential path end to end without any
-          # submission, upload, or state change on the notary service.
-          set +e
-          history_output="$(xcrun notarytool history \
-            --key "${notary_key_path}" \
-            --key-id "${MACOS_NOTARY_KEY_ID}" \
-            --issuer "${MACOS_NOTARY_ISSUER_ID}" \
-            --output-format json 2>&1)"
-          history_status=$?
-          set -e
-
-          if [[ "${history_status}" -ne 0 ]]; then
-            # Sanitized diagnostics only: never echo credential material,
-            # key contents, or full raw provider errors.
-            if grep -q '403' <<<"${history_output}"; then
-              echo "::error::Notary auth probe was rejected (HTTP 403). Check MACOS_NOTARY_API_KEY/ISSUER_ID/KEY_ID validity and team permissions. Not proceeding to submission."
-            else
-              echo "::error::Notary auth probe failed (notarytool history exit ${history_status}, sanitized: credential material withheld)."
-            fi
-            printf '%s\n' "${history_output}" | sed -E \
-              -e 's/(--key[ =])[^ ]+/\1<redacted>/g' \
-              -e 's/(AuthKey_)[^.]+(\.p8)/\1<redacted>\2/g' \
-              | head -n 20
-            exit 1
-          fi
-
-          # Prove the credential path works without leaking submission state.
-          printf '%s\n' "${history_output}" | jq -e 'type == "object"' >/dev/null || {
-            echo "::error::Notary auth probe returned unexpected history payload."
-            exit 1
-          }
-          printf '%s\n' "${history_output}" | head -c 400
-          printf '\n'
-          echo "GENTS_RC1_NOTARY_AUTH_OK=true" >> "${GITHUB_ENV}"
-
-  notary-submit:
-    name: Notary submission (one-shot, explicitly admitted)
-    needs: [repository-guard, notary-auth-preflight]
-    if: inputs.submit == true
-    runs-on: [self-hosted, macOS, ARM64, studio, studio-2, ci-desktop]
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Download fixed build-run artifacts
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          staging="${RUNNER_TEMP}/gents-rc1-notary-input"
-          rm -rf "${staging}"
-          mkdir -m 0700 -p "${staging}/run" "${staging}/receipts"
-
-          gh api "repos/${GENTS_REPO}/actions/runs/${GENTS_BUILD_RUN_ID}" \
-            --jq '.head_sha + " " + (. conclusion // "running")' \
-            > "${staging}/run-summary.txt"
-          cat "${staging}/run-summary.txt"
-
-          recorded_head="$(awk '{ print $1 }' <<<"$(cat "${staging}/run-summary.txt")")"
-          if [[ "${recorded_head}" != "${GENTS_SOURCE_SHA}" ]]; then
-            echo "::error::Build run ${GENTS_BUILD_RUN_ID} head SHA ${recorded_head} does not match the pinned source SHA ${GENTS_SOURCE_SHA}."
-            exit 1
-          fi
-
-          gh api "repos/${GENTS_REPO}/actions/runs/${GENTS_BUILD_RUN_ID}/artifacts" \
-            --paginate \
-            --jq '.artifacts[] | select(.expired == false) | [.id, .name, .size_in_bytes] | @tsv' \
-            > "${staging}/artifacts.tsv"
-          cat "${staging}/artifacts.tsv"
-
-          for artifact_pair in "${GENTS_CLI_ARTIFACT_ID}:cli" "${GENTS_DESKTOP_ARTIFACT_ID}:desktop"; do
-            artifact_id="${artifact_pair%%:*}"
-            slot="${artifact_pair##*:}"
-            artifact_line="$(awk -F '\t' -v id="${artifact_id}" '$1 == id { print; exit }' "${staging}/artifacts.tsv")"
-            if [[ -z "${artifact_line}" ]]; then
-              echo "::error::Artifact ${artifact_id} (slot ${slot}) not found alive in run ${GENTS_BUILD_RUN_ID}."
-              exit 1
-            fi
-            gh api "repos/${GENTS_REPO}/actions/artifacts/${artifact_id}/zip" \
-              > "${staging}/run/${slot}.zip"
-            unzip -q "${staging}/run/${slot}.zip" -d "${staging}/run/${slot}"
-          done
-
-          # CLI tarball must be exactly the pinned archive under its pinned name.
-          # Artifact zips extract under a directory prefix; resolve by name.
-          cli_tarball="$(find "${staging}/run/cli" -type f -name 'gents-aarch64-apple-darwin-signed-unnotarized-candidate.tar.gz' -print)"
-          cli_tarball_count="$(printf '%s\n' "${cli_tarball}" | grep -c .)"
-          if [[ "${cli_tarball_count}" -ne 1 ]]; then
-            echo "::error::Expected exactly one pinned CLI tarball in artifact ${GENTS_CLI_ARTIFACT_ID}, found ${cli_tarball_count}."
-            printf '%s\n' "${cli_tarball}"
-            exit 1
-          fi
-          echo "CLI_TARBALL_SOURCE=${cli_tarball}" >> "${GITHUB_ENV}"
-
-          # Desktop DMG must be exactly the pinned archive under its pinned name.
-          dmg_path="$(find "${staging}/run/desktop" -type f -name '*.dmg' -print)"
-          if [[ "$(printf '%s\n' "${dmg_path}" | grep -c .)" -ne 1 ]]; then
-            echo "::error::Expected exactly one DMG in artifact ${GENTS_DESKTOP_ARTIFACT_ID}, found:"
-            printf '%s\n' "${dmg_path}"
-            exit 1
-          fi
-          if [[ "$(basename "${dmg_path}")" != "${GENTS_DESKTOP_DMG_BASENAME}" ]]; then
-            echo "::error::Found DMG '$(basename "${dmg_path}")' does not match the pinned name '${GENTS_DESKTOP_DMG_BASENAME}'."
-            exit 1
-          fi
-          echo "DMG_SOURCE_PATH=${dmg_path}" >> "${GITHUB_ENV}"
-          echo "STAGING_DIR=${staging}" >> "${GITHUB_ENV}"
-
-      - name: Verify fixed artifact hashes and metadata
-        run: |
-          set -euo pipefail
-          staging="${STAGING_DIR}"
-          manifest_path="$(find "${staging}/run/desktop" -type f -name 'candidate-build.json' -print)"
-          if [[ "$(printf '%s\n' "${manifest_path}" | grep -c .)" -ne 1 ]]; then
-            echo "::error::Expected exactly one candidate-build.json in artifact ${GENTS_DESKTOP_ARTIFACT_ID}."
-            exit 1
-          fi
-          python3 .github/scripts/rc1-notary-verify.py \
-            --repo "${GENTS_REPO}" \
-            --build-run-id "${GENTS_BUILD_RUN_ID}" \
-            --source-sha "${GENTS_SOURCE_SHA}" \
-            --cli-tarball "${CLI_TARBALL_SOURCE}" \
-            --expected-cli-tarball-sha256 "${GENTS_CLI_TARBALL_SHA256}" \
-            --expected-cli-binary-sha256 "${GENTS_CLI_BINARY_SHA256}" \
-            --expected-desktop-manifest-sha256 "${GENTS_DESKTOP_MANIFEST_SHA256}" \
-            --desktop-manifest "${manifest_path}" \
-            --dmg "${DMG_SOURCE_PATH}" \
-            --expected-dmg-sha256 "${GENTS_DESKTOP_DMG_SHA256}" \
-            --expected-app-binary-sha256 "${GENTS_DESKTOP_APP_BINARY_SHA256}" \
-            --expected-cli-app-binary-sha256 "${GENTS_DESKTOP_CLI_BINARY_SHA256}" \
-            --expected-bridge-binary-sha256 "${GENTS_DESKTOP_BRIDGE_BINARY_SHA256}"
-
-      - name: Check durable submission record before admitting any submission
-        run: |
-          set -euo pipefail
-          receipts="${STAGING_DIR}/receipts"
-          if compgen -G "${receipts}/submission-*.json" >/dev/null; then
-            echo "::error::A durable submission receipt already exists for this run; refusing to submit again (fail-closed reconciliation guard)."
-            ls -la "${receipts}"
-            exit 1
-          fi
-          echo "No prior submission receipt for run ${GITHUB_RUN_ID}; admission to submit is unambiguous."
-
-      - name: Notarize desktop DMG (one-shot)
-        env:
-          MACOS_NOTARY_API_KEY: ${{ secrets.MACOS_NOTARY_API_KEY }}
-          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
-          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
-        run: |
-          set -euo pipefail
-          staging="${STAGING_DIR}"
-          receipts="${staging}/receipts"
-          notary_dir="${RUNNER_TEMP}/gents-rc1-notary-submit"
-          rm -rf "${notary_dir}"
-          mkdir -m 0700 -p "${notary_dir}"
-          notary_key_path="${notary_dir}/AuthKey_${MACOS_NOTARY_KEY_ID}.p8"
-          printf '%s\n' "${MACOS_NOTARY_API_KEY}" > "${notary_key_path}"
-          chmod 0600 "${notary_key_path}"
-
-          cleanup() {
-            rc=$?
-            rm -rf -P "${notary_dir}" 2>/dev/null || rm -rf "${notary_dir}" || true
-            exit "${rc}"
-          }
-          trap cleanup EXIT
-
-          submission_id_path="${receipts}/submission-id.pending"
-          set +e
-          submit_output="$(xcrun notarytool submit "${DMG_SOURCE_PATH}" \
-            --key "${notary_key_path}" \
-            --key-id "${MACOS_NOTARY_KEY_ID}" \
-            --issuer "${MACOS_NOTARY_ISSUER_ID}" \
-            --wait \
-            --output-format json 2>&1)"
-          submit_status=$?
-          set -e
-
-          # Persist the receipt durably before any further branching so a rerun
-          # sees it and fails closed instead of resubmitting.
-          jq -n \
-            --arg run_id "${GITHUB_RUN_ID}" \
-            --arg attempt "${GITHUB_RUN_ATTEMPT}" \
-            --arg source_sha "${GENTS_SOURCE_SHA}" \
-            --arg dmg_sha256 "${GENTS_DESKTOP_DMG_SHA256}" \
-            --arg status "${submit_status}" \
-            --arg output "${submit_output}" \
-            '{run_id: $run_id, attempt: $attempt, source_sha: $source_sha,
-              dmg_sha256: $dmg_sha256, status: $status, output: $output,
-              captured_at: (now | todate)}' \
-            > "${receipts}/submission-attempt.json"
-
-          if [[ "${submit_status}" -ne 0 ]]; then
-            sanitized="$(printf '%s\n' "${submit_output}" | sed -E \
-              -e 's/(--key[ =])[^ ]+/\1<redacted>/g' \
-              -e 's/(AuthKey_)[^.]+(\.p8)/\1<redacted>\2/g' \
-              | head -n 30)"
-            echo "::error::Notary submission failed (exit ${submit_status}). Sanitized output:"
-            printf '%s\n' "${sanitized}"
-            exit 1
-          fi
-
-          submission_id="$(jq -er '.id // empty' <<<"${submit_output}" 2>/dev/null || true)"
-          if [[ -z "${submission_id}" ]]; then
-            echo "::error::Notary submission output did not carry a submission id; refusing to continue."
-            exit 1
-          fi
-          printf '%s\n' "${submission_id}" > "${receipts}/submission-id.pending"
-          mv "${receipts}/submission-attempt.json" "${receipts}/submission-${submission_id}.json"
-
-          status="$(jq -er '.status // empty' <<<"${submit_output}")"
-          if [[ "${status}" != "Accepted" ]]; then
-            echo "::error::Notary submission ${submission_id} reached status '${status}' (expected Accepted)."
-            exit 1
-          fi
-          echo "Notary submission ${submission_id} accepted."
-          echo "GENTS_RC1_SUBMISSION_ID=${submission_id}" >> "${GITHUB_ENV}"
-
-      - name: Upload submission receipts
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: rc1-notary-submission-receipts-${{ github.run_id }}
-          path: ${{ env.STAGING_DIR }}/receipts/
-          if-no-files-found: error
-
-  staple-validate:
-    name: Staple, validate, and retain notarized DMG
-    needs: notary-submit
-    runs-on: [self-hosted, macOS, ARM64, studio, studio-2, ci-desktop]
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Download fixed build-run artifacts
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          staging="${RUNNER_TEMP}/gents-rc1-notary-staple"
-          rm -rf "${staging}"
-          mkdir -m 0700 -p "${staging}/run" "${staging}/receipts" "${staging}/work"
-
-          gh api "repos/${GENTS_REPO}/actions/runs/${GENTS_BUILD_RUN_ID}/artifacts" \
-            --paginate \
-            --jq '.artifacts[] | select(.expired == false) | [.id, .name, .size_in_bytes] | @tsv' \
-            > "${staging}/artifacts.tsv"
-
-          for artifact_pair in "${GENTS_CLI_ARTIFACT_ID}:cli" "${GENTS_DESKTOP_ARTIFACT_ID}:desktop"; do
-            artifact_id="${artifact_pair%%:*}"
-            slot="${artifact_pair##*:}"
-            artifact_line="$(awk -F '\t' -v id="${artifact_id}" '$1 == id { print; exit }' "${staging}/artifacts.tsv")"
-            if [[ -z "${artifact_line}" ]]; then
-              echo "::error::Artifact ${artifact_id} (slot ${slot}) not found alive in run ${GENTS_BUILD_RUN_ID}."
-              exit 1
-            fi
-            gh api "repos/${GENTS_REPO}/actions/artifacts/${artifact_id}/zip" \
-              > "${staging}/run/${slot}.zip"
-            unzip -q "${staging}/run/${slot}.zip" -d "${staging}/run/${slot}"
-          done
-
-          dmg_path="$(find "${staging}/run/desktop" -type f -name '*.dmg' -print)"
-          if [[ "$(printf '%s\n' "${dmg_path}" | grep -c .)" -ne 1 ]]; then
-            echo "::error::Expected exactly one DMG in artifact ${GENTS_DESKTOP_ARTIFACT_ID}, found:"
-            printf '%s\n' "${dmg_path}"
-            exit 1
-          fi
-          if [[ "$(basename "${dmg_path}")" != "${GENTS_DESKTOP_DMG_BASENAME}" ]]; then
-            echo "::error::Found DMG '$(basename "${dmg_path}")' does not match the pinned name '${GENTS_DESKTOP_DMG_BASENAME}'."
-            exit 1
-          fi
-          echo "DMG_SOURCE_PATH=${dmg_path}" >> "${GITHUB_ENV}"
-          echo "STAGING_DIR=${staging}" >> "${GITHUB_ENV}"
-
-      - name: Verify fixed artifact hashes and metadata
-        run: |
-          set -euo pipefail
-          staging="${STAGING_DIR}"
-          cli_tarball="$(find "${staging}/run/cli" -type f -name 'gents-aarch64-apple-darwin-signed-unnotarized-candidate.tar.gz' -print)"
-          if [[ "$(printf '%s\n' "${cli_tarball}" | grep -c .)" -ne 1 ]]; then
-            echo "::error::Expected exactly one pinned CLI tarball in artifact ${GENTS_CLI_ARTIFACT_ID}."
-            exit 1
-          fi
-          manifest_path="$(find "${staging}/run/desktop" -type f -name 'candidate-build.json' -print)"
-          if [[ "$(printf '%s\n' "${manifest_path}" | grep -c .)" -ne 1 ]]; then
-            echo "::error::Expected exactly one candidate-build.json in artifact ${GENTS_DESKTOP_ARTIFACT_ID}."
-            exit 1
-          fi
-          python3 .github/scripts/rc1-notary-verify.py \
-            --repo "${GENTS_REPO}" \
-            --build-run-id "${GENTS_BUILD_RUN_ID}" \
-            --source-sha "${GENTS_SOURCE_SHA}" \
-            --cli-tarball "${cli_tarball}" \
-            --expected-cli-tarball-sha256 "${GENTS_CLI_TARBALL_SHA256}" \
-            --expected-cli-binary-sha256 "${GENTS_CLI_BINARY_SHA256}" \
-            --expected-desktop-manifest-sha256 "${GENTS_DESKTOP_MANIFEST_SHA256}" \
-            --desktop-manifest "${manifest_path}" \
-            --dmg "${DMG_SOURCE_PATH}" \
-            --expected-dmg-sha256 "${GENTS_DESKTOP_DMG_SHA256}" \
-            --expected-app-binary-sha256 "${GENTS_DESKTOP_APP_BINARY_SHA256}" \
-            --expected-cli-app-binary-sha256 "${GENTS_DESKTOP_CLI_BINARY_SHA256}" \
-            --expected-bridge-binary-sha256 "${GENTS_DESKTOP_BRIDGE_BINARY_SHA256}"
-
-      - name: Copy DMG to a mutable work area (originals stay immutable)
-        run: |
-          set -euo pipefail
-          staging="${STAGING_DIR}"
-          work_copy="${staging}/work/${GENTS_DESKTOP_DMG_BASENAME}"
-          cp -c "${DMG_SOURCE_PATH}" "${work_copy}"
-          stat -f '%Sp %z %N' "${DMG_SOURCE_PATH}" "${work_copy}"
-          if [[ "$(shasum -a 256 "${work_copy}" | awk '{ print $1 }')" != "${GENTS_DESKTOP_DMG_SHA256}" ]]; then
-            echo "::error::Work copy of the DMG does not match the pinned hash; refusing to modify it."
-            exit 1
-          fi
-          # Read-only original: this job only ever writes to ${staging}/work.
-          chmod 0444 "${DMG_SOURCE_PATH}"
-          echo "DMG_WORK_COPY=${work_copy}" >> "${GITHUB_ENV}"
-
-      - name: Verify existing Developer ID signature on work copy
-        run: |
-          set -euo pipefail
-          work_copy="${DMG_WORK_COPY}"
-          mount_point="${RUNNER_TEMP}/gents-rc1-notary-mount"
-          rm -rf "${mount_point}"
-          mkdir -m 0700 "${mount_point}"
-          cleanup_mount() {
-            hdiutil detach "${mount_point}" -force >/dev/null 2>&1 || true
-          }
-          trap cleanup_mount EXIT
-
-          hdiutil attach -readonly -nobrowse -mountpoint "${mount_point}" "${work_copy}"
-          app_path="$(find "${mount_point}" -maxdepth 2 -name '*.app' -type d -print -quit)"
-          if [[ -z "${app_path}" ]]; then
-            echo "::error::Mounted DMG does not contain a top-level .app bundle."
-            exit 1
-          fi
-          echo "APP_PATH=${app_path}" >> "${GITHUB_ENV}"
-
-          codesign --verify --strict --deep --verbose=4 "${app_path}"
-          signature_details="$(codesign -dvv "${app_path}" 2>&1)"
-          printf '%s\n' "${signature_details}"
-          if ! grep -q "TeamIdentifier=${GENTS_CODESIGN_TEAM_ID}" <<<"${signature_details}"; then
-            echo "::error::Desktop app is not signed by team ${GENTS_CODESIGN_TEAM_ID}; refusing to notarize."
-            exit 1
-          fi
-          if ! grep -q "Authority=Developer ID Application" <<<"${signature_details}"; then
-            echo "::error::Desktop app is not signed with a Developer ID Application certificate."
-            exit 1
-          fi
-
-          leaf_cert_sha1="$(security find-certificate -a -c 'Developer ID Application' -Z "${HOME}/Library/Keychains/login.keychain-db" 2>/dev/null | awk '/SHA-1 hash/{ print $3; exit }' || true)"
-          echo "Observed local Developer ID certificate SHA-1 (informational only): ${leaf_cert_sha1:-<none locally available>}"
-          if [[ -n "${leaf_cert_sha1}" && "${leaf_cert_sha1}" != "${GENTS_CODESIGN_CERT_SHA1}" ]]; then
-            echo "::warning::Local Developer ID certificate SHA-1 ${leaf_cert_sha1} differs from the pinned candidate signing certificate ${GENTS_CODESIGN_CERT_SHA1}; relying on the embedded signature, not this host keychain."
-          fi
-          codesign -d --entitlements - "${app_path}" 2>/dev/null | head -n 10 || true
-
-      - name: Staple notarization ticket onto work-copy DMG
-        run: |
-          set -euo pipefail
-          work_copy="${DMG_WORK_COPY}"
-          if ! xcrun stapler staple "${work_copy}"; then
-            echo "::error::stapler staple failed on the work-copy DMG."
-            exit 1
-          fi
-          xcrun stapler validate "${work_copy}"
-          echo "Staple validation succeeded on ${work_copy}."
-
-      - name: Regenerate hashes and retain stapled DMG
-        run: |
-          set -euo pipefail
-          staging="${STAGING_DIR}"
-          stapled="${staging}/work/${GENTS_DESKTOP_DMG_BASENAME}"
-          stapled_sha="$(shasum -a 256 "${stapled}" | awk '{ print $1 }')"
-          echo "Stapled DMG sha256: ${stapled_sha}"
-          if [[ "${stapled_sha}" == "${GENTS_DESKTOP_DMG_SHA256}" ]]; then
-            echo "::error::Stapled DMG hash matches the unstapled pinned hash; stapling evidently did not change the file."
-            exit 1
-          fi
-          dist_dir="${staging}/dist"
-          mkdir -m 0755 "${dist_dir}"
-          cp -c "${stapled}" "${dist_dir}/${GENTS_DESKTOP_DMG_BASENAME}"
-          sums_file="${dist_dir}/SHA256SUMS-desktop-macos.txt"
-          {
-            printf '%s  %s\n' "${stapled_sha}" "${GENTS_DESKTOP_DMG_BASENAME}"
-            printf '%s  %s\n' \
-              "${GENTS_CLI_TARBALL_SHA256}" \
-              "gents-aarch64-apple-darwin-signed-unnotarized-candidate.tar.gz"
-          } > "${sums_file}"
-          (
-            cd "${dist_dir}"
-            shasum -a 256 -c "$(basename "${sums_file}")"
-          )
-          cat "${sums_file}"
-          if [[ ! -f "${STAGING_DIR}/receipts/submission-id.pending" ]]; then
-            echo "::error::Durable submission receipt is missing after stapling; notarization state is incomplete."
-            exit 1
-          fi
-          echo "Retaining stapled DMG and checksums as workflow artifacts."
-
-      - name: Upload stapled DMG and regenerated checksums
-        uses: actions/upload-artifact@v7
-        with:
-          name: rc1-notarized-desktop-dmg-${{ github.run_id }}
-          path: ${{ env.STAGING_DIR }}/dist/*
-          if-no-files-found: error
+          # The helper materializes the .p8 in a private 0700 temp dir, captures
+          # the full notary history/errors in a private temp file, emits only
+          # the allowlisted success line or a 403/auth-failure diagnostic, and
+          # always removes the key material and captured output via traps.
+          bash .github/scripts/rc1-notary-auth.sh
+          echo "rc1-notary-auth: credential path verified; no submission was attempted (auth-only workflow)."

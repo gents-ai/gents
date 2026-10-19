@@ -185,24 +185,47 @@ class AuthHelperTests(unittest.TestCase):
     def test_successful_history_probe_cleans_up_key(self):
         result = self._run_helper('{"submissions": []}', 0)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("auth-only preflight succeeded", result.stdout)
+        self.assertIn("success: auth-only preflight passed", result.stdout)
+        # Allowlisted success line only: no raw history payload on stdout.
+        self.assertNotIn("submissions", result.stdout)
         leftovers = [p for p in self.root.iterdir() if p.name.startswith("gents-rc1-notary-auth.")]
         self.assertEqual(leftovers, [], "key temp dir must be removed on success")
 
-    def test_403_reports_sanitized_diagnostic_and_fails(self):
+    def test_403_reports_allowlisted_diagnostic_and_fails(self):
         result = self._run_helper(
             "Error: HTTP status 403: ACCESS_DENIED key file /tmp/x/AuthKey_fakekeyid.p8", 64)
         self.assertNotEqual(result.returncode, 0)
+        # The only permitted output is the fixed 403 diagnostic on stderr.
         self.assertIn("403", result.stderr)
-        self.assertIn("403", result.stdout)
+        self.assertIn("MACOS_NOTARY_API_KEY", result.stderr)
+        self.assertEqual(result.stdout, "", "no raw history/error output on stdout")
+        self.assertNotIn("ACCESS_DENIED", result.stdout + result.stderr)
         self.assertNotIn("fake-key-material", result.stdout + result.stderr)
+        self.assertNotIn("AuthKey_fakekeyid.p8", result.stdout + result.stderr)
         leftovers = [p for p in self.root.iterdir() if p.name.startswith("gents-rc1-notary-auth.")]
         self.assertEqual(leftovers, [], "key temp dir must be removed on failure")
+
+    def test_non_403_failure_never_leaks_raw_provider_error(self):
+        raw_error = "Error: HTTP status 500: provider blew up with internal details"
+        result = self._run_helper(raw_error, 1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("auth failure", result.stderr)
+        self.assertNotIn("HTTP status 500", result.stdout + result.stderr)
+        self.assertNotIn("internal details", result.stdout + result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_unexpected_history_payload_fails_without_printing_it(self):
+        result = self._run_helper("this is not json at all", 0)
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("unexpected notary history payload", result.stderr)
+        self.assertNotIn("this is not json at all", result.stdout + result.stderr)
 
     def test_missing_secret_fails_without_invoking_notarytool(self):
         result = self._run_helper("should not run", 0,
                                   {"MACOS_NOTARY_API_KEY": ""})
         self.assertEqual(result.returncode, 2)
+        self.assertIn("missing notary secret(s)", result.stderr)
+        self.assertIn("MACOS_NOTARY_API_KEY", result.stderr)
         self.assertNotIn("should not run", result.stdout)
 
 
