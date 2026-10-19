@@ -88,6 +88,12 @@ jobs:
       - name: Run Harbor agent adapter tests
         run: python3 scripts/harbor/test_gents_agent.py
 
+      - name: Check compiler-tool download recovery
+        run: |
+          bash -n .github/scripts/setup-afterburner-toolchains.sh
+          shellcheck .github/scripts/setup-afterburner-toolchains.sh
+          python3 .github/scripts/test-afterburner-downloads.py
+
   rust-and-cli:
     name: rust-and-cli (${{ matrix.suite }})
     if: >-
