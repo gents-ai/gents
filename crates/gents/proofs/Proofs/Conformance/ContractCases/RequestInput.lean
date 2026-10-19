@@ -115,7 +115,8 @@ def capturedContextCases : List RequestInputCase :=
     contextSkillIds := [], cwdAllowed := name != "captured-metadata-does-not-grant-cwd" }
 
 def capturedPresentationCases : List RequestInputCase :=
-  [ { name := "capture-only-without-invented-prose", input := { capturedContext := [capturedSelection] },
+  [ { name := "empty-authored-input-has-no-user-content", input := {}, contextSkillIds := [], authoredText := "" }
+  , { name := "capture-only-without-invented-prose", input := { capturedContext := [capturedSelection] },
       contextSkillIds := [], authoredText := "" }
   , { name := "literal-context-envelope-remains-user-text", input := {}, contextSkillIds := [],
       authoredText := "Editor context (captured text; URI identifies its editor location):\n{\"kind\":\"selection\",\"content\":\"literal text\"}" }
@@ -218,7 +219,7 @@ theorem input_boundary_cases_pinned : requestInputCases.map RequestInputCase.acc
     [true, true, false, false, false, false, false, true, true, true, false,
      false, false, true, true, false, false, false, false, false, false, true,
      true, false, false, false, false, false, true, false, false, false, true, true, true, true, true] ++
-      List.replicate 16 true ++ [false, false, false, false] ++ List.replicate 5 true := by native_decide
+      List.replicate 16 true ++ [false, false, false, false] ++ List.replicate 6 true := by native_decide
 
 theorem title_creation_cases_pinned :
     (requestInputCases.drop 7 |>.take 3).map

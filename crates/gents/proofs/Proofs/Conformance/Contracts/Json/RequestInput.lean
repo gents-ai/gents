@@ -86,6 +86,7 @@ private def requestInputCaseJson (c : RequestInputCase) : String :=
   "{\"name\":" ++ jsonString c.name ++
   ",\"input\":" ++ requestInputJson c.input ++
   ",\"authored_text\":" ++ jsonString c.authoredText ++
+  ",\"expected_has_authored_input\":" ++ boolString (hasAuthoredInput c.input c.authoredText) ++
   ",\"expected_native_input\":" ++ capturedNativeMessageJson c ++
   ",\"expected_provider_parts\":" ++ jsonStringArray (PromptAssembly.CapturedContext.providerParts c.authoredText c.input.capturedContext) ++
   ",\"continuation_queue\":" ++ queueJson (some queue) ++

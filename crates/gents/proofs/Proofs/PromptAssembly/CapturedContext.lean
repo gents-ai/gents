@@ -30,7 +30,7 @@ def metadataJson (context : Enrollment.CapturedContext) : Json :=
   Json.mkObj (metadataFields context)
 
 def contextJson (context : Enrollment.CapturedContext) : Json :=
-  Json.mkObj (metadataFields context ++ [("content", .str context.content)])
+  Json.mkObj (metadataFields context ++ [("content", Json.str context.content)])
 
 /-- Captured bytes use the existing native document payload. Only observations
 remain in its metadata. Immutable output references and the existing fork owner
@@ -55,10 +55,12 @@ def authoredMessage (prose : String) (contexts : List Enrollment.CapturedContext
       contexts.map (fun context => .media (nativeDocument context)) }
 
 /-- The owned provider-input boundary formats each typed capture once. The
-metadata marker belongs to native storage and is not a provider parameter. -/
+metadata marker belongs to native storage and is not a provider parameter.
+Member order follows the captured record, independent of JSON object-map iteration. -/
 def providerText (context : Enrollment.CapturedContext) : String :=
   "Editor context (captured text; URI identifies its editor location):\n" ++
-    (contextJson context).compress
+    "{" ++ String.intercalate "," ((metadataFields context ++ [("content", Json.str context.content)]).map
+      (fun (key, value) => (Json.str key).compress ++ ":" ++ value.compress)) ++ "}"
 
 def providerParts (prose : String) (contexts : List Enrollment.CapturedContext) : List String :=
   prosePrefix prose contexts ++ contexts.map providerText
