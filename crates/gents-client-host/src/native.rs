@@ -38,6 +38,8 @@ pub async fn serve(paths: DesktopPaths, editor_store: bool, interactive: bool) -
     let options = match &provider {
         Some(provider) => ClientCoreOptions {
             store_key_provider: Some(provider.clone()),
+            operator_identity_interaction:
+                gents_desktop_core::local_runtime::OperatorIdentityInteraction::Prevent,
             ..Default::default()
         },
         None => ClientCoreOptions::default(),

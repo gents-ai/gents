@@ -4895,6 +4895,7 @@ dependencies = [
  "gents-protocol",
  "heck 0.5.0",
  "hostname",
+ "identity",
  "libc",
  "notify",
  "reqwest 0.12.28",

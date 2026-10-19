@@ -182,7 +182,7 @@ impl ClientHost {
                 self.require_configured_runtime(&request.node_did).await?;
                 let access = self
                     .core
-                    .operator_graphql(&request.node_did)
+                    .operator_observation_graphql(&request.node_did)
                     .map(gents::ConfigAccess::Graphql)
                     .ok_or_else(|| {
                         anyhow::anyhow!("Connect this local runtime before managing its accounts.")

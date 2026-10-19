@@ -171,6 +171,88 @@ async fn inference_setup_state_rejects_an_unconfigured_runtime() {
 }
 
 #[tokio::test]
+async fn passive_snapshots_keep_the_runtime_identity_locked() {
+    use identity::Identity as _;
+
+    let server = wiremock::MockServer::start().await;
+    let graphql = format!("{}/api/v0/graphql", server.uri());
+    let directory = tempfile::tempdir().unwrap();
+    let paths = gents_desktop_core::client::DesktopPaths::from_root(directory.path());
+    let options = gents_desktop_core::client::ClientCoreOptions {
+        operator_identity_interaction:
+            gents_desktop_core::local_runtime::OperatorIdentityInteraction::Prevent,
+        ..gents_desktop_core::client::ClientCoreOptions::local_only()
+    };
+    let core = Arc::new(
+        gents_desktop_core::client::ClientCore::start_with_paths_and_options(paths, options)
+            .await
+            .unwrap(),
+    );
+    let home = directory.path().join("runtime");
+    std::fs::create_dir_all(&home).unwrap();
+    let key_path = home.join("node.key");
+    let identity = gents::identity::load_or_create_file_identity(&key_path).unwrap();
+    let did = identity.did().unwrap().to_string();
+    std::fs::write(
+        home.join("init.json"),
+        json!({ "node_name": "Local", "node_did": did, "key_path": key_path }).to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        home.join("runtime.json"),
+        json!({
+            "node_name": "Local", "node_did": did, "graphql": graphql,
+            "p2p_transport": "iroh"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    core.persist_local_standard_peer(
+        "Local",
+        "iroh://unavailable-runtime",
+        &did,
+        &graphql,
+        &home.to_string_lossy(),
+    )
+    .await
+    .unwrap();
+    assert!(!gents::identity::can_mint_defradb_bearer(&did));
+    let host = ClientHost::new(core.clone());
+    let approvals = super::approvals::AttachmentApprovals::default();
+    host.execute(
+        protocol::ClientCommand::Snapshot {},
+        &approvals,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let _ = host
+        .execute(
+            protocol::ClientCommand::AccountsList {
+                request: crate::accounts::ProviderAccountsRequest {
+                    node_did: did.clone(),
+                },
+            },
+            &approvals,
+            CancellationToken::new(),
+        )
+        .await;
+    let _ = core
+        .session_goal_observation(&did, "unavailable-session")
+        .await;
+    let _ = core
+        .pending_user_queue_projection(&did, "unavailable-session", &[])
+        .await;
+    assert!(!gents::identity::can_mint_defradb_bearer(&did));
+    let requests = server.received_requests().await.unwrap();
+    assert!(!requests.is_empty());
+    assert!(requests
+        .iter()
+        .all(|request| !request.headers.contains_key("authorization")));
+    core.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn runtime_location_rejects_an_unconfigured_node() {
     let (core, _dir) = crate::tests::support::boot_core().await;
     let host = ClientHost::new(core.clone());

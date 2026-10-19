@@ -344,7 +344,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 &triggers,
             );
             let node_scope = core.transcript_node_scope(&peer.node_did);
-            let operator = core.operator_graphql(&peer.node_did).is_some();
+            let operator = core.operator_observation_graphql(&peer.node_did).is_some();
             for summary in &mut sessions {
                 summary.unreadable_reason = store
                     .sessions
