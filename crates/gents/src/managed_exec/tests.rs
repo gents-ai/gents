@@ -131,6 +131,8 @@ async fn managed_exec_cancellation_kills_process_group() {
     });
     let snapshot = wait_for_native_executor(tool_name).await;
     assert!(snapshot.pid > 0, "active executor snapshot must expose pid");
+    // SAFETY: getpgid observes the still-running managed child without changing it.
+    assert_eq!(unsafe { libc::getpgid(snapshot.pid) }, snapshot.pid);
     let snapshot_id = snapshot.id;
     let first_age = snapshot.age_ms;
     tokio::time::sleep(Duration::from_millis(25)).await;
@@ -667,4 +669,53 @@ async fn durable_process_record_survives_a_fresh_store() {
     restarted.remove("spawned:tool");
     assert!(restarted.list().is_empty());
     process.finish().await;
+}
+
+#[cfg(unix)]
+#[test]
+fn concurrent_managed_commands_retain_complete_output() {
+    let workers: Vec<_> = (0..16)
+        .map(|_| {
+            std::thread::spawn(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(async {
+                        for _ in 0..16 {
+                            let outcome = run_managed_exec(ManagedExecRequest {
+                                argv: vec!["/bin/sh".into(), "-c".into(), "printf captured".into()],
+                                cwd: PathBuf::from("/"),
+                                deadline_at: None,
+                                cancellation_token: CancellationToken::new(),
+                                max_output_bytes: 1024,
+                                stdin: Vec::new(),
+                                environment: None,
+                                tool_name: None,
+                                live_output: None,
+                            })
+                            .await;
+                            match outcome {
+                                ManagedExecOutcome::Exited {
+                                    code,
+                                    stdout,
+                                    stderr,
+                                    stdout_truncated,
+                                    stderr_truncated,
+                                } => {
+                                    assert_eq!(code, Some(0));
+                                    assert_eq!(stdout, b"captured");
+                                    assert!(stderr.is_empty());
+                                    assert!(!stdout_truncated && !stderr_truncated);
+                                }
+                                other => panic!("expected complete capture, got {other:?}"),
+                            }
+                        }
+                    });
+            })
+        })
+        .collect();
+    for worker in workers {
+        worker.join().unwrap();
+    }
 }
