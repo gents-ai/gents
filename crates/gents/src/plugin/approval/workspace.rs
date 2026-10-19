@@ -213,6 +213,53 @@ impl BindingAction {
 
 pub(crate) type Binding = Grant<WorkspaceKey, BindingAction>;
 
+#[derive(Clone, Debug)]
+pub(crate) struct ActionConsent {
+    home: PathBuf,
+    binding: Binding,
+}
+
+impl ActionConsent {
+    /// Consent can outlive an approval wait or a plugin host round. Recheck
+    /// the captured workspace revision and action before each mutation or run.
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_binding(&self.home, &self.binding)?;
+        Ok(())
+    }
+
+    pub(crate) fn validate_plugin(
+        &self,
+        plugin: &str,
+        artifact_digest: &str,
+        input_digest: &str,
+    ) -> Result<()> {
+        self.validate()?;
+        anyhow::ensure!(
+            matches!(&self.binding.action, BindingAction::Plugin {
+                plugin: expected_plugin,
+                artifact_digest: expected_artifact,
+                input_digest: expected_input,
+                ..
+            } if expected_plugin == plugin
+                && expected_artifact == artifact_digest
+                && expected_input == input_digest),
+            "The plugin invocation changed after approval. Retry the action."
+        );
+        Ok(())
+    }
+}
+
+pub(crate) fn action_consent(home: &Path, binding: Binding) -> ActionConsent {
+    ActionConsent {
+        home: home.to_owned(),
+        binding,
+    }
+}
+
+pub(crate) fn within_workspace(path: &Path) -> bool {
+    context::within_workspace(path)
+}
+
 pub(crate) struct BindingDecision {
     pub route: Route,
     pub binding: Binding,

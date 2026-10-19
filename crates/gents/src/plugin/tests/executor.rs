@@ -124,6 +124,62 @@ fn tool_ref(digest: Option<&str>) -> PluginToolRef {
 }
 
 #[tokio::test]
+async fn installed_filesystem_grants_cannot_expose_operator_aliases() {
+    use crate::plugin::{FsAccess, Manifold};
+
+    for write in [false, true] {
+        let wat = if write {
+            super::create_file_wat("out.json")
+        } else {
+            super::open_and_copy_wat("in.json", 0)
+        };
+        let (home, mut record) = installed_plugin(&wat, None);
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().canonicalize().unwrap();
+        std::fs::write(root.join("in.json"), r#"{"read":true}"#).unwrap();
+        let granted = Manifold {
+            fs: if write {
+                FsAccess::ReadWrite(vec![root.clone()])
+            } else {
+                FsAccess::ReadOnly(vec![root.clone()])
+            },
+            ..Manifold::sealed()
+        };
+        record.declaration.manifold = Some(serde_json::to_value(&granted).unwrap());
+        record.granted = Some(granted);
+        store::write_record(home.path(), &record).unwrap();
+        let executor = PluginExecutor::new(Some(home.path().to_owned()));
+        let first = executor.call(&record, serde_json::json!({})).await.unwrap();
+        assert_eq!(first.outcome.verdict, crate::plugin::PluginVerdict::Success);
+        if write {
+            assert_eq!(
+                std::fs::read_to_string(root.join("out.json")).unwrap(),
+                "{}"
+            );
+            std::fs::remove_file(root.join("out.json")).unwrap();
+        } else {
+            assert_eq!(first.outcome.output, serde_json::json!({"read":true}));
+        }
+        let permissions = home.path().join(crate::home::ALLOWED_DIRS_FILE_NAME);
+        std::fs::write(&permissions, "operator state").unwrap();
+        std::fs::hard_link(&permissions, root.join("operator-alias")).unwrap();
+        let error = executor
+            .call(&record, serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("protected runtime permissions"),
+            "{error:#}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&permissions).unwrap(),
+            "operator state"
+        );
+        assert!(!root.join("out.json").exists());
+    }
+}
+
+#[tokio::test]
 async fn a_model_tool_runs_the_installed_plugin_with_its_declared_schema() {
     let (home, record) = installed_echo();
     let executor = Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
@@ -337,6 +393,214 @@ mod bound {
             root,
             _dir: dir,
         }
+    }
+
+    #[tokio::test]
+    async fn workspace_modes_allow_routine_plugin_writes_without_widening_folder_grants() {
+        use approval::workspace::{self, Mode, WorkspaceKey};
+
+        for mode in [Mode::Ask, Mode::AutoReview, Mode::FullAccess] {
+            let fx = fixture(&create_file_wat("out.json"), BindAccess::ReadWrite);
+            let work = fx.root.join("work");
+            let key = WorkspaceKey::canonical("node", "requester", "agent", &work).unwrap();
+            let reviewer = workspace::ReviewTaskSelection::for_task(
+                &workspace::default_review_task("node", "agent"),
+            );
+            workspace::save_mode(
+                fx.home.path(),
+                &key,
+                0,
+                mode,
+                (mode == Mode::AutoReview).then_some(&reviewer),
+            )
+            .unwrap();
+            let context = workspace::for_request(
+                Some(fx.home.path()),
+                "node",
+                Some("requester"),
+                "agent",
+                Some(&work),
+            )
+            .unwrap();
+            let tool = tool_for(&fx.home, &fx.record);
+            workspace::scope(context, in_session(&tool, &work, &work, false))
+                .await
+                .unwrap();
+            assert_eq!(
+                std::fs::read_to_string(work.join("out.json")).unwrap(),
+                "{}"
+            );
+            assert!(allowed::list(fx.home.path()).unwrap().is_empty());
+            assert!(approval::pending_requests(fx.home.path())
+                .unwrap()
+                .is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_bound_plugin_rejects_changed_input_and_revised_workspace_consent() {
+        use approval::workspace::{self, Mode, WorkspaceKey};
+
+        let fx = fixture(&create_file_wat("out.json"), BindAccess::ReadWrite);
+        let work = fx.root.join("work");
+        let docs = fx.root.join("docs");
+        let key = WorkspaceKey::canonical("node", "requester", "agent", &work).unwrap();
+        let settings =
+            workspace::save_mode(fx.home.path(), &key, 0, Mode::FullAccess, None).unwrap();
+        let context = workspace::for_request(
+            Some(fx.home.path()),
+            "node",
+            Some("requester"),
+            "agent",
+            Some(&work),
+        )
+        .unwrap();
+        let executor = PluginExecutor::new(Some(fx.home.path().to_owned()));
+        let input = serde_json::json!({"path": docs});
+        let bound = workspace::scope(
+            context,
+            executor.bind_input(&fx.record, &input, &BindContext::headless(Some(&work))),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let changed = serde_json::json!({"path": docs, "operation": "different"});
+        let error = executor
+            .call_bound(&fx.record, changed, bound.clone())
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("invocation changed"),
+            "{error:#}"
+        );
+        assert!(!docs.join("out.json").exists());
+
+        executor
+            .call_bound(&fx.record, input.clone(), bound.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(docs.join("out.json")).unwrap(),
+            "{}"
+        );
+        std::fs::remove_file(docs.join("out.json")).unwrap();
+        workspace::save_mode(
+            fx.home.path(),
+            &key,
+            settings.selection.revision,
+            Mode::Ask,
+            None,
+        )
+        .unwrap();
+        let error = executor
+            .call_bound(&fx.record, input, bound)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("permissions changed"),
+            "{error:#}"
+        );
+        assert!(!docs.join("out.json").exists());
+    }
+
+    #[tokio::test]
+    async fn plugin_mounts_reject_operator_aliases_at_admission_and_execution() {
+        use approval::workspace::{self, Mode, WorkspaceKey};
+
+        for added_after_binding in [false, true] {
+            let fx = fixture(&create_file_wat("out.json"), BindAccess::ReadWrite);
+            let work = fx.root.join("work");
+            let docs = fx.root.join("docs");
+            let key = WorkspaceKey::canonical("node", "requester", "agent", &work).unwrap();
+            workspace::save_mode(fx.home.path(), &key, 0, Mode::FullAccess, None).unwrap();
+            let permission_file = workspace::preferences_file(fx.home.path());
+            let before = std::fs::read(&permission_file).unwrap();
+            let context = workspace::for_request(
+                Some(fx.home.path()),
+                "node",
+                Some("requester"),
+                "agent",
+                Some(&work),
+            )
+            .unwrap();
+            let executor = PluginExecutor::new(Some(fx.home.path().to_owned()));
+            let input = serde_json::json!({"path": docs});
+            let bind = BindContext::headless(Some(&work));
+            let bound = if added_after_binding {
+                Some(
+                    workspace::scope(
+                        context.clone(),
+                        executor.bind_input(&fx.record, &input, &bind),
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                )
+            } else {
+                None
+            };
+            std::fs::create_dir(docs.join("nested")).unwrap();
+            let alias = docs.join("nested/operator-alias");
+            std::fs::hard_link(&permission_file, &alias).unwrap();
+            let error = match bound {
+                Some(bound) => format!(
+                    "{:#}",
+                    executor
+                        .call_bound(&fx.record, input, bound)
+                        .await
+                        .unwrap_err()
+                ),
+                None => workspace::scope(
+                    context.clone(),
+                    executor.bind_input(&fx.record, &input, &bind),
+                )
+                .await
+                .unwrap_err(),
+            };
+            assert!(error.contains("protected runtime permissions"), "{error}");
+            let file_input = serde_json::json!({"path": alias});
+            let error =
+                workspace::scope(context, executor.bind_input(&fx.record, &file_input, &bind))
+                    .await
+                    .unwrap_err();
+            assert!(
+                error.contains("permission files cannot be shared"),
+                "{error}"
+            );
+            assert_eq!(std::fs::read(&permission_file).unwrap(), before);
+            assert!(!docs.join("out.json").exists());
+            assert!(approval::pending_requests(fx.home.path())
+                .unwrap()
+                .is_empty());
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_guest_cannot_follow_an_outside_link_from_a_shared_folder() {
+        use approval::workspace::{self, Mode, WorkspaceKey};
+
+        let fx = fixture(&open_and_copy_wat("operator-link", 0), BindAccess::Read);
+        let work = fx.root.join("work");
+        let key = WorkspaceKey::canonical("node", "requester", "agent", &work).unwrap();
+        workspace::save_mode(fx.home.path(), &key, 0, Mode::Ask, None).unwrap();
+        let permission_file = workspace::preferences_file(fx.home.path());
+        let before = std::fs::read(&permission_file).unwrap();
+        std::os::unix::fs::symlink(&permission_file, work.join("operator-link")).unwrap();
+        let context = workspace::for_request(
+            Some(fx.home.path()),
+            "node",
+            Some("requester"),
+            "agent",
+            Some(&work),
+        )
+        .unwrap();
+        let tool = tool_for(&fx.home, &fx.record);
+        let error = workspace::scope(context, in_session(&tool, &work, &work, false))
+            .await
+            .unwrap_err();
+        assert!(error.contains("did not return a result"), "{error}");
+        assert_eq!(std::fs::read(&permission_file).unwrap(), before);
     }
 
     #[tokio::test]

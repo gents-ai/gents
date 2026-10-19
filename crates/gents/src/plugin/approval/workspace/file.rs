@@ -1,31 +1,17 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::Result;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use super::{context, Binding, BindingAction};
-
-pub(crate) struct FileMutationConsent {
-    home: PathBuf,
-    binding: Binding,
-}
-
-impl FileMutationConsent {
-    /// Consent may wait while another call acquires the mutation lock or changes
-    /// an ancestor path. Revalidate under that lock before reading or writing.
-    pub(crate) fn validate(&self) -> Result<()> {
-        super::validate_binding(&self.home, &self.binding)?;
-        Ok(())
-    }
-}
+use super::{context, ActionConsent, BindingAction};
 
 pub(crate) async fn authorize_file_mutation(
     tool: &str,
     root: &Path,
     path: &Path,
     input: &impl Serialize,
-) -> Result<Option<FileMutationConsent>> {
+) -> Result<Option<ActionConsent>> {
     let Some(home) = context::current_home() else {
         return Ok(None);
     };
@@ -52,5 +38,5 @@ pub(crate) async fn authorize_file_mutation(
         "The file change was not approved for this workspace.",
     )
     .await?;
-    Ok(Some(FileMutationConsent { home, binding }))
+    Ok(Some(super::action_consent(&home, binding)))
 }
