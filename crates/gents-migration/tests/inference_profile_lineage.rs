@@ -50,7 +50,20 @@ fn rc0_fixture_is_verbatim_rc0_sdl() {
     // display_name(2), description(3), backend_id(4), model_name(5),
     // reasoning_effort(6) → service_tier lands at index 7, matching the live
     // SDL's position right after reasoning_effort.
-    assert!(baseline.sdl.contains("    service_tier: String\n"));
+    assert!(
+        !baseline.sdl.contains("    service_tier: String\n"),
+        "baseline must be the frozen rc0 SDL, without service_tier"
+    );
+    // The patch re-inserts service_tier, and the patched result must be
+    // byte-identical to the live SDL (same CID as the step pin).
+    let patched = INFERENCE_PROFILE_RC0_SDL.replace(
+        "    reasoning_effort: String\n",
+        "    reasoning_effort: String\n    service_tier: String\n",
+    );
+    assert_eq!(
+        patched, live,
+        "patched SDL must equal the canonical live SDL"
+    );
     assert!(INFERENCE_PROFILE_ADD_SERVICE_TIER_PATCH.contains("\"Name\":\"service_tier\""));
 }
 
@@ -437,32 +450,29 @@ async fn foreign_lineage_is_still_rejected() {
 }
 
 #[tokio::test]
-async fn new_root_only_store_reopens_clean() {
-    // Post-migration NEW-only case (review f addendum): a store holding ONLY
-    // the new root (e.g. migrated then old version pruned by the store) must
-    // still pass verification — the root gate is satisfied because the step
-    // pin overwrites the baseline pin in target_active_pins and the store's
-    // single version IS the step's expected pin.
-    let node = fresh_node().await;
-    ensure_migrations(node.as_ref()).await.expect("migrate");
-    // The migration DAG now holds OLD+NEW; verify the reopen passes with both
-    // (covered elsewhere). Here we prove the NEW-only shape is also accepted
-    // by constructing it directly: register the canonical live SDL (NEW CID)
-    // in a fresh node and run ensure — the baseline sees the collection
-    // present, the step sees active == pin, and the lineage check must pass
-    // because the step pin matches the store's version.
+async fn new_root_only_store_is_rejected() {
+    // NEW-only stores (OLD root absent) are rejected by the retained-root
+    // gate: reject_unknown_lineage runs FIRST (engine.rs:32) and
+    // check_known_lineage (844-865) requires the baseline pin (OLD root)
+    // among the store's non-placeholder versions. target_active_pins' step
+    // pin cannot help — it only feeds verify_managed_lineages, which runs
+    // after the root gate. This documents the boundary honestly: the gate is
+    // NOT weakened for arbitrary CIDs, and NEW-only is unreachable in
+    // practice (patch_collection creates NEW as a descendant of OLD and
+    // nothing prunes versions), but if encountered it must fail closed.
     let node2 = fresh_node().await;
     node2
         .add_schema(gents_protocol::schemas::INFERENCE_PROFILE)
         .await
         .expect("register canonical new root");
-    let report = ensure_migrations(node2.as_ref())
+    let err = ensure_migrations(node2.as_ref())
         .await
-        .expect("NEW-only store must be accepted");
-    assert_eq!(report.steps_applied, 0, "{report:?}");
-    assert_eq!(report.steps_already_current, 1);
+        .expect_err("NEW-only store must be rejected by the retained-root gate");
+    assert!(
+        matches!(err, Error::UnknownLineage { ref collection, .. } if collection == gents_protocol::schemas::INFERENCE_PROFILE_NAME),
+        "unexpected error: {err}"
+    );
     node2.shutdown().await;
-    node.shutdown().await;
 }
 
 #[tokio::test]
