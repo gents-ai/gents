@@ -246,28 +246,31 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                     &request,
                     frozen_instruction_manifest.as_deref(),
                 )?;
-                let prompt = |folded: crate::lifecycle::queue::FoldedInput| {
-                    crate::agent::loop_stream::FoldedPrompt {
+                let prompt = |folded: crate::lifecycle::queue::FoldedInput| -> Result<_> {
+                    Ok(crate::agent::loop_stream::FoldedPrompt {
                         key: folded.key(),
-                        message: crate::llm::message::Message::user(folded.content),
-                    }
+                        message: folded.message()?,
+                    })
                 };
                 let consumed_prompts =
                     crate::lifecycle::queue::load_consumed_folded_inputs(&self.node, &request)
                         .await?
                         .into_iter()
                         .map(prompt)
-                        .collect::<Vec<_>>();
+                        .collect::<Result<Vec<_>>>()?;
                 let selection = if resume_from_history {
                     &[][..]
                 } else {
                     lifecycle.folded_selection()
                 };
-                let folded_prompts = consumed_prompts
-                    .iter()
-                    .cloned()
-                    .chain(selection.iter().cloned().map(prompt))
-                    .collect::<Vec<_>>();
+                let mut folded_prompts = consumed_prompts.clone();
+                folded_prompts.extend(
+                    selection
+                        .iter()
+                        .cloned()
+                        .map(prompt)
+                        .collect::<Result<Vec<_>>>()?,
+                );
                 let workspace = match overlay {
                     Some(overlay) => crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
                         workspace_cwd: Some(overlay.cwd),
