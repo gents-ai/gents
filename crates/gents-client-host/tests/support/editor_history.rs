@@ -7,6 +7,9 @@ use std::time::Duration;
 
 pub const TURNS: usize = 45;
 const INPUT_PREFIX: &str = "History fixture turn ";
+/// Pending requests can be redelivered after the watcher's 30-second cooldown
+/// and 30-second quiet rescan; observation must outlast both without resubmission.
+const TURN_OBSERVATION_TIMEOUT: Duration = Duration::from_secs(90);
 
 pub fn reply(request: &Value) -> Option<String> {
     let message = request["messages"]
@@ -52,7 +55,7 @@ pub async fn populate(
         let request = receipt["requestId"].as_str().context("history request")?;
         ensure!(receipt["sessionId"] == session, "history changed sessions");
         let mut last = Value::Null;
-        tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::time::timeout(TURN_OBSERVATION_TIMEOUT, async {
             loop {
                 let output = client
                     .call(
