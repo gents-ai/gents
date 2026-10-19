@@ -181,3 +181,23 @@ fn captured_context_structure_matches_the_executable_input_owner() {
         );
     }
 }
+
+#[test]
+fn captured_native_documents_and_provider_parts_match_the_model() {
+    use gents_protocol::message::{Message, UserContent};
+    for case in &lean_contract_snapshot().request_input_cases {
+        let name = case["name"].as_str().unwrap();
+        let input: RequestInput = serde_json::from_value(case["input"].clone()).unwrap();
+        let native = input.authored_message(case["authored_text"].as_str().unwrap()).unwrap();
+        assert_eq!(serde_json::to_value(&native).unwrap(), case["expected_native_input"], "{name}");
+        let contexts = gents_protocol::request_input::CapturedContext::from_message(&native).unwrap();
+        assert_eq!(contexts, input.captured_context, "{name}: immutable document codec");
+        let provider = gents::provider_input::captured_context_for_provider(native).unwrap();
+        let Message::User {content} = provider else { panic!("{name}: provider changed the role") };
+        let texts = content.into_iter().map(|part| match part {
+            UserContent::Text(text) => text.text,
+            _ => panic!("{name}: captured metadata escaped the provider boundary"),
+        }).collect::<Vec<_>>();
+        assert_eq!(serde_json::to_value(texts).unwrap(), case["expected_provider_parts"], "{name}");
+    }
+}

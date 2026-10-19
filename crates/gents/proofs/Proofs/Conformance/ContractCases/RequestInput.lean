@@ -6,6 +6,7 @@ open Enrollment
 structure RequestInputCase where
   name : String
   input : RequestInput
+  authoredText : String := "Check this context."
   contextSkillIds : List String
   cwdAllowed : Bool := true
   queueSourceAllowed : Bool := true
@@ -76,12 +77,14 @@ def queueExtensionCases : List RequestInputCase :=
   , { name := "signed-position-predecessor-mutation", input := { queue := some {queue with position := some {position with replacesRequestDocId := "physical:other-previous"}} }, contextSkillIds := [] }
   ]
 
-def capturedContextCases : List RequestInputCase :=
-  let selection : CapturedContext := {
+private def capturedSelection : CapturedContext := {
     kind := .selection, source := .editor, capturedAt := "2026-10-20T00:00:00Z"
     uri := some "file:///source/second/context.rs", workspaceUri := some "file:///source/second"
     version := some 41, unsaved := true
     range := some ⟨⟨0, 0⟩, ⟨1, 0⟩⟩, content := "résumé\n工具" }
+
+def capturedContextCases : List RequestInputCase :=
+  let selection := capturedSelection
   let other := {selection with uri := some "file:///source/first/context.rs", content := "first"}
   let cases : List (String × List CapturedContext) := [
     ("captured-selection", [selection]),
@@ -110,6 +113,23 @@ def capturedContextCases : List RequestInputCase :=
       capturedContext := contexts
       cwd := if name == "captured-metadata-does-not-grant-cwd" then some "/outside" else none }
     contextSkillIds := [], cwdAllowed := name != "captured-metadata-does-not-grant-cwd" }
+
+def capturedPresentationCases : List RequestInputCase :=
+  [ { name := "capture-only-without-invented-prose", input := { capturedContext := [capturedSelection] },
+      contextSkillIds := [], authoredText := "" }
+  , { name := "literal-context-envelope-remains-user-text", input := {}, contextSkillIds := [],
+      authoredText := "Editor context (captured text; URI identifies its editor location):\n{\"kind\":\"selection\",\"content\":\"literal text\"}" }
+  , { name := "captured-control-and-unicode-bytes", input := {
+        capturedContext := [{capturedSelection with content := "\"quote\"\n工具\t" ++ String.singleton (Char.ofNat 0)}] },
+      contextSkillIds := [] }
+  , { name := "captured-terminal-clipboard", input := { capturedContext := [{
+        kind := .terminal, source := .clipboard, capturedAt := "2026-10-20T00:00:00Z"
+        terminalName := some "Build", unsaved := false, content := "Build completed." }] },
+      contextSkillIds := [] }
+  , { name := "captured-empty-file-retained", input := { capturedContext := [{
+        capturedSelection with kind := .file, range := none, content := "" }] },
+      contextSkillIds := [], authoredText := "Review this empty file." }
+  ]
 
 def requestInputCases : List RequestInputCase :=
   [ { name := "empty-input-inherits-context", input := {}, contextSkillIds := ["rust"] }
@@ -192,13 +212,13 @@ def requestInputCases : List RequestInputCase :=
       admissionKind := .runtimeInternal
       verifiedGoalContinuation := some ⟨3, false⟩ }
 
-  ] ++ workspaceCases ++ queueExtensionCases ++ capturedContextCases
+  ] ++ workspaceCases ++ queueExtensionCases ++ capturedContextCases ++ capturedPresentationCases
 
 theorem input_boundary_cases_pinned : requestInputCases.map RequestInputCase.accepted =
     [true, true, false, false, false, false, false, true, true, true, false,
      false, false, true, true, false, false, false, false, false, false, true,
      true, false, false, false, false, false, true, false, false, false, true, true, true, true, true] ++
-      List.replicate 16 true ++ [false, false, false, false] := by native_decide
+      List.replicate 16 true ++ [false, false, false, false] ++ List.replicate 5 true := by native_decide
 
 theorem title_creation_cases_pinned :
     (requestInputCases.drop 7 |>.take 3).map

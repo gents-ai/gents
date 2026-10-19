@@ -1,5 +1,6 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases.RequestInput
+import Proofs.PromptAssembly.CapturedContext
 
 namespace Conformance.Contracts
 open Conformance.ContractCases
@@ -51,25 +52,26 @@ private def workspaceJson (w : RequestWorkspace) : String :=
   ",\"workspace_authority\":" ++ optionalString (w.authority.map BindingAuthority.toDefraDB) ++
   ",\"workspace_seal_hash\":" ++ optionalString w.sealHash ++ "}"
 
-private def capturedPositionJson (position : CapturedPosition) : String :=
-  "{\"line\":" ++ toString position.line ++ ",\"character\":" ++ toString position.character ++ "}"
-
-private def capturedRangeJson : Option CapturedRange → String
-  | none => "null"
-  | some range => "{\"start\":" ++ capturedPositionJson range.start ++
-      ",\"end\":" ++ capturedPositionJson range.end ++ "}"
-
 private def capturedContextJson (context : CapturedContext) : String :=
-  "{\"kind\":" ++ jsonString context.kind.toWireName ++
-  ",\"source\":" ++ jsonString context.source.toWireName ++
-  ",\"capturedAt\":" ++ jsonString context.capturedAt ++
-  ",\"uri\":" ++ optionalString context.uri ++
-  ",\"terminalName\":" ++ optionalString context.terminalName ++
-  ",\"workspaceUri\":" ++ optionalString context.workspaceUri ++
-  ",\"version\":" ++ jsonOptionalNat context.version ++
-  ",\"unsaved\":" ++ boolString context.unsaved ++
-  ",\"range\":" ++ capturedRangeJson context.range ++
-  ",\"content\":" ++ jsonString context.content ++ "}"
+  (PromptAssembly.CapturedContext.contextJson context).compress
+
+private def capturedNativeBlockJson : CanonicalOutput.MessageBlock (List UInt8) → String
+  | .text bytes =>
+      "{\"type\":\"text\",\"text\":" ++ jsonString (String.fromUTF8! ⟨bytes.toArray⟩) ++ "}"
+  | .media media =>
+      let metadata := ((Lean.Json.parse (media.additionalParams.getD "{}")) >>= fun value =>
+        value.getObjVal? "captured_context").toOption.getD Lean.Json.null
+      let text := match media.data with
+        | .string bytes => String.fromUTF8! ⟨bytes.toArray⟩
+        | _ => panic! "captured context must reference native string bytes"
+      "{\"type\":\"document\",\"data\":{\"type\":\"string\",\"value\":" ++ jsonString text ++
+      "},\"media_type\":" ++ jsonString (media.mediaType.getD "") ++
+      ",\"captured_context\":" ++ metadata.compress ++ "}"
+  | _ => panic! "captured input must contain only prose and documents"
+
+private def capturedNativeMessageJson (c : RequestInputCase) : String :=
+  let message := PromptAssembly.CapturedContext.authoredMessage c.authoredText c.input.capturedContext
+  "{\"role\":\"user\",\"content\":" ++ jsonArray (message.blocks.map capturedNativeBlockJson) ++ "}"
 
 private def requestInputJson (input : RequestInput) : String :=
   "{\"selected_skill_ids\":" ++ jsonStringArray input.selectedSkillIds ++
@@ -83,6 +85,9 @@ private def requestInputCaseJson (c : RequestInputCase) : String :=
   let queue := c.input.queue.getD { source := .backgroundCompletion, policy := .coalesce }
   "{\"name\":" ++ jsonString c.name ++
   ",\"input\":" ++ requestInputJson c.input ++
+  ",\"authored_text\":" ++ jsonString c.authoredText ++
+  ",\"expected_native_input\":" ++ capturedNativeMessageJson c ++
+  ",\"expected_provider_parts\":" ++ jsonStringArray (PromptAssembly.CapturedContext.providerParts c.authoredText c.input.capturedContext) ++
   ",\"continuation_queue\":" ++ queueJson (some queue) ++
   ",\"continuation_goal\":" ++ goalJson c.input.goalContinuation ++
   ",\"expected_continuation\":" ++ requestInputJson (continuationInput c.input queue c.input.goalContinuation) ++
