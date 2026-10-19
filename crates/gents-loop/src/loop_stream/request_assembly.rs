@@ -1400,7 +1400,7 @@ pub async fn assemble_provider_request<M: CompletionModel>(
         select_replay(&rows, issuer, wire, resolve, &stage_body),
     )?;
     (*history, *new_messages) = split_joined(joined, history_len);
-    super::replace_core_chat_history(&mut core, config, history, new_messages);
+    super::replace_core_chat_history(&mut core, config, history, new_messages)?;
     Ok(core)
 }
 

@@ -84,3 +84,73 @@ impl CapturedContext {
             && (self.kind != CapturedContextKind::Selection || self.range.is_some())
     }
 }
+
+impl CapturedContext {
+    pub fn to_document(&self) -> anyhow::Result<crate::message::Document> {
+        let serde_json::Value::Object(mut metadata) = serde_json::to_value(self)? else {
+            anyhow::bail!("captured context metadata must be an object");
+        };
+        metadata.remove("content");
+        Ok(crate::message::Document {
+            data: crate::message::DocumentSourceKind::String(self.content.clone()),
+            media_type: Some(crate::message::DocumentMediaType::TXT),
+            additional_params: Some(serde_json::json!({ "captured_context": metadata })),
+        })
+    }
+
+    /// The native marker identifies structured context; ordinary document and
+    /// prose content is never inspected for it. The payload is the sole text
+    /// source, including in forks whose origin request is no longer local.
+    pub fn from_document(document: &crate::message::Document) -> anyhow::Result<Option<Self>> {
+        let Some(params) = document.additional_params.as_ref() else {
+            return Ok(None);
+        };
+        let Some(metadata) = params.get("captured_context") else {
+            return Ok(None);
+        };
+        anyhow::ensure!(
+            params.as_object().is_some_and(|object| object.len() == 1),
+            "captured context document contains unrelated provider parameters"
+        );
+        anyhow::ensure!(
+            matches!(
+                document.media_type,
+                Some(crate::message::DocumentMediaType::TXT)
+            ),
+            "captured context requires a text document"
+        );
+        let crate::message::DocumentSourceKind::String(content) = &document.data else {
+            anyhow::bail!("captured context requires captured text, not a live source location");
+        };
+        let mut fields = metadata
+            .as_object()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("captured context metadata must be an object"))?;
+        anyhow::ensure!(
+            !fields.contains_key("content"),
+            "captured context text must stay in its payload"
+        );
+        fields.insert(
+            "content".to_owned(),
+            serde_json::Value::String(content.clone()),
+        );
+        Ok(Some(serde_json::from_value(serde_json::Value::Object(
+            fields,
+        ))?))
+    }
+
+    pub fn from_message(message: &crate::message::Message) -> anyhow::Result<Vec<Self>> {
+        let crate::message::Message::User { content } = message else {
+            return Ok(Vec::new());
+        };
+        content
+            .iter()
+            .filter_map(|part| match part {
+                crate::message::UserContent::Document(document) => {
+                    Self::from_document(document).transpose()
+                }
+                _ => None,
+            })
+            .collect()
+    }
+}
