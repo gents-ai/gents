@@ -201,13 +201,22 @@ fn captured_native_documents_and_provider_parts_match_the_model() {
             case["expected_native_input"],
             "{name}"
         );
-        let contexts =
-            gents_protocol::request_input::CapturedContext::from_message(&native).unwrap();
+        let contexts = gents_protocol::request_input::CapturedContext::from_message(&native);
+        let provider = gents_loop::provider_input::captured_context_for_provider(native);
+        if case["expected_provider_parts"].is_null() {
+            assert!(contexts.is_err(), "{name}: invalid document capture");
+            assert!(
+                provider.is_err(),
+                "{name}: invalid capture crossed provider boundary"
+            );
+            continue;
+        }
         assert_eq!(
-            contexts, input.captured_context,
+            contexts.unwrap(),
+            input.captured_context,
             "{name}: immutable document codec"
         );
-        let provider = gents_loop::provider_input::captured_context_for_provider(native).unwrap();
+        let provider = provider.unwrap();
         let Message::User { content } = provider else {
             panic!("{name}: provider changed the role")
         };
