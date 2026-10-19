@@ -37,10 +37,12 @@ import {
   drawKey,
   drawKeys,
   holdLive,
+  lingerSentTurn,
   noDrawKeys,
   withSentTurns,
   type DrawKeys,
   type HeldLive,
+  type LocalTurn,
 } from "./stream-reveal";
 import { type Workers } from "./workers";
 import {
@@ -285,13 +287,12 @@ function ResponseActions({ text }: { text: string }) {
 
 const ItemRow = memo(function ItemRow({
   rowKey,
-  timelineKey,
   item,
   final,
   drawn,
 }: {
+  /** the key the row is drawn under, shared by every row for the message */
   rowKey: string;
-  timelineKey: string;
   item: RenderedTimelineItem;
   final: boolean;
   drawn: boolean;
@@ -300,7 +301,7 @@ const ItemRow = memo(function ItemRow({
     <WindowedRow
       rowKey={rowKey}
       drawn={drawn}
-      data-timeline-key={timelineKey}
+      data-timeline-key={rowKey}
       data-turn={
         item.kind === "userMessage" || item.kind === "pendingUserTurn" ? "" : undefined
       }
@@ -326,6 +327,24 @@ const GroupRow = memo(function GroupRow({
     </WindowedRow>
   );
 });
+
+/* the app's copy of the message just sent, drawn while no row stands for
+   it: the bridge's pending row can leave a commit before its saved
+   message lands */
+function useSentCopy(items: RenderedTimelineItem[]): LocalTurn | null {
+  const sent = useView((view) => view.pendingTurn);
+  const [last, setLast] = useState<LocalTurn | null>(null);
+  if (sent && sent !== last) setLast(sent);
+  const copy = useMemo(() => lingerSentTurn(items, sent, last), [items, sent, last]);
+  const lingering = sent === null && copy !== null;
+  useEffect(() => {
+    if (!lingering) return;
+    const timer = setTimeout(() => setLast(null), LINGER_MS);
+    return () => clearTimeout(timer);
+  }, [lingering]);
+  return copy;
+}
+const LINGER_MS = 3_000;
 
 export const TranscriptPanel = memo(function TranscriptPanel({
   inFlight,
@@ -402,10 +421,15 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     }, 3_000);
     return () => clearTimeout(timer);
   }, [holding]);
-  const localTurn = useView((view) => view.pendingTurn);
+  const localTurn = useSentCopy(held.items);
+  const localQueued = useView(
+    (view) =>
+      view.sentTurns.find((sent) => sent.requestId === localTurn?.requestId)?.queued ??
+      false,
+  );
   const turns = useMemo(
-    () => withSentTurns(held.items, localTurn, sessionKey),
-    [held.items, localTurn, sessionKey],
+    () => withSentTurns(held.items, localTurn, sessionKey, localQueued),
+    [held.items, localTurn, sessionKey, localQueued],
   );
   const keysRef = useRef<DrawKeys>(noDrawKeys(sessionKey));
   const keys = useMemo(
@@ -433,6 +457,45 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     return keys;
   }, [entries, inFlight]);
   const groupState = useGroupState(sessionKey);
+  /* one block per turn, keyed by the message, so a send starts a new
+     block and the rows before it are not drawn anew; the last block is
+     given room for its reply */
+  const blocks = useMemo(() => {
+    const out: { key: string; start: number; end: number }[] = [];
+    let start = 0;
+    let key = "lead";
+    entries.forEach((e, i) => {
+      if (
+        e.kind === "item" &&
+        (e.item.kind === "userMessage" || e.item.kind === "pendingUserTurn")
+      ) {
+        if (i > start || out.length === 0) out.push({ key, start, end: i });
+        start = i;
+        key = drawKey(keys, e.item);
+      }
+    });
+    out.push({ key, start, end: entries.length });
+    return out;
+  }, [entries, keys]);
+  const head = blocks.slice(0, -1);
+  const last = blocks[blocks.length - 1]!;
+  const renderEntry = (entry: (typeof entries)[number], index: number) =>
+    entry.kind === "item" ? (
+      <ItemRow
+        key={drawKey(keys, entry.item)}
+        rowKey={drawKey(keys, entry.item)}
+        item={entry.item}
+        final={finalKeys.has(entry.key)}
+        drawn={entries.length - index <= ALWAYS_DRAWN}
+      />
+    ) : (
+      <GroupRow
+        key={entry.key}
+        entry={entry}
+        workers={workers}
+        drawn={entries.length - index <= ALWAYS_DRAWN}
+      />
+    );
 
   const retry = async () => {
     const requestId = session?.latestRequestId;
@@ -466,68 +529,72 @@ export const TranscriptPanel = memo(function TranscriptPanel({
         <ParentContext.Provider value={parentWork}>
           <GroupStateContext.Provider value={groupState}>
             <TranscriptWindowProvider scroller={scroller} session={sessionKey}>
-              {entries.map((entry, index) =>
-                entry.kind === "item" ? (
-                  <ItemRow
-                    key={drawKey(keys, entry.item)}
-                    rowKey={drawKey(keys, entry.item)}
-                    timelineKey={entry.key}
-                    item={entry.item}
-                    final={finalKeys.has(entry.key)}
-                    drawn={entries.length - index <= ALWAYS_DRAWN}
+              {head.map((block) => (
+                <div
+                  key={block.key}
+                  data-turn-block
+                  className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-5"
+                >
+                  {entries
+                    .slice(block.start, block.end)
+                    .map((entry, i) => renderEntry(entry, block.start + i))}
+                </div>
+              ))}
+              {/* at least as tall as the room the scroll owner gives a sent
+                  turn: a minimum, so the reply's growth changes nothing */}
+              <div
+                key={last.key}
+                data-turn-block
+                className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-5 min-h-[var(--turn-room,0px)]"
+              >
+                {entries
+                  .slice(last.start)
+                  .map((entry, i) => renderEntry(entry, last.start + i))}
+                {continuing && showError && <FailedEarlier message={responseError} />}
+                {continuing &&
+                  session?.timelineItems
+                    .filter((item) => item.kind === "liveAssistant")
+                    .map((item) => <TranscriptItem key={item.itemKey} item={item} />)}
+                {wasInterrupted && !inFlight && (
+                  <StoppedNotice
+                    cause={session?.latestRequestOutcome?.cancelCause ?? null}
+                    stoppedBeforeRunning={
+                      session?.latestRequestOutcome?.stoppedBeforeRunning === true
+                    }
                   />
-                ) : (
-                  <GroupRow
-                    key={entry.key}
-                    entry={entry}
-                    workers={workers}
-                    drawn={entries.length - index <= ALWAYS_DRAWN}
-                  />
-                ),
-              )}
+                )}
+                {showError && (
+                  <div className="rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3">
+                    <p className="text-sm font-medium">
+                      The assistant could not finish this turn.
+                    </p>
+                    <pre className="mt-1 font-mono text-[11px] whitespace-pre-wrap text-muted-foreground">
+                      {responseError}
+                    </pre>
+                    {session?.retryEligibility?.eligible && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="mt-3"
+                        disabled={retrying}
+                        onClick={retry}
+                      >
+                        {retrying ? "Retrying…" : "Retry"}
+                      </Button>
+                    )}
+                  </div>
+                )}
+                {/* the run's line: laid out as a reply is, but not one */}
+                <div className="relative min-w-0">
+                  <div data-slot="activity-line" className="prose-app px-2">
+                    <ActivityLine status={status} />
+                  </div>
+                </div>
+              </div>
             </TranscriptWindowProvider>
           </GroupStateContext.Provider>
-          {continuing && showError && <FailedEarlier message={responseError} />}
-          {continuing &&
-            session?.timelineItems
-              .filter((item) => item.kind === "liveAssistant")
-              .map((item) => <TranscriptItem key={item.itemKey} item={item} />)}
         </ParentContext.Provider>
       </WorkerActionsContext.Provider>
-      {wasInterrupted && !inFlight && (
-        <StoppedNotice
-          cause={session?.latestRequestOutcome?.cancelCause ?? null}
-          stoppedBeforeRunning={
-            session?.latestRequestOutcome?.stoppedBeforeRunning === true
-          }
-        />
-      )}
-      {showError && (
-        <div className="rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3">
-          <p className="text-sm font-medium">
-            The assistant could not finish this turn.
-          </p>
-          <pre className="mt-1 font-mono text-[11px] whitespace-pre-wrap text-muted-foreground">
-            {responseError}
-          </pre>
-          {session?.retryEligibility?.eligible && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="mt-3"
-              disabled={retrying}
-              onClick={retry}
-            >
-              {retrying ? "Retrying…" : "Retry"}
-            </Button>
-          )}
-        </div>
-      )}
-      <div className="relative min-w-0">
-        <div data-slot="activity-line" className="prose-app px-2">
-          <ActivityLine status={status} />
-        </div>
-      </div>
     </div>
   );
 });

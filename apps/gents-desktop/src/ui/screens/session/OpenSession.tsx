@@ -16,6 +16,7 @@ import {
 import { toastFailure } from "@/lib/failure";
 import { isWorkingNode } from "@/lib/nodes";
 import { useFollowTail, useScroller } from "@/lib/scroll";
+import { useSentTurnPlacement } from "@/preferences";
 import { listedSession, nodeOf } from "../../../hooks/fleetStore";
 import { useFleet, workersOfId } from "../../hooks/useFleet";
 import {
@@ -31,6 +32,7 @@ import { StartedSessionsButton } from "../StartedSessionsButton";
 import { ParentLine, StartedByAutomation, Title } from "../SessionHeader";
 import { SessionLoading } from "../SessionLoading";
 import { useComposerRoom, useHeaderScrolledOut } from "../sessionLayout";
+import { sentTurnKey } from "../stream-reveal";
 import { TranscriptPanel } from "../Transcript";
 import { type WorkerActions } from "../WorkerActions";
 import { WorkerList } from "../WorkerStep";
@@ -62,7 +64,11 @@ export function OpenSession() {
     },
     [ownScroller],
   );
-  const { atBottom, toBottom, settle } = useFollowTail(scroller, selectedSessionId);
+  const { atBottom, toBottom, settle } = useFollowTail(scroller, selectedSessionId, {
+    anchorSentTurn: useSentTurnPlacement() === "anchor",
+    sentTurn: useSentTurnKey(selectedSessionId, session?.latestRequestId ?? null),
+  });
+  /* once the full header scrolls out, a condensed one sticks to the top */
   const [condensed, headerEnd] = useHeaderScrolledOut(scroller);
   const provenance = useSessionProvenance();
   const workers = useWorkers(provenance);
@@ -302,4 +308,33 @@ function selectScreenFacts(session: DesktopSessionSnapshot | null): ScreenFacts 
     latestRequestId: session.latestRequestId,
     latestRequestOutcome: session.latestRequestOutcome,
   };
+}
+
+/* The turn the view goes to after a send from here, by key. The session's
+   folds of what was sent are read as one string, so a snapshot that
+   changes nothing about them re-renders nothing here. */
+function useSentTurnKey(sessionId: string | null, latestRequestId: string | null) {
+  const sentTurns = useView((view) => view.sentTurns);
+  const { folds } = useSelectedSessionFields((held) => ({
+    folds: JSON.stringify(
+      (held?.foldedInputs ?? [])
+        .filter((input) => sentTurns.some((turn) => turn.requestId === input.requestId))
+        .map((input) => [input.requestId, input.foldedIntoRequestId]),
+    ),
+  }));
+  return useMemo(
+    () =>
+      sentTurnKey(
+        sentTurns,
+        sessionId,
+        latestRequestId,
+        (JSON.parse(folds) as [string, string][]).map(
+          ([requestId, foldedIntoRequestId]) => ({
+            requestId,
+            foldedIntoRequestId,
+          }),
+        ),
+      ),
+    [sentTurns, sessionId, latestRequestId, folds],
+  );
 }

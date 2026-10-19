@@ -113,16 +113,20 @@ export function createChatActions({
         );
       if (!selection.acceptsIntent(store, intentGeneration)) return result;
       selection.adoptSession(store, result.sessionId);
-      chat.showPendingTurn(stores.chat, {
-        sessionId: result.sessionId,
-        requestId: result.requestId,
-        content,
-        selectedSkillIds: [],
-        lifecycleState: "pending",
-        foldedIntoRequestId: null,
-        origin: null,
-        createdAt: new Date().toISOString(),
-      });
+      chat.showPendingTurn(
+        stores.chat,
+        {
+          sessionId: result.sessionId,
+          requestId: result.requestId,
+          content,
+          selectedSkillIds: [],
+          lifecycleState: "pending",
+          foldedIntoRequestId: null,
+          origin: null,
+          createdAt: new Date().toISOString(),
+        },
+        status.kind === "queue",
+      );
       chat.awaitObservation(stores.chat, {
         nodeDid: node.nodeDid,
         sessionId: result.sessionId,
