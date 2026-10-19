@@ -81,7 +81,8 @@ class BuildSpaceTests(unittest.TestCase):
         artifact.write_text("old build output")
         build_space.initialize_cache_tag(self.target)
         run_command(["cargo", "clean", "--offline", "--manifest-path", str(manifest),
-                     "--target-dir", str(self.target)], check=True, cwd=workspace)
+                     "--target-dir", str(self.target)], check=True, cwd=workspace,
+                    env={**os.environ, "RUSTC_WRAPPER": "", "RUSTC_WORKSPACE_WRAPPER": ""})
         self.assertFalse(artifact.exists())
         self.assertEqual(self.marker.read_text(), "keep")
 
