@@ -141,7 +141,7 @@ impl Tool for AgentNewTool {
         });
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Starts an agent on a task in the background; its result arrives later as a message in this conversation. Returns session_id, request_id and tool_call_id immediately. End your turn instead of polling. Continue the session with agent_message, stop its current turn with agent_interrupt, and kill the call with cancel_process. The later message is one event-time snapshot: it reports that request's outcome at that moment, not whether the durable assignment or goal is complete.".to_string(),
+            description: "Starts an agent on a task in the background; its result arrives later as a message in this conversation. Returns session_id, request_id and tool_call_id immediately. End your turn instead of polling. Continue the session with agent_message, stop its current turn with agent_interrupt, and kill the call with cancel_process. The later message is an event-time snapshot of that request, not the assignment's durable outcome.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": properties,
@@ -189,7 +189,7 @@ impl Tool for AgentMessageTool {
         });
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Send a message to an agent session you can reach. An idle session starts a new turn; a busy one queues it as a new request after the current request finishes unless interrupt is set. Returns request_id, delivery (request or steering) and tool_call_id immediately; the result arrives later as a message in this conversation. That message is one event-time snapshot of the receiving session's request at that moment; a delivered or queued send is not evidence the underlying assignment finished.".to_string(),
+            description: "Send a message to an agent session you can reach. An idle session starts a new turn; a busy one queues it as a new request after the current request finishes unless interrupt is set. Returns request_id, delivery (request or steering) and tool_call_id immediately; the result arrives later as a message in this conversation. That message is an event-time snapshot of the receiving session's request; a delivered send is not evidence the underlying assignment finished.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": properties,
@@ -280,7 +280,7 @@ impl Tool for AgentSessionListTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_owned(),
-            description: "Find existing sessions you may message, including trigger-started work. Returns activity, relationship and message/interrupt permissions. Continue with next_cursor and the same filter; a stale cursor restarts the listing. Results are a point-in-time listing, not a promise that a listed session is still running or idle.".to_owned(),
+            description: "Find existing sessions you may message, including trigger-started work. Returns activity, relationship and message/interrupt permissions. Continue with next_cursor and the same filter; a stale cursor restarts the listing. Results are a point-in-time listing; a listed session's state may have changed.".to_owned(),
             parameters: serde_json::json!({
                 "type": "object", "additionalProperties": false,
                 "properties": {
@@ -320,7 +320,7 @@ impl Tool for AgentSessionReadTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_owned(),
-            description: "Inspect a session you may message. last returns its latest assistant message and request state; recent pages backward through bounded transcript text and tool summaries; status shows a snapshot of the latest request state (request_id, lifecycle_state, terminal_reason, timestamps), tools in flight, queued steering and the durable Goal, each with its own observation timestamps. What you get is a bounded view at read time: truncated text and previews are marked, tool arguments and reasoning are never returned, and fields the target session does not have (e.g. a Goal) come back absent rather than invented. If the latest request is not readable, status says so instead of guessing.".to_owned(),
+            description: "Inspect a session you may message. last returns its latest assistant message and request state; recent pages backward through bounded transcript text and tool summaries; status shows the latest request state as of this read (one read timestamp; component states are event-time snapshots, not live), tools in flight, queued steering and the durable Goal if present. Truncated text is marked; tool arguments and reasoning are omitted; absent fields are absent. An unreadable latest request is reported as unknown, not guessed.".to_owned(),
             parameters: serde_json::json!({
                 "type": "object", "additionalProperties": false,
                 "required": ["session_id"],

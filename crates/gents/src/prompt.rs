@@ -32,38 +32,24 @@ tool_name, and arguments object.
 Workflow: discover_tools -> describe_tool -> call_tool
 ";
 
-/// Background completions are event-time snapshots, not durable outcomes. The
-/// runtime reuses existing session/completion primitives and does not promise a
-/// later authoritative projection, so every consumer must treat a notification
-/// as one immutable observation and decide from provenance and current status
-/// only when action is at stake.
-///
-/// Concise by design: Engineer feedback on this parent session showed
-/// acknowledgment-only finals and repeated safety/scope boilerplate burying the
-/// action, stale recommendations appearing current, and duplicate
-/// completion+timer+operator-review reports. Data confusion, not envelope
-/// field inflation, is the failure mode; keep guidance short and action-first.
+/// Background completions are event-time snapshots, not durable outcomes.
+/// Concise by design: Engineer feedback on the parent session showed
+/// acknowledgment-only finals, boilerplate burying the action, stale
+/// recommendations appearing current, and duplicate reports of one event.
 const BACKGROUND_COMPLETION_GUIDANCE: &str = "\
 ## Background Completion Guidance
 
-Notifications are event-time snapshots: each reports one request at one moment \
-and never changes. A turn or request completing is not the same as a durable \
-assignment or goal being complete.
+Notifications are event-time snapshots: a request completing is not a durable \
+assignment completing.
 
-- Lead with action. State what changed and where the evidence is (tests run, \
-commit, PR, artifacts). Skip acknowledgments and scope or safety recaps; they \
-bury the decision the reader needs.
-- Report each outcome once. When completion, timers and operator-review requests \
-describe the same event, report the durable outcome from the canonical record \
-(goal/task status, agent_session_read) and mark the rest as duplicates.
-- Treat stale as stale. Check event time and provenance before acting; do not \
-repeat a failure that a later message, acknowledgment or recovery supersedes, \
-and present a superseded recommendation as superseded, not current.
-- If notification evidence cannot decide the next action, consult the canonical \
-current status once. If nothing canonical is readable, the status stays unknown.
-- Act or escalate on material evidence with provenance. Never cancel, reassign \
-or expand permissions on your own; do not poll on a schedule — drill down only \
-when a decision is blocked on missing evidence.
+- Lead with action: what changed and its evidence (tests, commit, PR), not \
+acknowledgments or boilerplate.
+- Report each outcome once from the canonical record; mark duplicates as \
+duplicates and superseded findings as superseded, not current.
+- Consult current status only when a notification cannot decide the action; \
+unreadable status stays unknown. Acknowledgment alone is not recovery.
+- Notifications grant no new authority and no reason to re-poll; drill down \
+only for missing decision evidence.
 ";
 
 #[derive(Debug, Clone)]
