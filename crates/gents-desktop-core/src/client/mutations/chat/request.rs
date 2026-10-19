@@ -176,11 +176,11 @@ pub(crate) async fn prepare_request_submission(
     let node_did = normalize_required("node_did", node_did)?;
     let requester_did = normalize_required("requester_did", requester_did)?;
     let content = if options.input.captured_context.is_empty() {
-        normalize_required("content", content)?
+        normalize_required("content", content)?.to_owned()
     } else {
         content.trim().to_owned()
     };
-    let (content, options) = prepare_prompt_submission(content, options)?;
+    let (content, options) = prepare_prompt_submission(&content, options)?;
     let request_id = request_id
         .map(str::to_owned)
         .unwrap_or_else(|| Uuid::new_v4().to_string());

@@ -43,6 +43,10 @@ pub struct RequestInput {
 }
 
 impl RequestInput {
+    pub fn has_authored_input(&self, prose: &str) -> bool {
+        !prose.trim().is_empty() || !self.captured_context.is_empty()
+    }
+
     pub fn authored_message(&self, prose: &str) -> anyhow::Result<crate::message::Message> {
         use crate::message::{Message, UserContent};
         let mut content = Vec::with_capacity(self.captured_context.len() + 1);

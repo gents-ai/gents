@@ -287,6 +287,9 @@ pub struct PendingQueueEntryView {
     pub request_doc_id: String,
     pub request_id: String,
     pub content: String,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[ts(optional)]
+    pub captured_context: Vec<gents_protocol::request_input::CapturedContext>,
     pub editable: bool,
     pub steerable: bool,
     pub edit_group: Option<String>,
@@ -300,6 +303,9 @@ pub struct PendingTurnView {
     #[ts(skip)]
     pub(crate) request_doc_id: Option<String>,
     pub content: String,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[ts(optional)]
+    pub captured_context: Vec<gents_protocol::request_input::CapturedContext>,
     pub selected_skill_ids: Vec<String>,
     pub lifecycle_state: Option<String>,
     /// The request whose transcript published this as a folded entry; it is
@@ -371,6 +377,9 @@ pub enum RenderedTimelineItem {
         item_key: String,
         request_id: String,
         content: String,
+        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        #[ts(optional)]
+        captured_context: Vec<gents_protocol::request_input::CapturedContext>,
         selected_skill_ids: Vec<String>,
         lifecycle_state: Option<String>,
         folded_into_request_id: Option<String>,

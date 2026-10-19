@@ -292,6 +292,7 @@ pub async fn build_session_snapshot_for_node_with_transcript(
                                 request_doc_id: entry.request_doc_id,
                                 request_id: entry.request_id,
                                 content: entry.content,
+                                captured_context: entry.captured_context,
                                 editable: entry.editable,
                                 steerable: entry.steerable,
                                 edit_group: entry.edit_group,
