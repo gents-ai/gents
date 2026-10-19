@@ -118,6 +118,39 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     Uuid::parse_str(&thread_id)
         .with_context(|| format!("Codex TUI requires UUID thread ids, got {thread_id}"))?;
 
+    // ThreadStart threads stay ephemeral in shim memory until the first
+    // turn materializes the canonical AgentSession row, but the goal must
+    // be created before that sole user turn. Materialize the canonical
+    // session for the returned thread id through the same
+    // create_AgentSession fixture this suite uses for pre-existing
+    // sessions (agent_scope, thread_listing) so thread/goal/set resolves
+    // the thread without adding a turn. The later turn's session
+    // materialization is an idempotent ensure that reuses this row and
+    // validates its node/requester/agent scope, so ids and history are
+    // unchanged.
+    let default_agent_id = format!("{node_did}:default");
+    serve
+        .capturing(graphql_query(
+            &graphql,
+            &format!(
+                r#"mutation {{
+                create_AgentSession(input: {{
+                    session_id: "{}",
+                    node_did: "{}",
+                    requester_did: "{}",
+                    agent_id: "{}",
+                    created_at: "{}"
+                }}) {{ _docID }}
+            }}"#,
+                escape_graphql_string(&thread_id),
+                escape_graphql_string(&node_did),
+                escape_graphql_string(&node_did),
+                escape_graphql_string(&default_agent_id),
+                escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
+            ),
+        ))
+        .await?;
+
     // The goal must exist before the sole user turn so its post-turn
     // tokens_used has the right premise: fresh goals baseline against
     // existing session usage (set_goal_in_txn), so a goal created before
