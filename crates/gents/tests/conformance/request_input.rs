@@ -188,6 +188,8 @@ fn captured_native_documents_and_provider_parts_match_the_model() {
     for case in &lean_contract_snapshot().request_input_cases {
         let name = case["name"].as_str().unwrap();
         let input: RequestInput = serde_json::from_value(case["input"].clone()).unwrap();
+        assert_eq!(input.has_authored_input(case["authored_text"].as_str().unwrap()),
+            case["expected_has_authored_input"].as_bool().unwrap(), "{name}: user input presence");
         let native = input
             .authored_message(case["authored_text"].as_str().unwrap())
             .unwrap();

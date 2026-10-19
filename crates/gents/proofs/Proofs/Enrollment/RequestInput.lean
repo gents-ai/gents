@@ -36,6 +36,12 @@ structure RequestInput where
   capturedContext : List CapturedContext := []
   deriving DecidableEq, Repr
 
+/-- User submission and queue replacement may contain only typed captures.
+This is content presence, not admission authority or a requirement on internal
+runtime requests. -/
+def hasAuthoredInput (input : RequestInput) (prose : String) : Bool :=
+  !prose.trim.isEmpty || !input.capturedContext.isEmpty
+
 /-- Runtime continuations remain in their parent's invocation directory. They
 do not replay the parent's title intent, queue position, captured context, or goal issuance facts.
 The executing host still validates the inherited directory against its policy. -/
