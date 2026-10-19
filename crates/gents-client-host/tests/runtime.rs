@@ -213,6 +213,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     drop(seed);
     let mut host_command = Command::new(env!("CARGO_BIN_EXE_gents-client-host"));
     host_command.args(["--serve", "--home"]).arg(paths.root());
+    if matches!(journey, Journey::Editor) {
+        host_command.arg("--editor-store");
+    }
     #[cfg(unix)]
     let mut host = host_command
         .stdin(Stdio::null())
