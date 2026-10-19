@@ -1,0 +1,30 @@
+{
+  "manifest_version": 1,
+  "name": "dependee_fixture",
+  "version": "1.0.0",
+  "description": "A one-slot documents pack with no dependencies, for tests that install a documents pack as a dependency.",
+  "namespace": "fixture",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "fixture"
+  ],
+  "kind": "documents",
+  "assets": [
+    "README.md",
+    "agents/fixture_dependee/system_prompt.md",
+    "pack_config.json"
+  ],
+  "dependencies": [],
+  "config": "pack_config.json",
+  "inference_slots": [
+    {
+      "name": "worker",
+      "description": "The one slot this fixture declares.",
+      "agents": [
+        "fixture-dependee"
+      ]
+    }
+  ]
+}

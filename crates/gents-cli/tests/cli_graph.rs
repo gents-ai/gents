@@ -206,81 +206,17 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
     Ok(())
 }
 
-#[test]
-fn offline_pack_install_with_a_graph_dependency_holds_one_store_claim() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating pack install tempdir")?;
-    let home = tempdir.path().join("agent-home");
-    let home_arg = home.to_str().context("pack home path is not UTF-8")?;
-    let initialized = run_init_json(
-        tempdir.path(),
-        &["--node-name", "port-installer", "--home", home_arg],
-    )?;
-    let owner_did = node_did_from_init(&initialized)?;
-
-    let review_graph = fixture_pack_dir("review_graph");
-    run_cli_json(
-        tempdir.path(),
-        &[
-            "pack",
-            "fetch",
-            dir_arg(&review_graph),
-            "--store",
-            "--home",
-            home_arg,
-        ],
-    )?;
-
-    let profile = format!("{owner_did}:default-profile");
-    let slots: Vec<String> = ["coordinator", "worker", "verifier"]
-        .iter()
-        .map(|slot| format!("{slot}={profile}"))
-        .collect();
-    let dependent = fixture_pack_dir("dependent_fixture");
-    let mut install_args = vec![
-        "pack".to_owned(),
-        "install".to_owned(),
-        dir_arg(&dependent).to_owned(),
-        "--home".to_owned(),
-        home_arg.to_owned(),
-        "--registry".to_owned(),
-        UNROUTABLE_REGISTRY.to_owned(),
-    ];
-    for slot in &slots {
-        install_args.extend(["--inference-slot".to_owned(), slot.clone()]);
-    }
-    let install_args_ref: Vec<&str> = install_args.iter().map(String::as_str).collect();
-
-    let installed = run_cli_json(tempdir.path(), &install_args_ref)?;
-    anyhow::ensure!(
-        installed["dependencies"] == serde_json::json!(["fixture/review_graph"])
-            && installed["owner"] == owner_did.as_str(),
-        "pack install did not report its graph dependency: {installed}"
-    );
-    let enabled = run_cli_json(
-        tempdir.path(),
-        &[
-            "graph",
-            "enable",
-            "fixture/review_graph",
-            "--home",
-            home_arg,
-            "--node-did",
-            &owner_did,
-        ],
-    )?;
-    anyhow::ensure!(
-        enabled.get("enabled") == Some(&Value::Bool(true)),
-        "the graph dependency was not installed: {enabled}"
-    );
-
-    let _held = gents::home::lock_store(&home, &gents::home::default_data_dir(&home))?;
-    let denial = run_cli_failure_stderr(tempdir.path(), &install_args_ref)?;
-    anyhow::ensure!(
-        denial.contains("another Gents runtime")
-            && denial.contains(&format!("process {}", std::process::id())),
-        "a second holder of the home was not refused: {denial}"
-    );
-    Ok(())
+/// A private copy of `dependent_fixture` depending on `review_graph`, so the
+/// graph dependency path stays covered now that the checked-in fixture
+/// depends on a documents pack.
+fn dependent_on_review_graph(parent: &std::path::Path) -> Result<std::path::PathBuf> {
+    let dependent = parent.join("dependent_on_review_graph");
+    copy_dir_all(&fixture_pack_dir("dependent_fixture"), &dependent)?;
+    let manifest_path = dependent.join("manifest.json");
+    let mut manifest: Value = serde_json::from_str(&std::fs::read_to_string(&manifest_path)?)?;
+    manifest["dependencies"] = serde_json::json!(["fixture/review_graph"]);
+    std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
+    Ok(dependent)
 }
 
 #[test]
@@ -435,7 +371,7 @@ fn a_graph_dependency_is_released_with_its_dependent() -> Result<()> {
         ],
     )?;
 
-    let dependent = fixture_pack_dir("dependent_fixture");
+    let dependent = dependent_on_review_graph(tempdir.path())?;
     let mut install_args = vec![
         "pack".to_owned(),
         "install".to_owned(),

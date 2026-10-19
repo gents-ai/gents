@@ -834,6 +834,7 @@ async fn record_plugin_install(
             digest: installed_record().digest,
         }],
         dependencies: Vec::new(),
+        explicit: true,
     };
     crate::pack::record_plugin_store_change(
         &crate::config_client::ConfigAccess::local(node.clone()),
