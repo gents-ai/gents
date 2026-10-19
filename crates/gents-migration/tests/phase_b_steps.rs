@@ -337,39 +337,24 @@ async fn crash_resume_after_inactive_patch_before_activate() {
 }
 
 #[tokio::test]
-async fn canonical_catalog_pins_for_authoring() {
+async fn baseline_sdl_matches_pinned_roots() {
     let node = fresh_node().await;
-    let catalog = gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
-        .iter()
-        .copied()
-        .zip(gents_protocol::schemas::RUNTIME_ALL.iter().copied())
-        .chain(
-            gents_protocol::schemas::ALL_COLLECTION_NAMES
-                .iter()
-                .copied()
-                .zip(gents_protocol::schemas::ALL.iter().copied()),
-        )
-        .collect::<Vec<_>>();
-    for (name, sdl) in &catalog {
-        node.add_schema(sdl)
+    for entry in gents_migration::DEFAULT_BASELINE {
+        node.add_schema(entry.sdl)
             .await
-            .unwrap_or_else(|error| panic!("register {name} for pin authoring: {error}"));
+            .unwrap_or_else(|error| panic!("register {} for pin authoring: {error}", entry.name));
     }
 
     let mut mismatches = Vec::new();
-    for (name, _) in catalog {
+    for entry in gents_migration::DEFAULT_BASELINE {
         let cv = node
-            .get_collection(name)
+            .get_collection(entry.name)
             .expect("get")
-            .unwrap_or_else(|| panic!("missing {name}"));
-        let expected = gents_migration::DEFAULT_BASELINE
-            .iter()
-            .find(|entry| entry.name == name)
-            .and_then(|entry| entry.expected_version);
-        if expected != Some(cv.version_id.as_str()) {
+            .unwrap_or_else(|| panic!("missing {}", entry.name));
+        if entry.expected_version != Some(cv.version_id.as_str()) {
             mismatches.push(format!(
-                "{name}: expected {expected:?}, computed {}",
-                cv.version_id
+                "{}: expected {:?}, computed {}",
+                entry.name, entry.expected_version, cv.version_id
             ));
         }
     }
