@@ -320,7 +320,7 @@ impl Tool for AgentSessionReadTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_owned(),
-            description: "Inspect a session you may message. last returns its latest assistant message and request state; recent pages backward through bounded transcript text and tool summaries; status shows the latest request state as of this read (one read timestamp; component states are event-time snapshots, not live), tools in flight, queued steering and the durable Goal if present. Truncated text is marked; tool arguments and reasoning are omitted; absent fields are absent. An unreadable latest request is reported as unknown, not guessed.".to_owned(),
+            description: "Inspect a session you may message. last returns its latest assistant message and request state; recent pages backward through bounded transcript text and tool summaries; status shows the active request or, if none is active, the latest one as of this read, with its lifecycle_state and timestamps; unavailable observed requests are marked available:false. Tools in flight and queued steering carry their own timestamps. The durable Goal is returned as null when the session has none. Truncated text is marked; tool arguments and reasoning are omitted; unreadable state is reported as unknown, not guessed.".to_owned(),
             parameters: serde_json::json!({
                 "type": "object", "additionalProperties": false,
                 "required": ["session_id"],
