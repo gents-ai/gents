@@ -1,7 +1,9 @@
 mod http;
 mod identity;
+mod request_input;
 mod workspace_permissions;
 
+pub(crate) use request_input::ensure_captured_input_supported;
 pub use workspace_permissions::workspace_permission_support;
 
 #[cfg(test)]

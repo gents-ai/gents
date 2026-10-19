@@ -50,6 +50,7 @@ impl ClientCore {
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
         ensure_peer_chat_ready_at(node_did, peer.as_ref(), Utc::now())?;
+        crate::local_runtime::ensure_captured_input_supported(peer.as_ref(), &input).await?;
         let (signer, admission, requester_did) =
             self.request_authority(node_did, peer.as_ref()).await?;
         let command_id = uuid::Uuid::new_v4().to_string();

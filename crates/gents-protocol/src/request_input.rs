@@ -8,6 +8,9 @@ use crate::session::SessionTitle;
 mod captured_context;
 pub use captured_context::*;
 
+pub const REQUEST_INPUT_CONTRACT_VERSION: u32 = 1;
+pub const STATUS_INPUT_CONTRACT_FIELD: &str = "request_input_contract_version";
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RequestInput {
@@ -43,6 +46,13 @@ pub struct RequestInput {
 }
 
 impl RequestInput {
+    /// The serving runtime must advertise support before a client publishes
+    /// typed captures. This observation grants no request or workspace authority.
+    pub fn captured_input_compatible(&self, runtime_version: Option<u64>) -> bool {
+        self.captured_context.is_empty()
+            || runtime_version == Some(u64::from(REQUEST_INPUT_CONTRACT_VERSION))
+    }
+
     pub fn has_authored_input(&self, prose: &str) -> bool {
         !prose.trim().is_empty() || !self.captured_context.is_empty()
     }

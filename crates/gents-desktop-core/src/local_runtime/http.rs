@@ -3,6 +3,25 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
+pub(super) async fn peer_status(
+    record: &crate::client::PeerRecord,
+) -> Result<Option<serde_json::Value>> {
+    let http =
+        |endpoint: &&str| endpoint.starts_with("http://") || endpoint.starts_with("https://");
+    let endpoint = record
+        .graphql
+        .as_deref()
+        .map(str::trim)
+        .filter(http)
+        .or_else(|| Some(record.addr.trim()).filter(http));
+    let Some(endpoint) = endpoint else {
+        return Ok(None);
+    };
+    let url = super::runtime_status_url(endpoint)?;
+    let client = super::runtime_http_client().await?;
+    http_get_json(client, &url).await.map(Some)
+}
+
 pub(super) fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     serde_json::from_slice(&bytes).with_context(|| format!("decoding {}", path.display()))
