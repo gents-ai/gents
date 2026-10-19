@@ -420,6 +420,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AuxiliaryTask<M> {
                     return Ok(AuxiliaryResult::Skipped);
                 };
                 self.generate_with_fallback(
+                    &request.request_id,
                     &source,
                     &prompt,
                     config,
@@ -435,6 +436,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AuxiliaryTask<M> {
 
     async fn generate_with_fallback(
         &self,
+        request_id: &str,
         fallback_source: &str,
         prompt: &str,
         config: crate::agent::loop_stream::LoopConfig,
@@ -499,10 +501,10 @@ impl<M: crate::llm::rig_compat::ProviderModel> AuxiliaryTask<M> {
                     ));
                 }
             }
-            tracing::warn!(request_id = %request.request_id, attempt, error = %last_error.as_ref().expect("failed attempt has error"), "title inference failed");
+            tracing::warn!(request_id, attempt, error = %last_error.as_ref().expect("failed attempt has error"), "title inference failed");
         }
-        let fallback = sanitize_generated_title("", &request.content);
-        tracing::info!(request_id = %request.request_id, title = %fallback, error = ?last_error.map(|error| error.to_string()), "using fallback conversation title after provider failures");
+        let fallback = sanitize_generated_title("", fallback_source);
+        tracing::info!(request_id, title = %fallback, error = ?last_error.map(|error| error.to_string()), "using fallback conversation title after provider failures");
         Ok(AuxiliaryResult::Generated {
             title: fallback,
             parent_requester_did,
