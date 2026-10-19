@@ -1,4 +1,17 @@
 #!/usr/bin/env bash
+download_verified() {
+  local url="$1" checksum="$2" destination="$3"
+  # Proxy CONNECT failures and partial responses may be transport errors, not HTTP status errors.
+  curl --fail --location --retry 3 --retry-all-errors \
+    --connect-timeout 20 --max-time 300 --retry-max-time 600 \
+    --output "$destination" "$url" || return
+  printf '%s  %s\n' "$checksum" "$destination" | shasum -a 256 --check
+}
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return
+fi
+
 set -euo pipefail
 
 # Keep the non-Rust compilers out of mutable host state: install pinned,
@@ -23,13 +36,11 @@ binaryen_archive="binaryen-version_${binaryen_version}-arm64-macos.tar.gz"
 binaryen_sha256="e441b48dc22163d209b4f05e44dc7210909b01237642b6c9ae48fd710a3ef83e"
 binaryen_url="https://github.com/WebAssembly/binaryen/releases/download/version_${binaryen_version}/${binaryen_archive}"
 
-curl --fail --location --retry 3 --output "$download_root/$javy_archive" "$javy_url"
-echo "$javy_sha256  $download_root/$javy_archive" | shasum -a 256 --check
+download_verified "$javy_url" "$javy_sha256" "$download_root/$javy_archive"
 gzip --decompress --stdout "$download_root/$javy_archive" > "$bin_root/javy"
 chmod +x "$bin_root/javy"
 
-curl --fail --location --retry 3 --output "$download_root/$binaryen_archive" "$binaryen_url"
-echo "$binaryen_sha256  $download_root/$binaryen_archive" | shasum -a 256 --check
+download_verified "$binaryen_url" "$binaryen_sha256" "$download_root/$binaryen_archive"
 tar -xzf "$download_root/$binaryen_archive" -C "$tool_root"
 ln -sf "$tool_root/binaryen-version_${binaryen_version}/bin/wasm-opt" "$bin_root/wasm-opt"
 
