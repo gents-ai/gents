@@ -76,6 +76,41 @@ def queueExtensionCases : List RequestInputCase :=
   , { name := "signed-position-predecessor-mutation", input := { queue := some {queue with position := some {position with replacesRequestDocId := "physical:other-previous"}} }, contextSkillIds := [] }
   ]
 
+def capturedContextCases : List RequestInputCase :=
+  let selection : CapturedContext := {
+    kind := .selection, source := .editor, capturedAt := "2026-10-20T00:00:00Z"
+    uri := some "file:///source/second/context.rs", workspaceUri := some "file:///source/second"
+    version := some 41, unsaved := true
+    range := some ⟨⟨0, 0⟩, ⟨1, 0⟩⟩, content := "résumé\n工具" }
+  let other := {selection with uri := some "file:///source/first/context.rs", content := "first"}
+  let cases : List (String × List CapturedContext) := [
+    ("captured-selection", [selection]),
+    ("captured-content-mutation", [{selection with content := "later buffer"}]),
+    ("captured-uri-mutation", [{selection with uri := some "file:///other/context.rs"}]),
+    ("captured-workspace-mutation", [{selection with workspaceUri := some "file:///other"}]),
+    ("captured-version-mutation", [{selection with version := some 42}]),
+    ("captured-unsaved-mutation", [{selection with unsaved := false}]),
+    ("captured-time-mutation", [{selection with capturedAt := "2026-10-20T00:00:01Z"}]),
+    ("captured-range-mutation", [{selection with range := some ⟨⟨0, 1⟩, ⟨1, 0⟩⟩}]),
+    ("captured-source-mutation", [{selection with source := .clipboard}]),
+    ("captured-kind-mutation", [{selection with kind := .file}]),
+    ("captured-terminal-name-mutation", [{selection with terminalName := some "shell"}]),
+    ("captured-uri-absent", [{selection with uri := none}]),
+    ("captured-uri-explicit-empty", [{selection with uri := some ""}]),
+    ("captured-duplicate-retained", [selection, selection]),
+    ("captured-order-first", [selection, other]),
+    ("captured-order-second", [other, selection]),
+    ("captured-zero-version-rejected", [{selection with version := some 0}]),
+    ("captured-reversed-range-rejected", [{selection with range := some ⟨⟨1, 0⟩, ⟨0, 0⟩⟩}]),
+    ("captured-selection-without-range-rejected", [{selection with range := none}]),
+    ("captured-metadata-does-not-grant-cwd", [selection]) ]
+  cases.map fun (name, contexts) => {
+    name := name
+    input := {
+      capturedContext := contexts
+      cwd := if name == "captured-metadata-does-not-grant-cwd" then some "/outside" else none }
+    contextSkillIds := [], cwdAllowed := name != "captured-metadata-does-not-grant-cwd" }
+
 def requestInputCases : List RequestInputCase :=
   [ { name := "empty-input-inherits-context", input := {}, contextSkillIds := ["rust"] }
   , { name := "explicit-skill-within-whitelist", input := { selectedSkillIds := ["rust"] },
@@ -157,12 +192,13 @@ def requestInputCases : List RequestInputCase :=
       admissionKind := .runtimeInternal
       verifiedGoalContinuation := some ⟨3, false⟩ }
 
-  ] ++ workspaceCases ++ queueExtensionCases
+  ] ++ workspaceCases ++ queueExtensionCases ++ capturedContextCases
 
 theorem input_boundary_cases_pinned : requestInputCases.map RequestInputCase.accepted =
     [true, true, false, false, false, false, false, true, true, true, false,
      false, false, true, true, false, false, false, false, false, false, true,
-     true, false, false, false, false, false, true, false, false, false, true, true, true, true, true] := by native_decide
+     true, false, false, false, false, false, true, false, false, false, true, true, true, true, true] ++
+      List.replicate 16 true ++ [false, false, false, false] := by native_decide
 
 theorem title_creation_cases_pinned :
     (requestInputCases.drop 7 |>.take 3).map
@@ -183,5 +219,8 @@ theorem input_encoding_distinguishes_semantics :
 theorem new_queue_fields_change_signed_encoding :
     let encoded := queueExtensionCases.map (fun c => requestInputFields c.input)
     encoded.Nodup := by native_decide
+
+theorem captured_context_fields_bind_each_observation :
+    (capturedContextCases.map (fun c => requestInputFields c.input)).Nodup := by native_decide
 
 end Conformance.ContractCases
