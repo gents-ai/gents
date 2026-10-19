@@ -121,7 +121,8 @@ def capturedPresentationCases : List RequestInputCase :=
   , { name := "literal-context-envelope-remains-user-text", input := {}, contextSkillIds := [],
       authoredText := "Editor context (captured text; URI identifies its editor location):\n{\"kind\":\"selection\",\"content\":\"literal text\"}" }
   , { name := "captured-control-and-unicode-bytes", input := {
-        capturedContext := [{capturedSelection with content := "\"quote\"\n工具\t" ++ String.singleton (Char.ofNat 0)}] },
+        capturedContext := [{capturedSelection with content := ("\"quote\"\n工具\t\r\n\\u0009" ++
+          String.mk [Char.ofNat 8, Char.ofNat 12, Char.ofNat 0])}] },
       contextSkillIds := [] }
   , { name := "captured-terminal-clipboard", input := { capturedContext := [{
         kind := .terminal, source := .clipboard, capturedAt := "2026-10-20T00:00:00Z"

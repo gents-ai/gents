@@ -54,16 +54,36 @@ def authoredMessage (prose : String) (contexts : List Enrollment.CapturedContext
     blocks := (prosePrefix prose contexts).map (fun text => .text text.toUTF8.data.toList) ++
       contexts.map (fun context => .media (nativeDocument context)) }
 
+/-- Provider JSON uses the standard short escapes for backspace, form feed,
+tab, newline and carriage return. Encode characters independently so literal
+backslash-u sequences remain distinct from captured control characters. -/
+private def providerString (text : String) : String :=
+  "\"" ++ String.join (text.toList.map fun char =>
+    if char.toNat == 8 then "\\b"
+    else if char.toNat == 12 then "\\f"
+    else if char.toNat == 9 then "\\t"
+    else if char.toNat == 10 then "\\n"
+    else if char.toNat == 13 then "\\r"
+    else ((Json.str (String.singleton char)).compress.drop 1).dropRight 1) ++ "\""
+
 /-- The owned provider-input boundary formats each typed capture once. The
 metadata marker belongs to native storage and is not a provider parameter.
 Member order follows the captured record, independent of JSON object-map iteration. -/
 def providerText (context : Enrollment.CapturedContext) : String :=
   "Editor context (captured text; URI identifies its editor location):\n" ++
     "{" ++ String.intercalate "," ((metadataFields context ++ [("content", Json.str context.content)]).map
-      (fun (key, value) => (Json.str key).compress ++ ":" ++ value.compress)) ++ "}"
+      (fun (key, value) => providerString key ++ ":" ++
+        (match value with | .str text => providerString text | _ => value.compress))) ++ "}"
 
 def providerParts (prose : String) (contexts : List Enrollment.CapturedContext) : List String :=
   prosePrefix prose contexts ++ contexts.map providerText
+
+/-- Durable transcript decoding is permissive; malformed typed captures cannot
+cross the owned provider boundary. Validity is the invocation input owner's
+predicate, not another provider-specific interpretation of source metadata. -/
+def providerParts? (prose : String) (contexts : List Enrollment.CapturedContext) : Option (List String) :=
+  if contexts.all Enrollment.CapturedContext.wellFormed then some (providerParts prose contexts) else none
+
 
 theorem document_payload_is_the_captured_snapshot (context : Enrollment.CapturedContext) :
     (nativeDocument context).data = .string context.content.toUTF8.data.toList := rfl
