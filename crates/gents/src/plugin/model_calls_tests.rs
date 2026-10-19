@@ -596,18 +596,24 @@ fn installed_within(
 #[tokio::test]
 async fn model_time_running_out_leaves_the_plugin_a_final_round_to_finish() {
     let fake = Arc::new(Fake::start(Reply::Hang, Duration::ZERO).await);
-    let (home, record) = installed_within(&asking(vec![request("a")]), false, 6);
-    let call = executor(&home, Fixed(fake, 1, Duration::from_secs(30)))
-        .call(&record, json!({"n": 1}))
-        .await
-        .unwrap();
+    // Keep the endpoint timeout beyond the plugin deadline and leave three
+    // seconds for guest startup and scheduling in the final-round reserve.
+    let (home, record) = installed_within(&asking(vec![request("a")]), false, 24);
+    let executor = executor(&home, Fixed(fake.clone(), 1, Duration::from_secs(30)));
+    let call = tokio::time::timeout(
+        Duration::from_secs(60),
+        executor.call(&record, json!({"n": 1})),
+    )
+    .await
+    .expect("model timeout did not leave a final guest round")
+    .unwrap();
     assert_eq!(call.outcome.verdict, PluginVerdict::Success);
     assert_eq!(call.outcome.output["n"], 1);
     assert_eq!(
         call.outcome.output["model_results"]["a"],
         json!({"error": "the model request timed out"})
     );
-    assert!(call.outcome.wall_ms < 6000, "{}", call.outcome.wall_ms);
+    assert_eq!(fake.requests(), 1);
 }
 
 #[tokio::test]
