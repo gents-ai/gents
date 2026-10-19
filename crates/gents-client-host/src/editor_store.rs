@@ -4,14 +4,15 @@ use anyhow::{bail, Context, Result};
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use gents::store_key::{StoreEncryption, StoreKey, StoreKeyCustody, StoreKeyUnavailable};
-use gents_desktop_core::client::ClientStoreKeyProvider;
+use gents_desktop_bridge::{BridgeError, BridgeErrorCode};
+use gents_desktop_core::client::{ClientStoreKeyProvider, DesktopPaths};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 const MAX_FRAME_BYTES: usize = 4096;
-pub const VERSION: u32 = 1;
+pub use gents_desktop_bridge::host::protocol::EDITOR_STORE_BOOTSTRAP_VERSION as VERSION;
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
@@ -26,9 +27,7 @@ pub enum Message {
     },
     Ready,
     Error {
-        message: String,
-        #[serde(rename = "requiresUnlock")]
-        requires_unlock: bool,
+        error: BridgeError,
     },
 }
 
@@ -107,14 +106,33 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Provider<S> {
     }
 
     pub async fn failed(&self, error: &anyhow::Error) -> Result<()> {
+        let (code, message) = if error.downcast_ref::<HistoryUnlockRequired>().is_some()
+            || error.downcast_ref::<StoreKeyUnavailable>().is_some()
+        {
+            (
+                    BridgeErrorCode::LocalHistoryLocked,
+                    "Unlock local history to cache its encryption key in VS Code. Your chats are unchanged.",
+                )
+        } else if gents::storage_backend::incompatible_store(
+            error,
+            DesktopPaths::from_root(&self.home).node_data_dir(),
+        )
+        .is_some()
+        {
+            (
+                    BridgeErrorCode::IncompatibleLocalStore,
+                    "This local history cannot be opened by this Gents client. Its store and encryption key are unchanged.",
+                )
+        } else {
+            (
+                BridgeErrorCode::ClientStartFailed,
+                "Local history could not be opened. Its store and encryption key are unchanged.",
+            )
+        };
         send(
             &mut *self.channel.lock().await,
             &Message::Error {
-                message:
-                    "Local history could not be opened. Its store and encryption key are unchanged."
-                        .into(),
-                requires_unlock: error.downcast_ref::<HistoryUnlockRequired>().is_some()
-                    || error.downcast_ref::<StoreKeyUnavailable>().is_some(),
+                error: BridgeError::new(code, message),
             },
         )
         .await
@@ -285,10 +303,51 @@ mod tests {
         assert!(matches!(
             read_message(&mut frames(editor)).await,
             Message::Error {
-                requires_unlock: true,
-                ..
+                error: BridgeError {
+                    code: BridgeErrorCode::LocalHistoryLocked,
+                    retryable: false,
+                    ..
+                }
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn incompatible_store_failures_retain_their_class_without_raw_causes() {
+        let home = tempfile::tempdir().unwrap();
+        let (native, editor) = tokio::io::duplex(MAX_FRAME_BYTES);
+        let provider = Provider::new(home.path().to_owned(), false, native);
+        let failure = anyhow::Error::from(gents::storage_backend::IncompatibleStore {
+            kind: gents::storage_backend::IncompatibleStoreKind::ForeignVersion,
+            data_path: PathBuf::from("/private/retained-history"),
+        })
+        .context("sensitive native cause");
+        provider.failed(&failure).await.unwrap();
+        let Message::Error { error } = read_message(&mut frames(editor)).await else {
+            panic!("expected a typed startup failure");
+        };
+        assert_eq!(error.code, BridgeErrorCode::IncompatibleLocalStore);
+        assert!(!error.retryable);
+        assert!(error.endpoint.is_none());
+        assert!(!error.message.contains("/private/retained-history"));
+        assert!(!error.message.contains("sensitive native cause"));
+    }
+
+    #[tokio::test]
+    async fn unknown_startup_failures_remain_retryable_without_raw_causes() {
+        let home = tempfile::tempdir().unwrap();
+        let (native, editor) = tokio::io::duplex(MAX_FRAME_BYTES);
+        let provider = Provider::new(home.path().to_owned(), false, native);
+        provider
+            .failed(&anyhow::anyhow!("sensitive native cause"))
+            .await
+            .unwrap();
+        let Message::Error { error } = read_message(&mut frames(editor)).await else {
+            panic!("expected a typed startup failure");
+        };
+        assert_eq!(error.code, BridgeErrorCode::ClientStartFailed);
+        assert!(error.retryable);
+        assert!(!error.message.contains("sensitive native cause"));
     }
 
     #[tokio::test]

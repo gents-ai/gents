@@ -6,6 +6,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use gents_desktop_bridge::host::local;
+use gents_desktop_bridge::{BridgeError, BridgeErrorCode};
 use gents_desktop_core::client::DesktopPaths;
 use serde_json::{json, Value};
 use tokio::process::Command;
@@ -33,6 +34,10 @@ async fn an_editor_cache_miss_stops_before_identity_or_store_startup() {
         .unwrap();
     let store: Value = serde_json::from_slice(&store).unwrap();
     assert_eq!(store["kind"], "store");
+    assert_eq!(
+        store["version"],
+        gents_desktop_bridge::host::protocol::EDITOR_STORE_BOOTSTRAP_VERSION
+    );
     assert_eq!(store["record"]["custody"], "macos-keychain");
     assert!(local::connect(&paths).await.is_err());
     let original_record = std::fs::read(paths.store_encryption_path()).unwrap();
@@ -62,7 +67,9 @@ async fn an_editor_cache_miss_stops_before_identity_or_store_startup() {
         .unwrap();
     let error: Value = serde_json::from_slice(&error).unwrap();
     assert_eq!(error["kind"], "error");
-    assert_eq!(error["requiresUnlock"], true);
+    let failure: BridgeError = serde_json::from_value(error["error"].clone()).unwrap();
+    assert_eq!(failure.code, BridgeErrorCode::LocalHistoryLocked);
+    assert!(!failure.retryable);
     assert!(!paths.identity_key_path().exists());
     assert!(!paths.store_key_path().exists());
     assert!(!paths.node_data_dir().join("MANIFEST").exists());
@@ -94,7 +101,7 @@ async fn an_editor_cache_miss_stops_before_identity_or_store_startup() {
         .unwrap()
         .unwrap();
     let next_error: Value = serde_json::from_slice(&next_error).unwrap();
-    assert_eq!(next_error["requiresUnlock"], true);
+    assert_eq!(next_error, error);
     assert!(
         !tokio::time::timeout(Duration::from_secs(10), second.wait())
             .await

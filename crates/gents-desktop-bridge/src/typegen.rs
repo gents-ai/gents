@@ -353,8 +353,9 @@ fn export_all(dir: &Path) -> Result<(), String> {
 
     commands::export(dir)?;
     let protocol = format!(
-        "// Generated from gents-desktop-bridge::host::protocol. Do not edit.\n\nexport const CLIENT_HOST_VERSION = {};\nexport const CLIENT_HOST_MAX_FRAME_BYTES = {};\nexport const CLIENT_HOST_MAX_PENDING_CALLS = {};\nexport const CLIENT_HOST_COMMANDS = {} as const;\n",
+        "// Generated from gents-desktop-bridge::host::protocol. Do not edit.\n\nexport const CLIENT_HOST_VERSION = {};\nexport const EDITOR_STORE_BOOTSTRAP_VERSION = {};\nexport const CLIENT_HOST_MAX_FRAME_BYTES = {};\nexport const CLIENT_HOST_MAX_PENDING_CALLS = {};\nexport const CLIENT_HOST_COMMANDS = {} as const;\n",
         crate::host::protocol::PROTOCOL_VERSION,
+        crate::host::protocol::EDITOR_STORE_BOOTSTRAP_VERSION,
         crate::host::protocol::MAX_FRAME_BYTES,
         crate::host::protocol::MAX_PENDING_CALLS,
         serde_json::to_string(crate::host::protocol::ClientCommand::NAMES)
