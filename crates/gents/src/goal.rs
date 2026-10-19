@@ -2594,67 +2594,9 @@ async fn session_token_usage_in_txn(
     node_did: &str,
     session_id: &str,
 ) -> Result<i64> {
-    let node_did = escape_graphql_string(node_did);
-    let session_id = escape_graphql_string(session_id);
-    let request_query = format!(
-        r#"{{
-            AgentRequest(filter: {{ purpose: {{ _eq: "normal" }}, node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }} }}) {{ request_id }}
-        }}"#
-    );
-    let response = txn.execute(&request_query).await?;
-    let mut request_ids = response
-        .pointer("/data/AgentRequest")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|row| {
-            row.get("request_id")
-                .and_then(|value| value.as_str())
-                .map(ToOwned::to_owned)
-        })
-        .collect::<Vec<_>>();
-    request_ids.sort();
-    request_ids.dedup();
-    if request_ids.is_empty() {
-        return Ok(0);
-    }
-    let request_ids = request_ids
-        .iter()
-        .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let query = format!(
-        r#"{{
-            InferenceCall(
-                filter: {{ node_did: {{ _eq: "{node_did}" }}, request_id: {{ _in: [{request_ids}] }} }}
-            ) {{ prompt_tokens completion_tokens }}
-        }}"#
-    );
-    #[derive(Deserialize)]
-    struct UsageRow {
-        #[serde(default)]
-        prompt_tokens: Option<i64>,
-        #[serde(default)]
-        completion_tokens: Option<i64>,
-    }
-    let response = txn.execute(&query).await?;
-    let usage_rows: Vec<UsageRow> = response
-        .pointer("/data/InferenceCall")
-        .and_then(Value::as_array)
-        .map(|rows| {
-            rows.iter()
-                .cloned()
-                .map(serde_json::from_value)
-                .collect::<std::result::Result<Vec<_>, _>>()
-        })
-        .transpose()?
-        .context("decoding goal inference usage")?;
-    let charged = crate::provider_usage::sum_charged_from_persisted_parts(
-        usage_rows
-            .into_iter()
-            .map(|row| (row.prompt_tokens, row.completion_tokens)),
-    )
-    .context("summing goal inference usage")?;
+    let charged = crate::toolset::load_session_goal_usage(txn, node_did, session_id)
+        .await
+        .context("summing goal inference usage")?;
     Ok(i64::try_from(charged).unwrap_or(i64::MAX))
 }
 

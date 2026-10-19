@@ -215,6 +215,16 @@ async fn access_review_uses_the_caller_ledger_without_tools_or_chat_publication(
     drop(requests);
     assert_eq!(fixture.session_message_count().await, 0);
     assert_eq!(
+        crate::goal::session_token_usage(
+            &fixture.node,
+            &fixture.parent.node_did,
+            &fixture.parent.session_id,
+        )
+        .await
+        .unwrap(),
+        8,
+    );
+    assert_eq!(
         fixture.terminal_row().await,
         (
             RequestLifecycleState::Completed,
@@ -236,6 +246,28 @@ async fn access_review_uses_the_caller_ledger_without_tools_or_chat_publication(
         .as_array()
         .unwrap()
         .is_empty());
+}
+
+#[tokio::test]
+async fn goal_usage_rejects_a_review_without_its_same_session_parent() {
+    let fixture = TitleFixture::with_auxiliary(
+        RequestPurpose::AccessReview,
+        Some(review_input("goal-review-scope")),
+        Some(10_000),
+    )
+    .await;
+    let doc = crate::graphql::escape_graphql_string(&fixture.parent.doc_id);
+    ConfigAccess::local(fixture.node.clone()).write("test.goal_review_parent", &format!(
+        r#"mutation {{ delete_AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}) {{ _docID }} }}"#,
+    )).await.unwrap();
+    let error = crate::goal::session_token_usage(
+        &fixture.node,
+        &fixture.parent.node_did,
+        &fixture.parent.session_id,
+    )
+    .await
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("goal review has no same-session parent"));
 }
 
 async fn install_review_policy(
