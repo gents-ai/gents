@@ -1006,6 +1006,41 @@ impl DefraSessionHook {
                 )
                 .await;
         }
+        if lifecycle.kind() == crate::tool_call_lifecycle::ToolRowKind::PluginJob {
+            let result = match crate::plugin_job::control::control(
+                &crate::config_client::ConfigAccess::local(self.node.clone()),
+                &caller,
+                background_tool_call_id,
+                gents_protocol::job::JobControlKind::Stop,
+            )
+            .await
+            {
+                Ok(outcome) => json_string(json!({
+                    "ok": true,
+                    "tool_call_id": background_tool_call_id,
+                    "status": match outcome {
+                        gents_protocol::job::JobControlOutcome::Applied { .. } => "cancelled",
+                        gents_protocol::job::JobControlOutcome::AlreadyTerminal { .. } => {
+                            "already_terminal"
+                        }
+                    },
+                    "request_id": null,
+                    "error": null
+                })),
+                Err(error) => background_invalid_tool_arguments_payload(
+                    CANCEL_PROCESS_TOOL_NAME,
+                    "/tool_call_id",
+                    error.to_string(),
+                ),
+            };
+            return self
+                .complete_control_tool_call(
+                    &mut control_lifecycle,
+                    CANCEL_PROCESS_TOOL_NAME,
+                    result,
+                )
+                .await;
+        }
         let notification_tool_name = lifecycle.tool_name().to_string();
         let notification_request_id = lifecycle.request_id().to_string();
         let notification_reason = parsed

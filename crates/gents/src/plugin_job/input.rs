@@ -9,8 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use gents_protocol::job::{
     JobCaller, JobCeilingView, JobChildState, JobChildView, JobPin, JobProgress, JobRef,
-    JobRootCall, JobRowView, JobState, JobStepInput, JobUsage, JobVerifiedScript,
-    PluginJobSettings,
+    JobRootCall, JobRowView, JobStepInput, JobUsage, JobVerifiedScript, PluginJobSettings,
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
@@ -19,6 +18,7 @@ use serde_json::Value;
 use crate::background_tools::caused_request_terminals_in_txn;
 use crate::config_client::{ConfigAccess, ConfigApplyTxn, ConfigRead};
 use crate::graphql::{escape_graphql_string, graphql_string_list_literal};
+use crate::plugin::job_calls::job_state;
 use crate::plugin::mounts::resolve as resolve_mounts;
 use crate::plugin::store::{parse_coordinate, read_record};
 use crate::plugin_job::admit::{meet, StepChild};
@@ -34,13 +34,13 @@ use crate::plugin_job::JobBinding;
 use crate::provider_usage::{sum_charged_from_persisted_parts, sum_persisted_usage_columns};
 use crate::request_admission::load_request_context;
 use crate::request_binding::load_agent_request_by_doc_id;
-use crate::tool_call_lifecycle::{load_tool_call_arguments, CausedRequestTerminal};
+use crate::tool_call_lifecycle::{load_tool_call_arguments, CausedRequestTerminal, ToolCallState};
 use crate::watcher::AgentRequest;
 use crate::workspace::request_workspace_cwd;
 
 #[cfg(test)]
 tokio::task_local! {
-    static CHILD_QUERIES: std::sync::Arc<std::sync::atomic::AtomicUsize>;
+    pub(super) static CHILD_QUERIES: std::sync::Arc<std::sync::atomic::AtomicUsize>;
 }
 
 const FIELDS: &str = "_docID request_id node_did agent_id session_id retry_key lifecycle_state input created_at terminalized_at";
@@ -485,9 +485,11 @@ async fn session_jobs(
         job_pin: Option<Value>,
         #[serde(default)]
         job_progress: Option<Value>,
+        #[serde(default)]
+        lifecycle_state: Option<String>,
     }
     let document = format!(
-        r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "{}" }} }}) {{ _docID tool_call_id job_pin job_progress }} }}"#,
+        r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "{}" }} }}) {{ _docID tool_call_id job_pin job_progress lifecycle_state }} }}"#,
         escape_graphql_string(session_id),
         escape_graphql_string(tool_name)
     );
@@ -496,10 +498,15 @@ async fn session_jobs(
         .into_iter()
         .filter_map(|row| {
             let pin: JobPin = serde_json::from_value(row.job_pin?).ok()?;
-            let state = row
+            let progress = row
                 .job_progress
-                .and_then(|progress| serde_json::from_value::<JobProgress>(progress).ok())
-                .map_or(JobState::Running, |progress| progress.state);
+                .and_then(|progress| serde_json::from_value::<JobProgress>(progress).ok());
+            let lifecycle = row
+                .lifecycle_state
+                .as_deref()
+                .and_then(ToolCallState::from_persisted)
+                .unwrap_or(ToolCallState::Running);
+            let state = job_state(lifecycle, progress.as_ref());
             Some(JobRowView {
                 row_doc_id: row.doc_id,
                 tool_call_id: row.tool_call_id,
@@ -693,6 +700,23 @@ pub(crate) mod tests {
         })
         .await
         .unwrap()
+    }
+
+    /// Overwrites the stored `lifecycle_state` of the job row `row_doc_id`.
+    pub(crate) async fn set_lifecycle(node: &std::sync::Arc<EmbeddedNode>, row_doc_id: &str, state: &str) {
+        ConfigAccess::transact_local_write(node, None, "test.plugin_job_lifecycle", |txn| {
+            Box::pin(async move {
+                txn.execute(&format!(
+                    r#"mutation {{ update_AgentToolCall(docID: "{}", input: {{lifecycle_state: "{}"}}) {{ _docID }} }}"#,
+                    crate::graphql::escape_graphql_string(row_doc_id),
+                    crate::graphql::escape_graphql_string(state)
+                ))
+                .await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
     }
 
     pub(crate) async fn request(
@@ -1736,19 +1760,22 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn jobs_state_comes_from_job_progress() {
+    async fn jobs_state_follows_the_row_lifecycle_first() {
         let live = live_settings(JobPolicy::default());
         let mut job = new_job(Some(&live), None).await;
         let mut rows = Vec::new();
-        for (call, state) in [
-            ("call-1", Some(JobState::Paused)),
-            ("call-2", Some(JobState::AwaitingUser)),
-            ("call-3", None),
+        for (call, lifecycle, progress) in [
+            ("call-1", Some("completed"), Some(JobState::Paused)),
+            ("call-2", Some("completed"), Some(JobState::AwaitingUser)),
+            ("call-3", Some("failed"), Some(JobState::Running)),
         ] {
             let row = job.row("workflow", call, json!({"argv": ["run"]})).await;
             job.write_pin(&row, &job.pin(&row, None)).await;
-            if let Some(state) = state {
+            if let Some(state) = progress {
                 job.write_progress(&row, state, 0).await;
+            }
+            if let Some(lifecycle) = lifecycle {
+                set_lifecycle(&job.node, &row, lifecycle).await;
             }
             rows.push(row);
         }
@@ -1756,10 +1783,20 @@ pub(crate) mod tests {
         let other_tool = job.row("other", "call-5", json!({"argv": ["x"]})).await;
         job.write_pin(&other_tool, &job.pin(&other_tool, None))
             .await;
-        let (input, _) = job.later(&rows[0]).await.unwrap();
+        let live_row = job
+            .row("workflow", "call-6", json!({"argv": ["run"]}))
+            .await;
+        job.write_pin(&live_row, &job.pin(&live_row, None)).await;
+        rows.push(live_row.clone());
+        let (input, _) = job.later(&live_row).await.unwrap();
         let mut expected: Vec<JobRowView> = rows
             .iter()
-            .zip([JobState::Paused, JobState::AwaitingUser, JobState::Running])
+            .zip([
+                JobState::Paused,
+                JobState::AwaitingUser,
+                JobState::Failed,
+                JobState::Running,
+            ])
             .map(|(row, state)| JobRowView {
                 row_doc_id: row.clone(),
                 tool_call_id: job.call_ids[row].clone(),

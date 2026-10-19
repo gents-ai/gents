@@ -40,7 +40,7 @@ use crate::lifecycle::SessionMessageCause;
 use crate::pack::InstalledVia;
 use crate::plugin::data::{DataCaller, StampContext};
 use crate::plugin::executor::PluginExecutor;
-use crate::plugin::job_calls::JobCaller;
+use crate::plugin::job_calls::{job_state, JobCaller};
 use crate::plugin::store::{parse_coordinate, read_record, InstalledPlugin};
 use crate::plugin::{GuestTrap, PluginVerdict};
 use crate::session_origin::SessionScope;
@@ -1099,6 +1099,8 @@ struct StoredRow {
     #[serde(default)]
     requester_did: Option<String>,
     request_doc_id: String,
+    #[serde(default)]
+    lifecycle_state: Option<String>,
 }
 
 /// The admission row (`admit::StepRow`) of a stored job row, read through
@@ -1128,7 +1130,7 @@ pub(crate) async fn read_step_row(access: &ConfigAccess, row_doc_id: &str) -> Re
 async fn read_row(txn: &ConfigApplyTxn<'_>, row_doc_id: &str) -> Result<StepRow> {
     let stored = txn
         .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ session_id node_did requester_did request_doc_id }} }}"#,
+            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ session_id node_did requester_did request_doc_id lifecycle_state }} }}"#,
             escape_graphql_string(row_doc_id)
         ))
         .await?;
@@ -1163,6 +1165,12 @@ async fn read_row(txn: &ConfigApplyTxn<'_>, row_doc_id: &str) -> Result<StepRow>
         .with_context(|| format!("decoding the accepted arguments of job row {row_doc_id}"))?;
     let pin = read_pin(txn, row_doc_id).await?;
     let progress = read_progress(txn, row_doc_id).await?;
+    let lifecycle = stored
+        .lifecycle_state
+        .as_deref()
+        .and_then(ToolCallState::from_persisted)
+        .unwrap_or(ToolCallState::Running);
+    let state = job_state(lifecycle, progress.as_ref());
     let chain = chain_of(txn, row_doc_id, pin.as_ref()).await?;
     let result_bytes = pin
         .as_ref()
@@ -1206,7 +1214,7 @@ async fn read_row(txn: &ConfigApplyTxn<'_>, row_doc_id: &str) -> Result<StepRow>
             .as_ref()
             .map_or(0, |progress| progress.observed_terminal_children),
         consecutive_failures: 0,
-        state: progress.map_or(JobState::Running, |progress| progress.state),
+        state,
     })
 }
 
@@ -1275,13 +1283,14 @@ pub(crate) mod tests {
     };
     use crate::tool_call_lifecycle::AwaitMode;
     use gents_protocol::job::{
-        JobControlKind, JobFailure, JobPauseReason, JobProgress, JobState, JobSuspend,
-        JobSuspendKind,
+        JobControlKind, JobControlOutcome, JobFailure, JobPauseReason, JobProgress, JobState,
+        JobSuspend, JobSuspendKind,
     };
     use gents_protocol::plugin::{PluginExecutionReceipt, PluginExecutionVerdict};
     use serde_json::{json, Value};
 
     use super::super::admit::Refusal;
+    use super::super::control::control_outcome;
 
     const HOST_REFUSALS: [Refusal; 6] = [
         Refusal::Stalled,
@@ -1971,6 +1980,84 @@ pub(crate) mod tests {
                 .unwrap()
                 .unwrap();
         lifecycle.start_running().await.unwrap();
+    }
+
+    /// A running pinned job row of `job` (its own chain root), progress at revision 1.
+    pub(crate) async fn pinned_job_row(job: &mut Job, call_id: &str) -> String {
+        let row = job.row("workflow", call_id, json!({"argv": ["run"]})).await;
+        job.write_pin(&row, &job.pin(&row, None)).await;
+        job.write_progress(&row, JobState::Running, 1).await;
+        start_running(job, &row).await;
+        row
+    }
+
+    /// Ends `row` with `settlement` through the production settle owner.
+    pub(crate) async fn settle_row(job: &Job, row: &str, settlement: Settlement) {
+        let mut lifecycle = load_lifecycle(&job.access, row).await.unwrap();
+        settle_plugin_job(&mut lifecycle, settlement).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn read_step_row_state_follows_the_row_lifecycle_first() {
+        let mut job = new_job(Some(&live_settings(JobPolicy::default())), None).await;
+        let cases = [
+            (
+                Some(Settlement::Fail(JobFailure {
+                    code: "engine_boom".into(),
+                    message: "boom".into(),
+                })),
+                JobState::Failed,
+            ),
+            (
+                Some(Settlement::Control(JobControlKind::Stop)),
+                JobState::Cancelled,
+            ),
+            (
+                Some(Settlement::Refused(Refusal::TimedOut)),
+                JobState::TimedOut,
+            ),
+            (Some(Settlement::Result(json!("done"))), JobState::Completed),
+            (
+                Some(Settlement::Control(JobControlKind::Pause)),
+                JobState::Paused,
+            ),
+            (
+                Some(Settlement::Suspend(JobSuspend {
+                    kind: JobSuspendKind::AwaitUser,
+                    reason: None,
+                    message: "needs a decision".into(),
+                    question: Some("ship it?".into()),
+                })),
+                JobState::AwaitingUser,
+            ),
+            (None, JobState::Running),
+        ];
+        for (index, (settlement, expected)) in cases.into_iter().enumerate() {
+            let row = pinned_job_row(&mut job, &format!("call-{}", index + 1)).await;
+            if let Some(settlement) = settlement {
+                settle_row(&job, &row, settlement).await;
+            }
+            let stored = read_step_row(&job.access, &row).await.unwrap();
+            assert_eq!(stored.state, expected, "case {}", index + 1);
+        }
+        job.node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn control_outcome_of_a_settled_row_read_back_is_already_terminal() {
+        let mut job = new_job(Some(&live_settings(JobPolicy::default())), None).await;
+        let row = pinned_job_row(&mut job, "call-1").await;
+        settle_row(&job, &row, Settlement::Result(json!("done"))).await;
+        let stored = read_step_row(&job.access, &row).await.unwrap();
+        assert_eq!(
+            control_outcome(&stored, JobControlKind::Stop, &|_| {
+                KillObservation::CausedTerminal
+            }),
+            JobControlOutcome::AlreadyTerminal {
+                state: JobState::Completed
+            }
+        );
+        job.node.shutdown().await;
     }
 
     pub(crate) async fn stepper(output: Value) -> Stepper {

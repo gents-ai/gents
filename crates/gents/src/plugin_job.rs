@@ -10,6 +10,7 @@ pub mod origin;
 pub mod records;
 pub mod recovery;
 pub mod settings;
+pub mod view;
 
 use std::collections::HashMap;
 

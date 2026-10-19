@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use gents_protocol::job::{
     JobChildState, JobControlEcho, JobControlEchoKind, JobControlKind, JobControlOutcome,
-    JobGuestPin, JobPin, JobResume, JobResumeEngine, JobState,
+    JobGuestPin, JobPin, JobReadError, JobResume, JobResumeEngine, JobState,
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
@@ -14,13 +14,13 @@ use serde::{Deserialize, Serialize};
 use super::admit::{
     resume_pin, resume_valid, root_call_of, HostFacts, Refusal, RootCall, StepChild, StepRow,
 };
-use super::driver::{read_step_row_in_txn, settle_plugin_job, Settlement};
+use super::driver::{read_step_row, read_step_row_in_txn, settle_plugin_job, Settlement};
 use super::input::chain_of;
 use crate::background_tools::ProcessControlScope;
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::{escape_graphql_string, graphql_string_list_literal};
 use crate::plugin_job::keys::job_spawn_key;
-use crate::tool_call_lifecycle::ToolCallLifecycle;
+use crate::tool_call_lifecycle::{ToolCallLifecycle, ToolRowKind};
 
 /// Why a job row is killed: a control, the deadline, or a fail-closed refusal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -275,6 +275,64 @@ pub async fn kill(
         }
     }
     settle_plugin_job(lifecycle, cause.settlement()).await?;
+    Ok(outcome)
+}
+
+/// Stops or pauses the job `scope`'s session started at `tool_call_id`.
+/// Local only: a graphql access cannot reach the node's request interrupts.
+/// The row ends through [`kill`], whose settlement publishes the receipt.
+pub async fn control(
+    access: &ConfigAccess,
+    scope: &ProcessControlScope,
+    tool_call_id: &str,
+    action: JobControlKind,
+) -> Result<JobControlOutcome, JobReadError> {
+    let unavailable = |error: anyhow::Error| JobReadError::Unavailable {
+        message: format!("{error:#}; retry when the node answers"),
+    };
+    let ConfigAccess::Local(node) = access else {
+        return Err(JobReadError::Unavailable {
+            message: "job control is local-only in v1; stop or pause the job from its session (`workflow stop|pause <handle>`), the desktop, Grok or Codex".into(),
+        });
+    };
+    let mut lifecycle = ToolCallLifecycle::load(node.node().clone(), &scope.session_id, tool_call_id)
+        .await
+        .map_err(unavailable)?
+        .ok_or(JobReadError::NotYetObservable)?;
+    if !scope.authorizes(
+        lifecycle.session_id(),
+        lifecycle.node_did(),
+        lifecycle.requester_did(),
+    ) {
+        return Err(JobReadError::NotAuthorized);
+    }
+    if lifecycle.kind() != ToolRowKind::PluginJob {
+        return Err(JobReadError::NotAJob);
+    }
+    let doc_id = lifecycle
+        .doc_id()
+        .ok_or_else(|| unavailable(anyhow::anyhow!("job row lacks physical identity")))?
+        .to_owned();
+    let row = read_step_row(access, &doc_id).await.map_err(unavailable)?;
+    let observed = observe_live_children(access, &row, lifecycle.node_did())
+        .await
+        .map_err(unavailable)?;
+    let observe = |key: &str| {
+        observed
+            .get(key)
+            .copied()
+            .unwrap_or(KillObservation::Unresolved)
+    };
+    let outcome = control_outcome(&row, action, &observe);
+    if matches!(outcome, JobControlOutcome::Applied { .. }) {
+        let cause = match action {
+            JobControlKind::Stop => KillCause::Stop,
+            JobControlKind::Pause => KillCause::Pause,
+        };
+        kill(access, &mut lifecycle, &row, cause)
+            .await
+            .map_err(unavailable)?;
+    }
     Ok(outcome)
 }
 
@@ -914,7 +972,9 @@ mod tests {
 
     use crate::plugin_job::admit::RootCall;
     use crate::plugin_job::driver::read_step_row;
-    use crate::plugin_job::input::tests::{live_settings, new_job, resume_block, Job, NODE_DID};
+    use crate::plugin_job::input::tests::{
+        live_settings, new_job, resume_block, set_lifecycle, Job, NODE_DID,
+    };
     use crate::tool_call_lifecycle::admission_fixture::fixture_job_pin;
     use gents_protocol::job::{JobOrigin, JobPolicy};
 
@@ -938,6 +998,9 @@ mod tests {
         };
         job.write_pin(&row, &pin).await;
         job.write_progress(&row, state, 0).await;
+        if state == JobState::Completed {
+            set_lifecycle(&job.node, &row, "completed").await;
+        }
         row
     }
 

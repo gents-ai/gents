@@ -1015,6 +1015,28 @@ impl JobReadError {
     }
 }
 
+impl std::fmt::Display for JobReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotAJob => {
+                f.write_str("not a plugin job; find the job's address with `gents job list`")
+            }
+            Self::NotAuthorized => f.write_str(
+                "this job belongs to another session or requester; read it from the session that started it",
+            ),
+            Self::NotYetObservable => f.write_str(
+                "no job row is visible at this address yet; retry shortly, or check the address with `gents job list`",
+            ),
+            Self::Unavailable { message } => write!(f, "job store unavailable: {message}"),
+            Self::Malformed { message } => {
+                write!(f, "job row does not decode: {message}; retrying will not help")
+            }
+        }
+    }
+}
+
+impl std::error::Error for JobReadError {}
+
 /// Operator-owned job ceiling of one plugin: what a job it runs may start and
 /// how long it may live. An absent block means non-job verbs only.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1255,6 +1277,41 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&absent).expect("encode"),
             progress_json()
+        );
+    }
+
+    #[test]
+    fn job_read_error_display_names_the_next_call() {
+        let message = || "m".to_owned();
+        let cases = [
+            (
+                JobReadError::NotAJob,
+                "not a plugin job; find the job's address with `gents job list`",
+            ),
+            (
+                JobReadError::NotAuthorized,
+                "this job belongs to another session or requester; read it from the session that started it",
+            ),
+            (
+                JobReadError::NotYetObservable,
+                "no job row is visible at this address yet; retry shortly, or check the address with `gents job list`",
+            ),
+            (
+                JobReadError::Unavailable { message: message() },
+                "job store unavailable: m",
+            ),
+            (
+                JobReadError::Malformed { message: message() },
+                "job row does not decode: m; retrying will not help",
+            ),
+        ];
+        for (error, text) in cases {
+            assert_eq!(error.to_string(), text);
+        }
+        let boxed: Box<dyn std::error::Error + Send + Sync> = JobReadError::NotAJob.into();
+        assert_eq!(
+            boxed.downcast_ref::<JobReadError>(),
+            Some(&JobReadError::NotAJob)
         );
     }
 }
