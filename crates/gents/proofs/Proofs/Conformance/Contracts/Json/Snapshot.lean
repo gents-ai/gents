@@ -20,6 +20,7 @@ import Proofs.Conformance.SchemaArgumentRepair
 import Proofs.Conformance.RepeatedToolFailure
 import Proofs.Conformance.ToolTimeouts
 import Proofs.Conformance.PluginResources
+import Proofs.Conformance.PluginJob
 import Proofs.Conformance.MailboxNotification
 import Proofs.Conformance.MailboxReply
 import Proofs.Conformance.MailboxHandoff
@@ -474,6 +475,16 @@ def snapshotJson : String :=
       ++ Conformance.RepeatedToolFailureContracts.casesJson ++ ","
     ++ "\"plugin_resource_cases\":"
       ++ Conformance.PluginResources.casesJson ++ ","
+    ++ "\"plugin_data_cases\":" ++ Conformance.PluginResources.dataCasesJson ++ ","
+    ++ "\"plugin_calls_route_cases\":" ++ Conformance.PluginResources.routeCasesJson ++ ","
+    ++ "\"plugin_job_admission_cases\":" ++ Conformance.PluginJob.admissionCasesJson ++ ","
+    ++ "\"plugin_job_adoption_cases\":" ++ Conformance.PluginJob.adoptionCasesJson ++ ","
+    ++ "\"plugin_job_key_cases\":" ++ Conformance.PluginJob.keyCasesJson ++ ","
+    ++ "\"plugin_job_control_cases\":" ++ Conformance.PluginJob.controlCasesJson ++ ","
+    ++ "\"plugin_job_authority_cases\":" ++ Conformance.PluginJob.authorityCasesJson ++ ","
+    ++ "\"plugin_job_wire_cases\":" ++ Conformance.PluginJob.wireCasesJson ++ ","
+    ++ "\"plugin_job_lineage_cases\":" ++ Conformance.PluginJob.lineageCasesJson ++ ","
+    ++ "\"plugin_job_recovery_cases\":" ++ Conformance.PluginJob.recoveryCasesJson ++ ","
     ++ "\"tool_timeout_cases\":"
       ++ Conformance.ToolTimeouts.casesJson ++ ","
     ++ "\"scope_collection_rules\":{"

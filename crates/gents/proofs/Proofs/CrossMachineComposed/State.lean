@@ -32,13 +32,13 @@ def Coherent (pre : ComposedState) (toolPre : ToolExecution.ToolCallContext) : P
   toolPre.currentTime = pre.request.currentTime
 
 def IsDetached (t : ToolExecution.ToolCallContext) : Prop :=
-  t.operation = .sessionMessage
+  t.operation.isDetached = true
 
 instance (t : ToolExecution.ToolCallContext) : Decidable (IsDetached t) := by
   unfold IsDetached; infer_instance
 
 def Persistent (s : ComposedState) (t : ToolExecution.ToolCallContext) : Prop :=
-  t.requestId = s.requestId ∧ t.operation = .sessionMessage
+  t.requestId = s.requestId ∧ t.operation.isDetached = true
 
 def AllToolsCoherent (s : ComposedState) : Prop :=
   ∀ t ∈ s.tools, ¬ IsDetached t → Coherent s t

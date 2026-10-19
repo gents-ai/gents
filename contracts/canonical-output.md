@@ -133,6 +133,7 @@ redispatch. A late background result can close and publish after parent expiry
 or termination without renewing or reopening that request. A
 `agent_new`/`agent_message` row closes with the terminal output of the
 request it caused, not a fabricated native completion.
+A plugin-job row closes with its driver's terminal output, never a child request's.
 
 An invocation reply is not always execution completion. A started session
 returns a native `tool_result` receipt while its row remains running, then a

@@ -500,3 +500,43 @@ fn generated_graph_presentation_cases_drive_production_tool_surface() {
         );
     }
 }
+
+/// Lean `JobGuardRow.accepted`: a model write of Tools `integrations` is
+/// judged by the native grant guards, an operator write bypasses them.
+#[test]
+fn generated_self_config_job_guard_cases_drive_native_guard() {
+    let cases = lean_self_config_selection_cases();
+    assert!(!cases.job_guard_cases.is_empty());
+    let tools = |integrations: Option<&Value>| -> Map<String, Value> {
+        let mut tools = Map::new();
+        tools.insert(
+            "self_config".into(),
+            serde_json::json!({"enable_self_config": true}),
+        );
+        if let Some(integrations) = integrations {
+            tools.insert("integrations".into(), integrations.clone());
+        }
+        tools
+    };
+    for case in &cases.job_guard_cases {
+        let held = OperatorGrants::default();
+        let candidate = tools(Some(&case.candidate_integrations));
+        let accepted = match case.writer.as_str() {
+            "model" if case.selected_before => {
+                let stored = tools(case.stored_integrations.as_ref());
+                guard_tools_keep_grants(&held, Some(&stored), &candidate).is_ok()
+            }
+            "model" => reselection_keeps_grants(&held, None, Some(&candidate)).is_ok(),
+            "operator" => {
+                assert!(
+                    case.accepted,
+                    "{}: operator writes bypass the guard",
+                    case.name
+                );
+                continue;
+            }
+            other => panic!("{}: unknown writer {other:?}", case.name),
+        };
+        assert_eq!(accepted, case.accepted, "{}: {case:?}", case.name);
+    }
+}

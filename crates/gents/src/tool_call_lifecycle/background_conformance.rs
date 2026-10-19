@@ -32,9 +32,10 @@ async fn generated_background_lifecycle_cases_use_canonical_admission_owner() {
         .iter()
         .filter(|case| case.group == "native_lifecycle")
     {
-        let session_message = match case.operation.as_deref() {
-            Some("sessionMessage") => true,
-            Some("nativeCommand") => false,
+        let (session_message, plugin_job) = match case.operation.as_deref() {
+            Some("sessionMessage") => (true, false),
+            Some("pluginJob") => (false, true),
+            Some("nativeCommand") => (false, false),
             other => panic!("{}: unhandled modeled tool operation {other:?}", case.name),
         };
         let mut admission = published_admission(PublishedAdmissionOptions {
@@ -45,6 +46,7 @@ async fn generated_background_lifecycle_cases_use_canonical_admission_owner() {
                 AwaitMode::Background
             },
             tool_name: session_message.then(|| crate::toolset::AGENT_NEW_TOOL_NAME.to_owned()),
+            job_pin: plugin_job,
             start_running: true,
             ..Default::default()
         })

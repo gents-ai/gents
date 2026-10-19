@@ -320,7 +320,7 @@ pub(crate) enum GraphCommand {
 }
 
 #[derive(clap::Args, Clone)]
-pub(crate) struct GraphScopeArgs {
+pub(crate) struct ScopeArgs {
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
@@ -876,7 +876,7 @@ pub(crate) struct PackYankArgs {
 #[derive(clap::Args)]
 pub(crate) struct PackOutdatedArgs {
     #[command(flatten)]
-    pub(crate) scope: GraphScopeArgs,
+    pub(crate) scope: ScopeArgs,
     #[arg(
         long,
         help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
@@ -903,7 +903,7 @@ pub(crate) struct PackUpdateArgs {
     )]
     pub(crate) inference_slots: Vec<String>,
     #[command(flatten)]
-    pub(crate) scope: GraphScopeArgs,
+    pub(crate) scope: ScopeArgs,
     #[arg(
         long,
         help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
@@ -943,7 +943,7 @@ pub(crate) struct PackInstallArgs {
     )]
     pub(crate) preview: bool,
     #[command(flatten)]
-    pub(crate) scope: GraphScopeArgs,
+    pub(crate) scope: ScopeArgs,
     #[arg(long, value_enum, default_value_t = OutputFormat::Json,
         help = "Report format; document/asset installs require json, graph installs also support text")]
     pub(crate) output: OutputFormat,
@@ -998,7 +998,7 @@ pub(crate) struct PackRemoveArgs {
     )]
     pub(crate) package: String,
     #[command(flatten)]
-    pub(crate) scope: GraphScopeArgs,
+    pub(crate) scope: ScopeArgs,
     #[command(flatten)]
     pub(crate) drift: PackDriftArgs,
 }
@@ -1044,7 +1044,7 @@ pub(crate) struct GraphRunArgs {
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
     pub(crate) output: OutputFormat,
     #[command(flatten)]
-    pub(crate) scope: GraphScopeArgs,
+    pub(crate) scope: ScopeArgs,
 }
 
 #[derive(clap::Args)]
@@ -1055,7 +1055,7 @@ pub(crate) struct GraphWatchArgs {
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
     pub(crate) output: OutputFormat,
     #[command(flatten)]
-    pub(crate) scope: GraphScopeArgs,
+    pub(crate) scope: ScopeArgs,
 }
 
 #[derive(clap::Args)]
@@ -1064,7 +1064,7 @@ pub(crate) struct GraphResultArgs {
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
     pub(crate) output: OutputFormat,
     #[command(flatten)]
-    pub(crate) scope: GraphScopeArgs,
+    pub(crate) scope: ScopeArgs,
 }
 
 #[derive(clap::Args)]
@@ -1073,14 +1073,14 @@ pub(crate) struct GraphCancelArgs {
     #[arg(long)]
     pub(crate) reason: Option<String>,
     #[command(flatten)]
-    pub(crate) scope: GraphScopeArgs,
+    pub(crate) scope: ScopeArgs,
 }
 
 #[derive(clap::Args)]
 pub(crate) struct GraphToggleArgs {
     pub(crate) package: String,
     #[command(flatten)]
-    pub(crate) scope: GraphScopeArgs,
+    pub(crate) scope: ScopeArgs,
 }
 
 #[derive(clap::Args)]
@@ -1111,12 +1111,12 @@ pub(crate) struct PackRunArgs {
         long = "with-pack",
         value_name = "DIR_OR_PACK",
         action = clap::ArgAction::Append,
-        help = "Admit a directory or .pack file into the run's home store first, so a graph dependency resolves from it offline; repeatable"
+        help = "Admit a directory or .pack file into the run's home store first, so a dependency resolves from it offline; repeatable"
     )]
     pub(crate) with_pack: Vec<PathBuf>,
     #[arg(
         long,
-        help = "Pack registry base URL, used to resolve the pack and its graph dependencies. Defaults to GENTS_REGISTRY, then the public registry"
+        help = "Pack registry base URL, used to resolve the pack and its dependencies. Defaults to GENTS_REGISTRY, then the public registry"
     )]
     pub(crate) registry: Option<String>,
 }
@@ -1307,7 +1307,7 @@ pub(crate) struct PluginBindArgs {
     #[arg(help = "Existing inference profile (see `gents profile list`) the plugin calls through")]
     pub(crate) profile: String,
     #[command(flatten)]
-    pub(crate) scope: GraphScopeArgs,
+    pub(crate) scope: ScopeArgs,
 }
 
 #[derive(clap::Args)]

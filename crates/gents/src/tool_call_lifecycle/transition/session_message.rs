@@ -54,7 +54,7 @@ impl ToolCallLifecycle {
         handoff_reason: Option<&'static str>,
     ) -> Result<bool> {
         anyhow::ensure!(
-            self.is_session_message() && self.await_mode == AwaitMode::Background,
+            self.kind() == ToolRowKind::SessionMessage && self.await_mode == AwaitMode::Background,
             "session-message settlement requires a background agent_new/agent_message row"
         );
         let state = terminal.tool_state();

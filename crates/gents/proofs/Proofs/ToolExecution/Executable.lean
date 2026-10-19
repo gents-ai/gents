@@ -48,7 +48,7 @@ def step? (pre : ToolCallContext) : Action → Option ToolCallContext
         none
   | .foreground =>
       if pre.state = .running ∧ pre.awaitMode = .background ∧
-          pre.operation ≠ .sessionMessage then
+          pre.operation.isDetached = false then
         some { pre with awaitMode := .foreground }
       else
         none

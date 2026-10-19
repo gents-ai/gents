@@ -834,6 +834,7 @@ async fn record_plugin_install(
             digest: installed_record().digest,
         }],
         dependencies: Vec::new(),
+        explicit: true,
     };
     crate::pack::record_plugin_store_change(
         &crate::config_client::ConfigAccess::local(node.clone()),
@@ -946,6 +947,7 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
                 plugin: "fixture/list_files".to_string(),
                 digest: None,
                 input_fields: Vec::new(),
+                job: None,
             },
             None
         )],

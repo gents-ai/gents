@@ -5,6 +5,7 @@ import Proofs.ToolPolicy.PluginInvocation
 import Proofs.Conformance.PluginReceipt
 
 import Proofs.ToolPolicy.PluginCalls
+import Proofs.ToolPolicy.PluginData
 import Proofs.Conformance.PluginEffects
 import Lean
 
@@ -181,11 +182,280 @@ private def publicationJson : Json := toJson <| [false, true].flatMap fun previo
       ("expected", if PluginPublication.installedNew events then toJson "new"
         else if previous then toJson "previous" else Json.null)]
 
+section Mounts
+
+private def packMount (installed trusted : Bool) (via : InstallProvenance) : AssetMount :=
+  { klass := .pack "workflows", pack := "pack-a", installDigest := "digest-a",
+    path := "/cache/digest-a/workflows", installed := installed, trusted := trusted, via := via,
+    files := [] }
+
+private def projectWorkflows : AssetMount := projectMount "/work/repo/.gents/workflows"
+
+private def mountLists : List (List AssetMount) :=
+  [ [], [packMount true true .operator], [packMount true false .selfConfig]
+  , [packMount false true .operator], [projectWorkflows]
+  , [packMount true true .operator, projectWorkflows] ]
+
+def assetMountCases : List (Bool × List AssetMount) :=
+  [false, true].flatMap fun rwBind => mountLists.map (rwBind, ·)
+
+def assetMountVerdict (c : Bool × List AssetMount) : List (Option PluginAccess) × Bool :=
+  (c.2.map mountAccess, mountCallAdmitted c.1 c.2)
+
+private def renderMount (m : AssetMount) : Json := Json.mkObj [
+  ("pack", toJson m.pack),
+  ("class", toJson (match m.klass with | .pack klass => klass | .project => "project")),
+  ("digest", toJson m.installDigest), ("path", toJson m.path), ("trusted", toJson m.trusted),
+  ("installed", toJson m.installed)]
+
+private def assetMountJson : Json := toJson <| assetMountCases.map fun c =>
+  let (access, admitted) := assetMountVerdict c
+  Json.mkObj [("rw_bind", toJson c.1), ("mounts", toJson (c.2.map renderMount)),
+    ("access", toJson (access.map fun (a : Option PluginAccess) => match a with
+      | none => Json.null | some a => toJson a.spelling)),
+    ("admitted", toJson admitted)]
+
+/-- The host relation "`cwd` lies within `root`" compares whole path components. -/
+private def within (root cwd : String) : Bool :=
+  cwd == root || cwd.startsWith (root ++ "/")
+
+def projectTierCases : List (String × List String) :=
+  ["/work/repo", "/work/repo/sub", "/work/other", "/work/repository"].flatMap fun cwd =>
+    [[], ["/work/repo"], ["/elsewhere"], ["/elsewhere", "/work/repo"]].map (cwd, ·)
+
+def projectTierVerdict (c : String × List String) : Bool := projectPreopen c.1 c.2 within
+
+private def projectTierJson : Json := toJson <| projectTierCases.map fun c => Json.mkObj [
+  ("cwd", toJson c.1), ("project_roots", toJson c.2), ("expected", toJson (projectTierVerdict c))]
+
+structure ScratchCase where
+  cwdAllowed : Bool
+  toolCallId : String
+  handle : String
+  name : String
+  size : Nat
+  count : Nat
+
+private def scratchCwd : String := "/work/repo"
+
+/-- `handle` is not an owner input: rows that differ only in it share a path. -/
+def scratchCases : List ScratchCase :=
+  [ ⟨true, "call-1", "fetch", "notes.md", 0, 1⟩, ⟨true, "call-1", "fetch-2", "notes.md", 0, 1⟩
+  , ⟨true, "call-2", "fetch", "notes.md", 0, 1⟩, ⟨true, "call-1", "fetch", "a/b", 0, 1⟩
+  , ⟨true, "call-1", "fetch", "..", 0, 1⟩, ⟨true, "call-1", "fetch", ".", 0, 1⟩
+  , ⟨true, "call-1", "fetch", "", 0, 1⟩, ⟨true, "../call-1", "fetch", "notes.md", 0, 1⟩
+  , ⟨true, "..", "fetch", "notes.md", 0, 1⟩
+  , ⟨true, "call-1", "fetch", "notes.md", scratchMaxBytes, scratchMaxFiles⟩
+  , ⟨true, "call-1", "fetch", "notes.md", scratchMaxBytes + 1, 1⟩
+  , ⟨true, "call-1", "fetch", "notes.md", 0, scratchMaxFiles + 1⟩
+  , ⟨false, "call-1", "fetch", "notes.md", 0, 1⟩ ]
+
+def scratchVerdict (c : ScratchCase) : Option String :=
+  scratchAdmitted scratchCwd (fun _ => c.cwdAllowed) c.toolCallId c.name c.size c.count
+
+private def scratchJson : Json := toJson <| scratchCases.map fun c => Json.mkObj [
+  ("cwd", toJson scratchCwd), ("cwd_allowed", toJson c.cwdAllowed),
+  ("tool_call_id", toJson c.toolCallId), ("handle", toJson c.handle), ("name", toJson c.name),
+  ("size", toJson c.size), ("count", toJson c.count), ("expected", toJson (scratchVerdict c))]
+
+theorem job_resource_regressions :
+    assetMountCases.map assetMountVerdict =
+      [ ([], true), ([some .read], true), ([some .read], true), ([none], true)
+      , ([some .read], true), ([some .read, some .read], true)
+      , ([], true), ([some .read], false), ([some .read], false), ([none], false)
+      , ([some .read], false), ([some .read, some .read], false) ] ∧
+    projectTierCases.map projectTierVerdict =
+      [ false, true, false, true, false, true, false, true
+      , false, false, false, false, false, false, false, false ] ∧
+    scratchCases.map scratchVerdict =
+      [ some "/work/repo/.gents/workflows/runs/call-1/notes.md"
+      , some "/work/repo/.gents/workflows/runs/call-1/notes.md"
+      , some "/work/repo/.gents/workflows/runs/call-2/notes.md"
+      , none, none, none, none, none, none
+      , some "/work/repo/.gents/workflows/runs/call-1/notes.md"
+      , none, none, none ] := by
+  native_decide
+
+end Mounts
+
+section Data
+open PluginData
+
+structure DataWriteCase where
+  op : ApplicationWrite.Operation
+  inOwnSdl : Bool
+  runtimeOrProtected : Bool
+  actorIsInvoker : Bool
+  opGranted : Bool
+  stampedSuppliedByGuest : Bool
+  invocation : Invocation
+  collectionFields : List String
+  write : ApplicationWrite.Observation
+
+private def declaredStamps : List (String × Stamp) :=
+  [("job_row_doc_id", .jobRowDocId), ("chain_root_doc_id", .chainRootDocId),
+   ("node_did", .nodeDid)]
+
+private def noteFields : List String := ["note_id", "body", "job_row_doc_id", "chain_root_doc_id"]
+private def nameFields : List String := ["name", "script", "node_did"]
+
+private def boundedWrite : ApplicationWrite.Observation :=
+  { granted := true, application := true, blocked := false, credential := false, bounded := true,
+    targets := 1, limit := 1, preview := false, digestMatches := true }
+
+private def noteWrite : DataWriteCase :=
+  { op := .create, inOwnSdl := true, runtimeOrProtected := false, actorIsInvoker := true,
+    opGranted := true, stampedSuppliedByGuest := false, invocation := .jobStep,
+    collectionFields := noteFields, write := boundedWrite }
+
+/-- A note collection carries the job stamps; a name collection carries only
+`node_did`, so job stamps do not apply to it. -/
+def dataWriteCases : List DataWriteCase :=
+  [ noteWrite, { noteWrite with inOwnSdl := false }, { noteWrite with runtimeOrProtected := true }
+  , { noteWrite with actorIsInvoker := false }, { noteWrite with opGranted := false }
+  , { noteWrite with stampedSuppliedByGuest := true }
+  , { noteWrite with invocation := .callback }, { noteWrite with invocation := .toolCall }
+  , { noteWrite with invocation := .callback, collectionFields := nameFields }
+  , { noteWrite with invocation := .toolCall, collectionFields := nameFields }
+  , { noteWrite with write := { boundedWrite with targets := 101, limit := 100 } } ]
+
+def dataWriteVerdict (c : DataWriteCase) : List (String × Stamp) × Bool × Option Refusal :=
+  let o : Observation :=
+    { inOwnSdl := c.inOwnSdl, runtimeOrProtected := c.runtimeOrProtected,
+      actorIsInvoker := c.actorIsInvoker, opGranted := c.opGranted,
+      stampedSuppliedByGuest := c.stampedSuppliedByGuest, invocation := c.invocation,
+      applicable := applicableStamps declaredStamps c.collectionFields, write := c.write }
+  (o.applicable, admitted c.op o, refusal c.op o)
+
+def dataQueryCases : List (Nat × Bool × Bool × Bool) :=
+  [0, 1, 256, 257].map (·, true, false, true) ++
+    [(1, false, false, true), (1, true, true, true), (1, true, false, false)]
+
+def dataQueryVerdict (c : Nat × Bool × Bool × Bool) : Bool :=
+  queryAdmitted c.1 c.2.1 c.2.2.1 c.2.2.2
+
+private def hostNodeDid : String := "did:key:host"
+
+def dataFilterCases : List Filter :=
+  [ [("owner", .callerNodeDid), ("name", .literal "draft")]
+  , [("owner", .literal "did:key:guest")], [] ]
+
+def dataFilterVerdict (f : Filter) : Filter := substituteCallerNodeDid f hostNodeDid
+
+def dataNoteCases : List (Option Fingerprint × Fingerprint × OnConflict) :=
+  [none, some "fp-a"].flatMap fun existing => ["fp-a", "fp-b"].flatMap fun new =>
+    [OnConflict.ignore, .fail].map (existing, new, ·)
+
+def dataNoteVerdict (c : Option Fingerprint × Fingerprint × OnConflict) : InsertOutcome :=
+  insertNote c.1 c.2.1 c.2.2
+
+private def opSpelling : ApplicationWrite.Operation → String
+  | .create => "create" | .update => "update" | .delete => "delete"
+
+private def invocationSpelling : Invocation → String
+  | .toolCall => "tool_call" | .jobStep => "job_step" | .callback => "callback"
+
+private def stampSpelling : Stamp → String
+  | .nodeDid => "node_did" | .sessionId => "session_id" | .requestDocId => "request_doc_id"
+  | .toolCallDocId => "tool_call_doc_id" | .jobRowDocId => "job_row_doc_id"
+  | .chainRootDocId => "chain_root_doc_id"
+
+private def stampsJson (stamps : List (String × Stamp)) : Json :=
+  Json.mkObj (stamps.map fun (field, s) => (field, toJson (stampSpelling s)))
+
+private def refusalJson : Option Refusal → Json
+  | none => Json.null
+  | some (.stampUnavailable s inv) => Json.mkObj [("kind", toJson "stamp_unavailable"),
+      ("stamp", toJson (stampSpelling s)), ("invocation", toJson (invocationSpelling inv))]
+  | some .other => Json.mkObj [("kind", toJson "other")]
+
+private def writeJson (w : ApplicationWrite.Observation) : Json := Json.mkObj [
+  ("granted", toJson w.granted), ("application", toJson w.application),
+  ("blocked", toJson w.blocked), ("credential", toJson w.credential),
+  ("bounded", toJson w.bounded), ("targets", toJson w.targets), ("limit", toJson w.limit),
+  ("preview", toJson w.preview), ("digest_matches", toJson w.digestMatches)]
+
+/-- `$caller.node_did` is the placeholder's wire spelling. -/
+private def filterJson (f : Filter) : Json := Json.mkObj <| f.map fun (field, value) =>
+  (field, toJson (match value with | .literal v => v | .callerNodeDid => "$caller.node_did"))
+
+private def insertOutcomeSpelling : InsertOutcome → String
+  | .inserted => "inserted" | .unchanged => "unchanged" | .abortStep => "abort_step"
+
+def dataCasesJson : String := (Json.mkObj [
+  ("writes", toJson <| dataWriteCases.map fun c =>
+    let (applicable, ok, refused) := dataWriteVerdict c
+    Json.mkObj [("op", toJson (opSpelling c.op)), ("in_own_sdl", toJson c.inOwnSdl),
+      ("runtime_or_protected", toJson c.runtimeOrProtected),
+      ("actor_is_invoker", toJson c.actorIsInvoker), ("op_granted", toJson c.opGranted),
+      ("stamped_supplied_by_guest", toJson c.stampedSuppliedByGuest),
+      ("invocation", toJson (invocationSpelling c.invocation)),
+      ("declared_stamps", stampsJson declaredStamps),
+      ("collection_fields", toJson c.collectionFields), ("write", writeJson c.write),
+      ("applicable", stampsJson applicable), ("admitted", toJson ok),
+      ("refusal", refusalJson refused)]),
+  ("queries", toJson <| dataQueryCases.map fun c => Json.mkObj [
+    ("limit", toJson c.1), ("in_own_sdl", toJson c.2.1),
+    ("runtime_or_protected", toJson c.2.2.1), ("query_granted", toJson c.2.2.2),
+    ("expected", toJson (dataQueryVerdict c))]),
+  ("filters", toJson <| dataFilterCases.map fun f => Json.mkObj [
+    ("host_node_did", toJson hostNodeDid), ("filter", filterJson f),
+    ("expected", filterJson (dataFilterVerdict f))]),
+  ("notes", toJson <| dataNoteCases.map fun c => Json.mkObj [
+    ("existing", toJson c.1), ("new", toJson c.2.1),
+    ("on_conflict", toJson (match c.2.2 with | .ignore => "ignore" | .fail => "fail")),
+    ("expected", toJson (insertOutcomeSpelling (dataNoteVerdict c)))])]).compress
+
+private def noteStamps : List (String × Stamp) :=
+  [("job_row_doc_id", .jobRowDocId), ("chain_root_doc_id", .chainRootDocId)]
+
+theorem data_regressions :
+    dataWriteCases.map dataWriteVerdict =
+      [ (noteStamps, true, none), (noteStamps, false, some .other)
+      , (noteStamps, false, some .other), (noteStamps, false, some .other)
+      , (noteStamps, false, some .other), (noteStamps, false, some .other)
+      , (noteStamps, false, some (.stampUnavailable .jobRowDocId .callback))
+      , (noteStamps, false, some (.stampUnavailable .jobRowDocId .toolCall))
+      , ([("node_did", .nodeDid)], true, none), ([("node_did", .nodeDid)], true, none)
+      , (noteStamps, false, some .other) ] ∧
+    dataQueryCases.map dataQueryVerdict = [false, true, true, false, false, false, false] ∧
+    dataFilterCases.map dataFilterVerdict =
+      [ [("owner", .literal "did:key:host"), ("name", .literal "draft")]
+      , [("owner", .literal "did:key:guest")], [] ] ∧
+    dataNoteCases.map dataNoteVerdict =
+      [ .inserted, .inserted, .inserted, .inserted
+      , .unchanged, .unchanged, .unchanged, .abortStep ] := by
+  native_decide
+
+end Data
+
+def routeCases : List (Bool × Bool × Bool × Bool) :=
+  [false, true].flatMap fun staticHookOwned => [false, true].flatMap fun jobBound =>
+    [false, true].flatMap fun selected => [false, true].map fun admitted =>
+      (staticHookOwned, jobBound, selected, admitted)
+
+def routeVerdict (c : Bool × Bool × Bool × Bool) : Bool :=
+  PluginCalls.childAdmissible c.2.2.1 (PluginCalls.routeOf c.1 c.2.1) c.2.2.2
+
+def routeCasesJson : String := (toJson <| routeCases.map fun c => Json.mkObj [
+  ("static_hook_owned", toJson c.1), ("job_bound", toJson c.2.1),
+  ("selected", toJson c.2.2.1), ("admitted", toJson c.2.2.2),
+  ("expected", toJson (routeVerdict c))]).compress
+
+theorem route_regressions :
+    routeCases.map routeVerdict =
+      [ false, false, false, true, false, false, false, false
+      , false, false, false, false, false, false, false, false ] := by
+  native_decide
+
 def casesJson : String := (Json.mkObj [("consent", consentJson), ("budgets", budgetsJson),
   ("publication", publicationJson), ("tool_calls", toolCallsJson), ("child_admission", childAdmissionJson),
   ("tool_effects", PluginEffects.casesJson),
   ("tool_effect_terminals", PluginEffects.terminalCasesJson),
   ("tool_effect_accounting", PluginEffects.accountingCasesJson),
   ("model_slots", modelSlotsJson), ("network", networkJson),
-  ("call_access", callAccessJson), ("invocation", invocationJson), ("receipt", Conformance.PluginReceipt.casesJson)]).compress
+  ("call_access", callAccessJson), ("invocation", invocationJson), ("receipt", Conformance.PluginReceipt.casesJson),
+  ("asset_mount", assetMountJson),
+  ("project_tier", projectTierJson),
+  ("scratch", scratchJson)]).compress
 end Conformance.PluginResources

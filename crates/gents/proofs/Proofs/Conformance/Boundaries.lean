@@ -80,6 +80,15 @@ def boundaryRenderedCaptureAssembledRequestArtifactId : String :=
 def boundaryRenderedCaptureKeyEncodingInjectivityId : String :=
   "boundary.rendered-capture.key-encoding-injectivity"
 
+def boundaryPluginJobGuestDeterminismId : String :=
+  "boundary.plugin-job.guest-determinism"
+
+def boundaryPluginJobSingleStepDriverId : String :=
+  "boundary.plugin-job.single-step-driver"
+
+def boundaryPluginDataTransactionId : String :=
+  "boundary.plugin-data.transaction"
+
 def boundaries : List Boundary :=
   [ { id := boundaryRequestDeadPreclaimOnlyId
     , domain := "RequestLifecycle"
@@ -262,6 +271,30 @@ def boundaries : List Boundary :=
         some "A non-injective encoder merges two distinct attempts into one capture key. The existing composite key in the tree shows this is a live class rather than a hypothetical one: AgentToolCall.tool_call_key is an unescaped \"{session_id}:{tool_call_id}\" concatenation, and session_id reaches it unvalidated from `gents chat --session-id`, so a crafted session id can shadow or pre-claim another session's key."
     , acceptedFollowUp :=
         some "Derive capture_key from a canonical encoding of the tuple (length-prefixed or canonical-JSON, then hashed) and fence injectivity with an adversarial Rust property test, rather than concatenating with a delimiter."
+    }
+  , { id := boundaryPluginJobGuestDeterminismId
+    , domain := "PluginJob"
+    , subject := "arbitrary guest step function"
+    , statement :=
+        "Proofs.PluginJob quantifies every core guarantee over an arbitrary guest step function, so admission, keyed spawns, budgets, ceilings and the kill path hold whatever the guest returns. The workflow engine pack carries the remaining premises: Rhai determinism (=1.25.1/=1.26.1), replay, its output schema, script and meta validation, and prefix monotonicity. Step-0 engine honesty is a premise too: step 0 emits effects before the host has classified the script's origin, so verified_script covers steps >= 1 only. The host still admits step-0 effects under the computed origin, and the engine pack must be operator-installed (self_config_engine_refused)."
+    , acceptedFailureMode :=
+        some "A guest that breaks these premises can over-spawn within its ceilings and budget, or diverge on resume."
+    , acceptedFollowUp :=
+        some "Fence the engine pack's premises with its golden replay and corpus differential tests."
+    }
+  , { id := boundaryPluginJobSingleStepDriverId
+    , domain := "PluginJob"
+    , subject := "one in-flight step per job row"
+    , statement :=
+        "The runtime drives at most one in-flight step per plugin-job row, coalesced in memory, with no lease: the operating convention is one active runtime per node, and its enforcement is deferred. If a duplicate runtime interleaves steps, keyed spawns, latched interrupts, the first-wins pin and the terminal CAS keep the row safe, and a duplicated message is bounded by max_messages_per_slot rather than deduplicated. Job control (stop, pause) is local-only: it runs on the runtime that drives the row, and remote readers observe the row through the job view."
+    }
+  , { id := boundaryPluginDataTransactionId
+    , domain := "PluginData"
+    , subject := "plugin data writes in the step transaction"
+    , statement :=
+        "Proofs.ToolPolicy.PluginData admits a plugin's data reads and writes and makes notes first-wins. DefraDB transaction serializability is assumed: read-then-insert inside the step transaction is the rule, and the collection's unique index is a backstop. This assumption stands in for writes_atomic_with_output until the pinned DefraDB revision is confirmed to provide it."
+    , acceptedFollowUp :=
+        some "Confirm transaction serializability against the pinned DefraDB revision, then state writes_atomic_with_output over it."
     }
   ]
 

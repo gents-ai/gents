@@ -353,6 +353,7 @@ impl ToolCallLifecycle {
                 None
             },
             message_sequence: row.message_sequence,
+            kind: super::ToolRowKind::of(&row.tool_name),
             tool_name: row.tool_name,
             accepted_header_doc_id: Some(accepted.accepted_header_doc_id),
             arguments,

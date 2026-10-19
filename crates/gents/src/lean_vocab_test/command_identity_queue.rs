@@ -301,12 +301,24 @@ pub(crate) struct LeanRecoverySweepCase {
     pub(crate) deadline_audit_ref: String,
 }
 
+/// `Recovery.RowKind`: which owner a running tool-call row belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub(crate) enum LeanRestartRowKind {
+    #[serde(rename = "native")]
+    Native,
+    #[serde(rename = "sessionMessage")]
+    SessionMessage,
+    #[serde(rename = "pluginJob")]
+    PluginJob,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanRestartDispositionCase {
     pub(crate) name: String,
     pub(crate) rust_function: String,
     pub(crate) await_mode: String,
     pub(crate) session_message: bool,
+    pub(crate) kind: LeanRestartRowKind,
     pub(crate) parent_observation: String,
     pub(crate) deadline_expired: bool,
     pub(crate) process_outcome: String,

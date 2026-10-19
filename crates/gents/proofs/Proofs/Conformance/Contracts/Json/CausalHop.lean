@@ -46,6 +46,7 @@ def stepCases : List StepCase :=
   , ⟨"completion_wake_into_refused_session_is_refused", .returnEdge, 9,
       CausalHop.defaultMaxRequestHop⟩
   , ⟨"continuation_at_bound_stays_admitted", .continuation, 8, CausalHop.defaultMaxRequestHop⟩
+  , ⟨"plugin_job_completion", .continuation, 4, CausalHop.defaultMaxRequestHop⟩
   , ⟨"zero_bound_admits_root", .root, 0, 0⟩
   , ⟨"zero_bound_refuses_first_send", .crossSession 0, 0, 0⟩
   , ⟨"configured_bound_refuses_past_target_limit", .crossSession 2, 0, 2⟩ ]

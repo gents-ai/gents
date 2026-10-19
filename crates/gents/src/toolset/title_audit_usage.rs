@@ -208,13 +208,22 @@ struct ParentUsageCatalog {
 fn project_goal_catalog(
     request_ids: &BTreeMap<String, String>,
     calls: Vec<CallRow>,
-) -> Result<u64> {
+) -> Result<crate::goal::SessionTokenUsage> {
     let calls = coherent_calls(request_ids, calls)?;
-    crate::provider_usage::sum_charged_from_persisted_parts(
+    let parts = || {
         calls
             .values()
-            .map(|call| (call.prompt_tokens, call.completion_tokens)),
-    )
+            .map(|call| (call.prompt_tokens, call.completion_tokens))
+    };
+    let total = crate::provider_usage::sum_charged_from_persisted_parts(parts())?;
+    let (input, output, _) = crate::provider_usage::sum_persisted_usage_columns(
+        parts().map(|(prompt, completion)| (prompt, completion, None)),
+    );
+    Ok(crate::goal::SessionTokenUsage {
+        input: input.unwrap_or_default(),
+        output: output.unwrap_or_default(),
+        total,
+    })
 }
 
 /// Review charges follow their signed physical parent in the same snapshot as
@@ -223,7 +232,7 @@ pub(crate) async fn load_session_goal_usage(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
-) -> Result<u64> {
+) -> Result<crate::goal::SessionTokenUsage> {
     let response = txn.execute(&format!(
         r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, purpose: {{ _in: ["normal", "access-review"] }} }}) {{ {} }} }}"#,
         escape_graphql_string(node_did), escape_graphql_string(session_id),
@@ -262,7 +271,11 @@ pub(crate) async fn load_session_goal_usage(
         );
     }
     if request_ids.is_empty() {
-        return Ok(0);
+        return Ok(crate::goal::SessionTokenUsage {
+            input: 0,
+            output: 0,
+            total: 0,
+        });
     }
     let docs = request_ids
         .keys()
@@ -581,7 +594,11 @@ mod tests {
                 let LeanUsageBudgetResult::Ok { used } = expected else {
                     panic!("unexpected model goal error for {name}: {expected:?}")
                 };
-                assert_eq!(project_goal_catalog(&ids, calls).unwrap(), *used, "{name}");
+                assert_eq!(
+                    project_goal_catalog(&ids, calls).unwrap().total,
+                    *used,
+                    "{name}"
+                );
             }
         }
     }

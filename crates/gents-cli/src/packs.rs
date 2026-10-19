@@ -5,8 +5,8 @@ use serde_json::Value;
 
 use crate::cli::args::{PluginBindArgs, PluginCommand, PluginUnbindArgs};
 use crate::cli::{
-    GraphScopeArgs, PackAccountArgs, PackDriftArgs, PackInfoArgs, PackInstallArgs, PackLoginArgs,
-    PackOutdatedArgs, PackRemoveArgs, PackSearchArgs, PackUpdateArgs,
+    PackAccountArgs, PackDriftArgs, PackInfoArgs, PackInstallArgs, PackLoginArgs, PackOutdatedArgs,
+    PackRemoveArgs, PackSearchArgs, PackUpdateArgs, ScopeArgs,
 };
 use crate::commands::pack as command;
 use crate::output_format::OutputFormat;
@@ -29,8 +29,8 @@ fn drift(edited: EditedDocuments) -> PackDriftArgs {
     }
 }
 
-fn scope(home: PathBuf) -> GraphScopeArgs {
-    GraphScopeArgs {
+fn scope(home: PathBuf) -> ScopeArgs {
+    ScopeArgs {
         home: Some(home),
         graphql: None,
         node_did: None,

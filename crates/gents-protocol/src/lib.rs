@@ -7,6 +7,7 @@ pub mod event_delivery;
 pub mod goal;
 pub mod goal_control;
 pub mod graphql;
+pub mod job;
 pub mod mailbox_question;
 pub mod message;
 pub mod network_token;

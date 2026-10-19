@@ -8,14 +8,16 @@ use gents::{
 };
 
 pub fn fixture_pack_names() -> Vec<String> {
-    const KNOWN: [&str; 8] = [
+    const KNOWN: [&str; 9] = [
         "review_graph",
         "prepared_graph",
         "assets_fixture",
         "documents_fixture",
         "slot_fixture",
         "dependent_fixture",
+        "dependee_fixture",
         "bind_plugin_fixture",
+        "job_plugin_fixture",
         "plugin_documents_fixture",
     ];
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packs");

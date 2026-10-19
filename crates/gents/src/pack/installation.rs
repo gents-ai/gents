@@ -18,7 +18,7 @@ mod dependencies;
 mod documents;
 pub use documents::{
     document_pack_schema_paths, install_prepared_document_pack, prepare_document_pack_install,
-    PreparedDocumentPackInstall,
+    PreparedDependency, PreparedDocumentPackInstall,
 };
 mod graph;
 
@@ -34,6 +34,9 @@ pub struct PackIdentity {
     pub digest: String,
     pub plugins: Vec<InstalledPackPlugin>,
     pub dependencies: Vec<String>,
+    /// False when this install is a dependency of another pack's install; an
+    /// explicit install is sticky.
+    pub explicit: bool,
 }
 
 impl PackIdentity {
@@ -48,6 +51,7 @@ impl PackIdentity {
             digest: digest.into(),
             plugins,
             dependencies: Vec::new(),
+            explicit: true,
         }
     }
 }
@@ -452,7 +456,7 @@ pub(crate) async fn install_in_txn(
         pack,
         &prior,
         recorded.into_values().collect(),
-        true,
+        pack.explicit,
         false,
     )
     .await?;
@@ -519,6 +523,7 @@ async fn write_plugin_record(
         digest: record.digest,
         plugins: record.plugins,
         dependencies: Vec::new(),
+        explicit: true,
     });
     let installed = current_identity.as_ref().or(installed);
     let retained = installed.is_none()
@@ -551,6 +556,7 @@ async fn write_plugin_record(
         digest: prior.digest.clone().unwrap_or_default(),
         plugins,
         dependencies: Vec::new(),
+        explicit: prior.explicit,
     };
     let plugin_store = prior.plugin_store;
     write_record_in_txn(

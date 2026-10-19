@@ -65,6 +65,9 @@ inductive ToolOperation where
   host process or deadline and its terminal is the caused request's terminal
   output, delivered as a completion notification. -/
   | sessionMessage
+  /-- A background row with no host process; its terminal is the job driver's
+  decision, never a child's terminal. -/
+  | pluginJob
   deriving DecidableEq, Repr
 
 namespace ToolOperation
@@ -74,9 +77,21 @@ def toDefraDB : ToolOperation → String
   | .mcpCall => "mcpCall"
   | .nativeCommand => "nativeCommand"
   | .sessionMessage => "sessionMessage"
+  | .pluginJob => "pluginJob"
 
 def all : List ToolOperation :=
-  [ .mcpListTools, .mcpCall, .nativeCommand, .sessionMessage ]
+  [ .mcpListTools, .mcpCall, .nativeCommand, .sessionMessage, .pluginJob ]
+
+@[simp] def isDetached : ToolOperation → Bool
+  | .sessionMessage => true
+  | .pluginJob => true
+  | .mcpListTools => false
+  | .mcpCall => false
+  | .nativeCommand => false
+
+theorem isDetached_iff (o : ToolOperation) :
+    o.isDetached = true ↔ o = .sessionMessage ∨ o = .pluginJob := by
+  cases o <;> simp [isDetached]
 
 end ToolOperation
 
