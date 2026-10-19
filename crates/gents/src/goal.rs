@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 
@@ -1054,6 +1055,7 @@ async fn stage_goal_and_claim(
     }
 
     let status = initial_state.status;
+    let baseline = session_token_usage_in_txn(txn, node_did, session_id).await?;
     let active_started_field = optional_string_graphql_field(
         "active_started_at",
         status.accrues_active_time().then_some(now),
@@ -1063,7 +1065,7 @@ async fn stage_goal_and_claim(
             goal_id: "{}", creation_key: "{}",
             session_id: "{escaped_session}", node_did: "{escaped_did}",
             objective: "{}", status: "{}", {}
-            tokens_used: 0, active_time_seconds: 0, {active_started_field}
+            tokens_used: 0, token_usage_baseline: {baseline}, active_time_seconds: 0, {active_started_field}
             consecutive_blocked_audits: {}, continuation_sequence: 0,
             wrapup_requested: {}, wrapup_completed: {},
             infrastructure_retry_count: 0, created_at: "{}", updated_at: "{}"
@@ -1091,7 +1093,7 @@ async fn stage_goal_and_claim(
             status: status.as_str().to_string(),
             token_budget,
             tokens_used: Some(0),
-            token_usage_baseline: Some(0),
+            token_usage_baseline: Some(baseline),
             assignment_root_request_doc_id: None,
             active_time_seconds: Some(0),
             active_started_at: status.accrues_active_time().then(|| now.to_string()),
@@ -2319,6 +2321,7 @@ async fn set_goal_in_txn(
     let escaped_objective = escape_graphql_string(&objective);
     let escaped_now = escape_graphql_string(&now_string);
     let budget_field = optional_int_graphql_field("token_budget", budget);
+    let baseline = session_token_usage_in_txn(txn, node_did, session_id).await?;
     let active_started_field = optional_string_graphql_field(
         "active_started_at",
         status.accrues_active_time().then_some(now_string.as_str()),
@@ -2333,6 +2336,7 @@ async fn set_goal_in_txn(
                 status: "{status}",
                 {budget_field}
                 tokens_used: 0,
+                token_usage_baseline: {baseline},
                 active_time_seconds: 0,
                 {active_started_field}
                 consecutive_blocked_audits: {blocked_audits},
@@ -2597,9 +2601,12 @@ async fn session_token_usage_in_txn(
             AgentRequest(filter: {{ purpose: {{ _eq: "normal" }}, node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }} }}) {{ request_id }}
         }}"#
     );
-    let response = txn.execute_local_response(&request_query).await?;
-    let mut request_ids = rows::<serde_json::Value>(&response, "AgentRequest")?
+    let response = txn.execute(&request_query).await?;
+    let mut request_ids = response
+        .pointer("/data/AgentRequest")
+        .and_then(Value::as_array)
         .into_iter()
+        .flatten()
         .filter_map(|row| {
             row.get("request_id")
                 .and_then(|value| value.as_str())
@@ -2630,9 +2637,18 @@ async fn session_token_usage_in_txn(
         #[serde(default)]
         completion_tokens: Option<i64>,
     }
-    let response = txn.execute_local_response(&query).await?;
-    let usage_rows: Vec<UsageRow> =
-        rows(&response, "InferenceCall").context("decoding goal inference usage")?;
+    let response = txn.execute(&query).await?;
+    let usage_rows: Vec<UsageRow> = response
+        .pointer("/data/InferenceCall")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .cloned()
+                .map(serde_json::from_value)
+                .collect::<std::result::Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .context("decoding goal inference usage")?;
     let charged = crate::provider_usage::sum_charged_from_persisted_parts(
         usage_rows
             .into_iter()
