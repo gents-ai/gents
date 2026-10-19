@@ -22,6 +22,7 @@ impl Fixture {
         if let Some(mode) = mode {
             workspace::save_mode(home.path(), &key, 0, mode, None).unwrap();
         }
+        approval::mark_listening(home.path()).unwrap();
         Self { home, root, key }
     }
 
@@ -274,8 +275,9 @@ async fn cancelling_a_file_wait_removes_the_question_without_creating_directorie
     let fixture = Fixture::new(Some(workspace::Mode::Ask));
     let path = fixture.outside();
     tokio::select! {
-        result = fixture.write(&path) => panic!("unapproved write finished: {result:?}"),
+        biased;
         _ = fixture.question() => {}
+        result = fixture.write(&path) => panic!("unapproved write finished: {result:?}"),
     }
     assert!(!path.parent().unwrap().exists());
     fixture.assert_clear();
