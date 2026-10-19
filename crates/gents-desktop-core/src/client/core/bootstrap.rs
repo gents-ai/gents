@@ -128,8 +128,13 @@ impl ClientCore {
             let observation_scope = super::observation_scope::ObservationScope::new();
 
             let initial_snapshot = {
-                load_full_snapshot_with_peer_records(node.as_ref(), &records, node_identity.did())
-                    .await?
+                load_full_snapshot_with_peer_records(
+                    node.as_ref(),
+                    &records,
+                    node_identity.did(),
+                    options.operator_identity_interaction,
+                )
+                .await?
             };
             let (store, _store_updates) = ObservedStore::new(initial_snapshot);
             checkpoint("initial_snapshot");
@@ -147,6 +152,7 @@ impl ClientCore {
                 Arc::clone(&node),
                 Arc::clone(&p2p),
                 Arc::new(node_identity.clone()),
+                options.operator_identity_interaction,
             ));
 
             let (peer_statuses, bootstrap_errors) = bootstrap_saved_peers(
@@ -182,6 +188,7 @@ impl ClientCore {
                 node_identity.did().to_string(),
                 observer_subscription,
                 observation_scope.subscribe(),
+                options.operator_identity_interaction,
             );
             let (p2p_control, p2p_control_rx) = mpsc::channel(8);
             let p2p_supervisor = spawn_p2p_supervisor_task(

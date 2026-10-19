@@ -669,10 +669,11 @@ pub async fn load_full_snapshot_with_peer_records(
     node: &EmbeddedNode,
     peers: &[PeerRecord],
     _requester_did: &str,
+    identity_interaction: crate::local_runtime::OperatorIdentityInteraction,
 ) -> Result<ClientStore> {
     let mut store = load_full_snapshot(node).await?;
     for peer in peers {
-        let Some(graphql) = crate::local_runtime::operator_endpoint(peer) else {
+        let Some(graphql) = identity_interaction.endpoint(peer) else {
             continue;
         };
         match load_operator_config(
@@ -831,12 +832,13 @@ pub async fn load_node_scoped_snapshot_with_peer_records(
     node_did: &str,
     peers: &[PeerRecord],
     _requester_did: &str,
+    identity_interaction: crate::local_runtime::OperatorIdentityInteraction,
 ) -> Result<ClientStore> {
     let mut store = load_node_scoped_snapshot(node, node_did).await?;
     if let Some(graphql) = peers
         .iter()
         .find(|peer| peer.node_did == node_did)
-        .and_then(crate::local_runtime::operator_endpoint)
+        .and_then(|record| identity_interaction.endpoint(record))
     {
         match load_operator_config(
             &gents::config_client::ConfigAccess::Graphql(graphql.clone()),

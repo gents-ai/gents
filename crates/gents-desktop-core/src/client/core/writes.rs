@@ -505,7 +505,10 @@ impl ClientCore {
         delivery: gents_protocol::request_input::QueueDelivery,
     ) -> Result<gents_protocol::request_input::RequestInput> {
         gents::lifecycle::prepare_user_message_input(
-            &self.session_queue_access(node_did),
+            &self
+                .operator_observation_graphql(node_did)
+                .map(ConfigAccess::Graphql)
+                .unwrap_or_else(|| ConfigAccess::local(self.node_arc())),
             node_did,
             session_id,
             input,
@@ -538,7 +541,10 @@ impl ClientCore {
             .find(|record| record.node_did == node_did)
             .context("no saved deployment route owns this node")?;
         gents::lifecycle::pending_user_queue_projection(
-            &self.session_queue_access(node_did),
+            &self
+                .operator_observation_graphql(node_did)
+                .map(ConfigAccess::Graphql)
+                .unwrap_or_else(|| ConfigAccess::local(self.node_arc())),
             node_did,
             session_id,
             &self.requester_did(&record),
@@ -626,7 +632,7 @@ impl ClientCore {
         if !answer.is_terminal() || gents::lifecycle::folded_into(answer).is_some() {
             return Ok(None);
         }
-        let access = match self.operator_graphql(node_did) {
+        let access = match self.operator_observation_graphql(node_did) {
             Some(graphql) => ConfigAccess::Graphql(graphql),
             None => self
                 .store_access
@@ -810,7 +816,7 @@ impl ClientCore {
         }
 
         let captured = self.store.capture_read();
-        let (access, source) = match self.operator_graphql(node_did) {
+        let (access, source) = match self.operator_observation_graphql(node_did) {
             Some(graphql) => (ConfigAccess::Graphql(graphql), "operator"),
             None => (
                 self.store_access
@@ -1551,6 +1557,17 @@ impl ClientCore {
             .iter()
             .find(|record| record.node_did == node_did)
             .and_then(crate::local_runtime::operator_endpoint)
+    }
+
+    pub fn operator_observation_graphql(
+        &self,
+        node_did: &str,
+    ) -> Option<gents::config_client::GraphqlEndpoint> {
+        self.sync_state
+            .records()
+            .iter()
+            .find(|record| record.node_did == node_did)
+            .and_then(|record| self.options.operator_identity_interaction.endpoint(record))
     }
 
     pub fn operator_signer(

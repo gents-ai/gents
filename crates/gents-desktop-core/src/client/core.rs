@@ -69,6 +69,9 @@ pub struct ClientCoreOptions {
     pub install_replicators_on_bootstrap: bool,
     pub store_key_custody: gents::store_key::StoreKeyCustodyChoice,
     pub store_key_provider: Option<Arc<dyn ClientStoreKeyProvider>>,
+    /// Headless observation must not open platform credential dialogs. Explicit
+    /// user commands retain their existing operator authority requirements.
+    pub operator_identity_interaction: crate::local_runtime::OperatorIdentityInteraction,
 }
 
 /// Only a trusted native host may supply store keys. It must bind its lookup
@@ -101,6 +104,7 @@ impl Default for ClientCoreOptions {
             install_replicators_on_bootstrap: true,
             store_key_custody: gents::store_key::StoreKeyCustodyChoice::default(),
             store_key_provider: None,
+            operator_identity_interaction: Default::default(),
         }
     }
 }
@@ -518,6 +522,7 @@ impl ClientCore {
                     did,
                     &records,
                     self.node_identity.did(),
+                    self.options.operator_identity_interaction,
                 )
                 .await?
             }
@@ -526,6 +531,7 @@ impl ClientCore {
                     self.node.as_ref(),
                     &records,
                     self.node_identity.did(),
+                    self.options.operator_identity_interaction,
                 )
                 .await?
             }
@@ -561,6 +567,7 @@ impl ClientCore {
             node_did,
             &records,
             self.node_identity.did(),
+            self.options.operator_identity_interaction,
         )
         .await
         {
