@@ -2,6 +2,7 @@ import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import { describe, expect, it } from "vitest";
 import {
   actionEntries,
+  actionStatus,
   actionTitle,
   runningAction,
 } from "./actionPresentation.js";
@@ -53,6 +54,31 @@ function pair(): RenderedToolCallView[] {
 }
 
 describe("action presentation", () => {
+  it.each([
+    ["error", "userCancelled", "cancelled"],
+    ["error", "interrupted", "cancelled"],
+    ["error", "unknown", "cancelled"],
+    ["error", "deadline", "error"],
+    ["error", null, "error"],
+    ["running", "userCancelled", "running"],
+    ["success", "interrupted", "success"],
+  ])(
+    "presents native status %s with cause %s as %s",
+    (statusKind, cause, expected) => {
+      const tool = pair()[1]!;
+      tool.statusKind = statusKind!;
+      tool.cancelCause = cause
+        ? {
+            cause,
+            source: "toolLifecycle",
+            confidence: "direct",
+            at: null,
+            evidence: [],
+          }
+        : null;
+      expect(actionStatus(tool)).toBe(expected);
+    },
+  );
   it("pairs a launcher with its exact background call and retains both records", () => {
     const tools = pair();
     const original = JSON.stringify(tools);

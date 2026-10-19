@@ -9,6 +9,8 @@ import { ToolGroup } from "./ToolGroup.js";
 import {
   actionEntries,
   actionKind,
+  actionItemKeys,
+  actionStatus,
   runningAction,
   type ActionEntry,
 } from "./actionPresentation.js";
@@ -126,7 +128,10 @@ function ActivityDetails({
 }
 
 export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
-  const [selected, setSelected] = useState<ActionEntry | null>(null);
+  const [selected, setSelected] = useState<{
+    itemKey: string;
+    expand: boolean;
+  } | null>(null);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
   const focusAfterClose = useRef<string | null>(null);
   useLayoutEffect(() => {
@@ -138,10 +143,11 @@ export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
   const sections: ActionEntry[][] = [];
   for (const entry of actionEntries(tools)) {
     const previous = sections.at(-1);
-    const status = entry.tool.statusKind.toLowerCase();
+    const status = actionStatus(entry.tool);
     if (
       status !== "running" &&
-      previous?.[0]?.tool.statusKind.toLowerCase() === status
+      previous?.[0] &&
+      actionStatus(previous[0].tool) === status
     )
       previous.push(entry);
     else sections.push([entry]);
@@ -150,7 +156,7 @@ export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
     <>
       {sections.map((entries) => {
         const entry = entries[0]!;
-        const status = entry.tool.statusKind.toLowerCase();
+        const status = actionStatus(entry.tool);
         const running = status === "running";
         const failed = status === "error";
         const label = running
@@ -159,14 +165,16 @@ export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
             ? `${entries.length} ${entries.length === 1 ? "action failed" : "actions failed"}`
             : status === "success"
               ? completedLabel(entries)
-              : "Action status unavailable";
+              : status === "cancelled"
+                ? `${entries.length} ${entries.length === 1 ? "action stopped" : "actions stopped"}`
+                : "Action status unavailable";
         return (
           <button
             key={entry.tool.itemKey}
             ref={(element) => {
-              for (const item of entries) {
-                if (element) buttons.current.set(item.tool.itemKey, element);
-                else buttons.current.delete(item.tool.itemKey);
+              for (const key of entries.flatMap(actionItemKeys)) {
+                if (element) buttons.current.set(key, element);
+                else buttons.current.delete(key);
               }
             }}
             type="button"
@@ -174,12 +182,17 @@ export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
             aria-haspopup="dialog"
             aria-expanded={
               selected !== null &&
-              entries.some(
-                (item) => item.tool.itemKey === selected.tool.itemKey,
+              entries.some((item) =>
+                actionItemKeys(item).includes(selected.itemKey),
               )
             }
             aria-label={`View actions: ${label}`}
-            onClick={() => setSelected(entry)}
+            onClick={() =>
+              setSelected({
+                itemKey: entry.tool.itemKey,
+                expand: status !== "success",
+              })
+            }
           >
             <svg
               className="tool-activity-icon"
@@ -208,13 +221,9 @@ export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
       {selected ? (
         <ActivityDetails
           tools={tools}
-          expandedItemKey={
-            selected.tool.statusKind.toLowerCase() === "success"
-              ? undefined
-              : selected.tool.itemKey
-          }
+          expandedItemKey={selected.expand ? selected.itemKey : undefined}
           onClose={() => {
-            focusAfterClose.current = selected.tool.itemKey;
+            focusAfterClose.current = selected.itemKey;
             setSelected(null);
           }}
         />

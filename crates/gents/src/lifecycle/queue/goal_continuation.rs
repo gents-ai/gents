@@ -47,8 +47,8 @@ pub(crate) fn prepare_goal_continuation(
 ) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
     let continuation =
         goal_continuation_identity(goal_id, &parent.request_id, continuation_sequence)?;
-    let input = RequestInput {
-        queue: Some(RequestQueue {
+    let input = parent.input.continuation(
+        RequestQueue {
             delivery: Default::default(),
             position: None,
             source: QueueSource::Goal,
@@ -57,13 +57,12 @@ pub(crate) fn prepare_goal_continuation(
             queued_after_request_id: Some(parent.request_id.clone()),
             interrupted_request_id: None,
             background_completion_wake_version: None,
-        }),
-        goal_continuation: Some(GoalContinuationInput {
+        },
+        Some(GoalContinuationInput {
             sequence: continuation_sequence,
             wrapup,
         }),
-        ..Default::default()
-    };
+    );
     let admission =
         gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
             &parent.node_did,
