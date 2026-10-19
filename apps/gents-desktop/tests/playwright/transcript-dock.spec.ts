@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { expect, gotoHarness, test } from "./desktopTest";
+import { expect, gotoHarness, seedLocalStorage, test } from "./desktopTest";
 
 async function widthsDuring(page: Page, act: () => Promise<void>) {
   await page.evaluate(() => {
@@ -136,9 +136,7 @@ for (const rest of ["remembered", "widest"] as const) {
     test.skip(testInfo.project.name !== "webkit-desktop", "one engine");
     await page.setViewportSize({ width: 1500, height: 900 });
     if (rest === "widest")
-      await page.addInitScript(() =>
-        localStorage.setItem("gents-prototype-trace-width", "5000"),
-      );
+      await seedLocalStorage(page, { "gents-prototype-trace-width": "5000" });
     await gotoHarness(page, "mobile-performance");
     await page.locator('[data-testid="session-session-large"]').click();
     await page
