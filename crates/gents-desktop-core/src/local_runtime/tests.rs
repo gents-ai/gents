@@ -1,10 +1,11 @@
 use super::identity::resolve_p2p_peer_id;
 use super::{
     augment_peer_status_payload_for_desktop, await_serving_runtime_within,
-    dangerously_overwrite_desktop_home, graphql_endpoint_for_desktop_access,
-    init_standard_local_runtime, load_operator_node_identity, load_standard_runtime_identity,
-    operator_signer, render_human_summary, reset_desktop_runtime_state, serving_runtime,
-    DesktopInitOptions, DesktopInitSummary, StoredRuntimeState, LOCAL_STANDARD_SOURCE,
+    cached_operator_endpoint, dangerously_overwrite_desktop_home,
+    graphql_endpoint_for_desktop_access, init_standard_local_runtime, load_operator_node_identity,
+    load_standard_runtime_identity, operator_signer, render_human_summary,
+    reset_desktop_runtime_state, serving_runtime, DesktopInitOptions, DesktopInitSummary,
+    StoredRuntimeState, LOCAL_STANDARD_SOURCE,
 };
 use crate::client::DesktopPaths;
 use gents_protocol::serve_lifecycle::ObservedServeLifecycle;
@@ -381,6 +382,77 @@ fn hosted_record(home: &std::path::Path, did: &str, graphql: &str) -> crate::cli
         crate::client::PeerRecord::local_standard("Local", "iroh://peer", did, graphql);
     record.local_node_home = Some(home.to_string_lossy().into_owned());
     record
+}
+
+#[test]
+fn cached_operator_endpoint_does_not_load_a_cold_runtime_key() {
+    use identity::Identity as _;
+
+    let tempdir = tempfile::tempdir().unwrap();
+    let home = tempdir.path();
+    let key_path = home.join("node.key");
+    let identity = gents::identity::load_or_create_file_identity(&key_path).unwrap();
+    let did = identity.did().unwrap().to_string();
+    seed_home(home, &did, HOSTED_GRAPHQL);
+    std::fs::write(
+        home.join("init.json"),
+        json!({ "node_name": "Local", "node_did": did, "key_path": key_path }).to_string(),
+    )
+    .unwrap();
+    let record = hosted_record(home, &did, HOSTED_GRAPHQL);
+    assert!(!gents::identity::can_mint_defradb_bearer(&did));
+    assert_eq!(
+        cached_operator_endpoint(&record),
+        Some(gents::config_client::GraphqlEndpoint::anonymous(
+            HOSTED_GRAPHQL
+        ))
+    );
+    assert!(!gents::identity::can_mint_defradb_bearer(&did));
+
+    assert_eq!(
+        super::OperatorIdentityInteraction::default().endpoint(&record),
+        Some(gents::config_client::GraphqlEndpoint::as_principal(
+            HOSTED_GRAPHQL,
+            &did
+        ))
+    );
+    std::fs::remove_file(home.join("init.json")).unwrap();
+    std::fs::remove_file(key_path).unwrap();
+    assert_eq!(
+        cached_operator_endpoint(&record),
+        Some(gents::config_client::GraphqlEndpoint::as_principal(
+            HOSTED_GRAPHQL,
+            &did
+        ))
+    );
+}
+
+#[test]
+fn cached_operator_endpoint_keeps_unlocked_authority_on_its_hosted_endpoint() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let (home, did) = hosted_home(tempdir.path());
+    assert_eq!(
+        cached_operator_endpoint(&hosted_record(&home, &did, HOSTED_GRAPHQL)),
+        Some(gents::config_client::GraphqlEndpoint::as_principal(
+            HOSTED_GRAPHQL,
+            &did
+        ))
+    );
+    let elsewhere = "http://127.0.0.1:9999/api/v0/graphql";
+    assert_eq!(
+        cached_operator_endpoint(&hosted_record(&home, &did, elsewhere)),
+        Some(gents::config_client::GraphqlEndpoint::anonymous(elsewhere))
+    );
+    let mut record = hosted_record(&home, &did, HOSTED_GRAPHQL);
+    record.local_node_home = None;
+    assert_eq!(
+        cached_operator_endpoint(&record),
+        Some(gents::config_client::GraphqlEndpoint::anonymous(
+            HOSTED_GRAPHQL
+        ))
+    );
+    record.source = Some("manual".to_string());
+    assert!(cached_operator_endpoint(&record).is_none());
 }
 
 #[test]

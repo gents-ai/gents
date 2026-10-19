@@ -468,6 +468,11 @@ async fn run_agent_owned(
     let admission_registry = AdmissionRegistry::new(agent.node.clone());
     let (enrollment_owner, enrollment_handle) =
         crate::agent::p2p_reconcile::enrollment_authority_channel();
+    *agent
+        .enrollment_authority
+        .write()
+        .map_err(|_| anyhow::anyhow!("enrollment authority is unavailable"))? =
+        Some(enrollment_handle.clone());
     let lsp_pool = tool_runtime.lsp_pool.clone();
     let runtime = RuntimeContext {
         node: agent.node.clone(),

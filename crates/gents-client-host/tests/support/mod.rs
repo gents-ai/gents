@@ -1,9 +1,11 @@
+use anyhow::{ensure, Context, Result};
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use gents_desktop_bridge::host::protocol;
 use gents_desktop_bridge::BridgeError;
 use gents_desktop_core::client::DesktopPaths;
 use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -15,9 +17,30 @@ pub struct Attachment {
     output: FramedRead<ChildStdout, LengthDelimitedCodec>,
 }
 
+pub fn native_binary(name: &str) -> Result<PathBuf> {
+    let directory = match std::env::var_os("GENTS_NATIVE_TEST_BIN_DIR") {
+        Some(directory) => PathBuf::from(directory),
+        None => Path::new(env!("CARGO_BIN_EXE_gents-client-host"))
+            .parent()
+            .context("native binary directory")?
+            .to_owned(),
+    };
+    ensure!(
+        directory.is_absolute(),
+        "GENTS_NATIVE_TEST_BIN_DIR must be absolute"
+    );
+    let binary = directory.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    ensure!(
+        binary.is_file(),
+        "native test binary is missing: {}",
+        binary.display()
+    );
+    Ok(binary)
+}
+
 impl Attachment {
     pub async fn start(paths: &DesktopPaths) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
+        let mut child = Command::new(native_binary("gents-client-host").unwrap())
             .arg("--stdio")
             .arg("--home")
             .arg(paths.root())

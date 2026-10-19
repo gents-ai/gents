@@ -16,6 +16,7 @@ const KEY: &str = "sekret-key-0123";
 #[derive(Clone)]
 enum Reply {
     Text,
+    Paired(Arc<tokio::sync::Barrier>),
     Status(u16),
     Hang,
     Big(usize),
@@ -92,6 +93,10 @@ impl Fake {
                     .into_response(),
                 Reply::Big(bytes) => text("x".repeat(*bytes)),
                 Reply::Text => text(format!("answer:{prompt}")),
+                Reply::Paired(barrier) => {
+                    barrier.wait().await;
+                    text(format!("answer:{prompt}"))
+                }
             };
             shared.in_flight.fetch_sub(1, Ordering::SeqCst);
             answer
@@ -238,9 +243,15 @@ async fn a_bound_slot_answers_the_plugins_requests_and_echoes_its_state() {
 
 #[tokio::test]
 async fn the_backend_concurrency_cap_is_honoured() {
-    let fake = Arc::new(Fake::start(Reply::Text, Duration::from_millis(120)).await);
+    let fake = Arc::new(
+        Fake::start(
+            Reply::Paired(Arc::new(tokio::sync::Barrier::new(2))),
+            Duration::ZERO,
+        )
+        .await,
+    );
     let canned = asking((0..6).map(|n| request(&n.to_string())).collect());
-    let (home, record) = installed(&canned, false, true);
+    let (home, record) = installed_within(&canned, false, 30);
     let call = executor(&home, Fixed(fake.clone(), 2, Duration::from_secs(30)))
         .call(&record, json!({}))
         .await
@@ -585,18 +596,24 @@ fn installed_within(
 #[tokio::test]
 async fn model_time_running_out_leaves_the_plugin_a_final_round_to_finish() {
     let fake = Arc::new(Fake::start(Reply::Hang, Duration::ZERO).await);
-    let (home, record) = installed_within(&asking(vec![request("a")]), false, 6);
-    let call = executor(&home, Fixed(fake, 1, Duration::from_secs(30)))
-        .call(&record, json!({"n": 1}))
-        .await
-        .unwrap();
+    // Keep the endpoint timeout beyond the plugin deadline and leave three
+    // seconds for guest startup and scheduling in the final-round reserve.
+    let (home, record) = installed_within(&asking(vec![request("a")]), false, 24);
+    let executor = executor(&home, Fixed(fake.clone(), 1, Duration::from_secs(30)));
+    let call = tokio::time::timeout(
+        Duration::from_secs(60),
+        executor.call(&record, json!({"n": 1})),
+    )
+    .await
+    .expect("model timeout did not leave a final guest round")
+    .unwrap();
     assert_eq!(call.outcome.verdict, PluginVerdict::Success);
     assert_eq!(call.outcome.output["n"], 1);
     assert_eq!(
         call.outcome.output["model_results"]["a"],
         json!({"error": "the model request timed out"})
     );
-    assert!(call.outcome.wall_ms < 6000, "{}", call.outcome.wall_ms);
+    assert_eq!(fake.requests(), 1);
 }
 
 #[tokio::test]

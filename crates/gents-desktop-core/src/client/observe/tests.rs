@@ -56,6 +56,7 @@ async fn build_observer_fixture_for_selection(
         "did:test:requester".to_string(),
         subscription,
         rx,
+        Default::default(),
     );
     (tempdir, node, store, handle)
 }

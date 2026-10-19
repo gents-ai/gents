@@ -24,6 +24,25 @@ pub struct PoolKey {
     pub workspace_root: std::path::PathBuf,
     pub server_name: String,
     pub config_digest: String,
+    pub operator_guard_home: Option<std::path::PathBuf>,
+}
+
+impl PoolKey {
+    fn validate_operator_guard(&self) -> Result<(), String> {
+        let current = crate::plugin::approval::workspace::command_guard_home()
+            .map_err(|error| format!("{error:#}"))?;
+        if current != self.operator_guard_home {
+            return Err("language-server operator protection changed; retry the action".into());
+        }
+        if let Some(home) = &self.operator_guard_home {
+            crate::plugin::allowed::CommandProtection::capture(
+                home,
+                crate::toolset::workspace_write_sandbox_enforced(),
+            )
+            .map_err(|error| format!("{error:#}"))?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +50,11 @@ enum EntryState {
     Starting,
     Ready,
     Retiring,
+}
+
+enum ClientStartError {
+    Admission(String),
+    Initialization(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -240,6 +264,7 @@ impl LspPool {
             self.retire(key).await;
             return None;
         }
+        key.validate_operator_guard().ok()?;
         entry.leases.fetch_add(1, Ordering::SeqCst);
         entry.last_used = Instant::now();
         Some(LspLease {
@@ -258,6 +283,7 @@ impl LspPool {
         if super::artifact_scope_denied() {
             return Err(super::ARTIFACT_SCOPE_DENIAL.into());
         }
+        key.validate_operator_guard()?;
         self.try_spawn_sweeper();
         {
             let mut failed = self.failed.lock().await;
@@ -318,6 +344,7 @@ impl LspPool {
                 let mut entry = slot.lock().await;
                 if entry.state == EntryState::Ready {
                     if let Some(client) = entry.client.clone() {
+                        key.validate_operator_guard()?;
                         entry.leases.fetch_add(1, Ordering::SeqCst);
                         entry.last_used = Instant::now();
                         return Ok(LspLease {
@@ -352,12 +379,23 @@ impl LspPool {
             disarm: Arc::new(AtomicBool::new(false)),
         };
         let started = self.start_client(&key, server, config).await;
-        cleanup.disarm.store(true, Ordering::SeqCst);
+        let mut entry = slot.lock().await;
+        let started = match started {
+            Ok(client) => match key.validate_operator_guard() {
+                Ok(()) => Ok(client),
+                Err(error) => {
+                    drop(entry);
+                    client.shutdown_exit().await;
+                    entry = slot.lock().await;
+                    Err(ClientStartError::Admission(error))
+                }
+            },
+            Err(error) => Err(error),
+        };
         match started {
             Ok(client) => {
                 let client = Arc::new(client);
                 let leases = {
-                    let mut entry = slot.lock().await;
                     entry.client = Some(client.clone());
                     entry.state = EntryState::Ready;
                     entry.last_used = Instant::now();
@@ -366,6 +404,8 @@ impl LspPool {
                     entry.ready.notify_waiters();
                     entry.leases.clone()
                 };
+                drop(entry);
+                cleanup.disarm.store(true, Ordering::SeqCst);
                 Ok(LspLease {
                     client,
                     leases,
@@ -373,17 +413,23 @@ impl LspPool {
                 })
             }
             Err(error) => {
-                {
-                    let mut entry = slot.lock().await;
-                    entry.start_error = Some(error.clone());
-                    entry.state = EntryState::Retiring;
-                    entry.ready.notify_waiters();
-                }
+                let cache_failure = matches!(error, ClientStartError::Initialization(_));
+                let error = match error {
+                    ClientStartError::Admission(error)
+                    | ClientStartError::Initialization(error) => error,
+                };
+                entry.start_error = Some(error.clone());
+                entry.state = EntryState::Retiring;
+                entry.ready.notify_waiters();
+                drop(entry);
                 self.inner.lock().await.remove(&key);
-                self.failed
-                    .lock()
-                    .await
-                    .insert(key, (error.clone(), Instant::now()));
+                cleanup.disarm.store(true, Ordering::SeqCst);
+                if cache_failure {
+                    self.failed
+                        .lock()
+                        .await
+                        .insert(key, (error.clone(), Instant::now()));
+                }
                 Err(error)
             }
         }
@@ -394,27 +440,35 @@ impl LspPool {
         key: &PoolKey,
         server: &CatalogServer,
         config: &LspToolConfig,
-    ) -> Result<LspClient, String> {
+    ) -> Result<LspClient, ClientStartError> {
         let workspace = key.workspace_root.clone();
         let constraints = super::overlay_lsp_constraints(&config.constraints);
-        let (program, argv, env, _sandbox) =
+        let command =
             prepare_managed_command(&workspace, &server.command, &server.args, &constraints)
                 .await
-                .map_err(|err| err.to_string())?;
-        let mut full_argv = vec![program.to_string_lossy().into_owned()];
-        full_argv.extend(argv);
+                .map_err(|err| ClientStartError::Admission(err.to_string()))?;
+        if command.operator_guard_home != key.operator_guard_home {
+            return Err(ClientStartError::Admission(
+                "language-server operator protection changed; retry the action".into(),
+            ));
+        }
+        tracing::debug!(server = %server.name, sandbox = command.sandbox, "starting language server");
+        let mut full_argv = vec![command.program.to_string_lossy().into_owned()];
+        full_argv.extend(command.args);
         let process = spawn_managed_process(SpawnManagedProcessRequest {
             argv: full_argv,
             cwd: workspace.clone(),
-            environment: Some(env),
+            environment: Some(command.environment),
             tool_name: Some("lsp".into()),
             kind: ManagedExecKind::PersistentService,
         })
-        .await?;
-        let client = LspClient::start(process, server.name.clone(), server, workspace)?;
+        .await
+        .map_err(ClientStartError::Initialization)?;
+        let client = LspClient::start(process, server.name.clone(), server, workspace)
+            .map_err(ClientStartError::Initialization)?;
         if let Err(error) = client.initialize().await {
             client.shutdown_exit().await;
-            return Err(error);
+            return Err(ClientStartError::Initialization(error));
         }
         client
             .wait_until_ready(server.workspace_ready_timings.as_ref())
@@ -521,6 +575,9 @@ impl LspPool {
     }
 
     pub async fn has_ready(&self, key: &PoolKey) -> bool {
+        if key.validate_operator_guard().is_err() {
+            return false;
+        }
         let map = self.inner.lock().await;
         if let Some(slot) = map.get(key) {
             let entry = slot.lock().await;
@@ -539,7 +596,17 @@ impl LspPool {
         agent_id: &str,
         workspace: &std::path::Path,
         digest: &str,
-    ) -> HashMap<String, PoolServerState> {
+    ) -> Result<HashMap<String, PoolServerState>, String> {
+        let operator_guard_home = crate::plugin::approval::workspace::command_guard_home()
+            .map_err(|error| format!("{error:#}"))?;
+        let guard_error = operator_guard_home.as_ref().and_then(|home| {
+            crate::plugin::allowed::CommandProtection::capture(
+                home,
+                crate::toolset::workspace_write_sandbox_enforced(),
+            )
+            .err()
+            .map(|error| format!("{error:#}"))
+        });
         let map = self.inner.lock().await;
         let mut states = HashMap::new();
         for (key, slot) in map.iter() {
@@ -547,8 +614,16 @@ impl LspPool {
                 && key.agent_id == agent_id
                 && key.workspace_root == workspace
                 && key.config_digest == digest
+                && key.operator_guard_home == operator_guard_home
             {
                 let entry = slot.lock().await;
+                if let Some(error) = &guard_error {
+                    states.insert(
+                        key.server_name.clone(),
+                        PoolServerState::Failed(error.clone()),
+                    );
+                    continue;
+                }
                 let state = match entry.state {
                     EntryState::Starting => PoolServerState::Starting,
                     EntryState::Ready
@@ -574,6 +649,7 @@ impl LspPool {
                 && key.agent_id == agent_id
                 && key.workspace_root == workspace
                 && key.config_digest == digest
+                && key.operator_guard_home == operator_guard_home
                 && at.elapsed() < INIT_BACKOFF
             {
                 states.insert(
@@ -582,7 +658,7 @@ impl LspPool {
                 );
             }
         }
-        states
+        Ok(states)
     }
 
     #[cfg(test)]

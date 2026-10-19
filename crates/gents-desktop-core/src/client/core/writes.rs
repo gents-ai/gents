@@ -505,7 +505,10 @@ impl ClientCore {
         delivery: gents_protocol::request_input::QueueDelivery,
     ) -> Result<gents_protocol::request_input::RequestInput> {
         gents::lifecycle::prepare_user_message_input(
-            &self.session_queue_access(node_did),
+            &self
+                .operator_observation_graphql(node_did)
+                .map(ConfigAccess::Graphql)
+                .unwrap_or_else(|| ConfigAccess::local(self.node_arc())),
             node_did,
             session_id,
             input,
@@ -538,7 +541,10 @@ impl ClientCore {
             .find(|record| record.node_did == node_did)
             .context("no saved deployment route owns this node")?;
         gents::lifecycle::pending_user_queue_projection(
-            &self.session_queue_access(node_did),
+            &self
+                .operator_observation_graphql(node_did)
+                .map(ConfigAccess::Graphql)
+                .unwrap_or_else(|| ConfigAccess::local(self.node_arc())),
             node_did,
             session_id,
             &self.requester_did(&record),
@@ -553,22 +559,68 @@ impl ClientCore {
         session_id: &str,
         edit: gents::lifecycle::PendingQueueEdit,
     ) -> Result<gents_protocol::session_input_edit::SessionInputEditReceipt> {
+        self.apply_pending_queue_edit(node_did, session_id, edit, None)
+            .await
+    }
+
+    pub async fn steer_pending_message(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        expected_request_doc_ids: Vec<String>,
+        request_doc_id: &str,
+    ) -> Result<gents_protocol::session_input_edit::SessionInputEditReceipt> {
+        let snapshot = self.pending_user_queue(node_did, session_id).await?;
+        let edit = gents::lifecycle::pending_steer_edit(
+            &snapshot,
+            expected_request_doc_ids,
+            request_doc_id,
+        )?;
+        self.apply_pending_queue_edit(node_did, session_id, edit, Some(request_doc_id))
+            .await
+    }
+
+    async fn apply_pending_queue_edit(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        edit: gents::lifecycle::PendingQueueEdit,
+        steer: Option<&str>,
+    ) -> Result<gents_protocol::session_input_edit::SessionInputEditReceipt> {
         let peer = self
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
         ensure_peer_chat_ready_at(node_did, peer.as_ref(), Utc::now())?;
         let (signer, admission, _) = self.request_authority(node_did, peer.as_ref()).await?;
         let selected_doc_ids = edit.selected_request_doc_ids.clone();
-        let result = gents::lifecycle::submit_pending_user_edit(
-            &self.session_queue_access(node_did),
-            signer.as_ref(),
-            admission,
-            Some(self.local_peer_id()),
-            node_did,
-            session_id,
-            edit,
-        )
-        .await;
+        let access = self.session_queue_access(node_did);
+        let result = match steer {
+            Some(request_doc_id) => {
+                gents::lifecycle::submit_pending_user_steer(
+                    &access,
+                    signer.as_ref(),
+                    admission,
+                    Some(self.local_peer_id()),
+                    node_did,
+                    session_id,
+                    edit,
+                    request_doc_id,
+                )
+                .await
+            }
+            None => {
+                gents::lifecycle::submit_pending_user_edit(
+                    &access,
+                    signer.as_ref(),
+                    admission,
+                    Some(self.local_peer_id()),
+                    node_did,
+                    session_id,
+                    edit,
+                )
+                .await
+            }
+        };
         match result {
             Ok(receipt) => {
                 let requester_did = peer
@@ -626,7 +678,7 @@ impl ClientCore {
         if !answer.is_terminal() || gents::lifecycle::folded_into(answer).is_some() {
             return Ok(None);
         }
-        let access = match self.operator_graphql(node_did) {
+        let access = match self.operator_observation_graphql(node_did) {
             Some(graphql) => ConfigAccess::Graphql(graphql),
             None => self
                 .store_access
@@ -810,7 +862,7 @@ impl ClientCore {
         }
 
         let captured = self.store.capture_read();
-        let (access, source) = match self.operator_graphql(node_did) {
+        let (access, source) = match self.operator_observation_graphql(node_did) {
             Some(graphql) => (ConfigAccess::Graphql(graphql), "operator"),
             None => (
                 self.store_access
@@ -926,6 +978,42 @@ impl ClientCore {
             selected_request_id: resolved_request_id,
             published_version: Some(version),
         }))
+    }
+
+    /// A client replica cannot establish an idle source or complete history;
+    /// editing requires the runtime's authenticated transaction endpoint.
+    pub async fn fork_session_before_message(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        message_key: &str,
+    ) -> Result<gents::session::ForkOutcome> {
+        let node_did = normalize_required("node_did", node_did)?;
+        let session_id = normalize_required("session_id", session_id)?;
+        anyhow::ensure!(!message_key.trim().is_empty(), "message_key is required");
+        let peer = self
+            .peer_record_for_chat_write(node_did, Utc::now())
+            .await?;
+        ensure_peer_chat_ready_at(node_did, peer.as_ref(), Utc::now())?;
+        let requester = self.requester_did(
+            peer.as_ref()
+                .context("chat target has no current owned peer route")?,
+        );
+        let access = self.operator_graphql(node_did)
+            .map(ConfigAccess::Graphql)
+            .context("Editing a message requires a direct runtime connection. Reconnect the local runtime and try again.")?;
+        gents::session::fork_on(
+            &access,
+            gents::session::ForkParams {
+                source_session_id: session_id,
+                boundary: gents::session::ForkBoundary::BeforeMessageKey(message_key),
+                caller_node_did: node_did,
+                caller_requester_did: Some(&requester),
+                target_agent_id: None,
+            },
+        )
+        .await
+        .map_err(Into::into)
     }
 
     pub async fn rename_session(
@@ -1517,6 +1605,17 @@ impl ClientCore {
             .and_then(crate::local_runtime::operator_endpoint)
     }
 
+    pub fn operator_observation_graphql(
+        &self,
+        node_did: &str,
+    ) -> Option<gents::config_client::GraphqlEndpoint> {
+        self.sync_state
+            .records()
+            .iter()
+            .find(|record| record.node_did == node_did)
+            .and_then(|record| self.options.operator_identity_interaction.endpoint(record))
+    }
+
     pub fn operator_signer(
         &self,
         node_did: &str,
@@ -1758,6 +1857,33 @@ impl ClientCore {
         }
     }
 
+    pub async fn select_agent_model(
+        &self,
+        node_did: &str,
+        agent_id: &str,
+        backend_id: &str,
+        model_name: &str,
+        reasoning_effort: Option<gents::config::ReasoningEffort>,
+        service_tier: Option<gents::config::ServiceTier>,
+    ) -> Result<gents::InferenceProfile> {
+        let access = self.operator_access(node_did)?;
+        let saved = mutations::select_agent_model_on(
+            &access,
+            node_did,
+            agent_id,
+            backend_id,
+            model_name,
+            reasoning_effort,
+            service_tier,
+        )
+        .await?;
+        if self.refresh_config_source(node_did).await.is_err() {
+            tracing::warn!("Model saved; client observation will resynchronize");
+            self.store.request_resync(Some(node_did));
+        }
+        Ok(saved)
+    }
+
     pub async fn save_inference_profile(&self, row: &gents::InferenceProfile) -> Result<()> {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_inference_profile_on(&access, row).await {
@@ -1774,6 +1900,29 @@ impl ClientCore {
             }
             Err(error) => Err(self.record_mutation_error("save inference profile", error)),
         }
+    }
+
+    /// A disconnected runtime must not stage its reviewer in the client replica.
+    /// Preparing this Task also requires an already available signer; it never
+    /// unlocks a runtime identity as a side effect of selecting permissions.
+    pub async fn prepare_access_review_task(
+        &self,
+        node: &str,
+        agent: &str,
+        preferred: Option<&str>,
+    ) -> Result<gents::plugin::approval::workspace::ReviewTaskSelection> {
+        let record = self
+            .sync_state
+            .records()
+            .into_iter()
+            .find(|record| record.node_did == node)
+            .context("Connect this runtime before setting up access review.")?;
+        anyhow::ensure!(gents::identity::can_mint_defradb_bearer(node),
+            "Open Runtime Settings to connect this runtime's configuration before choosing Approve for me.");
+        let access = crate::local_runtime::operator_endpoint(&record)
+            .map(ConfigAccess::Graphql)
+            .context("Access review setup requires this runtime's operator endpoint.")?;
+        mutations::prepare_access_review_task_on(&access, node, agent, preferred).await
     }
 
     pub async fn save_task(&self, row: &gents::document_config::Task) -> Result<()> {

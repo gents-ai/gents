@@ -5,6 +5,10 @@ use std::time::{Duration, Instant};
 
 use crate::test_support::EnvVarGuard;
 
+mod workspace_file_permissions;
+#[cfg(unix)]
+mod workspace_permissions;
+
 use super::args::{
     BashArgs, EditFileArgs, GlobArgs, GrepArgs, ListFilesArgs, ReadFileArgs, WriteFileArgs,
 };
@@ -2682,7 +2686,7 @@ with socket.socket() as connection:
                     deny_all_argv: false,
                     deny_git_metadata_writes: true,
                 };
-                let (program, argv, env, sandbox) = prepare_managed_command(
+                let command = prepare_managed_command(
                     &root,
                     "/usr/bin/python3",
                     &[
@@ -2695,22 +2699,25 @@ with socket.socket() as connection:
                 )
                 .await
                 .unwrap();
-                assert_eq!(sandbox, "macos_seatbelt");
+                assert_eq!(command.sandbox, "macos_seatbelt");
                 assert_eq!(
-                    env["CARGO_TARGET_DIR"],
+                    command.environment["CARGO_TARGET_DIR"],
                     fx.grant.root().join("target").to_string_lossy()
                 );
-                assert_eq!(env["TMPDIR"], fx.grant.root().join("tmp").to_string_lossy());
+                assert_eq!(
+                    command.environment["TMPDIR"],
+                    fx.grant.root().join("tmp").to_string_lossy()
+                );
                 crate::managed_exec::run_managed_exec(crate::managed_exec::ManagedExecRequest {
-                    argv: std::iter::once(program.to_string_lossy().into_owned())
-                        .chain(argv)
+                    argv: std::iter::once(command.program.to_string_lossy().into_owned())
+                        .chain(command.args)
                         .collect(),
                     cwd: root.clone(),
                     deadline_at: Some(chrono::Utc::now() + chrono::Duration::seconds(15)),
                     cancellation_token: tokio_util::sync::CancellationToken::new(),
                     max_output_bytes: 64 * 1024,
                     stdin: Vec::new(),
-                    environment: Some(env),
+                    environment: Some(command.environment),
                     tool_name: Some("artifact-probe".into()),
                     live_output: None,
                 })

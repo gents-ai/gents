@@ -101,6 +101,21 @@ pub struct MailboxItemRequest {
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionForkBeforeRequest {
+    pub node_did: String,
+    pub session_id: String,
+    pub message_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionForkResult {
+    pub node_did: String,
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionRenameRequest {
     pub node_did: String,
@@ -538,9 +553,29 @@ pub struct PendingQueueEditRequest {
     pub messages: Vec<PendingMessageEditRequest>,
 }
 
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PendingMessageSteerRequest {
+    pub node_did: String,
+    pub session_id: String,
+    pub expected_request_doc_ids: Vec<String>,
+    pub request_doc_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingQueueEditResult {
     pub request_doc_ids: Vec<String>,
     pub request_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentModelSelectionRequest {
+    pub node_did: String,
+    pub agent_id: String,
+    pub backend_id: String,
+    pub model_name: String,
+    pub reasoning_effort: Option<gents::config::ReasoningEffort>,
+    pub service_tier: Option<gents::config::ServiceTier>,
 }

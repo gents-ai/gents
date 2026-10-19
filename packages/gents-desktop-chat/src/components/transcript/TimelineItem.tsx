@@ -8,18 +8,29 @@ import {
   UserMessageItem,
 } from "./MessageItems.js";
 import { ToolGroup } from "./ToolGroup.js";
+import { CompactToolGroup } from "./CompactToolGroup.js";
+
+export function timelineKey(item: RenderedTimelineItem) {
+  return `${item.kind}-${item.itemKey}`;
+}
 
 export const TimelineItem = memo(function TimelineItem({
   item,
   animateAssistantReveal,
+  compactTools,
+  onEditUserMessage,
 }: {
   item: RenderedTimelineItem;
   animateAssistantReveal?: boolean;
+  compactTools?: boolean;
+  onEditUserMessage?: (
+    item: Extract<RenderedTimelineItem, { kind: "userMessage" }>,
+  ) => void;
 }) {
   switch (item.kind) {
     case "userMessage":
     case "automatedInput":
-      return <UserMessageItem item={item} />;
+      return <UserMessageItem item={item} onEdit={onEditUserMessage} />;
     case "assistantMessage":
       return (
         <AssistantMessageItem
@@ -30,7 +41,11 @@ export const TimelineItem = memo(function TimelineItem({
     case "toolGroup":
       return (
         <div className="turn-block">
-          <ToolGroup tools={item.tools} />
+          {compactTools ? (
+            <CompactToolGroup tools={item.tools} />
+          ) : (
+            <ToolGroup tools={item.tools} />
+          )}
         </div>
       );
     case "pendingUserTurn":

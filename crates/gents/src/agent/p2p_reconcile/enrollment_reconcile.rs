@@ -45,6 +45,7 @@ pub struct EnrollmentAuthorizationFence {
     pub member_peer: String,
     pub member_ticket: String,
     pub owner_node: String,
+    pub profile: String,
     pub request_digest: String,
     pub authorization_sequence: u64,
     pub authorization_expires_at: String,
@@ -164,6 +165,41 @@ impl EnrollmentAuthorityHandle {
         result
             .await
             .context("enrollment authority owner dropped fresh member response")?
+    }
+
+    pub async fn client_observation_authorized(
+        &self,
+        authenticated_member: &str,
+        owner_node: &str,
+    ) -> Result<bool> {
+        let current = self
+            .fresh_member_authorization(authenticated_member)
+            .await?;
+        Ok(client_observation_admitted(
+            Some(authenticated_member),
+            owner_node,
+            current.as_ref(),
+        ))
+    }
+}
+
+/// The actor comes from DefraDB's verified request identity. The live enrollment
+/// owner supplies the unique current fence; callers must not reconstruct it from
+/// an unverified desired route or a client-provided generation.
+pub fn client_observation_admitted(
+    authenticated_member: Option<&str>,
+    owner_node: &str,
+    current: Option<&EnrollmentAuthorizationFence>,
+) -> bool {
+    match (authenticated_member, current) {
+        (Some(member), Some(authorization)) => {
+            !member.is_empty()
+                && !owner_node.is_empty()
+                && authorization.member_did == member
+                && authorization.owner_node == owner_node
+                && authorization.profile == CLIENT_TEMPLATE
+        }
+        _ => false,
     }
 }
 
@@ -458,6 +494,7 @@ pub(crate) fn exact_authorization_fence(
         member_peer: active.request.candidate_peer.clone(),
         member_ticket: active.request.candidate_ticket.clone(),
         owner_node: active.request.owner_agent.clone(),
+        profile: active.request.profile.clone(),
         request_digest: active.request.request_digest.clone(),
         authorization_sequence: active.revision.sequence,
         authorization_expires_at: active.revision.authorization_expires_at.clone(),
@@ -944,6 +981,47 @@ mod tests {
     use crate::identity::KeyIdentity;
     use crate::request_admission::AgentRequestAdmissionVerifier;
 
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ClientObservationCase {
+        name: String,
+        actor: Option<String>,
+        node: String,
+        current: Option<super::super::enrollment::EnrollmentRequestAuthority>,
+        expected_admitted: bool,
+    }
+
+    #[test]
+    fn generated_client_observation_admission_matches_lean() {
+        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot()
+            .expect("Lean client observation admission cases");
+        let cases: Vec<ClientObservationCase> =
+            serde_json::from_value(snapshot["client_observation_admission_cases"].clone())
+                .expect("decode client observation admission cases");
+        assert!(!cases.is_empty());
+        for case in cases {
+            let current = case.current.map(|authority| EnrollmentAuthorizationFence {
+                network_id: authority.network_id,
+                request_id: "request".into(),
+                admin_did: authority.admin_did,
+                member_did: authority.candidate_did,
+                member_peer: authority.candidate_peer,
+                member_ticket: "ticket".into(),
+                owner_node: authority.owner_node,
+                profile: authority.profile,
+                request_digest: "digest".into(),
+                authorization_sequence: 1,
+                authorization_expires_at: "2099-01-01T00:00:00Z".into(),
+            });
+            assert_eq!(
+                client_observation_admitted(case.actor.as_deref(), &case.node, current.as_ref()),
+                case.expected_admitted,
+                "{}",
+                case.name,
+            );
+        }
+    }
+
     enum ScriptedProjection {
         Projection(EnrollmentProjection),
         Error(&'static str),
@@ -1044,6 +1122,64 @@ mod tests {
             active: vec![active],
             ..EnrollmentProjection::default()
         }
+    }
+
+    #[tokio::test]
+    async fn client_observation_reloads_current_scoped_authority() {
+        let active = active_enrollment(1, "2099-01-01T00:00:00Z");
+        let member = active.request.candidate_did.clone();
+        let node = active.request.owner_agent.clone();
+        let mut peer = active.clone();
+        peer.request.profile = "peer".into();
+        let mut ambiguous = projection_with_active(active.clone());
+        ambiguous
+            .active
+            .push(active_enrollment(2, "2099-01-01T00:00:00Z"));
+        let script = ScriptedProjectionReader {
+            steps: Mutex::new(VecDeque::from([
+                ScriptedProjection::Projection(projection_with_active(active.clone())),
+                ScriptedProjection::Projection(projection_with_active(active.clone())),
+                ScriptedProjection::Projection(projection_with_active(peer)),
+                ScriptedProjection::Projection(projection_with_revoked(&active)),
+                ScriptedProjection::Projection(EnrollmentProjection::default()),
+                ScriptedProjection::Projection(ambiguous),
+                ScriptedProjection::Error("unavailable enrollment projection"),
+            ])),
+        };
+        let (mut owner, handle) = enrollment_authority_channel();
+        let task = tokio::spawn(async move {
+            for _ in 0..7 {
+                let command = owner
+                    .commands
+                    .recv()
+                    .await
+                    .expect("observation authorization");
+                handle_authority_command(&script, &owner, command).await;
+            }
+        });
+        assert!(handle
+            .client_observation_authorized(&member, &node)
+            .await
+            .unwrap());
+        assert!(!handle
+            .client_observation_authorized(&member, "another-node")
+            .await
+            .unwrap());
+        for _ in 0..3 {
+            assert!(!handle
+                .client_observation_authorized(&member, &node)
+                .await
+                .unwrap());
+        }
+        assert!(handle
+            .client_observation_authorized(&member, &node)
+            .await
+            .is_err());
+        assert!(handle
+            .client_observation_authorized(&member, &node)
+            .await
+            .is_err());
+        task.await.unwrap();
     }
 
     fn projection_with_revoked(active: &ActiveEnrollment) -> EnrollmentProjection {

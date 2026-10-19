@@ -132,6 +132,7 @@ pub(crate) struct LeanCanonicalExecutionSeed {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCanonicalTitleBinding {
+    pub(crate) purpose: LeanRequestPurpose,
     pub(crate) physical_request: u64,
     pub(crate) logical_request: u64,
     pub(crate) parent_physical: u64,

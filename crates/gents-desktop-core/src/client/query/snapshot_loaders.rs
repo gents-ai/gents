@@ -669,10 +669,11 @@ pub async fn load_full_snapshot_with_peer_records(
     node: &EmbeddedNode,
     peers: &[PeerRecord],
     _requester_did: &str,
+    identity_interaction: crate::local_runtime::OperatorIdentityInteraction,
 ) -> Result<ClientStore> {
     let mut store = load_full_snapshot(node).await?;
     for peer in peers {
-        let Some(graphql) = crate::local_runtime::operator_endpoint(peer) else {
+        let Some(graphql) = identity_interaction.endpoint(peer) else {
             continue;
         };
         match load_operator_config(
@@ -698,9 +699,30 @@ pub async fn load_full_snapshot_with_peer_records(
     Ok(store)
 }
 
+#[derive(Clone, Copy)]
+enum OperatorConfigScope {
+    Full,
+    Inference,
+}
+
 async fn load_operator_config(
     access: &gents::config_client::ConfigAccess,
     node_did: &str,
+) -> Result<ClientStore> {
+    load_operator_config_scoped(access, node_did, OperatorConfigScope::Full).await
+}
+
+pub async fn load_inference_configuration(
+    access: &gents::config_client::ConfigAccess,
+    node_did: &str,
+) -> Result<ClientStore> {
+    load_operator_config_scoped(access, node_did, OperatorConfigScope::Inference).await
+}
+
+async fn load_operator_config_scoped(
+    access: &gents::config_client::ConfigAccess,
+    node_did: &str,
+    scope: OperatorConfigScope,
 ) -> Result<ClientStore> {
     let did = escape_graphql_string(node_did);
     let did_filter = format!("filter: {{ node_did: {{ _eq: \"{did}\" }} }}");
@@ -711,16 +733,19 @@ async fn load_operator_config(
         gents::config_client::config_projection(gents::Collection::InferenceBackend, None)?;
     let trigger_fields = trigger_fields.join(" ");
     let backend_fields = backend_fields.join(" ");
-    let query = format!(
-        "query DesktopOperatorConfig {{
-            nodes: {NODE_NAME}({did_filter}) {{ {NODE_FIELDS} }}
+    let common = format!(
+        "nodes: {NODE_NAME}({did_filter}) {{ {NODE_FIELDS} }}
             agents: {AGENT_NAME}({did_filter}) {{ {AGENT_FIELDS} }}
-            runtimes: {NODE_RUNTIME_NAME}({did_filter}) {{ {NODE_RUNTIME_FIELDS} }}
+            inference_backends: InferenceBackend({did_filter}) {{ {backend_fields} {INFERENCE_BACKEND_OBSERVATION_FIELDS} }}
+            inference_profiles: InferenceProfile({did_filter}) {{ {INFERENCE_PROFILE_FIELDS} }}"
+    );
+    let remaining = match scope {
+        OperatorConfigScope::Inference => String::new(),
+        OperatorConfigScope::Full => format!(
+            "runtimes: {NODE_RUNTIME_NAME}({did_filter}) {{ {NODE_RUNTIME_FIELDS} }}
             node_readiness: {NODE_READINESS_NAME}({did_filter}) {{ {NODE_READINESS_FIELDS} }}
             contexts: AgentContext({did_filter}) {{ {AGENT_CONTEXT_FIELDS} }}
             tools: {TOOLS_NAME}({did_filter}) {{ {TOOLS_FIELDS} }}
-            inference_backends: InferenceBackend({did_filter}) {{ {backend_fields} {INFERENCE_BACKEND_OBSERVATION_FIELDS} }}
-            inference_profiles: InferenceProfile({did_filter}) {{ {INFERENCE_PROFILE_FIELDS} }}
             inference_sampling: InferenceSampling({did_filter}) {{ {INFERENCE_SAMPLING_FIELDS} }}
             inference_execution: InferenceExecution({did_filter}) {{ {INFERENCE_EXECUTION_FIELDS} }}
             tasks: {TASK_NAME}({did_filter}) {{ {TASK_FIELDS} }}
@@ -734,23 +759,35 @@ async fn load_operator_config(
             datastore_tool_surfaces: DatastoreToolSurface({did_filter}) {{ {DATASTORE_TOOL_SURFACE_FIELDS} }}
             chain_key_bindings: ChainKeyBinding({did_filter}) {{ {CHAIN_KEY_BINDING_FIELDS} }}
             sessions: {AGENT_SESSION_NAME}({did_filter}) {{ {AGENT_SESSION_FIELDS} }}
-            requests: {AGENT_REQUEST_NAME}{request_args} {{ {AGENT_REQUEST_FIELDS} }}
-        }}"
-    );
+            requests: {AGENT_REQUEST_NAME}{request_args} {{ {AGENT_REQUEST_FIELDS} }}"
+        ),
+    };
+    let query = format!("query DesktopOperatorConfig {{ {common} {remaining} }}");
     let data = execute_access_graphql_query(access, &query, "operator config").await?;
-    let requests = complete_access_snapshot_requests(access, &data, Some(node_did)).await?;
-    operator_config_store_from_data_with_requests(&data, node_did, requests)
+    let requests = match scope {
+        OperatorConfigScope::Full => {
+            complete_access_snapshot_requests(access, &data, Some(node_did)).await?
+        }
+        OperatorConfigScope::Inference => Vec::new(),
+    };
+    operator_config_store_from_data_with_requests(&data, node_did, requests, scope)
 }
 
 #[cfg(test)]
 pub(crate) fn operator_config_store_from_data(data: &Value, node_did: &str) -> Result<ClientStore> {
-    operator_config_store_from_data_with_requests(data, node_did, snapshot_request_rows(data)?)
+    operator_config_store_from_data_with_requests(
+        data,
+        node_did,
+        snapshot_request_rows(data)?,
+        OperatorConfigScope::Full,
+    )
 }
 
 fn operator_config_store_from_data_with_requests(
     data: &Value,
     node_did: &str,
     requests: Vec<AgentRequestRow>,
+    scope: OperatorConfigScope,
 ) -> Result<ClientStore> {
     let (nodes, nodes_complete) = parse_query_rows_with_completeness(data, "nodes")?;
     let (agents, agents_complete) = parse_query_rows_with_completeness(data, "agents")?;
@@ -769,6 +806,23 @@ fn operator_config_store_from_data_with_requests(
             INFERENCE_BACKEND_OBSERVATION_FIELDS,
             Some("node_did"),
         )?;
+    let mut common = ClientStoreRows {
+        nodes,
+        agents,
+        inference_profiles,
+        inference_backends,
+        backend_observations,
+        backend_observation_source_node_dids,
+        ..Default::default()
+    };
+    if nodes_complete && agents_complete && profiles_complete && backends_complete {
+        common
+            .operator_config_authoritative_node_dids
+            .insert(node_did.to_owned());
+    }
+    if matches!(scope, OperatorConfigScope::Inference) {
+        return Ok(ClientStore::from_rows(common));
+    }
     let (schedule_observations, schedule_observation_source_node_dids) =
         parse_observation_query_rows_with_source(
             data,
@@ -783,17 +837,11 @@ fn operator_config_store_from_data_with_requests(
             TRIGGER_OBSERVATION_FIELDS,
             Some("node_did"),
         )?;
-    let mut rows = ClientStoreRows {
-        nodes,
-        agents,
+    let rows = ClientStoreRows {
         runtimes: parse_query_rows(data, "runtimes")?,
         node_readiness: parse_query_rows(data, "node_readiness")?,
         contexts: parse_query_rows(data, "contexts")?,
         tools: parse_query_rows(data, "tools")?,
-        inference_backends,
-        backend_observations,
-        backend_observation_source_node_dids,
-        inference_profiles,
         inference_sampling: parse_query_rows(data, "inference_sampling")?,
         inference_execution: parse_query_rows(data, "inference_execution")?,
         tasks: parse_query_rows(data, "tasks")?,
@@ -817,12 +865,8 @@ fn operator_config_store_from_data_with_requests(
         chain_key_bindings: parse_query_rows(data, "chain_key_bindings")?,
         sessions: parse_query_rows(data, "sessions")?,
         requests,
-        ..ClientStoreRows::default()
+        ..common
     };
-    if nodes_complete && agents_complete && profiles_complete && backends_complete {
-        rows.operator_config_authoritative_node_dids
-            .insert(node_did.to_owned());
-    }
     Ok(ClientStore::from_rows(rows))
 }
 
@@ -831,12 +875,13 @@ pub async fn load_node_scoped_snapshot_with_peer_records(
     node_did: &str,
     peers: &[PeerRecord],
     _requester_did: &str,
+    identity_interaction: crate::local_runtime::OperatorIdentityInteraction,
 ) -> Result<ClientStore> {
     let mut store = load_node_scoped_snapshot(node, node_did).await?;
     if let Some(graphql) = peers
         .iter()
         .find(|peer| peer.node_did == node_did)
-        .and_then(crate::local_runtime::operator_endpoint)
+        .and_then(|record| identity_interaction.endpoint(record))
     {
         match load_operator_config(
             &gents::config_client::ConfigAccess::Graphql(graphql.clone()),

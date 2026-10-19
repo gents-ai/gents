@@ -22,6 +22,46 @@ const tool = (
 });
 
 describe("canonical tool payload availability", () => {
+  it("shows stopped action details with their native cancellation evidence", () => {
+    const row = {
+      ...tool("ready"),
+      statusKind: "error",
+      cancelCause: {
+        cause: "userCancelled",
+        source: "requestInterrupt",
+        confidence: "direct",
+        at: null,
+        evidence: ["direct interrupt"],
+      },
+    };
+    const html = renderToStaticMarkup(
+      createElement(ToolGroup, {
+        tools: [row],
+        compactDetails: true,
+        expandedItemKey: row.itemKey,
+      }),
+    );
+    expect(html).toContain("tool-item-dot-cancelled");
+    expect(html).not.toContain("tool-item-dot-error");
+    expect(html).not.toContain("is-error");
+    expect(html).toContain("stopped");
+    expect(html).toContain("direct interrupt");
+  });
+  it("renders popup payloads only when their action is expanded", () => {
+    const row = tool("ready");
+    const collapsed = renderToStaticMarkup(
+      createElement(ToolGroup, { tools: [row], compactDetails: true }),
+    );
+    expect(collapsed).not.toContain("stale partial result");
+    const expanded = renderToStaticMarkup(
+      createElement(ToolGroup, {
+        tools: [row],
+        compactDetails: true,
+        expandedItemKey: row.itemKey,
+      }),
+    );
+    expect(expanded).toContain("stale partial result");
+  });
   it.each(["loading", "denied", "invalid"] as const)(
     "shows %s without presenting a partial result",
     (state) => {

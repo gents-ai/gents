@@ -10,9 +10,8 @@ use super::auth::LspAction;
 use super::catalog::{family_eligible, marker_matches, primary_for_file, CatalogServer};
 use super::client::LspClient;
 use super::edits::{
-    acquire_mutation_locks, apply_prepared_with_held_locks, apply_workspace_edit,
-    redact_structured_uris, resolve_inbound_path, resolve_inbound_path_allow_create, walk_uris,
-    PreparedEdit,
+    apply_prepared_edits, prepare_rename, prepare_workspace_edit, redact_structured_uris,
+    resolve_inbound_path, resolve_inbound_path_allow_create, walk_uris,
 };
 use super::encoding::position_for_symbol;
 use super::pool::LspLease;
@@ -64,7 +63,8 @@ pub async fn dispatch(
                 .unwrap_or_else(|| config.session_id.clone());
             let states = pool
                 .inspect_session(&session_id, &config.agent_id, workspace, &config.digest)
-                .await;
+                .await
+                .map_err(|error| ToolError::reported_failure(FailureClass::PolicyDenied, error))?;
             Ok(status_text(states, &config.servers, workspace))
         }
         LspAction::Reload => {
@@ -252,25 +252,25 @@ async fn run_file_action(
         } else {
             result.clone()
         };
-        let mut applied = apply_workspace_edit(context, client, &edit).await?;
+        let mut prepared = prepare_workspace_edit(context, &edit, encoding).map_err(policy)?;
         if matches!(action, LspAction::RenameFile) {
             let dest = req
                 .new_name
                 .as_deref()
                 .ok_or_else(|| arg_invalid("new_name required for rename_file"))?;
             let dest_path = resolve_inbound_path_allow_create(context, dest).map_err(policy)?;
-            if path.exists() && path != dest_path {
-                let prepared = vec![PreparedEdit {
-                    path: dest_path,
-                    new_bytes: Vec::new(),
-                    expected_hash: None,
-                    version: None,
-                    rename_from: Some(path.clone()),
-                }];
-                let _guards = acquire_mutation_locks(&prepared).await;
-                applied += apply_prepared_with_held_locks(context, client, &prepared).await?;
+            if path != dest_path
+                && !prepared
+                    .iter()
+                    .any(|edit| edit.rename_from.as_ref() == Some(&path))
+            {
+                let mut rename = prepare_rename(path.clone(), dest_path).map_err(policy)?;
+                rename.expected_hash =
+                    Some(super::super::file_tools::content_hash(text.as_bytes()));
+                prepared.push(rename);
             }
         }
+        let applied = apply_prepared_edits(context, client, &prepared).await?;
         return Ok(format!("Applied edit to {applied} file(s)"));
     }
     let mut output = truncate_model_output(format_result(context, action, result));
@@ -942,12 +942,12 @@ pub(crate) async fn run_linter_diagnostics(
         ],
         _ => return None,
     };
-    let (program, rest, env, _sandbox) =
+    let command =
         crate::toolset::prepare_managed_command(&workspace, &argv[0], &argv[1..], &constraints)
             .await
             .ok()?;
-    let mut full = vec![program.to_string_lossy().into_owned()];
-    full.extend(rest);
+    let mut full = vec![command.program.to_string_lossy().into_owned()];
+    full.extend(command.args);
     // Best-effort supplementary probe; deliberately does not thread
     // live_output, which would interleave per-file linter noise into the
     // enclosing tool call's live output.
@@ -959,7 +959,7 @@ pub(crate) async fn run_linter_diagnostics(
         cancellation_token: bounds.cancellation_token,
         max_output_bytes: 64 * 1024,
         stdin: Vec::new(),
-        environment: Some(env),
+        environment: Some(command.environment),
         tool_name: Some("lsp".into()),
         live_output: None,
     })

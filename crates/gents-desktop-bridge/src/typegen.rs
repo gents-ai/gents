@@ -6,6 +6,7 @@ use gents_desktop_core::local_runtime::DesktopInitSummary;
 use ts_rs::TS;
 
 use crate::error::{BridgeError, BridgeErrorCode};
+use crate::inference_setup::InferenceSetupState;
 use crate::tauri_commands::chat::RequestResendResultView;
 use crate::tauri_commands::inference_setup::{
     BackendUsageView, ClaudeLoginRequest, ClaudeLoginResult, ClaudeLoginUrl, CodexLoginRequest,
@@ -151,6 +152,7 @@ fn contract_source_paths() -> Vec<PathBuf> {
     let mut paths = vec![
         source_root.join("contract.rs"),
         source_root.join("host/protocol.rs"),
+        source_root.join("inference_setup.rs"),
         source_root.join("../../gents-desktop-core/src/error.rs"),
         source_root.join("../../gents-desktop-core/src/home_reset.rs"),
         source_root.join("tauri_commands/chat.rs"),
@@ -192,6 +194,9 @@ fn export_all(dir: &Path) -> Result<(), String> {
         crate::host::speech::SpeechToolReference,
         crate::host::speech::SpeechRecognizeRequest,
         crate::host::speech::SpeechSynthesizeRequest,
+        crate::host::permissions::WorkspacePermissionsRequest,
+        crate::host::permissions::WorkspacePermissionsSaveRequest,
+        crate::host::permissions::WorkspacePermissionsState,
         crate::host::protocol::ClientMessage,
         crate::host::protocol::ClientCommand,
         crate::host::protocol::HostMessage,
@@ -205,6 +210,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ChatSendRequest,
         PendingMessageEditRequest,
         PendingQueueEditRequest,
+        PendingMessageSteerRequest,
         PendingQueueEditResult,
         SessionGoalView,
         GoalControlView,
@@ -214,6 +220,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         PendingQueueEntryView,
         MailboxItemRequest,
         gents_protocol::mailbox_question::MailboxQuestion,
+        SessionForkBeforeRequest,
+        SessionForkResult,
         SessionRenameRequest,
         NodeConfigSaveRequest,
         DefaultAgentSetRequest,
@@ -250,6 +258,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         DesktopProbeMcpServiceRequest,
         InferenceProbeRequest,
         InferenceDiscoveryRequest,
+        InferenceSetupState,
+        AgentModelSelectionRequest,
         InferenceRecommendationRequest,
         InferenceBackendRecommendationRequest,
         CodexLoginRequest,
@@ -344,8 +354,9 @@ fn export_all(dir: &Path) -> Result<(), String> {
 
     commands::export(dir)?;
     let protocol = format!(
-        "// Generated from gents-desktop-bridge::host::protocol. Do not edit.\n\nexport const CLIENT_HOST_VERSION = {};\nexport const CLIENT_HOST_MAX_FRAME_BYTES = {};\nexport const CLIENT_HOST_MAX_PENDING_CALLS = {};\nexport const CLIENT_HOST_COMMANDS = {} as const;\n",
+        "// Generated from gents-desktop-bridge::host::protocol. Do not edit.\n\nexport const CLIENT_HOST_VERSION = {};\nexport const EDITOR_STORE_BOOTSTRAP_VERSION = {};\nexport const CLIENT_HOST_MAX_FRAME_BYTES = {};\nexport const CLIENT_HOST_MAX_PENDING_CALLS = {};\nexport const CLIENT_HOST_COMMANDS = {} as const;\n",
         crate::host::protocol::PROTOCOL_VERSION,
+        crate::host::protocol::EDITOR_STORE_BOOTSTRAP_VERSION,
         crate::host::protocol::MAX_FRAME_BYTES,
         crate::host::protocol::MAX_PENDING_CALLS,
         serde_json::to_string(crate::host::protocol::ClientCommand::NAMES)

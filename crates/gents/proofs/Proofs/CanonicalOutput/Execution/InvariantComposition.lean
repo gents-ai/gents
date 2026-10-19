@@ -88,15 +88,15 @@ theorem Trace.sequenceBound {before after : World} (trace : Trace before after)
         cases h
         have hb := claim_sequenceBound before world actor now activation bound hc
         simpa [SequenceBound] using hb
-  | activateTitle actor now activation scope budget deadline h =>
+  | activateAuxiliary actor now activation scope budget deadline h =>
       rename_i before after
-      unfold SessionComposition.activateTitle at h
-      cases hc : Handover.claimTitle before actor now activation with
+      unfold SessionComposition.activateAuxiliary at h
+      cases hc : Handover.claimAuxiliary before actor now activation with
       | none => simp [hc] at h
       | some world =>
         simp [hc] at h
         cases h
-        rw [Handover.successful_title_claim_frame before world actor now activation hc]
+        rw [Handover.successful_auxiliary_claim_frame before world actor now activation hc]
         exact bound
   | finish actor acknowledged h =>
       rename_i before after

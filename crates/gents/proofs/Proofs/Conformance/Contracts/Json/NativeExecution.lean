@@ -521,7 +521,7 @@ private def titlePending : World :=
     gateOwner := some 1
     gateSchedule := ⟨.storage, true, false⟩ }
 
-private def titleActivation : Handover.TitleActivation :=
+private def titleActivation : Handover.AuxiliaryActivation :=
   { binding :=
       { physicalRequest := 10, logicalRequest := 11
       , parentPhysical := 20, parentLogical := 21
@@ -529,7 +529,7 @@ private def titleActivation : Handover.TitleActivation :=
   , generation := 7, duration := 5, deadline := 10 }
 
 private def titleClaimed? : Option World :=
-  SessionComposition.activateTitle titlePending 1 5 titleActivation 1
+  SessionComposition.activateAuxiliary titlePending 1 5 titleActivation 1
     { transportRetries := 0, resampleRetries := 0, allowRepair := false } none
 
 private def titleClaimed : World := titleClaimed?.get (by native_decide)
@@ -576,7 +576,7 @@ private def titleRetryClose : Segment :=
 /-- Native title seeds use the typed title claim and begin owners. Their claim
 time plus duration equals the deadline installed by the native claim owner.
 Replication and operations lacking native physical inputs remain explicit
-external-premise experiments. Parent lifecycle is absent from `TitleBinding`:
+external-premise experiments. Parent lifecycle is absent from `AuxiliaryBinding`:
 the native fixture may use a terminal parent without changing these results. -/
 def titleCases : List Case :=
   [ mkCase "title_claimed_renewal_while_permit_wait" titleClaimed
@@ -658,6 +658,54 @@ def titleCases : List Case :=
        .closeAuxiliary 5 7 (AuxiliaryCases.close .title .complete),
        .terminalizeNoMessage] ]
 
+private def reviewPending : World := { titlePending with purpose := .accessReview }
+
+private def reviewActivation : Handover.AuxiliaryActivation :=
+  { titleActivation with binding := { titleActivation.binding with purpose := .accessReview } }
+
+private def reviewProcessing? : Option World := do
+  let claimed ← SessionComposition.activateAuxiliary reviewPending 1 5 reviewActivation 1
+    { transportRetries := 0, resampleRetries := 0, allowRepair := false } none
+  let released ← scheduling claimed 1 .release
+  let held ← acquire released 1 true
+  Handover.beginProcessing held 1 5 7
+
+private def reviewProcessing : World := reviewProcessing?.get (by native_decide)
+
+def accessReviewCases : List Case :=
+  [ mkCase "access_review_complete_is_audit_only" reviewProcessing
+      [.appendRaw 1 5 (AuxiliaryCases.observed .accessReview),
+       .closeAuxiliary 5 7 (AuxiliaryCases.close .accessReview .complete),
+       .terminalizeNoMessage]
+  , mkCase "access_review_rejects_assistant_publication" reviewProcessing
+      [.appendRaw 1 5 (AuxiliaryCases.observed .accessReview),
+       .acceptTurn (AuxiliaryCases.nativePublicationClose .accessReview)
+         AuxiliaryCases.nativePublicationMessage [],
+       .closeAuxiliary 5 7 (AuxiliaryCases.close .accessReview .complete),
+       .terminalizeNoMessage]
+  , mkCase "access_review_rejects_title_audit_source" reviewProcessing
+      [.appendRaw 1 5 (AuxiliaryCases.observed .title),
+       .appendRaw 1 5 (AuxiliaryCases.observed .accessReview),
+       .closeAuxiliary 5 7 (AuxiliaryCases.close .accessReview .complete),
+       .terminalizeNoMessage]
+  , mkCase "normal_request_rejects_access_review_source" (world 5)
+      [.appendRaw 1 5 (AuxiliaryCases.observed .accessReview),
+       .appendRaw 1 6 (raw 102 0 0 6)]
+  , mkCase "access_review_partial_output_is_audit_only" reviewProcessing
+      [.appendRaw 1 5 (AuxiliaryCases.observed .accessReview),
+       .closePartial 6 7
+         ⟨{ AuxiliaryCases.close .accessReview .«partial» with createdAt := 6 }, none⟩,
+       .terminalizeNoMessageAt 7]
+  , mkCase "access_review_expired_lease_recovers_without_message" reviewProcessing
+      [.appendRaw 1 5 (AuxiliaryCases.observed .accessReview),
+       .recoverTerminal 2 20 8 .interrupted .noMessage
+         [⟨AuxiliaryCases.recoveryClose .accessReview, none⟩]] ]
+
+example : accessReviewCases.map (fun value => value.expected.map (List.map (·.accepted))) =
+    [some [true, true, true], some [true, false, true, true],
+     some [false, true, true, true], some [false, true],
+     some [true, true, true], some [true, true]] := by native_decide
+
 example : titleCases.map (fun value => value.expected.map (List.map (·.accepted))) =
     [some [true], some [true, true, true], some [true, true, true],
       some [true, true], some [true, true], some [true, true], some [true, true, true],
@@ -737,7 +785,7 @@ def cases : List Case :=
   schedulingCases ++ toolSeamCases ++ nativeToolCompletionCases ++ leaseOrderingCases ++
     toolOutputDeadlineCases ++ terminalRecoveryCases ++
     publicationCases ++ integrityCases ++
-    compactionCases ++ auxiliaryCloseCases ++ titleCases ++ livePartialCases
+    compactionCases ++ auxiliaryCloseCases ++ titleCases ++ accessReviewCases ++ livePartialCases
 
 def contextFieldsJson (context : ToolExecution.ToolCallContext) : String :=
   "\"call_id\":" ++ toString context.callId ++ ","
@@ -765,8 +813,9 @@ def recoveryItemJson (value : RecoveryItem) : String :=
   "{\"closing\":" ++ canonicalSegmentJson value.closing ++ ",\"message\":" ++
     (value.message.map canonicalMessageJson).getD "null" ++ "}"
 
-private def titleBindingJson (binding : Handover.TitleBinding) : String :=
-  "{\"physical_request\":" ++ toString binding.physicalRequest ++
+private def auxiliaryBindingJson (binding : Handover.AuxiliaryBinding) : String :=
+  "{\"purpose\":" ++ jsonString binding.purpose.toWire ++
+    ",\"physical_request\":" ++ toString binding.physicalRequest ++
     ",\"logical_request\":" ++ toString binding.logicalRequest ++
     ",\"parent_physical\":" ++ toString binding.parentPhysical ++
     ",\"parent_logical\":" ++ toString binding.parentLogical ++
@@ -775,12 +824,12 @@ private def titleBindingJson (binding : Handover.TitleBinding) : String :=
     ",\"authenticated\":" ++ jsonOptionalBool (some binding.authenticated) ++ "}"
 
 def seedJson (value : World) : String :=
-  let titleBinding := value.claimed.bind fun claimed => match claimed.evidence with
-    | .titleAudit binding => some binding
+  let auxiliaryBinding := value.claimed.bind fun claimed => match claimed.evidence with
+    | .auxiliary binding => some binding
     | _ => none
   "{" ++ "\"request_id\":" ++ toString value.requestId ++ ","
     ++ "\"purpose\":" ++ jsonString value.purpose.toWire ++ ","
-    ++ "\"title_binding\":" ++ (titleBinding.map titleBindingJson).getD "null" ++ ","
+    ++ "\"title_binding\":" ++ (auxiliaryBinding.map auxiliaryBindingJson).getD "null" ++ ","
     ++ "\"session_id\":" ++ toString value.sessionId ++ ","
     ++ "\"node_did\":" ++ toString value.nodeDid ++ ","
     ++ "\"lease\":" ++ Conformance.RequestExecutionLeaseContracts.worldJson value.lease ++ ","
@@ -924,7 +973,7 @@ example : cases.all (fun value => value.seed.segments.isEmpty && value.seed.mess
     value.seed.terminalSelection.isNone &&
     (value.nativeGap.isSome ||
       (value.seed.gateOwner.isNone && value.seed.claimed.isNone) ||
-      decide (value.seed = titleClaimed ∨ value.seed = titleProcessing))) = true := by
+      decide (value.seed = titleClaimed ∨ value.seed = titleProcessing ∨ value.seed = reviewProcessing))) = true := by
   native_decide
 
 example : cases.all (fun value => !value.inputs.isEmpty &&

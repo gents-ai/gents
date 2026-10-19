@@ -39,7 +39,7 @@ def evidenceValid (world : World) (request : PhysicalRequestAdmission) : ClaimEv
         request.entry.source == .goal &&
         request.entry.queuedAfter == some receipt.parentLogical &&
         request.document != receipt.parentPhysical
-  | .titleAudit _ => false
+  | .auxiliary _ => false
 
 def predecessorReady (world : World) : Bool :=
   match world.lease.lease with
@@ -88,10 +88,10 @@ def claimAndActivate (state : World) (actor : Gate.Actor) (now : Time)
                 , logicalRequest := activation.request.entry.requestId
                 , session := activation.request.session, evidence := activation.evidence } }
 
-def claimTitle (state : World) (actor : Gate.Actor) (now : Time)
-    (activation : TitleActivation) : Option World :=
+def claimAuxiliary (state : World) (actor : Gate.Actor) (now : Time)
+    (activation : AuxiliaryActivation) : Option World :=
   let binding := activation.binding
-  if state.purpose != .titleAudit || state.claimed.isSome ||
+  if !state.purpose.isAuxiliary || binding.purpose != state.purpose || state.claimed.isSome ||
       !binding.authenticated || binding.physicalRequest != state.requestId ||
       binding.parentPhysical == binding.physicalRequest ||
       binding.parentLogical == binding.logicalRequest ||
@@ -111,33 +111,33 @@ def claimTitle (state : World) (actor : Gate.Actor) (now : Time)
             { physicalRequest := binding.physicalRequest
             , logicalRequest := binding.logicalRequest
             , session := binding.session
-            , evidence := .titleAudit binding } }
+            , evidence := .auxiliary binding } }
 
-theorem successful_title_claim_frame
+theorem successful_auxiliary_claim_frame
     (before after : World) (actor : Gate.Actor) (now : Time)
-    (activation : TitleActivation)
-    (h : claimTitle before actor now activation = some after) :
+    (activation : AuxiliaryActivation)
+    (h : claimAuxiliary before actor now activation = some after) :
     after = { before with
       lease := after.lease
       gateSchedule := after.gateSchedule
       claimed := after.claimed } := by
-  unfold claimTitle at h
+  unfold claimAuxiliary at h
   dsimp only at h
   repeat' first | contradiction | split at h
   all_goals cases h
   all_goals rfl
 
-theorem successful_title_claim_binding
+theorem successful_auxiliary_claim_binding
     (before after : World) (actor : Gate.Actor) (now : Time)
-    (activation : TitleActivation)
-    (h : claimTitle before actor now activation = some after) :
+    (activation : AuxiliaryActivation)
+    (h : claimAuxiliary before actor now activation = some after) :
     after.claimed = some
       { physicalRequest := activation.binding.physicalRequest
       , logicalRequest := activation.binding.logicalRequest
       , session := activation.binding.session
-      , evidence := .titleAudit activation.binding } ∧
+      , evidence := .auxiliary activation.binding } ∧
     after.queue = before.queue ∧ after.requestId = before.requestId := by
-  unfold claimTitle at h
+  unfold claimAuxiliary at h
   dsimp only at h
   repeat' first | contradiction | split at h
   all_goals cases h
@@ -199,8 +199,8 @@ theorem successful_claim_preserves_nextSeq
 def claimReady (world : World) (claimed : ClaimedBinding) : Bool :=
   claimed.physicalRequest == world.requestId && claimed.session == world.sessionId &&
     match claimed.evidence with
-    | .titleAudit binding =>
-        world.purpose == .titleAudit && binding.authenticated &&
+    | .auxiliary binding =>
+        world.purpose.isAuxiliary && binding.purpose == world.purpose && binding.authenticated &&
           binding.physicalRequest == claimed.physicalRequest &&
           binding.logicalRequest == claimed.logicalRequest &&
           binding.session == claimed.session && binding.node == world.nodeDid &&
@@ -264,14 +264,14 @@ def finishAndAcknowledge (state : World) (actor : Gate.Actor) : Option FinishRes
     else match terminalOutcome? world with
     | none => none
     | some outcome =>
-      if (world.purpose == .titleAudit && world.terminalSelection != some .noMessage) ||
+      if (world.purpose.isAuxiliary && world.terminalSelection != some .noMessage) ||
           (outcome == .completed &&
       !(match world.terminalSelection with
         | some selection => terminalSelectionValid world selection
         | none => false)) then none
       else
       let queue? := match claimed.evidence with
-        | .titleAudit _ => some state.queue
+        | .auxiliary _ => some state.queue
         | _ => SessionQueue.step? state.queue .finishActive
       match queue? with
       | none => none
@@ -279,7 +279,7 @@ def finishAndAcknowledge (state : World) (actor : Gate.Actor) : Option FinishRes
         let acknowledged := match claimed.evidence with
           | .backgroundWake snapshot =>
               if outcome == .completed then snapshot.attemptedBindings else []
-          | .ordinary | .goalChild _ | .titleAudit _ => []
+          | .ordinary | .goalChild _ | .auxiliary _ => []
         some ⟨
           { state with
             gateSchedule := { state.gateSchedule with phase := .releasable }
@@ -306,12 +306,12 @@ theorem successful_finish_clears_claim_control
     (h : finishAndAcknowledge before actor = some after) :
     after.state.claimed = none ∧
       (before.purpose = .normal → after.state.queue.active = none) ∧
-      (before.purpose = .titleAudit → after.state.queue = before.queue) := by
+      (before.purpose.isAuxiliary = true → after.state.queue = before.queue) := by
   unfold finishAndAcknowledge at h
   dsimp only at h
   repeat' first | contradiction | split at h
   all_goals cases h
-  all_goals simp_all [claimReady]
+  all_goals cases hp : before.purpose <;> simp_all [claimReady, RequestPurpose.isAuxiliary]
   all_goals exact finishActive_step_clears_active _ _ (by assumption)
 
 end CanonicalOutput.Execution.Handover

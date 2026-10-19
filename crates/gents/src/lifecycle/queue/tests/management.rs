@@ -243,6 +243,15 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
             &session_id,
             caller_did,
             edit,
+            &replacements
+                .iter()
+                .map(|replacement| {
+                    super::folding::generated_input(replacement)
+                        .queue
+                        .unwrap()
+                        .delivery
+                })
+                .collect::<Vec<_>>(),
         )
         .await;
         assert_eq!(
@@ -366,7 +375,7 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
     }
     assert_eq!(
         exercised.len(),
-        9,
+        15,
         "all representable generated management operations"
     );
 }

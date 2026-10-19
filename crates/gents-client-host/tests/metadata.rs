@@ -24,6 +24,10 @@ fn artifact_description_does_not_open_a_client_store() {
         gents_desktop_bridge::host::protocol::PROTOCOL_VERSION
     );
     assert_eq!(
+        metadata["editorStoreBootstrapVersion"],
+        gents_desktop_bridge::host::protocol::EDITOR_STORE_BOOTSTRAP_VERSION
+    );
+    assert_eq!(
         metadata["commands"],
         serde_json::json!(gents_desktop_bridge::host::protocol::ClientCommand::NAMES)
     );

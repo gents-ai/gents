@@ -123,6 +123,19 @@ pub(super) fn chat_folder(raw: Option<&str>) -> Result<Option<String>> {
     Ok(Some(raw.to_string()))
 }
 
+pub async fn fork_session_before_message(
+    core: &ClientCore,
+    request: crate::types::SessionForkBeforeRequest,
+) -> Result<crate::types::SessionForkResult> {
+    let outcome = core
+        .fork_session_before_message(&request.node_did, &request.session_id, &request.message_key)
+        .await?;
+    Ok(crate::types::SessionForkResult {
+        node_did: request.node_did.trim().to_owned(),
+        session_id: outcome.session_id,
+    })
+}
+
 pub async fn rename_session(core: &ClientCore, request: SessionRenameRequest) -> Result<()> {
     let node_did = request.node_did.trim().to_string();
     if node_did.is_empty() {
@@ -180,6 +193,24 @@ pub async fn edit_pending_queue(
                     })
                     .collect(),
             },
+        )
+        .await?;
+    Ok(super::super::types::PendingQueueEditResult {
+        request_doc_ids: result.request_doc_ids,
+        request_ids: result.request_ids,
+    })
+}
+
+pub async fn steer_pending_message(
+    core: &ClientCore,
+    request: super::super::types::PendingMessageSteerRequest,
+) -> Result<super::super::types::PendingQueueEditResult> {
+    let result = core
+        .steer_pending_message(
+            &request.node_did,
+            &request.session_id,
+            request.expected_request_doc_ids,
+            &request.request_doc_id,
         )
         .await?;
     Ok(super::super::types::PendingQueueEditResult {

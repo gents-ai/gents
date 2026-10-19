@@ -51,13 +51,20 @@ private def workspaceJson (w : RequestWorkspace) : String :=
   ",\"workspace_authority\":" ++ optionalString (w.authority.map BindingAuthority.toDefraDB) ++
   ",\"workspace_seal_hash\":" ++ optionalString w.sealHash ++ "}"
 
+private def requestInputJson (input : RequestInput) : String :=
+  "{\"selected_skill_ids\":" ++ jsonStringArray input.selectedSkillIds ++
+  ",\"cwd\":" ++ optionalString input.cwd ++
+  ",\"initial_title\":" ++ titleJson input.initialTitle ++
+  ",\"queue\":" ++ queueJson input.queue ++
+  ",\"goal_continuation\":" ++ goalJson input.goalContinuation ++ "}"
+
 private def requestInputCaseJson (c : RequestInputCase) : String :=
+  let queue := c.input.queue.getD { source := .backgroundCompletion, policy := .coalesce }
   "{\"name\":" ++ jsonString c.name ++
-  ",\"input\":{\"selected_skill_ids\":" ++ jsonStringArray c.input.selectedSkillIds ++
-  ",\"cwd\":" ++ optionalString c.input.cwd ++
-  ",\"initial_title\":" ++ titleJson c.input.initialTitle ++
-  ",\"queue\":" ++ queueJson c.input.queue ++
-  ",\"goal_continuation\":" ++ goalJson c.input.goalContinuation ++ "}" ++
+  ",\"input\":" ++ requestInputJson c.input ++
+  ",\"continuation_queue\":" ++ queueJson (some queue) ++
+  ",\"continuation_goal\":" ++ goalJson c.input.goalContinuation ++
+  ",\"expected_continuation\":" ++ requestInputJson (continuationInput c.input queue c.input.goalContinuation) ++
   ",\"workspace\":" ++ workspaceJson c.workspace ++
   ",\"workspace_source\":" ++ workspaceJson c.workspaceSource ++
   ",\"workspace_source_authenticated\":" ++ boolString c.workspaceSourceAuthenticated ++

@@ -23,7 +23,10 @@ impl ClientCore {
             .find(|record| record.node_did == node_did)
             .context("no saved deployment route owns this node")?;
         gents::goal::load_session_goal_observation(
-            &self.session_queue_access(node_did),
+            &self
+                .operator_observation_graphql(node_did)
+                .map(gents::config_client::ConfigAccess::Graphql)
+                .unwrap_or_else(|| gents::config_client::ConfigAccess::local(self.node_arc())),
             &self.node_identity,
             node_did,
             session_id,

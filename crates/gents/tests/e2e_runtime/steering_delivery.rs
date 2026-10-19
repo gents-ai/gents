@@ -4,7 +4,8 @@ use std::time::Duration;
 use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
 use gents::lifecycle::{
-    pending_user_queue, submit_pending_user_edit, PendingMessageEdit, PendingQueueEdit,
+    pending_steer_edit, pending_user_queue, submit_pending_user_edit, submit_pending_user_steer,
+    PendingMessageEdit, PendingQueueEdit,
 };
 use gents::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents::{Gents, NodeIdentity};
@@ -56,12 +57,18 @@ impl ToolDyn for HeldTool {
     }
 }
 
-async fn steering_case(hold_tool: bool) {
+async fn steering_case(hold_tool: bool, promote: bool) {
     let name = if hold_tool {
         "steering-held-tool"
     } else {
         "steering-terminal-arrival"
     };
+    let name = if promote {
+        format!("queued-{name}")
+    } else {
+        name.to_owned()
+    };
+    let name = name.as_str();
     let db = test_db(name).await;
     let did = db.node_identity.did();
     let access = ConfigAccess::local(db.node.clone());
@@ -142,7 +149,11 @@ async fn steering_case(hold_tool: bool) {
         name,
         "old-steering",
         "withdrawn steering content",
-        QueueDelivery::Steer,
+        if promote {
+            QueueDelivery::Queue
+        } else {
+            QueueDelivery::Steer
+        },
     )
     .await;
     let cancelled = enqueue(
@@ -151,7 +162,11 @@ async fn steering_case(hold_tool: bool) {
         name,
         "cancelled-steering",
         "cancelled steering content",
-        QueueDelivery::Steer,
+        if promote {
+            QueueDelivery::Queue
+        } else {
+            QueueDelivery::Steer
+        },
     )
     .await;
     let snapshot = pending_user_queue(&access, did, name, did).await.unwrap();
@@ -161,7 +176,7 @@ async fn steering_case(hold_tool: bool) {
         .map(|entry| entry.request_doc_id.clone())
         .collect::<Vec<_>>();
     let correction = format!("{name}: accepted correction");
-    let replacement = submit_pending_user_edit(
+    let mut replacement = submit_pending_user_edit(
         &access,
         db.node_identity.as_ref(),
         AgentRequestAdmissionRecord::local_self(did),
@@ -199,6 +214,41 @@ async fn steering_case(hold_tool: bool) {
     )
     .await
     .unwrap();
+    if promote {
+        let snapshot = pending_user_queue(&access, did, name, did).await.unwrap();
+        let selected = replacement.request_doc_ids[0].clone();
+        assert!(
+            snapshot
+                .entries
+                .iter()
+                .find(|entry| entry.request_doc_id == selected)
+                .unwrap()
+                .steerable
+        );
+        let edit = pending_steer_edit(
+            &snapshot,
+            snapshot
+                .entries
+                .iter()
+                .map(|entry| entry.request_doc_id.clone())
+                .collect(),
+            &selected,
+        )
+        .unwrap();
+        replacement = submit_pending_user_steer(
+            &access,
+            db.node_identity.as_ref(),
+            AgentRequestAdmissionRecord::local_self(did),
+            None,
+            did,
+            name,
+            edit,
+            &selected,
+        )
+        .await
+        .unwrap();
+        assert_eq!(row(&db, &selected).await["lifecycle_state"], "superseded");
+    }
     assert_eq!(row(&db, &old).await["lifecycle_state"], "superseded");
     assert_eq!(row(&db, &cancelled).await["lifecycle_state"], "interrupted");
     assert_eq!(
@@ -248,12 +298,22 @@ async fn steering_case(hold_tool: bool) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn steering_after_held_tool_uses_same_physical_request_and_excludes_edited_cancelled_input() {
-    steering_case(true).await;
+    steering_case(true, false).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn steering_arriving_during_terminal_response_continues_same_physical_request() {
-    steering_case(false).await;
+    steering_case(false, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicitly_promoted_queue_input_reaches_the_same_request_after_a_tool() {
+    steering_case(true, true).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicitly_promoted_queue_input_continues_the_same_request_after_terminal_text() {
+    steering_case(false, true).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -88,16 +88,26 @@ async fn editor_preserves_live_session_and_draft_across_window_reload() -> Resul
 }
 
 async fn exercise(root: &Path, journey: Journey) -> Result<()> {
-    let cli = Path::new(env!("CARGO_BIN_EXE_gents-client-host"))
-        .parent()
-        .context("native binary directory")?
-        .join(format!("gents{}", std::env::consts::EXE_SUFFIX));
-    ensure!(cli.is_file(), "build gents-cli before running runtime-e2e");
+    let cli = support::native_binary("gents")?;
+    let host_binary = support::native_binary("gents-client-host")?;
+    if matches!(journey, Journey::Editor) {
+        std::fs::write(
+            root.join("AGENTS.md"),
+            "# Project instructions fixture\nUse the current editor workspace.\n",
+        )?;
+    }
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     let (emitted, _) = tokio::sync::watch::channel(None);
     let provider_gate = gate.clone();
-    let provider = FakeLlm::start(
-        "editor-fixture",
+    let editor_goal_gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let goal_provider_gate = editor_goal_gate.clone();
+    let goal_provider_hold = root.join("hold-goal-provider");
+    let provider = FakeLlm::start_with_models(
+        if matches!(journey, Journey::Editor) {
+            &["editor-fixture", "editor-fixture-alternate"]
+        } else {
+            &["editor-fixture"]
+        },
         None,
         Arc::new(move |_| {
             ChatAction::GatedSse(
@@ -108,7 +118,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                         json!({"choices":[{"delta":{"content":"First part"},"finish_reason":null}],"usage":null})
                     ),
                 )],
-                provider_gate.clone(),
+                if goal_provider_hold.is_file() {
+                    goal_provider_gate.clone()
+                } else {
+                    provider_gate.clone()
+                },
                 fake_llm::completion_text_sse(" and final part."),
                 emitted.clone(),
             )
@@ -119,6 +133,16 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .current_dir(root)
         .args(["init", "--store-key-custody", "file", "--home"])
         .arg(&node_home)
+        .args([
+            "--tool-package",
+            if matches!(journey, Journey::Editor) {
+                "write"
+            } else {
+                "readonly"
+            },
+            "--tool-root",
+        ])
+        .arg(root)
         .args([
             "--node-name",
             "editor-fixture",
@@ -191,8 +215,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let client_did = seed.node_identity().did().to_owned();
     seed.shutdown().await?;
     drop(seed);
-    let mut host_command = Command::new(env!("CARGO_BIN_EXE_gents-client-host"));
+    let mut host_command = Command::new(&host_binary);
     host_command.args(["--serve", "--home"]).arg(paths.root());
+    if matches!(journey, Journey::Editor) {
+        host_command.arg("--editor-store");
+    }
     #[cfg(unix)]
     let mut host = host_command
         .stdin(Stdio::null())
@@ -211,48 +238,54 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         graphql,
         identity.did(),
     ));
-    let pending = client
-        .call(
-            1,
-            "desktop_peer_enroll_status",
-            json!({
-                "request": { "serverAddress": format!("http://127.0.0.1:{port}") }
-            }),
-        )
-        .await;
-    let pending_id = pending["requestId"]
-        .as_str()
-        .context("pending enrollment")?;
-    let pending_query = format!(
-        "{{ NetworkEnrollmentRequest(filter: {{ request_id: {{ _eq: \"{}\" }} }}) {{ _docID }} }}",
-        gents::graphql::escape_graphql_string(pending_id)
-    );
-    tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            let response = access.execute(&pending_query).await?;
-            if response["data"]["NetworkEnrollmentRequest"]
-                .as_array()
-                .is_some_and(|rows| !rows.is_empty())
-            {
-                return Ok::<_, anyhow::Error>(());
+    if matches!(journey, Journey::Conversation) {
+        client
+            .call(1, "client_connect_local", json!({"nodeHome":node_home}))
+            .await;
+    } else {
+        let pending = client
+            .call(
+                1,
+                "desktop_peer_enroll_status",
+                json!({
+                    "request": { "serverAddress": format!("http://127.0.0.1:{port}") }
+                }),
+            )
+            .await;
+        let pending_id = pending["requestId"]
+            .as_str()
+            .context("pending enrollment")?;
+        let pending_query = format!(
+            "{{ NetworkEnrollmentRequest(filter: {{ request_id: {{ _eq: \"{}\" }} }}) {{ _docID }} }}",
+            gents::graphql::escape_graphql_string(pending_id)
+        );
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let response = access.execute(&pending_query).await?;
+                if response["data"]["NetworkEnrollmentRequest"]
+                    .as_array()
+                    .is_some_and(|rows| !rows.is_empty())
+                {
+                    return Ok::<_, anyhow::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .context("runtime did not observe the enrollment request")??;
-    let approved = Command::new(&cli)
-        .current_dir(root)
-        .args(["p2p", "enrollment", "approve", pending_id, "--home"])
-        .arg(&node_home)
-        .kill_on_drop(true)
-        .output();
-    let approved = tokio::time::timeout(Duration::from_secs(30), approved).await??;
-    ensure!(
-        approved.status.success(),
-        "enrollment approval failed: {}",
-        String::from_utf8_lossy(&approved.stderr)
-    );
+        })
+        .await
+        .context("runtime did not observe the enrollment request")??;
+        let approved = Command::new(&cli)
+            .current_dir(root)
+            .args(["p2p", "enrollment", "approve", pending_id, "--home"])
+            .arg(&node_home)
+            .kill_on_drop(true)
+            .output();
+        let approved = tokio::time::timeout(Duration::from_secs(30), approved).await??;
+        ensure!(
+            approved.status.success(),
+            "enrollment approval failed: {}",
+            String::from_utf8_lossy(&approved.stderr)
+        );
+    }
     let mut id = 2;
     let mut last_snapshot = Value::Null;
     let deployment = tokio::time::timeout(Duration::from_secs(30), async {
@@ -285,6 +318,16 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .and_then(|agents| agents.iter().find(|agent| agent["isDefault"] == true))
         .and_then(|agent| agent["agentId"].as_str())
         .context("runtime default agent")?;
+    if matches!(journey, Journey::Conversation) {
+        configure_inference(
+            &mut client,
+            &mut id,
+            node_did,
+            agent_id,
+            provider.endpoint(),
+        )
+        .await?;
+    }
     let speech = if matches!(journey, Journey::Conversation) {
         client
             .call(id, "client_connect_local", json!({"nodeHome":node_home}))
@@ -481,6 +524,50 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         );
     }
     if matches!(journey, Journey::Editor) {
+        let context = access.execute(&format!(
+            r#"{{
+                AgentMessage(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ message_key request_doc_id }}
+                AgentOutputSegment(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ payload }}
+            }}"#,
+            gents::graphql::escape_graphql_string(session),
+            gents::graphql::escape_graphql_string(session),
+        )).await?;
+        ensure!(
+            context["data"]["AgentMessage"]
+                .as_array()
+                .is_some_and(|messages| {
+                    messages.iter().any(|message| {
+                        message["request_doc_id"].as_str().is_some_and(|doc_id| {
+                            message["message_key"] == format!("authored:{doc_id}:context")
+                        })
+                    })
+                })
+                && context["data"]["AgentOutputSegment"]
+                    .to_string()
+                    .contains("Project instructions fixture"),
+            "the fixture did not preserve its native workspace instructions: {context}"
+        );
+        let completion_path = root.join("finish-provider");
+        let completion_gate = Arc::clone(&gate);
+        let _completion = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            loop {
+                if completion_path.is_file() {
+                    completion_gate.add_permits(1);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }));
+        let goal_completion_path = root.join("finish-goal-provider");
+        let _goal_completion = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            loop {
+                if goal_completion_path.is_file() {
+                    editor_goal_gate.add_permits(1);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }));
         configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
         client
             .call(id, "client_connect_local", json!({"nodeHome":node_home}))
@@ -529,12 +616,26 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             script.is_file(),
             "The extension checkout has no tests/editor.mjs"
         );
+        let mut editor = Command::new("node");
+        if std::env::var("GENTS_VSCODE_STARTUP_CUSTODY").as_deref() == Ok("file") {
+            let startup_paths = DesktopPaths::from_root(root.join("startup-client"));
+            let startup = Arc::new(
+                ClientCore::start_with_paths_and_options(
+                    startup_paths.clone(),
+                    ClientCoreOptions::local_only(),
+                )
+                .await?,
+            );
+            startup.shutdown().await?;
+            editor.env("GENTS_VSCODE_STARTUP_CLIENT_HOME", startup_paths.root());
+        }
         let log = std::fs::File::create(root.join("editor.log"))?;
-        let child = Command::new("node")
+        let child = editor
+            .env("GENTS_VSCODE_INFERENCE_ENDPOINT", provider.endpoint())
             .arg(script)
             .arg(root)
             .arg(paths.root())
-            .arg(env!("CARGO_BIN_EXE_gents-client-host"))
+            .arg(&host_binary)
             .arg(session)
             .stdout(Stdio::from(log.try_clone()?))
             .stderr(Stdio::from(log))
@@ -546,7 +647,103 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         }
         let status = status.context("editor journey timed out")??;
         ensure!(status.success(), "editor journey exited with {status}");
+        let stopped = access
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ content session_id lifecycle_state }} }}"#,
+                gents::graphql::escape_graphql_string(node_did),
+            ))
+            .await?;
+        let stopped = stopped["data"]["AgentRequest"]
+            .as_array()
+            .context("stopped editor request rows")?
+            .iter()
+            .filter(|row| {
+                matches!(
+                    row["content"].as_str(),
+                    Some(
+                        "Verify the installed goal controls" | "Continue with the queued follow-up"
+                    )
+                )
+            })
+            .collect::<Vec<_>>();
+        ensure!(
+            stopped.len() == 2
+                && stopped[0]["content"] != stopped[1]["content"]
+                && stopped[0]["session_id"] == stopped[1]["session_id"]
+                && stopped.iter().all(|row| row["lifecycle_state"] == "interrupted"),
+            "both editor Stop actions must reach distinct requests in the same session: {stopped:?}"
+        );
         configured_actions::verify_editor_settings(&access, node_did, agent_id).await?;
+        let submitted = access.execute(&format!(
+            r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ content input }} }}"#,
+            gents::graphql::escape_graphql_string(node_did),
+        )).await?;
+        let rows = submitted["data"]["AgentRequest"]
+            .as_array()
+            .context("editor workspace request")?
+            .iter()
+            .filter(|row| {
+                row["content"]
+                    .as_str()
+                    .is_some_and(|content| content.starts_with("Check this repository"))
+            })
+            .collect::<Vec<_>>();
+        ensure!(
+            rows.len() == 1,
+            "the editor must submit one workspace request: {submitted}"
+        );
+        let selected = client
+            .call(
+                id,
+                "client_inference_setup_state",
+                json!({"nodeDid":node_did}),
+            )
+            .await;
+        id += 1;
+        let binding = selected["agentConfigs"]
+            .as_array()
+            .and_then(|agents| agents.iter().find(|agent| agent["agent_id"] == agent_id))
+            .context("selected agent configuration")?;
+        ensure!(
+            selected["inferenceProfiles"]
+                .as_array()
+                .is_some_and(|profiles| {
+                    profiles.iter().any(|profile| {
+                        profile["profile_id"] == binding["inference_profile_id"]
+                            && profile["model_name"] == "editor-fixture-alternate"
+                            && profile["service_tier"] == "fast"
+                    })
+                }),
+            "the composer model selection did not reach the selected agent: {selected}"
+        );
+        ensure!(
+            provider.captured_chat_requests().iter().any(|request| {
+                request["model"] == "editor-fixture-alternate"
+                    && request["service_tier"] == "priority"
+                    && request["messages"].as_array().is_some_and(|messages| {
+                        messages.iter().any(|message| {
+                            message["role"] == "user"
+                                && match &message["content"] {
+                                    Value::String(text) => text.contains("Check this repository"),
+                                    Value::Array(parts) => parts.iter().any(|part| {
+                                        part["text"].as_str().is_some_and(|text| {
+                                            text.contains("Check this repository")
+                                        })
+                                    }),
+                                    _ => false,
+                                }
+                        })
+                    })
+            }),
+            "the editor request did not use the selected model"
+        );
+        let cwd = rows[0]["input"]["cwd"]
+            .as_str()
+            .context("the editor request has no workspace folder")?;
+        ensure!(
+            std::fs::canonicalize(cwd)? == std::fs::canonicalize(root.join("second-workspace"))?,
+            "the editor request used a different project folder"
+        );
         ensure!(tokio::time::timeout(Duration::from_secs(5), approval_wait)
             .await
             .context("the editor's approval did not reach the waiting call")???);
@@ -705,9 +902,104 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )
         .await?;
     }
+    if matches!(journey, Journey::Conversation | Journey::Editor) {
+        exercise_message_edit(&mut client, &mut id, node_did, session, agent_id).await?;
+    }
     client.close().await;
     stop(&mut host).await?;
     stop(&mut runtime).await?;
+    Ok(())
+}
+
+async fn exercise_message_edit(
+    client: &mut Attachment,
+    id: &mut u32,
+    node_did: &str,
+    source: &str,
+    agent: &str,
+) -> Result<()> {
+    let before = read_session(client, id, node_did, source).await?;
+    let message = before["timelineItems"]
+        .as_array()
+        .and_then(|items| items.iter().find(|item| item["kind"] == "userMessage"))
+        .context("completed source has no authored user message")?;
+    let padded = format!(
+        " {} ",
+        message["itemKey"]
+            .as_str()
+            .context("canonical message key")?
+    );
+    let invalid = client
+        .try_call(
+            *id,
+            "desktop_session_fork_before_message",
+            json!({"request": {
+                "nodeDid": node_did, "sessionId": source, "messageKey": padded
+            }}),
+        )
+        .await;
+    *id += 1;
+    ensure!(
+        invalid.is_err(),
+        "message-key whitespace changed canonical identity"
+    );
+    let fork = client
+        .call(
+            *id,
+            "desktop_session_fork_before_message",
+            json!({"request": {
+                "nodeDid": node_did, "sessionId": source, "messageKey": message["itemKey"]
+            }}),
+        )
+        .await;
+    *id += 1;
+    let child = fork["sessionId"].as_str().context("missing fork receipt")?;
+    ensure!(
+        child != source && fork["nodeDid"] == node_did,
+        "fork receipt crossed source scope"
+    );
+    let sent = client
+        .call(
+            *id,
+            "desktop_chat_send",
+            json!({"request": {
+                "nodeDid": node_did, "sessionId": child, "agentId": agent,
+                "content": "Return the edited fixture response."
+            }}),
+        )
+        .await;
+    *id += 1;
+    ensure!(
+        sent["sessionId"] == child,
+        "edited input was not sent to the branch"
+    );
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let branch = read_session(client, id, node_did, child).await?;
+            if branch["turnState"] == "completed" {
+                let users = branch["timelineItems"]
+                    .as_array()
+                    .context("child timeline")?
+                    .iter()
+                    .filter(|item| item["kind"] == "userMessage")
+                    .collect::<Vec<_>>();
+                ensure!(
+                    users.len() == 1
+                        && users[0]["content"] == "Return the edited fixture response.",
+                    "the edited branch retained the replaced user turn: {branch}"
+                );
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .context("edited branch did not complete")??;
+    let after = read_session(client, id, node_did, source).await?;
+    ensure!(
+        after["timelineItems"] == before["timelineItems"],
+        "editing mutated the original conversation"
+    );
     Ok(())
 }
 
@@ -772,6 +1064,88 @@ async fn wait_goal(
     })
     .await
     .context("the signed goal observation did not reach the client")
+}
+
+async fn configure_inference(
+    client: &mut Attachment,
+    id: &mut u32,
+    node_did: &str,
+    agent_id: &str,
+    endpoint: &str,
+) -> Result<()> {
+    let local = client
+        .call(*id, "client_runtime_is_local", json!({"nodeDid":node_did}))
+        .await;
+    *id += 1;
+    ensure!(
+        local == true,
+        "the enrolled local runtime lost its local home observation"
+    );
+    let catalog = client
+        .call(*id, "client_inference_setup_catalog", json!({}))
+        .await;
+    *id += 1;
+    ensure!(
+        catalog["providers"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["id"] == "local")),
+        "the native setup catalog has no local provider"
+    );
+    let discovery = client.call(*id, "client_inference_models_discover", json!({"request": {
+        "requestKey":"editor-setup", "nodeDid":node_did, "provider":"local",
+        "authMethod":"optional_api_key", "endpoint":endpoint, "apiKey":null, "accountRef":null,
+    }})).await;
+    *id += 1;
+    ensure!(
+        discovery["reachable"] == true
+            && discovery["models"].as_array().is_some_and(|models| models
+                .iter()
+                .any(|model| model["advertised"]["model_name"] == "editor-fixture")),
+        "native model discovery did not observe the provider: {discovery}"
+    );
+    let deployment = client
+        .call(
+            *id,
+            "client_inference_setup_state",
+            json!({"nodeDid":node_did}),
+        )
+        .await;
+    *id += 1;
+    ensure!(deployment["nodeDid"] == node_did);
+    let mut agent = deployment["agentConfigs"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|row| row["agent_id"] == agent_id))
+        .context("the setup default agent configuration")?
+        .clone();
+    agent["inference_profile_id"] = json!("editor-setup");
+    client.call(*id, "client_config_apply", json!({"request":{"document":{
+        "node":{"node_did":node_did},
+        "inference_backends":[{"node_did":node_did,"backend_id":"editor-setup",
+            "name":"Editor setup", "provider_kind":discovery["providerKind"],
+            "openai_wire_api":discovery["openaiWireApi"], "endpoint":discovery["effectiveEndpoint"],
+            "auth":{"kind":"unauthenticated"},"max_concurrent":1,"max_queue_depth":100,"enabled":true}],
+        "inference_profiles":[{"node_did":node_did,"profile_id":"editor-setup",
+            "backend_id":"editor-setup","model_name":"editor-fixture"}],
+        "agents":[agent],
+    }}})).await;
+    *id += 1;
+    let observed = client
+        .call(
+            *id,
+            "client_inference_setup_state",
+            json!({"nodeDid":node_did}),
+        )
+        .await;
+    *id += 1;
+    ensure!(
+        observed["agentConfigs"].as_array().is_some_and(|rows| rows
+            .iter()
+            .any(
+                |row| row["agent_id"] == agent_id && row["inference_profile_id"] == "editor-setup"
+            )),
+        "the selected model was not bound to the default agent: {observed}"
+    );
+    Ok(())
 }
 
 #[cfg(unix)]

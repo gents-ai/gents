@@ -244,6 +244,11 @@ impl RuntimeContext {
             request_admission,
         )?
         .with_replay_issuer(replay_issuer)
+        .with_approval_home(
+            self.tool_runtime
+                .plugin_home()
+                .map(std::path::Path::to_path_buf),
+        )
         .with_remote_tools(remote_tools)
         .with_output_obligations(output_obligations)
         .with_tool_surface_runtime_policy(root_execution_guard, self.operator_tool_root.clone());

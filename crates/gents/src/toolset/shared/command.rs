@@ -19,6 +19,9 @@ pub use gents_loop::tool_policy::{
 
 use gents_loop::live_output::COMMAND_OUTPUT_META_PREFIX as OUTPUT_META_PREFIX;
 const FALLBACK_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
+#[cfg(all(test, target_os = "macos"))]
+#[path = "command_protection_tests.rs"]
+mod command_protection_tests;
 #[cfg(target_os = "macos")]
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 const CORE_ENV_VARS: &[&str] = &[
@@ -71,7 +74,8 @@ pub(crate) fn effective_command_policy(policy: &CommandExecutionPolicy) -> Comma
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CommandExecutionPolicy {
     pub mode: CommandExecutionMode,
     pub allowed_argv_prefixes: Vec<Vec<String>>,
@@ -365,12 +369,31 @@ fn which_on_host_path(name: &str) -> Option<PathBuf> {
     None
 }
 
+pub(crate) struct PreparedManagedCommand {
+    pub(crate) program: PathBuf,
+    pub(crate) args: Vec<String>,
+    pub(crate) environment: HashMap<String, String>,
+    pub(crate) sandbox: &'static str,
+    pub(crate) operator_guard_home: Option<PathBuf>,
+}
+
+impl std::fmt::Debug for PreparedManagedCommand {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedManagedCommand")
+            .field("program", &self.program)
+            .field("sandbox", &self.sandbox)
+            .field("operator_guard_home", &self.operator_guard_home)
+            .finish_non_exhaustive()
+    }
+}
+
 pub(crate) async fn prepare_managed_command(
     root: &Path,
     command: &str,
     args: &[String],
     constraints: &CommandConstraints,
-) -> std::result::Result<(PathBuf, Vec<String>, HashMap<String, String>, &'static str), ToolError> {
+) -> std::result::Result<PreparedManagedCommand, ToolError> {
     let admitted = admit_host_executable(command, root)
         .map_err(|reason| policy_denial(&constraints.to_spawn_policy(), reason))?;
     let spawn_policy = constraints.to_spawn_policy();
@@ -387,9 +410,21 @@ pub(crate) async fn prepare_managed_command(
         &admitted.to_string_lossy(),
         &spawn_policy,
     )?;
-    let (program, argv, env, sandbox) =
+    let launch =
         prepare_command_launch(root, &admitted.to_string_lossy(), args, &spawn_policy).await?;
-    Ok((PathBuf::from(program), argv, env, sandbox))
+    if let Some(protection) = &launch.protection {
+        protection.revalidate().map_err(command_guard_error)?;
+    }
+    Ok(PreparedManagedCommand {
+        program: PathBuf::from(launch.program),
+        args: launch.args,
+        environment: launch.environment,
+        sandbox: launch.sandbox,
+        operator_guard_home: launch
+            .protection
+            .as_ref()
+            .map(|guard| guard.home().to_owned()),
+    })
 }
 
 pub(crate) async fn run_command(
@@ -404,28 +439,42 @@ pub(crate) async fn run_command(
     max_output_chars: usize,
 ) -> std::result::Result<String, ToolError> {
     let policy = effective_command_policy(policy);
+    validate_command_policy(command_name, args, &policy)?;
     let cwd = context.resolve_existing_dir(cwd)?;
     let argv = std::iter::once(command_name.to_string())
         .chain(args.iter().cloned())
         .collect::<Vec<_>>();
     let command_line = shell_join(&argv);
     let root = context.root();
-    let (program, command_args, environment, sandbox) =
-        prepare_command_launch(&root, command_name, args, &policy).await?;
+    let launch = prepare_command_launch(&root, command_name, args, &policy).await?;
+    crate::plugin::approval::workspace::authorize_command(
+        &argv,
+        &cwd,
+        &root,
+        launch.writable_root.as_deref(),
+        &policy,
+    )
+    .await
+    .map_err(|error| {
+        ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
+    })?;
+    if let Some(protection) = &launch.protection {
+        protection.revalidate().map_err(command_guard_error)?;
+    }
     let bounds = tool_execution_bounds(timeout);
     let live_output = bounds.live_output.clone();
     let request_deadline = bounds.request_deadline_at;
     let started = bounds.armed_at;
     let outcome = run_managed_exec(ManagedExecRequest {
-        argv: std::iter::once(program)
-            .chain(command_args)
+        argv: std::iter::once(launch.program)
+            .chain(launch.args)
             .collect::<Vec<_>>(),
         cwd: cwd.clone(),
         deadline_at: bounds.deadline_at,
         cancellation_token: bounds.cancellation_token,
         max_output_bytes: usize::MAX,
         stdin: Vec::new(),
-        environment: Some(environment),
+        environment: Some(launch.environment),
         tool_name: Some(tool_name.to_string()),
         live_output: live_output.clone(),
     })
@@ -506,7 +555,7 @@ pub(crate) async fn run_command(
         timeout_ms: millis(timeout),
         execution_mode: policy.mode,
         network_mode: policy.network_mode,
-        sandbox,
+        sandbox: launch.sandbox,
         stdout_capture_incomplete,
         stderr_capture_incomplete,
         stdout_truncation: stdout.metadata,
@@ -881,12 +930,21 @@ fn artifact_policy_denial(message: impl Into<String>) -> ToolError {
     ToolError::reported_failure(FailureClass::PolicyDenied, message.into())
 }
 
+struct CommandLaunch {
+    program: String,
+    args: Vec<String>,
+    environment: HashMap<String, String>,
+    sandbox: &'static str,
+    writable_root: Option<PathBuf>,
+    protection: Option<crate::plugin::allowed::CommandProtection>,
+}
+
 async fn prepare_command_launch(
     source_root: &Path,
     command: &str,
     args: &[String],
     policy: &CommandExecutionPolicy,
-) -> std::result::Result<(String, Vec<String>, HashMap<String, String>, &'static str), ToolError> {
+) -> std::result::Result<CommandLaunch, ToolError> {
     let mut environment = build_shell_env();
     let artifact = if policy.mode == CommandExecutionMode::ArtifactWrite {
         let scope = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
@@ -929,13 +987,162 @@ async fn prepare_command_launch(
     } else {
         None
     };
+    let workspace_root =
+        crate::plugin::approval::workspace::command_writable_root(source_root, policy).map_err(
+            |error| ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}")),
+        )?;
     let writable_root = artifact
         .as_ref()
         .map(|grant| grant.root())
-        .unwrap_or(source_root);
-    let (program, argv, sandbox) =
-        sandboxed_command_for_policy(writable_root, command, args, policy)?;
-    Ok((program, argv, environment, sandbox))
+        .unwrap_or(&workspace_root);
+    let protection = crate::plugin::approval::workspace::command_guard_home()
+        .map_err(command_guard_error)?
+        .map(|home| {
+            crate::plugin::allowed::CommandProtection::capture(
+                &home,
+                workspace_write_sandbox_enforced(),
+            )
+        })
+        .transpose()
+        .map_err(command_guard_error)?;
+    let (program, argv, sandbox) = match &protection {
+        Some(protection) => {
+            protected_command_for_policy(writable_root, command, args, policy, protection)
+                .map_err(command_guard_error)?
+        }
+        None => sandboxed_command_for_policy(writable_root, command, args, policy)?,
+    };
+    Ok(CommandLaunch {
+        program,
+        args: argv,
+        environment,
+        sandbox,
+        writable_root: (policy.mode == CommandExecutionMode::WorkspaceWrite)
+            .then(|| writable_root.to_owned()),
+        protection,
+    })
+}
+
+fn command_guard_error(error: anyhow::Error) -> ToolError {
+    ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
+}
+
+pub(crate) async fn prepare_declared_cli_command(
+    cwd: &Path,
+    command: &str,
+    args: &[String],
+    allowed_prefixes: &[Vec<String>],
+) -> std::result::Result<Vec<String>, ToolError> {
+    let policy = CommandExecutionPolicy::write_capable()
+        .with_mode(CommandExecutionMode::Unrestricted)
+        .with_allowed_argv_prefixes(
+            allowed_prefixes
+                .iter()
+                .map(|prefix| {
+                    std::iter::once(command.to_owned())
+                        .chain(prefix.iter().cloned())
+                        .collect()
+                })
+                .collect(),
+        );
+    let protection = crate::plugin::approval::workspace::command_guard_home()
+        .map_err(command_guard_error)?
+        .map(|home| {
+            crate::plugin::allowed::CommandProtection::capture(
+                &home,
+                workspace_write_sandbox_enforced(),
+            )
+        })
+        .transpose()
+        .map_err(command_guard_error)?;
+    let argv: Vec<_> = std::iter::once(command.to_owned())
+        .chain(args.iter().cloned())
+        .collect();
+    crate::plugin::approval::workspace::authorize_command(&argv, cwd, cwd, None, &policy)
+        .await
+        .map_err(command_guard_error)?;
+    match protection {
+        Some(protection) => {
+            protection.revalidate().map_err(command_guard_error)?;
+            let (program, args, _) =
+                protected_command_for_policy(cwd, command, args, &policy, &protection)
+                    .map_err(command_guard_error)?;
+            Ok(std::iter::once(program).chain(args).collect())
+        }
+        None => Ok(argv),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn protected_command_for_policy(
+    root: &Path,
+    command: &str,
+    args: &[String],
+    policy: &CommandExecutionPolicy,
+    protection: &crate::plugin::allowed::CommandProtection,
+) -> Result<(String, Vec<String>, &'static str)> {
+    let bounded = matches!(
+        policy.mode,
+        CommandExecutionMode::WorkspaceWrite | CommandExecutionMode::ArtifactWrite
+    );
+    let mut profile = if bounded {
+        macos_workspace_write_policy(policy.network_mode)
+    } else {
+        "(version 1)\n(allow default)\n".to_owned()
+    };
+    if policy.mode == CommandExecutionMode::ArtifactWrite {
+        profile.push_str("\n(deny file-link)\n");
+    }
+    let mut parameters = vec![format!(
+        "-DWRITABLE_ROOT={}",
+        root.to_str().context("command root is not valid UTF-8")?
+    )];
+    for (index, path) in protection.paths().iter().enumerate() {
+        profile.push_str(&format!(
+            "\n(deny file-read* file-write* (subpath (param \"OPERATOR_{index}\")))\n"
+        ));
+        parameters.push(format!(
+            "-DOPERATOR_{index}={}",
+            path.to_str()
+                .context("permission path is not valid UTF-8")?
+        ));
+    }
+    for (index, path) in protection.ancestors().iter().enumerate() {
+        profile.push_str(&format!(
+            "\n(deny file-write-unlink (literal (param \"OPERATOR_PARENT_{index}\")))\n"
+        ));
+        parameters.push(format!(
+            "-DOPERATOR_PARENT_{index}={}",
+            path.to_str()
+                .context("permission parent is not valid UTF-8")?
+        ));
+    }
+    let argv = std::iter::once("-p".to_owned())
+        .chain(std::iter::once(profile))
+        .chain(parameters)
+        .chain(["--".to_owned(), command.to_owned()])
+        .chain(args.iter().cloned())
+        .collect();
+    Ok((
+        SANDBOX_EXEC.to_owned(),
+        argv,
+        if bounded {
+            "macos_seatbelt"
+        } else {
+            "macos_operator_state_guard"
+        },
+    ))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn protected_command_for_policy(
+    _root: &Path,
+    _command: &str,
+    _args: &[String],
+    _policy: &CommandExecutionPolicy,
+    _protection: &crate::plugin::allowed::CommandProtection,
+) -> Result<(String, Vec<String>, &'static str)> {
+    anyhow::bail!("Command isolation for runtime permissions is unavailable on this platform.")
 }
 
 fn sandboxed_command_for_policy(
@@ -1573,7 +1780,7 @@ fn millis(duration: Duration) -> u64 {
     millis.min(u128::from(u64::MAX)) as u64
 }
 
-fn shell_join(argv: &[String]) -> String {
+pub(crate) fn shell_join(argv: &[String]) -> String {
     argv.iter()
         .map(|arg| shell_quote(arg))
         .collect::<Vec<_>>()

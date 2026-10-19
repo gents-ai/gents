@@ -20,9 +20,15 @@ use super::sessions::{ensure_session_in_txn, load_agent_session_row_in_txn};
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 
 #[derive(Debug, Clone)]
+pub enum ForkBoundary<'a> {
+    UserTurn(u32),
+    BeforeMessageKey(&'a str),
+}
+
+#[derive(Debug, Clone)]
 pub struct ForkParams<'a> {
     pub source_session_id: &'a str,
-    pub fork_at_user_turn: u32,
+    pub boundary: ForkBoundary<'a>,
     pub caller_node_did: &'a str,
     pub caller_requester_did: Option<&'a str>,
     pub target_agent_id: Option<&'a str>,
@@ -47,6 +53,8 @@ pub enum ForkError {
     ForkSourceBusy,
     #[error("fork_at_user_turn={0} is out of range (parent has only {1} user messages)")]
     ForkAtUserTurnOutOfRange(u32, u32),
+    #[error("the selected user message is missing, ambiguous, or not editable: {0}")]
+    ForkMessageNotEditable(String),
     #[error("target agent not found: {0}")]
     ForkAgentNotFound(String),
     #[error("fork copy step failed: {0}")]
@@ -64,22 +72,22 @@ pub async fn fork(
     node: &std::sync::Arc<EmbeddedNode>,
     params: ForkParams<'_>,
 ) -> Result<ForkOutcome, ForkError> {
-    let child = uuid::Uuid::new_v4().to_string();
-    ConfigAccess::transact_local_write(node, None, "session.fork", |txn| {
-        let child = child.clone();
-        let params = params.clone();
-        Box::pin(async move { fork_in_txn(txn, &params, &child).await })
-    })
-    .await
-    .map_err(fork_error)
+    fork_on(&ConfigAccess::local(node.clone()), params).await
 }
 
 pub async fn fork_via_http(
     endpoint: &crate::config_client::GraphqlEndpoint,
     params: ForkParams<'_>,
 ) -> Result<ForkOutcome, ForkError> {
+    fork_on(&ConfigAccess::Graphql(endpoint.clone()), params).await
+}
+
+pub async fn fork_on(
+    access: &ConfigAccess,
+    params: ForkParams<'_>,
+) -> Result<ForkOutcome, ForkError> {
     let child = uuid::Uuid::new_v4().to_string();
-    ConfigAccess::Graphql(endpoint.clone())
+    access
         .transact_write("session.fork", |txn| {
             let child = child.clone();
             let params = params.clone();
@@ -123,11 +131,24 @@ fn ordinal(row: &Value, field: &str) -> Result<u32> {
 
 pub fn is_user_turn(row: &Value) -> Result<bool> {
     let message = decode_transcript_message_row(row)?.message;
-    Ok(message.role == MessageRole::User
+    Ok(is_user_message(&message))
+}
+
+fn is_user_message(message: &TranscriptMessage) -> bool {
+    message.role == MessageRole::User
         && message
             .blocks
             .iter()
-            .any(|block| !matches!(block, MessageBlock::ToolResult { .. })))
+            .any(|block| !matches!(block, MessageBlock::ToolResult { .. }))
+}
+
+fn edit_cut<'a>(
+    messages: impl Iterator<Item = &'a TranscriptMessage>,
+    message_key: &str,
+) -> Option<u32> {
+    let mut matching = messages.filter(|message| message.message_key == message_key);
+    let message = matching.next()?;
+    (matching.next().is_none() && is_user_message(message)).then_some(message.sequence)
 }
 
 fn fork_header(
@@ -246,7 +267,7 @@ async fn fork_in_txn(
         let purpose =
             gents_protocol::request_admission::RequestPurpose::try_from(text(&request, "purpose")?)
                 .map_err(anyhow::Error::msg)?;
-        if purpose == gents_protocol::request_admission::RequestPurpose::TitleAudit {
+        if purpose.is_auxiliary() {
             continue;
         }
         if RequestLifecycleState::parse(text(&request, "lifecycle_state")?)?.is_active_runtime() {
@@ -272,22 +293,28 @@ async fn fork_in_txn(
     }
     let turns = headers
         .iter()
-        .filter(|header| {
-            header.message.role == MessageRole::User
-                && header
-                    .message
-                    .blocks
-                    .iter()
-                    .any(|b| !matches!(b, MessageBlock::ToolResult { .. }))
-        })
+        .filter(|header| is_user_message(&header.message))
         .map(|header| header.message.sequence)
         .collect::<Vec<_>>();
     let total = u32::try_from(turns.len())?;
-    if params.fork_at_user_turn > total {
-        return Err(ForkError::ForkAtUserTurnOutOfRange(params.fork_at_user_turn, total).into());
+    let at_user_turn = match params.boundary {
+        ForkBoundary::UserTurn(turn) => turn,
+        ForkBoundary::BeforeMessageKey(key) => {
+            let cut = edit_cut(headers.iter().map(|header| &header.message), key)
+                .ok_or_else(|| ForkError::ForkMessageNotEditable(key.to_owned()))?;
+            u32::try_from(
+                turns
+                    .iter()
+                    .position(|sequence| *sequence == cut)
+                    .context("the edit anchor is not a source user turn")?,
+            )?
+        }
+    };
+    if at_user_turn > total {
+        return Err(ForkError::ForkAtUserTurnOutOfRange(at_user_turn, total).into());
     }
     let cut = turns
-        .get(params.fork_at_user_turn as usize)
+        .get(at_user_turn as usize)
         .copied()
         .map(u64::from)
         .unwrap_or_else(|| {
@@ -388,7 +415,7 @@ async fn fork_in_txn(
             Some(gents_protocol::session::SessionProvenance {
                 fork: Some(gents_protocol::session::SessionFork {
                     source_session_id: params.source_session_id.to_owned(),
-                    at_user_turn: params.fork_at_user_turn,
+                    at_user_turn,
                 }),
                 ..Default::default()
             }),
@@ -404,4 +431,75 @@ async fn fork_in_txn(
         copied_tool_results: 0,
         copied_compaction_entries: copied_compactions,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gents_protocol::output::{
+        OutputOutcome, PayloadPresentation, PayloadRef, PresentedPayload,
+    };
+
+    fn modeled_message(row: &Value) -> TranscriptMessage {
+        TranscriptMessage {
+            message_key: row["key"].as_str().unwrap().to_owned(),
+            sequence: u32::try_from(row["sequence"].as_u64().unwrap()).unwrap(),
+            role: serde_json::from_value(row["role"].clone()).unwrap(),
+            session_id: "source".into(),
+            node_did: "node".into(),
+            requester_did: Some("requester".into()),
+            request_doc_id: Some("request".into()),
+            publication: MessagePublication::RequestExecution {
+                execution_generation: "generation".into(),
+            },
+            outcome: OutputOutcome::Complete,
+            native_id: None,
+            created_at: "2026-10-18T00:00:00Z".into(),
+            blocks: row["blocks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|block| match block.as_str().unwrap() {
+                    "text" => MessageBlock::Text {
+                        text: PresentedPayload {
+                            output: PayloadRef {
+                                close_doc_id: "close".into(),
+                                stream: 0,
+                            },
+                            presentation: PayloadPresentation::Full,
+                        },
+                    },
+                    "toolResult" => MessageBlock::ToolResult {
+                        tool_call_doc_id: "tool".into(),
+                        id: "call".into(),
+                        call_id: None,
+                        parts: Vec::new(),
+                    },
+                    other => panic!("untranslated modeled block {other}"),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn generated_edit_anchors_select_exact_canonical_user_messages() {
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot()
+            .session_document_cases
+            .edit_anchors;
+        assert!(!cases.is_empty());
+        for case in cases {
+            let messages = case["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(modeled_message)
+                .collect::<Vec<_>>();
+            let expected = case["cut"].as_u64().map(|cut| u32::try_from(cut).unwrap());
+            assert_eq!(
+                edit_cut(messages.iter(), case["key"].as_str().unwrap()),
+                expected,
+                "{case}"
+            );
+        }
+    }
 }

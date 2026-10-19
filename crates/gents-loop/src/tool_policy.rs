@@ -1,3 +1,7 @@
+pub mod access_review;
+pub mod operator_paths;
+pub mod workspace_permissions;
+
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

@@ -18,6 +18,7 @@ const entry = (id: string): PendingQueueEntryView => ({
   requestId: id,
   content: `message ${id}`,
   editable: true,
+  steerable: true,
   editGroup: "same",
 });
 const turn = (row: PendingQueueEntryView): PendingTurnView => ({

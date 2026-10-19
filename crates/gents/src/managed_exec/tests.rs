@@ -38,15 +38,20 @@ fn managed_exec_state_machine_contract_is_complete() {
 #[tokio::test]
 async fn managed_exec_deadline_kills_process_group() {
     let tool_name = "r3-soak-blocker";
+    let directory = tempfile::tempdir().unwrap();
+    let ready = directory.path().join("ready");
+    let child_ready = ready.clone();
     let handle = tokio::spawn(async move {
         run_managed_exec(ManagedExecRequest {
             argv: vec![
                 "/bin/sh".to_string(),
                 "-c".to_string(),
-                "echo started; trap '' TERM; sleep 5".to_string(),
+                "trap '' TERM; printf started; : > \"$1\"; while :; do sleep 60; done".to_string(),
+                "managed-deadline".to_string(),
+                child_ready.to_str().unwrap().to_string(),
             ],
             cwd: PathBuf::from("/"),
-            deadline_at: Some(Utc::now() + chrono::Duration::milliseconds(500)),
+            deadline_at: Some(Utc::now() + chrono::Duration::seconds(60)),
             cancellation_token: CancellationToken::new(),
             max_output_bytes: 1024,
             stdin: Vec::new(),
@@ -64,6 +69,16 @@ async fn managed_exec_deadline_kills_process_group() {
     chrono::DateTime::parse_from_rfc3339(&snapshot.started_at)
         .expect("active executor snapshot must expose RFC3339 started_at");
 
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while !ready.exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the command installs its signal handler and writes output before the deadline");
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(60)).await;
+    tokio::time::resume();
     let outcome = handle.await.expect("managed exec task should join");
 
     match outcome {
@@ -82,22 +97,26 @@ async fn managed_exec_deadline_kills_process_group() {
         "timed-out native executor snapshot must clear after reap"
     );
 
-    let next = run_managed_exec(ManagedExecRequest {
-        argv: vec![
-            "/bin/sh".to_string(),
-            "-c".to_string(),
-            "printf next".to_string(),
-        ],
-        cwd: PathBuf::from("/"),
-        deadline_at: Some(Utc::now() + chrono::Duration::seconds(1)),
-        cancellation_token: CancellationToken::new(),
-        max_output_bytes: 1024,
-        stdin: Vec::new(),
-        environment: None,
-        tool_name: Some("r3-soak-next".to_string()),
-        live_output: None,
-    })
-    .await;
+    let next = tokio::time::timeout(
+        Duration::from_secs(30),
+        run_managed_exec(ManagedExecRequest {
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "printf next".to_string(),
+            ],
+            cwd: PathBuf::from("/"),
+            deadline_at: None,
+            cancellation_token: CancellationToken::new(),
+            max_output_bytes: 1024,
+            stdin: Vec::new(),
+            environment: None,
+            tool_name: Some("r3-soak-next".to_string()),
+            live_output: None,
+        }),
+    )
+    .await
+    .expect("the next command must complete after its predecessor was reaped");
 
     match next {
         ManagedExecOutcome::Exited { stdout, .. } => assert_eq!(stdout, b"next"),

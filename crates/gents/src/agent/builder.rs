@@ -259,6 +259,7 @@ impl GentsBuilder {
                 }),
             ),
             manual_trigger_handle: Arc::new(tokio::sync::OnceCell::new()),
+            enrollment_authority: Arc::default(),
             operator_tool_root: self.tool_ceiling.root().map(std::path::PathBuf::from),
             plugins: Arc::new(crate::agent::plugin_executor(
                 self.plugin_home,
@@ -618,6 +619,7 @@ impl PendingAgent {
             backend_endpoint: backend_fields.backend_endpoint,
             backend_auth: backend_fields.backend_auth,
             model_name: self.model_name,
+            service_tier: None,
             resolved_reasoning_efforts: None,
             context_window: self.context_window,
             max_output_tokens: self.max_output_tokens,

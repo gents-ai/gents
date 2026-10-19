@@ -46,6 +46,7 @@ pub(crate) fn admission_kind_matches_scope(
             | (CallKind::Compaction, CaptureScopeKind::Compaction)
             | (CallKind::Compaction, CaptureScopeKind::CompactionFallback)
             | (CallKind::OneOff, CaptureScopeKind::Title)
+            | (CallKind::OneOff, CaptureScopeKind::AccessReview)
     )
 }
 

@@ -833,8 +833,14 @@ export function createDesktopUiHarness(
     async controlGoal() {
       throw new Error("Goal controls are unavailable in this fixture.");
     },
+    async steerPendingMessage() {
+      throw new Error("Steering is unavailable in this fixture.");
+    },
     async editPendingQueue() {
       throw new Error("Pending queue edits are unavailable in this fixture.");
+    },
+    async forkSessionBeforeMessage() {
+      throw new Error("Message editing is unavailable in this fixture.");
     },
     async fetchDesktopSnapshot() {
       if (scenario === "bridge-unavailable") {

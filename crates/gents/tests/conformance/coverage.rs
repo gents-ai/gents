@@ -175,7 +175,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(
         lean_contract_snapshot().frontend_client_shell_cases.len(),
-        27
+        29
     );
     assert_eq!(
         lean_contract_snapshot().desktop_client_shell_case_count,
@@ -183,7 +183,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(
         lean_contract_snapshot().desktop_client_shell_cases.len(),
-        24
+        26
     );
     assert_eq!(lean_contract_snapshot().tool_preflight_cases.len(), 9);
     assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 72);
@@ -493,6 +493,41 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "prompt_assembly_claude_wire_start_cases",
             "PromptAssemblyClaudeWireStartCases",
             !snapshot.prompt_assembly_claude_wire_start_cases.is_empty(),
+        ),
+        (
+            "prompt_assembly_service_tier_cases",
+            "PromptAssemblyServiceTierCases",
+            !snapshot.prompt_assembly_service_tier_cases.is_empty(),
+        ),
+        (
+            "workspace_permission_cases",
+            "WorkspacePermissionCases",
+            !snapshot.workspace_permission_cases.is_empty(),
+        ),
+        (
+            "access_review_cases",
+            "AccessReviewCases",
+            !snapshot.access_review_cases.is_empty(),
+        ),
+        (
+            "workspace_permission_write_cases",
+            "WorkspacePermissionWriteCases",
+            !snapshot.workspace_permission_write_cases.is_empty(),
+        ),
+        (
+            "access_review_task_cases",
+            "AccessReviewTaskCases",
+            !snapshot.access_review_task_cases.is_empty(),
+        ),
+        (
+            "workspace_command_root_cases",
+            "WorkspaceCommandRootCases",
+            !snapshot.workspace_command_root_cases.is_empty(),
+        ),
+        (
+            "operator_path_cases",
+            "OperatorPathCases",
+            !snapshot.operator_path_cases.is_empty(),
         ),
         (
             "prompt_assembly_responses_storage_cases",
@@ -998,6 +1033,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     }
     emitted.insert(("client_settings_cases".into(), "ClientSettingsCases".into()));
     assert!(!snapshot.client_observation_scope_cases.is_empty());
+    assert!(!snapshot.client_observation_admission_cases.is_empty());
+    emitted.insert((
+        "client_observation_admission_cases".into(),
+        "ClientObservationAdmission".into(),
+    ));
     emitted.insert((
         "client_observation_scope_cases".into(),
         "ClientObservationScopeCases".into(),
@@ -1801,6 +1841,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "causal_hop_contract".into(),
         "SessionTargetAuthorityCases".into(),
     ));
+    assert!(!snapshot.title_text_cases["cases"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    emitted.insert(("title_text_cases".into(), "TitleTextCases".into()));
     if !snapshot.title_request_admission_cases.is_empty() {
         emitted.insert((
             "title_request_admission_cases".to_string(),
@@ -1976,6 +2021,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             && !sessions.projection.is_empty()
             && !sessions.retry.is_empty()
             && !sessions.fork.is_empty()
+            && !sessions.edit_anchors.is_empty()
     );
     emitted.insert((
         "session_document_cases".into(),

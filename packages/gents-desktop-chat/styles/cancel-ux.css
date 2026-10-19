@@ -46,7 +46,7 @@
 
   .cause-details {
     display: grid;
-    grid-template-columns: 130px 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-1) var(--space-5);
     margin: 0;
     font-size: var(--text-sm);
@@ -69,6 +69,31 @@
     margin: 0 0 var(--space-2);
     color: var(--color-text-soft);
     font-size: var(--text-md);
+  }
+
+  .turn-stop {
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+
+  .turn-stop > summary {
+    width: fit-content;
+    padding: 4px 0;
+    cursor: pointer;
+  }
+
+  .turn-stop .cause-details {
+    margin-top: 8px;
+  }
+
+  .turn-stop .cause-headline {
+    font-size: var(--text-xs);
+    overflow-wrap: anywhere;
+  }
+
+  .turn-stop .cause-evidence summary {
+    letter-spacing: normal;
+    text-transform: none;
   }
 
   .cause-evidence summary {

@@ -167,6 +167,16 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
         Some(gents::DEFAULT_CONTEXT_WINDOW as i64),
         "context capacity should come from the bound GENTS inference profile"
     );
+    let (original_request, session_id, _agent_id) =
+        wait_for_request(&graphql, &node_did, &prompt).await?;
+    assert_eq!(session_id, thread_id);
+    wait_for_request_lifecycle_state(
+        &graphql,
+        &original_request,
+        &["completed"],
+        Duration::from_secs(15),
+    )
+    .await?;
 
     let session_response = serve
         .capturing(graphql_query(
@@ -342,7 +352,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
             params: codex::ThreadGoalSetParams {
                 thread_id: thread_id.clone(),
                 objective: Some("exercise GENTS-backed Codex goal state".to_string()),
-                status: Some(codex::ThreadGoalStatus::Active),
+                status: Some(codex::ThreadGoalStatus::Paused),
                 token_budget: Some(Some(123)),
             },
         },
@@ -357,6 +367,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
         "exercise GENTS-backed Codex goal state"
     );
     assert_eq!(goal_set.goal.token_budget, Some(123));
+    assert_eq!(goal_set.goal.status, codex::ThreadGoalStatus::Paused);
 
     send_client_request(
         &mut ws,
@@ -508,15 +519,11 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     let goal_after_turn = goal_after_turn
         .goal
         .expect("goal should still exist after the turn");
-    assert!(
-        goal_after_turn.tokens_used > 0,
-        "goal.tokens_used should reflect real session usage after a turn, got {}",
-        goal_after_turn.tokens_used
+    assert_eq!(
+        goal_after_turn.tokens_used, 0,
+        "a new goal must not charge usage from before its creation"
     );
 
-    let (_request_id, session_id, _agent_id) =
-        wait_for_request(&graphql, &node_did, &prompt).await?;
-    assert_eq!(session_id, thread_id);
     let captured_requests = mock_endpoint.captured_chat_requests();
     assert!(
         captured_requests
@@ -664,6 +671,58 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
         read_typed_response(&mut ws, request_id(45)).await?;
     assert_eq!(summary.summary.conversation_id.to_string(), thread_id);
     assert_eq!(summary.summary.model_provider, "gents");
+
+    let followup_prompt = format!("Reply with exactly {expected_reply} again.");
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::TurnStart {
+            request_id: request_id(51),
+            params: codex::TurnStartParams {
+                thread_id: thread_id.clone(),
+                input: vec![codex::UserInput::Text {
+                    text: followup_prompt.clone(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let followup: codex::TurnStartResponse = read_typed_response(&mut ws, request_id(51)).await?;
+    assert_eq!(followup.turn.status, codex::TurnStatus::InProgress);
+    let followup = read_turn_capture(&mut ws).await?;
+    assert_eq!(followup.turn.status, codex::TurnStatus::Completed);
+    assert!(followup.text.contains(&expected_reply));
+    let (followup_request, session_id, _agent_id) =
+        wait_for_request(&graphql, &node_did, &followup_prompt).await?;
+    assert_eq!(session_id, thread_id);
+    wait_for_request_lifecycle_state(
+        &graphql,
+        &followup_request,
+        &["completed"],
+        Duration::from_secs(15),
+    )
+    .await?;
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadGoalGet {
+            request_id: request_id(52),
+            params: codex::ThreadGoalGetParams {
+                thread_id: thread_id.clone(),
+            },
+        },
+    )
+    .await?;
+    let charged: codex::ThreadGoalGetResponse =
+        read_typed_response(&mut ws, request_id(52)).await?;
+    assert!(
+        charged
+            .goal
+            .expect("goal should survive the follow-up")
+            .tokens_used
+            > 0,
+        "the goal must charge real usage from the post-creation turn"
+    );
 
     Ok(())
 }

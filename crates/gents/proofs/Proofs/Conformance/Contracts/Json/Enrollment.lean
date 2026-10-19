@@ -223,7 +223,7 @@ private def titleRequestInputJson (input : Enrollment.RequestInput) : String :=
       | some goal => "{\"sequence\":" ++ toString goal.sequence ++
           ",\"wrapup\":" ++ boolJson goal.wrapup ++ "}") ++ "}"
 
-private def titleParentEvidenceJson (parent : Enrollment.TitleParentEvidence) : String :=
+private def titleParentEvidenceJson (parent : Enrollment.AuxiliaryParentEvidence) : String :=
   "{" ++ "\"request_id\":" ++ jsonString parent.link.requestId ++ ","
     ++ "\"document_id\":" ++ jsonString parent.link.documentId ++ ","
     ++ "\"node_did\":" ++ jsonString parent.nodeDid ++ ","
@@ -243,7 +243,7 @@ private def titleRuntimeEvidenceJson (evidence : Enrollment.RuntimeInternalEvide
     ++ "\"source_binding_current\":" ++ boolJson evidence.sourceBindingCurrent ++ ","
     ++ "\"source_document_binding_current\":" ++ boolJson evidence.sourceDocumentBindingCurrent ++ ","
     ++ "\"title_parent\":" ++
-      (match evidence.titleParent with
+      (match evidence.auxiliaryParent with
       | none => "null"
       | some parent => titleParentEvidenceJson parent) ++ "}"
 

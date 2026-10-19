@@ -756,6 +756,65 @@ async fn session_rewrite_rows(node: &defra_node::EmbeddedNode) -> Vec<Vec<String
 }
 
 #[tokio::test]
+async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_source() {
+    const AGENT: &str = "did:test:edit-fork";
+    const SOURCE: &str = "edit-source";
+    let case = crate::lean_vocab_test::lean_contract_snapshot()
+        .session_document_cases
+        .edit_anchors
+        .iter()
+        .find(|case| case["name"] == "three_user_turns")
+        .unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    crate::test_support::install_test_agent(&node, AGENT, "edit-fork").await;
+    create_session_with_agent_id(&node, SOURCE, AGENT, "edit-fork")
+        .await
+        .unwrap();
+    for message in case["messages"].as_array().unwrap() {
+        let key = message["key"].as_str().unwrap();
+        import_history_observation(
+            &node,
+            &format!("request-{key}"),
+            SOURCE,
+            AGENT,
+            None,
+            key,
+            key,
+            u32::try_from(message["sequence"].as_u64().unwrap()).unwrap(),
+            None,
+        )
+        .await;
+    }
+    let before = load_history(&node, SOURCE, AGENT, None).await.unwrap();
+    let receipt = fork(
+        &node,
+        ForkParams {
+            source_session_id: SOURCE,
+            boundary: ForkBoundary::BeforeMessageKey(case["key"].as_str().unwrap()),
+            caller_node_did: AGENT,
+            caller_requester_did: None,
+            target_agent_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    let retained = usize::try_from(case["retained_count"].as_u64().unwrap()).unwrap();
+    assert_eq!(receipt.copied_messages as usize, retained);
+    assert_eq!(
+        load_history(&node, &receipt.session_id, AGENT, None)
+            .await
+            .unwrap(),
+        before[..retained]
+    );
+    assert_eq!(
+        load_history(&node, SOURCE, AGENT, None).await.unwrap(),
+        before
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn fork_rolls_back_at_every_mutation_position() {
     const AGENT: &str = "did:test:fork-rollback";
     const SOURCE: &str = "fork-rollback-source";
@@ -813,7 +872,7 @@ async fn fork_rolls_back_at_every_mutation_position() {
     .unwrap();
     let params = ForkParams {
         source_session_id: SOURCE,
-        fork_at_user_turn: 3,
+        boundary: ForkBoundary::UserTurn(3),
         caller_node_did: AGENT,
         caller_requester_did: None,
         target_agent_id: None,

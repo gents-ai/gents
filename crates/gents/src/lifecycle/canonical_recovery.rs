@@ -78,10 +78,14 @@ async fn validate_selection(
     row: &AgentRequestRow,
     selection: &TerminalOutput,
 ) -> Result<()> {
-    if row.purpose.context("recovery request purpose missing")? == RequestPurpose::TitleAudit {
+    if row
+        .purpose
+        .context("recovery request purpose missing")?
+        .is_auxiliary()
+    {
         anyhow::ensure!(
             matches!(selection, TerminalOutput::NoMessage) && headers.is_empty(),
-            "title recovery requires NoMessage and no transcript headers"
+            "auxiliary recovery requires NoMessage and no transcript headers"
         );
         return Ok(());
     }
@@ -121,7 +125,10 @@ async fn validate_selection(
     Ok(())
 }
 
-async fn ensure_title_has_no_tools(txn: &ConfigApplyTxn<'_>, request_doc_id: &str) -> Result<()> {
+async fn ensure_auxiliary_has_no_tools(
+    txn: &ConfigApplyTxn<'_>,
+    request_doc_id: &str,
+) -> Result<()> {
     let request = escape_graphql_string(request_doc_id);
     let response = txn
         .execute_local_response(&format!(
@@ -133,8 +140,11 @@ async fn ensure_title_has_no_tools(txn: &ConfigApplyTxn<'_>, request_doc_id: &st
         .as_ref()
         .and_then(|data| data.get("AgentToolCall"))
         .and_then(serde_json::Value::as_array)
-        .context("title recovery tool query omitted rows")?;
-    anyhow::ensure!(rows.is_empty(), "title recovery found a tool lifecycle row");
+        .context("auxiliary recovery tool query omitted rows")?;
+    anyhow::ensure!(
+        rows.is_empty(),
+        "auxiliary recovery found a tool lifecycle row"
+    );
     Ok(())
 }
 
@@ -219,8 +229,8 @@ pub(crate) async fn recover_expired_generation_with_facts(
             }} }}"#)).await?;
             let row = crate::graphql::first_row::<AgentRequestRow>(&value, "AgentRequest")?
                 .context("execution request disappeared")?;
-            let is_title = row.purpose.context("recovery request purpose missing")?
-                == RequestPurpose::TitleAudit;
+            let purpose = row.purpose.context("recovery request purpose missing")?;
+            let is_auxiliary = purpose.is_auxiliary();
             let state = row.lifecycle_state.context("missing request lifecycle")?;
             if state.is_terminal()
                 && row.execution_generation.as_deref() == Some(fresh_generation.as_str())
@@ -237,8 +247,8 @@ pub(crate) async fn recover_expired_generation_with_facts(
                     &request_doc_id,
                 )
                 .await?;
-                if is_title {
-                    ensure_title_has_no_tools(txn, &request_doc_id).await?;
+                if is_auxiliary {
+                    ensure_auxiliary_has_no_tools(txn, &request_doc_id).await?;
                     let writer = OutputWriter::RequestExecution {
                         execution_generation: expected_generation.to_owned(),
                     };
@@ -252,13 +262,14 @@ pub(crate) async fn recover_expired_generation_with_facts(
                     .await?;
                     for record in segments.iter().filter(|record| record.segment.writer == writer) {
                         crate::streaming::canonical::validate_source_purpose(
-                            RequestPurpose::TitleAudit,
+                            purpose,
                             &record.segment.source,
                         )?;
                     }
-                    super::execution_lease::validate_title_sources_decided(
+                    super::execution_lease::validate_auxiliary_sources_decided(
                         &request_doc_id,
                         &segments,
+                        purpose,
                     )?;
                 }
                 let published = headers
@@ -302,9 +313,9 @@ pub(crate) async fn recover_expired_generation_with_facts(
             let existing_headers = session::load_request_headers_in_txn(
                 txn, session_id, agent, row.requester_did.as_deref(), &request_doc_id,
             ).await?;
-            if is_title {
-                anyhow::ensure!(existing_headers.is_empty(), "title recovery found a transcript header");
-                ensure_title_has_no_tools(txn, &request_doc_id).await?;
+            if is_auxiliary {
+                anyhow::ensure!(existing_headers.is_empty(), "auxiliary recovery found a transcript header");
+                ensure_auxiliary_has_no_tools(txn, &request_doc_id).await?;
             }
             let referenced = existing_headers.iter().flat_map(|header| header.message.payload_references())
                 .map(|reference| reference.close_doc_id.as_str()).collect::<BTreeSet<_>>();
@@ -320,7 +331,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                     }
                 }
             }
-            let mut sequence = if is_title {
+            let mut sequence = if is_auxiliary {
                 None
             } else {
                 Some(super::queue::next_append_sequence_in_transaction(
@@ -330,9 +341,9 @@ pub(crate) async fn recover_expired_generation_with_facts(
             let timestamp = observed_now.to_rfc3339();
             let mut published = Vec::<TranscriptMessageRow>::new();
             for source in sources.into_values() {
-                if is_title {
+                if is_auxiliary {
                     crate::streaming::canonical::validate_source_purpose(
-                        RequestPurpose::TitleAudit, &source,
+                        purpose, &source,
                     )?;
                 } else if crate::streaming::canonical::validate_source_purpose(
                     RequestPurpose::Normal, &source,
@@ -357,9 +368,9 @@ pub(crate) async fn recover_expired_generation_with_facts(
                         segments.push(OutputSegmentRow { doc_id: id.clone(), segment: closing });
                         blocks
                     }
-                    [closing] if is_title => {
+                    [closing] if is_auxiliary => {
                         anyhow::ensure!(closing.segment.writer == writer,
-                            "title recovery closure belongs to another generation");
+                            "auxiliary recovery closure belongs to another generation");
                         Vec::new()
                     }
                     [closing] if closing.segment.writer == writer
@@ -372,8 +383,8 @@ pub(crate) async fn recover_expired_generation_with_facts(
                     [_] => continue,
                     _ => continue,
                 };
-                if is_title {
-                    anyhow::ensure!(blocks.is_empty(), "title recovery planned a public header");
+                if is_auxiliary {
+                    anyhow::ensure!(blocks.is_empty(), "auxiliary recovery planned a public header");
                     continue;
                 }
                 if blocks.is_empty() { continue; }
@@ -390,16 +401,17 @@ pub(crate) async fn recover_expired_generation_with_facts(
                 let doc_id = created_doc_id(&response, "AgentMessage")?;
                 published.push(TranscriptMessageRow { doc_id, message });
             }
-            if is_title {
+            if is_auxiliary {
                 for record in segments.iter().filter(|record| record.segment.writer == writer) {
                     crate::streaming::canonical::validate_source_purpose(
-                        RequestPurpose::TitleAudit,
+                        purpose,
                         &record.segment.source,
                     )?;
                 }
-                super::execution_lease::validate_title_sources_decided(
+                super::execution_lease::validate_auxiliary_sources_decided(
                     &request_doc_id,
                     &segments,
+                    purpose,
                 )?;
             }
             let read = existing_headers.len();
@@ -410,7 +422,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
             for header in &published {
                 reader.load_message(&header.doc_id).await?;
             }
-            if !is_title {
+            if !is_auxiliary {
                 super::terminal_tools::account_tools_in_txn(
                     txn,
                     &mut reader,
@@ -453,12 +465,12 @@ pub(crate) async fn recover_expired_generation_with_facts(
             } else {
                 TerminalOutput::NoMessage
             };
-            let selection = if is_title {
+            let selection = if is_auxiliary {
                 anyhow::ensure!(selection_choice.as_ref().is_none_or(|choice|
                     matches!(choice, RecoverySelectionChoice::NoMessage)),
-                    "title recovery cannot select a transcript header");
+                    "auxiliary recovery cannot select a transcript header");
                 anyhow::ensure!(matches!(selection, TerminalOutput::NoMessage),
-                    "title recovery selected a transcript header");
+                    "auxiliary recovery selected a transcript header");
                 TerminalOutput::NoMessage
             } else {
                 match &selection_choice {
@@ -491,7 +503,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
             crate::trigger_engine::durable::publish_request_outcome(
                 txn, agent, &row.request_id, &target, "execution lease expired", &timestamp,
             ).await?;
-            if !is_title {
+            if !is_auxiliary {
                 session::refresh_session_request_observation_in_txn(txn, agent, row.requester_did.as_deref(), session_id, &request_doc_id, &row.request_id, &timestamp).await?;
             }
             Ok(RecoveryResult::Won { published: published.len() })

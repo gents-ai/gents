@@ -1147,6 +1147,18 @@
           "markdownDescription": "Denies the desktop_peer_status_fetch command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_pending_message_steer command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-pending-message-steer",
+          "markdownDescription": "Enables the desktop_pending_message_steer command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_pending_message_steer command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-pending-message-steer",
+          "markdownDescription": "Denies the desktop_pending_message_steer command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_pending_queue_edit command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-pending-queue-edit",
@@ -1373,6 +1385,18 @@
           "type": "string",
           "const": "deny-desktop-schedule-save",
           "markdownDescription": "Denies the desktop_schedule_save command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_session_fork_before_message command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-session-fork-before-message",
+          "markdownDescription": "Enables the desktop_session_fork_before_message command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_session_fork_before_message command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-session-fork-before-message",
+          "markdownDescription": "Denies the desktop_session_fork_before_message command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_session_goal command without any pre-configured scope.",
@@ -1669,10 +1693,10 @@
           "markdownDescription": "Tool-surface explain (config family)\n#### This permission set includes:\n\n- `allow-desktop-tool-surface-explain`"
         },
         {
-          "description": "Chat send and rename\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-pending-queue-edit`\n- `allow-desktop-goal-control`\n- `allow-desktop-session-rename`",
+          "description": "Chat submission, branching, and rename\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-pending-queue-edit`\n- `allow-desktop-pending-message-steer`\n- `allow-desktop-goal-control`\n- `allow-desktop-session-fork-before-message`\n- `allow-desktop-session-rename`",
           "type": "string",
           "const": "chat-write",
-          "markdownDescription": "Chat send and rename\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-pending-queue-edit`\n- `allow-desktop-goal-control`\n- `allow-desktop-session-rename`"
+          "markdownDescription": "Chat submission, branching, and rename\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-pending-queue-edit`\n- `allow-desktop-pending-message-steer`\n- `allow-desktop-goal-control`\n- `allow-desktop-session-fork-before-message`\n- `allow-desktop-session-rename`"
         },
         {
           "description": "Owner-scoped mailbox envelope reads\n#### This permission set includes:\n\n- `allow-desktop-mailbox-list`",

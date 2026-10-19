@@ -36,6 +36,7 @@ env:
   LEAN_CACHE_ROOT: ${{ vars.LEAN_CACHE_ROOT || '/Users/admin/.cache/gents-lean' }}
   RUSTC_WRAPPER: sccache
   RUST_BACKTRACE: "1"
+  RUST_TEST_THREADS: ${{ vars.RUST_TEST_THREADS || vars.CARGO_BUILD_JOBS || '12' }}
   SCCACHE_CACHE_SIZE: ${{ vars.SCCACHE_CACHE_SIZE || '120G' }}
   # The host service and clients normalize every registered checkout root.
   SCCACHE_BASEDIRS: ${{ vars.SCCACHE_BASEDIRS }}
@@ -85,8 +86,17 @@ jobs:
       - name: Run build attribution parser self-test
         run: scripts/measure-gents-build-attribution.sh self-test
 
+      - name: Check runner build-space reclamation
+        run: python3 .github/scripts/test-rust-build-space.py
+
       - name: Run Harbor agent adapter tests
         run: python3 scripts/harbor/test_gents_agent.py
+
+      - name: Check compiler-tool download recovery
+        run: |
+          bash -n .github/scripts/setup-afterburner-toolchains.sh
+          shellcheck .github/scripts/setup-afterburner-toolchains.sh
+          python3 .github/scripts/test-afterburner-downloads.py
 
   rust-and-cli:
     name: rust-and-cli (${{ matrix.suite }})
@@ -386,6 +396,7 @@ jobs:
         env:
           RUST_MIN_STACK: 16777216
         run: |
+          python3 .github/scripts/ensure-rust-build-space.py "$CARGO_TARGET_DIR"
           cargo build --profile test -p gents-cli -p gents-client-host -p gents-media-host --bins
           cargo test -p gents-client-host --features runtime-e2e --test runtime
 

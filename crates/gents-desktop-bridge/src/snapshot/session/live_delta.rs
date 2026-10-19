@@ -191,7 +191,7 @@ pub async fn build_session_live_delta(
                 .collect::<Vec<_>>();
             if let [request] = matches.as_slice() {
                 let operator = core
-                    .operator_graphql(node_did)
+                    .operator_observation_graphql(node_did)
                     .map(gents::config_client::ConfigAccess::Graphql);
                 let node_scope = core.transcript_node_scope(node_did);
                 let session = observed

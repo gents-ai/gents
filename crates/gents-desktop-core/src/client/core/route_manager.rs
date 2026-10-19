@@ -32,6 +32,7 @@ pub(super) struct ClientRouteManager {
     node: Arc<EmbeddedNode>,
     p2p: Arc<dyn P2POps>,
     actor: Arc<PrincipalIdentity>,
+    identity_interaction: crate::local_runtime::OperatorIdentityInteraction,
     lifecycle: Mutex<()>,
 }
 
@@ -71,11 +72,13 @@ impl ClientRouteManager {
         node: Arc<EmbeddedNode>,
         p2p: Arc<dyn P2POps>,
         actor: Arc<PrincipalIdentity>,
+        identity_interaction: crate::local_runtime::OperatorIdentityInteraction,
     ) -> Self {
         Self {
             node,
             p2p,
             actor,
+            identity_interaction,
             lifecycle: Mutex::new(()),
         }
     }
@@ -516,7 +519,7 @@ impl ClientRouteManager {
         graphql: &str,
     ) -> gents::agent::p2p_reconcile::RemoteP2pAdminResult<HttpRemoteP2pAdmin> {
         let admin = HttpRemoteP2pAdmin::new_with_actor(graphql, Arc::clone(&self.actor))?;
-        Ok(match crate::local_runtime::operator_endpoint(record) {
+        Ok(match self.identity_interaction.endpoint(record) {
             Some(endpoint) => admin.with_node_identity(endpoint),
             None => admin,
         })

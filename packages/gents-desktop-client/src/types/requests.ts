@@ -1,3 +1,5 @@
+export type { SessionForkBeforeRequest } from "../generated/SessionForkBeforeRequest.js";
+export type { SessionForkResult } from "../generated/SessionForkResult.js";
 import type { NodeConfigSaveRequest as GeneratedNodeConfigSaveRequest } from "../generated/NodeConfigSaveRequest.js";
 import type { DefaultAgentSetRequest as GeneratedDefaultAgentSetRequest } from "../generated/DefaultAgentSetRequest.js";
 import type { BackendDeleteRequest as GeneratedBackendDeleteRequest } from "../generated/BackendDeleteRequest.js";

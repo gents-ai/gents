@@ -8,7 +8,7 @@ open scoped BigOperators
 namespace InferenceCall.UsageProjection
 
 abbrev Usage := PromptAssembly.AggregateBudget.PersistedUsage
-abbrev TitleBinding := CanonicalOutput.Execution.Handover.TitleBinding
+abbrev AuxiliaryBinding := CanonicalOutput.Execution.Handover.AuxiliaryBinding
 
 structure UsageRow where
   physicalRequest : CanonicalOutput.DocId
@@ -25,7 +25,7 @@ structure Observation where
   callIds : Finset Nat
   row : Nat → UsageRow
   purpose : CanonicalOutput.DocId → Option RequestPurpose
-  titleBinding : CanonicalOutput.DocId → Option TitleBinding
+  auxiliaryBinding : CanonicalOutput.DocId → Option AuxiliaryBinding
 
 structure CatalogCoherent (records : List (Nat × UsageRow))
     (observation : Observation) : Prop where
@@ -53,44 +53,81 @@ def sumWhere (observation : Observation) (eligible : UsageRow → Bool) : Nat ×
       if eligible (observation.row callId) then
         (rowUsage (observation.row callId)).completionTokens else 0)
 
-def normalPublic (observation : Observation) (parent : ParentScope) : Nat × Nat :=
-  sumWhere observation fun row =>
-    decide (observation.purpose parent.physical = some .normal ∧
-      row.persisted.call.requestId = parent.logical ∧
-      row.physicalRequest = parent.physical)
+def normalBelongsTo (observation : Observation) (parent : ParentScope)
+    (row : UsageRow) : Bool :=
+  decide (observation.purpose parent.physical = some .normal ∧
+    row.persisted.call.requestId = parent.logical ∧
+    row.physicalRequest = parent.physical)
 
-def titleSelfBindingValid (row : UsageRow) (binding : TitleBinding) : Bool :=
-  decide (binding.authenticated = true ∧
+def normalPublic (observation : Observation) (parent : ParentScope) : Nat × Nat :=
+  sumWhere observation (normalBelongsTo observation parent)
+
+def auxiliarySelfBindingValid (row : UsageRow) (binding : AuxiliaryBinding) : Bool :=
+  decide (binding.purpose.isAuxiliary = true ∧ binding.authenticated = true ∧
     row.persisted.call.requestId = binding.logicalRequest ∧
     row.physicalRequest = binding.physicalRequest)
 
-def titleBelongsTo (observation : Observation) (parent : ParentScope)
+def auxiliaryBelongsTo (observation : Observation) (parent : ParentScope)
     (row : UsageRow) : Bool :=
-  match observation.titleBinding row.physicalRequest with
+  match observation.auxiliaryBinding row.physicalRequest with
   | some binding =>
-      titleSelfBindingValid row binding &&
+      auxiliarySelfBindingValid row binding &&
+        decide (observation.purpose row.physicalRequest = some binding.purpose) &&
         decide (binding.parentLogical = parent.logical ∧
           binding.parentPhysical = parent.physical ∧
           binding.node = parent.node ∧
           binding.session = parent.session)
   | none => false
 
-def titleChildren (observation : Observation) (parent : ParentScope) : Nat × Nat :=
+def auxiliaryChildren (observation : Observation) (parent : ParentScope) : Nat × Nat :=
   sumWhere observation fun row =>
-    decide (observation.purpose row.physicalRequest = some .titleAudit) &&
-      titleBelongsTo observation parent row
+    (observation.purpose row.physicalRequest).any RequestPurpose.isAuxiliary &&
+      auxiliaryBelongsTo observation parent row
 
 def parentInclusiveAudit (observation : Observation) (parent : ParentScope) : Nat × Nat :=
   let normal := normalPublic observation parent
-  let titles := titleChildren observation parent
+  let titles := auxiliaryChildren observation parent
   (normal.1 + titles.1, normal.2 + titles.2)
+
+/-- Access review is part of carrying out a user's work and consumes its goal
+budget. Session title generation is presentation overhead and remains audit-only.
+An auxiliary call is chargeable only through its authenticated physical parent. -/
+def goalBelongsTo (observation : Observation) (parent : ParentScope)
+    (row : UsageRow) : Bool :=
+  normalBelongsTo observation parent row ||
+    (observation.purpose row.physicalRequest == some .accessReview &&
+      auxiliaryBelongsTo observation parent row)
+
+def goalUsage (observation : Observation) (parent : ParentScope) : Nat × Nat :=
+  sumWhere observation (goalBelongsTo observation parent)
+
+theorem a_title_cannot_enter_a_goal_budget (observation : Observation)
+    (parent : ParentScope) (row : UsageRow)
+    (title : observation.purpose row.physicalRequest = some .titleAudit) :
+    goalBelongsTo observation parent row = false := by
+  simp only [goalBelongsTo, normalBelongsTo]
+  by_cases same : row.physicalRequest = parent.physical
+  · simp [same] at title ⊢
+    simp [title]
+  · simp [same, title]
+
+theorem a_review_without_a_parent_cannot_enter_a_goal_budget
+    (observation : Observation) (parent : ParentScope) (row : UsageRow)
+    (review : observation.purpose row.physicalRequest = some .accessReview)
+    (unbound : observation.auxiliaryBinding row.physicalRequest = none) :
+    goalBelongsTo observation parent row = false := by
+  simp only [goalBelongsTo, normalBelongsTo, auxiliaryBelongsTo, unbound]
+  by_cases same : row.physicalRequest = parent.physical
+  · simp [same] at review ⊢
+    simp [review]
+  · simp [same]
 
 inductive CatalogError where
   | mismatchedCallId
   | conflictingCallId
   | missingPurpose
-  | missingTitleBinding
-  | invalidTitleBinding
+  | missingAuxiliaryBinding
+  | invalidAuxiliaryBinding
   deriving DecidableEq, Repr
 
 def sameUsageRow (left right : UsageRow) : Bool :=
@@ -161,12 +198,12 @@ def validateCatalog : List (Nat × UsageRow) →
 private def uniqueObservation (first : Nat × UsageRow)
     (rest : List (Nat × UsageRow))
     (purpose : CanonicalOutput.DocId → Option RequestPurpose)
-    (titleBinding : CanonicalOutput.DocId → Option TitleBinding) : Observation :=
+    (auxiliaryBinding : CanonicalOutput.DocId → Option AuxiliaryBinding) : Observation :=
   let rows := first :: rest
   { callIds := (rows.map Prod.fst).toFinset
   , row := fun callId =>
       ((rows.find? (fun entry => entry.1 == callId)).map Prod.snd).getD first.2
-  , purpose, titleBinding }
+  , purpose, auxiliaryBinding }
 
 structure Totals where
   normalPublic : Nat × Nat
@@ -175,33 +212,71 @@ structure Totals where
 
 def validateAndProject (records : List (Nat × UsageRow))
     (purpose : CanonicalOutput.DocId → Option RequestPurpose)
-    (titleBinding : CanonicalOutput.DocId → Option TitleBinding)
+    (auxiliaryBinding : CanonicalOutput.DocId → Option AuxiliaryBinding)
     (parent : ParentScope) : Except CatalogError Totals := do
   let unique ← validateCatalog records
   if records.any (fun (_, row) => (purpose row.physicalRequest).isNone) then
     throw .missingPurpose
   if records.any (fun (_, row) =>
-      decide (purpose row.physicalRequest = some .titleAudit) &&
-        (titleBinding row.physicalRequest).isNone) then
-    throw .missingTitleBinding
+      (purpose row.physicalRequest).any RequestPurpose.isAuxiliary &&
+        (auxiliaryBinding row.physicalRequest).isNone) then
+    throw .missingAuxiliaryBinding
   if records.any (fun (_, row) =>
-      decide (purpose row.physicalRequest = some .titleAudit) &&
-        match titleBinding row.physicalRequest with
-        | some binding => !titleSelfBindingValid row binding
+      (purpose row.physicalRequest).any RequestPurpose.isAuxiliary &&
+        match auxiliaryBinding row.physicalRequest with
+        | some binding => !auxiliarySelfBindingValid row binding ||
+            purpose row.physicalRequest != some binding.purpose
         | none => false) then
-    throw .invalidTitleBinding
+    throw .invalidAuxiliaryBinding
   match unique with
   | [] => pure ⟨(0, 0), (0, 0)⟩
   | first :: rest =>
-      let observation := uniqueObservation first rest purpose titleBinding
+      let observation := uniqueObservation first rest purpose auxiliaryBinding
       if coherentCheck records observation then
         pure ⟨normalPublic observation parent, parentInclusiveAudit observation parent⟩
       else throw .conflictingCallId
 
+inductive BudgetError where
+  | catalog (error : CatalogError)
+  | unreportedUsage
+  deriving DecidableEq, Repr
+
+def projectGoal (records : List (Nat × UsageRow))
+    (purpose : CanonicalOutput.DocId → Option RequestPurpose)
+    (auxiliaryBinding : CanonicalOutput.DocId → Option AuxiliaryBinding)
+    (parent : ParentScope) : Except CatalogError Nat := do
+  let _ ← validateAndProject records purpose auxiliaryBinding parent
+  let unique ← validateCatalog records
+  match unique with
+  | [] => pure 0
+  | first :: rest =>
+      let usage := goalUsage (uniqueObservation first rest purpose auxiliaryBinding) parent
+      pure (usage.1 + usage.2)
+
+/-- Restart uses the authenticated parent-inclusive catalog. A missing or zero
+usage report cannot establish a remaining provider allowance, even for a failed
+or cancelled call. Late positive usage can make that allowance observable again;
+the parent terminal state never discards paid review work. -/
+def recoverBudget (records : List (Nat × UsageRow))
+    (purpose : CanonicalOutput.DocId → Option RequestPurpose)
+    (auxiliaryBinding : CanonicalOutput.DocId → Option AuxiliaryBinding)
+    (parent : ParentScope) : Except BudgetError Nat := do
+  let totals ← (validateAndProject records purpose auxiliaryBinding parent).mapError .catalog
+  let unique ← (validateCatalog records).mapError .catalog
+  match unique with
+  | [] => pure 0
+  | first :: rest =>
+      let observation := uniqueObservation first rest purpose auxiliaryBinding
+      if unique.any (fun (_, row) =>
+          (normalBelongsTo observation parent row || auxiliaryBelongsTo observation parent row) &&
+          !(row.persisted.usage.any (fun usage => decide (0 < usage.chargedTotal)))) then
+        throw .unreportedUsage
+      pure (totals.parentInclusiveAudit.1 + totals.parentInclusiveAudit.2)
+
 theorem parent_inclusive_decomposes (observation : Observation) (parent : ParentScope) :
     parentInclusiveAudit observation parent =
-      ((normalPublic observation parent).1 + (titleChildren observation parent).1,
-       (normalPublic observation parent).2 + (titleChildren observation parent).2) := by
+      ((normalPublic observation parent).1 + (auxiliaryChildren observation parent).1,
+       (normalPublic observation parent).2 + (auxiliaryChildren observation parent).2) := by
   rfl
 
 theorem duplicate_call_id_does_not_double_count (observation : Observation)
@@ -216,6 +291,14 @@ theorem parent_terminal_does_not_drop_late_usage (observation : Observation)
     (parent : ParentScope) (terminal : RequestState) :
     parentInclusiveAudit observation { parent with state := terminal } =
       parentInclusiveAudit observation parent := by
+  rfl
+
+theorem parent_terminal_preserves_recoverable_budget (records : List (Nat × UsageRow))
+    (purpose : CanonicalOutput.DocId → Option RequestPurpose)
+    (auxiliaryBinding : CanonicalOutput.DocId → Option AuxiliaryBinding)
+    (parent : ParentScope) (terminal : RequestState) :
+    recoverBudget records purpose auxiliaryBinding { parent with state := terminal } =
+      recoverBudget records purpose auxiliaryBinding parent := by
   rfl
 
 theorem observe_usage_after_terminal (row : UsageRow) (usage : Usage) :
@@ -240,7 +323,7 @@ private def witnessRow (physical : CanonicalOutput.DocId) (logical : RequestId)
       , terminalStamp := some 99
       , usage := usage } }
 
-private def witnessTitleBinding : CanonicalOutput.Execution.Handover.TitleBinding :=
+private def witnessAuxiliaryBinding : CanonicalOutput.Execution.Handover.AuxiliaryBinding :=
   { physicalRequest := 11, logicalRequest := 21,
     parentPhysical := 10, parentLogical := 20,
     node := 30, session := 40, authenticated := true }
@@ -249,7 +332,7 @@ private def witnessObservation (row : UsageRow) : Observation :=
   { callIds := {7}
   , row := fun _ => row
   , purpose := fun physical => if physical = 11 then some .titleAudit else some .normal
-  , titleBinding := fun physical => if physical = 11 then some witnessTitleBinding else none }
+  , auxiliaryBinding := fun physical => if physical = 11 then some witnessAuxiliaryBinding else none }
 
 private def witnessUsage : Usage :=
   { promptTokens := 3, completionTokens := 5 }

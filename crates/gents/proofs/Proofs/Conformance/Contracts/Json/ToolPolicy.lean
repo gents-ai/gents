@@ -4,7 +4,55 @@ import Proofs.ToolPolicy.FieldRead
 import Proofs.ToolPolicy.WriteInput
 import Proofs.ToolPolicy.ApplicationWrite
 
+import Proofs.ToolPolicy.WorkspacePermissions
+
 namespace Conformance.Contracts
+
+private def permissionPreferenceJson (value : ToolPolicy.WorkspacePermissions.Preference) : String :=
+  "{\"revision\":" ++ toString value.revision
+  ++ ",\"mode\":" ++ jsonString value.mode.wireName
+  ++ ",\"reviewTask\":" ++ (match value.reviewTask with | none => "null" | some task => toString task) ++ "}"
+
+private def permissionOptionalPreferenceJson (value : Option ToolPolicy.WorkspacePermissions.Preference) : String :=
+  match value with
+  | none => "null"
+  | some value => permissionPreferenceJson value
+
+def workspacePermissionWriteCasesJson : String :=
+  jsonArray (ToolPolicy.WorkspacePermissions.writeCases.map fun witness =>
+    let result := ToolPolicy.WorkspacePermissions.selectMode witness.previous witness.expected witness.mode witness.requestedTask
+    "{\"previous\":" ++ permissionOptionalPreferenceJson witness.previous
+    ++ ",\"expected\":" ++ toString witness.expected
+    ++ ",\"mode\":" ++ jsonString witness.mode.wireName
+    ++ ",\"requestedTask\":" ++ (match witness.requestedTask with | none => "null" | some task => toString task)
+    ++ ",\"accepted\":" ++ (if result.accepted then "true" else "false")
+    ++ ",\"changed\":" ++ (if result.changed then "true" else "false")
+    ++ ",\"next\":" ++ permissionOptionalPreferenceJson result.next ++ "}")
+
+def permissionScopeJson (scope : ToolPolicy.WorkspacePermissions.Scope) : Lean.Json :=
+  Lean.Json.mkObj [("workspace", Lean.toJson scope.workspace), ("revision", Lean.toJson scope.revision)]
+
+def permissionGrantJson (grant : ToolPolicy.WorkspacePermissions.Grant) : Lean.Json :=
+  Lean.Json.mkObj [("scope", permissionScopeJson grant.scope), ("action", Lean.toJson grant.action)]
+
+def permissionInputJson (input : ToolPolicy.WorkspacePermissions.Input) : Lean.Json :=
+  Lean.Json.mkObj [
+    ("current", permissionScopeJson input.current),
+    ("configuredWorkspace", Lean.toJson input.configuredWorkspace),
+    ("mode", Lean.toJson input.mode.wireName), ("action", Lean.toJson input.action),
+    ("ceilingAllows", Lean.toJson input.ceilingAllows),
+    ("crossesBoundary", Lean.toJson input.crossesBoundary),
+    ("grant", match input.grant with | none => .null | some grant => permissionGrantJson grant)]
+
+def workspacePermissionCasesJson : String :=
+  jsonArray (ToolPolicy.WorkspacePermissions.cases.map fun witness =>
+    let input := witness.input
+    "{\"input\":" ++ (permissionInputJson input).compress
+    ++ ",\"review\":" ++ jsonString witness.review.wireName
+    ++ ",\"reviewedGrant\":" ++ (permissionGrantJson witness.reviewedGrant).compress
+    ++ ",\"expectedRoute\":" ++ jsonString (ToolPolicy.WorkspacePermissions.route input).wireName
+    ++ ",\"expectedReviewedRoute\":" ++ jsonString (ToolPolicy.WorkspacePermissions.reviewedRoute input witness.review witness.reviewedGrant).wireName
+    ++ ",\"expectedValidGrant\":" ++ (if ToolPolicy.WorkspacePermissions.validGrant input then "true" else "false") ++ "}")
 
 open ToolPolicy.ContractCases
 

@@ -9,7 +9,8 @@ use anyhow::{bail, Context, Result};
 
 use super::args::CliToolArgs;
 use super::shared::{
-    captured_channel, stopped_stream, truncate_stream, ToolError as LocalToolError,
+    captured_channel, prepare_declared_cli_command, stopped_stream, truncate_stream,
+    ToolError as LocalToolError,
 };
 use super::CliToolConfig;
 
@@ -146,15 +147,22 @@ async fn run_cli_command(
             path.clone()
         }
         None => std::env::current_dir().context("determining current working directory")?,
-    };
+    }
+    .canonicalize()
+    .context("resolving CLI working directory")?;
+
+    let command = config
+        .binary_path
+        .to_str()
+        .context("CLI executable path is not valid UTF-8")?;
+    let launch_argv =
+        prepare_declared_cli_command(&cwd, command, argv, &config.allowed_argv_prefixes).await?;
 
     let timeout_secs = config.timeout_secs.max(1);
     let bounds = tool_execution_bounds(std::time::Duration::from_secs(timeout_secs));
 
     let outcome = run_managed_exec(ManagedExecRequest {
-        argv: std::iter::once(config.binary_path.display().to_string())
-            .chain(argv.iter().cloned())
-            .collect::<Vec<_>>(),
+        argv: launch_argv,
         cwd: cwd.clone(),
         deadline_at: bounds.deadline_at,
         cancellation_token: bounds.cancellation_token,

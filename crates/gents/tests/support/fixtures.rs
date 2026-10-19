@@ -101,6 +101,7 @@ pub fn test_agent_for_node(
         backend_endpoint: "http://localhost:8000/v1".to_string(),
         backend_auth: gents::document_config::BackendAuth::Unauthenticated,
         model_name: gents::config::DEFAULT_MODEL_NAME.to_string(),
+        service_tier: None,
         resolved_reasoning_efforts: None,
         context_window: gents::config::DEFAULT_CONTEXT_WINDOW,
         max_output_tokens: gents::config::DEFAULT_MAX_OUTPUT_TOKENS,

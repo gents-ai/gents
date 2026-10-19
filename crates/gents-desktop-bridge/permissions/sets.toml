@@ -49,11 +49,13 @@ permissions = ["allow-desktop-tool-surface-explain"]
 
 [[set]]
 identifier = "chat-write"
-description = "Chat send and rename"
+description = "Chat submission, branching, and rename"
 permissions = [
   "allow-desktop-chat-send",
   "allow-desktop-pending-queue-edit",
+  "allow-desktop-pending-message-steer",
   "allow-desktop-goal-control",
+  "allow-desktop-session-fork-before-message",
   "allow-desktop-session-rename",
 ]
 

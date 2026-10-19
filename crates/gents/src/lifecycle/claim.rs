@@ -1379,8 +1379,9 @@ mod tests {
                 let finish = format!(
                     r#"mutation {{
             update_AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}, input: {{lifecycle_state: "completed"}}) {{_docID}}
-            create_InferenceCall(input: {{call_id: "prior-usage", request_id: "prior-request", node_did: "{TEST_NODE_DID}", prompt_tokens: 100, completion_tokens: 0}}) {{_docID}}
+            create_InferenceCall(input: {{call_id: "prior-usage", request_doc_id: "{}", request_id: "prior-request", node_did: "{TEST_NODE_DID}", backend_id: "test-backend", call_state: "completed", prompt_tokens: 100, completion_tokens: 0}}) {{_docID}}
         }}"#,
+                    escape_graphql_string(&first_doc_id),
                     escape_graphql_string(&first_doc_id)
                 );
                 crate::config_client::ConfigAccess::transact_local_write(

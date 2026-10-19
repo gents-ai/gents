@@ -143,7 +143,7 @@ pub(crate) async fn verify_fresh_local_self_request(
     let row = load_signed_request(node, &request.doc_id).await?;
     deny_if(
         row.purpose == Some(RequestPurpose::Normal),
-        "local-self claim cannot authorize title-audit purpose",
+        "local-self claim cannot authorize auxiliary request purpose",
     )?;
     let admission = row_admission(&row).map_err(AgentRequestAdmissionError::denied)?;
     let signing_fields = row_signing_fields(&row).map_err(AgentRequestAdmissionError::denied)?;
@@ -380,8 +380,8 @@ impl AgentRequestAdmissionVerifier {
             require_admitted_observation(observation, None)?;
             unreachable!("negative common admission evidence cannot be admitted");
         }
-        if row.purpose == Some(RequestPurpose::TitleAudit) {
-            verify_title_request_shape(&row, &admission)?;
+        if row.purpose.is_some_and(RequestPurpose::is_auxiliary) {
+            verify_auxiliary_request_shape(&row, &admission)?;
         }
         let mut denied = None;
         match admission.kind {
@@ -485,7 +485,7 @@ impl AgentRequestAdmissionVerifier {
                     row.requester_did.as_deref() == row.node_did.as_deref();
                 observation.target_runtime_attestation_valid = issuer == row.node_did.as_deref();
                 let target = required_row_string(row.node_did.as_deref(), "node_did")?;
-                let session_scope = if row.purpose == Some(RequestPurpose::TitleAudit) {
+                let session_scope = if row.purpose.is_some_and(RequestPurpose::is_auxiliary) {
                     None
                 } else {
                     crate::session::load_session_requester_scope(
@@ -546,7 +546,7 @@ impl AgentRequestAdmissionVerifier {
     }
 }
 
-fn verify_title_request_shape(
+fn verify_auxiliary_request_shape(
     row: &AgentRequestRow,
     admission: &AgentRequestAdmissionRecord,
 ) -> AdmissionResult<()> {
@@ -561,7 +561,7 @@ fn verify_title_request_shape(
             && admission.signer_did == target
             && admission.runtime_issuer_did.as_deref() == Some(target)
             && row.requester_did.as_deref() == Some(target),
-        "title-audit requires target-runtime local-control admission",
+        "auxiliary request requires target-runtime local-control admission",
     )?;
     deny_if(
         !source.is_empty()
@@ -571,7 +571,7 @@ fn verify_title_request_shape(
             && row.caused_by_parent_tool_call_id.is_none()
             && row.caused_by_parent_tool_call_doc_id.is_none()
             && row.request_hop == Some(0),
-        "title-audit requires an exact parent-only request link",
+        "auxiliary request requires an exact parent-only request link",
     )?;
     deny_if(
         row.input.as_ref().unwrap_or(&DEFAULT_REQUEST_INPUT) == &*DEFAULT_REQUEST_INPUT
@@ -587,7 +587,7 @@ fn verify_title_request_shape(
             && row.caused_by_correlation.is_none()
             && row.caused_by_trigger_context.is_none()
             && row.caused_by_source_doc_id.is_none(),
-        "title-audit cannot carry input, retry, or trigger lineage",
+        "auxiliary request cannot carry input, retry, or trigger lineage",
     )
 }
 
@@ -598,10 +598,10 @@ async fn verify_request_input(
 ) -> AdmissionResult<()> {
     use gents_protocol::request_input::QueueSource;
     let input = row.input.as_ref().unwrap_or(&DEFAULT_REQUEST_INPUT);
-    if row.purpose == Some(RequestPurpose::TitleAudit) {
+    if row.purpose.is_some_and(RequestPurpose::is_auxiliary) {
         return deny_if(
             input == &*DEFAULT_REQUEST_INPUT,
-            "title-audit cannot carry ordinary request input",
+            "auxiliary request cannot carry ordinary request input",
         );
     }
     let owner = required_row_string(row.node_did.as_deref(), "node_did")?;
@@ -753,11 +753,11 @@ async fn verify_runtime_source_binding(
                 parent.request_id == source && parent.node_did == row.node_did,
                 "local-control parent document does not exactly own the source",
             )?;
-            if purpose == RequestPurpose::TitleAudit {
+            if purpose.is_auxiliary() {
                 return deny_if(
                     parent.session_id == row.session_id
                         && parent.agent_id.as_deref() == Some(target_agent_id),
-                    "title-audit parent does not match its session and agent",
+                    "auxiliary request parent does not match its session and agent",
                 );
             }
             deny_if(
@@ -963,25 +963,25 @@ pub fn verify_request_receipt_signature(row: &AgentRequestRow) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn verify_historical_title_receipt(
-    title: &AgentRequestRow,
+pub(crate) fn verify_historical_auxiliary_receipt(
+    request: &AgentRequestRow,
     parent: &AgentRequestRow,
 ) -> Result<()> {
-    verify_request_receipt_signature(title)?;
+    verify_request_receipt_signature(request)?;
     verify_request_receipt_signature(parent)?;
-    verify_title_request_shape(title, &row_admission(title)?)?;
+    verify_auxiliary_request_shape(request, &row_admission(request)?)?;
     anyhow::ensure!(
-        title.purpose == Some(RequestPurpose::TitleAudit)
+        request.purpose.is_some_and(RequestPurpose::is_auxiliary)
             && parent.purpose == Some(RequestPurpose::Normal)
-            && title.doc_id.as_deref().is_some_and(|id| !id.is_empty())
+            && request.doc_id.as_deref().is_some_and(|id| !id.is_empty())
             && parent.doc_id.as_deref().is_some_and(|id| !id.is_empty())
-            && title.doc_id != parent.doc_id
-            && title.caused_by_parent_request_doc_id == parent.doc_id
-            && title.caused_by_parent_request_id.as_deref() == Some(parent.request_id.as_str())
-            && title.node_did == parent.node_did
-            && title.session_id == parent.session_id
-            && title.agent_id == parent.agent_id,
-        "title audit receipt crosses its authenticated parent scope"
+            && request.doc_id != parent.doc_id
+            && request.caused_by_parent_request_doc_id == parent.doc_id
+            && request.caused_by_parent_request_id.as_deref() == Some(parent.request_id.as_str())
+            && request.node_did == parent.node_did
+            && request.session_id == parent.session_id
+            && request.agent_id == parent.agent_id,
+        "auxiliary receipt crosses its authenticated parent scope"
     );
     Ok(())
 }
@@ -1107,10 +1107,10 @@ fn required_row_string<'a>(value: Option<&'a str>, field: &str) -> AdmissionResu
     })
 }
 
-/// Lifecycle is included for callers decoding the row, but is not part of the
-/// signed payload.
-pub const SIGNED_REQUEST_FIELDS: &str = r#"
-_docID lifecycle_state request_id purpose node_did requester_did agent_id session_id
+macro_rules! signed_request_receipt_fields {
+    () => {
+        r#"
+_docID request_id purpose node_did requester_did agent_id session_id
                 retry_parent_request retry_parent_request_doc_id retry_root_request retry_key
                 content input max_total_tokens
                 execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_correlation
@@ -1124,7 +1124,17 @@ _docID lifecycle_state request_id purpose node_did requester_did agent_id sessio
                 enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence
                 enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id
                 runtime_source_kind
-"#;
+"#
+    };
+}
+
+/// Historical receipt verification does not depend on mutable lifecycle state.
+pub(crate) const SIGNED_REQUEST_RECEIPT_FIELDS: &str = signed_request_receipt_fields!();
+
+/// Lifecycle is included for callers decoding the row, but is not part of the
+/// signed payload.
+pub const SIGNED_REQUEST_FIELDS: &str =
+    concat!("lifecycle_state ", signed_request_receipt_fields!());
 
 async fn load_signed_request(
     node: &EmbeddedNode,

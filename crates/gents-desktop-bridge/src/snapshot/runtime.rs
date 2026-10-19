@@ -1,3 +1,5 @@
+#[cfg(test)]
+use gents_desktop_core::inference::backend_config_view;
 use std::collections::HashMap;
 
 use chrono::Utc;
@@ -11,10 +13,9 @@ use gents_protocol::row::{
 use super::super::types::{
     normalize_optional, AgentContext, AgentEnvironmentView, AgentReadinessStatusView,
     AgentReadinessUnknownReasonView, AgentUnavailableReasonView, AgentView, ClientRouteStatusView,
-    DeploymentView, DesktopRuntimeSnapshot, InferenceBackendView, InferenceProfile,
-    MailboxItemView, NodeReadinessSourceView, NodeReadinessView, NodeView, RuntimeView,
-    SessionSummary, SkillView, TaskRecentRunsView, TaskRunSummaryView, TaskView, Tools,
-    TriggerView,
+    DeploymentView, DesktopRuntimeSnapshot, InferenceProfile, MailboxItemView,
+    NodeReadinessSourceView, NodeReadinessView, RuntimeView, SessionSummary, SkillView,
+    TaskRecentRunsView, TaskRunSummaryView, TaskView, Tools, TriggerView,
 };
 use super::runtime_tasks::{
     recent_runs_for_task_views, session_summaries, source_matches_node, task_run_histories,
@@ -54,31 +55,11 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 })
                 .map(MailboxItemView::from)
                 .collect::<Vec<_>>();
-            let node = node_row
-                .map(|row| NodeView {
-                    node_did: row.node_did.clone(),
-                    display_name: normalize_optional(row.display_name.as_deref()),
-                    default_agent_id: normalize_optional(row.default_agent_id.as_deref()),
-                    enabled: Some(row.enabled),
-                    created_at: normalize_optional(row.created_at.as_deref()),
-                    created_by: normalize_optional(row.created_by.as_deref()),
-                })
-                .unwrap_or_else(|| NodeView {
-                    node_did: peer.node_did.clone(),
-                    display_name: None,
-                    default_agent_id: None,
-                    enabled: None,
-                    created_at: None,
-                    created_by: None,
-                });
+            let inference =
+                gents_desktop_core::inference::InferenceSetupState::project(&store, &peer.node_did);
+            let node = inference.node;
             let node_config = node_row.cloned();
-            let mut agent_configs = store
-                .agents
-                .iter()
-                .filter(|row| row.node_did == peer.node_did)
-                .cloned()
-                .collect::<Vec<_>>();
-            agent_configs.sort_by(|left, right| left.agent_id.cmp(&right.agent_id));
+            let agent_configs = inference.agent_configs;
             let default_agent_id = store
                 .default_agent_id_for_node(&peer.node_did)
                 .map(str::to_owned);
@@ -91,73 +72,13 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 agent_executor_queue_depth: row.agent_executor_queue_depth,
             });
 
-            let mut agents = store
-                .agent_rows(&peer.node_did)
-                .into_iter()
-                .map(|row| AgentView {
-                    agent_id: row.agent_id.clone(),
-                    node_did: row.node_did.clone(),
-                    display_name: normalize_optional(row.display_name.as_deref())
-                        .unwrap_or_else(|| row.agent_id.clone()),
-                    description: row.description.clone(),
-                    context_id: row.context_id.clone(),
-                    inference_profile_id: Some(row.inference_profile_id.clone()),
-                    enabled: row.enabled,
-                    is_default: default_agent_id.as_deref() == Some(row.agent_id.as_str()),
-                    tags: row.tags.clone(),
-                    created_at: row.created_at.clone(),
-                })
-                .collect::<Vec<_>>();
-            agents.sort_by(|left, right| {
-                right
-                    .is_default
-                    .cmp(&left.is_default)
-                    .then_with(|| left.display_name.cmp(&right.display_name))
-            });
+            let agents = inference.agents;
             let agent_ids = agents
                 .iter()
                 .map(|agent| agent.agent_id.as_str())
                 .collect::<Vec<_>>();
-            let mut inference_backends = store
-                .inference_backends
-                .iter()
-                .filter(|row| row.node_did == peer.node_did)
-                .map(|row| {
-                    let observation = store
-                        .backend_observations
-                        .iter()
-                        .enumerate()
-                        .find(|(index, observation)| {
-                            observation.backend_id == row.backend_id
-                                && source_matches_node(
-                                    &store.backend_observation_source_node_dids,
-                                    *index,
-                                    &row.node_did,
-                                    true,
-                                )
-                        })
-                        .map(|(_, observation)| observation);
-                    backend_config_view(row, observation)
-                })
-                .collect::<Vec<_>>();
-            inference_backends.sort_by(|left, right| left.backend_id.cmp(&right.backend_id));
-
-            let mut inference_profiles = store
-                .inference_profiles
-                .iter()
-                .enumerate()
-                .filter(|(index, row)| {
-                    row.node_did == peer.node_did
-                        && source_matches_node(
-                            &store.inference_profile_source_node_dids,
-                            *index,
-                            &peer.node_did,
-                            false,
-                        )
-                })
-                .map(|(_, row)| row.clone())
-                .collect::<Vec<_>>();
-            inference_profiles.sort_by(|left, right| left.profile_id.cmp(&right.profile_id));
+            let inference_backends = inference.inference_backends;
+            let inference_profiles = inference.inference_profiles;
             let mut inference_sampling = store
                 .inference_sampling
                 .iter()
@@ -344,7 +265,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 &triggers,
             );
             let node_scope = core.transcript_node_scope(&peer.node_did);
-            let operator = core.operator_graphql(&peer.node_did).is_some();
+            let operator = core.operator_observation_graphql(&peer.node_did).is_some();
             for summary in &mut sessions {
                 summary.unreadable_reason = store
                     .sessions
@@ -642,53 +563,6 @@ impl From<AgentReadinessUnknownReason> for AgentReadinessUnknownReasonView {
             AgentReadinessUnknownReason::RouterGenerationStale => Self::RouterGenerationStale,
             AgentReadinessUnknownReason::AgentNotAssigned => Self::AgentNotAssigned,
         }
-    }
-}
-
-fn backend_config_view(
-    row: &gents::document_config::InferenceBackend,
-    observation: Option<&gents::document_config::InferenceBackendObservation>,
-) -> InferenceBackendView {
-    use gents::document_config::BackendAuth;
-    let (auth_kind, api_key_configured, api_key_env_var) = match &row.auth {
-        BackendAuth::Unauthenticated => ("unauthenticated", false, None),
-        BackendAuth::ApiKey { .. } => ("api_key", true, None),
-        BackendAuth::Environment { variable } => ("environment", false, Some(variable.clone())),
-        BackendAuth::NodeOAuth { .. } => ("node_oauth", false, None),
-    };
-    let advertised_models = match gents::config::backend_catalog(row, observation) {
-        Ok(catalog) => catalog,
-        Err(error) => {
-            tracing::warn!(backend_id = %row.backend_id, node_did = %row.node_did,
-            %error, "cannot project ambiguous backend catalog");
-            None
-        }
-    }
-    .map(|catalog| catalog.models.clone())
-    .unwrap_or_default();
-    let models = advertised_models
-        .iter()
-        .map(|model| model.model_name.clone())
-        .collect();
-    InferenceBackendView {
-        backend_id: row.backend_id.clone(),
-        name: Some(row.name.clone()),
-        provider_kind: Some(row.provider_kind.as_str().to_owned()),
-        openai_wire_api: row.openai_wire_api.map(|api| api.as_str().to_owned()),
-        endpoint: Some(row.endpoint.clone()),
-        auth_kind: Some(auth_kind.to_owned()),
-        connect_timeout_secs: row.connect_timeout_secs,
-        discovery_timeout_secs: row.discovery_timeout_secs,
-        api_key_configured,
-        api_key_env_var,
-        max_concurrent: row.max_concurrent,
-        max_queue_depth: row.max_queue_depth,
-        enabled: Some(row.enabled),
-        tags: row.tags.clone(),
-        models,
-        advertised_models,
-        probe_status: observation.and_then(|observation| observation.probe_status.clone()),
-        account_ref: row.auth.oauth_account_ref().map(str::to_owned),
     }
 }
 

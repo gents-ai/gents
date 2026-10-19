@@ -132,16 +132,16 @@ impl NativeFsRunner {
                 deny_all_argv: false,
                 deny_git_metadata_writes: true,
             };
-            let (program, args, environment, _) = super::prepare_managed_command(
+            let command = super::prepare_managed_command(
                 &root,
                 &runner.argv[0],
                 &runner.argv[1..],
                 &constraints,
             )
             .await?;
-            let mut argv = vec![program.to_string_lossy().into_owned()];
-            argv.extend(args);
-            (argv, Some(environment))
+            let mut argv = vec![command.program.to_string_lossy().into_owned()];
+            argv.extend(command.args);
+            (argv, Some(command.environment))
         } else {
             (runner.argv, None)
         };

@@ -70,6 +70,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
     pub(crate) mailbox_sweep_cases: Vec<serde_json::Value>,
     pub(crate) client_observation_scope_cases: Vec<serde_json::Value>,
+    pub(crate) client_observation_admission_cases: Vec<serde_json::Value>,
     pub(crate) client_settings_cases: serde_json::Value,
     pub(crate) client_data_publication_cases: serde_json::Value,
     pub(crate) client_request_patch_publication_cases: serde_json::Value,
@@ -111,6 +112,12 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) goal_client_start_cases: Vec<serde_json::Value>,
     pub(crate) goal_client_receipt_cases: Vec<serde_json::Value>,
     pub(crate) goal_observation_cases: Vec<serde_json::Value>,
+    pub(crate) workspace_permission_write_cases: Vec<serde_json::Value>,
+    pub(crate) workspace_permission_cases: Vec<serde_json::Value>,
+    pub(crate) workspace_command_root_cases: Vec<serde_json::Value>,
+    pub(crate) operator_path_cases: Vec<serde_json::Value>,
+    pub(crate) access_review_cases: Vec<serde_json::Value>,
+    pub(crate) access_review_task_cases: Vec<serde_json::Value>,
     pub(crate) plugin_approval_cases: Vec<serde_json::Value>,
     pub(crate) goal_objective_whitespace_codepoints: Vec<u32>,
     pub(crate) task_goal_publication_cases: Vec<LeanTaskGoalPublicationCase>,
@@ -136,6 +143,7 @@ pub(crate) struct LeanContractSnapshot {
         std::collections::BTreeMap<String, Vec<LeanScopeCollectionRule>>,
     pub(crate) title_request_admission_cases: Vec<LeanTitleRequestAdmissionCase>,
     pub(crate) title_request_purpose_wire_cases: Vec<LeanTitleRequestPurposeWireCase>,
+    pub(crate) title_text_cases: serde_json::Value,
     pub(crate) title_usage_cases: Vec<LeanTitleUsageCase>,
     pub(crate) title_admission_join_cases: Vec<LeanTitleAdmissionJoinCase>,
     pub(crate) frontend_client_shell_case_count: usize,
@@ -264,6 +272,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) prompt_assembly_claude_thinking_stream_cases:
         Vec<LeanPromptAssemblyClaudeThinkingStreamCase>,
     pub(crate) prompt_assembly_claude_wire_start_cases: Vec<LeanPromptAssemblyClaudeWireStartCase>,
+    pub(crate) prompt_assembly_service_tier_cases: Vec<LeanPromptAssemblyServiceTierCase>,
     pub(crate) prompt_assembly_responses_storage_cases: Vec<LeanPromptAssemblyResponsesStorageCase>,
     pub(crate) prompt_assembly_responses_effort_cases: Vec<LeanPromptAssemblyResponsesEffortCase>,
     pub(crate) prompt_assembly_claude_replay_cases: Vec<LeanPromptAssemblyClaudeReplayCase>,
@@ -3123,4 +3132,9 @@ pub(crate) struct LeanSessionInputEditReceipt {
     pub(crate) digest: u64,
     pub(crate) outcome: String,
     pub(crate) request_ids: Vec<u64>,
+}
+
+pub(crate) fn lean_prompt_assembly_service_tier_cases(
+) -> &'static [LeanPromptAssemblyServiceTierCase] {
+    &lean_contract_snapshot().prompt_assembly_service_tier_cases
 }

@@ -752,7 +752,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                             db.node_did(), &session_id, db.node_did(), PendingQueueEdit {
                                 expected_request_doc_ids: snapshot.entries.iter().map(|entry| entry.request_doc_id.clone()).collect(),
                                 selected_request_doc_ids: vec![first.request_doc_id.clone()], messages: vec![],
-                            }).await;
+                            }, &[]).await;
                         if result.is_ok() {
                             for turn in generations.values_mut() {
                                 turn.selected.clear();

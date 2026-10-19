@@ -31,6 +31,21 @@ def intakeSteering? (target : AgentSession.Scope) (pre : SessionQueueState)
     some { pre with folding := selected, pending := pre.pending.drop selected.length }
   else none
 
+def replacementDeliveryAllowed (before after : QueueDelivery) : Prop :=
+  before = after ∨ (before = .queue ∧ after = .steer)
+
+instance (before after : QueueDelivery) : Decidable (replacementDeliveryAllowed before after) := by
+  unfold replacementDeliveryAllowed
+  infer_instance
+
+theorem steering_delivery_cannot_be_demoted :
+    ¬ replacementDeliveryAllowed .steer .queue := by
+  simp [replacementDeliveryAllowed]
+
+theorem queued_delivery_can_be_promoted :
+    replacementDeliveryAllowed .queue .steer := by
+  exact Or.inr ⟨rfl, rfl⟩
+
 /-- The active request and already-consumed input cannot be edited; selection is
 provisional until authored consumption (an edit invalidates it and restores the
 remaining order). -/
@@ -52,7 +67,8 @@ def replacementAllowed (target : AgentSession.Scope) (pre : SessionQueueState)
       (old.zip replacements).all (fun pair => decide (
         pair.2.source = .user ∧ pair.2.policy = .append ∧
         pair.2.origin = .interactive ∧ pair.2.requester = caller ∧
-        pair.2.turnContext = pair.1.turnContext ∧ pair.2.delivery = pair.1.delivery ∧
+        pair.2.turnContext = pair.1.turnContext ∧
+        replacementDeliveryAllowed pair.1.delivery pair.2.delivery ∧
         pair.2.orderKey = pair.1.orderKey))
 
 def replacePendingGroup? (target : AgentSession.Scope) (pre : SessionQueueState)
