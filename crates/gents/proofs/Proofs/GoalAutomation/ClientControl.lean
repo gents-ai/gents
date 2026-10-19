@@ -52,7 +52,7 @@ def apply? (s : Snapshot) (expected : Revision) (nextComposite : String) (operat
     let next := { s.revision with composite := nextComposite }
     match operation with
   | .edit fields =>
-      (Edit.apply? (assignment s) (assignment s) fields).map fun edited =>
+      (Edit.apply? (assignment s) (assignment s) fields .client).map fun edited =>
         { s with
           revision := next
           objective := edited.objective
@@ -80,6 +80,24 @@ theorem stale_revision_cannot_change_goal (s : Snapshot) (expected : Revision) (
     (operation : Operation) (facts : Facts) (h : s.revision ≠ expected) :
     apply? s expected next operation facts = none := by
   simp [apply?, h]
+
+theorem edit_preserves_goal_and_request_owner (s post : Snapshot)
+    (expected : Revision) (next : String) (fields : Edit.Fields) (facts : Facts)
+    (h : apply? s expected next (.edit fields) facts = some post) :
+    post.execution.goal = s.execution.goal ∧
+      post.execution.sequence = s.execution.sequence ∧
+      post.execution.latestRequest = s.execution.latestRequest ∧
+      post.execution.children = s.execution.children := by
+  unfold apply? at h
+  split at h
+  · contradiction
+  · dsimp at h
+    cases he : Edit.apply? (assignment s) (assignment s) fields .client with
+    | none => simp [he] at h
+    | some edited =>
+      simp only [he, Option.map_some, Option.some.injEq] at h
+      cases h
+      exact ⟨rfl, rfl, rfl, rfl⟩
 
 theorem pause_preserves_request_owner (s post : Snapshot) (expected : Revision) (next : String)
     (facts : Facts) (h : apply? s expected next .pause facts = some post) :
@@ -131,7 +149,7 @@ theorem preserves_document_identity (s post : Snapshot) (expected : Revision) (n
   · cases operation with
     | edit fields =>
       dsimp at h
-      cases he : Edit.apply? (assignment s) (assignment s) fields with
+      cases he : Edit.apply? (assignment s) (assignment s) fields .client with
       | none => simp [he] at h
       | some edited =>
         simp only [he, Option.map_some, Option.some.injEq] at h

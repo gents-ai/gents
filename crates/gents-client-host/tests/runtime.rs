@@ -88,11 +88,8 @@ async fn editor_preserves_live_session_and_draft_across_window_reload() -> Resul
 }
 
 async fn exercise(root: &Path, journey: Journey) -> Result<()> {
-    let cli = Path::new(env!("CARGO_BIN_EXE_gents-client-host"))
-        .parent()
-        .context("native binary directory")?
-        .join(format!("gents{}", std::env::consts::EXE_SUFFIX));
-    ensure!(cli.is_file(), "build gents-cli before running runtime-e2e");
+    let cli = support::native_binary("gents")?;
+    let host_binary = support::native_binary("gents-client-host")?;
     if matches!(journey, Journey::Editor) {
         std::fs::write(
             root.join("AGENTS.md"),
@@ -102,6 +99,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     let (emitted, _) = tokio::sync::watch::channel(None);
     let provider_gate = gate.clone();
+    let editor_goal_gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let goal_provider_gate = editor_goal_gate.clone();
+    let goal_provider_hold = root.join("hold-goal-provider");
     let provider = FakeLlm::start_with_models(
         if matches!(journey, Journey::Editor) {
             &["editor-fixture", "editor-fixture-alternate"]
@@ -118,7 +118,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                         json!({"choices":[{"delta":{"content":"First part"},"finish_reason":null}],"usage":null})
                     ),
                 )],
-                provider_gate.clone(),
+                if goal_provider_hold.is_file() {
+                    goal_provider_gate.clone()
+                } else {
+                    provider_gate.clone()
+                },
                 fake_llm::completion_text_sse(" and final part."),
                 emitted.clone(),
             )
@@ -211,7 +215,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let client_did = seed.node_identity().did().to_owned();
     seed.shutdown().await?;
     drop(seed);
-    let mut host_command = Command::new(env!("CARGO_BIN_EXE_gents-client-host"));
+    let mut host_command = Command::new(&host_binary);
     host_command.args(["--serve", "--home"]).arg(paths.root());
     if matches!(journey, Journey::Editor) {
         host_command.arg("--editor-store");
@@ -554,6 +558,16 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         }));
+        let goal_completion_path = root.join("finish-goal-provider");
+        let _goal_completion = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            loop {
+                if goal_completion_path.is_file() {
+                    editor_goal_gate.add_permits(1);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }));
         configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
         client
             .call(id, "client_connect_local", json!({"nodeHome":node_home}))
@@ -621,7 +635,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             .arg(script)
             .arg(root)
             .arg(paths.root())
-            .arg(env!("CARGO_BIN_EXE_gents-client-host"))
+            .arg(&host_binary)
             .arg(session)
             .stdout(Stdio::from(log.try_clone()?))
             .stderr(Stdio::from(log))
@@ -633,6 +647,32 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         }
         let status = status.context("editor journey timed out")??;
         ensure!(status.success(), "editor journey exited with {status}");
+        let stopped = access
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ content session_id lifecycle_state }} }}"#,
+                gents::graphql::escape_graphql_string(node_did),
+            ))
+            .await?;
+        let stopped = stopped["data"]["AgentRequest"]
+            .as_array()
+            .context("stopped editor request rows")?
+            .iter()
+            .filter(|row| {
+                matches!(
+                    row["content"].as_str(),
+                    Some(
+                        "Verify the installed goal controls" | "Continue with the queued follow-up"
+                    )
+                )
+            })
+            .collect::<Vec<_>>();
+        ensure!(
+            stopped.len() == 2
+                && stopped[0]["content"] != stopped[1]["content"]
+                && stopped[0]["session_id"] == stopped[1]["session_id"]
+                && stopped.iter().all(|row| row["lifecycle_state"] == "interrupted"),
+            "both editor Stop actions must reach distinct requests in the same session: {stopped:?}"
+        );
         configured_actions::verify_editor_settings(&access, node_did, agent_id).await?;
         let submitted = access.execute(&format!(
             r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ content input }} }}"#,
