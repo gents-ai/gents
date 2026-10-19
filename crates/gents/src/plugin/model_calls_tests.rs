@@ -560,6 +560,7 @@ async fn a_model_tool_gets_its_model_answers_through_the_same_path() {
             plugin: "team/plugin".into(),
             digest: Some(record.digest.clone()),
             input_fields: Vec::new(),
+            job: None,
         },
         None,
     )

@@ -90,6 +90,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
                 "obligation model + operator surface for #630; not a flood-safety fence — queue-admission, retained JoinHandles, and durable pending-DAG recovery require defradb.rs work (boundary.p2p-backpressure.obligation-model)",
             ),
         ),
+        ("PluginJob", Module("conformance/plugin_job.rs")),
         ("Process", WorkspaceTest("crates/gents/src/runtime_status/tests.rs")),
         ("PromptAssembly", Module("conformance/prompt_assembly.rs")),
         ("QueuedSteering", Module("conformance/live_overlay.rs")),

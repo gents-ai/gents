@@ -235,19 +235,54 @@ theorem Grants.boundedBy_of_le_held {c held : Grants} (s : Grants)
   cases hc : c.packInstall <;> cases hh : held.packInstall <;>
     simp_all [Grants.le, Grants.boundedBy]
 
+theorem ceiling_leB_refl (c : PluginJob.Ceiling) : c.leB c = true := by
+  cases h : c.targets <;> simp [PluginJob.Ceiling.leB, PluginJob.scopeLe, h]
+
+theorem JobGrant.narrows_refl (g : Option JobGrant) : JobGrant.narrows g g = true := by
+  cases g with
+  | none => rfl
+  | some j =>
+      have h : j.ceiling ≤ j.ceiling := ceiling_leB_refl j.ceiling
+      simp [JobGrant.narrows, h]
+
+/-- The coordinates of the job blocks a Tools document carries are distinct. -/
+def Grants.jobCoordinatesUnique (g : Grants) : Prop :=
+  g.job.Pairwise fun a b => a.1 ≠ b.1
+
+private theorem lookup_eq_some_of_mem {l : List (String × JobGrant)}
+    (hu : l.Pairwise fun a b => a.1 ≠ b.1) {k : String} {v : JobGrant}
+    (hm : (k, v) ∈ l) : l.lookup k = some v := by
+  induction hu with
+  | nil => simp at hm
+  | @cons e t hne _ ih =>
+      rcases List.mem_cons.mp hm with rfl | hm
+      · simp [List.lookup]
+      · have hk : k ≠ e.1 := fun hke => hne _ hm (hke ▸ rfl)
+        have hb : (k == e.1) = false := by simpa using hk
+        simp [List.lookup, hb, ih hm]
+
+theorem keepsJobGrants_self (g : Grants) (hu : g.jobCoordinatesUnique) :
+    keepsJobGrants g g = true := by
+  simp only [keepsJobGrants, List.all_eq_true]
+  intro e he
+  rw [lookup_eq_some_of_mem hu he]
+  exact JobGrant.narrows_refl _
+
 theorem grant_widening_requires_held (decode : Doc → Option Grants) (held : Grants)
     (stored candidate : Doc) (s c : Grants)
     (hs : decode stored = some s) (hc : decode candidate = some c)
     (hcp : c.packInstall = true) (hsp : s.packInstall = false)
     (h : keepsGrants decode held stored candidate = true) :
     held.packInstall = true := by
-  simpa [keepsGrants, Grants.boundedBy, hs, hc, hcp, hsp] using h
+  simp [keepsGrants, Grants.boundedBy, hs, hc, hcp, hsp] at h
+  exact h.1
 
 theorem unrelated_edit_preserves_grants (decode : Doc → Option Grants) (held : Grants)
     (stored candidate : Doc) (g : Grants)
-    (hs : decode stored = some g) (hc : decode candidate = some g) :
+    (hs : decode stored = some g) (hc : decode candidate = some g)
+    (hu : g.jobCoordinatesUnique) :
     keepsGrants decode held stored candidate = true := by
-  simp [keepsGrants, hs, hc, Grants.boundedBy_self]
+  simp [keepsGrants, hs, hc, Grants.boundedBy_self, keepsJobGrants_self g hu]
 
 theorem self_grant_without_held_refused (decode : Doc → Option Grants)
     (stored candidate : Doc)
@@ -280,10 +315,10 @@ theorem chain_widening_requires_held (decode : Doc → Option Grants) (held : Gr
 theorem chain_unchanged_selection_keeps_grants (decode : Doc → Option Grants)
     (held : Grants) (resolve : Doc → Option Doc) (stored candidate tools : Doc) (g : Grants)
     (hs : resolve stored = some tools) (hc : resolve candidate = some tools)
-    (hd : decode tools = some g) :
+    (hd : decode tools = some g) (hu : g.jobCoordinatesUnique) :
     chainKeepsGrants decode held resolve stored candidate = true := by
   simp only [chainKeepsGrants, reselectionKeepsGrants, hs, hc]
-  exact unrelated_edit_preserves_grants decode held tools tools g hd hd
+  exact unrelated_edit_preserves_grants decode held tools tools g hd hd hu
 
 theorem chain_without_tools_is_unconstrained (decode : Doc → Option Grants)
     (held : Grants) (resolve : Doc → Option Doc) (stored candidate : Doc)
@@ -296,6 +331,118 @@ theorem reselection_from_nothing_requires_held (decode : Doc → Option Grants)
     (hd : decode tools = some c) (hcp : c.packInstall = true)
     (h : reselectionKeepsGrants decode held none (some tools) = true) :
     held.packInstall = true := by
-  simpa [reselectionKeepsGrants, hd, Grants.boundedBy, Grants.bot, hcp] using h
+  simp [reselectionKeepsGrants, hd, Grants.boundedBy, Grants.bot, hcp] at h
+  exact h.1
+
+private theorem mem_of_lookup_eq_some {l : List (String × JobGrant)} {k : String}
+    {v : JobGrant} (h : l.lookup k = some v) : (k, v) ∈ l := by
+  induction l with
+  | nil => simp [List.lookup] at h
+  | cons e t ih =>
+      obtain ⟨a, b⟩ := e
+      cases hb : (k == a)
+      · simp only [List.lookup, hb] at h
+        exact List.mem_cons_of_mem _ (ih h)
+      · have hka : k = a := by simpa using hb
+        subst hka
+        simp only [List.lookup, hb, Option.some.injEq] at h
+        subst h
+        simp
+
+theorem keepsJobGrants_lookup {c s : Grants} {plugin : String} {jc : JobGrant}
+    (h : keepsJobGrants c s = true) (hj : c.job.lookup plugin = some jc) :
+    JobGrant.narrows (some jc) (s.job.lookup plugin) = true := by
+  have hm := mem_of_lookup_eq_some hj
+  exact List.all_eq_true.mp h _ hm
+
+/-- A later job entry for a plugin already listed is judged on its own: it cannot
+hide behind the first entry for that coordinate. -/
+theorem keepsJobGrants_checks_every_entry (plugin : String) (a b : JobGrant)
+    (hb : JobGrant.narrows (some b) (some a) = false) :
+    keepsJobGrants { packInstall := false, job := [(plugin, a), (plugin, b)] }
+      { packInstall := false, job := [(plugin, a)] } = false := by
+  simp [keepsJobGrants, List.lookup, hb]
+
+/-- A model Tools write keeps every job ceiling within the stored block of the
+same plugin, whatever the invoker holds. -/
+theorem job_ceiling_self_config_narrow_only (decode : Doc → Option Grants) (held : Grants)
+    (validate lockout : Doc → Bool) (stored : Doc) (p : Patch) (merged : Doc)
+    (s c : Grants) (plugin : String) (jc : JobGrant)
+    (h : step validate
+      (fun candidate => keepsGrants decode held stored candidate && lockout candidate)
+      .tools stored p = some merged)
+    (hs : decode stored = some s) (hc : decode merged = some c)
+    (hj : c.job.lookup plugin = some jc) :
+    ∃ js, s.job.lookup plugin = some js ∧ jc.ceiling ≤ js.ceiling := by
+  have hk := accepted_tools_write_keeps_grants decode held validate lockout stored p merged h
+  simp only [keepsGrants, hs, hc, Bool.and_eq_true] at hk
+  have hn := keepsJobGrants_lookup hk.2 hj
+  cases hsl : s.job.lookup plugin with
+  | none => simp [hsl, JobGrant.narrows] at hn
+  | some js =>
+      refine ⟨js, rfl, ?_⟩
+      simp [hsl, JobGrant.narrows] at hn
+      exact hn.1
+
+/-- A model Tools write keeps each job block's policy as stored. -/
+theorem job_policy_operator_only (decode : Doc → Option Grants) (held : Grants)
+    (validate lockout : Doc → Bool) (stored : Doc) (p : Patch) (merged : Doc)
+    (s c : Grants) (plugin : String) (jc : JobGrant)
+    (h : step validate
+      (fun candidate => keepsGrants decode held stored candidate && lockout candidate)
+      .tools stored p = some merged)
+    (hs : decode stored = some s) (hc : decode merged = some c)
+    (hj : c.job.lookup plugin = some jc) :
+    ∃ js, s.job.lookup plugin = some js ∧ jc.policy = js.policy := by
+  have hk := accepted_tools_write_keeps_grants decode held validate lockout stored p merged h
+  simp only [keepsGrants, hs, hc, Bool.and_eq_true] at hk
+  have hn := keepsJobGrants_lookup hk.2 hj
+  cases hsl : s.job.lookup plugin with
+  | none => simp [hsl, JobGrant.narrows] at hn
+  | some js =>
+      refine ⟨js, rfl, ?_⟩
+      simp [hsl, JobGrant.narrows] at hn
+      exact hn.2
+
+/-- A model Tools write cannot add a job block for a plugin the stored Tools
+carry none for. -/
+theorem self_config_cannot_add_job_block (decode : Doc → Option Grants) (held : Grants)
+    (validate lockout : Doc → Bool) (stored : Doc) (p : Patch) (merged : Doc)
+    (s c : Grants) (plugin : String)
+    (h : step validate
+      (fun candidate => keepsGrants decode held stored candidate && lockout candidate)
+      .tools stored p = some merged)
+    (hs : decode stored = some s) (hc : decode merged = some c)
+    (hnone : s.job.lookup plugin = none) :
+    c.job.lookup plugin = none := by
+  have hk := accepted_tools_write_keeps_grants decode held validate lockout stored p merged h
+  simp only [keepsGrants, hs, hc, Bool.and_eq_true] at hk
+  cases hcl : c.job.lookup plugin with
+  | none => rfl
+  | some jc =>
+      have hn := keepsJobGrants_lookup hk.2 hcl
+      simp [hnone, JobGrant.narrows] at hn
+
+/-- A Context write that newly selects Tools, with no previous selection,
+acquires no job block, whatever the invoker holds. -/
+theorem reselection_cannot_acquire_job_ceiling (decode : Doc → Option Grants)
+    (held : Grants) (validate lockout : Doc → Bool) (resolve : Doc → Option Doc)
+    (stored : Doc) (p : Patch) (merged tools : Doc) (c : Grants) (plugin : String)
+    (h : step validate
+      (fun candidate => chainKeepsGrants decode held resolve stored candidate && lockout candidate)
+      .agentContext stored p = some merged)
+    (hs : resolve stored = none) (hm : resolve merged = some tools)
+    (hd : decode tools = some c) :
+    c.job.lookup plugin = none := by
+  have hg := (step_accept_validates validate _ .agentContext stored p merged h).2
+  simp only [Bool.and_eq_true] at hg
+  have hk := hg.1
+  simp only [chainKeepsGrants, reselectionKeepsGrants, hs, hm, hd, Option.any_some,
+    Bool.and_eq_true] at hk
+  cases hcl : c.job.lookup plugin with
+  | none => rfl
+  | some jc =>
+      have hn := keepsJobGrants_lookup hk.2 hcl
+      simp [Grants.bot, JobGrant.narrows, List.lookup] at hn
 
 end SelfConfig

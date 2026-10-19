@@ -65,6 +65,16 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) repeated_tool_failure_cases: Vec<serde_json::Value>,
     pub(crate) tool_timeout_cases: serde_json::Value,
     pub(crate) plugin_resource_cases: serde_json::Value,
+    pub(crate) plugin_data_cases: LeanPluginDataCases,
+    pub(crate) plugin_calls_route_cases: Vec<LeanPluginCallsRouteCase>,
+    pub(crate) plugin_job_admission_cases: Vec<LeanPluginJobAdmissionCase>,
+    pub(crate) plugin_job_adoption_cases: Vec<LeanPluginJobAdoptionCase>,
+    pub(crate) plugin_job_key_cases: Vec<LeanPluginJobKeyCase>,
+    pub(crate) plugin_job_control_cases: Vec<LeanPluginJobControlCase>,
+    pub(crate) plugin_job_authority_cases: Vec<LeanPluginJobAuthorityCase>,
+    pub(crate) plugin_job_wire_cases: Vec<LeanPluginJobWireCase>,
+    pub(crate) plugin_job_lineage_cases: Vec<LeanPluginJobLineageCase>,
+    pub(crate) plugin_job_recovery_cases: Vec<LeanPluginJobRecoveryCase>,
     pub(crate) mailbox_notification_cases: Vec<serde_json::Value>,
     pub(crate) mailbox_reply_cases: Vec<serde_json::Value>,
     pub(crate) mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
@@ -313,6 +323,973 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) event_delivery_transition_cases: Vec<LeanEventDeliveryTransitionCase>,
     pub(crate) event_delivery_source_instances: Vec<LeanEventDeliverySourceInstance>,
     pub(crate) event_delivery_convergence_traces: Vec<LeanEventDeliveryConvergenceTrace>,
+}
+
+/// `Conformance.PluginJob.admissionCases`: one `admitStep` row, its context,
+/// job and step output as the model holds them, and the verdict
+/// `settleStep` computes from them.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobAdmissionCase {
+    pub(crate) name: String,
+    pub(crate) context: LeanPluginJobContext,
+    pub(crate) job: LeanPluginJobRow,
+    pub(crate) output: LeanPluginJobOutput,
+    pub(crate) expected: LeanPluginJobAdmissionExpected,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobAdmissionExpected {
+    pub(crate) admitted: bool,
+    pub(crate) code: Option<String>,
+    pub(crate) job: Option<LeanPluginJobRow>,
+    pub(crate) row_state: String,
+    pub(crate) kill: Vec<LeanPluginJobKill>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobKill {
+    pub(crate) retry_key: String,
+    pub(crate) action: String,
+}
+
+/// `Conformance.PluginJob.adoptionCasesJson`: the step-0 adoption rows and the
+/// pure pin, handle and address rows, tagged by `kind`.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanPluginJobAdoptionCase {
+    Step0 {
+        name: String,
+        tool_call: LeanPluginJobToolCall,
+        context: LeanPluginJobContext,
+        job: LeanPluginJobRow,
+        output: LeanPluginJobOutput,
+        expected: LeanPluginJobStep0Expected,
+    },
+    HostPin {
+        name: String,
+        claimed: LeanPluginJobPin,
+        facts: LeanPluginJobHostFacts,
+        expected: LeanPluginJobHostPinExpected,
+    },
+    Handle {
+        name: String,
+        taken: Vec<String>,
+        handle: String,
+        expected: LeanPluginJobHandleExpected,
+    },
+    Address {
+        name: String,
+        address: String,
+        expected: LeanPluginJobAddressExpected,
+    },
+}
+
+impl LeanPluginJobAdoptionCase {
+    pub(crate) fn name(&self) -> &str {
+        match self {
+            Self::Step0 { name, .. }
+            | Self::HostPin { name, .. }
+            | Self::Handle { name, .. }
+            | Self::Address { name, .. } => name,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobToolCall {
+    pub(crate) state: String,
+    pub(crate) operation: String,
+    pub(crate) await_mode: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobStep0Expected {
+    pub(crate) admitted: bool,
+    pub(crate) code: Option<String>,
+    pub(crate) job: Option<LeanPluginJobRow>,
+    pub(crate) tool_call: LeanPluginJobToolCall,
+    pub(crate) delivery: Option<String>,
+    pub(crate) continuation_appended: bool,
+    pub(crate) receipt: Option<LeanPluginJobReceiptDecisions>,
+    pub(crate) next_resume_valid: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobReceiptDecisions {
+    pub(crate) terminal_decision: String,
+    pub(crate) late_decision: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobHostPinExpected {
+    pub(crate) pin: LeanPluginJobPin,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobHandleExpected {
+    pub(crate) handle: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobAddressExpected {
+    pub(crate) split: Option<LeanPluginJobAddressSplit>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobAddressSplit {
+    pub(crate) session_id: String,
+    pub(crate) tool_call_id: String,
+}
+
+/// `Conformance.PluginJob.keyCasesJson`: one spawn key, the message numbers
+/// probed, and the strings the Lean encoders and `decodeRetryKey?` produce.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobKeyCase {
+    pub(crate) name: String,
+    pub(crate) root: String,
+    pub(crate) slot: String,
+    pub(crate) attempt: u32,
+    pub(crate) messages: Vec<u32>,
+    pub(crate) expected: LeanPluginJobKeyExpected,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobKeyExpected {
+    pub(crate) retry_key: String,
+    pub(crate) session_id: String,
+    pub(crate) message_keys: Vec<LeanPluginJobMessageKey>,
+    pub(crate) decoded: Option<LeanPluginJobDecodedKey>,
+    pub(crate) message_keys_decode: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobMessageKey {
+    pub(crate) n: u32,
+    pub(crate) key: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobDecodedKey {
+    pub(crate) root: String,
+    pub(crate) slot: String,
+    pub(crate) attempt: u32,
+}
+
+/// `Conformance.PluginJob.controlCasesJson`, tagged by `kind`: kills, resumes,
+/// `job_calls.result` reads and offers, and step failures.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanPluginJobControlCase {
+    Kill {
+        name: String,
+        job: LeanPluginJobRow,
+        observations: Vec<LeanPluginJobObservation>,
+        control: String,
+        expected: LeanPluginJobKillExpected,
+    },
+    Resume {
+        name: String,
+        caller: LeanPluginJobProcessScope,
+        owner: LeanPluginJobProcessScope,
+        same_plugin: bool,
+        root: LeanPluginJobRow,
+        root_call_args: LeanPluginJobCall,
+        prior: LeanPluginJobRow,
+        job: LeanPluginJobRow,
+        call_args: LeanPluginJobCall,
+        guest_pin: LeanPluginJobGuestPin,
+        facts: LeanPluginJobHostFacts,
+        resume: LeanPluginJobResume,
+        expected: LeanPluginJobResumeExpected,
+    },
+    ResultRead {
+        name: String,
+        caller: LeanPluginJobProcessScope,
+        owner: LeanPluginJobProcessScope,
+        same_plugin: bool,
+        terminal: bool,
+        expected: LeanPluginJobResultReadExpected,
+    },
+    ResultOffer {
+        name: String,
+        invocation: String,
+        expected: LeanPluginJobResultOfferExpected,
+    },
+    StepFailure {
+        name: String,
+        job: LeanPluginJobRow,
+        consecutive_failures: u32,
+        observations: Vec<LeanPluginJobObservation>,
+        expected: LeanPluginJobStepFailureExpected,
+    },
+}
+
+impl LeanPluginJobControlCase {
+    pub(crate) fn name(&self) -> &str {
+        match self {
+            Self::Kill { name, .. }
+            | Self::Resume { name, .. }
+            | Self::ResultRead { name, .. }
+            | Self::ResultOffer { name, .. }
+            | Self::StepFailure { name, .. } => name,
+        }
+    }
+}
+
+/// What a kill observes about the request one child caused
+/// (`Recovery.KillObservation`'s contract spelling).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobObservation {
+    pub(crate) retry_key: String,
+    pub(crate) observation: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobKillExpected {
+    pub(crate) row_state: String,
+    pub(crate) job_state: String,
+    pub(crate) kill: Vec<LeanPluginJobKill>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobControlEcho {
+    pub(crate) kind: String,
+    pub(crate) payload: Option<LeanPluginJobResume>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobResumeExpected {
+    pub(crate) valid: bool,
+    pub(crate) pin: Option<LeanPluginJobPin>,
+    pub(crate) control: LeanPluginJobControlEcho,
+    pub(crate) root_call: LeanPluginJobRootCall,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobResultReadExpected {
+    pub(crate) authorized: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobResultOfferExpected {
+    pub(crate) offered: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobStepFailureExpected {
+    pub(crate) row_state: String,
+    pub(crate) consecutive_failures: u32,
+    pub(crate) kill: Vec<LeanPluginJobKill>,
+    pub(crate) code: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobTarget {
+    pub(crate) node: String,
+    pub(crate) agent: String,
+}
+
+/// `kind` is `none`, `all` or `only`; only `only` carries `targets`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobScope {
+    pub(crate) kind: String,
+    #[serde(default)]
+    pub(crate) targets: Vec<LeanPluginJobTarget>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobCeiling {
+    pub(crate) targets: LeanPluginJobScope,
+    pub(crate) max_live: u32,
+    pub(crate) max_spawns: u32,
+    pub(crate) max_messages_per_slot: u32,
+    pub(crate) result_bytes: u64,
+    pub(crate) max_wall_secs: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobHostFacts {
+    pub(crate) engine_digest: String,
+    pub(crate) plugin_ref: String,
+    pub(crate) cwd: String,
+    pub(crate) args_digest: String,
+    pub(crate) chain_root: String,
+    pub(crate) origin: String,
+    pub(crate) adopted_at: u64,
+    pub(crate) resume_of: Option<String>,
+    pub(crate) replayed_from: Option<String>,
+    pub(crate) ceiling_at_pin: LeanPluginJobCeiling,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobPin {
+    pub(crate) script_id: String,
+    pub(crate) source_digest: String,
+    pub(crate) engine_digest: String,
+    pub(crate) plugin_ref: String,
+    pub(crate) handle: String,
+    pub(crate) cwd: String,
+    pub(crate) args_digest: String,
+    pub(crate) chain_root: String,
+    pub(crate) origin: String,
+    pub(crate) agent_budget: u32,
+    pub(crate) adopted_at: u64,
+    pub(crate) resume_of: Option<String>,
+    pub(crate) replayed_from: Option<String>,
+    pub(crate) ceiling_at_pin: LeanPluginJobCeiling,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobGuestPin {
+    pub(crate) script_id: String,
+    pub(crate) source_digest: String,
+    pub(crate) handle: String,
+    pub(crate) agent_budget: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobResume {
+    pub(crate) row_doc_id: String,
+    pub(crate) engine_current: bool,
+    pub(crate) answer: Option<String>,
+    pub(crate) budget: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobChild {
+    pub(crate) retry_key: String,
+    pub(crate) slot: String,
+    pub(crate) attempt: u32,
+    pub(crate) target: LeanPluginJobTarget,
+    pub(crate) state: String,
+    pub(crate) messages: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobCall {
+    pub(crate) argv: Vec<String>,
+    pub(crate) args: Option<String>,
+    pub(crate) path: Option<String>,
+    pub(crate) script: Option<String>,
+    pub(crate) agent_budget: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobRootCall {
+    pub(crate) argv: Vec<String>,
+    pub(crate) args: Option<String>,
+    pub(crate) path: Option<String>,
+    pub(crate) agent_budget: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobRow {
+    pub(crate) root: String,
+    pub(crate) row_doc_id: String,
+    pub(crate) caller_session: String,
+    pub(crate) caller_cwd: String,
+    pub(crate) handle: String,
+    pub(crate) caller_hop: u32,
+    pub(crate) call: LeanPluginJobCall,
+    pub(crate) root_call: Option<LeanPluginJobRootCall>,
+    pub(crate) resume: Option<LeanPluginJobResume>,
+    pub(crate) pin: Option<LeanPluginJobPin>,
+    pub(crate) children: Vec<LeanPluginJobChild>,
+    pub(crate) spent: u32,
+    pub(crate) observed_terminal: u32,
+    pub(crate) consecutive_failures: u32,
+    pub(crate) state: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobProcessScope {
+    pub(crate) request_id: String,
+    pub(crate) session_id: String,
+    pub(crate) node_did: String,
+    pub(crate) requester_did: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobExtras {
+    pub(crate) writes: u32,
+    pub(crate) scratch: Vec<String>,
+    pub(crate) progress: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobSpawn {
+    pub(crate) slot: String,
+    pub(crate) attempt: u32,
+    pub(crate) target: LeanPluginJobTarget,
+    pub(crate) cwd: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobControl {
+    pub(crate) row_doc_id: String,
+    pub(crate) control: String,
+}
+
+/// A step output, tagged by `kind`; the sibling riders follow the variant.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanPluginJobOutput {
+    Result {
+        extras: LeanPluginJobExtras,
+        control: Vec<LeanPluginJobControl>,
+        pin: Option<LeanPluginJobGuestPin>,
+        resume: Option<LeanPluginJobResume>,
+    },
+    Fail {
+        extras: LeanPluginJobExtras,
+    },
+    Suspend {
+        suspend: String,
+        reason: Option<String>,
+        extras: LeanPluginJobExtras,
+        pin: Option<LeanPluginJobGuestPin>,
+        resume: Option<LeanPluginJobResume>,
+    },
+    Effects {
+        pin: Option<LeanPluginJobGuestPin>,
+        resume: Option<LeanPluginJobResume>,
+        spawns: Vec<LeanPluginJobSpawn>,
+        messages: Vec<String>,
+        interrupts: Vec<String>,
+        extras: LeanPluginJobExtras,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobPolicy {
+    pub(crate) mode: String,
+    pub(crate) dynamic_targets: LeanPluginJobScope,
+    pub(crate) trusted_packs: Vec<String>,
+    pub(crate) project_roots: Vec<String>,
+}
+
+/// `Conformance.PluginJob.authorityCasesJson`, tagged by `kind`: provenance
+/// reads, install records, origin and mount trust hints, pack-shipped job
+/// blocks, `Policy.valid` and `wireTargetsFrom`.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanPluginJobAuthorityCase {
+    Provenance {
+        name: String,
+        pack_kind: String,
+        record: LeanPluginJobRecord,
+        expected: LeanPluginJobProvenanceExpected,
+    },
+    Install {
+        name: String,
+        prior: LeanPluginJobRecord,
+        pack_kind: String,
+        explicit: bool,
+        via: String,
+        expected: LeanPluginJobInstallExpected,
+    },
+    Origin {
+        name: String,
+        digest: String,
+        mounts: Vec<LeanPluginJobMount>,
+        trusted_packs: Vec<String>,
+        expected: LeanPluginJobOriginExpected,
+    },
+    PackJobBlock {
+        name: String,
+        via: String,
+        closure: Vec<String>,
+        block: LeanPluginJobPackBlock,
+        expected: LeanPluginJobAdmissibleExpected,
+    },
+    PolicyValid {
+        name: String,
+        agent_targets: Vec<LeanPluginJobTarget>,
+        policy: LeanPluginJobPolicy,
+        expected: LeanPluginJobValidExpected,
+    },
+    WireTargetsFrom {
+        name: String,
+        pack: String,
+        pack_targets: Vec<LeanPluginJobTarget>,
+        policy: LeanPluginJobPolicy,
+        job_targets: Vec<LeanPluginJobTarget>,
+        caller_targets: Vec<LeanPluginJobTarget>,
+        expected: LeanPluginJobWireTargetsExpected,
+    },
+}
+
+impl LeanPluginJobAuthorityCase {
+    pub(crate) fn name(&self) -> &str {
+        match self {
+            Self::Provenance { name, .. }
+            | Self::Install { name, .. }
+            | Self::Origin { name, .. }
+            | Self::PackJobBlock { name, .. }
+            | Self::PolicyValid { name, .. }
+            | Self::WireTargetsFrom { name, .. } => name,
+        }
+    }
+}
+
+/// `kind` is `absent`, `legacy` or `written`; only `written` carries `via`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobRecord {
+    pub(crate) kind: String,
+    #[serde(default)]
+    pub(crate) via: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobProvenanceExpected {
+    pub(crate) provenance: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobInstallExpected {
+    pub(crate) record: LeanPluginJobRecord,
+    pub(crate) provenance: String,
+}
+
+/// A model mount. `files` is the sha256 of each file in the mount: the
+/// install-cache index the native origin check builds, never on the wire.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobMount {
+    pub(crate) pack: String,
+    pub(crate) class: String,
+    pub(crate) digest: String,
+    pub(crate) path: String,
+    pub(crate) trusted: bool,
+    pub(crate) via: String,
+    pub(crate) files: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobOriginExpected {
+    pub(crate) origin: String,
+    pub(crate) trusted_hints: Vec<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobPackBlock {
+    pub(crate) targets_from: Vec<String>,
+    pub(crate) trusted: Vec<String>,
+    pub(crate) dynamic: String,
+    pub(crate) project_roots: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobAdmissibleExpected {
+    pub(crate) admissible: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobValidExpected {
+    pub(crate) valid: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobWireTargetsExpected {
+    pub(crate) policy: LeanPluginJobPolicy,
+    pub(crate) job_targets: Vec<LeanPluginJobTarget>,
+    pub(crate) caller_targets: Vec<LeanPluginJobTarget>,
+}
+
+/// `Conformance.PluginJob.wireCasesJson`: one sample in the protocol's own
+/// spelling, which the consumer decodes strictly into the `kind`'s type.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobWireCase {
+    pub(crate) name: String,
+    pub(crate) kind: LeanPluginJobWireKind,
+    pub(crate) value: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LeanPluginJobWireKind {
+    JobStepInput,
+    JobStepOutput,
+    JobView,
+    JobOutcome,
+}
+
+/// `Conformance.PluginJob.lineageCasesJson`: request rows and the
+/// `DurableLineage.openingRequest` each `(cause, session)` query selects.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobLineageCase {
+    pub(crate) name: String,
+    pub(crate) rows: Vec<LeanPluginJobRequestRow>,
+    pub(crate) queries: Vec<LeanPluginJobLineageQuery>,
+}
+
+/// `Conformance.PluginJob.recoveryCasesJson`: one running plugin-job row, the
+/// registered sweep's staleness verdict and measures, and the row after one
+/// tick (`pluginJobRecover ∘ pluginJobRecover`).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobRecoveryCase {
+    pub(crate) name: String,
+    pub(crate) sweep_id: String,
+    pub(crate) rust_function: String,
+    pub(crate) row: LeanPluginJobRecoveryRow,
+    pub(crate) stale: bool,
+    pub(crate) measure_before: u32,
+    pub(crate) measure_after: u32,
+    pub(crate) expected_row: LeanPluginJobRecoveryRow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobRecoveryRow {
+    pub(crate) running: bool,
+    pub(crate) terminal_children: u32,
+    pub(crate) observed: u32,
+    pub(crate) live: u32,
+    pub(crate) step_new: u32,
+    pub(crate) deadline_expired: bool,
+    pub(crate) available: bool,
+}
+
+/// `Conformance.PluginResources.dataCasesJson`: `PluginData.admitted` and
+/// `refusal` over one write, `queryAdmitted`, `substituteCallerNodeDid` and
+/// `insertNote`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginDataCases {
+    pub(crate) writes: Vec<LeanPluginDataWriteCase>,
+    pub(crate) queries: Vec<LeanPluginDataQueryCase>,
+    pub(crate) filters: Vec<LeanPluginDataFilterCase>,
+    pub(crate) notes: Vec<LeanPluginDataNoteCase>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginDataWriteCase {
+    pub(crate) op: LeanPluginDataOperation,
+    pub(crate) in_own_sdl: bool,
+    pub(crate) runtime_or_protected: bool,
+    pub(crate) actor_is_invoker: bool,
+    pub(crate) op_granted: bool,
+    pub(crate) stamped_supplied_by_guest: bool,
+    pub(crate) invocation: LeanPluginDataInvocation,
+    /// The manifest's `data.stamped` map: field to host fact.
+    pub(crate) declared_stamps: BTreeMap<String, LeanPluginDataStamp>,
+    pub(crate) collection_fields: Vec<String>,
+    pub(crate) write: LeanPluginDataWriteFacts,
+    /// `applicableStamps`: the declared stamps of the written collection's fields.
+    pub(crate) applicable: BTreeMap<String, LeanPluginDataStamp>,
+    pub(crate) admitted: bool,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) refusal: Option<LeanPluginDataRefusal>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LeanPluginDataOperation {
+    Create,
+    Update,
+    Delete,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LeanPluginDataInvocation {
+    ToolCall,
+    JobStep,
+    Callback,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LeanPluginDataStamp {
+    NodeDid,
+    SessionId,
+    RequestDocId,
+    ToolCallDocId,
+    JobRowDocId,
+    ChainRootDocId,
+}
+
+/// `ToolPolicy.ApplicationWrite.Observation`.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginDataWriteFacts {
+    pub(crate) granted: bool,
+    pub(crate) application: bool,
+    pub(crate) blocked: bool,
+    pub(crate) credential: bool,
+    pub(crate) bounded: bool,
+    pub(crate) targets: u32,
+    pub(crate) limit: u32,
+    pub(crate) preview: bool,
+    pub(crate) digest_matches: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanPluginDataRefusal {
+    StampUnavailable {
+        stamp: LeanPluginDataStamp,
+        invocation: LeanPluginDataInvocation,
+    },
+    Other,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginDataQueryCase {
+    pub(crate) limit: u32,
+    pub(crate) in_own_sdl: bool,
+    pub(crate) runtime_or_protected: bool,
+    pub(crate) query_granted: bool,
+    pub(crate) expected: bool,
+}
+
+/// A filter maps each field to a literal or the `$caller.node_did` placeholder.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginDataFilterCase {
+    pub(crate) host_node_did: String,
+    pub(crate) filter: BTreeMap<String, String>,
+    pub(crate) expected: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginDataNoteCase {
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) existing: Option<String>,
+    pub(crate) new: String,
+    pub(crate) on_conflict: LeanPluginDataOnConflict,
+    pub(crate) expected: LeanPluginDataInsertOutcome,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LeanPluginDataOnConflict {
+    Ignore,
+    Fail,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LeanPluginDataInsertOutcome {
+    Inserted,
+    Unchanged,
+    AbortStep,
+}
+
+/// `Conformance.PluginResources.routeCasesJson`: `PluginCalls.childAdmissible`
+/// over `routeOf staticHookOwned jobBound`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginCallsRouteCase {
+    pub(crate) static_hook_owned: bool,
+    pub(crate) job_bound: bool,
+    pub(crate) selected: bool,
+    pub(crate) admitted: bool,
+    pub(crate) expected: bool,
+}
+
+/// `plugin_resource_cases.asset_mount`: `mountAccess` per mount and
+/// `mountCallAdmitted` for the call.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginAssetMountCase {
+    pub(crate) rw_bind: bool,
+    pub(crate) mounts: Vec<LeanPluginMount>,
+    pub(crate) access: Vec<Option<LeanPluginAccess>>,
+    pub(crate) admitted: bool,
+}
+
+/// The pack tier spells `class` as the asset class; the project tier as
+/// `project` with empty `pack` and `digest`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginMount {
+    pub(crate) pack: String,
+    pub(crate) class: String,
+    pub(crate) digest: String,
+    pub(crate) path: String,
+    pub(crate) trusted: bool,
+    pub(crate) installed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LeanPluginAccess {
+    Read,
+    ReadWrite,
+}
+
+/// `plugin_resource_cases.project_tier`: `projectPreopen cwd roots within`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginProjectTierCase {
+    pub(crate) cwd: String,
+    pub(crate) project_roots: Vec<String>,
+    pub(crate) expected: bool,
+}
+
+/// `plugin_resource_cases.scratch`: `scratchAdmitted`. `handle` is not an
+/// owner input; rows that differ only in it share a path.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginScratchCase {
+    pub(crate) cwd: String,
+    pub(crate) cwd_allowed: bool,
+    pub(crate) tool_call_id: String,
+    pub(crate) handle: String,
+    pub(crate) name: String,
+    pub(crate) size: u64,
+    pub(crate) count: u32,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) expected: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobRequestRow {
+    pub(crate) created_at: u64,
+    #[serde(rename = "_docID")]
+    pub(crate) doc_id: String,
+    pub(crate) session_id: String,
+    pub(crate) is_public: bool,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) caused_by_parent_request_doc_id: Option<String>,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) caused_by_parent_tool_call_doc_id: Option<String>,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) opening_request_doc_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobLineageQuery {
+    pub(crate) cause_request_doc_id: String,
+    pub(crate) session_id: String,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) expected_opening_doc_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobTargetHop {
+    pub(crate) target: LeanPluginJobTarget,
+    pub(crate) hop: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobWithin {
+    pub(crate) base: String,
+    pub(crate) cwd: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobControlOwner {
+    pub(crate) owner: LeanPluginJobProcessScope,
+    pub(crate) same_plugin: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobControlTarget {
+    pub(crate) row_doc_id: String,
+    pub(crate) target: Option<LeanPluginJobControlOwner>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobResumeOwner {
+    pub(crate) owner: LeanPluginJobProcessScope,
+    pub(crate) same_plugin: bool,
+    pub(crate) prior: LeanPluginJobRow,
+    pub(crate) root: LeanPluginJobRow,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobResumeTarget {
+    pub(crate) row_doc_id: String,
+    pub(crate) is_head: bool,
+    pub(crate) target: Option<LeanPluginJobResumeOwner>,
+}
+
+/// The host facts one step reads, tabulated over the documents and working
+/// directories the case names.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobContext {
+    pub(crate) live: LeanPluginJobCeiling,
+    pub(crate) available: bool,
+    pub(crate) caller_targets: LeanPluginJobScope,
+    pub(crate) job_targets: LeanPluginJobScope,
+    pub(crate) policy: LeanPluginJobPolicy,
+    pub(crate) engine_digest: String,
+    pub(crate) engine_provenance_operator: bool,
+    pub(crate) installed_trusted_sources: Vec<String>,
+    pub(crate) max_hop: u32,
+    pub(crate) target_hops: Vec<LeanPluginJobTargetHop>,
+    pub(crate) live_background: u32,
+    pub(crate) started_by_job: bool,
+    pub(crate) cwd_allowed: Vec<String>,
+    pub(crate) within: Vec<LeanPluginJobWithin>,
+    pub(crate) named_origin: Option<String>,
+    pub(crate) adoption_facts: LeanPluginJobHostFacts,
+    pub(crate) caller_scope: LeanPluginJobProcessScope,
+    pub(crate) control_targets: Vec<LeanPluginJobControlTarget>,
+    pub(crate) resume_targets: Vec<LeanPluginJobResumeTarget>,
+    pub(crate) resume_facts: LeanPluginJobHostFacts,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1351,6 +2328,67 @@ static LEAN_CONTRACT_SNAPSHOT: OnceLock<LeanContractSnapshot> = OnceLock::new();
 
 pub(crate) fn lean_contract_snapshot() -> &'static LeanContractSnapshot {
     LEAN_CONTRACT_SNAPSHOT.get_or_init(load_lean_contract_snapshot)
+}
+
+pub(crate) fn lean_plugin_job_admission_cases() -> &'static [LeanPluginJobAdmissionCase] {
+    &lean_contract_snapshot().plugin_job_admission_cases
+}
+
+pub(crate) fn lean_plugin_job_adoption_cases() -> &'static [LeanPluginJobAdoptionCase] {
+    &lean_contract_snapshot().plugin_job_adoption_cases
+}
+
+pub(crate) fn lean_plugin_job_control_cases() -> &'static [LeanPluginJobControlCase] {
+    &lean_contract_snapshot().plugin_job_control_cases
+}
+
+pub(crate) fn lean_plugin_job_key_cases() -> &'static [LeanPluginJobKeyCase] {
+    &lean_contract_snapshot().plugin_job_key_cases
+}
+
+pub(crate) fn lean_plugin_job_authority_cases() -> &'static [LeanPluginJobAuthorityCase] {
+    &lean_contract_snapshot().plugin_job_authority_cases
+}
+
+pub(crate) fn lean_plugin_job_wire_cases() -> &'static [LeanPluginJobWireCase] {
+    &lean_contract_snapshot().plugin_job_wire_cases
+}
+
+pub(crate) fn lean_plugin_job_lineage_cases() -> &'static [LeanPluginJobLineageCase] {
+    &lean_contract_snapshot().plugin_job_lineage_cases
+}
+
+pub(crate) fn lean_plugin_job_recovery_cases() -> &'static [LeanPluginJobRecoveryCase] {
+    &lean_contract_snapshot().plugin_job_recovery_cases
+}
+
+pub(crate) fn lean_plugin_data_cases() -> &'static LeanPluginDataCases {
+    &lean_contract_snapshot().plugin_data_cases
+}
+
+pub(crate) fn lean_plugin_calls_route_cases() -> &'static [LeanPluginCallsRouteCase] {
+    &lean_contract_snapshot().plugin_calls_route_cases
+}
+
+/// One strictly decoded group of `plugin_resource_cases`.
+fn lean_plugin_resource_group<T: serde::de::DeserializeOwned>(group: &str) -> Vec<T> {
+    serde_json::from_value(lean_contract_snapshot().plugin_resource_cases[group].clone())
+        .unwrap_or_else(|error| panic!("plugin_resource_cases.{group}: {error}"))
+}
+
+pub(crate) fn lean_plugin_asset_mount_cases() -> &'static [LeanPluginAssetMountCase] {
+    static CASES: OnceLock<Vec<LeanPluginAssetMountCase>> = OnceLock::new();
+    CASES.get_or_init(|| lean_plugin_resource_group("asset_mount"))
+}
+
+pub(crate) fn lean_plugin_project_tier_cases() -> &'static [LeanPluginProjectTierCase] {
+    static CASES: OnceLock<Vec<LeanPluginProjectTierCase>> = OnceLock::new();
+    CASES.get_or_init(|| lean_plugin_resource_group("project_tier"))
+}
+
+pub(crate) fn lean_plugin_scratch_cases() -> &'static [LeanPluginScratchCase] {
+    static CASES: OnceLock<Vec<LeanPluginScratchCase>> = OnceLock::new();
+    CASES.get_or_init(|| lean_plugin_resource_group("scratch"))
 }
 
 pub(crate) fn lean_workspace_cases() -> &'static [LeanWorkspaceCase] {

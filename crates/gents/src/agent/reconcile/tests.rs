@@ -2245,6 +2245,7 @@ async fn plugin_resolution_surfaces(
         plugin: "fixture/list_files".to_string(),
         digest: None,
         input_fields: Vec::new(),
+        job: None,
     };
     assert_eq!(absent.plugin_resolutions(), &[(plugin_ref.clone(), None)]);
     assert_eq!(

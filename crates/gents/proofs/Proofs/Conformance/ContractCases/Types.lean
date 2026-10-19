@@ -2,6 +2,7 @@ import Proofs.Basic
 import Proofs.Scheduling
 import Proofs.RuntimeReconcile.State
 import Proofs.CanonicalOutput.State
+import Proofs.Recovery.Sweeps.BackgroundRestart
 
 namespace Conformance.ContractCases
 
@@ -475,7 +476,7 @@ structure RestartDispositionCase where
   name : String
   rustFunction : String
   awaitMode : String
-  sessionMessage : Bool
+  kind : Recovery.RowKind
   parentObservation : String
   deadlineExpired : Bool
   processOutcome : String

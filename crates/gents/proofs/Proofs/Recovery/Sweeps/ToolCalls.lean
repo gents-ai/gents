@@ -6,12 +6,29 @@ namespace Recovery
 
 open ToolExecution
 
-def isSessionMessageCall (call : ToolCallContext) : Prop :=
-  call.operation = .sessionMessage
+def isDetachedCall (call : ToolCallContext) : Prop :=
+  call.operation.isDetached = true
 
-instance (call : ToolCallContext) : Decidable (isSessionMessageCall call) := by
-  unfold isSessionMessageCall
+instance (call : ToolCallContext) : Decidable (isDetachedCall call) := by
+  unfold isDetachedCall
   infer_instance
+
+/-- The class of running rows one tool-call recovery sweep selects. A
+plugin-job row is its own class: its terminal is the job driver's decision,
+so neither the native nor the session-message sweep selects it. -/
+inductive RowClass where
+  | native
+  | sessionMessage
+  | pluginJob
+  deriving DecidableEq, Repr
+
+def RowClass.of (call : ToolCallContext) : RowClass :=
+  match call.operation with
+  | .sessionMessage => .sessionMessage
+  | .pluginJob => .pluginJob
+  | .mcpListTools => .native
+  | .mcpCall => .native
+  | .nativeCommand => .native
 
 inductive ToolRecoveryCause where
   | deadlineExceeded
@@ -96,46 +113,46 @@ structure ToolCallRecoveryRow where
   cause : ToolRecoveryCause
   deriving Repr
 
-def toolCallRecoveryStale (sessionMessage : Bool) (row : ToolCallRecoveryRow) : Prop :=
-  row.call.state = .running ∧ decide (isSessionMessageCall row.call) = sessionMessage
+def toolCallRecoveryStale (k : RowClass) (row : ToolCallRecoveryRow) : Prop :=
+  row.call.state = .running ∧ RowClass.of row.call = k
 
-instance (sessionMessage : Bool) (row : ToolCallRecoveryRow) :
-    Decidable (toolCallRecoveryStale sessionMessage row) := by
+instance (k : RowClass) (row : ToolCallRecoveryRow) :
+    Decidable (toolCallRecoveryStale k row) := by
   unfold toolCallRecoveryStale
   infer_instance
 
 def toolCallRecover (row : ToolCallRecoveryRow) : ToolCallRecoveryRow :=
   { row with call := { row.call with state := row.cause.terminalState } }
 
-def toolCallRecoveryMeasure (sessionMessage : Bool) (row : ToolCallRecoveryRow) : Nat :=
-  if toolCallRecoveryStale sessionMessage row then 1 else 0
+def toolCallRecoveryMeasure (k : RowClass) (row : ToolCallRecoveryRow) : Nat :=
+  if toolCallRecoveryStale k row then 1 else 0
 
-theorem toolCallRecovery_stale_positive (sessionMessage : Bool) :
-    ∀ row, toolCallRecoveryStale sessionMessage row →
-      toolCallRecoveryMeasure sessionMessage row > 0 := by
+theorem toolCallRecovery_stale_positive (k : RowClass) :
+    ∀ row, toolCallRecoveryStale k row →
+      toolCallRecoveryMeasure k row > 0 := by
   intro row h_stale
   simp [toolCallRecoveryMeasure, h_stale]
 
-theorem toolCallRecover_terminal (sessionMessage : Bool) :
-    ∀ row, toolCallRecoveryStale sessionMessage row →
+theorem toolCallRecover_terminal (k : RowClass) :
+    ∀ row, toolCallRecoveryStale k row →
       isTerminal (toolCallRecover row).call.state := by
   intro row _h_stale
   exact row.cause.terminalState_terminal
 
-theorem toolCallRecover_zero (sessionMessage : Bool) :
-    ∀ row, toolCallRecoveryStale sessionMessage row →
-      toolCallRecoveryMeasure sessionMessage (toolCallRecover row) = 0 := by
+theorem toolCallRecover_zero (k : RowClass) :
+    ∀ row, toolCallRecoveryStale k row →
+      toolCallRecoveryMeasure k (toolCallRecover row) = 0 := by
   intro row _h_stale
   have h_terminal_not_running : row.cause.terminalState ≠ .running := by
     cases row.cause <;> simp [ToolRecoveryCause.terminalState]
-  have h_not : ¬ toolCallRecoveryStale sessionMessage (toolCallRecover row) := by
+  have h_not : ¬ toolCallRecoveryStale k (toolCallRecover row) := by
     intro h_stale
     rcases h_stale with ⟨h_running, _h_session⟩
     simp [toolCallRecover] at h_running
     exact h_terminal_not_running h_running
   simp [toolCallRecoveryMeasure, h_not]
 
-def toolCallRecoverySweepFor (sessionMessage : Bool)
+def toolCallRecoverySweepFor (k : RowClass)
     (sweepId rustFunction : String) (cadence : RecoveryCadence) : RecoverySweep :=
   { Row := ToolCallRecoveryRow
   , collection := .agentToolCall
@@ -143,18 +160,25 @@ def toolCallRecoverySweepFor (sessionMessage : Bool)
   , rustFunction := rustFunction
   , cadence := cadence
   , implementationStatus := .implemented
-  , stale := toolCallRecoveryStale sessionMessage
+  , stale := toolCallRecoveryStale k
   , recover := toolCallRecover
   , terminal := fun row => isTerminal row.call.state
-  , measure := toolCallRecoveryMeasure sessionMessage
-  , h_stale_positive := toolCallRecovery_stale_positive sessionMessage
-  , h_recover_terminal := toolCallRecover_terminal sessionMessage
-  , h_recover_zero := toolCallRecover_zero sessionMessage
+  , measure := toolCallRecoveryMeasure k
+  , h_stale_positive := toolCallRecovery_stale_positive k
+  , h_recover_terminal := toolCallRecover_terminal k
+  , h_recover_zero := toolCallRecover_zero k
   }
 
 def toolCallRecoverySweep : RecoverySweep :=
-  toolCallRecoverySweepFor false
+  toolCallRecoverySweepFor .native
     "tool_call_lifecycle_recover_all_running_calls" "ToolCallLifecycle::recover_all" .startup
+
+/-- A plugin-job row's terminal is the job driver's decision: the startup
+    native sweep never selects it, so a restart leaves it running. -/
+theorem native_sweep_never_selects_plugin_job
+    (row : ToolCallRecoveryRow) (h_job : row.call.operation = .pluginJob) :
+    ¬ toolCallRecoveryStale .native row := by
+  simp [toolCallRecoveryStale, RowClass.of, h_job]
 
 structure OrphanedBackgroundToolRow where
   call : ToolCallContext
@@ -225,7 +249,7 @@ theorem orphanedBackgroundTool_registered_live_worker_untouched
 def orphanedBackgroundToolStale (row : OrphanedBackgroundToolRow) : Prop :=
   row.call.state = .running ∧
   row.call.awaitMode = .background ∧
-  ¬ isSessionMessageCall row.call ∧
+  ¬ isDetachedCall row.call ∧
   (row.executionRegistered = false ∨ row.ownerTaskDeleted = true) ∧
   (orphanedBackgroundToolCause row).isSome = true
 
@@ -233,6 +257,15 @@ instance (row : OrphanedBackgroundToolRow) :
     Decidable (orphanedBackgroundToolStale row) := by
   unfold orphanedBackgroundToolStale
   infer_instance
+
+/-- A plugin-job row has no host process to orphan; its terminal is the job
+    driver's decision, so the orphan sweep never selects it. -/
+theorem orphan_sweep_never_selects_plugin_job
+    (row : OrphanedBackgroundToolRow)
+    (h_job : row.call.operation = .pluginJob) :
+    ¬ orphanedBackgroundToolStale row := by
+  intro h_stale
+  exact h_stale.2.2.1 (by simp [isDetachedCall, h_job])
 
 def orphanedBackgroundToolRecover
     (row : OrphanedBackgroundToolRow) : OrphanedBackgroundToolRow :=
@@ -313,7 +346,7 @@ structure BackgroundCompletionSideEffectRow where
   deriving Repr
 
 def isNativeBackgroundCall (call : ToolCallContext) : Prop :=
-  call.awaitMode = .background ∧ ¬ isSessionMessageCall call
+  call.awaitMode = .background ∧ ¬ isDetachedCall call
 
 def isBackgroundCall (call : ToolCallContext) : Prop :=
   call.awaitMode = .background

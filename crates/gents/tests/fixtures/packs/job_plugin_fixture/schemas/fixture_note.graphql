@@ -1,0 +1,5 @@
+type FixtureNote {
+  text: String
+  job_row_doc_id: String
+  chain_root_doc_id: String
+}

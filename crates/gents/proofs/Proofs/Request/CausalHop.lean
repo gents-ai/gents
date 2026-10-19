@@ -13,7 +13,7 @@ inductive Cause where
   result back to the calling session. -/
   | returnEdge
   /-- A same-session continuation (retry, goal continuation, user steering,
-  native process completion wake); cannot extend a chain. -/
+  native process or plugin-job completion wake); cannot extend a chain. -/
   | continuation
   deriving DecidableEq, Repr
 
@@ -36,6 +36,12 @@ theorem root_hop_is_zero (own : Nat) : nextHop .root own = 0 := rfl
 
 theorem continuation_preserves_hop (own : Nat) :
     nextHop .continuation own = own := rfl
+
+/-- A plugin job's completion wakes its caller as a same-session continuation,
+so the caller keeps its current hop. -/
+theorem job_completion_wake_is_continuation (own : Nat) :
+    nextHop .continuation own = own :=
+  continuation_preserves_hop own
 
 theorem return_keeps_caller_hop (own : Nat) : nextHop .returnEdge own = own := rfl
 

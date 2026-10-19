@@ -619,7 +619,9 @@ mod tests {
             ) {
                 continue;
             }
-            if case.await_mode != "background" || case.session_message {
+            if case.await_mode != "background"
+                || case.kind != crate::lean_vocab_test::LeanRestartRowKind::Native
+            {
                 continue;
             }
             let outcome = classify_orphaned_background_tool(

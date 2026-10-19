@@ -10,9 +10,16 @@ Accepted premise: a peer that never replicates its caused request's terminal
 back leaves the row running; only a kill ends it (`killAction`). -/
 
 def sessionMessageRecoverySweep : RecoverySweep :=
-  toolCallRecoverySweepFor true
+  toolCallRecoverySweepFor .sessionMessage
     "tool_call_lifecycle_recover_session_message_rows"
     "background_completion::settle_running_session_message_rows" .periodic
+
+/-- A plugin-job row's terminal is the job driver's decision: the
+    session-message sweep never selects it. -/
+theorem session_message_sweep_never_selects_plugin_job
+    (row : ToolCallRecoveryRow) (h_job : row.call.operation = .pluginJob) :
+    ¬ toolCallRecoveryStale .sessionMessage row := by
+  simp [toolCallRecoveryStale, RowClass.of, h_job]
 
 inductive KillObservation where
   | causedTerminal

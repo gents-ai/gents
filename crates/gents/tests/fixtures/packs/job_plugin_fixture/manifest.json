@@ -1,0 +1,46 @@
+{
+  "manifest_version": 1,
+  "name": "job_plugin_fixture",
+  "version": "0.1.0",
+  "description": "Fixture documents pack with a table-driven job plugin, a FixtureNote schema and an asset class.",
+  "namespace": "fixture",
+  "authors": ["gents"],
+  "tags": ["fixture"],
+  "kind": "documents",
+  "assets": [
+    "README.md",
+    "pack_config.json",
+    "schemas/fixture_note.graphql",
+    "fixture_assets/a.txt",
+    "plugins/job_fixture.afb"
+  ],
+  "dependencies": [],
+  "config": "pack_config.json",
+  "schemas": ["schemas/fixture_note.graphql"],
+  "plugins": [
+    {
+      "name": "job_fixture",
+      "description": "Table-driven job guest: prints the output of the first args.plan entry whose when matches.",
+      "artifact": "plugins/job_fixture.afb",
+      "source": "plugins/job_fixture",
+      "language": "rust",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "plan": {"type": "array"}
+        }
+      },
+      "job": true,
+      "data": {
+        "collections": ["FixtureNote"],
+        "ops": ["query", "insert"],
+        "stamped": {
+          "job_row_doc_id": "job_row_doc_id",
+          "chain_root_doc_id": "chain_root_doc_id"
+        }
+      },
+      "asset_mounts": [{"class": "fixture_assets"}],
+      "catalog": {"argv": ["catalog"]}
+    }
+  ]
+}

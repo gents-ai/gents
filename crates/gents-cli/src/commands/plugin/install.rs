@@ -277,6 +277,7 @@ mod instruction_tests {
                 plugin: "team/echo".into(),
                 digest: None,
                 input_fields: Vec::new(),
+                job: None,
             },
             None,
         )

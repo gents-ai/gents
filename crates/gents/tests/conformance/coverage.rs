@@ -186,7 +186,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
         26
     );
     assert_eq!(lean_contract_snapshot().tool_preflight_cases.len(), 9);
-    assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 72);
+    assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 90);
     assert_eq!(lean_contract_snapshot().command_policy_cases.len(), 52);
     assert_eq!(lean_contract_snapshot().command_sandbox_cases.len(), 6);
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 14);
@@ -280,6 +280,9 @@ fn lean_boundary_metadata_is_typed_and_reviewable() {
         "boundary.graph-pipeline.foundation",
         "boundary.rendered-capture.assembled-request-artifact",
         "boundary.rendered-capture.key-encoding-injectivity",
+        "boundary.plugin-job.guest-determinism",
+        "boundary.plugin-job.single-step-driver",
+        "boundary.plugin-data.transaction",
     ]
     .into_iter()
     .map(str::to_string)
@@ -1996,6 +1999,9 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         ("tool_effects", "PluginEffectCases"),
         ("tool_effect_terminals", "PluginEffectTerminalCases"),
         ("tool_effect_accounting", "PluginEffectAccountingCases"),
+        ("asset_mount", "PluginAssetMountCases"),
+        ("project_tier", "PluginProjectTierCases"),
+        ("scratch", "PluginScratchCases"),
     ] {
         assert!(snapshot.plugin_resource_cases[family]
             .as_array()
@@ -2008,6 +2014,64 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             .is_some_and(|rows| !rows.is_empty()));
     }
     emitted.insert(("plugin_resource_cases".into(), "PluginToolCallCases".into()));
+    let data = &snapshot.plugin_data_cases;
+    assert!(
+        !data.writes.is_empty()
+            && !data.queries.is_empty()
+            && !data.filters.is_empty()
+            && !data.notes.is_empty()
+    );
+    emitted.insert(("plugin_data_cases".into(), "PluginDataCases".into()));
+    assert!(!snapshot.plugin_calls_route_cases.is_empty());
+    emitted.insert((
+        "plugin_calls_route_cases".into(),
+        "PluginCallsRouteCases".into(),
+    ));
+    for (category, domain, present) in [
+        (
+            "plugin_job_admission_cases",
+            "PluginJobAdmissionCases",
+            !snapshot.plugin_job_admission_cases.is_empty(),
+        ),
+        (
+            "plugin_job_adoption_cases",
+            "PluginJobAdoptionCases",
+            !snapshot.plugin_job_adoption_cases.is_empty(),
+        ),
+        (
+            "plugin_job_key_cases",
+            "PluginJobKeyCases",
+            !snapshot.plugin_job_key_cases.is_empty(),
+        ),
+        (
+            "plugin_job_control_cases",
+            "PluginJobControlCases",
+            !snapshot.plugin_job_control_cases.is_empty(),
+        ),
+        (
+            "plugin_job_authority_cases",
+            "PluginJobAuthorityCases",
+            !snapshot.plugin_job_authority_cases.is_empty(),
+        ),
+        (
+            "plugin_job_wire_cases",
+            "PluginJobWireCases",
+            !snapshot.plugin_job_wire_cases.is_empty(),
+        ),
+        (
+            "plugin_job_lineage_cases",
+            "PluginJobLineageCases",
+            !snapshot.plugin_job_lineage_cases.is_empty(),
+        ),
+        (
+            "plugin_job_recovery_cases",
+            "PluginJobRecoveryCases",
+            !snapshot.plugin_job_recovery_cases.is_empty(),
+        ),
+    ] {
+        assert!(present, "{category} must emit rows");
+        emitted.insert((category.into(), domain.into()));
+    }
     assert!(snapshot.configuration_scope_cases["cases"]
         .as_array()
         .is_some_and(|rows| !rows.is_empty()));

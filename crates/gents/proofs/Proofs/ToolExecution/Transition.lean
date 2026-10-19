@@ -52,14 +52,14 @@ inductive Transition : ToolCallContext → ToolCallContext → Prop where
       (h_post  : post = { pre with awaitMode := .background })
       : Transition pre post
 
-  /-- A `agent_new`/`agent_message` row never becomes foreground: its result
-  arrives only as a completion notification; the foreground wait on another
-  session is removed because it couples the caller's turn to another agent's
-  lifetime. -/
+  /-- A `agent_new`/`agent_message` row or plugin-job row never becomes
+  foreground: its result arrives only as a completion notification; the
+  foreground wait on another session is removed because it couples the
+  caller's turn to another agent's lifetime. -/
   | foreground {pre post : ToolCallContext}
       (h_state : pre.state = .running)
       (h_mode  : pre.awaitMode = .background)
-      (h_op    : pre.operation ≠ .sessionMessage)
+      (h_op    : pre.operation.isDetached = false)
       (h_post  : post = { pre with awaitMode := .foreground })
       : Transition pre post
 
@@ -79,6 +79,20 @@ inductive Trace : ToolCallContext → ToolCallContext → Prop where
   | refl {c : ToolCallContext} : Trace c c
   | step {c₁ c₂ c₃ : ToolCallContext} :
       Transition c₁ c₂ → Trace c₂ c₃ → Trace c₁ c₃
+
+theorem plugin_job_row_never_foregrounds {pre post : ToolCallContext}
+    (h_op : pre.operation = .pluginJob)
+    (h_mode : pre.awaitMode = .background)
+    (h_step : Transition pre post) :
+    post.awaitMode = .background := by
+  cases h_step with
+  | foreground h_state h_mode' h_det _ =>
+      simp [h_op, ToolOperation.isDetached] at h_det
+  | background h_state h_mode' _ =>
+      rw [h_mode] at h_mode'
+      cases h_mode'
+  | _ =>
+      simp_all
 
 end ToolCallContext
 end ToolExecution

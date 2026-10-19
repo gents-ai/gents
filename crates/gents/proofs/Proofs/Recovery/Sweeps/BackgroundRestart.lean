@@ -3,7 +3,8 @@ import Proofs.Recovery.Sweeps.ToolCalls
 /-! Models `ToolCallLifecycle::recover_all` startup classification. Native
 background rows use the host stop verdict and require durable completion
 notification after terminalization. Missing parents defer writes; session
-message rows remain running for their caused-request completion observer. -/
+message rows remain running for their caused-request completion observer, and
+plugin-job rows remain running for their job driver. -/
 
 namespace Recovery
 
@@ -49,12 +50,20 @@ theorem all_complete (p : ParentObservation) : p ∈ all := by
 
 end ParentObservation
 
+/-- The tool kind of a running row: `sessionMessage` is the
+    `agent_new`/`agent_message` kind, `pluginJob` a plugin job; neither is
+    backed by a host process. -/
+inductive RowKind where
+  | native
+  | sessionMessage
+  | pluginJob
+  deriving DecidableEq, Repr
+
 /-- One running `AgentToolCall` row as the startup classifier sees it
-    (`lifecycle_state = "running"`, so the state itself is not a field);
-    `sessionMessage` is the `agent_new`/`agent_message` tool kind. -/
+    (`lifecycle_state = "running"`, so the state itself is not a field). -/
 structure RestartRow where
   awaitMode : AwaitMode
-  sessionMessage : Bool
+  kind : RowKind
   parent : ParentObservation
   deadlineExpired : Bool
   /-- Host stop verdict for a native background process; other rows carry
@@ -84,7 +93,7 @@ def terminalStateContract : RestartDisposition → Option String
 end RestartDisposition
 
 def RestartRow.isNativeBackgroundTool (row : RestartRow) : Prop :=
-  row.awaitMode = .background ∧ row.sessionMessage = false
+  row.awaitMode = .background ∧ row.kind = .native
 
 instance (row : RestartRow) : Decidable row.isNativeBackgroundTool := by
   unfold RestartRow.isNativeBackgroundTool
@@ -96,7 +105,7 @@ exhaustive theorems below. -/
 def restartDisposition (row : RestartRow) : RestartDisposition :=
   if row.parent = .missing then
     .leaveRunning
-  else if row.sessionMessage then
+  else if row.kind ≠ .native then
     .leaveRunning
   else if row.isNativeBackgroundTool ∧ row.process = .stillRunning then
     .leaveRunning
@@ -124,7 +133,10 @@ def OrphanedBackgroundToolRow.parentObservation
 def OrphanedBackgroundToolRow.toRestartRow
     (row : OrphanedBackgroundToolRow) : RestartRow :=
   { awaitMode := row.call.awaitMode
-  , sessionMessage := decide (row.call.operation = .sessionMessage)
+  , kind :=
+      if row.call.operation = .sessionMessage then .sessionMessage
+      else if row.call.operation = .pluginJob then .pluginJob
+      else .native
   , parent := row.parentObservation
   , deadlineExpired := row.deadlineExpired
   , process := row.process
@@ -133,11 +145,15 @@ def OrphanedBackgroundToolRow.toRestartRow
 theorem orphanedBackgroundToolCause_matches_restartDisposition
     (row : OrphanedBackgroundToolRow)
     (h_background : row.call.awaitMode = .background)
-    (h_native : row.call.operation ≠ .sessionMessage)
+    (h_native : row.call.operation.isDetached = false)
     (h_unregistered : row.executionRegistered = false)
     (h_task : row.ownerTaskDeleted = false) :
     (orphanedBackgroundToolCause row).map ToolRecoveryCause.toContract =
       (restartDisposition row.toRestartRow).causeContract := by
+  have h_session : row.call.operation ≠ .sessionMessage := fun h => by
+    simp [h] at h_native
+  have h_job : row.call.operation ≠ .pluginJob := fun h => by
+    simp [h] at h_native
   cases h_deadline : row.deadlineExpired <;>
     cases h_live : row.parentLive <;>
     cases h_interrupted : row.parentInterrupted <;>
@@ -147,7 +163,7 @@ theorem orphanedBackgroundToolCause_matches_restartDisposition
       OrphanedBackgroundToolRow.parentObservation,
       OrphanedBackgroundToolRow.parentResolvable, restartDisposition,
       RestartRow.isNativeBackgroundTool,
-      RestartDisposition.causeContract, h_background, h_native, h_deadline,
+      RestartDisposition.causeContract, h_background, h_session, h_job, h_deadline,
       h_live, h_interrupted, h_terminal, h_process,
       h_unregistered, h_task, ParentObservation.observedTerminal]
 
@@ -191,7 +207,7 @@ theorem native_background_tool_interrupted_on_restart
     (h_process : row.process = .stopped) :
     restartDisposition row =
       .terminalize .terminalizeBackgroundedAsInterrupted := by
-  have h_session : row.sessionMessage = false := h_native.2
+  have h_session : row.kind = .native := h_native.2
   simp [restartDisposition, h_native, h_session, h_owner, h_deadline, h_process]
 
 theorem native_background_tool_live_parent_interrupted_on_restart
@@ -206,7 +222,7 @@ theorem native_background_tool_live_parent_interrupted_on_restart
       row.notification =
         some (restartNotificationObligation
           .terminalizeBackgroundedAsInterrupted) := by
-  have h_session : row.sessionMessage = false := h_native.2
+  have h_session : row.kind = .native := h_native.2
   have h : restartDisposition row =
       .terminalize .terminalizeBackgroundedAsInterrupted := by
     simp [restartDisposition, h_native, h_session, h_live, h_deadline, h_process]
@@ -227,7 +243,7 @@ theorem native_background_unstopped_process_settles_lost
     rcases h_process with h | h <;> simp [h]
   have h_not_stopped : row.process ≠ .stopped := by
     rcases h_process with h | h <;> simp [h]
-  have h_session : row.sessionMessage = false := h_native.2
+  have h_session : row.kind = .native := h_native.2
   have h : restartDisposition row = .terminalize .processLost := by
     simp [restartDisposition, h_owner, h_native, h_session, h_not_running,
       h_not_stopped]
@@ -246,11 +262,19 @@ theorem native_background_still_running_left_running
 
 theorem session_message_row_left_running
     (row : RestartRow)
-    (h_session : row.sessionMessage = true) :
+    (h_session : row.kind = .sessionMessage) :
     restartDisposition row = .leaveRunning := by
   by_cases h_owner : row.parent = .missing
   · simp [restartDisposition, h_owner]
   · simp [restartDisposition, h_owner, h_session]
+
+theorem plugin_job_row_left_running
+    (row : RestartRow)
+    (h_job : row.kind = .pluginJob) :
+    restartDisposition row = .leaveRunning := by
+  by_cases h_owner : row.parent = .missing
+  · simp [restartDisposition, h_owner]
+  · simp [restartDisposition, h_owner, h_job]
 
 theorem restart_interrupt_iff_native_background_resolvable_parent
     (row : RestartRow) :
@@ -258,18 +282,18 @@ theorem restart_interrupt_iff_native_background_resolvable_parent
         .terminalize .terminalizeBackgroundedAsInterrupted ↔
       (row.isNativeBackgroundTool ∧ row.parent ≠ .missing ∧
         row.deadlineExpired = false ∧ row.process = .stopped) := by
-  rcases row with ⟨awaitMode, sessionMessage, parent, deadlineExpired, process⟩
-  cases awaitMode <;> cases sessionMessage <;> cases parent <;>
+  rcases row with ⟨awaitMode, kind, parent, deadlineExpired, process⟩
+  cases awaitMode <;> cases kind <;> cases parent <;>
     cases deadlineExpired <;> cases process <;> decide
 
 theorem leave_running_iff_preserved_shapes (row : RestartRow) :
     restartDisposition row = .leaveRunning ↔
-      (row.parent = .missing ∨ row.sessionMessage = true ∨
+      (row.parent = .missing ∨ row.kind ≠ .native ∨
         (row.isNativeBackgroundTool ∧ row.process = .stillRunning) ∨
         (row.deadlineExpired = false ∧ ¬ row.isNativeBackgroundTool ∧
           row.parent = .live)) := by
-  rcases row with ⟨awaitMode, sessionMessage, parent, deadlineExpired, process⟩
-  cases awaitMode <;> cases sessionMessage <;> cases parent <;>
+  rcases row with ⟨awaitMode, kind, parent, deadlineExpired, process⟩
+  cases awaitMode <;> cases kind <;> cases parent <;>
     cases deadlineExpired <;> cases process <;> decide
 
 theorem terminalize_lands_terminal
@@ -282,13 +306,13 @@ theorem notification_iff_terminalized_native_background (row : RestartRow) :
     row.notification.isSome = true ↔
       (row.isNativeBackgroundTool ∧ row.parent ≠ .missing ∧
         restartDisposition row ≠ .leaveRunning) := by
-  rcases row with ⟨awaitMode, sessionMessage, parent, deadlineExpired, process⟩
-  cases awaitMode <;> cases sessionMessage <;> cases parent <;>
+  rcases row with ⟨awaitMode, kind, parent, deadlineExpired, process⟩
+  cases awaitMode <;> cases kind <;> cases parent <;>
     cases deadlineExpired <;> cases process <;> decide
 
 theorem deadline_precedes_restart_interrupt
     (row : RestartRow)
-    (h_session : row.sessionMessage = false)
+    (h_session : row.kind = .native)
     (h_owner : row.parent ≠ .missing)
     (h_process : row.process = .stopped)
     (h_expired : row.deadlineExpired = true) :

@@ -66,6 +66,17 @@ theorem interrupt_retains_running_background
     interruptTool c = c := by
   simp [interruptTool, disposition, h_running, h_background]
 
+/-- A running plugin job is background work, so interrupting its caller
+leaves the job row running as the same job row. -/
+theorem interrupt_retains_running_detached_job
+    (c : ToolCallContext)
+    (h_job : c.operation = .pluginJob)
+    (h_running : c.state = .running)
+    (h_background : c.awaitMode = .background) :
+    interruptTool c = c ∧ (interruptTool c).operation = .pluginJob := by
+  have h := interrupt_retains_running_background c h_running h_background
+  exact ⟨h, by rw [h]; exact h_job⟩
+
 theorem interrupt_cancels_running_foreground
     (c : ToolCallContext)
     (h_running : c.state = .running)

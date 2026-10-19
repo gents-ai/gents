@@ -117,3 +117,5 @@ import Proofs.TaskHooks
 import Proofs.Eval
 
 import Proofs.Optimization
+
+import Proofs.PluginJob

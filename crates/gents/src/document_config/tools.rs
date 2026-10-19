@@ -507,6 +507,9 @@ pub struct PluginToolRef {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<super::WriteToolField>>", optional = nullable))]
     pub input_fields: Vec<super::WriteToolField>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub job: Option<gents_protocol::job::PluginJobSettings>,
 }
 
 impl PluginToolRef {
