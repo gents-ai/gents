@@ -1,6 +1,177 @@
 use super::*;
 use crate::identity::NodeIdentity;
 
+#[cfg(unix)]
+#[tokio::test]
+async fn background_commands_keep_workspace_consent_after_dispatch() {
+    use crate::plugin::approval::workspace;
+
+    for (mode, reviewer_available, revoke) in [
+        (workspace::Mode::Ask, false, false),
+        (workspace::Mode::FullAccess, false, false),
+        (workspace::Mode::AutoReview, false, false),
+        (workspace::Mode::AutoReview, true, false),
+        (workspace::Mode::AutoReview, true, true),
+    ] {
+        let model_mode = serde_json::to_value(mode).unwrap();
+        let review = if reviewer_available {
+            "allow"
+        } else {
+            "unavailable"
+        };
+        let case = crate::lean_vocab_test::lean_contract_snapshot()
+            .workspace_permission_cases
+            .iter()
+            .find(|case| {
+                let input = &case["input"];
+                input["mode"] == model_mode
+                    && input["ceilingAllows"] == true
+                    && input["crossesBoundary"] == true
+                    && input["grant"].is_null()
+                    && input["configuredWorkspace"] == input["current"]["workspace"]
+                    && (mode != workspace::Mode::AutoReview
+                        || (case["review"] == review
+                            && case["reviewedGrant"]["scope"]["workspace"]
+                                == input["current"]["workspace"]
+                            && (case["reviewedGrant"]["scope"]["revision"]
+                                == input["current"]["revision"])
+                                != revoke
+                            && case["reviewedGrant"]["action"] == input["action"]))
+            })
+            .expect("missing executable permission case");
+        let expected = if mode == workspace::Mode::AutoReview {
+            &case["expectedReviewedRoute"]
+        } else {
+            &case["expectedRoute"]
+        };
+        let allowed = expected == "allow";
+        let mut harness = admission_harness(|_, root| {
+            BackgroundToolRegistry::from_tools(
+                vec![crate::toolset::write_capable_bash_for_test(root)],
+                &["bash_unrestricted".into()],
+            )
+        })
+        .await;
+        let executions = BackgroundExecutionRegistry::default();
+        harness.hook = harness
+            .hook
+            .with_background_execution_registry(executions.clone());
+        let root = harness.root.path().canonicalize().unwrap();
+        let key = workspace::WorkspaceKey::canonical(
+            &harness.hook.node_did,
+            &harness.hook.node_did,
+            "general",
+            &root,
+        )
+        .unwrap();
+        let selection = workspace::ReviewTaskSelection {
+            task_id: "review-command".into(),
+            policy_digest: "fixture-policy".into(),
+        };
+        workspace::save_mode(
+            harness._dir.path(),
+            &key,
+            0,
+            mode,
+            (mode == workspace::Mode::AutoReview).then_some(&selection),
+        )
+        .unwrap();
+        let mut context = workspace::for_request(
+            Some(harness._dir.path()),
+            &key.node_did,
+            Some(&key.requester_did),
+            &key.agent_id,
+            Some(&root),
+        )
+        .unwrap()
+        .unwrap();
+        let reviews = Arc::new(AtomicU64::new(0));
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        if reviewer_available {
+            let reviews = reviews.clone();
+            let entered = entered.clone();
+            let release = release.clone();
+            context = context.with_reviewer(Arc::new(move |invocation| {
+                reviews.fetch_add(1, Ordering::SeqCst);
+                let entered = entered.clone();
+                let release = release.clone();
+                Box::pin(async move {
+                    if revoke {
+                        entered.notify_one();
+                        release.notified().await;
+                    }
+                    Ok(Some(
+                        json!({
+                            "actionId": invocation.action_id, "decision": "allow",
+                            "reason": "The command writes only the requested fixture marker.",
+                        })
+                        .to_string(),
+                    ))
+                })
+            }));
+        }
+        let marker = root.join("approved-marker");
+        let args = json!({"tool_name": "bash_unrestricted", "args": {
+            "command": "/bin/sh",
+            "args": ["-c", "printf approved > \"$1\"", "fixture", marker],
+        }})
+        .to_string();
+        accept_hook_tool_call(&harness.hook, "spawn-command", "spawn_process", &args, None).await;
+        let action = workspace::scope(
+            Some(context),
+            harness
+                .hook
+                .on_tool_call("spawn_process", None, "spawn-command", &args),
+        )
+        .await;
+        let ToolCallHookAction::Skip { reason } = action else {
+            panic!("{action:?}")
+        };
+        let receipt: serde_json::Value = serde_json::from_str(&reason).unwrap();
+        let child = receipt["tool_call_id"].as_str().expect("background handle");
+        if revoke {
+            tokio::time::timeout(std::time::Duration::from_secs(60), entered.notified())
+                .await
+                .expect("background review did not start");
+            workspace::save_mode(harness._dir.path(), &key, 1, workspace::Mode::Ask, None).unwrap();
+            release.notify_one();
+        }
+        tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            executions.wait_for_completion(child),
+        )
+        .await
+        .expect("background command did not settle");
+        let session = harness.hook.session_id().await.unwrap();
+        let row = fetch_tool_call_row(&harness.node, &session, child).await;
+        assert_eq!(
+            row["lifecycle_state"],
+            if allowed { "completed" } else { "failed" },
+            "{mode:?}: {row}"
+        );
+        assert_eq!(marker.exists(), allowed, "{mode:?}: {row}");
+        if allowed {
+            assert_eq!(std::fs::read_to_string(&marker).unwrap(), "approved");
+        }
+        assert_eq!(
+            reviews.load(Ordering::SeqCst),
+            u64::from(reviewer_available)
+        );
+        assert!(crate::plugin::approval::pending(harness._dir.path())
+            .unwrap()
+            .is_empty());
+        hook_execution_fixtures()
+            .lock()
+            .await
+            .remove(&hook_execution_fixture_key(
+                &harness.hook,
+                &harness.request_id,
+            ));
+        harness.node.shutdown().await;
+    }
+}
+
 #[tokio::test]
 async fn spawn_process_rejects_target_policy_before_spawned_admission() {
     let cases = crate::lean_vocab_test::lean_canonical_spawned_target_rejection_cases();

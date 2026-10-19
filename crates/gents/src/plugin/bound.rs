@@ -17,6 +17,7 @@ pub struct BoundDir {
     target: PathBuf,
     original: PathBuf,
     access: BindAccess,
+    consent: Option<super::approval::workspace::ActionConsent>,
     _private: Option<Arc<tempfile::TempDir>>,
 }
 
@@ -46,6 +47,7 @@ impl BoundDir {
             original: canonical.clone(),
             dir: canonical,
             access: BindAccess::ReadWrite,
+            consent: None,
             _private: None,
         })
     }
@@ -57,6 +59,7 @@ impl BoundDir {
             target: dir.to_path_buf(),
             original: dir.to_path_buf(),
             access,
+            consent: None,
             _private: None,
         })
     }
@@ -99,6 +102,7 @@ impl BoundDir {
                         target: link,
                         original: file.to_path_buf(),
                         access,
+                        consent: None,
                         _private: Some(Arc::new(private)),
                     });
                 }
@@ -115,6 +119,9 @@ impl BoundDir {
 
     // A swap after this check and before the guest's first read is contained by WASI preopen resolution.
     pub fn recheck(&self) -> Result<()> {
+        if let Some(consent) = &self.consent {
+            consent.validate()?;
+        }
         for path in [&self.dir, &self.target] {
             let now = path.canonicalize().with_context(|| {
                 format!("{} no longer exists or cannot be read", path.display())
@@ -125,6 +132,30 @@ impl BoundDir {
                 path.display(),
                 now.display()
             );
+        }
+        anyhow::ensure!(
+            !super::allowed::is_protected(&self.original),
+            "Runtime permission files cannot be shared with a plugin."
+        );
+        Ok(())
+    }
+
+    pub(crate) fn with_consent(
+        mut self,
+        consent: Option<super::approval::workspace::ActionConsent>,
+    ) -> Self {
+        self.consent = consent;
+        self
+    }
+
+    pub(super) fn validate_invocation(
+        &self,
+        plugin: &str,
+        artifact_digest: &str,
+        input_digest: &str,
+    ) -> Result<()> {
+        if let Some(consent) = &self.consent {
+            consent.validate_plugin(plugin, artifact_digest, input_digest)?;
         }
         Ok(())
     }

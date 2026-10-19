@@ -305,37 +305,51 @@ impl PluginExecutor {
         let user_home = allowed::user_home();
         let resolved = allowed::resolve(requested, context.workdir, user_home.as_deref(), home)
             .map_err(refuse)?;
+        if resolved.is_dir {
+            allowed::ensure_mount_safe(&resolved.target)
+                .map_err(|error| refuse(format!("{error:#}")))?;
+        } else if allowed::is_protected(&resolved.target) {
+            return Err(refuse(
+                "Runtime permission files cannot be shared with a plugin.".into(),
+            ));
+        }
         let scope = approval::workspace::allowed_scope(home, context.workdir, user_home.as_deref())
             .map_err(|error| refuse(format!("{error:#}")))?;
         let access = binding.call_access(input);
         let granted = scope.granted(&resolved.target);
         let covered = granted.is_some_and(|granted| granted >= access);
-        if !covered {
-            let route = approval::workspace::binding_route(
-                home,
-                || {
-                    Ok(approval::workspace::BindingAction::Plugin {
-                        plugin: plugin.clone(),
-                        artifact_digest: record.digest.clone(),
-                        input_digest: json_digest(input),
-                        path: resolved.target.clone(),
-                        is_dir: resolved.is_dir,
-                        access,
-                    })
-                },
-                covered,
-                || Ok(input.clone()),
-            )
-            .map_err(|error| refuse(format!("{error:#}")))?;
+        let route = approval::workspace::binding_route(
+            home,
+            || {
+                Ok(approval::workspace::BindingAction::Plugin {
+                    plugin: plugin.clone(),
+                    artifact_digest: record.digest.clone(),
+                    input_digest: json_digest(input),
+                    path: resolved.target.clone(),
+                    is_dir: resolved.is_dir,
+                    access,
+                })
+            },
+            covered || approval::workspace::within_workspace(&resolved.target),
+            || Ok(input.clone()),
+        )
+        .map_err(|error| refuse(format!("{error:#}")))?;
+        let mut consent = None;
+        if route.is_some() || !covered {
             let allowed = match route {
-                Some(decision) => approval::workspace::consent_binding(
-                    home,
-                    decision,
-                    context.interactive,
-                    context.session_id.map(str::to_owned),
-                )
-                .await
-                .map_err(|error| refuse(format!("{error:#}")))?,
+                Some(decision) => {
+                    let binding = decision.binding.clone();
+                    let allowed = approval::workspace::consent_binding(
+                        home,
+                        decision,
+                        context.interactive,
+                        context.session_id.map(str::to_owned),
+                    )
+                    .await
+                    .map_err(|error| refuse(format!("{error:#}")))?;
+                    consent = Some(approval::workspace::action_consent(home, binding));
+                    allowed
+                }
                 None => match approval::consent(context.interactive) {
                     approval::Consent::Deny => false,
                     approval::Consent::Ask => {
@@ -364,6 +378,7 @@ impl PluginExecutor {
                 .granted(resolved.folder())
                 .is_some();
         allowed::bind(&resolved, access, folder_allowed)
+            .map(|bound| bound.with_consent(consent))
             .map(Some)
             .map_err(refuse)
     }
@@ -475,6 +490,9 @@ impl PluginExecutor {
                 "plugin {coordinate} was reinstalled while this call was being authorized; call again"
             );
             let record = &current;
+            if let Some(bound) = &bound {
+                bound.validate_invocation(&coordinate, &record.digest, &json_digest(&input))?;
+            }
             let admitted = self.admit(record)?;
             let mut input = input.clone();
             if record.declaration.service.is_some() {

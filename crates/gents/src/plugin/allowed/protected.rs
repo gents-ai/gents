@@ -36,6 +36,56 @@ pub fn is_protected(path: &Path) -> bool {
     inspect(&paths, path).unwrap_or(true)
 }
 
+/// WASI preopens reject links outside their root. Inspect physical descendants
+/// without following links; an in-root link's target is visited at its own name.
+/// Namespace changes after the final inspection remain a host filesystem premise.
+pub(crate) fn ensure_mount_safe(root: &Path) -> anyhow::Result<()> {
+    let paths = PROTECTED
+        .lock()
+        .map_err(|_| io::Error::other("operator path guard is unavailable"))?
+        .clone();
+    anyhow::ensure!(
+        !mount_contains_protected(&paths, root)?,
+        "The shared folder contains protected runtime permissions. Choose another file or folder."
+    );
+    Ok(())
+}
+
+pub(super) fn mount_contains_protected(paths: &[PathBuf], root: &Path) -> io::Result<bool> {
+    let root = root.canonicalize()?;
+    if paths
+        .iter()
+        .any(|guarded| root.starts_with(guarded) || guarded.starts_with(&root))
+    {
+        return Ok(true);
+    }
+    let objects = protected_objects(paths)?;
+    if objects.is_empty() {
+        return Ok(false);
+    }
+    let mut directories = vec![root.clone()];
+    while let Some(directory) = directories.pop() {
+        if directory.canonicalize()? != directory || !directory.starts_with(&root) {
+            return Err(io::Error::other(
+                "the shared folder changed during inspection",
+            ));
+        }
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            if kind.is_dir() {
+                directories.push(entry.path());
+            } else if kind.is_file() {
+                let file = regular_file(&entry.path())?;
+                if objects.contains(&file) {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
 pub(super) fn inspect(paths: &[PathBuf], path: &Path) -> io::Result<bool> {
     if paths.iter().any(|guarded| path.starts_with(guarded)) {
         return Ok(true);
@@ -52,6 +102,11 @@ pub(super) fn inspect(paths: &[PathBuf], path: &Path) -> io::Result<bool> {
         return Ok(false);
     }
     let target = regular_file(&canonical)?;
+    Ok(protected_objects(paths)?.contains(&target))
+}
+
+fn protected_objects(paths: &[PathBuf]) -> io::Result<Vec<Handle>> {
+    let mut objects = Vec::new();
     let mut remaining = paths.to_vec();
     while let Some(guarded) = remaining.pop() {
         let metadata = match fs::symlink_metadata(&guarded) {
@@ -73,14 +128,13 @@ pub(super) fn inspect(paths: &[PathBuf], path: &Path) -> io::Result<bool> {
                 ));
             }
             match regular_file(&guarded) {
-                Ok(current) if current == target => return Ok(true),
-                Ok(_) => {}
+                Ok(current) => objects.push(current),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error),
             }
         }
     }
-    Ok(false)
+    Ok(objects)
 }
 
 pub(super) fn optional_directory(path: &Path) -> io::Result<Option<fs::ReadDir>> {

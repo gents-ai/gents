@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use super::super::file_tools::{content_hash, file_mutation_lock_for};
+use super::super::file_tools::{content_hash, file_content_hash, file_mutation_lock_for};
 use crate::tool_call_lifecycle::FailureClass;
 use crate::toolset::shared::{ToolContext, ToolError};
 
@@ -16,6 +16,31 @@ pub struct PreparedEdit {
     pub expected_hash: Option<String>,
     pub version: Option<i64>,
     pub rename_from: Option<PathBuf>,
+    pub rename_destination: Option<RenameDestination>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "kind", content = "contentHash", rename_all = "camelCase")]
+pub enum RenameDestination {
+    Missing,
+    ContentHash(String),
+}
+
+pub fn prepare_rename(from: PathBuf, to: PathBuf) -> Result<PreparedEdit, String> {
+    let source = file_content_hash(&from).map_err(|error| error.to_string())?;
+    let destination = match file_content_hash(&to) {
+        Ok(hash) => RenameDestination::ContentHash(hash),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => RenameDestination::Missing,
+        Err(error) => return Err(error.to_string()),
+    };
+    Ok(PreparedEdit {
+        path: to,
+        new_bytes: Vec::new(),
+        expected_hash: Some(source),
+        version: None,
+        rename_from: Some(from),
+        rename_destination: Some(destination),
+    })
 }
 
 pub fn prepare_workspace_edit(
@@ -43,13 +68,7 @@ pub fn prepare_workspace_edit(
                         .ok_or_else(|| "rename missing newUri".to_string())?;
                     let old_path = resolve_inbound_path(context, old)?;
                     let new_path = resolve_inbound_path_allow_create(context, new)?;
-                    prepared.push(PreparedEdit {
-                        path: new_path,
-                        new_bytes: Vec::new(),
-                        expected_hash: None,
-                        version: None,
-                        rename_from: Some(old_path),
-                    });
+                    prepared.push(prepare_rename(old_path, new_path)?);
                     continue;
                 }
                 return Err(format!("resource operation {kind} is not applied"));
@@ -73,19 +92,101 @@ pub fn prepare_workspace_edit(
     Ok(prepared)
 }
 
-pub async fn apply_workspace_edit(
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EditApproval<'a> {
+    path: &'a std::path::Path,
+    rename_from: Option<&'a std::path::Path>,
+    rename_destination: Option<&'a RenameDestination>,
+    new_text: Option<&'a str>,
+    expected_hash: Option<&'a str>,
+    version: Option<i64>,
+}
+
+/// Obtain consent for every mutation before taking locks or writing any file.
+/// Rename sources and destinations are independently bounded file targets.
+pub async fn apply_prepared_edits(
     context: &ToolContext,
     client: &LspClient,
-    edit: &Value,
+    prepared: &[PreparedEdit],
 ) -> Result<usize, ToolError> {
-    let encoding = client.position_encoding().await;
-    let prepared = prepare_workspace_edit(context, edit, encoding)
-        .map_err(|err| ToolError::reported_failure(FailureClass::PolicyDenied, err))?;
     if prepared.is_empty() {
         return Ok(0);
     }
-    let _guards = acquire_mutation_locks(&prepared).await;
-    apply_prepared_with_held_locks(context, client, &prepared).await
+    validate_edit_paths(context, prepared)?;
+    let mut consents = Vec::new();
+    for edit in prepared {
+        let input = EditApproval {
+            path: &edit.path,
+            rename_from: edit.rename_from.as_deref(),
+            rename_destination: edit.rename_destination.as_ref(),
+            new_text: if edit.rename_from.is_some() {
+                None
+            } else {
+                Some(std::str::from_utf8(&edit.new_bytes).map_err(policy_error)?)
+            },
+            expected_hash: edit.expected_hash.as_deref(),
+            version: edit.version,
+        };
+        let mut paths = std::iter::once(&edit.path)
+            .chain(edit.rename_from.iter())
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths.dedup();
+        for path in paths {
+            if let Some(consent) = crate::plugin::approval::workspace::authorize_file_mutation(
+                "lsp_edit",
+                &context.root(),
+                path,
+                &input,
+            )
+            .await
+            .map_err(policy_error)?
+            {
+                consents.push(consent);
+            }
+        }
+    }
+    let _guards = acquire_mutation_locks(prepared).await;
+    for consent in consents {
+        consent.validate().map_err(policy_error)?;
+    }
+    apply_prepared_with_held_locks(context, client, prepared).await
+}
+
+fn policy_error(error: impl std::fmt::Display) -> ToolError {
+    ToolError::reported_failure(FailureClass::PolicyDenied, error.to_string())
+}
+
+fn validate_edit_paths(context: &ToolContext, prepared: &[PreparedEdit]) -> Result<(), ToolError> {
+    for edit in prepared {
+        let path = edit
+            .path
+            .to_str()
+            .ok_or_else(|| policy_error("the edit path is not valid UTF-8"))?;
+        let current = context
+            .resolve_path_allow_create(path)
+            .map_err(policy_error)?;
+        if current != edit.path
+            || (current.try_exists().map_err(policy_error)? && !current.is_file())
+        {
+            return Err(policy_error(
+                "The edit target changed. Retry the language-server action.",
+            ));
+        }
+        if let Some(from) = &edit.rename_from {
+            let path = from
+                .to_str()
+                .ok_or_else(|| policy_error("the rename path is not valid UTF-8"))?;
+            let current = context.resolve_existing_file(path).map_err(policy_error)?;
+            if current != *from {
+                return Err(policy_error(
+                    "The rename source changed. Retry the language-server action.",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 pub async fn acquire_mutation_locks(
@@ -110,24 +211,59 @@ pub async fn acquire_mutation_locks(
     guards
 }
 
-pub async fn apply_prepared_with_held_locks(
+/// Foreground edits obtain workspace consent before locking. Format-on-write
+/// inherits its native file mutation and may only rewrite that same file.
+pub(super) async fn apply_prepared_with_held_locks(
     context: &ToolContext,
     client: &LspClient,
     prepared: &[PreparedEdit],
 ) -> Result<usize, ToolError> {
+    validate_edit_paths(context, prepared)?;
     // Validate the entire edit set while all mutation locks are held, before
     // the first write: a stale hash/version in a later file must never leave
     // earlier files rewritten.
     for edit in prepared {
         if let Some(expected) = &edit.expected_hash {
-            let current = std::fs::read(&edit.path).map_err(|err| {
+            let checked_path = edit.rename_from.as_ref().unwrap_or(&edit.path);
+            let current = file_content_hash(checked_path).map_err(|err| {
                 ToolError::reported_failure(FailureClass::ToolReturnedError, err.to_string())
             })?;
-            if &content_hash(&current) != expected {
+            if &current != expected {
                 return Err(ToolError::reported_failure(
                     FailureClass::ArgumentInvalid,
                     format!(
                         "{} changed between preflight and write",
+                        context.display_path(checked_path)
+                    ),
+                ));
+            }
+        }
+        if edit.rename_from.is_some() {
+            let actual = match file_content_hash(&edit.path) {
+                Ok(hash) => RenameDestination::ContentHash(hash),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    RenameDestination::Missing
+                }
+                Err(error) => {
+                    return Err(ToolError::reported_failure(
+                        FailureClass::ToolReturnedError,
+                        error.to_string(),
+                    ))
+                }
+            };
+            let unchanged = match (&edit.rename_destination, actual) {
+                (Some(RenameDestination::Missing), RenameDestination::Missing) => true,
+                (
+                    Some(RenameDestination::ContentHash(expected)),
+                    RenameDestination::ContentHash(actual),
+                ) => *expected == actual,
+                _ => false,
+            };
+            if !unchanged {
+                return Err(ToolError::reported_failure(
+                    FailureClass::ArgumentInvalid,
+                    format!(
+                        "{} changed between preflight and rename",
                         context.display_path(&edit.path)
                     ),
                 ));
@@ -258,6 +394,7 @@ fn prepare_uri(
         expected_hash: Some(content_hash(original.as_bytes())),
         version: None,
         rename_from: None,
+        rename_destination: None,
     })
 }
 

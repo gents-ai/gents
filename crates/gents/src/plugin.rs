@@ -289,6 +289,21 @@ impl PluginRunner {
             ..manifold
         };
 
+        let roots = match &manifold.fs {
+            FsAccess::None => &[][..],
+            FsAccess::ReadOnly(roots) | FsAccess::ReadWrite(roots) => roots.as_slice(),
+        };
+        for root in roots {
+            if root.is_dir() {
+                allowed::ensure_mount_safe(root)?;
+            } else {
+                anyhow::ensure!(
+                    !allowed::is_protected(root),
+                    "Runtime permission files cannot be shared with a plugin."
+                );
+            }
+        }
+
         let stdin =
             serde_json::to_vec(arguments).context("encoding plugin arguments as canonical JSON")?;
         let request = plugin_run_request(stdin, manifold, budget);

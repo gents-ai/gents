@@ -64,6 +64,43 @@ fn generated_operator_path_cases_protect_names_and_file_aliases() {
 }
 
 #[test]
+fn a_mount_rejects_nested_operator_aliases_and_reserved_names() {
+    let world = world();
+    let guarded = file(&world.gents);
+    std::fs::write(&guarded, "operator state").unwrap();
+    let work = world.root.join("work");
+    let paths = [guarded];
+    std::fs::hard_link(work.join("a.txt"), work.join("sub/ordinary-alias")).unwrap();
+    assert!(!protected::mount_contains_protected(&paths, &work).unwrap());
+    std::fs::hard_link(&paths[0], work.join("sub/operator-alias")).unwrap();
+    assert!(protected::mount_contains_protected(&paths, &work).unwrap());
+    assert!(protected::mount_contains_protected(&[work.join("future-state")], &work).unwrap());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_mount_does_not_follow_directory_links_or_cycles() {
+    let world = world();
+    let guarded = file(&world.gents);
+    std::fs::write(&guarded, "operator state").unwrap();
+    let work = world.root.join("work");
+    std::os::unix::fs::symlink(&world.gents, work.join("outside-link")).unwrap();
+    std::os::unix::fs::symlink(&work, work.join("sub/cycle")).unwrap();
+    std::os::unix::fs::symlink(work.join("missing"), work.join("dangling-link")).unwrap();
+    assert!(!protected::mount_contains_protected(&[guarded], &work).unwrap());
+}
+
+#[test]
+fn a_mount_fails_when_operator_objects_cannot_be_inspected() {
+    let world = world();
+    let work = world.root.join("work");
+    assert!(
+        protected::mount_contains_protected(&[world.gents.join("invalid\0path")], &work).is_err()
+    );
+    assert!(protected::mount_contains_protected(&[], &work.join("missing")).is_err());
+}
+
+#[test]
 fn a_removed_operator_directory_is_absent_but_a_wrong_kind_is_an_error() {
     let world = world();
     assert!(

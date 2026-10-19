@@ -50,6 +50,16 @@ pub(crate) fn read_only_bash_for_test(
     ))
 }
 
+#[cfg(all(test, unix))]
+pub(crate) fn write_capable_bash_for_test(
+    root: &std::path::Path,
+) -> Box<dyn crate::llm::tool::ToolDyn> {
+    Box::new(UnrestrictedBashTool::new(
+        ToolContext::new(root.to_path_buf(), false).unwrap(),
+        Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+    ))
+}
+
 #[cfg(test)]
 pub(crate) fn cli_tool_for_test(config: CliToolConfig) -> Box<dyn crate::llm::tool::ToolDyn> {
     Box::new(CliTool::new(config))

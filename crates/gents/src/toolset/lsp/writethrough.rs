@@ -84,6 +84,23 @@ impl LspWritethrough {
             Ok(prepared) => prepared,
             Err(error) => return Some(format!("format-on-write skipped: {error}")),
         };
+        let target = match path
+            .to_str()
+            .ok_or_else(|| "the formatting path is not valid UTF-8".to_string())
+            .and_then(|path| {
+                context
+                    .resolve_existing_file(path)
+                    .map_err(|error| error.to_string())
+            }) {
+            Ok(path) => path,
+            Err(error) => return Some(format!("format-on-write skipped: {error}")),
+        };
+        if prepared
+            .iter()
+            .any(|edit| edit.path != target || edit.rename_from.is_some())
+        {
+            return Some("format-on-write skipped: formatting changed its target".into());
+        }
         match apply_prepared_with_held_locks(&context, lease.client(), &prepared).await {
             Ok(0) => None,
             Ok(n) => Some(format!("format-on-write applied {n} file(s)")),
