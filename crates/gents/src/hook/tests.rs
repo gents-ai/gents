@@ -1944,8 +1944,14 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         .expect("create active goal");
         let call_id = "active-edit-accepted";
         let args = r#"{"objective":"revised while active"}"#;
-        accept_hook_tool_call(&hook, &call_id, crate::goal::UPDATE_GOAL_TOOL_NAME, args, None)
-            .await;
+        accept_hook_tool_call(
+            &hook,
+            &call_id,
+            crate::goal::UPDATE_GOAL_TOOL_NAME,
+            args,
+            None,
+        )
+        .await;
         let ToolCallHookAction::Skip { tool_result, .. } = hook
             .on_tool_call(crate::goal::UPDATE_GOAL_TOOL_NAME, None, &call_id, args)
             .await
@@ -1969,15 +1975,15 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
     for (status, expected_hint) in [
         (
             crate::goal::GoalStatus::Blocked,
-            "gents goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID identifies the current blocked/paused goal\'s request)",
+            "gents goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)",
         ),
         (
             crate::goal::GoalStatus::Paused,
-            "gents goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID identifies the current blocked/paused goal\'s request)",
+            "gents goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)",
         ),
         (
             crate::goal::GoalStatus::UsageLimited,
-            "gents goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID identifies the current blocked/paused goal\'s request)",
+            "gents goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)",
         ),
         (
             crate::goal::GoalStatus::Complete,
@@ -2008,43 +2014,67 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         )
         .await
         .expect("latch status");
-        let call_id = format!("blocked-edit-{}", status.as_str());
-        let args = r#"{"objective":"revised"}"#;
-        accept_hook_tool_call(&hook, &call_id, crate::goal::UPDATE_GOAL_TOOL_NAME, args, None)
-            .await;
-        let ToolCallHookAction::Skip { tool_result, .. } = hook
-            .on_tool_call(crate::goal::UPDATE_GOAL_TOOL_NAME, None, &call_id, args)
+        let before = crate::goal::load_canonical_goal(&node, "did:test:general", &session_id)
             .await
-        else {
-            panic!("expected hook-managed skip for {call_id}");
-        };
-        assert!(!tool_result.contains("\"accepted\": true"), "{tool_result}");
-
-        assert!(
-            tool_result.contains(&format!("the current goal status is {}", status.as_str())),
-            "{call_id}: {tool_result}"
-        );
-        assert!(
-            tool_result.contains(expected_hint),
-            "{call_id}: expected {expected_hint:?} in {tool_result}"
-        );
-        assert!(
-            !tool_result.contains("no longer active or its continuation changed"),
-            "{call_id}: stale-race message must not appear for a fresh non-active goal: {tool_result}"
-        );
-        let goal = crate::goal::load_canonical_goal(&node, "did:test:general", &session_id)
-            .await
-            .expect("load goal")
+            .expect("load before")
             .expect("goal exists");
-        assert_eq!(
-            goal.parsed_status(),
-            Some(status),
-            "{call_id}: refused edit must not change status"
-        );
-        assert_eq!(
-            goal.objective, "blocked-edit semantics",
-            "{call_id}: refused edit must not change objective"
-        );
+        for (index, args) in [
+            r#"{"objective":"revised"}"#,
+            r#"{"status":"active","objective":"revised"}"#,
+            r#"{"status":"active"}"#,
+            r#"{"status":" active ","objective":"revised"}"#,
+            r#"{"token_budget":1000}"#,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let call_id = format!("blocked-edit-{}-{index}", status.as_str());
+            accept_hook_tool_call(
+                &hook,
+                &call_id,
+                crate::goal::UPDATE_GOAL_TOOL_NAME,
+                args,
+                None,
+            )
+            .await;
+            let ToolCallHookAction::Skip { tool_result, .. } = hook
+                .on_tool_call(crate::goal::UPDATE_GOAL_TOOL_NAME, None, &call_id, args)
+                .await
+            else {
+                panic!("expected hook-managed skip for {call_id}");
+            };
+            assert!(!tool_result.contains("\"accepted\": true"), "{tool_result}");
+
+            assert!(
+                tool_result.contains(&format!("the current goal status is {}", status.as_str())),
+                "{call_id}: {tool_result}"
+            );
+            assert!(
+                tool_result.contains(expected_hint),
+                "{call_id}: expected {expected_hint:?} in {tool_result}"
+            );
+            assert!(
+                !tool_result.contains("no longer active or its continuation changed"),
+                "{call_id}: stale-race message must not appear for a fresh non-active goal: {tool_result}"
+            );
+            let goal = crate::goal::load_canonical_goal(&node, "did:test:general", &session_id)
+                .await
+                .expect("load goal")
+                .expect("goal exists");
+            assert_eq!(
+                goal.parsed_status(),
+                Some(status),
+                "{call_id}: refused edit must not change status"
+            );
+            assert_eq!(
+                goal.objective, "blocked-edit semantics",
+                "{call_id}: refused edit must not change objective"
+            );
+            assert_eq!(goal.token_budget, before.token_budget);
+            assert_eq!(goal.continuation_sequence, before.continuation_sequence);
+            assert_eq!(goal.goal_id, before.goal_id);
+            assert_eq!(goal.updated_at, before.updated_at);
+        }
         // Rebuild from a fresh active goal for the next case; complete and
         // budget_limited cannot be reset to active via set_goal.
         crate::goal::delete_goals_for_session(&node, "did:test:general", &session_id)
