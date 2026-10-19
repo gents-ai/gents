@@ -259,6 +259,7 @@ impl GentsBuilder {
                 }),
             ),
             manual_trigger_handle: Arc::new(tokio::sync::OnceCell::new()),
+            enrollment_authority: Arc::default(),
             operator_tool_root: self.tool_ceiling.root().map(std::path::PathBuf::from),
             plugins: Arc::new(crate::agent::plugin_executor(
                 self.plugin_home,

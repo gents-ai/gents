@@ -224,6 +224,7 @@ pub struct Gents {
     rendered_request_capture_factory:
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
     pub(crate) manual_trigger_handle: Arc<OnceCell<ManualTriggerHandle>>,
+    enrollment_authority: Arc<std::sync::RwLock<Option<p2p_reconcile::EnrollmentAuthorityHandle>>>,
     operator_tool_root: Option<PathBuf>,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
 }
@@ -311,6 +312,7 @@ impl Gents {
             // Provider calls require durable rendered input to be fact records.
             rendered_request_capture_factory: Some(rendered_request_capture_factory),
             manual_trigger_handle: Arc::new(OnceCell::new()),
+            enrollment_authority: Arc::default(),
             operator_tool_root: options.tool_ceiling.root().map(PathBuf::from),
             plugins,
         })
@@ -412,6 +414,19 @@ impl Gents {
     #[allow(dead_code)]
     pub(crate) fn manual_trigger_handle(&self) -> Option<&ManualTriggerHandle> {
         self.manual_trigger_handle.get()
+    }
+
+    /// The caller authenticates the member with DefraDB before requesting metadata.
+    pub async fn client_observation_authorized(&self, member_did: &str) -> anyhow::Result<bool> {
+        let authority = self
+            .enrollment_authority
+            .read()
+            .map_err(|_| anyhow::anyhow!("enrollment authority is unavailable"))?
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("enrollment authority is not running"))?;
+        authority
+            .client_observation_authorized(member_did, self.node_did())
+            .await
     }
 
     pub async fn run(self, shutdown: watch::Receiver<bool>) -> anyhow::Result<()> {

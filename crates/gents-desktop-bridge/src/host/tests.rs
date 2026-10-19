@@ -249,6 +249,50 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
     assert!(requests
         .iter()
         .all(|request| !request.headers.contains_key("authorization")));
+    let settings = gents_desktop_core::inference::InferenceSetupState::project(
+        &gents_desktop_core::client::ClientStore::default(),
+        &did,
+    );
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path(
+            gents_desktop_core::inference::INFERENCE_SETTINGS_PATH,
+        ))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
+            gents_desktop_core::inference::InferenceSettingsResponse {
+                contract_version:
+                    gents_desktop_core::inference::INFERENCE_SETTINGS_CONTRACT_VERSION,
+                state: settings,
+            },
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let settings = host
+        .execute(
+            protocol::ClientCommand::InferenceSetupState {
+                node_did: did.clone(),
+            },
+            &approvals,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(settings["nodeDid"], did);
+    assert!(!gents::identity::can_mint_defradb_bearer(&did));
+    let requests = server.received_requests().await.unwrap();
+    let settings_read = requests
+        .iter()
+        .find(|request| {
+            request.url.path() == gents_desktop_core::inference::INFERENCE_SETTINGS_PATH
+        })
+        .unwrap();
+    assert!(settings_read
+        .headers
+        .get("authorization")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("Bearer "));
     core.shutdown().await.unwrap();
 }
 
