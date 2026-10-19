@@ -14,6 +14,7 @@ import { useFollowTail, useScroller } from "../lib/scroll";
 import { useHomeDid, useSelectedNode } from "../hooks/useClient";
 import { isWorkingNode } from "../lib/nodes";
 import { CopyButton } from "./Markdown";
+import { JobProgressCell } from "./JobProgressCell";
 import {
   diffShape,
   diffText,
@@ -237,6 +238,7 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
   const denial = tool.statusKind === "error" ? tool.denial : null;
   return (
     <div className="grid gap-3">
+      {(tool.jobProgress || tool.jobState) && <JobProgressCell tool={tool} />}
       {denial && (
         <>
           <Meta

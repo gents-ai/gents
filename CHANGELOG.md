@@ -6,6 +6,25 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- `gents pack wire` (with `--targets-from` and `--remove`), `gents pack install
+  --wire <agent>` and the desktop's Enable for agent action add a job plugin
+  to an agent's Tools with a reviewed job block, without turning on direct
+  `agent_new`; `pack install --expect-digest sha256:<hex>` refuses a pack whose
+  content differs; `gents diagnose` reports `plugin_jobs` checks; `gents init`
+  names the workflows install, and `gents init --workflows` performs it.
+- The desktop shows a plugin job's progress on its tool row (state, phases,
+  agents and budget, the outcome or pause reason with the next step), with
+  Stop and Pause buttons and an Answer button that prefills the composer; the
+  agent card labels job rows as workflows.
+- The Grok pager's Workflows tab lists the workflows of every installed plugin
+  that declares a catalog, instead of an error.
+- The Grok pager shows each plugin job as a workflow run with its phases,
+  agents and budget, tags the job's subagent cards with that run, and handles
+  `/workflow stop`, `/workflow pause` and `/workflow runs` in the session.
+- `gents job list|show|watch|stop|pause` read and control plugin jobs.
+  `watch --until-terminal` waits for a job by its address
+  (`session_id:tool_call_id`) and prints one answer-first line with the next
+  call; `stop` and `pause` act only on a home whose server is not running.
 - A session started by another session's tool call now records its opening
   request in its provenance when it is created, so Codex threads, Grok cards
   and the desktop show the request that opened it even when a later message
@@ -279,6 +298,8 @@ source consistency checks, not a separate runtime compatibility version.
   pin refuses any handle that is not the kind the scope resolved, so the swap
   race the pin already caught for symlinks fails closed promptly for FIFOs
   and kind swaps too.
+- Codex background-terminal clean and process kill now stop running background
+  tool calls.
 
 ## 0.20.0 - 2026-10-05
 

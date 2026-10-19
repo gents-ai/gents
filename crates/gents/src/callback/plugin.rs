@@ -11,8 +11,11 @@
 //! (`gents plugin dirs add`, or a pack scenario's `allowed_folders`), at the
 //! access that call asks for.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use defra_node::EmbeddedNode;
+use gents_protocol::job::DataWrite;
 use serde_json::{Map, Value};
 
 use super::documents::{
@@ -22,6 +25,7 @@ use super::documents::{
 use super::run::{deny, encode_journal, persist_journal};
 use super::{LIFECYCLE_FAILED, LIFECYCLE_RUNNING, LIFECYCLE_SUCCEEDED};
 use crate::document_config::{PortCardinality, PortSpec};
+use crate::plugin::data::{DataCaller, PluginData, StampContext};
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::PluginVerdict;
 use crate::workspace::journal::advance;
@@ -29,7 +33,7 @@ use crate::workspace::{ActionJournalEntry, ActionJournalState};
 
 /// A plugin writes only a pack's own collections: never the runtime's
 /// documents and never a protected collection.
-fn writable_output_collection(collection: &str) -> Result<()> {
+pub(crate) fn writable_output_collection(collection: &str) -> Result<()> {
     crate::graphql::validate_collection_identifier(collection)?;
     anyhow::ensure!(
         !gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(&collection),
@@ -151,6 +155,17 @@ pub(super) struct PluginHandler<'a> {
     pub outputs: &'a [PortSpec],
 }
 
+fn take_writes(output: &mut Value) -> Result<Vec<DataWrite>, String> {
+    let Some(writes) = output.as_object_mut().and_then(|o| o.remove("writes")) else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_value(writes).map_err(|error| {
+        format!(
+            "plugin writes must be [{{op, collection, doc_id?, fields, on_conflict?}}]: {error}"
+        )
+    })
+}
+
 pub(super) async fn execute(
     node: &std::sync::Arc<EmbeddedNode>,
     invocation: &mut CallbackInvocationDoc,
@@ -158,6 +173,7 @@ pub(super) async fn execute(
     source: &Value,
     plugins: &PluginExecutor,
     journal: Vec<ActionJournalEntry>,
+    data_node: Option<&Arc<EmbeddedNode>>,
 ) -> Result<()> {
     if let Some(journal) = crate::workspace::recover_running(&journal) {
         return persist_journal(
@@ -199,28 +215,40 @@ pub(super) async fn execute(
             .and_then(Value::as_str)
             .map(str::to_owned)
     });
-    let called = match bound {
-        Some(bound) => plugins.call_bound(&record, input, bound).await,
-        None => plugins.call(&record, input).await,
-    };
+    let grant = record.data_grant();
+    let caller = grant
+        .as_ref()
+        .and(data_node)
+        .and_then(|node| DataCaller::new(node.clone(), &invocation.owner_node_did).ok());
+    let called = plugins.call_bound_data(&record, input, bound, caller).await;
     let failure = match called {
         Err(error) => Some(format!("{error:#}")),
         Ok(call) if call.outcome.verdict != PluginVerdict::Success => Some(format!(
             "plugin {} did not return a result: {}",
             call.coordinate, call.outcome.diagnostics
         )),
-        Ok(call) => {
-            match output_documents(
-                &call.outcome.output,
-                handler.outputs,
-                correlation.as_deref(),
-            ) {
+        Ok(mut call) => {
+            let writes = match grant {
+                Some(_) => take_writes(&mut call.outcome.output),
+                None => Ok(Vec::new()),
+            };
+            match writes.and_then(|writes| {
+                output_documents(
+                    &call.outcome.output,
+                    handler.outputs,
+                    correlation.as_deref(),
+                )
+                .map(|documents| (writes, documents))
+            }) {
                 Err(reason) => Some(format!("plugin {}: {reason}", call.coordinate)),
-                Ok(documents) => {
+                Ok((writes, documents)) => {
+                    let writes = grant.filter(|_| !writes.is_empty()).map(|g| (g, writes));
                     let mut written = journal.clone();
                     advance(&mut written, 0, ActionJournalState::EffectObserved);
                     advance(&mut written, 0, ActionJournalState::ResultDocsWritten);
-                    match commit_success(node, invocation, &written, documents, correlation).await {
+                    match commit_success(node, invocation, &written, documents, writes, correlation)
+                        .await
+                    {
                         Ok(()) => return Ok(()),
                         Err(error) => {
                             Some(format!("writing the plugin's results failed: {error:#}"))
@@ -245,6 +273,7 @@ async fn commit_success(
     invocation: &mut CallbackInvocationDoc,
     journal: &[ActionJournalEntry],
     documents: Vec<(String, Value)>,
+    writes: Option<(PluginData, Vec<DataWrite>)>,
     correlation: Option<String>,
 ) -> Result<()> {
     let mut succeeded = invocation.clone();
@@ -273,6 +302,9 @@ async fn commit_success(
         })
         .collect::<Result<Vec<_>>>()?;
     let invocation_id = invocation.invocation_id.clone();
+    let stamps = StampContext::Callback {
+        node_did: invocation.owner_node_did.clone(),
+    };
     crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
@@ -282,6 +314,8 @@ async fn commit_success(
             let update = &update;
             let result = &result;
             let invocation_id = &invocation_id;
+            let writes = &writes;
+            let stamps = &stamps;
             Box::pin(async move {
                 let updated = txn.execute(update).await?;
                 anyhow::ensure!(
@@ -293,6 +327,15 @@ async fn commit_success(
                 );
                 for create in creates {
                     txn.execute(create).await?;
+                }
+                if let Some((grant, writes)) = writes {
+                    crate::application_write::apply_plugin_writes_in_txn(
+                        txn,
+                        grant,
+                        stamps,
+                        writes.clone(),
+                    )
+                    .await?;
                 }
                 txn.execute(result).await?;
                 Ok(())
@@ -452,7 +495,10 @@ mod tests {
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         node.add_schema(
             "type Job { job_run: String text: String path: String origin: String }
-             type Echoed { job_run: String text: String path: String origin: String run_ref: String }",
+             type Echoed { job_run: String text: String path: String origin: String run_ref: String }
+             type PluginNote { body: String }
+             type PluginOwned { body: String owner: String }
+             type PluginJobbed { body: String job_row_doc_id: String }",
         )
         .await
         .unwrap();
@@ -557,6 +603,156 @@ mod tests {
         .await;
         assert_eq!(invocations.len(), 1);
         invocations.remove(0)
+    }
+
+    /// A plugin that, while it is offered `service`, returns `canned` (an
+    /// `Echoed` document and its `writes`) instead of echoing its input, and
+    /// declares `data` over the three plugin collections of the test node.
+    fn data_plugin(
+        service: &str,
+        canned: &Value,
+    ) -> (tempfile::TempDir, crate::plugin::store::InstalledPlugin) {
+        use gents_protocol::job::{PluginDataDeclaration, StampedField};
+        let (home, mut record) = crate::plugin::tests::executor::installed_plugin(
+            &crate::plugin::tests::executor::asking_plugin_wat(
+                service,
+                "data_results",
+                canned,
+                true,
+            ),
+            None,
+        );
+        record.declaration.data = Some(PluginDataDeclaration {
+            collections: vec![
+                "PluginNote".into(),
+                "PluginOwned".into(),
+                "PluginJobbed".into(),
+            ],
+            ops: vec!["query".into(), "insert".into()],
+            stamped: [
+                ("owner".to_owned(), StampedField::NodeDid),
+                ("job_row_doc_id".to_owned(), StampedField::JobRowDocId),
+            ]
+            .into(),
+        });
+        record.data_collection_fields = [
+            ("PluginNote", vec!["body"]),
+            ("PluginOwned", vec!["body", "owner"]),
+            ("PluginJobbed", vec!["body", "job_row_doc_id"]),
+        ]
+        .into_iter()
+        .map(|(name, fields)| {
+            (
+                name.to_owned(),
+                fields.into_iter().map(str::to_owned).collect(),
+            )
+        })
+        .collect();
+        crate::plugin::store::write_record(home.path(), &record).unwrap();
+        (home, record)
+    }
+
+    fn echoed_with(text: &str, writes: Value) -> Value {
+        json!({"job_run": "run-7", "text": text, "writes": writes})
+    }
+
+    fn insert(collection: &str) -> Value {
+        json!({"op": "insert", "collection": collection, "fields": {"body": "x"}})
+    }
+
+    async fn run_data_plugin(
+        service: &str,
+        canned: Value,
+    ) -> (std::sync::Arc<EmbeddedNode>, tempfile::TempDir) {
+        let installed = data_plugin(service, &canned);
+        let digest = installed.1.digest.clone();
+        run_plugin_binding(installed, &digest, None, None, "").await
+    }
+
+    #[tokio::test]
+    async fn callback_write_commits_atomically_with_its_callback_result() {
+        let (node, _home) = run_data_plugin(
+            "data_calls",
+            echoed_with(
+                "offered",
+                json!([insert("PluginNote"), insert("PluginOwned")]),
+            ),
+        )
+        .await;
+        assert_eq!(
+            only_invocation(&node).await["lifecycle_state"],
+            LIFECYCLE_SUCCEEDED
+        );
+        let echoed = rows(&node, "{ Echoed { text } }", "Echoed").await;
+        assert_eq!(echoed, vec![json!({"text": "offered"})]);
+        assert_eq!(
+            rows(&node, "{ PluginNote { body } }", "PluginNote").await,
+            vec![json!({"body": "x"})]
+        );
+        assert_eq!(
+            rows(&node, "{ PluginOwned { body owner } }", "PluginOwned").await,
+            vec![json!({"body": "x", "owner": "did:key:zPluginOwner"})]
+        );
+        assert_eq!(
+            rows(&node, "{ CallbackResult { result_id } }", "CallbackResult")
+                .await
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn callback_job_only_stamp_refuses_and_commits_nothing() {
+        let (node, _home) = run_data_plugin(
+            "data_calls",
+            echoed_with(
+                "offered",
+                json!([insert("PluginNote"), insert("PluginJobbed")]),
+            ),
+        )
+        .await;
+        let invocation = only_invocation(&node).await;
+        assert_eq!(
+            invocation["lifecycle_state"],
+            super::super::LIFECYCLE_FAILED
+        );
+        assert!(invocation["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("has no value in a callback call")));
+        assert!(rows(&node, "{ PluginNote { body } }", "PluginNote")
+            .await
+            .is_empty());
+        assert!(rows(&node, "{ PluginJobbed { body } }", "PluginJobbed")
+            .await
+            .is_empty());
+        assert!(rows(&node, "{ Echoed { text } }", "Echoed")
+            .await
+            .is_empty());
+        assert!(
+            rows(&node, "{ CallbackResult { result_id } }", "CallbackResult")
+                .await
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn callback_is_offered_data_calls_but_never_job_calls() {
+        let canned = echoed_with("offered", json!([]));
+        let (node, _home) = run_data_plugin("data_calls", canned.clone()).await;
+        let echoed = rows(&node, "{ Echoed { text } }", "Echoed").await;
+        assert_eq!(
+            echoed,
+            vec![json!({"text": "offered"})],
+            "data_calls offered"
+        );
+
+        let (node, _home) = run_data_plugin("job_calls", canned).await;
+        let echoed = rows(&node, "{ Echoed { text } }", "Echoed").await;
+        assert_eq!(
+            echoed,
+            vec![json!({"text": "hello"})],
+            "job_calls never offered"
+        );
     }
 
     #[tokio::test]

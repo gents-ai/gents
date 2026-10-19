@@ -297,8 +297,8 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , deferred := []
     }
   , { feature := "plugin-jobs"
-    , required := [Surface.agentFacing, Surface.runtimeInternal]
-    , deferred := [(Surface.operatorCli, "gents job"), (Surface.operatorUi, "desktop")]
+    , required := [Surface.agentFacing, Surface.runtimeInternal, Surface.operatorCli, Surface.operatorUi]
+    , deferred := []
     }
   ]
 
@@ -1451,6 +1451,16 @@ def caseCoverage : List CoverageEntry :=
       "conformance::plugin_job::generated_plugin_job_lineage_cases_decode_strictly"
       "Rows decode strictly against DurableLineage.openingRequest. The client consumers that drive the native opening-request owner are pending.")
       "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "plugin_job_lineage_cases"
+      "PluginJobLineageCases"
+      "caused_sessions::tests::generated_plugin_job_lineage_cases_drive_caused_session_readers")
+      "plugin-jobs" [Surface.operatorCli]
+  , tagged (consumerCoverage
+      "plugin_job_lineage_cases"
+      "PluginJobLineageCases"
+      "gents_desktop_bridge::provenance::tests::generated_plugin_job_lineage_cases_drive_desktop_opening_request")
+      "plugin-jobs" [Surface.operatorUi]
   , tagged (consumerCoverage
       "plugin_job_recovery_cases"
       "PluginJobRecoveryCases"

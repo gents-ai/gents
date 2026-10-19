@@ -291,6 +291,12 @@ impl DefraSessionHook {
                     .plugin_receipt(&execution_tool_doc_id)
                     .await,
             );
+            lifecycle.stage_plugin_writes(
+                live_outputs
+                    .registry
+                    .deferred_writes(&execution_tool_doc_id)
+                    .await,
+            );
 
             match execution {
                 Ok(outcome) => match outcome {
@@ -992,6 +998,41 @@ impl DefraSessionHook {
                 "request_id": request_id,
                 "error": null
             }));
+            return self
+                .complete_control_tool_call(
+                    &mut control_lifecycle,
+                    CANCEL_PROCESS_TOOL_NAME,
+                    result,
+                )
+                .await;
+        }
+        if lifecycle.kind() == crate::tool_call_lifecycle::ToolRowKind::PluginJob {
+            let result = match crate::plugin_job::control::control(
+                &crate::config_client::ConfigAccess::local(self.node.clone()),
+                &caller,
+                background_tool_call_id,
+                gents_protocol::job::JobControlKind::Stop,
+            )
+            .await
+            {
+                Ok(outcome) => json_string(json!({
+                    "ok": true,
+                    "tool_call_id": background_tool_call_id,
+                    "status": match outcome {
+                        gents_protocol::job::JobControlOutcome::Applied { .. } => "cancelled",
+                        gents_protocol::job::JobControlOutcome::AlreadyTerminal { .. } => {
+                            "already_terminal"
+                        }
+                    },
+                    "request_id": null,
+                    "error": null
+                })),
+                Err(error) => background_invalid_tool_arguments_payload(
+                    CANCEL_PROCESS_TOOL_NAME,
+                    "/tool_call_id",
+                    error.to_string(),
+                ),
+            };
             return self
                 .complete_control_tool_call(
                     &mut control_lifecycle,

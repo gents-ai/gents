@@ -48,6 +48,11 @@ fn render_tool_call(tool: ToolCallView) -> RenderedToolCallView {
         partial_output_tail: tool.partial_output_tail.clone(),
         denial: tool.denial.clone(),
         cancel_cause: tool.cancel_cause.clone(),
+        job_progress: tool.job_progress.clone(),
+        job_handle: tool.job_handle.clone(),
+        job_state: tool.job_state,
+        job_outcome: tool.job_outcome.clone(),
+        job_next_calls: tool.job_next_calls.clone(),
     }
 }
 
@@ -323,6 +328,11 @@ mod tests {
             completed_at: None,
             denial: None,
             cancel_cause: None,
+            job_progress: None,
+            job_handle: None,
+            job_state: None,
+            job_outcome: None,
+            job_next_calls: Vec::new(),
         };
         let rendered = render_tool_call(tool.clone());
 

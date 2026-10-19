@@ -48,6 +48,7 @@ pub async fn install<F: Future<Output = Result<()>>>(
                 digest: archive.digest().to_owned(),
                 kind: manifest.metadata.kind.clone(),
                 assets: root.strip_prefix(home)?.to_string_lossy().into_owned(),
+                dependency_assets: Vec::new(),
                 plugins: plugins
                     .iter()
                     .map(|plugin| InstalledPackPlugin {
@@ -56,6 +57,7 @@ pub async fn install<F: Future<Output = Result<()>>>(
                     })
                     .collect(),
                 installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                installed_via: None,
             };
             if let Err(error) = super::write_home_install(home, &record) {
                 let restored = match previous {
@@ -86,6 +88,24 @@ pub async fn install<F: Future<Output = Result<()>>>(
         }
     }
     Ok((record, installed))
+}
+
+/// Releases the plugin store records `coordinate` still owns at the digests its
+/// node record lists; records another pack or a newer install took over stay.
+pub fn release_plugin_records(
+    home: &Path,
+    coordinate: &str,
+    plugins: &[InstalledPackPlugin],
+) -> Result<Vec<InstalledPackPlugin>> {
+    let (namespace, _) = crate::pack_registry::split_pack_coordinate(coordinate);
+    let mut released = Vec::new();
+    for plugin in plugins {
+        if store::remove_record_if_owned(home, namespace, &plugin.name, coordinate, &plugin.digest)?
+        {
+            released.push(plugin.clone());
+        }
+    }
+    Ok(released)
 }
 
 pub struct LocalPackRemoval {

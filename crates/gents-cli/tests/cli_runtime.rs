@@ -10,6 +10,8 @@ mod cli_document;
 mod cli_goal;
 #[path = "suites/cli_init.rs"]
 mod cli_init;
+#[path = "suites/cli_job.rs"]
+mod cli_job;
 #[path = "suites/cli_mailbox.rs"]
 mod cli_mailbox;
 #[path = "suites/cli_reconciliation.rs"]

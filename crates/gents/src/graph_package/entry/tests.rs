@@ -55,6 +55,8 @@ fn install_prepare_fixture_plugin(output: &Value) -> (tempfile::TempDir, String)
         owner_pack_coordinate: None,
         owner_pack_digest: None,
         model_binding: None,
+        data_unique_keys: Default::default(),
+        data_collection_fields: Default::default(),
     };
     crate::plugin::store::write_record(home.path(), &record).unwrap();
     (home, digest)

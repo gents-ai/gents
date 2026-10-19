@@ -86,6 +86,8 @@ export function createBridgeHttpAdapter(
     updatePack: unsupported("updatePack"),
     removePack: unsupported("removePack"),
     bindPackPlugin: unsupported("bindPackPlugin"),
+    wirePack: unsupported("wirePack"),
+    listPackWireSources: unsupported("listPackWireSources"),
     signInToPackRegistry: unsupported("signInToPackRegistry"),
     signOutOfPackRegistry: unsupported("signOutOfPackRegistry"),
     listAllowedFolders: unsupported("listAllowedFolders"),
@@ -240,6 +242,9 @@ export function createBridgeHttpAdapter(
       ),
     interruptRequest: async (request) =>
       client.postJson<InterruptRequestResult>("/desktop/interrupt/request", request),
+    jobControl: async () => {
+      throw new Error("desktop_job_control is not served by the live bridge runner");
+    },
   };
 }
 

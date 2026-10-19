@@ -159,6 +159,10 @@ export type {
   PackInstallRequest,
   PackPluginSlot,
   PackSlotProfile,
+  PackWireRequest,
+  PackWireResult,
+  PackWireSources,
+  WireReport,
 } from "./types/packs.js";
 export type {
   AllowedFolder,

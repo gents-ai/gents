@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde_json::Value;
 
 use crate::config_client::{ConfigAccess, ConfigRead};
@@ -8,6 +8,7 @@ use crate::graphql::{escape_graphql_string, graphql_string_list_literal};
 use crate::session::{
     decode_session_row, public_request_filter, session_scope_filter, AGENT_SESSION_FIELDS,
 };
+use gents_protocol::row::AgentRequestRow;
 use gents_protocol::session::AgentSession;
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -202,6 +203,85 @@ pub async fn recorded_opening(
     Ok(own
         .first()
         .and_then(|session| session.provenance.as_ref()?.opening_request_doc_id.clone()))
+}
+
+/// The `AgentRequestRow` fields lineage readers select.
+pub const REQUEST_FIELDS: &str = "_docID request_id node_did session_id requester_did agent_id \
+     content lifecycle_state superseded_by_request failure_reason created_at request_hop \
+     caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id \
+     caused_by_parent_tool_call_doc_id";
+
+/// The public request that started a linked session: among the requests of
+/// `link.scope` that name the link's cause and a tool call, the one the
+/// session's provenance recorded when it was created, else the earliest by
+/// `(created_at, _docID)` for a session created before that was recorded. It
+/// is never found by tool name, so a call of any kind may open it, and a later
+/// message from the same cause into the same session, even in the same second,
+/// does not displace a recorded opening request.
+pub async fn starting_request(
+    access: &ConfigAccess,
+    link: &SessionLink,
+) -> Result<Option<AgentRequestRow>> {
+    let filter = public_request_filter(&format!(
+        r#"{}, caused_by_parent_request_doc_id: {{ _eq: "{}" }}"#,
+        session_scope_filter(
+            &link.scope.node_did,
+            &link.scope.session_id,
+            link.scope.requester_did.as_deref(),
+        ),
+        escape_graphql_string(&link.cause_request_doc_id)
+    ));
+    let mut rows = access
+        .execute(&format!(
+            "{{AgentRequest(filter: {{{filter}}}) {{{REQUEST_FIELDS}}}}}"
+        ))
+        .await?
+        .pointer("/data/AgentRequest")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let opening = recorded_opening(access, &link.scope).await?;
+    for row in &mut rows {
+        row["opening_request_doc_id"] = opening.clone().map_or(Value::Null, Value::String);
+    }
+    opening_request(&rows, link)
+        .map(|row| serde_json::from_value(row).context("decoding AgentRequest row"))
+        .transpose()
+}
+
+/// The opening request among request rows (`_docID`, `created_at`, the
+/// session scope, both causal edges and the session's recorded
+/// `opening_request_doc_id`), as Lean `DurableLineage.openingRequest` states
+/// it: among rows of `link.scope` whose `caused_by_parent_request_doc_id` is
+/// the link's cause and whose `caused_by_parent_tool_call_doc_id` is non-null,
+/// the recorded opening request, and none while it is not among them; without
+/// a recorded one, the earliest by `(created_at, _docID)`.
+pub fn opening_request(rows: &[Value], link: &SessionLink) -> Option<Value> {
+    let text = |row: &Value, field: &str| row.get(field).and_then(Value::as_str).map(str::to_owned);
+    let candidates: Vec<&Value> = rows
+        .iter()
+        .filter(|row| {
+            text(row, "caused_by_parent_request_doc_id").as_deref()
+                == Some(&link.cause_request_doc_id)
+                && text(row, "caused_by_parent_tool_call_doc_id").is_some()
+                && text(row, "node_did").as_deref() == Some(&link.scope.node_did)
+                && text(row, "session_id").as_deref() == Some(&link.scope.session_id)
+                && text(row, "requester_did") == link.scope.requester_did
+        })
+        .collect();
+    match candidates
+        .iter()
+        .find_map(|row| text(row, "opening_request_doc_id"))
+    {
+        Some(opening) => candidates
+            .into_iter()
+            .find(|row| text(row, "_docID").as_deref() == Some(opening.as_str()))
+            .cloned(),
+        None => candidates
+            .into_iter()
+            .min_by_key(|row| (text(row, "created_at"), text(row, "_docID")))
+            .cloned(),
+    }
 }
 
 /// One public request a physical tool call caused.
@@ -421,6 +501,7 @@ mod tests {
     use super::*;
     use crate::defra_node::EmbeddedNode;
     use gents_protocol::session::SessionProvenance;
+    use serde_json::json;
 
     async fn create(node: &EmbeddedNode, mutation: String, collection: &str) -> String {
         let response = node.execute(&mutation).await;
@@ -744,5 +825,118 @@ mod tests {
             .await
             .is_err());
         node.shutdown().await;
+    }
+
+    fn link() -> SessionLink {
+        SessionLink {
+            scope: SessionScope {
+                node_did: "did:test:node".into(),
+                session_id: "child".into(),
+                requester_did: Some("did:test:node".into()),
+            },
+            cause_request_doc_id: "bae-parent".into(),
+        }
+    }
+
+    fn row(doc_id: &str, created_at: &str, call: Option<&str>) -> Value {
+        json!({
+            "_docID": doc_id,
+            "node_did": "did:test:node",
+            "session_id": "child",
+            "requester_did": "did:test:node",
+            "created_at": created_at,
+            "caused_by_parent_request_doc_id": "bae-parent",
+            "caused_by_parent_tool_call_doc_id": call,
+        })
+    }
+
+    fn doc_id(row: Option<Value>) -> Option<String> {
+        row.map(|row| row["_docID"].as_str().unwrap().to_owned())
+    }
+
+    #[test]
+    fn opening_request_prefers_agent_new_over_a_later_message() {
+        let rows = [
+            row("bae-message", "2026-09-26T00:00:02Z", Some("call-message")),
+            row("bae-new", "2026-09-26T00:00:01Z", Some("call-new")),
+        ];
+        assert_eq!(
+            doc_id(opening_request(&rows, &link())).as_deref(),
+            Some("bae-new")
+        );
+    }
+
+    #[test]
+    fn opening_request_is_the_earliest_of_one_call() {
+        let rows = [
+            row("bae-b", "2026-09-26T00:00:01Z", Some("call-1")),
+            row("bae-c", "2026-09-26T00:00:02Z", Some("call-1")),
+            row("bae-a", "2026-09-26T00:00:01Z", Some("call-1")),
+        ];
+        assert_eq!(
+            doc_id(opening_request(&rows, &link())).as_deref(),
+            Some("bae-a")
+        );
+    }
+
+    #[test]
+    fn opening_request_needs_the_cause_the_call_edge_and_the_session() {
+        let mut other_cause = row("bae-cause", "2026-09-26T00:00:00Z", Some("call-1"));
+        other_cause["caused_by_parent_request_doc_id"] = json!("bae-other");
+        let mut other_session = row("bae-session", "2026-09-26T00:00:00Z", Some("call-1"));
+        other_session["session_id"] = json!("elsewhere");
+        let rows = [
+            other_cause,
+            other_session,
+            row("bae-no-call", "2026-09-26T00:00:00Z", None),
+        ];
+        assert_eq!(opening_request(&rows, &link()), None);
+    }
+
+    fn recording_opening(mut row: Value) -> Value {
+        row["opening_request_doc_id"] = json!("bae-b-new");
+        row
+    }
+
+    #[test]
+    fn opening_request_follows_the_recorded_opening_in_one_second() {
+        let rows = [
+            recording_opening(row(
+                "bae-a-message",
+                "2026-09-26T00:00:01Z",
+                Some("call-message"),
+            )),
+            recording_opening(row("bae-b-new", "2026-09-26T00:00:01Z", Some("call-new"))),
+        ];
+        assert_eq!(
+            doc_id(opening_request(&rows, &link())).as_deref(),
+            Some("bae-b-new")
+        );
+    }
+
+    #[test]
+    fn opening_request_follows_the_recorded_opening_over_an_earlier_clock() {
+        let rows = [
+            recording_opening(row(
+                "bae-a-message",
+                "2026-09-26T00:00:00Z",
+                Some("call-message"),
+            )),
+            recording_opening(row("bae-b-new", "2026-09-26T00:00:01Z", Some("call-new"))),
+        ];
+        assert_eq!(
+            doc_id(opening_request(&rows, &link())).as_deref(),
+            Some("bae-b-new")
+        );
+    }
+
+    #[test]
+    fn opening_request_is_none_while_the_recorded_opening_is_not_visible() {
+        let rows = [recording_opening(row(
+            "bae-a-message",
+            "2026-09-26T00:00:00Z",
+            Some("call-message"),
+        ))];
+        assert_eq!(opening_request(&rows, &link()), None);
     }
 }

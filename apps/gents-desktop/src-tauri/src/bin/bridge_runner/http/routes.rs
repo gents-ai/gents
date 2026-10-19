@@ -924,6 +924,7 @@ async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolC
                 deadline_at
                 await_mode
                 stuck_since
+                job_pin
             }
         }
     "#;
@@ -988,6 +989,7 @@ async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolC
                 .get("stuck_since")
                 .and_then(|value| value.as_str())
                 .map(str::to_string),
+            job: row.get("job_pin").is_some_and(|pin| !pin.is_null()),
         })
         .collect())
 }

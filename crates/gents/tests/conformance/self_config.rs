@@ -113,6 +113,7 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
         if (case.guarded || grant_guarded) && case.admissible && case.validates {
             let held = OperatorGrants {
                 pack_install: case.held_grants.pack_install,
+                ..Default::default()
             };
             let typed = || typed_merge(target, case, &patch);
             let grants = match target {

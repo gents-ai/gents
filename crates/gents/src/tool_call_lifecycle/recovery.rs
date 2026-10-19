@@ -71,6 +71,8 @@ struct RunningToolCallRow {
     await_mode: Option<String>,
     #[serde(default)]
     cancel_cause: Option<String>,
+    #[serde(default)]
+    job_pin: Option<gents_protocol::job::JobPin>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -899,6 +901,7 @@ async fn load_running_tool_call_rows_with_filter(
             deadline_at
             await_mode
             cancel_cause
+            job_pin
         }}
     }}"#
     );
@@ -1308,8 +1311,8 @@ fn await_mode(row: &RunningToolCallRow) -> AwaitMode {
 }
 
 fn is_background_tool_row(row: &RunningToolCallRow) -> bool {
-    await_mode(row) == AwaitMode::Background
-        && super::ToolRowKind::of(&row.tool_name) == super::ToolRowKind::Native
+    super::ToolRowKind::of_row(&row.tool_name, row.job_pin.is_some())
+        .in_orphan_sweep_scope(await_mode(row))
 }
 
 impl RecoveryOutcome {

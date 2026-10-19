@@ -264,5 +264,7 @@ export function createDesktopApiAdapter(
       invokeDesktop("desktop_interrupt_request", {
         request,
       }),
+    jobControl: (request) =>
+      invokeDesktop("desktop_job_control", { request }),
   };
 }

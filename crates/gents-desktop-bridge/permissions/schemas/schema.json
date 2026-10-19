@@ -703,6 +703,18 @@
           "markdownDescription": "Denies the desktop_interrupt_request command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_job_control command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-job-control",
+          "markdownDescription": "Enables the desktop_job_control command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_job_control command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-job-control",
+          "markdownDescription": "Denies the desktop_job_control command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_list_backends_with_health command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-list-backends-with-health",
@@ -1097,6 +1109,30 @@
           "type": "string",
           "const": "deny-desktop-pack-whoami",
           "markdownDescription": "Denies the desktop_pack_whoami command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_pack_wire command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-pack-wire",
+          "markdownDescription": "Enables the desktop_pack_wire command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_pack_wire command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-pack-wire",
+          "markdownDescription": "Denies the desktop_pack_wire command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_pack_wire_sources command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-pack-wire-sources",
+          "markdownDescription": "Enables the desktop_pack_wire_sources command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_pack_wire_sources command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-pack-wire-sources",
+          "markdownDescription": "Denies the desktop_pack_wire_sources command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_peer_enroll_status command without any pre-configured scope.",
@@ -1735,16 +1771,16 @@
           "markdownDescription": "Open a web link in the person's own browser\n#### This permission set includes:\n\n- `allow-desktop-open-external-url`"
         },
         {
-          "description": "Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model\n#### This permission set includes:\n\n- `allow-desktop-pack-installed`\n- `allow-desktop-pack-search`\n- `allow-desktop-pack-info`\n- `allow-desktop-pack-whoami`\n- `allow-desktop-pack-plugin-slots`",
+          "description": "Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model or be wired\n#### This permission set includes:\n\n- `allow-desktop-pack-installed`\n- `allow-desktop-pack-search`\n- `allow-desktop-pack-info`\n- `allow-desktop-pack-whoami`\n- `allow-desktop-pack-plugin-slots`\n- `allow-desktop-pack-wire-sources`",
           "type": "string",
           "const": "packs-read",
-          "markdownDescription": "Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model\n#### This permission set includes:\n\n- `allow-desktop-pack-installed`\n- `allow-desktop-pack-search`\n- `allow-desktop-pack-info`\n- `allow-desktop-pack-whoami`\n- `allow-desktop-pack-plugin-slots`"
+          "markdownDescription": "Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model or be wired\n#### This permission set includes:\n\n- `allow-desktop-pack-installed`\n- `allow-desktop-pack-search`\n- `allow-desktop-pack-info`\n- `allow-desktop-pack-whoami`\n- `allow-desktop-pack-plugin-slots`\n- `allow-desktop-pack-wire-sources`"
         },
         {
-          "description": "Install, update and remove packs, bind a plugin to an inference profile, and sign in to the registry\n#### This permission set includes:\n\n- `allow-desktop-pack-install`\n- `allow-desktop-pack-update`\n- `allow-desktop-pack-remove`\n- `allow-desktop-pack-login`\n- `allow-desktop-pack-logout`\n- `allow-desktop-pack-plugin-bind`",
+          "description": "Install, update and remove packs, wire a plugin to an agent, bind a plugin to an inference profile, and sign in to the registry\n#### This permission set includes:\n\n- `allow-desktop-pack-install`\n- `allow-desktop-pack-update`\n- `allow-desktop-pack-remove`\n- `allow-desktop-pack-login`\n- `allow-desktop-pack-logout`\n- `allow-desktop-pack-plugin-bind`\n- `allow-desktop-pack-wire`",
           "type": "string",
           "const": "packs-admin",
-          "markdownDescription": "Install, update and remove packs, bind a plugin to an inference profile, and sign in to the registry\n#### This permission set includes:\n\n- `allow-desktop-pack-install`\n- `allow-desktop-pack-update`\n- `allow-desktop-pack-remove`\n- `allow-desktop-pack-login`\n- `allow-desktop-pack-logout`\n- `allow-desktop-pack-plugin-bind`"
+          "markdownDescription": "Install, update and remove packs, wire a plugin to an agent, bind a plugin to an inference profile, and sign in to the registry\n#### This permission set includes:\n\n- `allow-desktop-pack-install`\n- `allow-desktop-pack-update`\n- `allow-desktop-pack-remove`\n- `allow-desktop-pack-login`\n- `allow-desktop-pack-logout`\n- `allow-desktop-pack-plugin-bind`\n- `allow-desktop-pack-wire`"
         },
         {
           "description": "The folders plugins may read or write, and the plugin questions waiting for an answer\n#### This permission set includes:\n\n- `allow-desktop-allowed-dirs-list`\n- `allow-desktop-plugin-approvals-pending`",
@@ -1771,10 +1807,10 @@
           "markdownDescription": "Operations snapshot, health, session provenance, MCP probe\n#### This permission set includes:\n\n- `allow-desktop-operations-snapshot`\n- `allow-desktop-session-provenance`\n- `allow-desktop-list-backends-with-health`\n- `allow-desktop-list-mcp-services-with-health`\n- `allow-desktop-probe-mcp-service`"
         },
         {
-          "description": "Interrupt request execution\n#### This permission set includes:\n\n- `allow-desktop-interrupt-request`",
+          "description": "Interrupt request execution\n#### This permission set includes:\n\n- `allow-desktop-interrupt-request`\n- `allow-desktop-job-control`",
           "type": "string",
           "const": "interrupt-control",
-          "markdownDescription": "Interrupt request execution\n#### This permission set includes:\n\n- `allow-desktop-interrupt-request`"
+          "markdownDescription": "Interrupt request execution\n#### This permission set includes:\n\n- `allow-desktop-interrupt-request`\n- `allow-desktop-job-control`"
         },
         {
           "description": "Local runtime provisioning and managed server lifecycle\n#### This permission set includes:\n\n- `allow-desktop-init-local-standard`\n- `allow-desktop-managed-server-status`\n- `allow-desktop-managed-server-start`\n- `allow-desktop-managed-server-stop`\n- `allow-desktop-managed-server-set-auto-start`\n- `allow-desktop-managed-server-restart`\n- `allow-desktop-managed-server-reset`\n- `allow-desktop-managed-server-validate-root`\n- `allow-desktop-managed-server-open-login-items`\n- `allow-desktop-open-db-explorer`",

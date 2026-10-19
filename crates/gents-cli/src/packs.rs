@@ -6,7 +6,7 @@ use serde_json::Value;
 use crate::cli::args::{PluginBindArgs, PluginCommand, PluginUnbindArgs};
 use crate::cli::{
     PackAccountArgs, PackDriftArgs, PackInfoArgs, PackInstallArgs, PackLoginArgs, PackOutdatedArgs,
-    PackRemoveArgs, PackSearchArgs, PackUpdateArgs, ScopeArgs,
+    PackRemoveArgs, PackSearchArgs, PackUpdateArgs, PackWireArgs, ScopeArgs,
 };
 use crate::commands::pack as command;
 use crate::output_format::OutputFormat;
@@ -79,7 +79,31 @@ pub async fn install(
         registry,
         drift: drift(edited),
         grant_authority,
+        wire: Vec::new(),
+        expect_digest: None,
         explicit: true,
+    }))
+    .await
+}
+
+/// Wires the installed `plugin` into `agent`'s Tools and Context (or with
+/// `remove`, takes it back out), or with `preview` reports what that would
+/// write.
+pub async fn wire(
+    home: PathBuf,
+    plugin: String,
+    agent: String,
+    targets_from: Vec<String>,
+    remove: bool,
+    preview: bool,
+) -> Result<Value> {
+    capture_report(command::wire::wire(PackWireArgs {
+        plugin,
+        agent,
+        targets_from,
+        remove,
+        preview,
+        scope: scope(home),
     }))
     .await
 }
@@ -102,6 +126,35 @@ pub async fn plugin_slots(home: PathBuf) -> Result<Value> {
     let (access, owner) = command::resolve_scope_owner(&scope(home)).await?;
     let profiles = gents::pack::inference_profile_options(&access, &owner).await?;
     Ok(serde_json::json!({"plugins": plugins, "profiles": profiles}))
+}
+
+/// What a person can wire: every installed plugin with its pack and whether
+/// it declares jobs, and the installed packs that ship AgentTargets.
+pub async fn wire_sources(home: PathBuf) -> Result<Value> {
+    let plugins = gents::plugin::store::list_records(&home)?
+        .into_iter()
+        .map(|record| {
+            serde_json::json!({
+                "plugin": format!("{}/{}", record.namespace, record.name),
+                "pack": record.owner_pack_coordinate,
+                "job": record.declaration.job.0,
+            })
+        })
+        .collect::<Vec<_>>();
+    let (access, owner) = command::resolve_scope_owner(&scope(home.clone())).await?;
+    let mut target_packs = Vec::new();
+    for pack in gents::pack::installed_packs(Some(&home), Some((&access, &owner))).await? {
+        let targets = gents::pack::installed_pack_documents(&access, &owner, &pack.coordinate)
+            .await?
+            .into_iter()
+            .filter(|(collection, _)| *collection == gents::collection::Collection::AgentTarget)
+            .map(|(_, id)| id)
+            .collect::<Vec<_>>();
+        if !targets.is_empty() {
+            target_packs.push(serde_json::json!({"pack": pack.coordinate, "targets": targets}));
+        }
+    }
+    Ok(serde_json::json!({"plugins": plugins, "target_packs": target_packs}))
 }
 
 pub async fn bind_plugin_slot(

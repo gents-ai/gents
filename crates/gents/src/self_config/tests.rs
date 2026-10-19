@@ -954,6 +954,37 @@ async fn pack_install_puts_a_sealed_plugin_in_the_home_and_refuses_one_that_asks
 }
 
 #[tokio::test]
+async fn pack_install_refuses_a_pack_shipped_job_block() {
+    let (_guard, dir) = crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
+    let config_path = dir.join("pack_config.json");
+    let mut pack_config: Value =
+        serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+    pack_config["tools"][0]["integrations"] =
+        json!({"plugins": [{"plugin": "acme/runner", "job": {"agent_targets": ["wf-run"]}}]});
+    pack_config["agent_targets"] = json!([{"target_id": "wf-run", "target_node_did": "did:key:foreign", "agent_id": "fixture-worker", "name": "wf-run"}]);
+    std::fs::write(&config_path, serde_json::to_vec(&pack_config).unwrap()).unwrap();
+    let (_home, plugins) = crate::test_support::home_with_pack_dir(&dir);
+    let (_node, _did, tools) = pack_tool("pack-job-block", plugins).await;
+    let error = format!(
+        "{:#}",
+        config_call(
+            &tools,
+            &[
+                "pack",
+                "preview",
+                "install",
+                "fixture/documents_fixture",
+                "--inference-slot",
+                "worker=setup:inference",
+            ],
+        )
+        .await
+        .unwrap_err()
+    );
+    assert!(error.contains("operator install"), "{error}");
+}
+
+#[tokio::test]
 async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
     let node = build_agent_node().await;
     let identity = node_identity("graph-tools");
@@ -1561,6 +1592,8 @@ async fn run_graph_prepares_host_input_under_the_effective_root() {
             owner_pack_coordinate: None,
             owner_pack_digest: None,
             model_binding: None,
+            data_unique_keys: Default::default(),
+            data_collection_fields: Default::default(),
         },
     )
     .expect("record the plugin");
@@ -7313,6 +7346,154 @@ async fn public_prompt_edits_require_an_existing_unshared_context_without_partia
     assert_eq!(after["data"]["AgentContext"], expected_contexts);
 }
 
+fn job_tools(plugin: &str, job: Option<Value>) -> serde_json::Map<String, Value> {
+    let mut entry = json!({"plugin": plugin});
+    if let Some(job) = job {
+        entry["job"] = job;
+    }
+    json!({"integrations": {"plugins": [entry]}})
+        .as_object()
+        .unwrap()
+        .clone()
+}
+
+fn job_block(overrides: Value) -> Value {
+    let mut block = json!({
+        "agent_targets": ["a", "b"],
+        "max_live": 8,
+        "max_spawns": 100,
+        "max_messages_per_slot": 4,
+        "result_bytes": 65536,
+        "max_wall_secs": 7200,
+        "policy": {"dynamic": "check", "dynamic_targets": ["a"], "trusted_packs": [], "project_roots": []}
+    });
+    for (key, value) in overrides.as_object().unwrap() {
+        block[key] = value.clone();
+    }
+    block
+}
+
+fn job_guard(stored: Option<Value>, candidate: Option<Value>) -> Result<(), String> {
+    let stored = job_tools("ns/runner", stored);
+    let candidate = job_tools("ns/runner", candidate);
+    ops::guard_tools_keep_grants(&ops::OperatorGrants::default(), Some(&stored), &candidate)
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[test]
+fn self_config_may_narrow_job_fields() {
+    let narrowed = job_block(json!({
+        "agent_targets": ["a"],
+        "max_live": 4,
+        "max_spawns": 10,
+        "max_messages_per_slot": 0,
+        "result_bytes": 1024,
+        "max_wall_secs": 60,
+    }));
+    job_guard(Some(job_block(json!({}))), Some(narrowed)).expect("narrowing every field");
+    job_guard(Some(job_block(json!({}))), Some(job_block(json!({}))))
+        .expect("an unchanged block is not a widening");
+}
+
+#[test]
+fn self_config_may_not_widen_a_job_number() {
+    for (field, value) in [
+        ("max_live", 9),
+        ("max_spawns", 101),
+        ("max_messages_per_slot", 5),
+        ("result_bytes", 65537),
+        ("max_wall_secs", 7201),
+    ] {
+        let refused = job_guard(
+            Some(job_block(json!({}))),
+            Some(job_block(json!({field: value}))),
+        )
+        .expect_err(field);
+        assert!(refused.contains(&format!("job.{field}")), "{refused}");
+        assert!(refused.contains("only the operator"), "{refused}");
+    }
+}
+
+#[test]
+fn self_config_may_not_add_a_job_target() {
+    let refused = job_guard(
+        Some(job_block(json!({}))),
+        Some(job_block(json!({"agent_targets": ["a", "c"]}))),
+    )
+    .expect_err("a target outside the stored ceiling");
+    assert!(refused.contains("job.agent_targets"), "{refused}");
+    assert!(refused.contains("only the operator"), "{refused}");
+}
+
+#[test]
+fn self_config_may_not_edit_job_policy() {
+    let stored = job_block(json!({}));
+    for policy in [
+        json!({"dynamic": "off", "dynamic_targets": ["a"], "trusted_packs": [], "project_roots": []}),
+        json!({"dynamic": "check", "dynamic_targets": [], "trusted_packs": [], "project_roots": []}),
+        json!({"dynamic": "check", "dynamic_targets": ["a"], "trusted_packs": ["x/y"], "project_roots": []}),
+        json!({"dynamic": "check", "dynamic_targets": ["a"], "trusted_packs": [], "project_roots": ["/tmp"]}),
+    ] {
+        let refused = job_guard(
+            Some(stored.clone()),
+            Some(job_block(json!({"policy": policy}))),
+        )
+        .expect_err("policy is operator-only");
+        assert!(refused.contains("job.policy"), "{refused}");
+        assert!(refused.contains("only the operator"), "{refused}");
+    }
+}
+
+#[test]
+fn self_config_may_not_add_a_job_block() {
+    let refused =
+        job_guard(None, Some(job_block(json!({})))).expect_err("absent is the empty ceiling");
+    assert!(refused.contains("ns/runner"), "{refused}");
+    assert!(refused.contains("only the operator"), "{refused}");
+    let other = job_tools("ns/other", Some(job_block(json!({}))));
+    let stored = job_tools("ns/runner", Some(job_block(json!({}))));
+    ops::guard_tools_keep_grants(&ops::OperatorGrants::default(), Some(&stored), &other)
+        .expect_err("a block for another plugin is an added block");
+    ops::guard_tools_keep_grants(&ops::OperatorGrants::default(), None, &stored)
+        .expect_err("no stored Tools carries no job block");
+    ops::guard_tools_keep_grants(
+        &ops::OperatorGrants {
+            pack_install: true,
+            ..Default::default()
+        },
+        None,
+        &stored,
+    )
+    .expect_err("holding pack installation does not hold a job grant");
+}
+
+#[test]
+fn self_config_may_remove_a_job_block() {
+    job_guard(Some(job_block(json!({}))), None).expect("removing the block narrows it");
+    let stored = job_tools("ns/runner", Some(job_block(json!({}))));
+    ops::guard_tools_keep_grants(
+        &ops::OperatorGrants::default(),
+        Some(&stored),
+        &serde_json::Map::new(),
+    )
+    .expect("dropping integrations narrows every block");
+}
+
+#[test]
+fn reselection_keeps_job_grants() {
+    let held = ops::OperatorGrants::default();
+    let stored = job_tools("ns/runner", Some(job_block(json!({}))));
+    let narrower = job_tools("ns/runner", Some(job_block(json!({"max_live": 1}))));
+    let wider = job_tools("ns/runner", Some(job_block(json!({"max_live": 9}))));
+    ops::reselection_keeps_grants(&held, Some(&stored), Some(&narrower)).expect("narrower");
+    ops::reselection_keeps_grants(&held, Some(&stored), Some(&wider)).expect_err("wider");
+    ops::reselection_keeps_grants(&held, None, Some(&stored))
+        .expect_err("a reselection from no Tools acquires no job block");
+    ops::reselection_keeps_grants(&held, Some(&stored), None).expect("selecting no Tools");
+    let plain = job_tools("ns/runner", None);
+    ops::reselection_keeps_grants(&held, None, Some(&plain)).expect("no block, no grant");
+}
+
 async fn grant_pack_install_for_test(
     node: &Arc<defra_node::EmbeddedNode>,
     owner: &str,
@@ -7374,7 +7555,10 @@ async fn model_clone_is_atomically_grant_bounded_but_operator_clone_is_not() {
         .unwrap_err();
     assert!(format!("{error:#}").contains("cannot be self-granted"));
     assert_eq!(crate::list_agents(&node, &owner).await.unwrap(), before);
-    let holder = core.with_held_grants(ops::OperatorGrants { pack_install: true });
+    let holder = core.with_held_grants(ops::OperatorGrants {
+        pack_install: true,
+        ..Default::default()
+    });
     let accepted: Value = serde_json::from_str(
         &agent_management::model_agent_mutate(&holder, identity.as_ref(), &args)
             .await
@@ -7423,7 +7607,10 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
         };
         assert!(format!("{:#}", result.unwrap_err()).contains("cannot be self-granted"));
     }
-    let holder = core.with_held_grants(ops::OperatorGrants { pack_install: true });
+    let holder = core.with_held_grants(ops::OperatorGrants {
+        pack_install: true,
+        ..Default::default()
+    });
     holder
         .apply(protect_working_agent(agent_request(
             &holder,
@@ -7896,6 +8083,8 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
             owner_pack_coordinate: None,
             owner_pack_digest: None,
             model_binding: None,
+            data_unique_keys: Default::default(),
+            data_collection_fields: Default::default(),
         },
     )
     .unwrap();

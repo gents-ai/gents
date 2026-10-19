@@ -33,3 +33,4 @@ __pycache__/
 
 # Fixture plugin artifacts: every test builds its own
 crates/gents/tests/fixtures/packs/*/plugins/*.afb
+!crates/gents/tests/fixtures/packs/job_plugin_fixture/plugins/job_fixture.afb

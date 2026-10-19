@@ -25,6 +25,8 @@ async fn install(home: &Path, package: String) -> anyhow::Result<Value> {
         registry: None,
         drift: PackDriftArgs::default(),
         grant_authority: false,
+        wire: Vec::new(),
+        expect_digest: None,
         explicit: true,
     }))
     .await
@@ -424,5 +426,111 @@ async fn a_plugins_pack_releases_its_plugins_and_unreferenced_bytes() {
     assert!(
         gents::plugin::store::read_bytes(home.path(), &digest_hex).is_err(),
         "nothing references the bytes any more"
+    );
+}
+
+fn documents_pack_dir() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("manifest.json"),
+        serde_json::to_vec(&json!({
+            "manifest_version": 1, "name": "demo_pack", "version": "1.0.0",
+            "description": "A minimal document pack", "authors": ["tests"], "tags": [],
+            "kind": "documents", "assets": ["README.md", "pack_config.json"],
+            "dependencies": [], "config": "pack_config.json",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("README.md"), "# demo_pack").unwrap();
+    std::fs::write(
+        dir.path().join("pack_config.json"),
+        serde_json::to_vec(&json!({
+            "node": { "node_did": "${GENTS_PACK_NODE_DID}" },
+            "tools": [{ "tools_id": "demo-tools", "display_name": "No tools" }],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    dir
+}
+
+async fn initialized_home() -> tempfile::TempDir {
+    use clap::Parser;
+    let home = tempfile::tempdir().unwrap();
+    let cli = crate::cli::Cli::try_parse_from([
+        "gents",
+        "init",
+        "--store-key-custody",
+        "file",
+        "--node-name",
+        "installer",
+        "--home",
+        home.path().to_str().unwrap(),
+    ])
+    .unwrap();
+    let crate::cli::Command::Init(init_args) = cli.command else {
+        panic!("expected init")
+    };
+    crate::commands::init::init(init_args).await.unwrap();
+    home
+}
+
+async fn demo_tools_rows(home: &Path) -> usize {
+    let (access, _) = crate::resolve_config_access(Some(home), None)
+        .await
+        .unwrap();
+    let response = access
+        .execute(r#"{ Tools(filter: {tools_id: {_eq: "demo-tools"}}) { _docID } }"#)
+        .await
+        .unwrap();
+    response["data"]["Tools"].as_array().unwrap().len()
+}
+
+#[tokio::test]
+async fn documents_pack_with_a_home_record_is_removed_from_the_node_and_forgotten() {
+    let home = initialized_home().await;
+    let pack = documents_pack_dir();
+    install(home.path(), pack.path().to_str().unwrap().to_owned())
+        .await
+        .unwrap();
+    let record = gents::pack::read_home_install(home.path(), "gents/demo_pack")
+        .unwrap()
+        .expect("a documents install records itself in the home");
+    assert_eq!(record.kind, gents::pack::PackKind::Documents);
+    assert_eq!(demo_tools_rows(home.path()).await, 1);
+
+    remove_pkg(home.path(), "gents/demo_pack").await.unwrap();
+
+    assert_eq!(
+        demo_tools_rows(home.path()).await,
+        0,
+        "the pack's documents leave the node"
+    );
+    assert!(
+        gents::pack::read_home_install(home.path(), "gents/demo_pack")
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn assets_pack_still_takes_the_early_path() {
+    let home = tempfile::tempdir().unwrap();
+    install(home.path(), assets_fixture_spec()).await.unwrap();
+    let record = gents::pack::read_home_install(home.path(), "fixture/assets_fixture")
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.kind, gents::pack::PackKind::Assets);
+
+    remove_pkg(home.path(), "fixture/assets_fixture")
+        .await
+        .unwrap();
+
+    assert!(!home.path().join("data").exists(), "no node was opened");
+    assert!(
+        gents::pack::read_home_install(home.path(), "fixture/assets_fixture")
+            .unwrap()
+            .is_none()
     );
 }

@@ -3,11 +3,22 @@ use gents_protocol::plugin::{PluginExecutionReceipt, PluginExecutionVerdict};
 use super::ToolCallState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ReceiptDecision {
+pub enum ReceiptDecision {
     Commit,
     Adopt,
     Replay,
     Conflict,
+}
+
+impl ReceiptDecision {
+    pub fn spelling(self) -> &'static str {
+        match self {
+            Self::Commit => "commit",
+            Self::Adopt => "adopt",
+            Self::Replay => "replay",
+            Self::Conflict => "conflict",
+        }
+    }
 }
 
 pub(super) fn published(
@@ -28,7 +39,7 @@ pub(super) fn published(
     receipt
 }
 
-pub(super) fn decide<T: PartialEq + ?Sized>(
+pub(crate) fn decide<T: PartialEq + ?Sized>(
     terminal: bool,
     existing: Option<&T>,
     receipt: &T,

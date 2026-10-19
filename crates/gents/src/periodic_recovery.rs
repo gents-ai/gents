@@ -18,6 +18,7 @@ const BACKGROUND_COMPLETION_SIDE_EFFECT_SWEEP_IDS: &[&str] =
     &["tool_call_lifecycle_reconcile_background_completion_side_effects"];
 const INFERENCE_CALL_SWEEP_IDS: &[&str] = &["inference_call_recover_all_stale_calls"];
 const SESSION_MESSAGE_SWEEP_IDS: &[&str] = &["tool_call_lifecycle_recover_session_message_rows"];
+const PLUGIN_JOB_SWEEP_IDS: &[&str] = &["tool_call_lifecycle_recover_plugin_job_rows"];
 const TASK_HOOK_SWEEP_IDS: &[&str] = &["task_hook_recover_interrupted_cleanup"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,6 +105,12 @@ const PERIODIC_RECOVERY_SWEEP_METADATA: &[PeriodicRecoverySweepMetadata] = &[
     PeriodicRecoverySweepMetadata {
         sweep_ids: TASK_HOOK_SWEEP_IDS,
         rust_function: "task_hooks::recover_task_hook_records",
+    },
+    // Run by the completion observer, which holds the runtime's job driver;
+    // it has no executor in this registry.
+    PeriodicRecoverySweepMetadata {
+        sweep_ids: PLUGIN_JOB_SWEEP_IDS,
+        rust_function: "plugin_job::recovery::redrive_running_jobs",
     },
 ];
 
@@ -255,4 +262,26 @@ fn recover_task_hook_records<'a>(
         .await
         .map(PeriodicRecoverySweepOutcome::TaskHookRecords)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn position(sweep_id: &str) -> usize {
+        PERIODIC_RECOVERY_SWEEP_METADATA
+            .iter()
+            .position(|metadata| metadata.sweep_ids.contains(&sweep_id))
+            .unwrap_or_else(|| panic!("{sweep_id} is not registered"))
+    }
+
+    #[test]
+    fn plugin_job_sweep_is_registered_after_the_session_message_sweep() {
+        let plugin_job = position("tool_call_lifecycle_recover_plugin_job_rows");
+        assert!(plugin_job > position("tool_call_lifecycle_recover_session_message_rows"));
+        assert_eq!(
+            PERIODIC_RECOVERY_SWEEP_METADATA[plugin_job].rust_function,
+            "plugin_job::recovery::redrive_running_jobs"
+        );
+    }
 }

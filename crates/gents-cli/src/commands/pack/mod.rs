@@ -9,12 +9,13 @@ mod inspect;
 mod local;
 pub(crate) mod registry;
 mod remove;
-pub(crate) use remove::remove;
+pub(crate) use remove::{remove, remove_home_install};
 mod scaffold;
 mod scenario;
 mod server;
 mod test;
 pub(crate) mod update;
+pub(crate) mod wire;
 use crate::cli::*;
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
@@ -64,6 +65,7 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
         PackCommand::Check(args) => check::check(args).await,
         PackCommand::Graph(args) => check::graph(args),
         PackCommand::Install(args) => install(args).await,
+        PackCommand::Wire(args) => wire::wire(args).await,
         PackCommand::Remove(args) => remove::remove(args).await,
         PackCommand::Outdated(args) => update::outdated(args).await,
         PackCommand::Update(args) => update::update(args).await,
@@ -531,6 +533,7 @@ async fn install_documents_pack(
             .iter()
             .map(PackSource::archive)
             .collect::<Vec<_>>(),
+        gents::pack::InstalledVia::Operator,
         &|name| std::env::var(name).ok(),
     )
     .await?;
@@ -550,6 +553,37 @@ async fn install_documents_pack(
             "dependencies": pack.manifest().metadata.dependencies,
             "would_write": false,
         }));
+    }
+    // A dependency installed on its own behalf (`explicit` false) writes no
+    // home record, and a remote node has no local home to record in.
+    let record_home = explicit && args.scope.graphql.is_none();
+    // Every pack that ships an asset class is materialized before any
+    // write; the leases are held until the home record is written.
+    let mut cache_leases = Vec::new();
+    let mut materialized_assets = String::new();
+    let mut dependency_assets = Vec::new();
+    if record_home {
+        for dependency in &dependencies {
+            if let Some((assets, lease)) =
+                gents::pack::home_install::materialize_asset_pack(&home, dependency.archive())?
+            {
+                dependency_assets.push((
+                    format!(
+                        "{}/{}",
+                        dependency.manifest().metadata.namespace,
+                        dependency.manifest().name
+                    ),
+                    assets,
+                ));
+                cache_leases.push(lease);
+            }
+        }
+        if let Some((assets, lease)) =
+            gents::pack::home_install::materialize_asset_pack(&home, pack.archive())?
+        {
+            materialized_assets = assets;
+            cache_leases.push(lease);
+        }
     }
     let dependency_coordinates: Vec<String> = dependencies
         .iter()
@@ -578,6 +612,8 @@ async fn install_documents_pack(
             registry: args.registry.clone(),
             drift: args.drift,
             grant_authority: args.grant_authority,
+            wire: Vec::new(),
+            expect_digest: None,
             explicit: false,
         };
         match dependency.manifest().metadata.kind {
@@ -658,6 +694,25 @@ async fn install_documents_pack(
     )
     .await
     .context("document pack write failed after local plugins were published; the plugins remain installed")?;
+    if record_home {
+        gents::pack::record_after_install(
+            &home,
+            gents::pack::HomePackInstall {
+                coordinate: identity.coordinate.clone(),
+                version: identity.version.clone(),
+                digest: identity.digest.clone(),
+                kind: PackKind::Documents,
+                assets: materialized_assets,
+                dependency_assets,
+                plugins: identity.plugins.clone(),
+                installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                installed_via: Some(gents::pack::InstalledVia::Operator),
+            },
+            gents::pack::InstalledVia::Operator,
+            explicit,
+        )
+        .context("the pack documents were written, but the home install record was not")?;
+    }
     Ok(json!({
         "pack": pack.manifest().name,
         "source": pack.label(),
@@ -672,10 +727,72 @@ async fn install_documents_pack(
     }))
 }
 
+/// Refuses, before any write, a pack whose content digest is not the one the
+/// operator reviewed with `gents pack show`.
+fn check_expected_digest(expected: Option<&str>, actual: &str) -> Result<()> {
+    match expected {
+        Some(expected) if expected != actual => anyhow::bail!(
+            "the pack's digest is {actual}, not the expected {expected}. Nothing was installed. \
+             Next: gents pack show ./dir"
+        ),
+        _ => Ok(()),
+    }
+}
+
+/// `--wire` acts on plugins this install places, so a pack that cannot ship
+/// one refuses it before any write.
+fn check_wire_target(manifest: &PackManifest, wire: &[String]) -> Result<()> {
+    if wire.is_empty() {
+        return Ok(());
+    }
+    anyhow::ensure!(
+        matches!(
+            manifest.metadata.kind,
+            PackKind::Documents | PackKind::Plugins
+        ),
+        "--wire applies only to documents and plugins packs; {} is not one",
+        manifest.name
+    );
+    anyhow::ensure!(
+        !manifest.metadata.plugins.is_empty(),
+        "--wire needs a pack that ships a plugin; {} ships none",
+        manifest.name
+    );
+    Ok(())
+}
+
+/// Wires each plugin `pack` shipped into each of `agents`, agent by agent,
+/// through the same writer as `gents pack wire`.
+async fn wire_pack_plugins(
+    access: &gents::config_client::ConfigAccess,
+    owner: &str,
+    home: &std::path::Path,
+    pack: &PackSource,
+    agents: &[String],
+) -> Result<Vec<serde_json::Value>> {
+    let namespace = &pack.manifest().metadata.namespace;
+    let mut wired = Vec::new();
+    for agent in agents {
+        for plugin in &pack.manifest().metadata.plugins {
+            let request = wire::WireRequest {
+                plugin: format!("{namespace}/{}", plugin.name),
+                agent: agent.clone(),
+                targets_from: Vec::new(),
+                remove: false,
+                preview: false,
+            };
+            wired.push(wire::wire_in(access, owner, home, &request).await?);
+        }
+    }
+    Ok(wired)
+}
+
 pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
     let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
     let pack = resolve_pack_source(&args.package, args.registry.as_deref(), &home).await?;
     tracing::info!(package = %args.package, source = %pack.describe(), "resolved pack");
+    check_expected_digest(args.expect_digest.as_deref(), pack.digest())?;
+    check_wire_target(pack.manifest(), &args.wire)?;
     let supported_outputs: &[crate::cli::output_format::OutputFormat] =
         if pack.manifest().metadata.kind == PackKind::Graph {
             &[
@@ -722,8 +839,13 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                 Some(&access),
             )
             .await?;
-            let output =
+            let mut output =
                 install_documents_pack(&access, &owner, &pack, &args, args.explicit).await?;
+            if !args.wire.is_empty() && !args.preview {
+                output["wired"] = wire_pack_plugins(&access, &owner, &home, &pack, &args.wire)
+                    .await?
+                    .into();
+            }
             crate::print_json(&output)
         }
         PackKind::Assets | PackKind::Plugins => {
@@ -750,6 +872,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
             let home = args
                 .scope
                 .home
+                .clone()
                 .context("asset and plugins packs require --home")?;
             let (record, installed_plugins) = gents::pack::plugin_lifecycle::install(
                 &home,
@@ -767,14 +890,21 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
             )
             .await?;
             let root = home.join(&record.assets);
-            crate::print_json(&json!({
+            let mut output = json!({
                 "pack": pack.manifest().name,
                 "digest": pack.digest(),
                 "installed_assets": root,
                 "installed_plugins": installed_plugins,
                 "record": record,
                 "source": pack.label(),
-            }))
+            });
+            if !args.wire.is_empty() {
+                let (access, owner) = resolve_scope_owner(&args.scope).await?;
+                output["wired"] = wire_pack_plugins(&access, &owner, &home, &pack, &args.wire)
+                    .await?
+                    .into();
+            }
+            crate::print_json(&output)
         }
     }
 }
@@ -928,6 +1058,166 @@ mod tests {
         .unwrap()
     }
 
+    fn documents_pack_dir(version: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("manifest.json"),
+            serde_json::to_vec(&json!({
+                "manifest_version": 1, "name": "demo_pack", "version": version,
+                "description": "A minimal document pack", "authors": ["tests"], "tags": [],
+                "kind": "documents", "assets": ["README.md", "pack_config.json"],
+                "dependencies": [], "config": "pack_config.json",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("README.md"), "# demo_pack").unwrap();
+        std::fs::write(
+            dir.path().join("pack_config.json"),
+            serde_json::to_vec(&json!({
+                "node": { "node_did": "${GENTS_PACK_NODE_DID}" },
+                "tools": [{ "tools_id": "demo-tools", "display_name": "No tools" }],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        dir
+    }
+
+    async fn initialized_home() -> tempfile::TempDir {
+        use clap::Parser;
+        let home = tempfile::tempdir().unwrap();
+        let cli = crate::cli::Cli::try_parse_from([
+            "gents",
+            "init",
+            "--store-key-custody",
+            "file",
+            "--node-name",
+            "installer",
+            "--home",
+            home.path().to_str().unwrap(),
+        ])
+        .unwrap();
+        let crate::cli::Command::Init(init_args) = cli.command else {
+            panic!("expected init")
+        };
+        crate::commands::init::init(init_args).await.unwrap();
+        home
+    }
+
+    async fn install_from(
+        home: &std::path::Path,
+        spec: &std::path::Path,
+        inference_slots: Vec<String>,
+    ) -> Result<serde_json::Value> {
+        crate::request_helpers::capture_report(install(PackInstallArgs {
+            package: spec.to_str().unwrap().to_owned(),
+            bindings: None,
+            inference_slots,
+            preview: false,
+            scope: ScopeArgs {
+                home: Some(home.to_path_buf()),
+                graphql: None,
+                node_did: None,
+            },
+            output: crate::cli::output_format::OutputFormat::Json,
+            force_rebind_concrete_did: false,
+            registry: None,
+            drift: PackDriftArgs::default(),
+            grant_authority: false,
+            wire: Vec::new(),
+            expect_digest: None,
+            explicit: true,
+        }))
+        .await
+    }
+
+    #[tokio::test]
+    async fn documents_install_writes_an_operator_home_record() {
+        let home = initialized_home().await;
+        let pack = documents_pack_dir("1.0.0");
+        install_from(home.path(), pack.path(), Vec::new())
+            .await
+            .unwrap();
+
+        let record = gents::pack::read_home_install(home.path(), "gents/demo_pack")
+            .unwrap()
+            .expect("a documents install records itself in the home");
+        assert_eq!(record.kind, PackKind::Documents);
+        assert_eq!(
+            record.installed_via,
+            Some(gents::pack::InstalledVia::Operator)
+        );
+    }
+
+    #[tokio::test]
+    async fn documents_install_rolls_back_its_record_on_failure() {
+        let home = initialized_home().await;
+        let first = documents_pack_dir("1.0.0");
+        install_from(home.path(), first.path(), Vec::new())
+            .await
+            .unwrap();
+        let before = gents::pack::read_home_install(home.path(), "gents/demo_pack")
+            .unwrap()
+            .unwrap();
+        {
+            let (access, _) = crate::resolve_config_access(Some(home.path()), None)
+                .await
+                .unwrap();
+            access
+                .write(
+                    "test.edit_pack_document",
+                    r#"mutation { update_Tools(filter: {tools_id: {_eq: "demo-tools"}}, input: {display_name: "edited"}) { _docID } }"#,
+                )
+                .await
+                .unwrap();
+        }
+
+        let second = documents_pack_dir("1.1.0");
+        let error = install_from(home.path(), second.path(), Vec::new())
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("were edited"), "{error:#}");
+
+        assert_eq!(
+            gents::pack::read_home_install(home.path(), "gents/demo_pack").unwrap(),
+            Some(before)
+        );
+    }
+
+    #[tokio::test]
+    async fn dependency_install_keeps_an_existing_operator_record() {
+        let home = tempfile::tempdir().unwrap();
+        let fixture = test_support::fixture_dir("assets_fixture");
+        let installed = install_from(home.path(), &fixture, Vec::new())
+            .await
+            .unwrap();
+        let record: gents::pack::HomePackInstall =
+            serde_json::from_value(installed["record"].clone()).unwrap();
+        let via =
+            gents::pack::home_install::recorded_provenance(record.kind, Some(record.installed_via));
+        assert_eq!(via, gents::pack::InstalledVia::Operator);
+    }
+
+    #[tokio::test]
+    async fn graph_install_writes_no_home_record() {
+        let home = initialized_home().await;
+        let owner = crate::resolve_node_did(Some(home.path()), None).unwrap();
+        let slots = ["coordinator", "worker", "verifier"]
+            .map(|slot| format!("{slot}={owner}:default-profile"))
+            .to_vec();
+        install_from(
+            home.path(),
+            &test_support::fixture_dir("review_graph"),
+            slots,
+        )
+        .await
+        .unwrap();
+
+        let record = gents::pack::read_home_install(home.path(), "fixture/review_graph");
+        assert!(record.unwrap().is_none());
+    }
+
     #[test]
     fn local_publication_failure_restores_exactly_the_previous_records() {
         let home = tempfile::tempdir().unwrap();
@@ -1006,5 +1296,42 @@ mod tests {
         );
         assert!(error.is_err());
         assert!(super::super::plugin::store::read_record(home.path(), "acme", "brandnew").is_err());
+    }
+
+    #[test]
+    fn expect_digest_match_passes() {
+        check_expected_digest(Some("sha256:abc"), "sha256:abc").unwrap();
+        check_expected_digest(None, "sha256:abc").unwrap();
+    }
+
+    #[test]
+    fn expect_digest_mismatch_names_both_digests_and_pack_show() {
+        let error = format!(
+            "{:#}",
+            check_expected_digest(Some("sha256:expected"), "sha256:actual").unwrap_err()
+        );
+        for needle in ["sha256:expected", "sha256:actual", "gents pack show"] {
+            assert!(error.contains(needle), "{needle} missing from {error}");
+        }
+    }
+
+    #[test]
+    fn wire_refuses_a_graph_or_pluginless_pack() {
+        let wire = vec!["agent".to_owned()];
+        let plugins = plugin_manifest("acme", "echo_pack", "echo", "1.0.0");
+        check_wire_target(&plugins, &wire).unwrap();
+        check_wire_target(&plugins, &[]).unwrap();
+
+        let mut graph = plugins.clone();
+        graph.metadata.kind = PackKind::Graph;
+        assert!(check_wire_target(&graph, &wire).is_err());
+
+        let mut pluginless = plugins;
+        pluginless.metadata.plugins.clear();
+        let error = check_wire_target(&pluginless, &wire).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("--wire needs a pack that ships a plugin"),
+            "{error:#}"
+        );
     }
 }

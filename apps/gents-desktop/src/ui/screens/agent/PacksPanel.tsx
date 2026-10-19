@@ -8,10 +8,14 @@ import type {
   PackEditedChoice,
   PackPluginSlot,
   PackSlotProfile,
+  PackWireSources,
 } from "@source-inc/gents-desktop-client";
 import { useApp } from "@/app/AppContext";
+import { defaultAgentOf } from "@/lib/agents";
+import type { NodeView } from "../../../hooks/fleetStore";
 import { ChoiceRow } from "./editors";
 import { Group, Row } from "./rows";
+import { WORKFLOW_ENGINE, WirePackDialog, type WirePackDialogProps } from "./WirePackDialog";
 import { errorText } from "../../../lib/errorText";
 
 /** An install or update that would replace documents someone edited stops and
@@ -20,7 +24,9 @@ function editedChoice(error: unknown): boolean {
   return errorText(error).includes("--overwrite");
 }
 
-export function PacksPanel() {
+const NO_SOURCES: PackWireSources = { plugins: [], target_packs: [] };
+
+export function PacksPanel({ deployment }: { deployment: NodeView }) {
   const { actions } = useApp();
   const [installed, setInstalled] = useState<InstalledPack[] | null>(null);
   const [account, setAccount] = useState<string | null>(null);
@@ -32,6 +38,11 @@ export function PacksPanel() {
   const [busy, setBusy] = useState<string | null>(null);
   const [slots, setSlots] = useState<PackPluginSlot[]>([]);
   const [profiles, setProfiles] = useState<PackSlotProfile[]>([]);
+  const [sources, setSources] = useState<PackWireSources>(NO_SOURCES);
+  const [wiring, setWiring] = useState<Omit<
+    WirePackDialogProps,
+    "agents" | "agent" | "onClose"
+  > | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -47,6 +58,12 @@ export function PacksPanel() {
       setProfiles(report.profiles.filter((profile) => profile.usable));
     } catch (error) {
       setSlots([]);
+      toast.error(errorText(error));
+    }
+    try {
+      setSources(await actions.listPackWireSources());
+    } catch (error) {
+      setSources(NO_SOURCES);
       toast.error(errorText(error));
     }
     try {
@@ -170,8 +187,57 @@ export function PacksPanel() {
     await refresh();
   }
 
+  /* the buttons that open the dialog for an installed pack */
+  function enableFor(pack: string) {
+    const plugins = sources.plugins.filter((p) => p.pack === pack);
+    if (plugins.length > 0) {
+      return plugins.map(({ plugin }) => (
+        <Button
+          key={plugin}
+          size="sm"
+          variant="outline"
+          disabled={busy !== null}
+          onClick={() => setWiring({ plugin, targetsFrom: [] })}
+        >
+          Enable for agent
+        </Button>
+      ));
+    }
+    if (!sources.target_packs.some((p) => p.pack === pack)) return null;
+    const engineMissing = !sources.plugins.some(
+      (p) => p.plugin === WORKFLOW_ENGINE.plugin,
+    );
+    return (
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={busy !== null}
+        onClick={() =>
+          setWiring({
+            plugin: WORKFLOW_ENGINE.plugin,
+            targetsFrom: [pack],
+            installFirst: engineMissing ? WORKFLOW_ENGINE.pack : undefined,
+          })
+        }
+      >
+        Enable for agent
+      </Button>
+    );
+  }
+
   return (
     <div>
+      {wiring && (
+        <WirePackDialog
+          {...wiring}
+          agents={deployment.agents}
+          agent={defaultAgentOf(deployment)?.agentId}
+          onClose={(wired) => {
+            setWiring(null);
+            if (wired) void refresh();
+          }}
+        />
+      )}
       <Group title="Installed">
         {installed === null && <Row label="Loading" />}
         {installed?.length === 0 && <Row label="No packs installed" />}
@@ -186,6 +252,7 @@ export function PacksPanel() {
             }
           >
             <div className="flex gap-2">
+              {enableFor(pack.pack)}
               {pack.outdated && (
                 <Button
                   size="sm"

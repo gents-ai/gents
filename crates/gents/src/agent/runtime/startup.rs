@@ -474,6 +474,17 @@ async fn run_agent_owned(
         .map_err(|_| anyhow::anyhow!("enrollment authority is unavailable"))? =
         Some(enrollment_handle.clone());
     let lsp_pool = tool_runtime.lsp_pool.clone();
+    let job_driver =
+        crate::plugin_job::driver::JobDriver::new(crate::plugin_job::driver::JobRuntime {
+            node: agent.node.clone(),
+            plugins: agent.plugins().clone(),
+            home: agent
+                .plugins()
+                .home()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_default(),
+            tool_root: agent.operator_tool_root().map(PathBuf::from),
+        });
     let runtime = RuntimeContext {
         node: agent.node.clone(),
         tool_runtime,
@@ -485,6 +496,7 @@ async fn run_agent_owned(
         startup_readiness: agent.startup_readiness.clone(),
         runtime_status: runtime_status.clone(),
         operator_tool_root: agent.operator_tool_root().map(PathBuf::from),
+        job_driver,
         enrollment_authority: enrollment_handle.clone(),
     };
     let runtime_for_runner = runtime.clone();
@@ -754,6 +766,7 @@ async fn run_agent_owned(
     let completion_node = agent.node.clone();
     let completion_node_did = agent.node_did().to_string();
     let completion_background_executions = agent.background_execution_registry.clone();
+    let completion_job_driver = runtime.job_driver.clone();
     let completion_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::BackgroundCompletion(
@@ -761,6 +774,7 @@ async fn run_agent_owned(
                 completion_node,
                 completion_node_did,
                 completion_background_executions,
+                completion_job_driver,
                 completion_cancel,
             )
             .await,

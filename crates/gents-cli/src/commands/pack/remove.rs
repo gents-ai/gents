@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
-use gents::pack::{InstalledPackPlugin, RemoveReport};
+use gents::pack::{InstalledPackPlugin, PackKind, RemoveReport};
 use serde_json::{json, Value};
 
 use crate::cli::PackRemoveArgs;
@@ -13,14 +13,20 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
     let coordinate = format!("{namespace}/{name}");
     let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
 
+    // A documents pack's record has no assets or node-free removal: it goes
+    // through `remove_pack` below and the record is forgotten after.
+    let mut documents_record = false;
     if args.scope.graphql.is_none() {
-        if gents::pack::read_home_install(&home, &coordinate)?.is_some() {
-            anyhow::ensure!(
-                args.scope.node_did.is_none(),
-                "asset and plugins packs are removed locally with --home; identity flags do not apply"
-            );
-            let removed = remove_home_install(&home, &coordinate).await?;
-            return crate::print_json(&json!({ "pack": coordinate, "removed": removed }));
+        if let Some(record) = gents::pack::read_home_install(&home, &coordinate)? {
+            if matches!(record.kind, PackKind::Assets | PackKind::Plugins) {
+                anyhow::ensure!(
+                    args.scope.node_did.is_none(),
+                    "asset and plugins packs are removed locally with --home; identity flags do not apply"
+                );
+                let removed = remove_home_install(&home, &coordinate).await?;
+                return crate::print_json(&json!({ "pack": coordinate, "removed": removed }));
+            }
+            documents_record = true;
         }
         anyhow::ensure!(
             gents::home::init_config_path(&home).is_file(),
@@ -32,6 +38,10 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
     let (access, owner) = super::resolve_scope_owner(&args.scope).await?;
     let report =
         gents::pack::remove_pack(&access, &owner, &coordinate, args.drift.policy()).await?;
+    if documents_record {
+        // Before the archive scan below, which counts every file record.
+        gents::pack::forget_home_install(&home, &coordinate)?;
+    }
 
     let mut plugin_digests = BTreeSet::new();
     let pack_plugin_records = release_plugin_records(
@@ -108,21 +118,8 @@ fn release_plugin_records(
     plugins: &[InstalledPackPlugin],
     candidates: &mut BTreeSet<String>,
 ) -> Result<Vec<InstalledPackPlugin>> {
-    let (namespace, _) = super::split_namespace(coordinate);
-    let mut released = Vec::new();
-    for plugin in plugins {
-        candidates.insert(plugin.digest.clone());
-        if gents::plugin::store::remove_record_if_owned(
-            home,
-            namespace,
-            &plugin.name,
-            coordinate,
-            &plugin.digest,
-        )? {
-            released.push(plugin.clone());
-        }
-    }
-    Ok(released)
+    candidates.extend(plugins.iter().map(|plugin| plugin.digest.clone()));
+    gents::pack::plugin_lifecycle::release_plugin_records(home, coordinate, plugins)
 }
 
 fn plugin_release_result(home: &Path, candidates: &BTreeSet<String>) -> Result<Vec<String>> {
@@ -155,7 +152,7 @@ async fn release_archives(
     Ok(released)
 }
 
-async fn remove_home_install(home: &Path, coordinate: &str) -> Result<Value> {
+pub(crate) async fn remove_home_install(home: &Path, coordinate: &str) -> Result<Value> {
     let mut retained = Vec::new();
     let mut assets_removed = Vec::new();
     let removal = gents::pack::plugin_lifecycle::remove_local(

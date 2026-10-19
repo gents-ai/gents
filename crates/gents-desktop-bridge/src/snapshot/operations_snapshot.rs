@@ -15,6 +15,7 @@ pub struct ToolCallRow {
     pub deadline_at: Option<String>,
     pub await_mode: Option<String>,
     pub stuck_since: Option<String>,
+    pub job: bool,
 }
 
 const CORRELATION_WINDOW_MS: i64 = 1_000;
@@ -60,6 +61,7 @@ pub fn project_backgrounded_tools(
                 tool_call_id: r.tool_call_id.clone(),
                 tool_name: r.tool_name.clone(),
                 starts_session: gents::toolset::is_session_message_tool(&r.tool_name),
+                job: r.job,
                 lifecycle_state: r.lifecycle_state.clone(),
                 status: r.status.clone(),
                 started_at: r.started_at.clone(),

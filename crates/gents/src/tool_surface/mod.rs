@@ -196,6 +196,12 @@ impl ToolSurface {
         self.remote_tools.as_ref()
     }
 
+    pub(crate) fn job_tools(
+        &self,
+    ) -> std::collections::HashMap<String, crate::plugin_job::JobBinding> {
+        crate::plugin_job::JobBinding::bind_all(&self.plugin_resolutions)
+    }
+
     pub fn allowed_mcp_service_ids(&self) -> &[String] {
         &self.allowed_mcp_service_ids
     }
@@ -499,7 +505,8 @@ impl ToolSurface {
                 self.host_tools
                     .read_root()
                     .map(std::path::Path::to_path_buf),
-            )?;
+            )?
+            .with_data_node(runtime.node.clone());
             if !registered_names.insert(tool.name()) {
                 anyhow::bail!(
                     "plugin tool `{}` has the same name as another tool; rename one of them",

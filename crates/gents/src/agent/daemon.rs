@@ -174,6 +174,8 @@ pub(super) struct AgentDaemon<M: ProviderModel> {
     background_tool_registry: crate::hook::BackgroundToolRegistry,
     background_execution_registry: crate::hook::BackgroundExecutionRegistry,
     remote_tools: Option<crate::document_config::RemoteTools>,
+    job_tools: std::collections::HashMap<String, crate::plugin_job::JobBinding>,
+    job_driver: Option<Arc<crate::plugin_job::driver::JobDriver>>,
     output_obligations: Arc<Vec<(String, crate::document_config::WriteToolOutputObligation)>>,
     startup_barrier: Arc<StartupBarrier>,
     runtime_status: crate::runtime_status::RuntimeStatusHandle,
@@ -272,6 +274,8 @@ impl<M: ProviderModel> AgentDaemon<M> {
             background_tool_registry,
             background_execution_registry,
             remote_tools: None,
+            job_tools: Default::default(),
+            job_driver: None,
             output_obligations: Arc::new(Vec::new()),
             startup_barrier,
             runtime_status,
@@ -349,6 +353,22 @@ impl<M: ProviderModel> AgentDaemon<M> {
         tools: Option<crate::document_config::RemoteTools>,
     ) -> Self {
         self.remote_tools = tools;
+        self
+    }
+
+    pub(super) fn with_job_tools(
+        mut self,
+        job_tools: std::collections::HashMap<String, crate::plugin_job::JobBinding>,
+    ) -> Self {
+        self.job_tools = job_tools;
+        self
+    }
+
+    pub(super) fn with_job_driver(
+        mut self,
+        driver: Arc<crate::plugin_job::driver::JobDriver>,
+    ) -> Self {
+        self.job_driver = Some(driver);
         self
     }
 
