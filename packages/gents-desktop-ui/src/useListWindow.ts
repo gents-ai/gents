@@ -36,7 +36,7 @@ export function useListWindow<T>(
     getScrollElement: () => scroller,
     estimateSize: (i) => sizeOf(rows[i]!),
     getItemKey,
-    enabled,
+    enabled: active,
     anchorTo: enabled ? options.anchorTo : undefined,
     initialRect: { width: 0, height: 800 },
     overscan: 8,
@@ -51,6 +51,11 @@ export function useListWindow<T>(
       return [...indexes].sort((a, b) => a - b);
     },
   });
+  // Keep row measurements across the threshold; non-windowed scroll correction
+  // belongs to the transcript's prepend owner.
+  virtual.shouldAdjustScrollPositionOnItemSizeChange = enabled
+    ? undefined
+    : () => false;
   useLayoutEffect(() => {
     const list = ref.current;
     if (!active || !scroller || !list) return;
@@ -133,7 +138,7 @@ export function useListWindow<T>(
     items,
     attributes(index: number, start: number): ComponentProps<"li"> {
       return {
-        ref: enabled ? virtual.measureElement : undefined,
+        ref: active ? virtual.measureElement : undefined,
         "data-index": index,
         "aria-posinset": index + 1,
         "aria-setsize": rows.length,
