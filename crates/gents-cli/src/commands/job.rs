@@ -27,7 +27,8 @@ use crate::home_state::resolve_node_did;
 use crate::request_helpers::print_ndjson;
 use crate::{print_json, resolve_config_access};
 
-const ACTIVE_STATES: [JobState; 3] = [JobState::Running, JobState::Paused, JobState::AwaitingUser];
+pub(crate) const ACTIVE_STATES: [JobState; 3] =
+    [JobState::Running, JobState::Paused, JobState::AwaitingUser];
 const ALL_STATES: [JobState; 7] = [
     JobState::Running,
     JobState::Paused,
@@ -287,7 +288,7 @@ async fn job_control(args: JobControlArgs, kind: JobControlKind) -> Result<()> {
 }
 
 /// The operator acts as the job's own scope; the owner refuses a GraphQL access.
-fn operator_scope(view: &JobView) -> ProcessControlScope {
+pub(crate) fn operator_scope(view: &JobView) -> ProcessControlScope {
     ProcessControlScope {
         request_id: String::new(),
         session_id: view.scope.session_id.clone(),
@@ -307,7 +308,7 @@ async fn control_job(
 
 /// Answer first. A job that is not ours or not a job is an error carrying the
 /// same lines; any other reader error prints as its `Display`.
-fn control_lines(
+pub(crate) fn control_lines(
     kind: JobControlKind,
     view: &JobView,
     result: Result<JobControlOutcome, JobReadError>,
@@ -549,7 +550,7 @@ pub fn next_calls(
 }
 
 /// Guest-sourced text as one printable line, through the shared output filter.
-fn clean(text: &str) -> String {
+pub(crate) fn clean(text: &str) -> String {
     sanitize_summary_text(text, usize::MAX).unwrap_or_default()
 }
 
@@ -699,7 +700,7 @@ fn row_cells(view: &JobView, now_ms: u64) -> [String; 9] {
     ]
 }
 
-fn state_name(state: JobState) -> &'static str {
+pub(crate) fn state_name(state: JobState) -> &'static str {
     match state {
         JobState::Running => "running",
         JobState::Paused => "paused",

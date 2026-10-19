@@ -893,10 +893,11 @@ impl AcpService {
                     .as_ref()
                     .is_none_or(|meta| meta.as_object().is_some_and(|meta| meta.is_empty()))
             {
-                if let Some(command) = super::goals::GoalCommand::parse(&block.text)
+                let goal = super::goals::GoalCommand::parse(&block.text)
                     .map_err(|error| invalid_params(error.to_string()))?
-                    .filter(|command| !matches!(command, super::goals::GoalCommand::Create { .. }))
-                {
+                    .filter(|command| !matches!(command, super::goals::GoalCommand::Create { .. }));
+                let workflow = super::workflow_command::WorkflowCommand::parse(&block.text);
+                if goal.is_some() || workflow.is_some() {
                     super::sessions::load(
                         &self.config.node,
                         &self.config.node_did,
@@ -904,9 +905,27 @@ impl AcpService {
                         &parsed.session_id,
                     )
                     .await?;
-                    let reply = command
-                        .execute(&self.config.node, &self.config.node_did, &parsed.session_id)
-                        .await?;
+                    let reply = match (goal, workflow) {
+                        (Some(command), _) => {
+                            command
+                                .execute(
+                                    &self.config.node,
+                                    &self.config.node_did,
+                                    &parsed.session_id,
+                                )
+                                .await?
+                        }
+                        (None, Some(command)) => {
+                            command
+                                .execute(
+                                    &self.config.node,
+                                    &self.config.node_did,
+                                    &parsed.session_id,
+                                )
+                                .await?
+                        }
+                        (None, None) => unreachable!("a host command matched above"),
+                    };
                     for (kind, text) in [
                         ("user_message_chunk", block.text.as_str()),
                         ("agent_message_chunk", reply.as_str()),
@@ -1273,7 +1292,7 @@ mod tests {
     use crate::commands::grok_shim::projection::tools::PAGER_WAIT_FOR_EXIT_MESSAGE;
     use crate::commands::grok_shim::test_fixtures::seed_canonical_assistant_message;
     use crate::commands::grok_shim::test_fixtures::{
-        configure_runtime_agent,
+        configure_runtime_agent, seed_background_receipt, seed_canonical_tool_call,
         streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse},
     };
     use crate::commands::grok_shim::turn::PromptBlock;
@@ -1311,11 +1330,20 @@ mod tests {
     }
 
     async fn test_service() -> (tempfile::TempDir, AcpService) {
-        let (staging, config) = config().await;
+        service_over(false).await
+    }
+
+    /// `signing_node`: the node DID is the registered test signing identity,
+    /// for owners that author documents as the node (job control's kill).
+    async fn service_over(signing_node: bool) -> (tempfile::TempDir, AcpService) {
+        let (staging, mut config) = config().await;
         let identity = gents::KeyIdentity::load_or_create(staging.path().join("actor.key"), None)
             .expect("test signing identity");
         let actor = ::identity::Did::new(gents::NodeIdentity::did(&identity).to_owned())
             .expect("fixture creator DID");
+        if signing_node {
+            config.node_did = Arc::from(gents::NodeIdentity::did(&identity));
+        }
         gents::schema::ensure_runtime_schemas(config.node.as_ref())
             .await
             .expect("runtime schemas");
@@ -1414,6 +1442,383 @@ mod tests {
             .get("error")
             .is_some());
         service.turns.handle_disconnect().await.unwrap();
+    }
+
+    async fn seed_job_row(
+        node: &Arc<EmbeddedNode>,
+        node_did: &str,
+        session: &str,
+        call: &str,
+        handle: &str,
+        lifecycle: &str,
+        state: gents_protocol::job::JobState,
+    ) -> gents_protocol::job::JobView {
+        use gents_protocol::job::{JobBudget, JobCeiling, JobOrigin, JobPin, JobProgress};
+        let mut pin = JobPin {
+            script_id: "fixture-script".into(),
+            source_digest: "sha256:source".into(),
+            origin: JobOrigin::Installed,
+            engine_digest: "sha256:engine".into(),
+            plugin_ref: "fixture/workflow".into(),
+            agent_budget: 4,
+            handle: handle.into(),
+            cwd: "/fixture/cwd".into(),
+            adopted_at: 1_780_000_000_000,
+            args_digest: "sha256:args".into(),
+            chain_root_doc_id: String::new(),
+            resume_of: None,
+            replayed_from: None,
+            ceiling_at_pin: JobCeiling {
+                targets: vec!["general".into()],
+                max_live: 2,
+                max_spawns: 8,
+                max_messages_per_slot: 4,
+                result_bytes: 65_536,
+                max_wall_secs: 600,
+            },
+        };
+        let progress = JobProgress {
+            title: format!("Job {call}"),
+            state,
+            pause_reason: None,
+            phases: Vec::new(),
+            active: Vec::new(),
+            spawned: 2,
+            budget: JobBudget {
+                total: 4,
+                spent: 2,
+                remaining: 2,
+            },
+            last_event: "seeded".into(),
+            last_event_at: None,
+            question: None,
+            observed_terminal_children: 0,
+            revision: 1,
+        };
+        let ended = if lifecycle == "running" {
+            ""
+        } else {
+            r#"completed_at: "2026-06-01T10:05:00Z","#
+        };
+        let created = node
+            .execute(&format!(
+                r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "request-{call}", session_id: "{session}", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "test", content: "test", lifecycle_state: "pending", created_at: "2026-06-01T10:00:00Z"}}) {{ _docID }} }}"#
+            ))
+            .await;
+        ensure_no_errors(&created, "seed job request").unwrap();
+        let request: gents_protocol::row::AgentRequestRow = serde_json::from_value(json!({
+            "_docID": gents_protocol::graphql::extract_mutation_doc_id(
+                &json!({"data": created.data}),
+                "AgentRequest",
+            )
+            .unwrap(),
+            "request_id": format!("request-{call}"), "session_id": session,
+            "node_did": node_did, "requester_did": node_did,
+        }))
+        .unwrap();
+        let doc_id = seed_canonical_tool_call(
+            node, &request, call, "workflow", lifecycle, "{}", None, None, None, None,
+        )
+        .await;
+        pin.chain_root_doc_id = doc_id.clone();
+        let mutation = format!(
+            r#"mutation($job_pin: JSON, $job_progress: JSON) {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, input: {{
+                await_mode: "background", status: "{lifecycle}", deadline_at: "2126-06-01T10:00:00Z", {ended}
+                job_pin: $job_pin, job_progress: $job_progress
+            }}) {{ _docID }} }}"#
+        );
+        let variables = json!({ "job_pin": pin, "job_progress": progress });
+        ConfigAccess::transact_local_write(node, None, "test.grok.workflow.job", |txn| {
+            let (mutation, variables) = (&mutation, &variables);
+            Box::pin(async move { txn.execute_with_variables(mutation, variables).await })
+        })
+        .await
+        .unwrap();
+        if lifecycle == "running" {
+            seed_background_receipt(node, &request, &doc_id, call).await;
+        }
+        gents::plugin_job::view::load_job_view(
+            &ConfigAccess::local(node.clone()),
+            None,
+            gents::plugin_job::view::JobKey::Address {
+                session_id: session.into(),
+                tool_call_id: call.into(),
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn workflow_session(session: &str) -> (tempfile::TempDir, AcpService) {
+        let (dir, service) = service_over(true).await;
+        let new = service
+            .handle_acp_payload(&request_payload(
+                "session/new",
+                json!({"_meta":{"sessionId":session}}),
+            ))
+            .await;
+        assert!(parse_response(new.response.as_deref().unwrap())
+            .get("error")
+            .is_none());
+        (dir, service)
+    }
+
+    async fn host_reply(service: &AcpService, session: &str, text: &str) -> String {
+        let dispatch = service
+            .handle_acp_payload(&request_payload(
+                "session/prompt",
+                json!({"sessionId":session, "prompt":[{"type":"text", "text":text, "meta":{}}]}),
+            ))
+            .await;
+        let response = parse_response(dispatch.response.as_deref().unwrap());
+        assert_eq!(response["result"]["stopReason"], "end_turn", "{response}");
+        dispatch
+            .notifications
+            .iter()
+            .map(|line| parse_response(line))
+            .find(|update| {
+                update["params"]["update"]["sessionUpdate"] == "agent_message_chunk"
+                    && update["params"]["update"]["_meta"]["hostTurn"] == true
+            })
+            .map(|update| {
+                update["params"]["update"]["content"]["text"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .unwrap_or_else(|| panic!("{text} produced no host turn"))
+    }
+
+    async fn no_requests_were_submitted(service: &AcpService) {
+        let requests = service
+            .config
+            .node
+            .execute(r#"{AgentRequest(filter: {request_id: {_nlike: "request-call-%"}}) {_docID}}"#)
+            .await;
+        ensure_no_errors(&requests, "workflow controls do not infer").unwrap();
+        assert!(requests.data.as_ref().unwrap()["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn workflow_runs_overview() {
+        use gents_protocol::job::JobState;
+        let (_dir, service) = workflow_session("wf-runs").await;
+        let node = &service.config.node;
+        let did = &*service.config.node_did;
+        seed_job_row(
+            node,
+            did,
+            "wf-runs",
+            "call-a",
+            "alpha",
+            "running",
+            JobState::Running,
+        )
+        .await;
+        seed_job_row(
+            node,
+            did,
+            "wf-runs",
+            "call-b",
+            "beta",
+            "completed",
+            JobState::Completed,
+        )
+        .await;
+        for text in ["/workflow", "/workflow runs"] {
+            let reply = host_reply(&service, "wf-runs", text).await;
+            assert!(reply.contains("alpha"), "{reply}");
+            assert!(reply.contains("wf-runs:call-a"), "{reply}");
+            assert!(reply.contains("running"), "{reply}");
+            assert!(!reply.contains("beta"), "{reply}");
+        }
+        no_requests_were_submitted(&service).await;
+        service.turns.handle_disconnect().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stop_or_pause_without_a_handle_lists_the_handles() {
+        use gents_protocol::job::JobState;
+        let (_dir, service) = workflow_session("wf-list").await;
+        let node = &service.config.node;
+        let did = &*service.config.node_did;
+        seed_job_row(
+            node,
+            did,
+            "wf-list",
+            "call-a",
+            "alpha",
+            "running",
+            JobState::Running,
+        )
+        .await;
+        for text in ["/workflow stop", "/workflow pause"] {
+            let reply = host_reply(&service, "wf-list", text).await;
+            assert!(reply.contains("alpha"), "{reply}");
+            assert!(reply.contains("wf-list:call-a"), "{reply}");
+        }
+        no_requests_were_submitted(&service).await;
+        service.turns.handle_disconnect().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unknown_handle_replies_c9_code() {
+        use gents_protocol::job::JobState;
+        let (_dir, service) = workflow_session("wf-unknown").await;
+        let node = &service.config.node;
+        let did = &*service.config.node_did;
+        seed_job_row(
+            node,
+            did,
+            "wf-other",
+            "call-x",
+            "elsewhere",
+            "running",
+            JobState::Running,
+        )
+        .await;
+        for text in [
+            "/workflow stop nope",
+            "/workflow pause nope",
+            "/workflow stop elsewhere",
+            "/workflow stop wf-other:call-x",
+        ] {
+            let reply = host_reply(&service, "wf-unknown", text).await;
+            assert!(
+                reply.contains("workflow_control_unknown_run"),
+                "{text}: {reply}"
+            );
+            assert!(reply.contains("/workflow runs"), "{text}: {reply}");
+        }
+        no_requests_were_submitted(&service).await;
+        service.turns.handle_disconnect().await.unwrap();
+    }
+
+    async fn job_state(
+        service: &AcpService,
+        session: &str,
+        call: &str,
+    ) -> gents_protocol::job::JobState {
+        gents::plugin_job::view::load_job_view(
+            &ConfigAccess::local(service.config.node.clone()),
+            None,
+            gents::plugin_job::view::JobKey::Address {
+                session_id: session.into(),
+                tool_call_id: call.into(),
+            },
+        )
+        .await
+        .unwrap()
+        .state
+    }
+
+    #[tokio::test]
+    async fn ended_row_replies_not_applicable() {
+        use gents_protocol::job::JobState;
+        let (_dir, service) = workflow_session("wf-ended").await;
+        seed_job_row(
+            &service.config.node,
+            &service.config.node_did,
+            "wf-ended",
+            "call-b",
+            "beta",
+            "completed",
+            JobState::Completed,
+        )
+        .await;
+        for text in ["/workflow stop beta", "/workflow pause beta"] {
+            let reply = host_reply(&service, "wf-ended", text).await;
+            assert!(
+                reply.contains("workflow_control_not_applicable"),
+                "{text}: {reply}"
+            );
+            assert!(
+                reply.contains("gents job show wf-ended:call-b"),
+                "{text}: {reply}"
+            );
+        }
+        assert_eq!(
+            job_state(&service, "wf-ended", "call-b").await,
+            JobState::Completed
+        );
+        service.turns.handle_disconnect().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn workflow_stop_replies_host_turn() {
+        use gents_protocol::job::JobState;
+        let (_dir, service) = workflow_session("wf-stop").await;
+        seed_job_row(
+            &service.config.node,
+            &service.config.node_did,
+            "wf-stop",
+            "call-a",
+            "alpha",
+            "running",
+            JobState::Running,
+        )
+        .await;
+        let reply = host_reply(&service, "wf-stop", "/workflow stop alpha").await;
+        assert!(reply.contains("alpha"), "{reply}");
+        assert!(reply.contains('0'), "{reply}");
+        assert_eq!(
+            job_state(&service, "wf-stop", "call-a").await,
+            JobState::Cancelled
+        );
+        service.turns.handle_disconnect().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn workflow_pause_replies_host_turn() {
+        use gents_protocol::job::JobState;
+        let (_dir, service) = workflow_session("wf-pause").await;
+        seed_job_row(
+            &service.config.node,
+            &service.config.node_did,
+            "wf-pause",
+            "call-a",
+            "alpha",
+            "running",
+            JobState::Running,
+        )
+        .await;
+        let reply = host_reply(&service, "wf-pause", "/workflow pause alpha").await;
+        assert!(reply.contains("alpha"), "{reply}");
+        assert!(reply.contains("/workflow resume alpha"), "{reply}");
+        assert_eq!(
+            job_state(&service, "wf-pause", "call-a").await,
+            JobState::Paused
+        );
+        service.turns.handle_disconnect().await.unwrap();
+    }
+
+    #[test]
+    fn forwarded_verbs_reach_prompt_text() {
+        use super::super::workflow_command::WorkflowCommand;
+        for text in [
+            "/workflow research the topic",
+            "/workflow resume alpha",
+            "/workflow answer alpha yes",
+            "/workflow save alpha",
+        ] {
+            assert_eq!(WorkflowCommand::parse(text), None, "{text}");
+            let request = crate::commands::grok_shim::turn::PromptRequest {
+                session_id: "s".to_owned(),
+                prompt: vec![PromptBlock {
+                    kind: "text".to_owned(),
+                    text: text.to_owned(),
+                    meta: Some(json!({})),
+                }],
+                prompt_id: None,
+                screen_mode: None,
+                send_now: false,
+                id: None,
+            };
+            assert_eq!(super::super::turn::prompt_text(&request), text);
+        }
     }
 
     #[tokio::test]

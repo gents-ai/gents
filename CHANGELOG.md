@@ -6,6 +6,9 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- The Grok pager shows each plugin job as a workflow run with its phases,
+  agents and budget, tags the job's subagent cards with that run, and handles
+  `/workflow stop`, `/workflow pause` and `/workflow runs` in the session.
 - `gents job list|show|watch|stop|pause` read and control plugin jobs.
   `watch --until-terminal` waits for a job by its address
   (`session_id:tool_call_id`) and prints one answer-first line with the next

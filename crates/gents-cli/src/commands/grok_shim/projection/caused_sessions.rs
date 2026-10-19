@@ -1,9 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
+use gents::config_client::ConfigAccess;
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::session_origin::load_session;
 use gents_protocol::row::AgentRequestRow;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -27,6 +29,7 @@ pub(super) struct SubagentSpawnedUpdate {
     pub child_session_id: String,
     pub subagent_type: String,
     pub description: String,
+    pub workflow_run_id: Option<String>,
     pub context_normalized: bool,
 }
 
@@ -129,6 +132,9 @@ impl SubagentUpdate {
                 if let Some(prompt_id) = update.parent_prompt_id.as_deref() {
                     payload["parent_prompt_id"] = json!(prompt_id);
                 }
+                if let Some(run_id) = update.workflow_run_id.as_deref() {
+                    payload["workflow_run_id"] = json!(run_id);
+                }
                 payload
             }
             SubagentUpdate::Progress(update) => json!({
@@ -177,6 +183,8 @@ struct HeadActivity {
 struct Activity {
     heads: HashMap<String, HeadActivity>,
     cause_sequences: HashMap<String, i64>,
+    /// Cause tool-call doc id to the `tool_call_id` of the plugin job it pins.
+    job_runs: HashMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -211,6 +219,10 @@ struct CauseRow {
     doc_id: String,
     #[serde(default)]
     message_sequence: Option<i64>,
+    #[serde(default)]
+    tool_call_id: Option<String>,
+    #[serde(default)]
+    job_pin: Option<Value>,
 }
 
 pub(crate) async fn caused_by_request(
@@ -225,6 +237,7 @@ pub(super) async fn project_caused_sessions(
     parent: &AgentRequestRow,
     parent_prompt_id: Option<&str>,
     context_window_tokens: u64,
+    delivered_runs: &BTreeSet<String>,
 ) -> Result<SubagentProjection> {
     let sessions = caused_by_request(node, parent).await?;
     let activity = load_activity(node, &sessions, parent.doc_id.as_deref()).await?;
@@ -239,13 +252,30 @@ pub(super) async fn project_caused_sessions(
             .copied();
         let head = activity.head(session);
         let id = session.scope.session_id.clone();
+        let job_run = session
+            .first
+            .caused_by_parent_tool_call_doc_id
+            .as_deref()
+            .and_then(|doc_id| activity.job_runs.get(doc_id));
+        let description = match job_run {
+            Some(_) => spawn_title(node, session)
+                .await
+                .unwrap_or_else(|error| {
+                    tracing::warn!(%error, session_id = %id,
+                        "job child title unreadable; using the first prompt");
+                    None
+                })
+                .unwrap_or_else(|| description(session)),
+            None => description(session),
+        };
         updates.push(SubagentUpdate::Spawned(SubagentSpawnedUpdate {
             subagent_id: id.clone(),
             parent_session_id: session.caused_by_scope.session_id.clone(),
             parent_prompt_id: parent_prompt_id.map(ToOwned::to_owned),
             child_session_id: id.clone(),
             subagent_type: session.agent_id.clone(),
-            description: description(session),
+            description,
+            workflow_run_id: job_run.filter(|run| delivered_runs.contains(*run)).cloned(),
             context_normalized: true,
         }));
         chronology.push(sequence);
@@ -272,7 +302,8 @@ pub(super) async fn project_caused_sessions(
                     head.terminalized_at.as_deref(),
                 ),
                 tokens_used: head.tokens_used,
-                will_wake: session.first.caused_by_parent_tool_call_doc_id.is_some(),
+                will_wake: job_run.is_none()
+                    && session.first.caused_by_parent_tool_call_doc_id.is_some(),
             })),
         }
         chronology.push(sequence);
@@ -523,7 +554,7 @@ async fn load_activity(
         .map(|parent| {
             let ids = &cause_ids;
             format!(
-                r#"causes: AgentToolCall(docIDs: [{ids}], filter: {{ request_doc_id: {{_eq: "{}"}} }}) {{ _docID message_sequence }}"#,
+                r#"causes: AgentToolCall(docIDs: [{ids}], filter: {{ request_doc_id: {{_eq: "{}"}} }}) {{ _docID message_sequence tool_call_id job_pin }}"#,
                 escape_graphql_string(parent)
             )
         })
@@ -565,6 +596,9 @@ async fn load_activity(
     }
     if !causes.is_empty() {
         for row in decode_rows::<CauseRow>(&response, "causes")? {
+            if let (Some(_), Some(call)) = (row.job_pin, row.tool_call_id) {
+                activity.job_runs.insert(row.doc_id.clone(), call);
+            }
             if let Some(sequence) = row.message_sequence {
                 activity.cause_sequences.insert(row.doc_id, sequence);
             }
@@ -641,6 +675,20 @@ fn progress_update(
         tools_used,
         error_count: count(failed_tools + request_failure),
     }
+}
+
+/// The title the job gave its child session when it spawned it.
+async fn spawn_title(node: &Arc<EmbeddedNode>, session: &CausedSession) -> Result<Option<String>> {
+    let access = ConfigAccess::local(node.clone());
+    let loaded = load_session(
+        &access,
+        &session.scope.session_id,
+        session.scope.requester_did.as_deref(),
+    )
+    .await?;
+    Ok(loaded
+        .and_then(|loaded| loaded.title)
+        .map(|title| title.text))
 }
 
 fn count(value: usize) -> u32 {
@@ -728,5 +776,300 @@ mod tests {
         started.sort();
         assert_eq!(started, ["child-a", "child-b"]);
         node.shutdown().await;
+    }
+
+    const DID: &str = "did:test:node";
+
+    async fn embedded_node(dir: &tempfile::TempDir) -> Arc<EmbeddedNode> {
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(dir.path().join("node"))
+                .build()
+                .await
+                .unwrap(),
+        );
+        gents::schema::ensure_runtime_schemas(node.as_ref())
+            .await
+            .unwrap();
+        node
+    }
+
+    async fn create(node: &EmbeddedNode, collection: &str, input: &str) -> String {
+        let response = node
+            .execute(&format!(
+                "mutation {{ create_{collection}(input: {{ {input} }}) {{ _docID }} }}"
+            ))
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        gents::graphql::single_mutation_document(&response, &format!("create_{collection}"))
+            .unwrap()
+            .and_then(|document| document["_docID"].as_str().map(str::to_owned))
+            .expect("created doc id")
+    }
+
+    /// A parent request whose `workflow` call (tool-call id `call-run`) started
+    /// the session `child`, titled `Audit the repo`, with a completed request.
+    async fn seed_job_child(node: &EmbeddedNode) -> AgentRequestRow {
+        seed_child(
+            node,
+            r#", job_pin: { script_id: "audit", handle: "audit-1" }"#,
+        )
+        .await
+    }
+
+    /// Like `seed_job_child`, with `pin` as the call row's extra fields: empty
+    /// seeds a plain `agent.new` call.
+    async fn seed_child(node: &EmbeddedNode, pin: &str) -> AgentRequestRow {
+        let parent = create(
+            node,
+            "AgentRequest",
+            &format!(
+                r#"purpose: "normal", request_id: "parent-request", node_did: "{DID}", requester_did: "{DID}", agent_id: "worker", session_id: "parent", content: "run it", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "2026-09-26T00:00:00Z", retry_count: 0, max_retries: 3"#
+            ),
+        )
+        .await;
+        let call = create(
+            node,
+            "AgentToolCall",
+            &format!(
+                r#"tool_call_key: "parent:call-run", request_id: "parent-request", request_doc_id: "{parent}", session_id: "parent", node_did: "{DID}", requester_did: "{DID}", tool_call_id: "call-run", tool_name: "workflow", lifecycle_state: "completed", message_sequence: 3{pin}"#
+            ),
+        )
+        .await;
+        create(
+            node,
+            "AgentRequest",
+            &format!(
+                r#"purpose: "normal", request_id: "child-request", node_did: "{DID}", requester_did: "{DID}", agent_id: "worker", session_id: "child", caused_by_parent_request_id: "parent-request", caused_by_parent_request_doc_id: "{parent}", caused_by_parent_tool_call_id: "call-run", caused_by_parent_tool_call_doc_id: "{call}", content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "2026-09-26T00:00:01Z", retry_count: 0, max_retries: 3"#
+            ),
+        )
+        .await;
+        create(
+            node,
+            "AgentSession",
+            &format!(
+                r#"session_id: "child", node_did: "{DID}", requester_did: "{DID}", agent_id: "worker", created_at: "2026-09-26T00:00:00Z", title: {{ text: "Audit the repo", source: "task" }}, provenance: {{ parent_request_doc_id: "{parent}" }}"#
+            ),
+        )
+        .await;
+        request(json!({
+            "_docID": parent, "request_id": "parent-request", "session_id": "parent",
+            "node_did": DID, "requester_did": DID,
+        }))
+    }
+
+    async fn project(
+        node: &Arc<EmbeddedNode>,
+        parent: &AgentRequestRow,
+        delivered: &[&str],
+    ) -> SubagentProjection {
+        let delivered = delivered.iter().map(|run| (*run).to_owned()).collect();
+        project_caused_sessions(node, parent, None, 100, &delivered)
+            .await
+            .unwrap()
+    }
+
+    fn spawned(projection: &SubagentProjection) -> &SubagentSpawnedUpdate {
+        match &projection.updates[0] {
+            SubagentUpdate::Spawned(update) => update,
+            other => panic!("expected spawned, got {other:?}"),
+        }
+    }
+
+    fn finished(projection: &SubagentProjection) -> &SubagentFinishedUpdate {
+        match &projection.updates[1] {
+            SubagentUpdate::Finished(update) => update,
+            other => panic!("expected finished, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn job_child_card_carries_run_id_after_first_frame() {
+        let dir = tempfile::tempdir().unwrap();
+        let node = embedded_node(&dir).await;
+        let parent = seed_job_child(&node).await;
+        let projection = project(&node, &parent, &["call-run"]).await;
+        assert_eq!(
+            spawned(&projection).workflow_run_id.as_deref(),
+            Some("call-run")
+        );
+        assert_eq!(
+            projection.updates[0].to_payload()["workflow_run_id"],
+            "call-run"
+        );
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn undelivered_or_abandoned_run_omits_run_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let node = embedded_node(&dir).await;
+        let parent = seed_job_child(&node).await;
+        for delivered in [&[][..], &["call-other"][..]] {
+            let projection = project(&node, &parent, delivered).await;
+            let card = spawned(&projection);
+            assert_eq!(card.workflow_run_id, None, "{delivered:?}");
+            assert_eq!(card.subagent_id, "child");
+            assert!(projection.updates[0]
+                .to_payload()
+                .get("workflow_run_id")
+                .is_none());
+        }
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn abandoned_run_omits_run_id() {
+        use crate::commands::grok_shim::projection::{BoundModelContext, ProjectionEngine};
+        let dir = tempfile::tempdir().unwrap();
+        let node = embedded_node(&dir).await;
+        let parent = seed_job_child(&node).await;
+        let engine = ProjectionEngine::new(
+            node.clone(),
+            BoundModelContext::new("model".into(), "Model".into(), 1000),
+        );
+        // A tick that delivered the run, then one that abandoned it: the cursor
+        // reports the run's tool-call id in the first and drops it in the second.
+        engine.record_job_runs("parent", &BTreeSet::from(["call-run".to_owned()]));
+        let delivered: Vec<_> = engine.delivered_job_runs().into_iter().collect();
+        let delivered: Vec<&str> = delivered.iter().map(String::as_str).collect();
+        assert_eq!(
+            spawned(&project(&node, &parent, &delivered).await)
+                .workflow_run_id
+                .as_deref(),
+            Some("call-run")
+        );
+        engine.record_job_runs("parent", &BTreeSet::new());
+        assert!(engine.delivered_job_runs().is_empty());
+        let projection =
+            project_caused_sessions(&node, &parent, None, 100, &engine.delivered_job_runs())
+                .await
+                .unwrap();
+        assert_eq!(spawned(&projection).workflow_run_id, None);
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn job_child_uses_spawn_title_and_will_wake_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let node = embedded_node(&dir).await;
+        let parent = seed_job_child(&node).await;
+        let projection = project(&node, &parent, &["call-run"]).await;
+        assert_eq!(spawned(&projection).description, "Audit the repo");
+        assert!(!finished(&projection).will_wake);
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn agent_new_children_project_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let node = embedded_node(&dir).await;
+        let parent = seed_child(&node, "").await;
+        let projection = project(&node, &parent, &["call-run"]).await;
+        assert_eq!(
+            (
+                spawned(&projection).workflow_run_id.as_deref(),
+                spawned(&projection).description.as_str()
+            ),
+            (None, "work")
+        );
+        assert!(finished(&projection).will_wake);
+        assert_eq!(projection.updates.len(), 2);
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn unreadable_job_child_title_falls_back_to_the_first_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let node = embedded_node(&dir).await;
+        let parent = seed_job_child(&node).await;
+        // The same label on another node makes the requester-scoped read ambiguous.
+        create(
+            &node,
+            "AgentSession",
+            &format!(
+                r#"session_id: "child", node_did: "did:test:other", requester_did: "{DID}", agent_id: "worker", created_at: "2026-09-26T00:00:02Z", title: {{ text: "Duplicate", source: "task" }}, provenance: {{ parent_request_doc_id: "{}" }}"#,
+                parent.doc_id.as_deref().unwrap()
+            ),
+        )
+        .await;
+        let projection = project(&node, &parent, &["call-run"]).await;
+        assert_eq!(spawned(&projection).description, "work");
+        assert_eq!(
+            spawned(&projection).workflow_run_id.as_deref(),
+            Some("call-run")
+        );
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn generated_plugin_job_lineage_cases_drive_grok_cards() {
+        let snapshot: Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        for case in snapshot["plugin_job_lineage_cases"].as_array().unwrap() {
+            let mut case = case.clone();
+            let queries = case["queries"].as_array().unwrap().clone();
+            let mut causes: Vec<&str> = queries
+                .iter()
+                .map(|query| query["cause_request_doc_id"].as_str().unwrap())
+                .collect();
+            causes.dedup();
+            // A cause outside the case's rows is the calling request: it opens
+            // the calling session, ahead of the rows that name it.
+            let rows = case["rows"].as_array_mut().unwrap();
+            for cause in causes.iter().rev() {
+                if !rows.iter().any(|row| row["_docID"] == *cause) {
+                    rows.insert(
+                        0,
+                        json!({
+                            "created_at": 1, "_docID": cause, "session_id": "parent",
+                            "is_public": true, "caused_by_parent_request_doc_id": null,
+                            "caused_by_parent_tool_call_doc_id": null,
+                            "opening_request_doc_id": null,
+                        }),
+                    );
+                }
+            }
+            let dir = tempfile::tempdir().unwrap();
+            let node = embedded_node(&dir).await;
+            let ids = crate::caused_sessions::fixtures::seed_lineage_case(&node, &case, DID).await;
+            for cause in causes {
+                let parent = request(json!({
+                    "_docID": ids[cause], "request_id": cause, "session_id": "parent",
+                    "node_did": DID, "requester_did": DID,
+                }));
+                let mut expected: Vec<(String, Option<String>)> = queries
+                    .iter()
+                    .filter(|query| query["cause_request_doc_id"] == cause)
+                    .filter_map(|query| {
+                        let opening = query["expected_opening_doc_id"].as_str()?;
+                        let session = query["session_id"].as_str().unwrap();
+                        Some((session.to_owned(), Some(ids[opening].clone())))
+                    })
+                    .collect();
+                expected.sort();
+                let mut opened: Vec<_> = caused_by_request(&node, &parent)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|session| (session.scope.session_id, session.first.doc_id))
+                    .collect();
+                opened.sort();
+                assert_eq!(opened, expected, "{}: {cause}", case["name"]);
+                let mut cards: Vec<String> = project(&node, &parent, &[])
+                    .await
+                    .updates
+                    .iter()
+                    .filter_map(|update| match update {
+                        SubagentUpdate::Spawned(card) => Some(card.child_session_id.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                cards.sort();
+                let sessions: Vec<String> =
+                    expected.into_iter().map(|(session, _)| session).collect();
+                assert_eq!(cards, sessions, "{}: {cause}", case["name"]);
+            }
+            node.shutdown().await;
+        }
     }
 }

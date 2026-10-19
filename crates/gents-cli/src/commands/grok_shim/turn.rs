@@ -537,6 +537,7 @@ impl TurnManager {
                 let mut delivery_after = String::new();
                 let mut goal_cursor = super::goals::GoalCursor::default();
                 let mut graph_cursor = super::graph_runs::GraphRunCursor::default();
+                let mut job_cursor = super::job_runs::JobRunCursor::default();
                 let mut goal_refresh_at = tokio::time::Instant::now();
                 loop {
                     if !std::mem::take(&mut first_pass) {
@@ -575,6 +576,19 @@ impl TurnManager {
                         {
                             tracing::warn!(error = %format_args!("{error:#}"),
                             session_id = %observed_session, "Grok graph run observation failed");
+                        }
+                        for error in job_cursor
+                            .refresh(
+                                &manager.node,
+                                &manager.config.node_did,
+                                &observed_session,
+                                &sender,
+                                &projections,
+                            )
+                            .await
+                        {
+                            tracing::warn!(error = %format_args!("{error:#}"),
+                            session_id = %observed_session, "Grok job observation failed");
                         }
                     }
                     if let Err(error) = manager
@@ -2702,6 +2716,17 @@ mod tests {
         )
         .unwrap();
         serde_json::from_value(json!({"_docID":doc,"request_id":request,"node_did":node_did,"requester_did":node_did,"agent_id":agent_id,"session_id":"session-1","runtime_source_kind":"local-control"})).unwrap()
+    }
+
+    #[test]
+    fn job_tick_runs_before_observe_session_tick() {
+        let source = include_str!("turn.rs");
+        let observer = &source[source.find("async fn observe_session_since").unwrap()..];
+        let before_cards = &observer[..observer.find(".observe_session_tick(").unwrap()];
+        assert!(
+            before_cards.matches("job_cursor").count() >= 2,
+            "the job cursor is declared and refreshed ahead of the card tick"
+        );
     }
 
     fn buffer_sender() -> (Arc<Mutex<Vec<String>>>, PromptSender) {

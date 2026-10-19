@@ -7,6 +7,7 @@ pub(crate) mod acp;
 mod binding;
 mod goals;
 mod graph_runs;
+mod job_runs;
 mod observation_cursor;
 pub(crate) mod projection;
 pub(crate) mod protocol;
@@ -18,6 +19,7 @@ mod task_control;
 mod test_fixtures;
 pub(crate) mod turn;
 mod usage;
+mod workflow_command;
 
 #[cfg(test)]
 async fn seed_test_agent_configuration(
