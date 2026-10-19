@@ -59,6 +59,7 @@ impl Fixture {
                     workspace_root: root.clone(),
                     server_name: server.name.clone(),
                     config_digest: config.digest.clone(),
+                    operator_guard_home: None,
                 },
                 &server,
                 &config,

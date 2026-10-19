@@ -44,7 +44,19 @@ async fn background_commands_keep_workspace_consent_after_dispatch() {
         } else {
             &case["expectedRoute"]
         };
-        let allowed = expected == "allow";
+        let supported = crate::toolset::workspace_write_sandbox_enforced();
+        let guard_case = crate::lean_vocab_test::lean_contract_snapshot()
+            .operator_path_cases
+            .iter()
+            .find(|case| {
+                case["kind"] == "commandGuard"
+                    && case["command"]["required"] == true
+                    && case["command"]["supported"] == supported
+                    && case["command"]["inspected"] == true
+                    && case["command"]["singleLinked"] == true
+            })
+            .expect("missing command isolation case");
+        let allowed = expected == "allow" && guard_case["expected"] == true;
         let mut harness = admission_harness(|_, root| {
             BackgroundToolRegistry::from_tools(
                 vec![crate::toolset::write_capable_bash_for_test(root)],
@@ -130,7 +142,7 @@ async fn background_commands_keep_workspace_consent_after_dispatch() {
         };
         let receipt: serde_json::Value = serde_json::from_str(&reason).unwrap();
         let child = receipt["tool_call_id"].as_str().expect("background handle");
-        if revoke {
+        if revoke && supported {
             tokio::time::timeout(std::time::Duration::from_secs(60), entered.notified())
                 .await
                 .expect("background review did not start");
@@ -156,7 +168,7 @@ async fn background_commands_keep_workspace_consent_after_dispatch() {
         }
         assert_eq!(
             reviews.load(Ordering::SeqCst),
-            u64::from(reviewer_available)
+            u64::from(reviewer_available && supported)
         );
         assert!(crate::plugin::approval::pending(harness._dir.path())
             .unwrap()

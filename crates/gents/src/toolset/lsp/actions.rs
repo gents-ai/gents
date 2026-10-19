@@ -63,7 +63,8 @@ pub async fn dispatch(
                 .unwrap_or_else(|| config.session_id.clone());
             let states = pool
                 .inspect_session(&session_id, &config.agent_id, workspace, &config.digest)
-                .await;
+                .await
+                .map_err(|error| ToolError::reported_failure(FailureClass::PolicyDenied, error))?;
             Ok(status_text(states, &config.servers, workspace))
         }
         LspAction::Reload => {
@@ -941,12 +942,12 @@ pub(crate) async fn run_linter_diagnostics(
         ],
         _ => return None,
     };
-    let (program, rest, env, _sandbox) =
+    let command =
         crate::toolset::prepare_managed_command(&workspace, &argv[0], &argv[1..], &constraints)
             .await
             .ok()?;
-    let mut full = vec![program.to_string_lossy().into_owned()];
-    full.extend(rest);
+    let mut full = vec![command.program.to_string_lossy().into_owned()];
+    full.extend(command.args);
     // Best-effort supplementary probe; deliberately does not thread
     // live_output, which would interleave per-file linter noise into the
     // enclosing tool call's live output.
@@ -958,7 +959,7 @@ pub(crate) async fn run_linter_diagnostics(
         cancellation_token: bounds.cancellation_token,
         max_output_bytes: 64 * 1024,
         stdin: Vec::new(),
-        environment: Some(env),
+        environment: Some(command.environment),
         tool_name: Some("lsp".into()),
         live_output: None,
     })

@@ -347,6 +347,13 @@ impl Tool for LspTool {
                     workspace_root: workspace.clone(),
                     server_name: server.name.clone(),
                     config_digest: self.config.digest.clone(),
+                    operator_guard_home: crate::plugin::approval::workspace::command_guard_home()
+                        .map_err(|error| {
+                        ToolError::reported_failure(
+                            FailureClass::PolicyDenied,
+                            format!("{error:#}"),
+                        )
+                    })?,
                 };
                 Some(
                     self.pool
