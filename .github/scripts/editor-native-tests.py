@@ -40,7 +40,7 @@ def artifacts(log, root, target):
             or not any(item['role'] == 'host' and item['name'] == 'runtime' for item in found)
             or len({item['path'] for item in found}) != len(found)):
         raise ValueError('native transport test targets are missing or duplicated')
-    return found
+    return sorted(found, key=lambda item: (item['role'], item['name']))
 
 
 def compile_tests(root, manifest):
@@ -54,7 +54,7 @@ def compile_tests(root, manifest):
 
 
 def command(item):
-    return [item['path'], *(['host::local::windows'] if item['role'] == 'bridge' else []), '--test-threads=2']
+    return [item['path'], *(['host::local::windows'] if item['role'] == 'bridge' else [])]
 
 
 def check_result(item, status, content):
@@ -83,7 +83,10 @@ def run_tests(manifest, role):
                 if os.name == 'nt':
                     subprocess.run(['taskkill', '/T', '/F', '/PID', str(child.pid)], check=False)
                 else:
-                    os.killpg(child.pid, signal.SIGKILL)
+                    try:
+                        os.killpg(child.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
                 child.wait()
                 raise
             finally:
