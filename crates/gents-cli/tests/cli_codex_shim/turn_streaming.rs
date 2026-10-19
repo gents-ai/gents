@@ -118,6 +118,47 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     Uuid::parse_str(&thread_id)
         .with_context(|| format!("Codex TUI requires UUID thread ids, got {thread_id}"))?;
 
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadGoalSet {
+            request_id: request_id(37),
+            params: codex::ThreadGoalSetParams {
+                thread_id: thread_id.clone(),
+                objective: Some("exercise GENTS-backed Codex goal state".to_string()),
+                status: Some(codex::ThreadGoalStatus::Active),
+                token_budget: Some(Some(123)),
+            },
+        },
+    )
+    .await?;
+    let goal_set: codex::ThreadGoalSetResponse = read_typed_response(&mut ws, request_id(37))
+        .await
+        .context("reading thread/goal/set response")?;
+    assert_eq!(goal_set.goal.thread_id, thread_id);
+    assert_eq!(
+        goal_set.goal.objective,
+        "exercise GENTS-backed Codex goal state"
+    );
+    assert_eq!(goal_set.goal.token_budget, Some(123));
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadGoalGet {
+            request_id: request_id(38),
+            params: codex::ThreadGoalGetParams {
+                thread_id: thread_id.clone(),
+            },
+        },
+    )
+    .await?;
+    let goal_get: codex::ThreadGoalGetResponse = read_typed_response(&mut ws, request_id(38))
+        .await
+        .context("reading thread/goal/get response")?;
+    assert_eq!(
+        goal_get.goal.as_ref().map(|goal| &goal.thread_id),
+        Some(&thread_id)
+    );
+
     let prompt = format!("Reply with exactly {}.", Uuid::new_v4().simple());
     send_client_request(
         &mut ws,
@@ -334,47 +375,6 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     let _: codex::ThreadSettingsUpdateResponse = read_typed_response(&mut ws, request_id(36))
         .await
         .context("reading thread/settings/update response")?;
-
-    send_client_request(
-        &mut ws,
-        codex::ClientRequest::ThreadGoalSet {
-            request_id: request_id(37),
-            params: codex::ThreadGoalSetParams {
-                thread_id: thread_id.clone(),
-                objective: Some("exercise GENTS-backed Codex goal state".to_string()),
-                status: Some(codex::ThreadGoalStatus::Active),
-                token_budget: Some(Some(123)),
-            },
-        },
-    )
-    .await?;
-    let goal_set: codex::ThreadGoalSetResponse = read_typed_response(&mut ws, request_id(37))
-        .await
-        .context("reading thread/goal/set response")?;
-    assert_eq!(goal_set.goal.thread_id, thread_id);
-    assert_eq!(
-        goal_set.goal.objective,
-        "exercise GENTS-backed Codex goal state"
-    );
-    assert_eq!(goal_set.goal.token_budget, Some(123));
-
-    send_client_request(
-        &mut ws,
-        codex::ClientRequest::ThreadGoalGet {
-            request_id: request_id(38),
-            params: codex::ThreadGoalGetParams {
-                thread_id: thread_id.clone(),
-            },
-        },
-    )
-    .await?;
-    let goal_get: codex::ThreadGoalGetResponse = read_typed_response(&mut ws, request_id(38))
-        .await
-        .context("reading thread/goal/get response")?;
-    assert_eq!(
-        goal_get.goal.as_ref().map(|goal| &goal.thread_id),
-        Some(&thread_id)
-    );
 
     let expected_git_sha = init_test_git_repo(&home_dir, "main")?;
     send_client_request(
