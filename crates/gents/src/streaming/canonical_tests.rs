@@ -1695,3 +1695,97 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
     node.shutdown().await;
     let _ = std::fs::remove_dir_all(path);
 }
+
+#[tokio::test]
+async fn modeled_capture_documents_survive_publication_replay_and_forks() {
+    use gents_protocol::request_input::RequestInput;
+    const OWNER: &str = "did:test:test";
+    const SESSION: &str = "captured-documents";
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+    crate::test_support::install_test_agent(&node, OWNER, "general").await;
+    let mut lifecycle = claimed(&node, "captured-documents", SESSION).await;
+    let writer = DefraStreamWriter::new(node.clone(), OWNER, Duration::ZERO);
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let mut expected = Vec::new();
+    for (index, case) in crate::lean_vocab_test::lean_contract_snapshot()
+        .request_input_cases
+        .iter()
+        .enumerate()
+    {
+        let input: RequestInput = serde_json::from_value(case["input"].clone()).unwrap();
+        if input.captured_context.is_empty() || case["expected_provider_parts"].is_null() {
+            continue;
+        }
+        let message = input
+            .authored_message(case["authored_text"].as_str().unwrap())
+            .unwrap();
+        let key = format!("capture:{index}");
+        let first = writer
+            .publish_authored_message(&lifecycle, &key, &message)
+            .await
+            .unwrap();
+        let replay = writer
+            .publish_authored_message(&lifecycle, &key, &message)
+            .await
+            .unwrap();
+        assert_eq!(first, replay, "{}: publication replay", case["name"]);
+        let (_, reconstructed) =
+            crate::session::load_canonical_message(&access, &first, OWNER, None)
+                .await
+                .unwrap();
+        assert_eq!(
+            serde_json::to_value(&reconstructed).unwrap(),
+            case["expected_native_input"],
+            "{}: sealed document reconstruction",
+            case["name"]
+        );
+        assert_eq!(
+            gents_protocol::request_input::CapturedContext::from_message(&reconstructed).unwrap(),
+            input.captured_context
+        );
+        expected.push(message);
+    }
+    assert!(!expected.is_empty());
+    lifecycle
+        .terminalize_owned(
+            crate::lifecycle::RequestTerminalOutcome::Failed,
+            gents_protocol::output::TerminalOutput::NoMessage,
+            Some("fixture finished"),
+        )
+        .await
+        .unwrap();
+    let before = crate::session::load_history(&node, SESSION, OWNER, None)
+        .await
+        .unwrap();
+    assert_eq!(before, expected);
+    let child = crate::session::fork::fork(
+        &node,
+        crate::session::fork::ForkParams {
+            source_session_id: SESSION,
+            boundary: crate::session::fork::ForkBoundary::UserTurn(
+                u32::try_from(expected.len()).unwrap(),
+            ),
+            caller_node_did: OWNER,
+            caller_requester_did: None,
+            target_agent_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    let forked = crate::session::load_history(&node, &child.session_id, OWNER, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        forked, before,
+        "fork retains the original payload and capture metadata"
+    );
+    assert_eq!(
+        crate::session::load_history(&node, SESSION, OWNER, None)
+            .await
+            .unwrap(),
+        before
+    );
+    node.shutdown().await;
+}
