@@ -32,6 +32,39 @@ tool_name, and arguments object.
 Workflow: discover_tools -> describe_tool -> call_tool
 ";
 
+/// Background completions are event-time snapshots, not durable outcomes. The
+/// runtime reuses existing session/completion primitives and does not promise a
+/// later authoritative projection, so every consumer must treat a notification
+/// as one immutable observation and decide from provenance and current status
+/// only when action is at stake.
+const BACKGROUND_COMPLETION_GUIDANCE: &str = "\
+## Background Completion Guidance
+
+Background work and peer sessions deliver completion and status notifications as \
+event-time snapshots: a message captures the state of one request at one moment, \
+and it does not change later. A turn or request completing (even successfully) is \
+not the same as a durable assignment or goal being complete; treat request \
+outcomes and durable assignment status (goal, task) as separate facts.
+
+- Treat every notification as an immutable observation with its own event time. \
+Never describe it as live state, and do not re-read it for freshness.
+- Before acting or escalating, look for evidence that the situation already moved \
+on: a later result or status for the same event, an acknowledgment, or an explicit \
+superseded/recovered relation. If a failure is already handled, do not report or \
+repeat it.
+- If notification evidence alone cannot decide the next action, check the canonical \
+current status (durable goal/task records, agent_session_read, sessions) before \
+acting. If nothing canonical is available or readable, the status stays unknown: \
+say so rather than inferring success or failure.
+- Act or escalate on material evidence, with provenance (which request or event, \
+which artifact) and only within the authority you already hold. Preserve the \
+requester's control; never cancel or reassign background work automatically, and \
+never widen your own permissions to resolve ambiguity.
+- Do not poll for status on a schedule or re-check completed work; notifications \
+arrive when there is something to observe. Drill down (agent_session_read status, \
+sessions) only when a decision is blocked on missing evidence.
+";
+
 #[derive(Debug, Clone)]
 pub struct BuiltPrompt {
     pub preamble: String,
@@ -183,6 +216,7 @@ pub(crate) fn build_preamble_with_targets(
     if include_meta_tool_guidance {
         parts.push(TOOL_DISCOVERY_GUIDANCE.to_string());
     }
+    parts.push(BACKGROUND_COMPLETION_GUIDANCE.to_string());
     parts.push(direct_tool_guidance(tool_names));
 
     if !allowed_targets.is_empty() {
