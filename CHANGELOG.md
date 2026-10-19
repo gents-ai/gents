@@ -13,6 +13,13 @@ source consistency checks, not a separate runtime compatibility version.
   the previous order by creation time and document id. Nodes that share
   sessions must upgrade together: older versions cannot read sessions created
   by this version, because their session provenance rejects unknown fields.
+- A documents pack can now depend on another documents pack: `gents pack install`
+  and the self-config install put the dependency in first (its schemas, plugins
+  and documents, recorded as installed for its dependent) and release it with its
+  last dependent; installing it yourself keeps it. Asset, plugin and nested
+  dependencies are refused with the command that installs them directly. The
+  scenario manifest key `graph_dependency_environment` is now
+  `dependency_environment`; the old key is still accepted.
 
 ## 0.21.0-rc0 - 2026-10-17
 

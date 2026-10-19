@@ -6,7 +6,7 @@ use crate::cli::{PackInstallArgs, PackOutdatedArgs, PackUpdateArgs};
 use crate::output_format::OutputFormat;
 
 async fn outdated_packs(
-    scope: &crate::cli::GraphScopeArgs,
+    scope: &crate::cli::ScopeArgs,
     registry: Option<&str>,
 ) -> Result<Vec<Value>> {
     let home = crate::home_state::resolve_home_dir(scope.home.as_deref());
@@ -214,7 +214,7 @@ mod tests {
             .await
             .expect("identity-only init");
 
-        let scope = crate::cli::GraphScopeArgs {
+        let scope = crate::cli::ScopeArgs {
             home: Some(home_path),
             graphql: None,
             node_did: None,
@@ -267,10 +267,82 @@ mod tests {
         );
     }
 
+    /// An update reinstalls a documents dependency with `explicit: false`; it
+    /// must stay a dependency, released with its last dependent.
+    #[tokio::test]
+    async fn an_update_keeps_a_documents_dependency_released_with_its_dependent() {
+        let home = tempfile::tempdir().unwrap();
+        let scope = crate::cli::ScopeArgs {
+            home: Some(home.path().to_path_buf()),
+            graphql: None,
+            node_did: None,
+        };
+        let cli = crate::cli::Cli::try_parse_from([
+            "gents",
+            "init",
+            "--store-key-custody",
+            "file",
+            "--node-name",
+            "dep-updater",
+            "--home",
+            home.path().to_str().unwrap(),
+        ])
+        .unwrap();
+        let crate::cli::Command::Init(init_args) = cli.command else {
+            panic!("expected init")
+        };
+        crate::commands::init::init(init_args)
+            .await
+            .expect("identity-only init");
+        let slot = format!(
+            "worker={}:default-profile",
+            crate::home_state::resolve_node_did(Some(home.path()), None).unwrap()
+        );
+        let _ = super::super::test_support::fixture_pack_source("dependee_fixture", home.path());
+        let install = |fixture: &str, explicit: bool| {
+            let package = super::super::test_support::fixture_dir(fixture)
+                .to_str()
+                .unwrap()
+                .to_owned();
+            crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
+                package,
+                bindings: None,
+                inference_slots: vec![slot.clone()],
+                preview: false,
+                scope: scope.clone(),
+                output: OutputFormat::Json,
+                force_rebind_concrete_did: false,
+                registry: Some("http://127.0.0.1:9".to_owned()),
+                drift: crate::cli::PackDriftArgs::default(),
+                grant_authority: false,
+                explicit,
+            }))
+        };
+        install("dependent_fixture", true).await.unwrap();
+        install("dependee_fixture", false).await.unwrap();
+
+        let removed = crate::request_helpers::capture_report(super::super::remove::remove(
+            crate::cli::PackRemoveArgs {
+                package: "fixture/dependent_fixture".to_owned(),
+                scope,
+                drift: crate::cli::PackDriftArgs::default(),
+            },
+        ))
+        .await
+        .unwrap();
+        let released: Vec<&Value> = removed["removed"]["dependencies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|dependency| &dependency["pack"])
+            .collect();
+        assert_eq!(released, [&json!("fixture/dependee_fixture")], "{removed}");
+    }
+
     #[tokio::test]
     async fn outdated_lists_home_recorded_installs_without_opening_a_node() {
         let home = tempfile::tempdir().unwrap();
-        let scope = crate::cli::GraphScopeArgs {
+        let scope = crate::cli::ScopeArgs {
             home: Some(home.path().to_path_buf()),
             graphql: None,
             node_did: None,

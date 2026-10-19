@@ -417,7 +417,7 @@ pub(crate) async fn record_plugin_store_change(
     if !gents::home::init_config_path(home).is_file() {
         return Ok(());
     }
-    let (access, owner) = resolve_scope_owner(&GraphScopeArgs {
+    let (access, owner) = resolve_scope_owner(&ScopeArgs {
         home: Some(home.to_owned()),
         graphql: None,
         node_did: None,
@@ -438,7 +438,7 @@ pub(crate) fn warn_on_unrecorded_removal(coordinate: &str, recorded: Result<()>)
 }
 
 async fn resolve_plugin_slot_owner(
-    scope: &GraphScopeArgs,
+    scope: &ScopeArgs,
     manifest: &PackManifest,
     requested: &BTreeMap<String, String>,
 ) -> Result<Option<String>> {
@@ -462,7 +462,7 @@ async fn resolve_plugin_slot_owner(
 }
 
 pub(crate) async fn resolve_scope_owner(
-    scope: &GraphScopeArgs,
+    scope: &ScopeArgs,
 ) -> Result<(gents::config_client::ConfigAccess, String)> {
     let (access, _) =
         crate::resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
@@ -481,6 +481,246 @@ pub(crate) async fn resolve_scope_owner(
     )
     .await?;
     Ok((access, owner))
+}
+
+/// The documents pack install: the CLI's single site that writes a documents
+/// pack and its dependencies. `explicit` is false only when the pack is
+/// installed as another pack's dependency.
+async fn install_documents_pack(
+    access: &gents::config_client::ConfigAccess,
+    owner: &str,
+    pack: &PackSource,
+    args: &PackInstallArgs,
+    explicit: bool,
+) -> Result<serde_json::Value> {
+    let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+    let requested = parse_inference_slot_bindings(&args.inference_slots)?;
+    let dependencies: Vec<PackSource> =
+        futures_util::stream::iter(pack.manifest().metadata.dependencies.iter())
+            .map(|coordinate| resolve_pack_source(coordinate, args.registry.as_deref(), &home))
+            .buffered(4)
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+    let temp = tempfile::tempdir()?;
+    gents::pack::materialize::materialize(pack.archive(), temp.path())?;
+    let (mut authored, mut report) = crate::desired_state::load_manifest_root(temp.path());
+    if authored.is_none() {
+        (authored, report) =
+            crate::desired_state::load_manifest_root_for_owner(temp.path(), Some(&owner));
+    }
+    anyhow::ensure!(
+        authored.is_some(),
+        "invalid pack configuration: {:?}",
+        report.errors
+    );
+    let mut authored = authored.expect("checked pack configuration");
+    super::config::binding::rebind_manifest_to_node(
+        &mut authored,
+        &owner,
+        args.force_rebind_concrete_did,
+    )?;
+    let prepared = gents::pack::prepare_document_pack_install(
+        &access,
+        &owner,
+        pack.manifest(),
+        &authored,
+        &requested,
+        &dependencies
+            .iter()
+            .map(PackSource::archive)
+            .collect::<Vec<_>>(),
+        gents::pack::InstalledVia::Operator,
+        &|name| std::env::var(name).ok(),
+    )
+    .await?;
+    let desired = prepared.config;
+    let inference = prepared.inference;
+    let dependency_inference = prepared.dependency_inference;
+    let origin_tag = gents::pack::pack_origin_tag(&pack.manifest().name)?;
+    if args.preview {
+        return Ok(json!({
+            "pack": pack.manifest().name,
+            "source": pack.label(),
+            "digest": pack.digest(),
+            "owner": owner,
+            "inference": inference,
+            "dependency_inference": dependency_inference,
+            "origin_tag": origin_tag,
+            "dependencies": pack.manifest().metadata.dependencies,
+            "would_write": false,
+        }));
+    }
+    // A dependency installed on its own behalf (`explicit` false) writes no
+    // home record, and a remote node has no local home to record in.
+    let record_home = explicit && args.scope.graphql.is_none();
+    // Every pack that ships an asset class is materialized before any
+    // write; the leases are held until the home record is written.
+    let mut cache_leases = Vec::new();
+    let mut materialized_assets = String::new();
+    let mut dependency_assets = Vec::new();
+    if record_home {
+        for dependency in &dependencies {
+            if let Some((assets, lease)) =
+                gents::pack::home_install::materialize_asset_pack(&home, dependency.archive())?
+            {
+                dependency_assets.push((
+                    format!(
+                        "{}/{}",
+                        dependency.manifest().metadata.namespace,
+                        dependency.manifest().name
+                    ),
+                    assets,
+                ));
+                cache_leases.push(lease);
+            }
+        }
+        if let Some((assets, lease)) =
+            gents::pack::home_install::materialize_asset_pack(&home, pack.archive())?
+        {
+            materialized_assets = assets;
+            cache_leases.push(lease);
+        }
+    }
+    let dependency_coordinates: Vec<String> = dependencies
+        .iter()
+        .map(|dependency| {
+            format!(
+                "{}/{}",
+                dependency.manifest().metadata.namespace,
+                dependency.manifest().name
+            )
+        })
+        .collect();
+    for dependency in &dependencies {
+        let dependency_slots = dependency_inference[dependency.manifest().name.as_str()]
+            .bindings
+            .iter()
+            .map(|(slot, profile)| format!("{slot}={profile}"))
+            .collect();
+        let dependency_args = PackInstallArgs {
+            package: dependency.manifest().name.clone(),
+            bindings: None,
+            inference_slots: dependency_slots,
+            preview: false,
+            scope: args.scope.clone(),
+            output: args.output,
+            force_rebind_concrete_did: false,
+            registry: args.registry.clone(),
+            drift: args.drift,
+            grant_authority: args.grant_authority,
+            explicit: false,
+        };
+        match dependency.manifest().metadata.kind {
+            PackKind::Graph => {
+                super::graph::install_with_access(
+                    &access,
+                    &owner,
+                    dependency,
+                    dependency_args,
+                    false,
+                )
+                .await?;
+            }
+            // A dependency installs exactly as `gents pack install <dep>`
+            // would; the boxed future breaks the async recursion.
+            PackKind::Documents => {
+                Box::pin(install_documents_pack(
+                    &access,
+                    &owner,
+                    dependency,
+                    &dependency_args,
+                    false,
+                ))
+                .await?;
+            }
+            // `prepare_document_pack_install` above already refused these.
+            PackKind::Assets | PackKind::Plugins => {
+                unreachable!("dependency preparation refuses asset and plugin dependencies")
+            }
+        }
+    }
+    let schemas = super::schema::apply_pack_schemas_if_present(&access, temp.path())
+        .await
+        .context("pack install schemas")?;
+    let plugins = if pack.manifest().metadata.plugins.is_empty() {
+        Vec::new()
+    } else {
+        anyhow::ensure!(
+            args.scope.graphql.is_none(),
+            "{} ships plugins, which install on the node's own host; run the install \
+             there with --home",
+            pack.manifest().name
+        );
+        gents::plugin::install::install_pack_plugins_with_bindings(
+            &home,
+            pack.manifest(),
+            pack.digest(),
+            |path| pack.asset(path),
+            args.grant_authority,
+            Some(&owner),
+            &inference.bindings,
+            |_| Ok(()),
+        )
+        .context("publishing document-pack plugins locally")?
+    };
+    let mut identity = gents::pack::PackIdentity::new(
+        pack.manifest(),
+        pack.digest(),
+        plugins
+            .iter()
+            .map(|plugin| gents::pack::InstalledPackPlugin {
+                name: plugin.name.clone(),
+                digest: plugin.digest.clone(),
+            })
+            .collect(),
+    );
+    identity.dependencies = dependency_coordinates;
+    identity.explicit = explicit;
+    // Local plugin publication is complete before the node write.
+    // A later transaction failure leaves those files installed for
+    // the next explicit reconciliation attempt.
+    let apply = gents::pack::install_pack_documents(
+        &access,
+        &owner,
+        &identity,
+        &desired,
+        args.drift.policy(),
+    )
+    .await
+    .context("document pack write failed after local plugins were published; the plugins remain installed")?;
+    if record_home {
+        gents::pack::record_after_install(
+            &home,
+            gents::pack::HomePackInstall {
+                coordinate: identity.coordinate.clone(),
+                version: identity.version.clone(),
+                digest: identity.digest.clone(),
+                kind: PackKind::Documents,
+                assets: materialized_assets,
+                dependency_assets,
+                plugins: identity.plugins.clone(),
+                installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                installed_via: Some(gents::pack::InstalledVia::Operator),
+            },
+            gents::pack::InstalledVia::Operator,
+            explicit,
+        )
+        .context("the pack documents were written, but the home install record was not")?;
+    }
+    Ok(json!({
+        "pack": pack.manifest().name,
+        "source": pack.label(),
+        "digest": pack.digest(),
+        "owner": owner,
+        "inference": inference,
+        "dependency_inference": dependency_inference,
+        "origin_tag": origin_tag,
+        "dependencies": pack.manifest().metadata.dependencies,
+        "schemas": schemas,
+        "apply": apply,
+    }))
 }
 
 pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
@@ -533,216 +773,9 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                 Some(&access),
             )
             .await?;
-            let requested = parse_inference_slot_bindings(&args.inference_slots)?;
-            let dependencies: Vec<PackSource> =
-                futures_util::stream::iter(pack.manifest().metadata.dependencies.iter())
-                    .map(|coordinate| {
-                        resolve_pack_source(coordinate, args.registry.as_deref(), &home)
-                    })
-                    .buffered(4)
-                    .collect::<Vec<_>>()
-                    .await
-                    .into_iter()
-                    .collect::<Result<Vec<_>>>()?;
-            let temp = tempfile::tempdir()?;
-            gents::pack::materialize::materialize(pack.archive(), temp.path())?;
-            let (mut authored, mut report) = crate::desired_state::load_manifest_root(temp.path());
-            if authored.is_none() {
-                (authored, report) =
-                    crate::desired_state::load_manifest_root_for_owner(temp.path(), Some(&owner));
-            }
-            anyhow::ensure!(
-                authored.is_some(),
-                "invalid pack configuration: {:?}",
-                report.errors
-            );
-            let mut authored = authored.expect("checked pack configuration");
-            super::config::binding::rebind_manifest_to_node(
-                &mut authored,
-                &owner,
-                args.force_rebind_concrete_did,
-            )?;
-            let prepared = gents::pack::prepare_document_pack_install(
-                &access,
-                &owner,
-                pack.manifest(),
-                &authored,
-                &requested,
-                &dependencies
-                    .iter()
-                    .map(PackSource::archive)
-                    .collect::<Vec<_>>(),
-                gents::pack::InstalledVia::Operator,
-                &|name| std::env::var(name).ok(),
-            )
-            .await?;
-            let desired = prepared.config;
-            let inference = prepared.inference;
-            let dependency_inference = prepared.dependency_inference;
-            let origin_tag = gents::pack::pack_origin_tag(&pack.manifest().name)?;
-            if args.preview {
-                return crate::print_json(&json!({
-                    "pack": pack.manifest().name,
-                    "source": pack.label(),
-                    "digest": pack.digest(),
-                    "owner": owner,
-                    "inference": inference,
-                    "dependency_inference": dependency_inference,
-                    "origin_tag": origin_tag,
-                    "dependencies": pack.manifest().metadata.dependencies,
-                    "would_write": false,
-                }));
-            }
-            // Every pack that ships an asset class is materialized before any
-            // write; the leases are held until the home record is written.
-            let mut cache_leases = Vec::new();
-            let mut materialized_assets = String::new();
-            let mut dependency_assets = Vec::new();
-            if args.scope.graphql.is_none() {
-                for dependency in &dependencies {
-                    if let Some((assets, lease)) =
-                        gents::pack::home_install::materialize_asset_pack(
-                            &home,
-                            dependency.archive(),
-                        )?
-                    {
-                        dependency_assets.push((
-                            format!(
-                                "{}/{}",
-                                dependency.manifest().metadata.namespace,
-                                dependency.manifest().name
-                            ),
-                            assets,
-                        ));
-                        cache_leases.push(lease);
-                    }
-                }
-                if let Some((assets, lease)) =
-                    gents::pack::home_install::materialize_asset_pack(&home, pack.archive())?
-                {
-                    materialized_assets = assets;
-                    cache_leases.push(lease);
-                }
-            }
-            let dependency_coordinates: Vec<String> = dependencies
-                .iter()
-                .map(|dependency| {
-                    format!(
-                        "{}/{}",
-                        dependency.manifest().metadata.namespace,
-                        dependency.manifest().name
-                    )
-                })
-                .collect();
-            for dependency in &dependencies {
-                let dependency_slots = dependency_inference[dependency.manifest().name.as_str()]
-                    .bindings
-                    .iter()
-                    .map(|(slot, profile)| format!("{slot}={profile}"))
-                    .collect();
-                super::graph::install_with_access(
-                    &access,
-                    &owner,
-                    dependency,
-                    PackInstallArgs {
-                        package: dependency.manifest().name.clone(),
-                        bindings: None,
-                        inference_slots: dependency_slots,
-                        preview: false,
-                        scope: args.scope.clone(),
-                        output: args.output,
-                        force_rebind_concrete_did: false,
-                        registry: args.registry.clone(),
-                        drift: args.drift,
-                        grant_authority: args.grant_authority,
-                        explicit: false,
-                    },
-                    false,
-                )
-                .await?;
-            }
-            let schemas = super::schema::apply_pack_schemas_if_present(&access, temp.path())
-                .await
-                .context("pack install schemas")?;
-            let plugin_home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
-            let plugins = if pack.manifest().metadata.plugins.is_empty() {
-                Vec::new()
-            } else {
-                anyhow::ensure!(
-                    args.scope.graphql.is_none(),
-                    "{} ships plugins, which install on the node's own host; run the install \
-                     there with --home",
-                    pack.manifest().name
-                );
-                gents::plugin::install::install_pack_plugins_with_bindings(
-                    &plugin_home,
-                    pack.manifest(),
-                    pack.digest(),
-                    |path| pack.asset(path),
-                    args.grant_authority,
-                    Some(&owner),
-                    &inference.bindings,
-                    |_| Ok(()),
-                )
-                .context("publishing document-pack plugins locally")?
-            };
-            let mut identity = gents::pack::PackIdentity::new(
-                pack.manifest(),
-                pack.digest(),
-                plugins
-                    .iter()
-                    .map(|plugin| gents::pack::InstalledPackPlugin {
-                        name: plugin.name.clone(),
-                        digest: plugin.digest.clone(),
-                    })
-                    .collect(),
-            );
-            identity.dependencies = dependency_coordinates;
-            // Local plugin publication is complete before the node write.
-            // A later transaction failure leaves those files installed for
-            // the next explicit reconciliation attempt.
-            let apply = gents::pack::install_pack_documents(
-                &access,
-                &owner,
-                &identity,
-                &desired,
-                args.drift.policy(),
-            )
-            .await
-            .context("document pack write failed after local plugins were published; the plugins remain installed")?;
-            // A remote node has no local home to record in.
-            if args.scope.graphql.is_none() {
-                gents::pack::record_after_install(
-                    &plugin_home,
-                    gents::pack::HomePackInstall {
-                        coordinate: identity.coordinate.clone(),
-                        version: identity.version.clone(),
-                        digest: identity.digest.clone(),
-                        kind: PackKind::Documents,
-                        assets: materialized_assets,
-                        dependency_assets,
-                        plugins: identity.plugins.clone(),
-                        installed_at: chrono::Utc::now()
-                            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                        installed_via: Some(gents::pack::InstalledVia::Operator),
-                    },
-                    gents::pack::InstalledVia::Operator,
-                    args.explicit,
-                )
-                .context("the pack documents were written, but the home install record was not")?;
-            }
-            crate::print_json(&json!({
-                "pack": pack.manifest().name,
-                "source": pack.label(),
-                "digest": pack.digest(),
-                "owner": owner,
-                "inference": inference,
-                "dependency_inference": dependency_inference,
-                "origin_tag": origin_tag,
-                "dependencies": pack.manifest().metadata.dependencies,
-                "schemas": schemas,
-                "apply": apply,
-            }))
+            let output =
+                install_documents_pack(&access, &owner, &pack, &args, args.explicit).await?;
+            crate::print_json(&output)
         }
         PackKind::Assets | PackKind::Plugins => {
             let requested = parse_inference_slot_bindings(&args.inference_slots)?;
@@ -911,7 +944,7 @@ mod tests {
             "inference_slots": [{"name": "remote_ocr", "description": "d", "optional": true}],
         }))
         .unwrap();
-        let scope = GraphScopeArgs {
+        let scope = ScopeArgs {
             home: Some(tempfile::tempdir().unwrap().path().to_owned()),
             graphql: None,
             node_did: None,
@@ -1003,7 +1036,7 @@ mod tests {
             bindings: None,
             inference_slots,
             preview: false,
-            scope: GraphScopeArgs {
+            scope: ScopeArgs {
                 home: Some(home.to_path_buf()),
                 graphql: None,
                 node_did: None,

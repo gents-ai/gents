@@ -24,8 +24,8 @@ use serde_json::{json, Value};
 
 use crate::cli::output_format::OutputFormat;
 use crate::cli::{
-    GraphCancelArgs, GraphCommand, GraphResultArgs, GraphRunArgs, GraphScopeArgs, GraphToggleArgs,
-    GraphWatchArgs, PackInstallArgs,
+    GraphCancelArgs, GraphCommand, GraphResultArgs, GraphRunArgs, GraphToggleArgs, GraphWatchArgs,
+    PackInstallArgs, ScopeArgs,
 };
 use crate::{print_json, print_ndjson, resolve_config_access, resolve_node_did};
 
@@ -188,7 +188,7 @@ pub(crate) async fn install_with_access(
 }
 
 async fn access_and_actor(
-    scope: &GraphScopeArgs,
+    scope: &ScopeArgs,
 ) -> Result<(gents::config_client::ConfigAccess, String)> {
     let actor = resolve_node_did(scope.home.as_deref(), scope.node_did.as_deref())?;
     let (access, _) =

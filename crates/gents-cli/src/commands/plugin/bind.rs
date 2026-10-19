@@ -84,7 +84,7 @@ mod tests {
         let error = bind(PluginBindArgs {
             name: "team/ocr".to_owned(),
             profile: "chandra".to_owned(),
-            scope: crate::cli::args::GraphScopeArgs {
+            scope: crate::cli::args::ScopeArgs {
                 home: Some(home.path().to_owned()),
                 graphql: Some("http://127.0.0.1:1/graphql".to_owned()),
                 node_did: None,
@@ -107,7 +107,7 @@ mod tests {
         let error = bind(PluginBindArgs {
             name: "team/ocr".to_owned(),
             profile: "chandra".to_owned(),
-            scope: crate::cli::args::GraphScopeArgs {
+            scope: crate::cli::args::ScopeArgs {
                 home: Some(home.path().to_owned()),
                 graphql: None,
                 node_did: None,

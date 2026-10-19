@@ -31,7 +31,8 @@ pub use installation::{
     list_installed_packs, plugin_data_unique_keys, prepare_document_pack_install,
     read_installed_pack, record_plugin_store_change, record_plugin_store_change_as,
     referenced_pack_digests, remove_pack, DriftPolicy, InstallReport, InstalledPack,
-    InstalledPackPlugin, PackIdentity, PreparedDocumentPackInstall, RemoveReport, Retained,
+    InstalledPackPlugin, PackIdentity, PreparedDependency, PreparedDocumentPackInstall,
+    RemoveReport, Retained,
 };
 pub(crate) use installation::{observe_graph_install_in_txn, record_graph_install_in_txn};
 pub use loader::{
@@ -654,7 +655,7 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
     );
     anyhow::ensure!(
         manifest.metadata.kind == PackKind::Documents || manifest.metadata.dependencies.is_empty(),
-        "only document packs support package dependencies; nested graph/asset dependencies are unsupported"
+        "only document packs support package dependencies; nested dependencies are unsupported"
     );
     for dependency in &manifest.metadata.dependencies {
         anyhow::ensure!(

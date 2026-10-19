@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::config_client::ConfigAccess;
+use crate::config_client::{ConfigAccess, SchemaInstallPlan};
 use crate::document_config::PackConfig;
 use crate::graph_package::{GraphInstallRecord, GraphPackageInstallBindings, LoadedGraphPackage};
 use crate::pack_archive::PackArchive;
@@ -148,11 +148,56 @@ pub fn plugin_data_unique_keys<'a>(
     Ok((keys, fields))
 }
 
+/// A dependency prepared for the install of its dependent.
+pub enum PreparedDependency {
+    Graph(LoadedGraphPackage, GraphPackageInstallBindings),
+    /// Installed like the root, flagged non-explicit. `manifest`, `digest`
+    /// and `assets` hold what its install reads: the manifest, the pack
+    /// digest, and the schema and plugin files.
+    Documents {
+        coordinate: String,
+        config: PackConfig,
+        inference: PackInferenceBindingPreview,
+        schemas: Vec<(String, SchemaInstallPlan)>,
+        manifest: super::super::PackManifest,
+        digest: String,
+        assets: BTreeMap<String, Vec<u8>>,
+    },
+}
+
+impl PreparedDependency {
+    fn manifest(&self) -> &super::super::PackManifest {
+        match self {
+            Self::Graph(package, _) => &package.manifest,
+            Self::Documents { manifest, .. } => manifest,
+        }
+    }
+
+    fn config(&self) -> &PackConfig {
+        match self {
+            Self::Graph(package, _) => &package.config,
+            Self::Documents { config, .. } => config,
+        }
+    }
+
+    fn coordinate(&self) -> String {
+        match self {
+            Self::Graph(package, _) => {
+                format!(
+                    "{}/{}",
+                    package.manifest.metadata.namespace, package.manifest.name
+                )
+            }
+            Self::Documents { coordinate, .. } => coordinate.clone(),
+        }
+    }
+}
+
 pub struct PreparedDocumentPackInstall {
     pub config: PackConfig,
     pub inference: PackInferenceBindingPreview,
     pub dependency_inference: BTreeMap<String, PackInferenceBindingPreview>,
-    pub dependencies: Vec<(LoadedGraphPackage, GraphPackageInstallBindings)>,
+    pub dependencies: Vec<PreparedDependency>,
 }
 
 pub async fn prepare_document_pack_install(
@@ -166,9 +211,24 @@ pub async fn prepare_document_pack_install(
     environment: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<PreparedDocumentPackInstall> {
     for dependency in dependencies {
+        let dependency = dependency.manifest();
         anyhow::ensure!(
-            dependency.manifest().metadata.kind == super::super::PackKind::Graph,
-            "only graph dependencies are currently installable"
+            matches!(
+                dependency.metadata.kind,
+                super::super::PackKind::Graph | super::super::PackKind::Documents
+            ),
+            "dependency {}/{} is a {:?} pack, which cannot be installed as a dependency; \
+             install it with `gents pack install` or `gents plugin install`, then remove it from `dependencies`",
+            dependency.metadata.namespace,
+            dependency.name,
+            dependency.metadata.kind
+        );
+        anyhow::ensure!(
+            dependency.metadata.dependencies.is_empty(),
+            "dependency {}/{} declares dependencies of its own; dependencies are one level: \
+             install it with `gents pack install`, then remove it from `dependencies`",
+            dependency.metadata.namespace,
+            dependency.name
         );
     }
     for slot in requested.keys() {
@@ -211,33 +271,74 @@ pub async fn prepare_document_pack_install(
             &selected(archive.manifest()),
         )
         .await?;
-        let package = crate::graph_package::load_archive_graph_package_with_environment(
-            archive,
-            &PackInstallOptions {
-                node_did: owner.to_owned(),
-            },
-            environment,
-        )?;
-        let bindings = GraphPackageInstallBindings {
+        let options = PackInstallOptions {
             node_did: owner.to_owned(),
-            inference_slots: preview.bindings.clone(),
         };
-        crate::graph_package::prepare_loaded_graph_package_install(access, &package, &bindings)
-            .await?;
+        let prepared = if archive.manifest().metadata.kind == super::super::PackKind::Documents {
+            let authored = super::super::load_pack_config(
+                archive.manifest(),
+                &options,
+                &|path| archive.asset(path).map(<[u8]>::to_vec),
+                environment,
+            )?;
+            let config = super::super::bind_pack_install_config(
+                archive.manifest(),
+                &authored,
+                &preview.bindings,
+            )?;
+            let mut schemas = Vec::new();
+            let mut assets = BTreeMap::new();
+            for path in document_pack_schema_paths(archive.manifest())? {
+                let sdl = archive.asset(path)?;
+                schemas.push((
+                    path.to_owned(),
+                    crate::config_client::preview_schema_install(access, std::str::from_utf8(sdl)?)
+                        .await?,
+                ));
+                assets.insert(path.to_owned(), sdl.to_vec());
+            }
+            for plugin in &archive.manifest().metadata.plugins {
+                for path in std::iter::once(&plugin.artifact).chain(&plugin.instructions) {
+                    assets.insert(path.clone(), archive.asset(path)?.to_vec());
+                }
+            }
+            PreparedDependency::Documents {
+                coordinate: format!(
+                    "{}/{}",
+                    archive.manifest().metadata.namespace,
+                    archive.manifest().name
+                ),
+                config,
+                inference: preview.clone(),
+                schemas,
+                manifest: archive.manifest().clone(),
+                digest: archive.digest().to_owned(),
+                assets,
+            }
+        } else {
+            let package = crate::graph_package::load_archive_graph_package_with_environment(
+                archive,
+                &options,
+                environment,
+            )?;
+            let bindings = GraphPackageInstallBindings {
+                node_did: owner.to_owned(),
+                inference_slots: preview.bindings.clone(),
+            };
+            crate::graph_package::prepare_loaded_graph_package_install(access, &package, &bindings)
+                .await?;
+            PreparedDependency::Graph(package, bindings)
+        };
         dependency_inference.insert(archive.manifest().name.clone(), preview);
-        prepared_dependencies.push((package, bindings));
+        prepared_dependencies.push(prepared);
     }
     let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
     let shipped: Vec<(String, &PackConfig)> = std::iter::once((coordinate.clone(), &config))
-        .chain(prepared_dependencies.iter().map(|(package, _)| {
-            (
-                format!(
-                    "{}/{}",
-                    package.manifest.metadata.namespace, package.manifest.name
-                ),
-                &package.config,
-            )
-        }))
+        .chain(
+            prepared_dependencies
+                .iter()
+                .map(|dependency| (dependency.coordinate(), dependency.config())),
+        )
         .collect();
     for tools in &config.tools {
         crate::plugin_job::settings::pack_job_block_admissible(
@@ -270,13 +371,19 @@ pub async fn install_prepared_document_pack(
     for plugin in &archive.manifest().metadata.plugins {
         plugin_data_unique_keys(archive.manifest(), plugin, &|path| archive.asset(path))?;
     }
-    for (package, _) in &prepared.dependencies {
-        for plugin in &package.manifest.metadata.plugins {
-            plugin_data_unique_keys(&package.manifest, plugin, &|path| package.asset(path))?;
+    for dependency in dependency_archives {
+        for plugin in &dependency.manifest().metadata.plugins {
+            plugin_data_unique_keys(dependency.manifest(), plugin, &|path| {
+                dependency.asset(path)
+            })?;
         }
     }
-    let all = std::iter::once(archive.manifest())
-        .chain(prepared.dependencies.iter().map(|(p, _)| &p.manifest));
+    let all = std::iter::once(archive.manifest()).chain(
+        prepared
+            .dependencies
+            .iter()
+            .map(PreparedDependency::manifest),
+    );
     for manifest in all {
         for plugin in &manifest.metadata.plugins {
             let home = plugin_home.context("pack plugins require the node's local plugin home")?;
@@ -319,46 +426,89 @@ pub async fn install_prepared_document_pack(
             crate::config_client::preview_schema_install(access, sdl).await?,
         ));
     }
-    for (package, bindings) in &prepared.dependencies {
-        let plugins = install_plugins(
-            owner,
-            plugin_home,
-            &package.manifest,
-            &package.package_digest,
-            &bindings.inference_slots,
-            &|path| package.asset(path),
-            grant_authority,
-        )?;
-        let identity =
-            PackIdentity::new(&package.manifest, &package.package_digest, plugins.clone());
-        let record = GraphInstallRecord {
-            plugins,
-            explicit: false,
-        };
-        let receipt = crate::graph_package::install_loaded_graph_package(
-            access, owner, package, bindings, None, &record,
-        )
-        .await
-        .context("graph installation failed after local pack plugins were published; the plugins remain installed")?;
-        crate::graph_pipeline::activate_graph_revision_with_access(
-            access,
-            owner,
-            &receipt.graph_id,
-            &receipt.revision_digest,
-            receipt.predecessor_revision_digest.as_deref(),
-        )
-        .await
-        .context("graph activation failed after local pack plugins were published; the plugins remain installed")?;
-        if let Some(home) = plugin_home {
-            record_home_install(
-                home,
-                &package.manifest,
-                &identity,
-                String::new(),
-                Vec::new(),
-                installed_via,
-                false,
-            )?;
+    for dependency in &prepared.dependencies {
+        match dependency {
+            PreparedDependency::Graph(package, bindings) => {
+                let plugins = install_plugins(
+                    owner,
+                    plugin_home,
+                    &package.manifest,
+                    &package.package_digest,
+                    &bindings.inference_slots,
+                    &|path| package.asset(path),
+                    grant_authority,
+                )?;
+                let identity =
+                    PackIdentity::new(&package.manifest, &package.package_digest, plugins.clone());
+                let record = GraphInstallRecord {
+                    plugins,
+                    explicit: false,
+                };
+                let receipt = crate::graph_package::install_loaded_graph_package(
+                    access, owner, package, bindings, None, &record,
+                )
+                .await
+                .context("graph installation failed after local pack plugins were published; the plugins remain installed")?;
+                crate::graph_pipeline::activate_graph_revision_with_access(
+                    access,
+                    owner,
+                    &receipt.graph_id,
+                    &receipt.revision_digest,
+                    receipt.predecessor_revision_digest.as_deref(),
+                )
+                .await
+                .context("graph activation failed after local pack plugins were published; the plugins remain installed")?;
+                if let Some(home) = plugin_home {
+                    record_home_install(
+                        home,
+                        &package.manifest,
+                        &identity,
+                        String::new(),
+                        Vec::new(),
+                        installed_via,
+                        false,
+                    )?;
+                }
+            }
+            PreparedDependency::Documents {
+                config,
+                inference,
+                schemas,
+                manifest,
+                digest,
+                assets,
+                ..
+            } => {
+                for (path, plan) in schemas {
+                    crate::config_client::apply_schema_install(
+                        access,
+                        std::str::from_utf8(&assets[path])?,
+                        &plan.artifact_digest,
+                    )
+                    .await?;
+                }
+                let plugins = install_plugins(
+                    owner,
+                    plugin_home,
+                    manifest,
+                    digest,
+                    &inference.bindings,
+                    &|path| {
+                        assets
+                            .get(path)
+                            .map(Vec::as_slice)
+                            .with_context(|| format!("dependency asset {path} was not prepared"))
+                    },
+                    grant_authority,
+                )?;
+                let identity = PackIdentity {
+                    explicit: false,
+                    ..PackIdentity::new(manifest, digest, plugins)
+                };
+                super::super::install_pack_documents(access, owner, &identity, config, policy)
+                    .await
+                    .context("document pack installation failed after local pack plugins were published; the plugins remain installed")?;
+            }
         }
     }
     for (path, plan) in schemas {
@@ -382,7 +532,7 @@ pub async fn install_prepared_document_pack(
     identity.dependencies = prepared
         .dependencies
         .iter()
-        .map(|(p, _)| format!("{}/{}", p.manifest.metadata.namespace, p.manifest.name))
+        .map(PreparedDependency::coordinate)
         .collect();
     let report =
         super::super::install_pack_documents(access, owner, &identity, &prepared.config, policy)

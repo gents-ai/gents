@@ -1,12 +1,12 @@
 use super::*;
-use crate::cli::{GraphScopeArgs, PackDriftArgs, PackInstallArgs};
+use crate::cli::{PackDriftArgs, PackInstallArgs, ScopeArgs};
 use crate::commands::pack::test_support::{assets_pack_dir, fixture_dir};
 use crate::output_format::OutputFormat;
 use gents::pack::HomePackInstall;
 use serde_json::json;
 
-fn scope(home: &Path) -> GraphScopeArgs {
-    GraphScopeArgs {
+fn scope(home: &Path) -> ScopeArgs {
+    ScopeArgs {
         home: Some(home.to_path_buf()),
         graphql: None,
         node_did: None,
