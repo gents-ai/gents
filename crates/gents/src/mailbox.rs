@@ -1004,6 +1004,23 @@ async fn sweep_open_mailbox_items_with_close_collections(
     after_cursor: Option<&str>,
     close_collections: &[MailboxCloseCollection],
 ) -> Result<MailboxSweepPage> {
+    sweep_open_mailbox_items_with_clock(
+        node,
+        local_did,
+        after_cursor,
+        close_collections,
+        Instant::now,
+    )
+    .await
+}
+
+async fn sweep_open_mailbox_items_with_clock(
+    node: &Arc<EmbeddedNode>,
+    local_did: &str,
+    after_cursor: Option<&str>,
+    close_collections: &[MailboxCloseCollection],
+    read_clock: impl Fn() -> Instant,
+) -> Result<MailboxSweepPage> {
     validate_close_collections(close_collections)?;
     let response = graphql_with_transaction_retry(
         node,
@@ -1042,11 +1059,13 @@ async fn sweep_open_mailbox_items_with_close_collections(
         ..Default::default()
     };
     let now = Utc::now();
-    let turn_started = Instant::now();
+    let turn_started = read_clock();
     let mut last_processed_cursor = None;
     let mut stopped_early = false;
     for raw_item in raw_items {
-        if report.scanned > 0 && turn_started.elapsed() >= MAILBOX_SWEEP_TIME_BUDGET {
+        if report.scanned > 0
+            && read_clock().duration_since(turn_started) >= MAILBOX_SWEEP_TIME_BUDGET
+        {
             stopped_early = true;
             break;
         }
@@ -1817,11 +1836,13 @@ mod tests {
                     "keyset index scan should stay within the modeled local open suffix of {remaining_local_open_rows}, got {index_fetches}: {execution}"
                 );
             }
-            let page = sweep_open_mailbox_items_with_close_collections(
+            let turn_started = Instant::now();
+            let page = sweep_open_mailbox_items_with_clock(
                 &node,
                 "did:test:agent",
                 cursor.as_deref(),
                 FIXTURE_CLOSE,
+                || turn_started,
             )
             .await
             .unwrap();
