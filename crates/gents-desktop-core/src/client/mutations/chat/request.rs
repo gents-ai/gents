@@ -38,6 +38,14 @@ pub struct SubmitRequestOptions {
     pub retry_key: Option<String>,
 }
 
+fn normalize_authored_content<'a>(input: &RequestInput, content: &'a str) -> Result<&'a str> {
+    anyhow::ensure!(
+        input.has_authored_input(content),
+        "content must not be empty"
+    );
+    Ok(content.trim())
+}
+
 pub async fn submit_request(
     node: &Arc<EmbeddedNode>,
     store: &ClientStore,
@@ -175,11 +183,7 @@ pub(crate) async fn prepare_request_submission(
     let session_id = normalize_required("session_id", session_id)?;
     let node_did = normalize_required("node_did", node_did)?;
     let requester_did = normalize_required("requester_did", requester_did)?;
-    let content = if options.input.captured_context.is_empty() {
-        normalize_required("content", content)?.to_owned()
-    } else {
-        content.trim().to_owned()
-    };
+    let content = normalize_authored_content(&options.input, content)?.to_owned();
     let (content, options) = prepare_prompt_submission(&content, options)?;
     let request_id = request_id
         .map(str::to_owned)
@@ -428,8 +432,9 @@ async fn retry_request_in_txn(
             .as_deref()
             .context("retry parent request must have a session_id")?,
     )?;
-    let content = normalize_required(
-        "content",
+    let input = parent.input.clone().unwrap_or_default();
+    let content = normalize_authored_content(
+        &input,
         parent
             .content
             .as_deref()
@@ -472,7 +477,7 @@ async fn retry_request_in_txn(
                 max_retries,
             }),
             retry_key: Some(retry_key),
-            input: parent.input.clone().unwrap_or_default(),
+            input,
             ..RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 RequestIdentity {
