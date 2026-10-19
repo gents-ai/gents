@@ -56,12 +56,16 @@ pub async fn verify(
         "the request selected a different workspace folder"
     );
     let content = row.content.as_deref().context("workspace input")?;
-    let context: Value = serde_json::from_str(
-        content
-            .split_once(CONTEXT_HEADER)
-            .context("captured context envelope")?
-            .1,
-    )?;
+    ensure!(
+        content == PROMPT,
+        "captured context was mixed into authored prose"
+    );
+    let input = row.input.as_ref().context("typed workspace input")?;
+    ensure!(
+        input.captured_context.len() == 1,
+        "one original capture must be submitted"
+    );
+    let context = serde_json::to_value(&input.captured_context[0])?;
     ensure!(
         context["kind"] == "selection"
             && context["source"] == "editor"
@@ -72,14 +76,12 @@ pub async fn verify(
                 .is_some_and(|version| version > 1)
             && context["uri"] == ui["contextUri"]
             && context["workspaceUri"] == ui["selectedFolderUri"]
-            && context["range"]["lineBase"] == 0
-            && context["range"]["characterUnit"] == "utf16"
             && context["range"]["start"] == json!({"line":0,"character":0})
             && context["range"]["end"] == json!({"line":1,"character":0}),
         "captured context lost its source, version, range or unsaved contents: {context}"
     );
     ensure!(
-        !content.contains(LATER.trim()),
+        !input.captured_context[0].content.contains(LATER.trim()),
         "the later buffer replaced the attachment"
     );
     let captured = provider.captured_chat_requests();
@@ -88,12 +90,22 @@ pub async fn verify(
         .filter(|request| {
             request["messages"].as_array().is_some_and(|messages| {
                 messages.iter().any(|message| {
-                    message["role"] == "user"
-                        && match &message["content"] {
-                            Value::String(text) => text == content,
-                            Value::Array(parts) => parts.iter().any(|part| part["text"] == content),
-                            _ => false,
-                        }
+                    if message["role"] != "user" {
+                        return false;
+                    }
+                    let texts = match &message["content"] {
+                        Value::String(text) => vec![text.as_str()],
+                        Value::Array(parts) => parts
+                            .iter()
+                            .filter_map(|part| part["text"].as_str())
+                            .collect(),
+                        _ => return false,
+                    };
+                    texts.len() == 2
+                        && texts[0] == content
+                        && texts[1].strip_prefix(CONTEXT_HEADER).is_some_and(|text| {
+                            serde_json::from_str::<Value>(text).is_ok_and(|value| value == context)
+                        })
                 })
             })
         })
