@@ -1187,6 +1187,9 @@ pub(crate) async fn load_request_for_admission_test(
 mod title_tests;
 
 #[cfg(test)]
+mod captured_context_tests;
+
+#[cfg(test)]
 pub(crate) mod workspace_cleanup_tests;
 
 #[cfg(test)]
