@@ -17,9 +17,18 @@ def Family.wireName : Family → String
   | .claudeSubscription => "ClaudeCliSubscription"
   | .anthropicApiKey => "AnthropicApiKey"
 
-def Tier.wireName : Tier → String
+def Tier.configName : Tier → String
   | .standard => "default"
   | .fast => "fast"
+
+/-- Fast is persisted as a product selection, then encoded as priority on the
+provider wire. The public API accepts both names, while the ChatGPT subscription
+endpoint rejects the fast alias. Priority is the common transport value.
+External premise: https://developers.openai.com/api/docs/guides/fast-mode
+and the subscription endpoint's tier validation (2026-10-18). -/
+def Tier.wireName : Tier → String
+  | .standard => "default"
+  | .fast => "priority"
 
 /-- The Responses and Chat Completions request contracts accept service_tier;
 ChatGPT subscriptions use the Codex Responses transport. Other transports have
@@ -52,6 +61,10 @@ theorem supported_selection_is_preserved (family : Family) (requested : Option T
     (h : supports family = true) :
     decide family requested = { allowed := true, wire := requested.map Tier.wireName } := by
   simp [decide, h]
+
+theorem fast_uses_priority (family : Family) (h : supports family = true) :
+    (decide family (some .fast)).wire = some "priority" := by
+  simp [decide, h, Tier.wireName]
 
 theorem unsupported_selection_is_rejected (family : Family) (tier : Tier)
     (h : supports family = false) :

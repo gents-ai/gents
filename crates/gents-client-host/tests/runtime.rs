@@ -662,7 +662,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         ensure!(
             provider.captured_chat_requests().iter().any(|request| {
                 request["model"] == "editor-fixture-alternate"
-                    && request["service_tier"] == "fast"
+                    && request["service_tier"] == "priority"
                     && request["messages"].as_array().is_some_and(|messages| {
                         messages.iter().any(|message| {
                             message["role"] == "user"

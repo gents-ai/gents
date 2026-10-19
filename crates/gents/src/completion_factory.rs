@@ -107,7 +107,7 @@ pub(crate) fn loop_config(
                         .filter(|_| {
                             agent_config.openai_wire_api == crate::OpenAiWireApi::ChatCompletions
                         })
-                        .map(|tier| serde_json::json!({"service_tier":tier.as_str()})),
+                        .map(|tier| serde_json::json!({"service_tier":tier.wire_value()})),
                 ),
             ),
             agent_config.backend_provider_kind,
