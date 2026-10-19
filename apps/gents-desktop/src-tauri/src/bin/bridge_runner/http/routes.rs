@@ -920,6 +920,7 @@ async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolC
                 lifecycle_state
                 status
                 started_at
+                completed_at
                 deadline_at
                 await_mode
                 stuck_since
@@ -969,6 +970,10 @@ async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolC
                 .map(str::to_string),
             started_at: row
                 .get("started_at")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            completed_at: row
+                .get("completed_at")
                 .and_then(|value| value.as_str())
                 .map(str::to_string),
             deadline_at: row

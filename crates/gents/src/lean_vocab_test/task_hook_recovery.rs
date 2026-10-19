@@ -66,11 +66,71 @@ impl Fixture {
         lifecycle
     }
 
+    /// POST-failure diagnostic: read-after-the-fact snapshot of selected
+    /// persisted request lifecycle fields for the failing request. Uses the
+    /// existing safe bounded query pattern (single-row filter on _docID,
+    /// narrow serde_json::Value projection following the request_state
+    /// lookup in tool_call_lifecycle/query.rs) and emits ONLY the explicit
+    /// selected fields — never a full row dump. Sanitized by construction:
+    /// lifecycle/generation/deadline tokens and wall time only — no message
+    /// content, identities, secrets, or full row dumps. NOT atomic guard
+    /// evidence: the row is read after the failure and may have changed.
+    /// The whole snapshot future is capped at 1s (best-effort diagnostic cap
+    /// only; no lease/test budget increase, no retries): on timeout a marker
+    /// is returned and the original begin error stays in the panic.
+    async fn post_failure_request_snapshot(&self, request_doc_id: &str) -> String {
+        let snapshot_started = chrono::Utc::now();
+        let escaped = crate::graphql::escape_graphql_string(request_doc_id);
+        let query_future = async {
+            let response = self.node.execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ lifecycle_state execution_generation execution_lease_expires_at execution_lease_secs }} }}"#
+            )).await;
+            if response.has_errors() {
+                return Err(());
+            }
+            let rows = response
+                .data
+                .as_ref()
+                .and_then(|data| data.get("AgentRequest"))
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            Ok(rows.first().and_then(|row| project_request_row(row)))
+        };
+        let snapshot = render_snapshot(
+            snapshot_started,
+            tokio::time::timeout(std::time::Duration::from_secs(1), query_future)
+                .await
+                .map_err(|_| ()),
+        );
+        snapshot
+    }
+
     async fn abandoned_request(&self, interrupt_requested: bool) -> String {
+        let claim_started = std::time::Instant::now();
         let mut lifecycle = self.claimed(Duration::from_secs(1)).await;
         let writer =
             crate::streaming::DefraStreamWriter::new(self.node.clone(), self.did(), Duration::ZERO);
-        lifecycle.begin_owned_execution(&writer).await.unwrap();
+        // The real begin path, 1s lease, sleeps, assertions, and failing
+        // behavior are preserved; the enrichment below is diagnostic-only
+        // (adjudicated): expected generation, monotonic claim-through-begin
+        // elapsed, and a POST-failure snapshot (not atomic guard evidence),
+        // capped at 1s so the original begin error always reaches the panic.
+        if let Err(begin_error) = lifecycle.begin_owned_execution(&writer).await {
+            let expected_generation = lifecycle
+                .execution_generation()
+                .unwrap_or("<none>")
+                .to_string();
+            let elapsed = claim_started.elapsed();
+            let request_doc_id = lifecycle.request().doc_id.clone();
+            let post_failure_snapshot = self.post_failure_request_snapshot(&request_doc_id).await;
+            panic!(
+                "begin_owned_execution failed in abandoned_request fixture: {begin_error}; \
+                 expected execution generation: {expected_generation}; \
+                 monotonic claim-through-begin elapsed: {elapsed:?}; \
+                 POST-failure request snapshot (not atomic guard evidence): {post_failure_snapshot}"
+            );
+        }
         let doc_id = lifecycle.request().doc_id.clone();
         if interrupt_requested {
             crate::interrupt::interrupt_request_by_doc_id(
@@ -516,5 +576,184 @@ async fn recovered_cleanup_outside_an_admitted_root_is_refused() {
             store.list().is_empty(),
             "{name}: the refused record is dropped"
         );
+    }
+}
+
+/// Pure projection of one persisted AgentRequest row onto the snapshot's
+/// selected fields. Used by the live query path AND the projection tests.
+/// Emits ONLY the explicitly selected fields; any other keys present in the
+/// row (identities, secrets, message content, unknown future fields) are
+/// ignored and never rendered.
+fn project_request_row(
+    row: &serde_json::Value,
+) -> Option<(Option<String>, Option<String>, Option<String>, Option<i64>)> {
+    Some((
+        row.get("lifecycle_state")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        row.get("execution_generation")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        row.get("execution_lease_expires_at")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        row.get("execution_lease_secs")
+            .and_then(serde_json::Value::as_i64),
+    ))
+}
+
+/// Pure rendering of the POST-failure snapshot result, separated so the
+/// formatting branches (selected fields / missing row / query failure / 1s
+/// timeout marker) are testable without a node process. `result` is the
+/// outer timeout result (Err = 1s cap hit); the inner value is the query
+/// outcome. Emits only the explicitly selected fields — never a full row.
+fn render_snapshot(
+    snapshot_started: chrono::DateTime<chrono::Utc>,
+    result: Result<
+        Result<Option<(Option<String>, Option<String>, Option<String>, Option<i64>)>, ()>,
+        (),
+    >,
+) -> String {
+    match result {
+        Ok(Ok(Some((lifecycle_state, generation, expires_at, lease_secs)))) => format!(
+            "snapshot_started_at={}; lifecycle_state={}; execution_generation={}; \
+             execution_lease_expires_at={}; execution_lease_secs={}",
+            snapshot_started.to_rfc3339(),
+            lifecycle_state.unwrap_or_else(|| "<missing>".to_string()),
+            generation.unwrap_or_else(|| "<missing>".to_string()),
+            expires_at.unwrap_or_else(|| "<missing>".to_string()),
+            lease_secs
+                .map(|secs| secs.to_string())
+                .unwrap_or_else(|| "<missing>".to_string()),
+        ),
+        Ok(Ok(None)) => "request row missing at snapshot time".to_string(),
+        Ok(Err(())) => "<snapshot query failed>".to_string(),
+        Err(()) => "<snapshot timed out after 1s>".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod render_snapshot_tests {
+    use super::{project_request_row, render_snapshot};
+    use chrono::TimeZone;
+
+    fn ts() -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc.with_ymd_and_hms(2026, 5, 20, 12, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn renders_selected_fields_only() {
+        let rendered = render_snapshot(
+            ts(),
+            Ok(Ok(Some((
+                Some("running".to_string()),
+                Some("gen-7".to_string()),
+                Some("2026-05-20T12:00:01Z".to_string()),
+                Some(1),
+            )))),
+        );
+        assert!(rendered.contains("snapshot_started_at=2026-05-20T12:00:00"));
+        assert!(rendered.contains("lifecycle_state=running"));
+        assert!(rendered.contains("execution_generation=gen-7"));
+        assert!(rendered.contains("execution_lease_expires_at=2026-05-20T12:00:01Z"));
+        assert!(rendered.contains("execution_lease_secs=1"));
+        assert!(!rendered.contains("request_id"));
+    }
+
+    #[test]
+    fn projects_realistic_row_without_request_id_and_ignores_sensitive_keys() {
+        // Realistic full AgentRequest row shape WITHOUT request_id in the
+        // projection, plus extra sensitive/unknown keys that must never be
+        // rendered.
+        let row = serde_json::json!({
+            "_docID": "agent-request-doc-1",
+            "lifecycle_state": "claimed",
+            "execution_generation": "gen-9",
+            "execution_lease_expires_at": "2026-05-20T12:00:01.5Z",
+            "execution_lease_secs": 1,
+            "requester_did": "did:key:secret-owner",
+            "session_id": "session-secret",
+            "messages": [{"role": "user", "content": "sensitive"}],
+            "future_unknown_field": {"nested": "payload"}
+        });
+        let (lifecycle_state, generation, expires_at, lease_secs) =
+            project_request_row(&row).expect("row projects");
+        assert_eq!(lifecycle_state.as_deref(), Some("claimed"));
+        assert_eq!(generation.as_deref(), Some("gen-9"));
+        assert_eq!(expires_at.as_deref(), Some("2026-05-20T12:00:01.5Z"));
+        assert_eq!(lease_secs, Some(1));
+        // Rendered output must contain none of the ignored sensitive keys.
+        let rendered = render_snapshot(
+            ts(),
+            Ok(Ok(Some((
+                lifecycle_state,
+                generation,
+                expires_at,
+                lease_secs,
+            )))),
+        );
+        assert!(!rendered.contains("requester_did"));
+        assert!(!rendered.contains("session-secret"));
+        assert!(!rendered.contains("sensitive"));
+        assert!(!rendered.contains("future_unknown_field"));
+        assert!(!rendered.contains("agent-request-doc-1"));
+    }
+
+    #[test]
+    fn projects_partial_row_with_malformed_types_as_missing() {
+        // Wrong-typed / missing selected fields render as <missing>, and
+        // malformed types are simply ignored rather than panicking.
+        let row = serde_json::json!({
+            "lifecycle_state": 17,
+            "execution_generation": {"nested": true},
+            "execution_lease_secs": "not-a-number"
+        });
+        let (lifecycle_state, generation, expires_at, lease_secs) =
+            project_request_row(&row).expect("row projects even when typed wrong");
+        assert_eq!(lifecycle_state, None);
+        assert_eq!(generation, None);
+        assert_eq!(expires_at, None);
+        assert_eq!(lease_secs, None);
+    }
+
+    #[test]
+    fn empty_array_and_absent_key_project_to_missing_row() {
+        // Empty array: query succeeded but no row matched.
+        let empty: Vec<serde_json::Value> = Vec::new();
+        assert!(empty
+            .first()
+            .and_then(|row| project_request_row(row))
+            .is_none());
+
+        // Absent key: data object present without AgentRequest.
+        let data = serde_json::json!({ "SomethingElse": [] });
+        let rows = data
+            .get("AgentRequest")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(rows
+            .first()
+            .and_then(|row| project_request_row(row))
+            .is_none());
+    }
+
+    #[test]
+    fn renders_missing_fields_and_missing_row() {
+        let partial = render_snapshot(ts(), Ok(Ok(Some((None, None, None, None)))));
+        assert!(partial.contains("lifecycle_state=<missing>"));
+        assert!(partial.contains("execution_lease_secs=<missing>"));
+
+        let absent = render_snapshot(ts(), Ok(Ok(None)));
+        assert_eq!(absent, "request row missing at snapshot time");
+    }
+
+    #[test]
+    fn renders_query_failure_and_timeout_markers() {
+        let failed = render_snapshot(ts(), Ok(Err(())));
+        assert_eq!(failed, "<snapshot query failed>");
+
+        let timed_out = render_snapshot(ts(), Err(()));
+        assert_eq!(timed_out, "<snapshot timed out after 1s>");
     }
 }

@@ -462,6 +462,10 @@ impl ToolCallLifecycle {
         self.await_mode
     }
 
+    pub(crate) fn started_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.started_at
+    }
+
     pub(crate) fn state(&self) -> ToolCallState {
         self.state
     }
