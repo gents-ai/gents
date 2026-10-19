@@ -3,7 +3,6 @@ use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 

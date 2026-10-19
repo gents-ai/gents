@@ -224,12 +224,18 @@ pub(crate) async fn load_session_goal_usage(
     node_did: &str,
     session_id: &str,
 ) -> Result<u64> {
-    let response = txn.execute_local_response(&format!(
+    let response = txn.execute(&format!(
         r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, purpose: {{ _in: ["normal", "access-review"] }} }}) {{ {} }} }}"#,
         escape_graphql_string(node_did), escape_graphql_string(session_id),
-        crate::request_admission::SIGNED_REQUEST_FIELDS,
+        crate::request_admission::SIGNED_REQUEST_RECEIPT_FIELDS,
     )).await?;
-    let requests: Vec<AgentRequestRow> = required_rows(&response, "AgentRequest")?;
+    let requests: Vec<AgentRequestRow> = serde_json::from_value(
+        response
+            .pointer("/data/AgentRequest")
+            .context("goal usage query omitted AgentRequest rows")?
+            .clone(),
+    )
+    .context("decoding goal usage AgentRequest rows")?;
     let mut by_doc = BTreeMap::new();
     for request in &requests {
         let doc = nonempty(request.doc_id.as_deref(), "goal physical request")?;
@@ -263,14 +269,12 @@ pub(crate) async fn load_session_goal_usage(
         .map(|doc| format!("\"{}\"", escape_graphql_string(doc)))
         .collect::<Vec<_>>()
         .join(", ");
-    let response = txn.execute_local_response(&format!(
+    let response = txn.execute(&format!(
         r#"{{ InferenceCall(filter: {{ node_did: {{ _eq: "{}" }}, request_doc_id: {{ _in: [{docs}] }} }}) {{ _docID node_did call_id request_doc_id request_id backend_id call_state ended_at prompt_tokens completion_tokens }} }}"#,
         escape_graphql_string(node_did),
     )).await?;
     let raw_calls = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("InferenceCall"))
+        .pointer("/data/InferenceCall")
         .and_then(serde_json::Value::as_array)
         .context("goal usage query omitted InferenceCall rows")?;
     project_goal_catalog(&request_ids, decode_calls_for_node(raw_calls, node_did)?)
