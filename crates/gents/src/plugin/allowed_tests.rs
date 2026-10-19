@@ -6,12 +6,34 @@ fn generated_operator_path_cases_protect_names_and_file_aliases() {
     struct Case {
         kind: String,
         expected: bool,
+        command: Option<CommandCase>,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CommandCase {
+        required: bool,
+        supported: bool,
+        inspected: bool,
+        single_linked: bool,
     }
 
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().operator_path_cases;
-    assert_eq!(cases.len(), 13);
+    assert_eq!(cases.len(), 29);
     for value in cases {
         let case: Case = serde_json::from_value(value.clone()).unwrap();
+        if let Some(input) = case.command {
+            assert_eq!(
+                gents_loop::tool_policy::operator_paths::command_guard_allows(
+                    input.required,
+                    input.supported,
+                    input.inspected,
+                    input.single_linked,
+                ),
+                case.expected,
+                "{value}",
+            );
+            continue;
+        }
         let world = world();
         let guarded = file(&world.gents);
         let queue = world.gents.join(crate::home::PLUGIN_APPROVALS_DIR_NAME);
@@ -148,6 +170,27 @@ fn world() -> World {
         root: base,
         gents,
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn command_protection_rejects_existing_and_late_aliases() {
+    let world = world();
+    let state = file(&world.gents);
+    std::fs::write(&state, "permissions").unwrap();
+    let protection = CommandProtection::capture(&world.gents, true).unwrap();
+    let alias = world.root.join("work/command-alias");
+    std::fs::hard_link(&state, &alias).unwrap();
+    assert!(protection.revalidate().is_err());
+    assert!(CommandProtection::capture(&world.gents, true).is_err());
+    std::fs::remove_file(alias).unwrap();
+    assert!(protection.revalidate().is_ok());
+}
+
+#[test]
+fn command_protection_has_no_unsupported_fallback() {
+    let world = world();
+    assert!(CommandProtection::capture(&world.gents, false).is_err());
 }
 
 #[test]

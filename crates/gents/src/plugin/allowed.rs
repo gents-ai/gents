@@ -317,6 +317,7 @@ pub fn bind(
 mod protected;
 pub(crate) use protected::ensure_mount_safe;
 pub(crate) use protected::write_permission_file;
+pub(crate) use protected::CommandProtection;
 pub use protected::{is_protected, protect};
 
 #[cfg(test)]

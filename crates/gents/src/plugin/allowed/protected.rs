@@ -10,23 +10,103 @@ pub(crate) const STAGING_DIR: &str = ".permission-staging";
 
 static PROTECTED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
-pub fn protect(home: &Path) {
-    let home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
-    let paths = [
-        super::file(&home),
-        super::lock_file(&home),
-        crate::plugin::approval::lock_file(&home),
+fn reserved_paths(home: &Path) -> [PathBuf; 7] {
+    [
+        super::file(home),
+        super::lock_file(home),
+        crate::plugin::approval::lock_file(home),
         home.join(crate::plugin::approval::workspace::FILE),
         home.join(crate::plugin::approval::workspace::LOCK),
         home.join(crate::home::PLUGIN_APPROVALS_DIR_NAME),
         home.join(STAGING_DIR),
-    ];
+    ]
+}
+
+pub fn protect(home: &Path) {
+    let home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+    let paths = reserved_paths(&home);
     if let Ok(mut protected) = PROTECTED.lock() {
         for path in paths {
             if !protected.contains(&path) {
                 protected.push(path);
             }
         }
+    }
+}
+
+pub(crate) struct CommandProtection {
+    home: PathBuf,
+    #[cfg(target_os = "macos")]
+    paths: Vec<PathBuf>,
+}
+
+impl CommandProtection {
+    pub(crate) fn home(&self) -> &Path {
+        &self.home
+    }
+
+    pub(crate) fn capture(home: &Path, supported: bool) -> anyhow::Result<Self> {
+        use gents_loop::tool_policy::operator_paths::command_guard_allows;
+
+        anyhow::ensure!(
+            command_guard_allows(true, supported, true, true),
+            "Command isolation for runtime permissions is unavailable. Use native file tools or a runtime with supported command isolation."
+        );
+        let canonical = home
+            .canonicalize()
+            .context("resolving command permission state")?;
+        anyhow::ensure!(
+            canonical == home,
+            "The runtime permission home changed. Retry the command."
+        );
+        let paths = reserved_paths(home).to_vec();
+        let links = visit_objects(&paths, true, single_linked)?;
+        anyhow::ensure!(
+            command_guard_allows(true, supported, true, links.into_iter().all(|single| single)),
+            "A runtime permission file has a hard-link alias. Remove the alias outside this session, then retry the command."
+        );
+        Ok(Self {
+            home: canonical,
+            #[cfg(target_os = "macos")]
+            paths,
+        })
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn paths(&self) -> &[PathBuf] {
+        &self.paths
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn ancestors(&self) -> std::collections::BTreeSet<PathBuf> {
+        self.paths
+            .iter()
+            .flat_map(|path| path.ancestors().skip(1).map(Path::to_owned))
+            .collect()
+    }
+
+    pub(crate) fn revalidate(&self) -> anyhow::Result<()> {
+        Self::capture(&self.home, true).map(|_| ())
+    }
+}
+
+fn single_linked(path: &Path) -> io::Result<bool> {
+    let file = open_regular_file(path, true)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let links = file.metadata()?.nlink();
+        if links == 0 {
+            return Err(io::Error::other(
+                "Runtime permission state changed during inspection. Retry the action.",
+            ));
+        }
+        Ok(links == 1)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = file;
+        Ok(false)
     }
 }
 
@@ -185,6 +265,14 @@ pub(super) fn inspect(paths: &[PathBuf], path: &Path) -> io::Result<bool> {
 }
 
 fn protected_objects(paths: &[PathBuf]) -> io::Result<Vec<Handle>> {
+    visit_objects(paths, false, regular_file)
+}
+
+fn visit_objects<T>(
+    paths: &[PathBuf],
+    canonical_only: bool,
+    inspect: impl Fn(&Path) -> io::Result<T>,
+) -> io::Result<Vec<T>> {
     let mut objects = Vec::new();
     let mut remaining = paths.to_vec();
     while let Some(guarded) = remaining.pop() {
@@ -193,6 +281,23 @@ fn protected_objects(paths: &[PathBuf]) -> io::Result<Vec<Handle>> {
             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error),
         };
+        if canonical_only {
+            if metadata.is_symlink() {
+                return Err(io::Error::other(
+                    "runtime permission state contains a symbolic link",
+                ));
+            }
+            let canonical = match guarded.canonicalize() {
+                Ok(path) => path,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error),
+            };
+            if canonical != guarded {
+                return Err(io::Error::other(
+                    "runtime permission state changed during inspection",
+                ));
+            }
+        }
         if metadata.is_dir() {
             if let Some(entries) = optional_directory(&guarded)? {
                 for entry in entries {
@@ -206,7 +311,7 @@ fn protected_objects(paths: &[PathBuf]) -> io::Result<Vec<Handle>> {
                     "operator state contains a directory link",
                 ));
             }
-            match regular_file(&guarded) {
+            match inspect(&guarded) {
                 Ok(current) => objects.push(current),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error),
@@ -225,6 +330,10 @@ pub(super) fn optional_directory(path: &Path) -> io::Result<Option<fs::ReadDir>>
 }
 
 fn regular_file(path: &Path) -> io::Result<Handle> {
+    Handle::from_file(open_regular_file(path, false)?)
+}
+
+fn open_regular_file(path: &Path, _no_follow: bool) -> io::Result<fs::File> {
     if !fs::metadata(path)?.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -236,7 +345,7 @@ fn regular_file(path: &Path) -> io::Result<Handle> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NONBLOCK);
+        options.custom_flags(libc::O_NONBLOCK | if _no_follow { libc::O_NOFOLLOW } else { 0 });
     }
     let file = match options.open(path) {
         Ok(file) => file,
@@ -251,5 +360,5 @@ fn regular_file(path: &Path) -> io::Result<Handle> {
             "operator file changed during inspection",
         ));
     }
-    Handle::from_file(file)
+    Ok(file)
 }
