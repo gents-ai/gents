@@ -136,6 +136,7 @@ pub(crate) struct LeanContractSnapshot {
         std::collections::BTreeMap<String, Vec<LeanScopeCollectionRule>>,
     pub(crate) title_request_admission_cases: Vec<LeanTitleRequestAdmissionCase>,
     pub(crate) title_request_purpose_wire_cases: Vec<LeanTitleRequestPurposeWireCase>,
+    pub(crate) title_text_cases: serde_json::Value,
     pub(crate) title_usage_cases: Vec<LeanTitleUsageCase>,
     pub(crate) title_admission_join_cases: Vec<LeanTitleAdmissionJoinCase>,
     pub(crate) frontend_client_shell_case_count: usize,

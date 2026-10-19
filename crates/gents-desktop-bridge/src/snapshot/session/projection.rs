@@ -896,9 +896,9 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
         node_did: resolved_node_did,
         agent_id: resolved_agent_id,
         title: session_row.and_then(|row| {
-            row.title
-                .as_ref()
-                .and_then(|title| normalize_optional(Some(&title.text)))
+            row.title.as_ref().and_then(|title| {
+                normalize_optional(Some(&gents::session::display_session_title(title)))
+            })
         }),
         preview_text: session_row.and_then(|row| {
             row.observation
