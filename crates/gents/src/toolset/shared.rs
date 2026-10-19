@@ -14,7 +14,8 @@ pub(crate) use command::shell_join;
 pub(crate) use command::validate_command_policy;
 pub(crate) use command::{
     admit_host_executable, default_lsp_network_mode, effective_command_policy,
-    lsp_sandbox_for_effective, normalize_workspace_lifecycle_state, prepare_managed_command,
+    lsp_sandbox_for_effective, normalize_workspace_lifecycle_state, prepare_declared_cli_command,
+    prepare_managed_command,
 };
 #[cfg(test)]
 pub(super) use command::{build_shell_env_from_vars, validate_read_only_command};

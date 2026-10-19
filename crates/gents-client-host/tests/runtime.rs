@@ -213,6 +213,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     drop(seed);
     let mut host_command = Command::new(env!("CARGO_BIN_EXE_gents-client-host"));
     host_command.args(["--serve", "--home"]).arg(paths.root());
+    if matches!(journey, Journey::Editor) {
+        host_command.arg("--editor-store");
+    }
     #[cfg(unix)]
     let mut host = host_command
         .stdin(Stdio::null())
@@ -599,8 +602,22 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             script.is_file(),
             "The extension checkout has no tests/editor.mjs"
         );
+        let mut editor = Command::new("node");
+        if std::env::var("GENTS_VSCODE_STARTUP_CUSTODY").as_deref() == Ok("file") {
+            let startup_paths = DesktopPaths::from_root(root.join("startup-client"));
+            let startup = Arc::new(
+                ClientCore::start_with_paths_and_options(
+                    startup_paths.clone(),
+                    ClientCoreOptions::local_only(),
+                )
+                .await?,
+            );
+            startup.shutdown().await?;
+            editor.env("GENTS_VSCODE_STARTUP_CLIENT_HOME", startup_paths.root());
+        }
         let log = std::fs::File::create(root.join("editor.log"))?;
-        let child = Command::new("node")
+        let child = editor
+            .env("GENTS_VSCODE_INFERENCE_ENDPOINT", provider.endpoint())
             .arg(script)
             .arg(root)
             .arg(paths.root())

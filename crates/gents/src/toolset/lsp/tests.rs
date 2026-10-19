@@ -470,6 +470,7 @@ async fn workspace_edit_preflights_every_file_before_writing_any_file() {
         workspace_root: root.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
+        operator_guard_home: None,
     };
     let pool = LspPool::new();
     let lease = pool.get_or_start(key, &server, &config).await.unwrap();
@@ -847,6 +848,7 @@ async fn request_cancel_does_not_kill_pooled_server() {
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
+        operator_guard_home: None,
     };
     let lease = pool
         .get_or_start(key.clone(), &server, &config)
@@ -998,6 +1000,7 @@ async fn simultaneous_first_calls_share_one_process() {
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
+        operator_guard_home: None,
     };
     let first = pool.get_or_start(key.clone(), &server, &config);
     let second = pool.get_or_start(key.clone(), &server, &config);
@@ -1009,6 +1012,228 @@ async fn simultaneous_first_calls_share_one_process() {
     assert!(a.is_ok(), "first start failed");
     assert!(b.is_ok(), "second start failed");
     assert_eq!(pool.live_count().await, 1);
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn operator_guard_selection_excludes_cached_unprotected_servers() {
+    use crate::plugin::approval::workspace;
+
+    if !python3_available() {
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let home = root.join("runtime");
+    std::fs::create_dir(&home).unwrap();
+    let private = home.join(crate::home::ALLOWED_DIRS_FILE_NAME);
+    std::fs::write(&private, "private permission fixture").unwrap();
+    let ordinary = root.join("ordinary.txt");
+    std::fs::write(&ordinary, "ordinary file").unwrap();
+    let fixture = FIXTURE_PY.replace(
+        "    elif method == 'shutdown':",
+        r#"    elif method == 'fixture/readable':
+        try:
+            with open(msg['params']['path']) as source:
+                source.read()
+            readable = True
+        except PermissionError:
+            readable = False
+        write({"jsonrpc":"2.0","id":mid,"result":readable})
+    elif method == 'shutdown':"#,
+    );
+    let server = fixture_server(fixture);
+    let config = sample_config(
+        root.clone(),
+        FileToolMode::ReadOnly,
+        "s-operator-guard",
+        vec![server.clone()],
+    );
+    let key = PoolKey {
+        session_id: config.session_id.clone(),
+        agent_id: config.agent_id.clone(),
+        workspace_root: root.clone(),
+        server_name: server.name.clone(),
+        config_digest: config.digest.clone(),
+        operator_guard_home: None,
+    };
+    let pool = LspPool::new();
+    let scope = workspace::for_request(
+        Some(&home),
+        "node",
+        Some("requester"),
+        &config.agent_id,
+        Some(&root),
+    )
+    .unwrap();
+    workspace::scope(scope, async {
+        let initial = pool
+            .get_or_start(key.clone(), &server, &config)
+            .await
+            .unwrap();
+        assert_eq!(
+            initial
+                .client()
+                .request("fixture/readable", serde_json::json!({"path":private}))
+                .await
+                .unwrap(),
+            true,
+        );
+        let workspace =
+            workspace::WorkspaceKey::canonical("node", "requester", &config.agent_id, &root)
+                .unwrap();
+        workspace::save_mode(&home, &workspace, 0, workspace::Mode::FullAccess, None).unwrap();
+        assert!(pool.get_ready(&key).await.is_none());
+        assert!(!pool.has_ready(&key).await);
+        assert!(pool
+            .inspect_session(&config.session_id, &config.agent_id, &root, &config.digest,)
+            .await
+            .unwrap()
+            .is_empty());
+        let error = pool
+            .get_or_start(key.clone(), &server, &config)
+            .await
+            .err()
+            .unwrap();
+        assert!(error.contains("protection changed"), "{error}");
+        let guarded_key = PoolKey {
+            operator_guard_home: Some(home.clone()),
+            ..key.clone()
+        };
+        let guarded = pool
+            .get_or_start(guarded_key.clone(), &server, &config)
+            .await
+            .unwrap();
+        assert!(!std::ptr::eq(initial.client(), guarded.client()));
+        assert_eq!(
+            guarded
+                .client()
+                .request("fixture/readable", serde_json::json!({"path":private}))
+                .await
+                .unwrap(),
+            false,
+        );
+        assert_eq!(
+            guarded
+                .client()
+                .request("fixture/readable", serde_json::json!({"path":ordinary}))
+                .await
+                .unwrap(),
+            true,
+        );
+        let alias = root.join("permission-alias");
+        std::fs::hard_link(&private, &alias).unwrap();
+        assert!(pool.get_ready(&guarded_key).await.is_none());
+        let states = pool
+            .inspect_session(&config.session_id, &config.agent_id, &root, &config.digest)
+            .await
+            .unwrap();
+        assert!(matches!(
+            states.get(&server.name),
+            Some(super::pool::PoolServerState::Failed(error)) if error.contains("hard-link alias")
+        ));
+        let error = pool
+            .get_or_start(guarded_key.clone(), &server, &config)
+            .await
+            .err()
+            .unwrap();
+        assert!(error.contains("hard-link alias"), "{error}");
+        std::fs::remove_file(alias).unwrap();
+        let cached = pool.get_ready(&guarded_key).await.unwrap();
+        assert!(std::ptr::eq(guarded.client(), cached.client()));
+        drop(cached);
+        drop(initial);
+        drop(guarded);
+        pool.retire(&key).await;
+        pool.retire(&guarded_key).await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn operator_guard_selection_is_rechecked_after_server_initialization() {
+    use crate::plugin::approval::workspace;
+
+    if !python3_available() {
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let home = root.join("runtime");
+    std::fs::create_dir(&home).unwrap();
+    let ready = root.join("initialize-ready");
+    let release = root.join("initialize-release");
+    let fixture = FIXTURE_PY.replace("import json, sys", "import json, os, sys, time").replace(
+        "    if method == 'initialize':",
+        &format!("    if method == 'initialize':\n        open({ready:?}, 'w').close()\n        while not os.path.exists({release:?}):\n            time.sleep(0.01)"),
+    );
+    let server = fixture_server(fixture);
+    let config = sample_config(
+        root.clone(),
+        FileToolMode::ReadOnly,
+        "s-guard-initialize",
+        vec![server.clone()],
+    );
+    let key = PoolKey {
+        session_id: config.session_id.clone(),
+        agent_id: config.agent_id.clone(),
+        workspace_root: root.clone(),
+        server_name: server.name.clone(),
+        config_digest: config.digest.clone(),
+        operator_guard_home: None,
+    };
+    let pool = LspPool::new();
+    let scope = workspace::for_request(
+        Some(&home),
+        "node",
+        Some("requester"),
+        &config.agent_id,
+        Some(&root),
+    )
+    .unwrap();
+    workspace::scope(scope, async {
+        let selection_changed = async {
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                while !ready.exists() {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("fixture did not reach initialization");
+            let workspace =
+                workspace::WorkspaceKey::canonical("node", "requester", &config.agent_id, &root)
+                    .unwrap();
+            workspace::save_mode(&home, &workspace, 0, workspace::Mode::FullAccess, None).unwrap();
+            std::fs::write(&release, "continue").unwrap();
+        };
+        let (started, ()) = tokio::join!(
+            pool.get_or_start(key.clone(), &server, &config),
+            selection_changed
+        );
+        let error = match started {
+            Ok(lease) => {
+                drop(lease);
+                pool.shutdown().await;
+                None
+            }
+            Err(error) => Some(error),
+        };
+        assert!(
+            error
+                .as_deref()
+                .is_some_and(|error| error.contains("protection changed")),
+            "{error:?}"
+        );
+        assert_eq!(pool.live_count().await, 0);
+        std::fs::remove_file(workspace::preferences_file(&home)).unwrap();
+        let retried = pool
+            .get_or_start(key.clone(), &server, &config)
+            .await
+            .expect("admission changes must not create initialization backoff");
+        drop(retried);
+        pool.shutdown().await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -1039,6 +1264,7 @@ async fn resolved_executable_path_is_subject_to_command_prefix_policy() {
         workspace_root: root.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
+        operator_guard_home: None,
     };
     let error = match LspPool::new().get_or_start(key, &server, &config).await {
         Ok(_) => panic!("absolute-path prefix must constrain a catalog bare command"),
@@ -1118,6 +1344,7 @@ while True:
         workspace_root: root.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
+        operator_guard_home: None,
     };
     let lease = pool.get_or_start(key, &server, &config).await.unwrap();
     let result = super::actions::request_maybe_retry(
@@ -1295,6 +1522,7 @@ async fn busy_fixture_symbols(
         workspace_root: root.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
+        operator_guard_home: None,
     };
     let lease = pool.get_or_start(key, &server, &config).await.unwrap();
     let started = std::time::Instant::now();
@@ -1336,6 +1564,7 @@ async fn ensure_open_resyncs_when_disk_text_changes_out_of_band() {
         workspace_root: root.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
+        operator_guard_home: None,
     };
     let pool = LspPool::new();
     let lease = pool.get_or_start(key, &server, &config).await.unwrap();
@@ -1411,6 +1640,7 @@ while True:
         workspace_root: root.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
+        operator_guard_home: None,
     };
     let pool = LspPool::new();
     let first = pool
@@ -1461,6 +1691,7 @@ async fn rust_analyzer_readiness_waits_for_workspace_and_quiescence() {
         workspace_root: root.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
+        operator_guard_home: None,
     };
     let pool = LspPool::new();
     let lease = pool.get_or_start(key, &server, &config).await.unwrap();
@@ -1538,6 +1769,7 @@ while True:
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
+        operator_guard_home: None,
     };
     let first = pool.get_or_start(key.clone(), &server, &config);
     let second = pool.get_or_start(key.clone(), &server, &config);
@@ -1584,6 +1816,7 @@ async fn idle_sweep_retires_zero_lease_ready_clients() {
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
+        operator_guard_home: None,
     };
     let lease = pool
         .get_or_start(key.clone(), &server, &config)
@@ -1667,6 +1900,7 @@ while True:
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
+        operator_guard_home: None,
     };
     let _lease = pool
         .get_or_start(key, &server, &config)
@@ -2255,6 +2489,7 @@ while True:
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
+        operator_guard_home: None,
     };
     let start = pool.get_or_start(key.clone(), &server, &config);
     tokio::select! {
@@ -2334,6 +2569,7 @@ while True:
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
+        operator_guard_home: None,
     };
     let lease = pool
         .get_or_start(key.clone(), &server, &config)
@@ -2570,6 +2806,7 @@ async fn start_client_initializes_with_pool_key_workspace() {
         workspace_root: overlay.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
+        operator_guard_home: None,
     };
     let lease = pool.get_or_start(key, &server, &config).await.unwrap();
     assert_eq!(lease.client().workspace(), overlay.path());
@@ -2627,6 +2864,7 @@ pub(crate) async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispa
         workspace_root: source.clone(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
+        operator_guard_home: None,
     };
     crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
         None,

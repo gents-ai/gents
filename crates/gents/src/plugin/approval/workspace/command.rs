@@ -5,6 +5,13 @@ use anyhow::Result;
 use super::{context, BindingAction};
 use crate::toolset::{CommandExecutionMode, CommandExecutionPolicy};
 
+pub(crate) fn guard_home() -> Result<Option<PathBuf>> {
+    let Some(home) = context::current_home() else {
+        return Ok(None);
+    };
+    Ok(context::settings(&home)?.map(|_| home))
+}
+
 pub(crate) fn writable_root(root: &Path, policy: &CommandExecutionPolicy) -> Result<PathBuf> {
     if policy.mode != CommandExecutionMode::WorkspaceWrite {
         return Ok(root.to_owned());

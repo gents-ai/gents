@@ -46,6 +46,7 @@ pub const ALLOWED_DIRS_FILE_NAME: &str = "allowed-dirs.json";
 pub const ALLOWED_DIRS_LOCK_FILE_NAME: &str = "allowed-dirs.lock";
 pub const WORKSPACE_APPROVALS_FILE_NAME: &str = "workspace-approvals.json";
 pub const WORKSPACE_APPROVALS_LOCK_FILE_NAME: &str = "workspace-approvals.lock";
+pub const PERMISSION_STAGING_DIR_NAME: &str = ".permission-staging";
 pub const PLUGIN_APPROVALS_DIR_NAME: &str = "plugin-approvals";
 pub const PLUGIN_APPROVALS_LOCK_FILE_NAME: &str = ".plugin-approvals.lock";
 pub const PLUGINS_DIR_NAME: &str = "plugins";
@@ -66,6 +67,7 @@ pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
     PLUGIN_SERVICES_DIR_NAME,
     ALLOWED_DIRS_FILE_NAME,
     WORKSPACE_APPROVALS_FILE_NAME,
+    PERMISSION_STAGING_DIR_NAME,
     PLUGIN_APPROVALS_DIR_NAME,
     REGISTRY_DIR_NAME,
     CODEX_UI_DIR_NAME,
@@ -671,6 +673,9 @@ mod tests {
             .collect();
         fs::write(home.path().join(ALLOWED_DIRS_FILE_NAME), b"{}").unwrap();
         fs::write(home.path().join(WORKSPACE_APPROVALS_FILE_NAME), b"{}").unwrap();
+        let staging = home.path().join(PERMISSION_STAGING_DIR_NAME);
+        fs::create_dir(&staging).unwrap();
+        fs::write(staging.join("pending"), b"{}").unwrap();
         let entries = home_entries(home.path(), &[]).unwrap();
         retire_entries(
             &[RetireGroup {
@@ -682,6 +687,7 @@ mod tests {
         .unwrap();
         assert!(!home.path().join(ALLOWED_DIRS_FILE_NAME).exists());
         assert!(!home.path().join(WORKSPACE_APPROVALS_FILE_NAME).exists());
+        assert!(!staging.exists());
         for name in RUNTIME_HOME_LOCK_FILES {
             assert!(
                 matches!(

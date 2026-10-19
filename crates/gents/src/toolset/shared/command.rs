@@ -19,6 +19,9 @@ pub use gents_loop::tool_policy::{
 
 use gents_loop::live_output::COMMAND_OUTPUT_META_PREFIX as OUTPUT_META_PREFIX;
 const FALLBACK_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
+#[cfg(all(test, target_os = "macos"))]
+#[path = "command_protection_tests.rs"]
+mod command_protection_tests;
 #[cfg(target_os = "macos")]
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 const CORE_ENV_VARS: &[&str] = &[
@@ -366,12 +369,31 @@ fn which_on_host_path(name: &str) -> Option<PathBuf> {
     None
 }
 
+pub(crate) struct PreparedManagedCommand {
+    pub(crate) program: PathBuf,
+    pub(crate) args: Vec<String>,
+    pub(crate) environment: HashMap<String, String>,
+    pub(crate) sandbox: &'static str,
+    pub(crate) operator_guard_home: Option<PathBuf>,
+}
+
+impl std::fmt::Debug for PreparedManagedCommand {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedManagedCommand")
+            .field("program", &self.program)
+            .field("sandbox", &self.sandbox)
+            .field("operator_guard_home", &self.operator_guard_home)
+            .finish_non_exhaustive()
+    }
+}
+
 pub(crate) async fn prepare_managed_command(
     root: &Path,
     command: &str,
     args: &[String],
     constraints: &CommandConstraints,
-) -> std::result::Result<(PathBuf, Vec<String>, HashMap<String, String>, &'static str), ToolError> {
+) -> std::result::Result<PreparedManagedCommand, ToolError> {
     let admitted = admit_host_executable(command, root)
         .map_err(|reason| policy_denial(&constraints.to_spawn_policy(), reason))?;
     let spawn_policy = constraints.to_spawn_policy();
@@ -390,12 +412,19 @@ pub(crate) async fn prepare_managed_command(
     )?;
     let launch =
         prepare_command_launch(root, &admitted.to_string_lossy(), args, &spawn_policy).await?;
-    Ok((
-        PathBuf::from(launch.program),
-        launch.args,
-        launch.environment,
-        launch.sandbox,
-    ))
+    if let Some(protection) = &launch.protection {
+        protection.revalidate().map_err(command_guard_error)?;
+    }
+    Ok(PreparedManagedCommand {
+        program: PathBuf::from(launch.program),
+        args: launch.args,
+        environment: launch.environment,
+        sandbox: launch.sandbox,
+        operator_guard_home: launch
+            .protection
+            .as_ref()
+            .map(|guard| guard.home().to_owned()),
+    })
 }
 
 pub(crate) async fn run_command(
@@ -429,6 +458,9 @@ pub(crate) async fn run_command(
     .map_err(|error| {
         ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
     })?;
+    if let Some(protection) = &launch.protection {
+        protection.revalidate().map_err(command_guard_error)?;
+    }
     let bounds = tool_execution_bounds(timeout);
     let live_output = bounds.live_output.clone();
     let request_deadline = bounds.request_deadline_at;
@@ -904,6 +936,7 @@ struct CommandLaunch {
     environment: HashMap<String, String>,
     sandbox: &'static str,
     writable_root: Option<PathBuf>,
+    protection: Option<crate::plugin::allowed::CommandProtection>,
 }
 
 async fn prepare_command_launch(
@@ -962,8 +995,23 @@ async fn prepare_command_launch(
         .as_ref()
         .map(|grant| grant.root())
         .unwrap_or(&workspace_root);
-    let (program, argv, sandbox) =
-        sandboxed_command_for_policy(writable_root, command, args, policy)?;
+    let protection = crate::plugin::approval::workspace::command_guard_home()
+        .map_err(command_guard_error)?
+        .map(|home| {
+            crate::plugin::allowed::CommandProtection::capture(
+                &home,
+                workspace_write_sandbox_enforced(),
+            )
+        })
+        .transpose()
+        .map_err(command_guard_error)?;
+    let (program, argv, sandbox) = match &protection {
+        Some(protection) => {
+            protected_command_for_policy(writable_root, command, args, policy, protection)
+                .map_err(command_guard_error)?
+        }
+        None => sandboxed_command_for_policy(writable_root, command, args, policy)?,
+    };
     Ok(CommandLaunch {
         program,
         args: argv,
@@ -971,7 +1019,130 @@ async fn prepare_command_launch(
         sandbox,
         writable_root: (policy.mode == CommandExecutionMode::WorkspaceWrite)
             .then(|| writable_root.to_owned()),
+        protection,
     })
+}
+
+fn command_guard_error(error: anyhow::Error) -> ToolError {
+    ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
+}
+
+pub(crate) async fn prepare_declared_cli_command(
+    cwd: &Path,
+    command: &str,
+    args: &[String],
+    allowed_prefixes: &[Vec<String>],
+) -> std::result::Result<Vec<String>, ToolError> {
+    let policy = CommandExecutionPolicy::write_capable()
+        .with_mode(CommandExecutionMode::Unrestricted)
+        .with_allowed_argv_prefixes(
+            allowed_prefixes
+                .iter()
+                .map(|prefix| {
+                    std::iter::once(command.to_owned())
+                        .chain(prefix.iter().cloned())
+                        .collect()
+                })
+                .collect(),
+        );
+    let protection = crate::plugin::approval::workspace::command_guard_home()
+        .map_err(command_guard_error)?
+        .map(|home| {
+            crate::plugin::allowed::CommandProtection::capture(
+                &home,
+                workspace_write_sandbox_enforced(),
+            )
+        })
+        .transpose()
+        .map_err(command_guard_error)?;
+    let argv: Vec<_> = std::iter::once(command.to_owned())
+        .chain(args.iter().cloned())
+        .collect();
+    crate::plugin::approval::workspace::authorize_command(&argv, cwd, cwd, None, &policy)
+        .await
+        .map_err(command_guard_error)?;
+    match protection {
+        Some(protection) => {
+            protection.revalidate().map_err(command_guard_error)?;
+            let (program, args, _) =
+                protected_command_for_policy(cwd, command, args, &policy, &protection)
+                    .map_err(command_guard_error)?;
+            Ok(std::iter::once(program).chain(args).collect())
+        }
+        None => Ok(argv),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn protected_command_for_policy(
+    root: &Path,
+    command: &str,
+    args: &[String],
+    policy: &CommandExecutionPolicy,
+    protection: &crate::plugin::allowed::CommandProtection,
+) -> Result<(String, Vec<String>, &'static str)> {
+    let bounded = matches!(
+        policy.mode,
+        CommandExecutionMode::WorkspaceWrite | CommandExecutionMode::ArtifactWrite
+    );
+    let mut profile = if bounded {
+        macos_workspace_write_policy(policy.network_mode)
+    } else {
+        "(version 1)\n(allow default)\n".to_owned()
+    };
+    if policy.mode == CommandExecutionMode::ArtifactWrite {
+        profile.push_str("\n(deny file-link)\n");
+    }
+    let mut parameters = vec![format!(
+        "-DWRITABLE_ROOT={}",
+        root.to_str().context("command root is not valid UTF-8")?
+    )];
+    for (index, path) in protection.paths().iter().enumerate() {
+        profile.push_str(&format!(
+            "\n(deny file-read* file-write* (subpath (param \"OPERATOR_{index}\")))\n"
+        ));
+        parameters.push(format!(
+            "-DOPERATOR_{index}={}",
+            path.to_str()
+                .context("permission path is not valid UTF-8")?
+        ));
+    }
+    for (index, path) in protection.ancestors().iter().enumerate() {
+        profile.push_str(&format!(
+            "\n(deny file-write-unlink (literal (param \"OPERATOR_PARENT_{index}\")))\n"
+        ));
+        parameters.push(format!(
+            "-DOPERATOR_PARENT_{index}={}",
+            path.to_str()
+                .context("permission parent is not valid UTF-8")?
+        ));
+    }
+    let argv = std::iter::once("-p".to_owned())
+        .chain(std::iter::once(profile))
+        .chain(parameters)
+        .chain(["--".to_owned(), command.to_owned()])
+        .chain(args.iter().cloned())
+        .collect();
+    Ok((
+        SANDBOX_EXEC.to_owned(),
+        argv,
+        if bounded {
+            "macos_seatbelt"
+        } else {
+            "macos_operator_state_guard"
+        },
+    ))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn protected_command_for_policy(
+    _root: &Path,
+    _command: &str,
+    _args: &[String],
+    _policy: &CommandExecutionPolicy,
+    _protection: &crate::plugin::allowed::CommandProtection,
+) -> Result<(String, Vec<String>, &'static str)> {
+    anyhow::bail!("Command isolation for runtime permissions is unavailable on this platform.")
 }
 
 fn sandboxed_command_for_policy(
