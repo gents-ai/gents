@@ -118,104 +118,32 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     Uuid::parse_str(&thread_id)
         .with_context(|| format!("Codex TUI requires UUID thread ids, got {thread_id}"))?;
 
-    // ThreadStart threads stay ephemeral in shim memory until the first
-    // turn materializes the canonical AgentSession row, but the goal must
-    // be created before that sole user turn. Materialize the canonical
-    // session for the returned thread id through the same
-    // create_AgentSession fixture this suite uses for pre-existing
-    // sessions (agent_scope, thread_listing) so thread/goal/set resolves
-    // the thread without adding a turn. The later turn's session
-    // materialization is an idempotent ensure that reuses this row and
-    // validates its node/requester/agent scope, so ids and history are
-    // unchanged.
-    let default_agent_id = format!("{node_did}:default");
-    serve
+    // ThreadStart threads are ephemeral in shim memory: the canonical
+    // AgentSession row is materialized by the sole user turn below, not by
+    // ThreadStart. Assert the pre-turn absence explicitly so the session
+    // assertions later in this test are known to exercise the turn-driven
+    // ensure path rather than a pre-seeded row.
+    let session_before_turn = serve
         .capturing(graphql_query(
             &graphql,
             &format!(
-                r#"mutation {{
-                create_AgentSession(input: {{
-                    session_id: "{}",
-                    node_did: "{}",
-                    requester_did: "{}",
-                    agent_id: "{}",
-                    created_at: "{}"
-                }}) {{ _docID }}
+                r#"{{
+                AgentSession(filter: {{
+                    session_id: {{ _eq: "{}" }},
+                    node_did: {{ _eq: "{}" }}
+                }}) {{ session_id }}
             }}"#,
                 escape_graphql_string(&thread_id),
                 escape_graphql_string(&node_did),
-                escape_graphql_string(&node_did),
-                escape_graphql_string(&default_agent_id),
-                escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
             ),
         ))
         .await?;
-
-    // The goal must exist before the sole user turn so its post-turn
-    // tokens_used has the right premise: fresh goals baseline against
-    // existing session usage (set_goal_in_txn), so a goal created before
-    // the turn attributes the turn's spend to itself. It is created
-    // Paused because paused goals still accrue tokens from explicit
-    // user turns (refresh_goal_usage has no status gate on tokens) while
-    // never autonomously continuing (paused yields GoalDecision::None),
-    // which keeps this a single-turn fixture.
-    send_client_request(
-        &mut ws,
-        codex::ClientRequest::ThreadGoalSet {
-            request_id: request_id(37),
-            params: codex::ThreadGoalSetParams {
-                thread_id: thread_id.clone(),
-                objective: Some("exercise GENTS-backed Codex goal state".to_string()),
-                status: Some(codex::ThreadGoalStatus::Paused),
-                token_budget: Some(Some(123)),
-            },
-        },
-    )
-    .await?;
-    let goal_set: codex::ThreadGoalSetResponse = read_typed_response(&mut ws, request_id(37))
-        .await
-        .context("reading thread/goal/set response")?;
-    assert_eq!(goal_set.goal.thread_id, thread_id);
-    assert_eq!(
-        goal_set.goal.objective,
-        "exercise GENTS-backed Codex goal state"
-    );
-    assert_eq!(
-        goal_set.goal.status,
-        codex::ThreadGoalStatus::Paused,
-        "goal should be created paused so it cannot autonomously continue: {goal_set:?}"
-    );
-    assert_eq!(goal_set.goal.token_budget, Some(123));
-    assert_eq!(
-        goal_set.goal.tokens_used, 0,
-        "a fresh goal must start with zero usage: {goal_set:?}"
-    );
-
-    send_client_request(
-        &mut ws,
-        codex::ClientRequest::ThreadGoalGet {
-            request_id: request_id(38),
-            params: codex::ThreadGoalGetParams {
-                thread_id: thread_id.clone(),
-            },
-        },
-    )
-    .await?;
-    let goal_get: codex::ThreadGoalGetResponse = read_typed_response(&mut ws, request_id(38))
-        .await
-        .context("reading thread/goal/get response")?;
-    let goal_get = goal_get
-        .goal
-        .expect("goal should exist before the first turn");
-    assert_eq!(goal_get.thread_id, thread_id);
-    assert_eq!(
-        goal_get.status,
-        codex::ThreadGoalStatus::Paused,
-        "goal should still be paused before the turn: {goal_get:?}"
-    );
-    assert_eq!(
-        goal_get.tokens_used, 0,
-        "no session usage should be attributed before the first turn: {goal_get:?}"
+    assert!(
+        session_before_turn
+            .pointer("/data/AgentSession")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty),
+        "ThreadStart must not materialize a canonical AgentSession row before the first turn: {session_before_turn}"
     );
 
     let prompt = format!("Reply with exactly {}.", Uuid::new_v4().simple());
@@ -435,6 +363,58 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
         .await
         .context("reading thread/settings/update response")?;
 
+    // Goal field roundtrip only here. Usage accounting for a goal created
+    // after the turn is covered by the dedicated paused-goal test below:
+    // whether goal.tokens_used reflects the turn's spend depends on the
+    // goal's creation timing relative to session usage (fresh goals
+    // baseline against existing session usage), so the post-turn value is
+    // provenance-dependent and asserted nowhere in this lifecycle test.
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadGoalSet {
+            request_id: request_id(37),
+            params: codex::ThreadGoalSetParams {
+                thread_id: thread_id.clone(),
+                objective: Some("exercise GENTS-backed Codex goal state".to_string()),
+                status: Some(codex::ThreadGoalStatus::Active),
+                token_budget: Some(Some(123)),
+            },
+        },
+    )
+    .await?;
+    let goal_set: codex::ThreadGoalSetResponse = read_typed_response(&mut ws, request_id(37))
+        .await
+        .context("reading thread/goal/set response")?;
+    assert_eq!(goal_set.goal.thread_id, thread_id);
+    assert_eq!(
+        goal_set.goal.objective,
+        "exercise GENTS-backed Codex goal state"
+    );
+    assert_eq!(
+        goal_set.goal.status,
+        codex::ThreadGoalStatus::Active,
+        "thread/goal/set should roundtrip the requested active status: {goal_set:?}"
+    );
+    assert_eq!(goal_set.goal.token_budget, Some(123));
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadGoalGet {
+            request_id: request_id(38),
+            params: codex::ThreadGoalGetParams {
+                thread_id: thread_id.clone(),
+            },
+        },
+    )
+    .await?;
+    let goal_get: codex::ThreadGoalGetResponse = read_typed_response(&mut ws, request_id(38))
+        .await
+        .context("reading thread/goal/get response")?;
+    assert_eq!(
+        goal_get.goal.as_ref().map(|goal| &goal.thread_id),
+        Some(&thread_id)
+    );
+
     let expected_git_sha = init_test_git_repo(&home_dir, "main")?;
     send_client_request(
         &mut ws,
@@ -568,14 +548,8 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
         .goal
         .expect("goal should still exist after the turn");
     assert_eq!(
-        goal_after_turn.status,
-        codex::ThreadGoalStatus::Paused,
-        "a paused goal must stay paused through the turn (no autonomous continuation): {goal_after_turn:?}"
-    );
-    assert!(
-        goal_after_turn.tokens_used > 0,
-        "goal.tokens_used should reflect real session usage after a turn, got {}",
-        goal_after_turn.tokens_used
+        goal_after_turn.thread_id, thread_id,
+        "the same goal row should survive the turn: {goal_after_turn:?}"
     );
 
     let (_request_id, session_id, _agent_id) =
@@ -806,6 +780,263 @@ async fn codex_shim_completes_blank_materialized_terminal_message() -> Result<()
         capture.text.trim().is_empty(),
         "mock final response is intentionally blank; got:\n{}",
         capture.text
+    );
+
+    Ok(())
+}
+
+// Dedicated goal-usage accounting fixture: the goal exists (paused, budget
+// 123) before the sole user turn, so the turn's spend must be attributed to
+// it. This is the direct, provenance-controlled counterpart of the broad
+// lifecycle test above, which asserts goal field roundtrip but deliberately
+// no post-turn usage value because its goal is created after the turn.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_shim_paused_goal_created_before_turn_accrues_turn_usage() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let expected_reply = format!("codex-shim-goal-{}", Uuid::new_v4().simple());
+    let model_name = format!("mock-codex-shim-goal-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_reply)?;
+
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let node_name = format!("cli-codex-shim-goal-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--node-name",
+            &node_name,
+            "--model-name",
+            &model_name,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let node_did = node_did_from_init(&init)?;
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-poll-ms",
+            "100",
+            "--codex-shim-timeout-secs",
+            "60",
+        ],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &node_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
+
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
+    initialize_config_and_thread(&mut ws, &home_dir).await?;
+    let thread_id = start_thread(&mut ws, &home_dir).await?;
+
+    // Materialize the canonical AgentSession through the same
+    // create_AgentSession fixture this suite uses for pre-existing sessions
+    // (thread_listing, agent_scope) so the paused goal can resolve the
+    // ephemeral ThreadStart thread without adding a turn. The later turn's
+    // materialization is an idempotent ensure over this row, so ids and
+    // history are unchanged.
+    let default_agent_id = format!("{node_did}:default");
+    serve
+        .capturing(graphql_query(
+            &graphql,
+            &format!(
+                r#"mutation {{
+                create_AgentSession(input: {{
+                    session_id: "{}",
+                    node_did: "{}",
+                    requester_did: "{}",
+                    agent_id: "{}",
+                    created_at: "{}"
+                }}) {{ _docID }}
+            }}"#,
+                escape_graphql_string(&thread_id),
+                escape_graphql_string(&node_did),
+                escape_graphql_string(&node_did),
+                escape_graphql_string(&default_agent_id),
+                escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
+            ),
+        ))
+        .await?;
+
+    // The paused goal exists before the sole user turn: fresh goals
+    // baseline against existing session usage, so the upcoming turn's
+    // spend accrues to this goal. Paused also means the turn cannot
+    // autonomously continue (paused yields GoalDecision::None), keeping
+    // this a single-turn fixture.
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadGoalSet {
+            request_id: request_id(60),
+            params: codex::ThreadGoalSetParams {
+                thread_id: thread_id.clone(),
+                objective: Some("accrue the sole turn's usage while paused".to_string()),
+                status: Some(codex::ThreadGoalStatus::Paused),
+                token_budget: Some(Some(123)),
+            },
+        },
+    )
+    .await?;
+    let goal_set: codex::ThreadGoalSetResponse = read_typed_response(&mut ws, request_id(60))
+        .await
+        .context("reading paused thread/goal/set response")?;
+    assert_eq!(goal_set.goal.thread_id, thread_id);
+    assert_eq!(
+        goal_set.goal.status,
+        codex::ThreadGoalStatus::Paused,
+        "the goal must be paused before the turn so the fixture stays single-turn: {goal_set:?}"
+    );
+    assert_eq!(goal_set.goal.token_budget, Some(123));
+    assert_eq!(
+        goal_set.goal.tokens_used, 0,
+        "a fresh goal must start with zero usage: {goal_set:?}"
+    );
+
+    let prompt = format!("Reply with exactly {}.", Uuid::new_v4().simple());
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::TurnStart {
+            request_id: request_id(61),
+            params: codex::TurnStartParams {
+                thread_id: thread_id.clone(),
+                input: vec![codex::UserInput::Text {
+                    text: prompt.clone(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let turn_start: codex::TurnStartResponse = read_typed_response(&mut ws, request_id(61)).await?;
+    assert_eq!(turn_start.turn.status, codex::TurnStatus::InProgress);
+
+    let turn_capture = read_turn_capture(&mut ws).await?;
+    let completed_turn = turn_capture.turn.clone();
+    assert_eq!(
+        completed_turn.status,
+        codex::TurnStatus::Completed,
+        "the sole turn should complete against the mock endpoint"
+    );
+    assert!(
+        turn_capture.text.contains(&expected_reply),
+        "expected streamed Codex text to contain {expected_reply}, got:\n{}",
+        turn_capture.text
+    );
+    let turn_usage = turn_capture
+        .token_usage
+        .as_ref()
+        .expect("turn completion should emit a ThreadTokenUsageUpdated notification");
+    assert!(
+        turn_usage.last.total_tokens > 0,
+        "expected non-zero last-turn token usage on turn completion, got {turn_usage:?}"
+    );
+
+    let goal_after_turn: codex::ThreadGoalGetResponse = serve
+        .capturing(async {
+            send_client_request(
+                &mut ws,
+                codex::ClientRequest::ThreadGoalGet {
+                    request_id: request_id(62),
+                    params: codex::ThreadGoalGetParams {
+                        thread_id: thread_id.clone(),
+                    },
+                },
+            )
+            .await?;
+            read_typed_response(&mut ws, request_id(62)).await
+        })
+        .await
+        .context("reading post-turn paused thread/goal/get response")?;
+    let goal_after_turn = goal_after_turn
+        .goal
+        .expect("the pre-turn goal should still exist after the turn");
+    assert_eq!(
+        goal_after_turn.status,
+        codex::ThreadGoalStatus::Paused,
+        "a paused goal must stay paused through the turn (no autonomous continuation): {goal_after_turn:?}"
+    );
+    assert_eq!(
+        goal_after_turn.token_budget,
+        Some(123),
+        "the paused goal's budget must survive the turn: {goal_after_turn:?}"
+    );
+    assert!(
+        goal_after_turn.tokens_used > 0,
+        "a goal created before the turn must have the turn's spend attributed to it, got tokens_used={}",
+        goal_after_turn.tokens_used
+    );
+
+    // The fixture must remain single-turn: exactly one turn in the
+    // canonical history, and exactly one canonical session row.
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadRead {
+            request_id: request_id(63),
+            params: codex::ThreadReadParams {
+                thread_id: thread_id.clone(),
+                include_turns: true,
+            },
+        },
+    )
+    .await?;
+    let thread_history: codex::ThreadReadResponse = read_typed_response(&mut ws, request_id(63))
+        .await
+        .context("reading paused-goal thread/read history")?;
+    assert_eq!(thread_history.thread.id, thread_id);
+    assert_eq!(
+        thread_history.thread.turns.len(),
+        1,
+        "the paused goal must not add autonomous turns: {thread_history:?}"
+    );
+    assert_eq!(thread_history.thread.turns[0].id, completed_turn.id);
+    assert_eq!(
+        thread_history.thread.turns[0].status,
+        codex::TurnStatus::Completed
+    );
+
+    let session_rows = serve
+        .capturing(graphql_query(
+            &graphql,
+            &format!(
+                r#"{{
+                AgentSession(filter: {{
+                    session_id: {{ _eq: "{}" }},
+                    node_did: {{ _eq: "{}" }}
+                }}) {{ session_id }}
+            }}"#,
+                escape_graphql_string(&thread_id),
+                escape_graphql_string(&node_did),
+            ),
+        ))
+        .await?;
+    assert_eq!(
+        session_rows
+            .pointer("/data/AgentSession")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(1),
+        "the pre-materialized session must remain exactly one canonical row: {session_rows}"
     );
 
     Ok(())
