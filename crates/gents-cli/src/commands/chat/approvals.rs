@@ -61,14 +61,16 @@ pub(super) fn show_prompt(request: &Request) {
     let _ = writeln!(output, "{}", request.prompt());
     let _ = write!(output, "[o] allow once");
     if let Some(file) = request.filesystem() {
-        if !file.is_dir {
+        if request.allows_answer(Answer::AlwaysPath) && !file.is_dir {
             let _ = write!(output, "  [f] always allow this file");
         }
-        let _ = write!(
-            output,
-            "  [a] always allow the folder {}",
-            file.folder.display()
-        );
+        if request.allows_answer(Answer::AlwaysFolder) {
+            let _ = write!(
+                output,
+                "  [a] always allow the folder {}",
+                file.folder.display()
+            );
+        }
     }
     let _ = write!(output, "  [d] deny (default) > ");
     let _ = output.flush();

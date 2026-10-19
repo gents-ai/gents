@@ -144,6 +144,7 @@ impl BindingAction {
                 match tool.as_str() {
                     "write_file" => "Write file",
                     "edit_file" => "Edit file",
+                    "lsp_edit" => "Language-server edit",
                     _ => tool,
                 },
                 path,

@@ -145,7 +145,11 @@ impl Request {
         if let Some(workspace::BindingAction::FileMutation { tool, path, .. }) =
             self.binding().map(|binding| &binding.action)
         {
-            let verb = if tool == "edit_file" { "Edit" } else { "Write" };
+            let verb = match tool.as_str() {
+                "edit_file" => "Edit",
+                "lsp_edit" => "Apply language-server changes to",
+                _ => "Write",
+            };
             return format!("{verb} {}?", path.display());
         }
         if let Some(command) = self.command() {
