@@ -10,7 +10,7 @@ use crate::types::{
 
 /// Change the version for incompatible framing or operation semantics.
 /// Additional commands are negotiated through the initialization inventory.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_PENDING_CALLS: usize = 32;
 
@@ -164,6 +164,14 @@ pub enum ClientCommand {
         #[serde(rename = "nodeHome")]
         node_home: Option<String>,
     },
+    #[serde(rename = "client_workspace_permissions")]
+    WorkspacePermissions {
+        request: super::permissions::WorkspacePermissionsRequest,
+    },
+    #[serde(rename = "client_workspace_permissions_save")]
+    WorkspacePermissionsSave {
+        request: super::permissions::WorkspacePermissionsSaveRequest,
+    },
     #[serde(rename = "client_plugin_approval_subscribe")]
     ApprovalSubscribe {
         #[serde(rename = "nodeDid")]
@@ -243,6 +251,8 @@ impl ClientCommand {
         "client_speech_recognize",
         "client_speech_synthesize",
         "client_connect_local",
+        "client_workspace_permissions",
+        "client_workspace_permissions_save",
         "client_plugin_approval_subscribe",
         "client_plugin_approval_unsubscribe",
         "client_plugin_approval_pending",
@@ -279,6 +289,7 @@ impl ClientCommand {
                 | Self::SpeechTools { .. }
                 | Self::SpeechRecognize { .. }
                 | Self::SpeechSynthesize { .. }
+                | Self::WorkspacePermissions { .. }
                 | Self::ApprovalPending { .. }
                 | Self::SessionSnapshot(_)
                 | Self::SessionLiveDelta(_)

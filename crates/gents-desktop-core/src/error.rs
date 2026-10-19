@@ -6,6 +6,7 @@ use ts_rs::TS;
 pub enum BridgeErrorCode {
     ClientNotRunning,
     ClientStartFailed,
+    LocalHistoryLocked,
     /// The read could not publish against the current observation fence.
     ProjectionPending,
     NotFound,
@@ -26,6 +27,7 @@ impl BridgeErrorCode {
         match self {
             Self::ClientNotRunning => "clientNotRunning",
             Self::ClientStartFailed => "clientStartFailed",
+            Self::LocalHistoryLocked => "localHistoryLocked",
             Self::ProjectionPending => "projectionPending",
             Self::NotFound => "notFound",
             Self::InvalidArgument => "invalidArgument",

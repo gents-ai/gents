@@ -7,6 +7,7 @@ import Proofs.ToolExecution.State
 inductive RequestPurpose where
   | normal
   | titleAudit
+  | accessReview
   deriving DecidableEq, Repr
 
 namespace RequestPurpose
@@ -14,10 +15,12 @@ namespace RequestPurpose
 def toWire : RequestPurpose → String
   | .normal => "normal"
   | .titleAudit => "title-audit"
+  | .accessReview => "access-review"
 
 def fromWire? : String → Option RequestPurpose
   | "normal" => some .normal
   | "title-audit" => some .titleAudit
+  | "access-review" => some .accessReview
   | _ => none
 
 theorem fromWire_toWire (purpose : RequestPurpose) :
@@ -25,6 +28,10 @@ theorem fromWire_toWire (purpose : RequestPurpose) :
   cases purpose <;> rfl
 
 theorem missing_purpose_is_not_normal : fromWire? "" = none := by rfl
+
+def isAuxiliary : RequestPurpose → Bool
+  | .normal => false
+  | .titleAudit | .accessReview => true
 
 end RequestPurpose
 

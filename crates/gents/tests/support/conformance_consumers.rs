@@ -56,6 +56,41 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "toolset::title_audit_usage::tests::generated_budget_recovery_cases_bind_signed_catalog_usage",
+            package: "gents",
+            source_path: "crates/gents/src/toolset/title_audit_usage.rs",
+            module_path: "toolset::title_audit_usage::tests",
+            function: "generated_budget_recovery_cases_bind_signed_catalog_usage",
+        },
+        ConformanceConsumer::RustTest {
+            id: "plugin::approval::workspace::tests::generated_workspace_permission_writes_preserve_selected_policy_versions",
+            package: "gents",
+            source_path: "crates/gents/src/plugin/approval/workspace.rs",
+            module_path: "plugin::approval::workspace::tests",
+            function: "generated_workspace_permission_writes_preserve_selected_policy_versions",
+        },
+        ConformanceConsumer::RustTest {
+            id: "agent::daemon::title::review::task::tests::generated_task_policies_bind_the_configured_task_fields",
+            package: "gents",
+            source_path: "crates/gents/src/agent/daemon/title/review/task.rs",
+            module_path: "agent::daemon::title::review::task::tests",
+            function: "generated_task_policies_bind_the_configured_task_fields",
+        },
+        ConformanceConsumer::RustTest {
+            id: "plugin::approval::workspace::command::tests::generated_workspace_command_roots_preserve_the_tool_ceiling",
+            package: "gents",
+            source_path: "crates/gents/src/plugin/approval/workspace/command.rs",
+            module_path: "plugin::approval::workspace::command::tests",
+            function: "generated_workspace_command_roots_preserve_the_tool_ceiling",
+        },
+        ConformanceConsumer::RustTest {
+            id: "plugin::allowed::tests::generated_operator_path_cases_protect_names_and_file_aliases",
+            package: "gents",
+            source_path: "crates/gents/src/plugin/allowed_tests.rs",
+            module_path: "plugin::allowed::tests",
+            function: "generated_operator_path_cases_protect_names_and_file_aliases",
+        },
+        ConformanceConsumer::RustTest {
             id: "session::title_text::tests::generated_title_text_cases_bind_native_presentation",
             package: "gents",
             source_path: "crates/gents/src/session/title_text.rs",
@@ -245,6 +280,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_claude_wire_start_cases_drive_native_parser",
         },
         ConformanceConsumer::RustTest {
+            id: "tool_policy::access_review::tests::generated_access_review_cases_drive_native_reply_and_routing",
+            package: "gents-loop",
+            source_path: "crates/gents-loop/src/tool_policy/access_review.rs",
+            module_path: "tool_policy::access_review::tests",
+            function: "generated_access_review_cases_drive_native_reply_and_routing",
+        },
+        ConformanceConsumer::RustTest {
             id: "session::tests::editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_source",
             package: "gents",
             source_path: "crates/gents/src/session/tests.rs",
@@ -264,6 +306,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/src/completion_factory/tests.rs",
             module_path: "completion_factory::tests",
             function: "generated_service_tier_cases_drive_loop_config",
+        },
+        ConformanceConsumer::RustTest {
+            id: "tool_policy::workspace_permissions::tests::generated_workspace_permission_cases",
+            package: "gents-loop",
+            source_path: "crates/gents-loop/src/tool_policy/workspace_permissions.rs",
+            module_path: "tool_policy::workspace_permissions::tests",
+            function: "generated_workspace_permission_cases",
+        },
+        ConformanceConsumer::RustTest {
+            id: "tool_policy::workspace_permissions::tests::generated_workspace_permission_write_cases",
+            package: "gents-loop",
+            source_path: "crates/gents-loop/src/tool_policy/workspace_permissions.rs",
+            module_path: "tool_policy::workspace_permissions::tests",
+            function: "generated_workspace_permission_write_cases",
         },
         ConformanceConsumer::RustTest {
             id: "completion_factory::tests::generated_responses_storage_cases_drive_loop_config",

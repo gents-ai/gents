@@ -193,6 +193,20 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
         let request_id = request.request_id.clone();
         let session_id = request.session_id.clone();
         let agent_id = self.agent_config.agent_id.clone();
+        let reviewer = self.workspace_reviewer(
+            request,
+            aggregate_token_budget.clone(),
+            request_token.clone(),
+            shutdown.clone(),
+        );
+        let approval_context = crate::plugin::approval::workspace::for_request(
+            self.approval_home.as_deref(),
+            &request.node_did,
+            request.requester_did.as_deref(),
+            &agent_id,
+            workspace.workspace_cwd.as_deref(),
+        )?
+        .map(|context| context.with_reviewer(reviewer.callback.clone()));
         let backend_id = lifecycle.backend_id().to_string();
         let model_name = self.agent_config.model_name.clone();
         let inference = Box::pin(async {
@@ -603,7 +617,12 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                                         }.into()),
                                     }
                                 }
-                                _ = interrupt_rx.changed() => {
+                                _ = async {
+                                    tokio::select! {
+                                        _ = request_token.cancelled() => {},
+                                        _ = interrupt_rx.changed() => {},
+                                    }
+                                } => {
                                     request_token.cancel();
                                     inference_token.cancel();
                                     drop(stream);
@@ -895,11 +914,16 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                 false,
                 crate::plugin::approval::scope_interactive(
                     request.execution_origin.as_deref() == Some("interactive"),
-                    inference,
+                    crate::plugin::approval::workspace::scope(approval_context, inference),
                 ),
             ),
         )
-        .await?;
+        .await;
+
+        if let Some(error) = reviewer.take_failure() {
+            return Err(error);
+        }
+        let outcome = outcome?;
 
         Ok(outcome)
     }

@@ -1839,6 +1839,29 @@ impl ClientCore {
         }
     }
 
+    /// A disconnected runtime must not stage its reviewer in the client replica.
+    /// Preparing this Task also requires an already available signer; it never
+    /// unlocks a runtime identity as a side effect of selecting permissions.
+    pub async fn prepare_access_review_task(
+        &self,
+        node: &str,
+        agent: &str,
+        preferred: Option<&str>,
+    ) -> Result<gents::plugin::approval::workspace::ReviewTaskSelection> {
+        let record = self
+            .sync_state
+            .records()
+            .into_iter()
+            .find(|record| record.node_did == node)
+            .context("Connect this runtime before setting up access review.")?;
+        anyhow::ensure!(gents::identity::can_mint_defradb_bearer(node),
+            "Open Runtime Settings to connect this runtime's configuration before choosing Approve for me.");
+        let access = crate::local_runtime::operator_endpoint(&record)
+            .map(ConfigAccess::Graphql)
+            .context("Access review setup requires this runtime's operator endpoint.")?;
+        mutations::prepare_access_review_task_on(&access, node, agent, preferred).await
+    }
+
     pub async fn save_task(&self, row: &gents::document_config::Task) -> Result<()> {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_task_on(&access, row).await {

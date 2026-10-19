@@ -7,12 +7,13 @@ use serde::{Deserialize, Serialize};
 const REQUEST_SIGNATURE_DOMAIN: &str = "gents-agent-request-admission-v1";
 
 /// Signed admission purpose. Missing or unknown values must not acquire normal
-/// request authority; detached title work owns an independent request lease.
+/// request authority; auxiliary work owns an independent request lease.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RequestPurpose {
     Normal,
     TitleAudit,
+    AccessReview,
 }
 
 impl RequestPurpose {
@@ -20,10 +21,15 @@ impl RequestPurpose {
         match self {
             Self::Normal => "normal",
             Self::TitleAudit => "title-audit",
+            Self::AccessReview => "access-review",
         }
     }
 
     pub const PUBLIC: Self = Self::Normal;
+
+    pub const fn is_auxiliary(self) -> bool {
+        matches!(self, Self::TitleAudit | Self::AccessReview)
+    }
 
     pub fn is_public(purpose: Option<Self>) -> bool {
         purpose == Some(Self::PUBLIC)
@@ -37,6 +43,7 @@ impl TryFrom<&str> for RequestPurpose {
         match value {
             "normal" => Ok(Self::Normal),
             "title-audit" => Ok(Self::TitleAudit),
+            "access-review" => Ok(Self::AccessReview),
             _ => Err("unknown AgentRequest purpose"),
         }
     }

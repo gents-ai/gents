@@ -7,7 +7,10 @@ pub(crate) use command::apply_workspace_authority;
 pub(crate) use command::is_secret_env_name;
 pub(super) use command::run_command;
 #[cfg(test)]
+pub(crate) use command::run_command as run_command_for_test;
+#[cfg(test)]
 pub(crate) use command::select_sandbox_for_policy;
+pub(crate) use command::shell_join;
 pub(crate) use command::validate_command_policy;
 pub(crate) use command::{
     admit_host_executable, default_lsp_network_mode, effective_command_policy,

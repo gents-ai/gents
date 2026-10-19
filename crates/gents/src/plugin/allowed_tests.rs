@@ -1,5 +1,79 @@
 use super::*;
 
+#[test]
+fn generated_operator_path_cases_protect_names_and_file_aliases() {
+    #[derive(serde::Deserialize)]
+    struct Case {
+        kind: String,
+        expected: bool,
+    }
+
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().operator_path_cases;
+    assert_eq!(cases.len(), 10);
+    for value in cases {
+        let case: Case = serde_json::from_value(value.clone()).unwrap();
+        let world = world();
+        let guarded = file(&world.gents);
+        let queue = world.gents.join(crate::home::PLUGIN_APPROVALS_DIR_NAME);
+        std::fs::create_dir_all(queue.join("v3")).unwrap();
+        std::fs::write(&guarded, "operator state").unwrap();
+        let question = queue.join("v3/question.decision");
+        std::fs::write(&question, "operator answer").unwrap();
+        let mut paths = vec![guarded.clone(), queue];
+        let mut target = world.root.join("work/a.txt");
+        match case.kind.as_str() {
+            "ordinary" => {}
+            "writeOnly" => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o200))
+                        .unwrap();
+                }
+            }
+            "ordinaryAlias" => {
+                let alias = world.root.join("work/alias.txt");
+                std::fs::hard_link(&target, &alias).unwrap();
+                target = alias;
+            }
+            "missing" => target = world.root.join("work/missing.txt"),
+            "named" => target = guarded,
+            "uncreatedNamed" => {
+                std::fs::remove_file(&guarded).unwrap();
+                target = guarded;
+            }
+            "alias" | "queueAlias" => {
+                target = world.root.join("work/operator-alias.txt");
+                let source = if case.kind == "alias" {
+                    &guarded
+                } else {
+                    &question
+                };
+                std::fs::hard_link(source, &target).unwrap();
+            }
+            "unavailable" => target = world.root.join("work/invalid\0path"),
+            "guardUnavailable" => paths.push(world.gents.join("invalid\0path")),
+            other => panic!("unknown operator path case: {other}"),
+        }
+        assert_eq!(
+            protected::inspect(&paths, &target).unwrap_or(true),
+            case.expected,
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn a_removed_operator_directory_is_absent_but_a_wrong_kind_is_an_error() {
+    let world = world();
+    assert!(
+        protected::optional_directory(&world.root.join("removed-home"))
+            .unwrap()
+            .is_none()
+    );
+    assert!(protected::optional_directory(&world.root.join("work/a.txt")).is_err());
+}
+
 struct World {
     _root: tempfile::TempDir,
     root: PathBuf,
@@ -101,6 +175,36 @@ fn dot_dot_and_symlinks_resolve_before_the_scope_check() {
         assert_eq!(through.target, world.root.join("outside/o.txt"));
         assert_eq!(scope.granted(&through.target), None);
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_remembered_path_cannot_follow_a_replacement_symlink() {
+    let world = world();
+    let docs = world.root.join("docs");
+    let outside = world.root.join("outside");
+    add(&world.gents, &docs, BindAccess::Read).unwrap();
+    let scope = Scope::load(&world.gents, None, Some(&world.root)).unwrap();
+    std::fs::rename(&docs, world.root.join("original-docs")).unwrap();
+    std::os::unix::fs::symlink(&outside, &docs).unwrap();
+    assert_eq!(scope.granted(&outside.join("o.txt")), None);
+    assert!(Scope::load(&world.gents, None, Some(&world.root)).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_queued_answer_cannot_remember_a_different_canonical_target() {
+    let world = world();
+    let docs = world.root.join("docs");
+    let outside = world.root.join("outside");
+    std::fs::rename(&docs, world.root.join("original-docs")).unwrap();
+    std::os::unix::fs::symlink(&outside, &docs).unwrap();
+    assert!(grant_at_least(&world.gents, &docs, BindAccess::ReadWrite).is_err());
+    assert!(list(&world.gents).unwrap().is_empty());
+    assert_eq!(
+        add(&world.gents, &docs, BindAccess::Read).unwrap().path,
+        outside
+    );
 }
 
 #[test]
@@ -220,6 +324,12 @@ fn the_file_tools_refuse_the_allowed_folders_file_and_the_approval_queue() {
     assert!(is_protected(
         &world.gents.join(crate::home::ALLOWED_DIRS_FILE_NAME)
     ));
+    for name in [
+        crate::plugin::approval::workspace::FILE,
+        crate::plugin::approval::workspace::LOCK,
+    ] {
+        assert!(is_protected(&world.gents.join(name)));
+    }
     assert!(is_protected(
         &world
             .gents
@@ -269,7 +379,7 @@ fn concurrent_grants_keep_other_paths_and_the_widest_approval() {
         .map(|index| {
             let path = outside.path().join(format!("document-{index}"));
             std::fs::write(&path, "document").unwrap();
-            path
+            path.canonicalize().unwrap()
         })
         .collect();
     std::thread::scope(|scope| {

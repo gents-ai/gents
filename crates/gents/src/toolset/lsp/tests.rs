@@ -1051,6 +1051,7 @@ async fn semantic_retry_handles_empty_arrays_with_one_total_budget() {
     let fixture = r#"
 import json, sys
 calls = 0
+workspace_calls = 0
 def read():
     headers = {}
     while True:
@@ -1081,7 +1082,10 @@ while True:
         result = [] if calls == 1 else [{"name":"retried","kind":12,"range":{"start":{"line":0,"character":0}},"selectionRange":{"start":{"line":0,"character":0}}}]
         write({"jsonrpc":"2.0","id":mid,"result":result})
     elif method == 'workspace/symbol':
+        workspace_calls += 1
         write({"jsonrpc":"2.0","id":mid,"result":[]})
+    elif method == 'fixture/retryCounts':
+        write({"jsonrpc":"2.0","id":mid,"result":{"documentSymbols":calls,"workspaceSymbols":workspace_calls}})
     elif method == 'shutdown':
         write({"jsonrpc":"2.0","id":mid,"result":None})
     elif method == 'exit':
@@ -1124,22 +1128,33 @@ while True:
     .expect("empty array should be retried");
     assert_eq!(result[0]["name"], "retried");
 
-    let started = std::time::Instant::now();
-    let empty = super::actions::request_maybe_retry(
-        lease.client(),
-        "workspace/symbol",
-        serde_json::json!({"query":"missing"}),
-        std::time::Duration::from_secs(5),
-        std::time::Duration::from_secs(super::MAX_ACTION_TIMEOUT_SECS),
-        true,
+    let empty = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        super::actions::request_maybe_retry(
+            lease.client(),
+            "workspace/symbol",
+            serde_json::json!({"query":"missing"}),
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(super::MAX_ACTION_TIMEOUT_SECS),
+            true,
+        ),
     )
     .await
+    .expect("empty-result retries must finish within the watchdog")
     .expect("empty result at deadline is a semantic empty response");
     assert!(empty.is_null() || empty.as_array().is_some_and(Vec::is_empty));
+    let counts = lease
+        .client()
+        .request("fixture/retryCounts", serde_json::json!({}))
+        .await
+        .expect("fixture retry counts");
+    assert_eq!(counts["documentSymbols"], 2);
+    let workspace_calls = counts["workspaceSymbols"]
+        .as_u64()
+        .expect("workspace symbol request count");
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(2),
-        "genuinely empty results must stop after the bounded retry count: {:?}",
-        started.elapsed()
+        (1..=3).contains(&workspace_calls),
+        "empty-result retries exceeded their attempt bound: {workspace_calls}"
     );
 }
 

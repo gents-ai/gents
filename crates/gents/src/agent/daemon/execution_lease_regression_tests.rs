@@ -1,5 +1,7 @@
 use std::sync::atomic::AtomicBool;
 
+const ACTIVE_STREAM_INTERVAL: Duration = Duration::from_millis(300);
+
 #[derive(Clone)]
 struct NonTerminalProvider {
     empty_forever: bool,
@@ -639,7 +641,7 @@ impl CompletionModel for NonTerminalProvider {
                             1,
                         ))
                     } else if index <= active_chunks.unwrap_or(0) {
-                        tokio::time::sleep(Duration::from_millis(300)).await;
+                        tokio::time::sleep(ACTIVE_STREAM_INTERVAL).await;
                         Some((
                             Ok(RawStreamingChoice::Message(format!(" chunk-{index}"))),
                             index + 1,
@@ -1092,6 +1094,9 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
 
 #[tokio::test]
 async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() {
+    const ACTIVE_CHUNKS: usize = 40;
+    let lease = Duration::from_secs(5);
+    assert!(ACTIVE_STREAM_INTERVAL * ACTIVE_CHUNKS as u32 > lease * 2);
     let data = tempfile::tempdir().unwrap();
     let node = Arc::new(
         defra_node::EmbeddedNode::builder()
@@ -1105,13 +1110,14 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     {
         let agent_config = Arc::get_mut(&mut agent_config).unwrap();
         agent_config.stream_batch_ms = crate::config::DEFAULT_STREAM_BATCH_MS;
-        agent_config.stream_liveness_timeout = Duration::from_secs(1);
+        agent_config.stream_liveness_timeout = lease;
+        agent_config.deadline_duration = Duration::from_secs(120);
     }
     let node_did = agent_config.node_did().to_owned();
     let identity = agent_config.node_identity().clone();
     let model = NonTerminalProvider {
         empty_forever: false,
-        active_chunks: Some(8),
+        active_chunks: Some(ACTIVE_CHUNKS),
         reasoning_prefix: false,
         stream_calls: Arc::new(AtomicUsize::new(0)),
         empty_deltas: Arc::new(AtomicUsize::new(0)),
@@ -1176,7 +1182,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     assert!(!seeded.has_errors(), "{:?}", seeded.errors);
 
     tokio::time::timeout(
-        Duration::from_secs(10),
+        Duration::from_secs(45),
         daemon.process_request(request, shutdown_rx),
     )
     .await
@@ -1217,7 +1223,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     );
     let content = gents_protocol::transcript::present_message(&message).body_markdown;
     assert!(
-        content.contains("chunk-8"),
+        content.contains(&format!("chunk-{ACTIVE_CHUNKS}")),
         "final output was truncated: {data}"
     );
     assert_eq!(model.stream_calls.load(Ordering::SeqCst), 1);

@@ -57,17 +57,21 @@ pub(super) fn ask_on_terminal(request: &Request) -> Answer {
 }
 
 pub(super) fn show_prompt(request: &Request) {
-    println!("{}", request.prompt());
-    let file = if request.is_dir {
-        String::new()
-    } else {
-        "  [f] always allow this file".to_owned()
-    };
-    print!(
-        "[o] allow once{file}  [a] always allow the folder {}  [d] deny (default) > ",
-        request.folder.display()
-    );
-    let _ = std::io::stdout().flush();
+    let mut output = std::io::stdout().lock();
+    let _ = writeln!(output, "{}", request.prompt());
+    let _ = write!(output, "[o] allow once");
+    if let Some(file) = request.filesystem() {
+        if !file.is_dir {
+            let _ = write!(output, "  [f] always allow this file");
+        }
+        let _ = write!(
+            output,
+            "  [a] always allow the folder {}",
+            file.folder.display()
+        );
+    }
+    let _ = write!(output, "  [d] deny (default) > ");
+    let _ = output.flush();
 }
 
 #[cfg(test)]

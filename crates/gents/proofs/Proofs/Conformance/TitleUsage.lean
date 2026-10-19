@@ -20,9 +20,9 @@ private structure SignedPurpose where
   physical : CanonicalOutput.DocId
   purpose : RequestPurpose
 
-private structure TitleBindingFact where
+private structure AuxiliaryBindingFact where
   physical : CanonicalOutput.DocId
-  binding : TitleBinding
+  binding : AuxiliaryBinding
 
 private structure UsageAction where
   callId : Nat
@@ -33,13 +33,14 @@ private structure Case where
   parent : ParentScope
   rows : RawRows
   purposes : List SignedPurpose
-  bindings : List TitleBindingFact
+  bindings : List AuxiliaryBindingFact
   action : Option UsageAction := none
 
 private def parent : ParentScope :=
   { physical := 10, logical := 20, node := 30, session := 40, state := .completed }
 
-private def mkRow (callId physical logical : Nat) (usage : Option Usage) : Nat × UsageRow :=
+private def mkRow (callId physical logical : Nat) (usage : Option Usage)
+    (state : InferenceCallState := .completed) : Nat × UsageRow :=
   (callId,
     { physicalRequest := physical
     , persisted :=
@@ -47,25 +48,53 @@ private def mkRow (callId physical logical : Nat) (usage : Option Usage) : Nat �
             { callId := callId
             , requestId := logical
             , backend := { val := "backend" }
-            , state := .completed }
+            , state }
         , terminalStamp := some 99
         , usage := usage } })
 
 private def usage : Usage := { promptTokens := 3, completionTokens := 5 }
 private def otherUsage : Usage := { promptTokens := 4, completionTokens := 5 }
 
-private def binding : CanonicalOutput.Execution.Handover.TitleBinding :=
+private def binding : CanonicalOutput.Execution.Handover.AuxiliaryBinding :=
   { physicalRequest := 11, logicalRequest := 21
   , parentPhysical := 10, parentLogical := 20
   , node := 30, session := 40, authenticated := true }
 
-private def bindingFact (b : TitleBinding) : TitleBindingFact :=
+private def bindingFact (b : AuxiliaryBinding) : AuxiliaryBindingFact :=
   { physical := 11, binding := b }
 
 private def titlePurpose : SignedPurpose := ⟨11, .titleAudit⟩
 private def normalPurpose : SignedPurpose := ⟨10, .normal⟩
 
 private def titleUsageCases : List Case := [
+  { name := "empty_budget_has_no_spend", parent := parent,
+    rows := [], purposes := [normalPurpose], bindings := [] },
+  { name := "access_review_missing_usage_blocks_budget_restart", parent := parent,
+    rows := [mkRow 7 11 21 none], purposes := [⟨11, .accessReview⟩],
+    bindings := [bindingFact { binding with purpose := .accessReview }] },
+  { name := "access_review_zero_usage_blocks_budget_restart", parent := parent,
+    rows := [mkRow 7 11 21 (some ⟨0, 0⟩)], purposes := [⟨11, .accessReview⟩],
+    bindings := [bindingFact { binding with purpose := .accessReview }] },
+  { name := "access_review_late_usage_restores_budget_observation", parent := parent,
+    rows := [mkRow 7 11 21 none .cancelled], purposes := [⟨11, .accessReview⟩],
+    bindings := [bindingFact { binding with purpose := .accessReview }],
+    action := some ⟨7, usage⟩ },
+  { name := "failed_access_review_usage_still_reduces_budget", parent := parent,
+    rows := [mkRow 7 11 21 (some usage) .failed], purposes := [⟨11, .accessReview⟩],
+    bindings := [bindingFact { binding with purpose := .accessReview }] },
+  { name := "normal_missing_usage_blocks_budget_restart", parent := parent,
+    rows := [mkRow 1 10 20 none], purposes := [normalPurpose], bindings := [] },
+  { name := "access_review_usage_is_parent_inclusive_audit_only", parent := parent,
+    rows := [mkRow 7 11 21 (some usage)], purposes := [⟨11, .accessReview⟩],
+    bindings := [bindingFact { binding with purpose := .accessReview }] },
+  { name := "access_review_cannot_replay_title_binding", parent := parent,
+    rows := [mkRow 7 11 21 (some usage)], purposes := [⟨11, .accessReview⟩],
+    bindings := [bindingFact binding] },
+  { name := "title_cannot_replay_access_review_binding", parent := parent,
+    rows := [mkRow 7 11 21 (some usage)], purposes := [titlePurpose],
+    bindings := [bindingFact { binding with purpose := .accessReview }] },
+  { name := "access_review_missing_binding_fails_closed", parent := parent,
+    rows := [mkRow 7 11 21 (some usage)], purposes := [⟨11, .accessReview⟩], bindings := [] },
   { name := "normal_public_usage", parent := parent,
     rows := [mkRow 1 10 20 (some usage)], purposes := [normalPurpose], bindings := [] },
   { name := "title_audit_only", parent := parent,
@@ -116,8 +145,8 @@ private def purposeLookup (facts : List SignedPurpose)
     (physical : CanonicalOutput.DocId) : Option RequestPurpose :=
   (facts.find? (fun fact => fact.physical == physical)).map (·.purpose)
 
-private def bindingLookup (facts : List TitleBindingFact)
-    (physical : CanonicalOutput.DocId) : Option TitleBinding :=
+private def bindingLookup (facts : List AuxiliaryBindingFact)
+    (physical : CanonicalOutput.DocId) : Option AuxiliaryBinding :=
   (facts.find? (fun fact => fact.physical == physical)).map (·.binding)
 
 private def applyAction (rows : RawRows) : Option UsageAction → RawRows
@@ -149,16 +178,17 @@ private def parentJson (value : ParentScope) : Json := Json.mkObj
    ("node", toJson value.node), ("session", toJson value.session),
    ("state", toJson value.state.toDefraDB)]
 
-private def bindingJson (value : CanonicalOutput.Execution.Handover.TitleBinding) : Json :=
+private def bindingJson (value : CanonicalOutput.Execution.Handover.AuxiliaryBinding) : Json :=
   Json.mkObj
-    [("physical", toJson value.physicalRequest),
+    [("purpose", toJson value.purpose.toWire),
+     ("physical", toJson value.physicalRequest),
      ("logical", toJson value.logicalRequest),
      ("parent_physical", toJson value.parentPhysical),
      ("parent_logical", toJson value.parentLogical),
      ("node", toJson value.node), ("session", toJson value.session),
      ("authenticated", toJson value.authenticated)]
 
-private def bindingFactJson (value : TitleBindingFact) : Json :=
+private def bindingFactJson (value : AuxiliaryBindingFact) : Json :=
   Json.mkObj
     [("physical", toJson value.physical),
      ("binding", bindingJson value.binding)]
@@ -178,13 +208,41 @@ private def resultJson : Except CatalogError Totals → Json
       [("kind", toJson "error"), ("error", toJson "conflicting_call_id")]
   | .error .missingPurpose => Json.mkObj
       [("kind", toJson "error"), ("error", toJson "missing_purpose")]
-  | .error .missingTitleBinding => Json.mkObj
+  | .error .missingAuxiliaryBinding => Json.mkObj
       [("kind", toJson "error"), ("error", toJson "missing_title_binding")]
-  | .error .invalidTitleBinding => Json.mkObj
+  | .error .invalidAuxiliaryBinding => Json.mkObj
       [("kind", toJson "error"), ("error", toJson "invalid_title_binding")]
 
 private def evaluate (c : Case) (rows : RawRows) : Except CatalogError Totals :=
   validateAndProject rows (purposeLookup c.purposes) (bindingLookup c.bindings) c.parent
+
+private def evaluateBudget (c : Case) (rows : RawRows) : Except BudgetError Nat :=
+  recoverBudget rows (purposeLookup c.purposes) (bindingLookup c.bindings) c.parent
+
+private def budgetJson : Except BudgetError Nat → Json
+  | .ok used => Json.mkObj [("kind", toJson "ok"), ("used", toJson used)]
+  | .error (.catalog error) => resultJson (.error error)
+  | .error .unreportedUsage => Json.mkObj
+      [("kind", toJson "error"), ("error", toJson "unreported_usage")]
+
+private def evaluateNamedBudget (name : String) :
+    Option (Except BudgetError Nat × Except BudgetError Nat) :=
+  (titleUsageCases.find? (fun c => c.name == name)).map fun c =>
+    (evaluateBudget c c.rows, evaluateBudget c (applyAction c.rows c.action))
+
+theorem review_usage_cannot_become_a_fresh_allowance :
+    evaluateNamedBudget "access_review_usage_is_parent_inclusive_audit_only" =
+      some (.ok 8, .ok 8) ∧
+    evaluateNamedBudget "access_review_missing_usage_blocks_budget_restart" =
+      some (.error .unreportedUsage, .error .unreportedUsage) ∧
+    evaluateNamedBudget "access_review_zero_usage_blocks_budget_restart" =
+      some (.error .unreportedUsage, .error .unreportedUsage) := by
+  native_decide
+
+theorem late_report_restores_the_observed_allowance :
+    evaluateNamedBudget "access_review_late_usage_restores_budget_observation" =
+      some (.error .unreportedUsage, .ok 8) := by
+  native_decide
 
 private def evaluateNamed (name : String) :
     Option (Except CatalogError Totals × Except CatalogError Totals) :=
@@ -215,9 +273,9 @@ theorem exact_duplicate_and_conflict_witnesses :
 
 theorem wrong_physical_and_logical_witnesses :
     evaluateNamed "same_logical_wrong_physical" =
-      some (.error .invalidTitleBinding, .error .invalidTitleBinding) ∧
+      some (.error .invalidAuxiliaryBinding, .error .invalidAuxiliaryBinding) ∧
     evaluateNamed "same_physical_wrong_logical" =
-      some (.error .invalidTitleBinding, .error .invalidTitleBinding) := by
+      some (.error .invalidAuxiliaryBinding, .error .invalidAuxiliaryBinding) := by
   native_decide
 
 theorem unrelated_parent_is_excluded_not_invalid :
@@ -227,14 +285,14 @@ theorem unrelated_parent_is_excluded_not_invalid :
 
 theorem unauthenticated_binding_is_invalid :
     evaluateNamed "unauthenticated_title_binding" =
-      some (.error .invalidTitleBinding, .error .invalidTitleBinding) := by
+      some (.error .invalidAuxiliaryBinding, .error .invalidAuxiliaryBinding) := by
   native_decide
 
 theorem missing_dependencies_do_not_become_zero_totals :
     evaluateNamed "missing_signed_purpose" =
       some (.error .missingPurpose, .error .missingPurpose) ∧
     evaluateNamed "missing_authenticated_title_binding" =
-      some (.error .missingTitleBinding, .error .missingTitleBinding) := by
+      some (.error .missingAuxiliaryBinding, .error .missingAuxiliaryBinding) := by
   native_decide
 
 private def caseJson (c : Case) : Json := Json.mkObj
@@ -248,7 +306,9 @@ private def caseJson (c : Case) : Json := Json.mkObj
       [("call_id", toJson action.callId), ("usage", usageJson action.usage)])
       |>.getD Json.null),
    ("expected_before", resultJson (evaluate c c.rows)),
-   ("expected_after", resultJson (evaluate c (applyAction c.rows c.action)))]
+   ("expected_after", resultJson (evaluate c (applyAction c.rows c.action))),
+   ("budget_before", budgetJson (evaluateBudget c c.rows)),
+   ("budget_after", budgetJson (evaluateBudget c (applyAction c.rows c.action)))]
 
 def casesJson : String := (toJson (titleUsageCases.map caseJson)).compress
 

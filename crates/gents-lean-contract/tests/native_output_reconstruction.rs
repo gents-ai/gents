@@ -144,6 +144,7 @@ fn lean_source(source: &LeanCanonicalSource) -> OutputSource {
                     LeanAuxiliaryKind::Compaction => CaptureScopeKind::Compaction,
                     LeanAuxiliaryKind::CompactionFallback => CaptureScopeKind::CompactionFallback,
                     LeanAuxiliaryKind::Title => CaptureScopeKind::Title,
+                    LeanAuxiliaryKind::AccessReview => CaptureScopeKind::AccessReview,
                 },
                 seq: *scope,
             },

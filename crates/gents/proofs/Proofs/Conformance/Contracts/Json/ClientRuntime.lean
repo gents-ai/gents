@@ -67,7 +67,8 @@ private def sourceJson : CanonicalOutput.Source → String
       (",\"auxiliary_kind\":" ++ jsonString (match kind with
         | .compaction => "compaction"
         | .compactionFallback => "compaction_fallback"
-        | .title => "title") ++
+        | .title => "title"
+          | .accessReview => "access_review") ++
        ",\"scope\":" ++ toString scope ++ ",\"turn\":" ++ toString turn ++
        ",\"attempt\":" ++ toString attempt)
   | .toolEffectArguments call => tagged "tool_effect_arguments" (",\"call\":" ++ toString call)

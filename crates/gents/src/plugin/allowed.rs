@@ -67,12 +67,26 @@ pub fn add(home: &Path, path: &Path, access: BindAccess) -> Result<AllowedDir> {
 }
 
 /// An approval may widen a grant, but never downgrade a concurrent grant.
+/// The path is the canonical target captured by the question before waiting.
 /// All allowed-folder mutations share the same native exclusive lock.
 pub(super) fn grant_at_least(home: &Path, path: &Path, access: BindAccess) -> Result<AllowedDir> {
     put(home, path, access, true)
 }
 
 fn put(home: &Path, path: &Path, access: BindAccess, preserve_wider: bool) -> Result<AllowedDir> {
+    let entry = if preserve_wider {
+        prepare_answered_grant(home, path, access)?
+    } else {
+        prepare_grant(home, path, access)?
+    };
+    let _lock = lock(home)?;
+    let mut dirs = list(home)?;
+    let entry = put_entry(&mut dirs, entry, preserve_wider);
+    save(home, dirs)?;
+    Ok(entry)
+}
+
+pub(super) fn prepare_grant(home: &Path, path: &Path, access: BindAccess) -> Result<AllowedDir> {
     let path = path
         .canonicalize()
         .with_context(|| format!("{} does not exist or cannot be read", path.display()))?;
@@ -82,20 +96,61 @@ fn put(home: &Path, path: &Path, access: BindAccess, preserve_wider: bool) -> Re
         path.display()
     );
     ensure_scope_path(&path, user_home().as_deref(), home)?;
-    let _lock = lock(home)?;
-    let mut dirs = list(home)?;
-    let access = if preserve_wider {
-        dirs.iter()
-            .filter(|entry| entry.path == path)
-            .fold(access, |held, entry| held.max(entry.access))
-    } else {
-        access
-    };
-    let entry = AllowedDir { path, access };
+    Ok(AllowedDir { path, access })
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("The requested path changed or is unavailable: {}. Retry the action with its current path.", .0.display())]
+pub(super) struct PathChanged(pub PathBuf);
+
+/// Consent records hold canonical targets; a later alias cannot select a
+/// different target under an existing grant.
+pub(super) fn canonical_target(path: &Path, directory: Option<bool>) -> Result<PathBuf> {
+    let current = path
+        .canonicalize()
+        .map_err(|_| PathChanged(path.to_owned()))?;
+    if current != path
+        || directory.is_some_and(|expected| {
+            if expected {
+                !current.is_dir()
+            } else {
+                !current.is_file()
+            }
+        })
+    {
+        return Err(PathChanged(path.to_owned()).into());
+    }
+    Ok(current)
+}
+
+/// A queued answer names the canonical path captured before the wait.
+/// Following a replacement symlink would grant access to another target.
+pub(super) fn prepare_answered_grant(
+    home: &Path,
+    path: &Path,
+    access: BindAccess,
+) -> Result<AllowedDir> {
+    let entry = prepare_grant(home, path, access)?;
+    if entry.path != path {
+        return Err(PathChanged(path.to_owned()).into());
+    }
+    Ok(entry)
+}
+
+pub(super) fn put_entry(
+    dirs: &mut Vec<AllowedDir>,
+    mut entry: AllowedDir,
+    preserve_wider: bool,
+) -> AllowedDir {
+    if preserve_wider {
+        entry.access = dirs
+            .iter()
+            .filter(|existing| existing.path == entry.path)
+            .fold(entry.access, |held, existing| held.max(existing.access));
+    }
     dirs.retain(|existing| existing.path != entry.path);
     dirs.push(entry.clone());
-    save(home, dirs)?;
-    Ok(entry)
+    entry
 }
 
 pub fn remove(home: &Path, path: &Path) -> Result<bool> {
@@ -193,11 +248,17 @@ impl Scope {
         workdir: Option<&Path>,
         user_home: Option<&Path>,
     ) -> Result<Self> {
-        let mut entries = list(gents_home)?;
+        Self::from_entries(gents_home, list(gents_home)?, workdir, user_home)
+    }
+
+    pub(super) fn from_entries(
+        gents_home: &Path,
+        mut entries: Vec<AllowedDir>,
+        workdir: Option<&Path>,
+        user_home: Option<&Path>,
+    ) -> Result<Self> {
         for entry in &entries {
-            let path = entry
-                .path
-                .canonicalize()
+            let path = canonical_target(&entry.path, None)
                 .with_context(|| format!("allowed path {} is unavailable", entry.path.display()))?;
             ensure_scope_path(&path, user_home, gents_home)?;
         }
@@ -217,10 +278,7 @@ impl Scope {
         self.entries
             .iter()
             .filter(|entry| {
-                entry
-                    .path
-                    .canonicalize()
-                    .is_ok_and(|root| target.starts_with(root))
+                canonical_target(&entry.path, None).is_ok_and(|root| target.starts_with(root))
             })
             .map(|entry| entry.access)
             .max()
@@ -258,30 +316,8 @@ pub fn bind(
     }
 }
 
-static PROTECTED: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
-
-pub fn protect(home: &Path) {
-    let home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
-    let paths = [
-        file(&home),
-        lock_file(&home),
-        super::approval::lock_file(&home),
-        home.join(crate::home::PLUGIN_APPROVALS_DIR_NAME),
-    ];
-    if let Ok(mut protected) = PROTECTED.lock() {
-        for path in paths {
-            if !protected.contains(&path) {
-                protected.push(path);
-            }
-        }
-    }
-}
-
-pub fn is_protected(path: &Path) -> bool {
-    PROTECTED
-        .lock()
-        .is_ok_and(|protected| protected.iter().any(|guarded| path.starts_with(guarded)))
-}
+mod protected;
+pub use protected::{is_protected, protect};
 
 #[cfg(test)]
 #[path = "allowed_tests.rs"]

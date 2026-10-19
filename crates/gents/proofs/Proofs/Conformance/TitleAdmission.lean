@@ -1,4 +1,4 @@
-import Proofs.TitleAdmission
+import Proofs.AuxiliaryAdmission
 import Proofs.Conformance.ContractCases.Enrollment
 import Proofs.Compaction.State
 import Lean
@@ -7,19 +7,19 @@ namespace Conformance.TitleAdmission
 
 open Lean CanonicalOutput.Execution
 
-private def ids : _root_.TitleAdmission.Identities :=
+private def ids : _root_.AuxiliaryAdmission.Identities :=
   { encode := Compaction.PromptView.encodeProviderKey
   , injective := Compaction.PromptView.encodeProviderKey_injective }
 
-private def request := Conformance.ContractCases.titleRequest
-private def admission := Conformance.ContractCases.signTitleAdmission request
+private def baseRequest := Conformance.ContractCases.titleRequest
+private def baseAdmission := Conformance.ContractCases.signTitleAdmission baseRequest
 private def evidence : Option Enrollment.RuntimeInternalEvidence :=
   some Conformance.ContractCases.titleEvidence
 
-private def baseRow : _root_.TitleAdmission.RequestRowEvidence :=
+private def baseRow : _root_.AuxiliaryAdmission.RequestRowEvidence :=
   { physicalRequest := "T"
-  , logicalRequest := request.requestId
-  , signedFields := Enrollment.agentRequestAdmissionFields request admission
+  , logicalRequest := baseRequest.requestId
+  , signedFields := Enrollment.agentRequestAdmissionFields baseRequest baseAdmission
   , physicalBindingCurrent := true
   , branchFieldsExact := true
   , pendingDeadlineAbsent := true
@@ -28,7 +28,10 @@ private def baseRow : _root_.TitleAdmission.RequestRowEvidence :=
 private structure Case where
   name : String
   available : Bool := true
-  row : _root_.TitleAdmission.RequestRowEvidence := baseRow
+  request : Enrollment.AgentRequestSemantics := baseRequest
+  admission : Enrollment.AgentRequestAdmission := baseAdmission
+  admissionCase : String := "valid-title-parent-completed"
+  row : _root_.AuxiliaryAdmission.RequestRowEvidence := baseRow
   ownPhysical : String := "T"
   activeNormal : Bool := false
 
@@ -41,8 +44,24 @@ private def wrongWorldPhysicalCase : Case :=
 private def unavailableCase : Case :=
   { name := "observation-unavailable", available := false }
 
+private def reviewRequest : Enrollment.AgentRequestSemantics :=
+  { baseRequest with purpose := .accessReview, content := "Review workspace access" }
+
+private def reviewAdmission := Conformance.ContractCases.signTitleAdmission reviewRequest
+
+private def reviewRow : _root_.AuxiliaryAdmission.RequestRowEvidence :=
+  { baseRow with signedFields := Enrollment.agentRequestAdmissionFields reviewRequest reviewAdmission }
+
+private def reviewCase : Case :=
+  { name := "access-review-claims-independent-lease-with-active-parent"
+  , request := reviewRequest, admission := reviewAdmission, row := reviewRow
+  , admissionCase := "valid-access-review-parent-processing", activeNormal := true }
+
 private def cases : List Case :=
-  [ admittedCase
+  [ reviewCase
+  , { reviewCase with name := "access-review-signed-row-cannot-replay-title", row := baseRow }
+  , { reviewCase with name := "access-review-observation-unavailable", available := false }
+  , admittedCase
   , activeQueueCase
   , { name := "row-logical-request-mismatch"
     , row := { baseRow with logicalRequest := "x" } }
@@ -58,6 +77,7 @@ private def cases : List Case :=
     , row := { baseRow with pendingDeadlineAbsent := false } } ]
 
 private def world (c : Case) : World :=
+  let request := c.request
   let session := ids.encode request.sessionId
   let node := ids.encode request.targetNode
   let active := if c.activeNormal then some (ids.encode "n") else none
@@ -76,13 +96,13 @@ private def world (c : Case) : World :=
   , gateSchedule := ⟨.storage, true, false⟩
   , queue := queue }
 
-private def activation (c : Case) : Option Handover.TitleActivation :=
-  _root_.TitleAdmission.activation? ids c.available ({} : Enrollment.State)
-    request admission evidence request.agentId c.row 7 20 30
+private def activation (c : Case) : Option Handover.AuxiliaryActivation :=
+  _root_.AuxiliaryAdmission.activation? ids c.available ({} : Enrollment.State)
+    c.request c.admission evidence c.request.agentId c.row 7 20 30
 
 private def claimed (c : Case) : Option World :=
-  _root_.TitleAdmission.activate? (world c) 9 1 ids c.available
-    ({} : Enrollment.State) request admission evidence request.agentId
+  _root_.AuxiliaryAdmission.activate? (world c) 9 1 ids c.available
+    ({} : Enrollment.State) c.request c.admission evidence c.request.agentId
     c.row 7 20 30 99
     { transportRetries := 0, resampleRetries := 0, allowRepair := false } none
 
@@ -98,14 +118,20 @@ private theorem active_normal_queue_is_not_consumed :
       (claimed activeQueueCase).map (·.queue) = some (world activeQueueCase).queue := by
   native_decide
 
+private theorem review_preserves_the_active_queue_and_binds_its_purpose :
+    (claimed reviewCase).isSome = true ∧
+      (claimed reviewCase).map (·.queue) = some (world reviewCase).queue ∧
+      ((activation reviewCase).map (·.binding.purpose)) = some .accessReview := by
+  native_decide
+
 private theorem wrong_world_physical_rejects_valid_activation :
     (activation wrongWorldPhysicalCase).isSome = true ∧
       (claimed wrongWorldPhysicalCase).isNone = true := by
   native_decide
 
 private theorem unavailable_observation_retries_without_claim :
-    Enrollment.titlePendingDisposition false ({} : Enrollment.State) request admission
-      evidence request.agentId unavailableCase.row.branchFieldsExact
+    Enrollment.auxiliaryPendingDisposition false ({} : Enrollment.State) baseRequest baseAdmission
+      evidence baseRequest.agentId unavailableCase.row.branchFieldsExact
       unavailableCase.row.pendingDeadlineAbsent unavailableCase.row.maxRequestHop = .retry ∧
       (claimed unavailableCase).isNone = true := by
   native_decide
@@ -124,7 +150,7 @@ private theorem emitted_symbol_ids_remain_bounded :
     cases.all (fun c => (emittedModelLabels c).all (· < 65536)) = true := by
   native_decide
 
-private def rowJson (r : _root_.TitleAdmission.RequestRowEvidence) : Json :=
+private def rowJson (r : _root_.AuxiliaryAdmission.RequestRowEvidence) : Json :=
   Json.mkObj
     [ ("physical_request", toJson r.physicalRequest)
     , ("logical_request", toJson r.logicalRequest)
@@ -137,9 +163,10 @@ private def symbolJson (value : Nat) : Json := toJson (toString value)
 private def optionalSymbolJson (value : Option Nat) : Json :=
   value.map symbolJson |>.getD Json.null
 
-private def bindingJson (b : Handover.TitleBinding) : Json :=
+private def bindingJson (b : Handover.AuxiliaryBinding) : Json :=
   Json.mkObj
-    [ ("physical_request", symbolJson b.physicalRequest)
+    [ ("purpose", toJson b.purpose.toWire)
+    , ("physical_request", symbolJson b.physicalRequest)
     , ("logical_request", symbolJson b.logicalRequest)
     , ("parent_physical", symbolJson b.parentPhysical)
     , ("parent_logical", symbolJson b.parentLogical)
@@ -153,7 +180,7 @@ private def caseJson (c : Case) : Json :=
   let result := claimed c
   Json.mkObj
     [ ("name", toJson c.name)
-    , ("admission_case", toJson "valid-title-parent-completed")
+    , ("admission_case", toJson c.admissionCase)
     , ("observation_available", toJson c.available)
     , ("row", rowJson c.row)
     , ("world", Json.mkObj
@@ -188,7 +215,7 @@ private def caseJson (c : Case) : Json :=
         | none => false))
     , ("expected_claimed_binding", (result.bind (·.claimed)).map (fun binding =>
         match binding.evidence with
-        | .titleAudit title => bindingJson title
+        | .auxiliary title => bindingJson title
         | _ => Json.null) |>.getD Json.null)
     , ("expected_queue_active", optionalSymbolJson ((result.getD start).queue.active))
     , ("expected_queue_unchanged", toJson ((result.getD start).queue == start.queue))

@@ -51,19 +51,22 @@ inductive Error where
   | purposeRejected
   deriving DecidableEq, Repr
 
-def titleSource : Source → Bool
-  | .auxiliary .title _ _ _ => true
+def auxiliarySource (kind : AuxiliaryKind) : Source → Bool
+  | .auxiliary actual _ _ _ => actual == kind
   | _ => false
 
-def titleRecord (world : World) (record : Segment) : Bool :=
-  record.coordinate.request == world.requestId && titleSource record.coordinate.source
+def reservedSource (source : Source) : Bool :=
+  auxiliarySource .title source || auxiliarySource .accessReview source
 
-def titleRecoveryItem (world : World) (item : RecoveryItem) : Bool :=
-  titleRecord world item.closing && item.message.isNone
+def auxiliaryRecord (world : World) (kind : AuxiliaryKind) (record : Segment) : Bool :=
+  record.coordinate.request == world.requestId && auxiliarySource kind record.coordinate.source
 
-def titleSourcesDecided (world : World) : Bool :=
+def auxiliaryRecoveryItem (world : World) (kind : AuxiliaryKind) (item : RecoveryItem) : Bool :=
+  auxiliaryRecord world kind item.closing && item.message.isNone
+
+def auxiliarySourcesDecided (world : World) (kind : AuxiliaryKind) : Bool :=
   (requestCoordinates world).all fun coordinate =>
-    if coordinate.request != world.requestId || !titleSource coordinate.source then true
+    if coordinate.request != world.requestId || !auxiliarySource kind coordinate.source then true
     else
       match (closures world.segments coordinate).dedup with
       | [closing] =>
@@ -83,35 +86,38 @@ def titleSourcesDecided (world : World) : Bool :=
 
 def normalOperationAllowed (_world : World) (operation : Operation) : Bool :=
   match operation with
-    | .append _ record => !titleSource record.coordinate.source
-    | .retract _ record => !titleSource record.coordinate.source
-    | .closeAuxiliary _ closing => !titleSource closing.coordinate.source
-    | .closePartial _ item => !titleSource item.closing.coordinate.source
+    | .append _ record => !reservedSource record.coordinate.source
+    | .retract _ record => !reservedSource record.coordinate.source
+    | .closeAuxiliary _ closing => !reservedSource closing.coordinate.source
+    | .closePartial _ item => !reservedSource item.closing.coordinate.source
     | .recover _ _ _ _ items =>
-        items.all (fun item => !titleSource item.closing.coordinate.source)
+        items.all (fun item => !reservedSource item.closing.coordinate.source)
     | .recoverTerminal _ _ _ _ items =>
-        items.all (fun item => !titleSource item.closing.coordinate.source)
+        items.all (fun item => !reservedSource item.closing.coordinate.source)
     | _ => true
 
-def titleOperationAllowed (world : World) : Operation → Bool
+/-- Detached completions publish only their own audit extent. They cannot
+create transcript headers, tool intent, dispatch permits, or queue input. -/
+def auxiliaryOperationAllowed (world : World) (kind : AuxiliaryKind) : Operation → Bool
   | .renew .. => true
-  | .append _ record => titleRecord world record
-  | .closeAuxiliary _ closing => titleRecord world closing
-  | .retract _ record => titleRecord world record
-  | .closePartial _ item => titleRecoveryItem world item
-  | .recover _ _ _ _ items => items.all (titleRecoveryItem world)
+  | .append _ record => auxiliaryRecord world kind record
+  | .closeAuxiliary _ closing => auxiliaryRecord world kind closing
+  | .retract _ record => auxiliaryRecord world kind record
+  | .closePartial _ item => auxiliaryRecoveryItem world kind item
+  | .recover _ _ _ _ items => items.all (auxiliaryRecoveryItem world kind)
   | .recoverTerminal _ _ _ selection items =>
-      selection == .noMessage && items.all (titleRecoveryItem world)
+      selection == .noMessage && items.all (auxiliaryRecoveryItem world kind)
   | .revoke _ _ _ selection => selection == .noMessage
   | .terminalize generation outcome selection =>
       selection == .noMessage &&
-        (terminalReplayPresent world generation outcome selection || titleSourcesDecided world)
+        (terminalReplayPresent world generation outcome selection || auxiliarySourcesDecided world kind)
   | _ => false
 
 def purposeAllows (world : World) (operation : Operation) : Bool :=
   match world.purpose with
   | .normal => normalOperationAllowed world operation
-  | .titleAudit => titleOperationAllowed world operation
+  | .titleAudit => auxiliaryOperationAllowed world .title operation
+  | .accessReview => auxiliaryOperationAllowed world .accessReview operation
 
 def evaluateCore (operation : Operation) (world : World) : Except Error World :=
   match operation with
@@ -178,13 +184,24 @@ theorem title_rejects_publication (world : World) (generation : Generation)
     (admissions : List ToolAdmission) (h : world.purpose = .titleAudit) :
     evaluate (.accept generation closing message admissions) world =
       .error .purposeRejected := by
-  simp [evaluate, purposeAllows, titleOperationAllowed, h]
+  simp [evaluate, purposeAllows, auxiliaryOperationAllowed, h]
+
+theorem access_review_rejects_dispatch (world : World) (generation : Generation)
+    (permit : DispatchPermit) (h : world.purpose = .accessReview) :
+    evaluate (.dispatch generation permit) world = .error .purposeRejected := by
+  simp [evaluate, purposeAllows, auxiliaryOperationAllowed, h]
+
+theorem access_review_rejects_publication (world : World) (generation : Generation)
+    (closing : Segment) (message : MessageEnvelope) (admissions : List ToolAdmission)
+    (h : world.purpose = .accessReview) :
+    evaluate (.accept generation closing message admissions) world = .error .purposeRejected := by
+  simp [evaluate, purposeAllows, auxiliaryOperationAllowed, h]
 
 theorem normal_cannot_append_title_source (world : World) (generation : Generation)
     (record : Segment) (hpurpose : world.purpose = .normal)
-    (hsource : titleSource record.coordinate.source = true) :
+    (hsource : auxiliarySource .title record.coordinate.source = true) :
     evaluate (.append generation record) world = .error .purposeRejected := by
-  simp [evaluate, purposeAllows, normalOperationAllowed, hpurpose, hsource]
+  simp [evaluate, purposeAllows, normalOperationAllowed, reservedSource, hpurpose, hsource]
 
 theorem evaluate_nextSequence_monotone (operation : Operation) (before after : World)
     (h : evaluate operation before = .ok after) :

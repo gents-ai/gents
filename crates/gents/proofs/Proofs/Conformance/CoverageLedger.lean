@@ -1047,10 +1047,11 @@ def caseCoverage : List CoverageEntry :=
       "InferenceRegistryCases"
       "admission::registry::contract_tests::generated_inference_registry_cases_drive_real_permits")
       "inference-call" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
+  , tagged (consumerWithFollowUp
       "title_usage_cases"
       "TitleUsageCases"
-      "Model-derived physical-call and historical title-claim inputs cover normal-public versus parent-inclusive totals, late usage after parent terminal, duplicate-call idempotence, conflicting catalog rejection, missing facts, invalid self-binding, and valid foreign-parent exclusion. Native request-purpose, claim provenance and inference-row joins are not bound; no native accounting consumer is claimed.")
+      "toolset::title_audit_usage::tests::generated_budget_recovery_cases_bind_signed_catalog_usage"
+      "The catalog consumer binds parent-inclusive spending, missing and zero usage, late reports and duplicate-call accounting. Historical receipt authentication and foreign-parent filtering remain separate native admission boundaries.")
       "inference-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "backend_health_cases"
@@ -1821,6 +1822,47 @@ def caseCoverage : List CoverageEntry :=
       "claude_messages::tests::generated_claude_wire_start_cases_drive_native_parser"
       "The four generated wire-start cases bind initial signature plus later delta, absent initial signature, ordered rejection of later thinking, and malformed signature type at the native SSE parser. The native test compares final content/error, not intermediate modeled steps or durable output capture.")
       "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "workspace_permission_write_cases"
+      "WorkspacePermissionWriteCases"
+      "tool_policy::workspace_permissions::tests::generated_workspace_permission_write_cases")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "workspace_permission_write_cases"
+      "WorkspacePermissionWriteCases"
+      "plugin::approval::workspace::tests::generated_workspace_permission_writes_preserve_selected_policy_versions"
+      "Generated transitions drive persisted selections with policy fingerprints on one Task ID, stale revisions, missing reviewers, retained references, no-op writes and exhausted revisions. Concurrent locking and filesystem failure handling need adapter checks.")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "access_review_cases"
+      "AccessReviewCases"
+      "tool_policy::access_review::tests::generated_access_review_cases_drive_native_reply_and_routing"
+      "Generated JSON replies bind exact invocation IDs, complete decisions and UTF-8 byte limits. Traces bind denial windows and scoped routing. Signed review execution, physical request binding, cancellation, tool and hook exclusion, and reviewer accuracy require native adapter checks.")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "access_review_task_cases"
+      "AccessReviewTaskCases"
+      "agent::daemon::title::review::task::tests::generated_task_policies_bind_the_configured_task_fields"
+      "Generated Task documents bind node, task, agent, operator-selected policy text, eligibility and excluded execution effects. Store lookup, template evaluation, policy fingerprint integrity, concurrent edits and provider behavior remain native adapter boundaries.")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "workspace_command_root_cases"
+      "WorkspaceCommandRootCases"
+      "plugin::approval::workspace::command::tests::generated_workspace_command_roots_preserve_the_tool_ceiling"
+      "Canonical host paths drive the production writable-root selection. A macOS execution regression checks real writes inside the project, rejection in its sibling and Full access restoring the configured root; other platforms retain the existing sandbox-unavailable barrier.")
+      "tool-policy" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "operator_path_cases"
+      "OperatorPathCases"
+      "plugin::allowed::tests::generated_operator_path_cases_protect_names_and_file_aliases"
+      "Generated decisions drive the shared path guard with real files, hard links, nested approval queues, missing targets and failed filesystem inspection. File-tool regressions verify that both reads and writes reject operator aliases before touching contents. Filesystem handle identity and concurrent external namespace changes remain native premises.")
+      "tool-policy" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "workspace_permission_cases"
+      "WorkspacePermissionCases"
+      "tool_policy::workspace_permissions::tests::generated_workspace_permission_cases"
+      "Generated decisions bind workspace isolation, configured ceilings, action/revision grants and automatic-review fallback to the native routing owner. Canonical host paths, command fingerprints, sandbox enforcement and reviewer accuracy require adapter checks.")
+      "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "prompt_assembly_service_tier_cases"
       "PromptAssemblyServiceTierCases"

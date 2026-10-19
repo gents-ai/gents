@@ -305,25 +305,48 @@ impl PluginExecutor {
         let user_home = allowed::user_home();
         let resolved = allowed::resolve(requested, context.workdir, user_home.as_deref(), home)
             .map_err(refuse)?;
-        let scope = allowed::Scope::load(home, context.workdir, user_home.as_deref())
+        let scope = approval::workspace::allowed_scope(home, context.workdir, user_home.as_deref())
             .map_err(|error| refuse(format!("{error:#}")))?;
         let access = binding.call_access(input);
         let granted = scope.granted(&resolved.target);
         let covered = granted.is_some_and(|granted| granted >= access);
         if !covered {
-            let allowed = match approval::consent(context.interactive) {
-                approval::Consent::Deny => false,
-                approval::Consent::Ask => {
-                    let request = approval::Request::new(
-                        &plugin,
-                        &resolved,
+            let route = approval::workspace::binding_route(
+                home,
+                || {
+                    Ok(approval::workspace::BindingAction::Plugin {
+                        plugin: plugin.clone(),
+                        artifact_digest: record.digest.clone(),
+                        input_digest: json_digest(input),
+                        path: resolved.target.clone(),
+                        is_dir: resolved.is_dir,
                         access,
-                        context.session_id.map(str::to_owned),
-                    );
-                    approval::ask(home, &request, approval::WAIT)
-                        .await
-                        .map_err(|error| refuse(format!("{error:#}")))?
-                }
+                    })
+                },
+                covered,
+                || Ok(input.clone()),
+            )
+            .map_err(|error| refuse(format!("{error:#}")))?;
+            let allowed = match route {
+                Some(decision) => approval::workspace::consent_binding(
+                    home,
+                    decision,
+                    context.interactive,
+                    context.session_id.map(str::to_owned),
+                )
+                .await
+                .map_err(|error| refuse(format!("{error:#}")))?,
+                None => match approval::consent(context.interactive) {
+                    approval::Consent::Deny => false,
+                    approval::Consent::Ask => {
+                        let session_id = context.session_id.map(str::to_owned);
+                        let request =
+                            approval::Request::new(&plugin, &resolved, access, session_id);
+                        approval::ask(home, &request, approval::WAIT)
+                            .await
+                            .map_err(|error| refuse(format!("{error:#}")))?
+                    }
+                },
             };
             if !allowed {
                 return Err(refuse(not_allowed(
@@ -335,10 +358,11 @@ impl PluginExecutor {
                 )));
             }
         }
-        let folder_allowed = allowed::Scope::load(home, context.workdir, user_home.as_deref())
-            .map_err(|error| refuse(format!("{error:#}")))?
-            .granted(resolved.folder())
-            .is_some();
+        let folder_allowed =
+            approval::workspace::allowed_scope(home, context.workdir, user_home.as_deref())
+                .map_err(|error| refuse(format!("{error:#}")))?
+                .granted(resolved.folder())
+                .is_some();
         allowed::bind(&resolved, access, folder_allowed)
             .map(Some)
             .map_err(refuse)

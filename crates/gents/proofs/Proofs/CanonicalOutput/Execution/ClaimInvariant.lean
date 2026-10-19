@@ -53,17 +53,17 @@ theorem activation_preserves_claimCoherent
 
 theorem title_activation_preserves_claimCoherent
     (before after : World) (actor : Gate.Actor) (now : Time)
-    (activation : Handover.TitleActivation) (scope : Nat)
+    (activation : Handover.AuxiliaryActivation) (scope : Nat)
     (budget : CompletionRetry.Budget) (deadline : Option Time)
-    (h : activateTitle before actor now activation scope budget deadline = some after) :
+    (h : activateAuxiliary before actor now activation scope budget deadline = some after) :
     ClaimCoherent after := by
-  unfold activateTitle at h
-  cases hc : Handover.claimTitle before actor now activation with
+  unfold activateAuxiliary at h
+  cases hc : Handover.claimAuxiliary before actor now activation with
   | none => simp [hc] at h
   | some claimed =>
       simp [hc] at h
       cases h
-      unfold Handover.claimTitle at hc
+      unfold Handover.claimAuxiliary at hc
       dsimp only at hc
       repeat' first | contradiction | split at hc
       all_goals cases hc
@@ -375,7 +375,7 @@ theorem Trace.claimCoherent {before after : World}
       exact coherent
   | activate actor now activation scope budget deadline h =>
       exact activation_preserves_claimCoherent _ _ actor now activation scope budget deadline h
-  | activateTitle actor now activation scope budget deadline h =>
+  | activateAuxiliary actor now activation scope budget deadline h =>
       exact title_activation_preserves_claimCoherent _ _ actor now activation scope budget deadline h
   | finish actor acknowledged h => exact finish_preserves_claimCoherent _ _ actor acknowledged h
   | activateGoal actor now result published generation duration leaseDeadline scope budget deadline h =>

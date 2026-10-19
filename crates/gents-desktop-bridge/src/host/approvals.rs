@@ -218,7 +218,10 @@ impl Drop for AttachmentApprovals {
     }
 }
 
-async fn local_home(core: &ClientCore, node_did: &str) -> Result<PathBuf, BridgeError> {
+pub(super) async fn peer(
+    core: &ClientCore,
+    node_did: &str,
+) -> Result<gents_desktop_core::client::PeerRecord, BridgeError> {
     let records = core.peer_records().await;
     let mut records = records.iter().filter(|record| record.node_did == node_did);
     let record = records.next().ok_or_else(|| {
@@ -230,7 +233,12 @@ async fn local_home(core: &ClientCore, node_did: &str) -> Result<PathBuf, Bridge
     if records.next().is_some() {
         return Err(BridgeError::untyped("the runtime record is ambiguous"));
     }
-    gents_desktop_core::local_runtime::hosted_runtime_home(record)
+    Ok(record.clone())
+}
+
+async fn local_home(core: &ClientCore, node_did: &str) -> Result<PathBuf, BridgeError> {
+    let record = peer(core, node_did).await?;
+    gents_desktop_core::local_runtime::hosted_runtime_home(&record)
         .and_then(|home| home.canonicalize().map_err(Into::into))
         .map_err(|_| {
             BridgeError::new(

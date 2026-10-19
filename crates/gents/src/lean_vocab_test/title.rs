@@ -10,6 +10,18 @@ pub(crate) enum LeanRequestPurpose {
     Normal,
     #[serde(rename = "title-audit")]
     TitleAudit,
+    #[serde(rename = "access-review")]
+    AccessReview,
+}
+
+impl From<LeanRequestPurpose> for gents_protocol::request_admission::RequestPurpose {
+    fn from(purpose: LeanRequestPurpose) -> Self {
+        match purpose {
+            LeanRequestPurpose::Normal => Self::Normal,
+            LeanRequestPurpose::TitleAudit => Self::TitleAudit,
+            LeanRequestPurpose::AccessReview => Self::AccessReview,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -161,6 +173,8 @@ pub(crate) struct LeanTitleUsageCase {
     pub(crate) usage_action: Option<LeanTitleUsageAction>,
     pub(crate) expected_before: LeanTitleUsageResult,
     pub(crate) expected_after: LeanTitleUsageResult,
+    pub(crate) budget_before: LeanUsageBudgetResult,
+    pub(crate) budget_after: LeanUsageBudgetResult,
 }
 
 #[derive(Debug, Deserialize)]
@@ -212,6 +226,7 @@ pub(crate) struct LeanTitleUsageBindingFact {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanTitleUsageBinding {
+    pub(crate) purpose: LeanRequestPurpose,
     pub(crate) physical: u64,
     pub(crate) logical: u64,
     pub(crate) parent_physical: u64,
@@ -238,6 +253,13 @@ pub(crate) enum LeanTitleUsageResult {
     Error {
         error: String,
     },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanUsageBudgetResult {
+    Ok { used: u64 },
+    Error { error: String },
 }
 
 #[derive(Debug, Deserialize)]
@@ -301,6 +323,7 @@ pub(crate) struct LeanTitleJoinWorld {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanTitleJoinBinding {
+    pub(crate) purpose: LeanRequestPurpose,
     pub(crate) physical_request: String,
     pub(crate) logical_request: String,
     pub(crate) parent_physical: String,
@@ -329,10 +352,7 @@ mod tests {
         let cases = super::super::lean_title_request_purpose_wire_cases();
         assert!(!cases.is_empty());
         for case in cases {
-            let expected = case.expected_decoded.map(|purpose| match purpose {
-                LeanRequestPurpose::Normal => RequestPurpose::Normal,
-                LeanRequestPurpose::TitleAudit => RequestPurpose::TitleAudit,
-            });
+            let expected = case.expected_decoded.map(RequestPurpose::from);
             let parsed = case
                 .wire
                 .as_deref()
