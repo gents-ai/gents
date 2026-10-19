@@ -428,4 +428,33 @@ mod tests {
             } if rendered.as_deref() == Some(content)
         ));
     }
+    #[test]
+    fn attachment_only_input_is_visible_without_exposing_runtime_controls() {
+        let capture = serde_json::from_value(serde_json::json!({
+            "kind":"file", "source":"editor", "capturedAt":"2026-10-20T00:00:00Z",
+            "uri":"file:///second/context.rs", "workspaceUri":"file:///second",
+            "terminalName":null, "version":41, "unsaved":true, "range":null,
+            "content":"captured buffer"
+        }))
+        .unwrap();
+        let visible = MessageView {
+            display_content: None,
+            captured_context: Some(vec![capture]),
+            ..user_message("captured-user-input", 1, "")
+        };
+        let hidden = MessageView {
+            runtime_control: true,
+            message_key: "runtime-control".into(),
+            ..visible.clone()
+        };
+        let timeline = build_rendered_timeline(&[visible.clone(), hidden], &[], &[]);
+        assert!(
+            matches!(timeline.as_slice(), [RenderedTimelineItem::UserMessage {content:None, captured_context:Some(contexts), ..}] if contexts.len()==1)
+        );
+        let empty = MessageView {
+            captured_context: Some(Vec::new()),
+            ..visible
+        };
+        assert!(build_rendered_timeline(&[empty], &[], &[]).is_empty());
+    }
 }
