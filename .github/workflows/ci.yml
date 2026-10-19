@@ -71,6 +71,12 @@ jobs:
             exit 1
           fi
 
+      - name: Test macOS release signing modes
+        run: |
+          bash -n scripts/package-macos-desktop.sh
+          shellcheck scripts/package-macos-desktop.sh
+          python3 .github/scripts/test-macos-release-modes.py
+
       - name: Check Harbor runner syntax
         run: |
           bash -n scripts/harbor/run_gents.sh

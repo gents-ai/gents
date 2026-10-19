@@ -20,6 +20,15 @@ on:
           - auto
           - enabled
           - none
+      candidate_sha:
+        description: Exact 40-character candidate commit; required for signed-unnotarized dispatch.
+        required: false
+        type: string
+      signed_unnotarized:
+        description: Manual Developer ID signed candidate without notarization; never allowed for tags.
+        required: true
+        type: boolean
+        default: false
       dry_run_unsigned:
         description: Manual dry-run only. Builds and packages an unsigned artifact that must not be deployed.
         required: true
@@ -130,6 +139,8 @@ jobs:
 
       - name: Validate release signing mode
         env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          SIGNED_UNNOTARIZED_INPUT: ${{ inputs.signed_unnotarized }}
           DRY_RUN_UNSIGNED_INPUT: ${{ inputs.dry_run_unsigned }}
           TIMESTAMP_MODE_INPUT: ${{ inputs.codesign_timestamp }}
           TIMESTAMP_MODE_VAR: ${{ vars.MACOS_CODESIGN_TIMESTAMP_MODE }}
@@ -142,6 +153,21 @@ jobs:
           set -euo pipefail
 
           dry_run_unsigned="${DRY_RUN_UNSIGNED_INPUT:-false}"
+          signed_unnotarized="${SIGNED_UNNOTARIZED_INPUT:-false}"
+          notarization_enabled=true
+          artifact_suffix=""
+          if [[ "${signed_unnotarized}" == "true" ]]; then
+            if [[ "${GITHUB_EVENT_NAME}" != workflow_dispatch || "${GITHUB_REF_TYPE}" == tag || "${dry_run_unsigned}" == true ]]; then
+              echo "::error::Signed-unnotarized candidates require a manual branch dispatch and cannot be unsigned."
+              exit 1
+            fi
+            if [[ ! "${CANDIDATE_SHA}" =~ ^[0-9a-f]{40}$ || "${CANDIDATE_SHA}" != "${GITHUB_SHA}" ]]; then
+              echo "::error::candidate_sha must match the exact dispatched commit."
+              exit 1
+            fi
+            notarization_enabled=false
+            artifact_suffix="-signed-unnotarized-candidate"
+          fi
           timestamp_mode="${TIMESTAMP_MODE_INPUT:-${TIMESTAMP_MODE_VAR:-auto}}"
           is_release_tag=false
           if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" == v* ]]; then
@@ -165,9 +191,11 @@ jobs:
           missing=()
           [[ -n "${MACOS_CODESIGN_IDENTITY}" ]] || missing+=("MACOS_CODESIGN_IDENTITY")
           [[ -n "${MACOS_CODESIGN_KEYCHAIN_PASSWORD}" ]] || missing+=("MACOS_CODESIGN_KEYCHAIN_PASSWORD")
+          if [[ "${notarization_enabled}" == true ]]; then
           [[ -n "${MACOS_NOTARY_API_KEY}" ]] || missing+=("MACOS_NOTARY_API_KEY")
           [[ -n "${MACOS_NOTARY_ISSUER_ID}" ]] || missing+=("MACOS_NOTARY_ISSUER_ID")
           [[ -n "${MACOS_NOTARY_KEY_ID}" ]] || missing+=("MACOS_NOTARY_KEY_ID")
+          fi
 
           if [[ "${signing_enabled}" == "true" && "${#missing[@]}" -gt 0 ]]; then
             printf "::error::Missing required macOS release secret(s): %s\n" "${missing[*]}"
@@ -191,6 +219,8 @@ jobs:
             exit 1
           fi
 
+          echo "NOTARIZATION_ENABLED=${notarization_enabled}" >> "${GITHUB_ENV}"
+          echo "CANDIDATE_ARTIFACT_SUFFIX=${artifact_suffix}" >> "${GITHUB_ENV}"
           echo "SIGNING_ENABLED=${signing_enabled}" >> "${GITHUB_ENV}"
           echo "RELEASE_CODESIGN_TIMESTAMP_MODE=${timestamp_mode}" >> "${GITHUB_ENV}"
 
@@ -383,6 +413,7 @@ jobs:
           esac
 
       - name: Notarize signed binary
+        if: env.NOTARIZATION_ENABLED == 'true'
         env:
           MACOS_NOTARY_API_KEY: ${{ secrets.MACOS_NOTARY_API_KEY }}
           MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
@@ -433,6 +464,7 @@ jobs:
             codesign --verify --strict --verbose=2 "${binary_path}"
 
             signature_details="$(codesign -d -vv "${binary_path}" 2>&1)"
+            grep -Fxq "TeamIdentifier=NXJ753WW5X" <<< "${signature_details}"
             printf '%s\n' "${signature_details}"
             if ! grep -Fxq "Identifier=${MACOS_CODESIGN_IDENTIFIER}" <<< "${signature_details}"; then
               echo "::error::Signed release artifact does not have identifier ${MACOS_CODESIGN_IDENTIFIER}."
@@ -487,7 +519,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          artifact_basename="gents-${TARGET_TRIPLE}"
+          artifact_basename="gents-${TARGET_TRIPLE}${CANDIDATE_ARTIFACT_SUFFIX}"
           if [[ "${SIGNING_ENABLED}" != "true" ]]; then
             artifact_basename="${artifact_basename}-unsigned-dry-run"
           fi
@@ -641,7 +673,7 @@ jobs:
           if-no-files-found: error
 
       - name: Attach CLI archive to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') && env.NOTARIZATION_ENABLED == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TARBALL: ${{ steps.package.outputs.tarball }}
@@ -684,10 +716,11 @@ jobs:
       - name: Build and verify signed desktop installer
         if: env.SIGNING_ENABLED == 'true'
         env:
+          NOTARIZATION_ENABLED: ${{ env.NOTARIZATION_ENABLED }}
           APPLE_SIGNING_IDENTITY: ${{ env.SIGNING_IDENTITY_NAME }}
-          APPLE_API_KEY: ${{ secrets.MACOS_NOTARY_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
-          MACOS_NOTARY_API_KEY: ${{ secrets.MACOS_NOTARY_API_KEY }}
+          APPLE_API_KEY: ${{ env.NOTARIZATION_ENABLED == 'true' && secrets.MACOS_NOTARY_KEY_ID || '' }}
+          APPLE_API_ISSUER: ${{ env.NOTARIZATION_ENABLED == 'true' && secrets.MACOS_NOTARY_ISSUER_ID || '' }}
+          MACOS_NOTARY_API_KEY: ${{ env.NOTARIZATION_ENABLED == 'true' && secrets.MACOS_NOTARY_API_KEY || '' }}
         run: bash scripts/package-macos-desktop.sh
 
       - name: Verify signed WebAssembly execution
@@ -698,12 +731,12 @@ jobs:
         if: env.SIGNING_ENABLED == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: gents-desktop-aarch64-apple-darwin
+          name: gents-desktop-aarch64-apple-darwin${{ env.CANDIDATE_ARTIFACT_SUFFIX }}
           path: ${{ runner.temp }}/gents-desktop-dist/*
           if-no-files-found: error
 
       - name: Attach desktop installer to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v') && env.SIGNING_ENABLED == 'true'
+        if: startsWith(github.ref, 'refs/tags/v') && env.NOTARIZATION_ENABLED == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
