@@ -1371,8 +1371,8 @@ async fn verify_editor_steering(
     let capture_count = |body: &Value| {
         body["messages"]
             .as_array()
-            .context("steered provider messages")?
-            .iter()
+            .into_iter()
+            .flatten()
             .filter(|message| message["role"] == "user")
             .filter_map(|message| message["content"].as_array())
             .flatten()
