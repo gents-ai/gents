@@ -417,7 +417,7 @@ pub(crate) async fn record_plugin_store_change(
     if !gents::home::init_config_path(home).is_file() {
         return Ok(());
     }
-    let (access, owner) = resolve_scope_owner(&GraphScopeArgs {
+    let (access, owner) = resolve_scope_owner(&ScopeArgs {
         home: Some(home.to_owned()),
         graphql: None,
         node_did: None,
@@ -438,7 +438,7 @@ pub(crate) fn warn_on_unrecorded_removal(coordinate: &str, recorded: Result<()>)
 }
 
 async fn resolve_plugin_slot_owner(
-    scope: &GraphScopeArgs,
+    scope: &ScopeArgs,
     manifest: &PackManifest,
     requested: &BTreeMap<String, String>,
 ) -> Result<Option<String>> {
@@ -462,7 +462,7 @@ async fn resolve_plugin_slot_owner(
 }
 
 pub(crate) async fn resolve_scope_owner(
-    scope: &GraphScopeArgs,
+    scope: &ScopeArgs,
 ) -> Result<(gents::config_client::ConfigAccess, String)> {
     let (access, _) =
         crate::resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
@@ -893,7 +893,7 @@ mod tests {
             "inference_slots": [{"name": "remote_ocr", "description": "d", "optional": true}],
         }))
         .unwrap();
-        let scope = GraphScopeArgs {
+        let scope = ScopeArgs {
             home: Some(tempfile::tempdir().unwrap().path().to_owned()),
             graphql: None,
             node_did: None,
