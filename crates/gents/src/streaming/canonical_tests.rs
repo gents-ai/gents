@@ -1760,11 +1760,11 @@ async fn modeled_capture_documents_survive_publication_replay_and_forks() {
         .await
         .unwrap();
     assert_eq!(before, expected);
-    let child = crate::session::fork::fork(
+    let child = crate::session::fork(
         &node,
-        crate::session::fork::ForkParams {
+        crate::session::ForkParams {
             source_session_id: SESSION,
-            boundary: crate::session::fork::ForkBoundary::UserTurn(
+            boundary: crate::session::ForkBoundary::UserTurn(
                 u32::try_from(expected.len()).unwrap(),
             ),
             caller_node_did: OWNER,
