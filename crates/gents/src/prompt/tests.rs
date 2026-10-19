@@ -177,16 +177,20 @@ fn preamble_includes_background_completion_guidance() {
     assert!(preamble.contains("## Background Completion Guidance"));
     assert!(preamble.contains("event-time snapshots"));
     assert!(preamble.contains("not the same as a durable assignment"));
+    // Action-first: evidence of change up front, no ack/boilerplate burying it.
+    assert!(preamble.contains("Lead with action"));
+    assert!(preamble.contains("Skip acknowledgments and scope or safety recaps"));
+    // Duplicates collapse to one durable report from the canonical record.
+    assert!(preamble.contains("Report each outcome once"));
+    assert!(preamble.contains("goal/task status, agent_session_read"));
+    // Stale recommendation must not appear current.
+    assert!(preamble.contains("Treat stale as stale"));
+    assert!(preamble.contains("as superseded, not current"));
     // Canonical current status only when needed; unknown stays unknown.
     assert!(preamble.contains("the status stays unknown"));
-    // No stale-failure repetition after proven recovery or acknowledgment.
-    assert!(preamble.contains("do not report or\nrepeat it"));
-    // Evidence-based action with provenance; no automatic authority.
-    assert!(preamble.contains("never cancel or reassign background work automatically"));
-    assert!(preamble.contains("never widen your own permissions"));
-    // No automatic redundant status polling; drilldown only for missing evidence.
-    assert!(preamble.contains("Do not poll for status on a schedule"));
-    assert!(preamble.contains("only when a decision is blocked on missing evidence"));
+    // No automatic authority; no scheduled polling.
+    assert!(preamble.contains("Never cancel, reassign"));
+    assert!(preamble.contains("do not poll on a schedule"));
 }
 
 #[test]
