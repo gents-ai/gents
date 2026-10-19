@@ -1,6 +1,6 @@
 mod approvals;
 mod interactive;
-mod streaming;
+pub(crate) mod streaming;
 
 use gents::config_client::GraphqlEndpoint;
 use std::path::Path;

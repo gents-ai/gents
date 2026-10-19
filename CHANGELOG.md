@@ -6,6 +6,10 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- `gents job list|show|watch|stop|pause` read and control plugin jobs.
+  `watch --until-terminal` waits for a job by its address
+  (`session_id:tool_call_id`) and prints one answer-first line with the next
+  call; `stop` and `pause` act only on a home whose server is not running.
 - A session started by another session's tool call now records its opening
   request in its provenance when it is created, so Codex threads, Grok cards
   and the desktop show the request that opened it even when a later message

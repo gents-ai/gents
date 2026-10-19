@@ -216,6 +216,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: GoalCommand,
     },
+    #[command(about = "Inspect and control plugin jobs")]
+    Job {
+        #[command(subcommand)]
+        command: JobCommand,
+    },
     #[command(about = "Manage EVM chain keys, endpoints, and queries")]
     Chain {
         #[command(subcommand)]
@@ -3906,6 +3911,107 @@ pub(crate) enum SessionCommand {
     Show(ConfigShowArgs),
     #[command(about = "Fork an existing session at a user-turn boundary")]
     Fork(SessionForkArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum JobCommand {
+    #[command(about = "List plugin jobs, newest first")]
+    List(JobListArgs),
+    #[command(about = "Show one plugin job: its state, outcome, phases, children and next calls")]
+    Show(JobShowArgs),
+    #[command(
+        about = "Follow one plugin job until it ends, is paused or awaits an answer; needs a running server"
+    )]
+    Watch(JobWatchArgs),
+    #[command(about = "Stop one plugin job and interrupt its children; local only")]
+    Stop(JobControlArgs),
+    #[command(about = "Pause one plugin job and interrupt its children; local only")]
+    Pause(JobControlArgs),
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+#[value(rename_all = "snake_case")]
+pub(crate) enum JobStateArg {
+    Running,
+    Paused,
+    AwaitingUser,
+    Completed,
+    Failed,
+    Cancelled,
+    TimedOut,
+    All,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct JobListArgs {
+    #[command(flatten)]
+    pub(crate) scope: ScopeArgs,
+    #[arg(long, value_name = "SESSION_ID", help = "Only jobs of this session")]
+    pub(crate) session: Option<String>,
+    #[arg(
+        long,
+        value_enum,
+        value_name = "STATE",
+        help = "Only jobs in this state; repeatable, or `all`. Defaults to running, paused and awaiting_user"
+    )]
+    pub(crate) state: Vec<JobStateArg>,
+    #[arg(long, value_name = "NS/NAME", help = "Only jobs of this plugin")]
+    pub(crate) plugin: Option<String>,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    pub(crate) output: OutputFormat,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct JobShowArgs {
+    #[command(flatten)]
+    pub(crate) scope: ScopeArgs,
+    #[arg(help = "A job address (SESSION_ID:TOOL_CALL_ID), a tool call id or a handle")]
+    pub(crate) selector: String,
+    #[arg(
+        long,
+        value_name = "SESSION_ID",
+        help = "Resolve a handle within this session"
+    )]
+    pub(crate) session: Option<String>,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct JobControlArgs {
+    #[command(flatten)]
+    pub(crate) scope: ScopeArgs,
+    #[arg(help = "A job address (SESSION_ID:TOOL_CALL_ID), a tool call id or a handle")]
+    pub(crate) selector: String,
+    #[arg(
+        long,
+        value_name = "SESSION_ID",
+        help = "Resolve a handle within this session"
+    )]
+    pub(crate) session: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct JobWatchArgs {
+    #[command(flatten)]
+    pub(crate) scope: ScopeArgs,
+    #[arg(help = "A job address (SESSION_ID:TOOL_CALL_ID), a tool call id or a handle")]
+    pub(crate) selector: String,
+    #[arg(
+        long,
+        value_name = "SESSION_ID",
+        help = "Resolve a handle within this session"
+    )]
+    pub(crate) session: Option<String>,
+    #[arg(
+        long,
+        help = "Print nothing until the job ends, then one JSON line; exit 0 completed, 3 paused or awaiting_user, 1 failed, cancelled or timed_out, 4 not observable"
+    )]
+    pub(crate) until_terminal: bool,
+    #[arg(long, default_value_t = 1_000)]
+    pub(crate) interval_ms: u64,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
 }
 
 #[derive(Subcommand)]
