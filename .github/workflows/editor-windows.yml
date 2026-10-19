@@ -30,11 +30,12 @@ concurrency:
 jobs:
   named-pipes:
     runs-on: windows-2025
-    timeout-minutes: 180
+    timeout-minutes: 240
     env:
       CARGO_BUILD_JOBS: 2
       CARGO_INCREMENTAL: "0"
       RUST_MIN_STACK: 16777216
+      RUST_TEST_THREADS: "2"
     steps:
       - uses: actions/checkout@v7
         with:
