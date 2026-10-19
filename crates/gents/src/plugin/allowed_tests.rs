@@ -63,6 +63,17 @@ fn generated_operator_path_cases_protect_names_and_file_aliases() {
     }
 }
 
+#[test]
+fn a_removed_operator_directory_is_absent_but_a_wrong_kind_is_an_error() {
+    let world = world();
+    assert!(
+        protected::optional_directory(&world.root.join("removed-home"))
+            .unwrap()
+            .is_none()
+    );
+    assert!(protected::optional_directory(&world.root.join("work/a.txt")).is_err());
+}
+
 struct World {
     _root: tempfile::TempDir,
     root: PathBuf,
