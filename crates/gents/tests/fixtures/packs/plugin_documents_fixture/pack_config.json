@@ -1,0 +1,92 @@
+{
+  "node": {},
+  "agents": [
+    {
+      "agent_id": "fixture-coordinator",
+      "display_name": "Fixture coordinator",
+      "description": "A tool-less agent bound to the coordinator slot.",
+      "context_id": "fixture-coordinator-context",
+      "inference_profile_id": "gents:inference-slot:coordinator"
+    },
+    {
+      "agent_id": "fixture-worker",
+      "display_name": "Fixture worker",
+      "description": "A tool-less agent bound to the worker slot.",
+      "context_id": "fixture-worker-context",
+      "inference_profile_id": "gents:inference-slot:worker"
+    },
+    {
+      "agent_id": "fixture-verifier",
+      "display_name": "Fixture verifier",
+      "description": "A tool-less agent bound to the verifier slot.",
+      "context_id": "fixture-verifier-context",
+      "inference_profile_id": "gents:inference-slot:verifier"
+    }
+  ],
+  "contexts": [
+    {
+      "context_id": "fixture-coordinator-context",
+      "display_name": "Fixture coordinator",
+      "system_prompt": "./agents/fixture_coordinator/system_prompt.md",
+      "tools_id": "fixture-coordinator-tools"
+    },
+    {
+      "context_id": "fixture-worker-context",
+      "display_name": "Fixture worker",
+      "system_prompt": "./agents/fixture_worker/system_prompt.md",
+      "tools_id": "fixture-worker-tools"
+    },
+    {
+      "context_id": "fixture-verifier-context",
+      "display_name": "Fixture verifier",
+      "system_prompt": "./agents/fixture_verifier/system_prompt.md",
+      "tools_id": "fixture-verifier-tools"
+    }
+  ],
+  "tools": [
+    {
+      "tools_id": "fixture-coordinator-tools",
+      "display_name": "Fixture coordinator: no tools",
+      "host": {
+        "bash": {
+          "mode": "Off"
+        }
+      },
+      "built_ins": {
+        "enable_session_history_tool": false
+      }
+    },
+    {
+      "tools_id": "fixture-worker-tools",
+      "display_name": "Fixture worker: no tools",
+      "host": {
+        "bash": {
+          "mode": "Off"
+        }
+      },
+      "built_ins": {
+        "enable_session_history_tool": false
+      }
+    },
+    {
+      "tools_id": "fixture-verifier-tools",
+      "display_name": "Fixture verifier: no tools",
+      "host": {
+        "bash": {
+          "mode": "Off"
+        }
+      },
+      "built_ins": {
+        "enable_session_history_tool": false
+      }
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "fixture-worker-task",
+      "display_name": "fixture-worker-task",
+      "agent_id": "fixture-worker",
+      "prompt_template": "./tasks/fixture_worker_task/prompt.md"
+    }
+  ]
+}
