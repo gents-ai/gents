@@ -165,12 +165,19 @@ class AuthHelperTests(unittest.TestCase):
         self.fake_bin.mkdir()
 
     def _run_helper(self, history_output: str, history_status: int,
-                    env_overrides: dict[str, str] | None = None):
+                    env_overrides: dict[str, str] | None = None,
+                    stderr_only: bool = False):
         fake_xcrun = self.fake_bin / "xcrun"
-        fake_xcrun.write_text(
-            "#!/bin/sh\n"
-            f"printf '%s' {json.dumps(history_output)}\n"
-            f"exit {history_status}\n")
+        if stderr_only:
+            fake_xcrun.write_text(
+                "#!/bin/sh\n"
+                f"printf '%s' {json.dumps(history_output)} >&2\n"
+                f"exit {history_status}\n")
+        else:
+            fake_xcrun.write_text(
+                "#!/bin/sh\n"
+                f"printf '%s' {json.dumps(history_output)}\n"
+                f"exit {history_status}\n")
         fake_xcrun.chmod(0o755)
         env = dict(os.environ)
         env["PATH"] = f"{self.fake_bin}:{env.get('PATH', '')}"
@@ -193,7 +200,8 @@ class AuthHelperTests(unittest.TestCase):
 
     def test_403_reports_allowlisted_diagnostic_and_fails(self):
         result = self._run_helper(
-            "Error: HTTP status 403: ACCESS_DENIED key file /tmp/x/AuthKey_fakekeyid.p8", 64)
+            "Error: HTTP status 403: ACCESS_DENIED key file /tmp/x/AuthKey_fakekeyid.p8",
+            64, stderr_only=True)
         self.assertNotEqual(result.returncode, 0)
         # The only permitted output is the fixed 403 diagnostic on stderr.
         self.assertIn("403", result.stderr)
@@ -204,6 +212,42 @@ class AuthHelperTests(unittest.TestCase):
         self.assertNotIn("AuthKey_fakekeyid.p8", result.stdout + result.stderr)
         leftovers = [p for p in self.root.iterdir() if p.name.startswith("gents-rc1-notary-auth.")]
         self.assertEqual(leftovers, [], "key temp dir must be removed on failure")
+
+    def test_stderr_only_agreement_403_gets_agreement_specific_diagnostic(self):
+        # The 403 body appears only on notarytool's stderr (real-world shape);
+        # the helper must classify it from the private stderr capture.
+        result = self._run_helper(
+            "Error: HTTP status 403: You must accept the notary agreement in App Store Connect",
+            64, stderr_only=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("notary agreement not accepted (HTTP 403)", result.stderr)
+        self.assertNotIn("generic", result.stderr)
+        # Agreement-specific diagnostic must NOT leak the raw stderr body.
+        self.assertNotIn("You must accept", result.stdout + result.stderr)
+        self.assertEqual(result.stdout, "")
+        leftovers = [p for p in self.root.iterdir() if p.name.startswith("gents-rc1-notary-auth.")]
+        self.assertEqual(leftovers, [], "key temp dir must be removed on failure")
+
+    def test_stderr_only_generic_403_gets_generic_forbidden_diagnostic(self):
+        result = self._run_helper(
+            "Error: HTTP status 403: ACCESS_DENIED team key revoked",
+            64, stderr_only=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("notary auth rejected (HTTP 403)", result.stderr)
+        self.assertIn("MACOS_NOTARY_API_KEY", result.stderr)
+        self.assertNotIn("notary agreement not accepted", result.stderr)
+        self.assertNotIn("ACCESS_DENIED", result.stdout + result.stderr)
+        self.assertEqual(result.stdout, "")
+        leftovers = [p for p in self.root.iterdir() if p.name.startswith("gents-rc1-notary-auth.")]
+        self.assertEqual(leftovers, [], "key temp dir must be removed on failure")
+
+    def test_generic_403_diagnostic_is_not_agreement_specific(self):
+        # Both fixed diagnostics must be mutually exclusive.
+        generic = "notary auth rejected (HTTP 403)"
+        agreement = "notary agreement not accepted (HTTP 403)"
+        result = self._run_helper("Error: HTTP status 403: forbidden", 64, stderr_only=True)
+        self.assertIn(generic, result.stderr)
+        self.assertNotIn(agreement, result.stderr)
 
     def test_non_403_failure_never_leaks_raw_provider_error(self):
         raw_error = "Error: HTTP status 500: provider blew up with internal details"
@@ -229,8 +273,14 @@ class AuthHelperTests(unittest.TestCase):
         self.assertNotIn("should not run", result.stdout)
 
 
-class WorkflowReconciliationTests(unittest.TestCase):
-    """Fail-closed behavior of the durable submission receipt used by the workflow."""
+class VestigialReceiptContractTests(unittest.TestCase):
+    """NOT COVERAGE: these tests verify nothing that runs.
+
+    The submission path was removed entirely; no receipt logic exists in the
+    workflow or helper. They are kept only as documentation of the fail-closed
+    receipt contract that any FUTURE, separately reviewed submission phase
+    must implement. They must not be cited as covering current behavior.
+    """
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

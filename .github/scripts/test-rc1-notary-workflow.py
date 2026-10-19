@@ -96,6 +96,25 @@ class WorkflowStructureTests(unittest.TestCase):
         self.assertIn("TRUSTED_DEFAULT_BRANCH", joined)
         self.assertNotIn("GITHUB_REPOSITORY_DEFAULT_BRANCH", self.raw)
 
+    def test_guard_compares_full_ref_excluding_tags(self):
+        for job_name in ("repository-guard", "notary-auth-preflight"):
+            steps = self.wf["jobs"][job_name]["steps"]
+            guard_steps = [s for s in steps if "pre-checkout" in (s.get("name") or "")]
+            self.assertEqual(
+                len(guard_steps), 1,
+                f"job {job_name} must have exactly one job-level pre-checkout guard")
+            # Guard must be the literal first step, before any checkout.
+            self.assertIs(steps[0], guard_steps[0],
+                          f"job {job_name}: guard must run before any checkout step")
+            run = guard_steps[0]["run"]
+            # Full-ref comparison: a tag named like the default branch must
+            # not pass; only refs/heads/<branch> is accepted.
+            self.assertIn('"${GITHUB_REF}" != "refs/heads/${TRUSTED_DEFAULT_BRANCH}"', run,
+                          f"job {job_name}: guard must compare full GITHUB_REF against refs/heads/")
+            self.assertNotIn("GITHUB_REF_NAME", run,
+                             f"job {job_name}: short-name REF_NAME comparison must not be used")
+            self.assertIn("GITHUB_HEAD_REF", run)
+
     def test_helper_is_invoked_with_credentials(self):
         preflight = self.wf["jobs"]["notary-auth-preflight"]["steps"]
         probe_steps = [

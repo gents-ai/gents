@@ -31,8 +31,8 @@ these artifacts; the originals are immutable.
 | Repository | `gents-ai/gents` |
 | Source SHA | `08edd1bdfedca73fa28e648e4781ae03aeacf5e6` |
 | Build run | `39302246819` |
-| CLI artifact | `12217555726` (`gents-aarch64-apple-darwin-signed-unnotarized-candidate.tar.gz`, sha256 `71979526db36097b7b145398e7f7a7cfc47fb9d33ab5ea0a23eed7fe398caf55`, inner binary `5b488fc5af64f0a0112ab97b0894b2b7a2e4728df5b8c481a3f7c4b7aa3a2295`) |
-| Desktop artifact | `12214205657` (`gents-desktop_0.21.0-rc1_aarch64-signed-unnotarized-candidate.dmg`, sha256 `c6ee15a715e0a66a0d55ec435ddff127a52319bf10ad40ad1d6da134403245d7`) |
+| Desktop artifact | `12217555726` (`gents-desktop_0.21.0-rc1_aarch64-signed-unnotarized-candidate.dmg`, sha256 `c6ee15a715e0a66a0d55ec435ddff127a52319bf10ad40ad1d6da134403245d7`) |
+| CLI artifact | `12214205657` (`gents-aarch64-apple-darwin-signed-unnotarized-candidate.tar.gz`, sha256 `71979526db36097b7b145398e7f7a7cfc47fb9d33ab5ea0a23eed7fe398caf55`, inner binary `5b488fc5af64f0a0112ab97b0894b2b7a2e4728df5b8c481a3f7c4b7aa3a2295`) |
 | Desktop manifest | `candidate-build.json`, sha256 `b53772b976b4572f5a79d177748dbad3eaee3b60e26e1d23e892bbd647aadcb2` |
 | Inner binaries | app `076ad259e4451eeb4a46b0af336278b472aeb6fea392f02f39231618d19dd2d3`, CLI `64f5f84e22ae0056fead492dcc42d695d928b1f272ee744ea99e9dd5c5454abf`, bridge `ff17f13c68272e5b833b0a8a42f3d46fbabb1eee6964fe85e388205a7f3b3deb` (to be bound via the hash-verified manifest) |
 | Codesign identity (expected) | Team `NXJ753WW5X`, Developer ID Application; cert SHA-1 `4855F05BB34BFB227F828F9856DA05D2D02E7D0F`, SHA-256 `FFE161226E3BA89575FBB2FA4E0FFC2F7B0A7C99DE8FC2F696A24FB8D74F1BAF` (the embedded signature would remain authoritative; no keychain import, no resign) |
@@ -88,7 +88,7 @@ these artifacts; the originals are immutable.
 - No writes to releases, tags, or repository contents (permissions are
   `contents: read`, `actions: read` only).
 - No source changes to the product at `08edd1bdfedca73fa28e648e4781ae03aeacf5e6`;
-  the desktop (`12214205657`), CLI (`12217555726`), and build-run
+  the desktop (`12217555726`), CLI (`12214205657`), and build-run
   (`39302246819`) originals remain immutable.
 
 ## Future phases (not in this workflow)

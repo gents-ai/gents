@@ -38,21 +38,28 @@ fi
 umask 077
 NOTARY_DIR="$(mktemp -d "${TMPDIR:-/tmp}/gents-rc1-notary-auth.XXXXXX")"
 chmod 0700 "${NOTARY_DIR}"
-NOTARY_KEY_PATH="${NOTARY_DIR}/AuthKey_${MACOS_NOTARY_KEY_ID}.p8"
+# Constant key filename: never embed the key id in a path that could leak it.
+NOTARY_KEY_PATH="${NOTARY_DIR}/AuthKey.p8"
 printf '%s\n' "${MACOS_NOTARY_API_KEY}" > "${NOTARY_KEY_PATH}"
 chmod 0600 "${NOTARY_KEY_PATH}"
 HISTORY_FILE="${NOTARY_DIR}/notary-history.json"
+ERROR_FILE="${NOTARY_DIR}/notary-history.err"
 
-# Single auth probe; output (history or error) goes only to the private file.
+# Single auth probe; output (history or error) goes only to the private files.
 status=0
 xcrun notarytool history \
   --key "${NOTARY_KEY_PATH}" \
   --key-id "${MACOS_NOTARY_KEY_ID}" \
   --issuer "${MACOS_NOTARY_ISSUER_ID}" \
-  --output-format json >"${HISTORY_FILE}" 2>"${NOTARY_DIR}/notary-history.err" || status=$?
+  --output-format json >"${HISTORY_FILE}" 2>"${ERROR_FILE}" || status=$?
 
 if [ "${status}" -ne 0 ]; then
-  if grep -q '403' "${HISTORY_FILE}" "${HISTORY_FILE}.err" 2>/dev/null; then
+  # Classification reads only the private stderr capture; the payload body is
+  # never printed. Agreement rejections and generic rejections get distinct
+  # fixed diagnostics.
+  if grep -qi 'agreement' "${ERROR_FILE}" 2>/dev/null; then
+    echo "rc1-notary-auth: auth failure: notary agreement not accepted (HTTP 403): accept the notary agreement for this team in App Store Connect, then re-run" >&2
+  elif grep -q '403' "${ERROR_FILE}" 2>/dev/null; then
     echo "rc1-notary-auth: auth failure: notary auth rejected (HTTP 403); check MACOS_NOTARY_API_KEY/ISSUER_ID/KEY_ID validity and team permissions" >&2
   else
     echo "rc1-notary-auth: auth failure: notarytool history exited ${status}; credential material and provider errors withheld" >&2
