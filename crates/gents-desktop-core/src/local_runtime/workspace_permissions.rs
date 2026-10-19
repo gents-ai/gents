@@ -5,26 +5,15 @@ use serde_json::Value;
 
 use crate::client::PeerRecord;
 
-use super::{http::http_get_json, runtime_http_client, runtime_status_url, serving_runtime};
+use super::{http::peer_status, serving_runtime};
 
 /// Capabilities belong to the process serving the saved peer, not the client
 /// binary. Matching the node and lifecycle prevents a stale home or a different
 /// service on the same port from supplying permission settings.
 pub async fn workspace_permission_support(record: &PeerRecord) -> Result<Option<Support>> {
-    let http =
-        |endpoint: &&str| endpoint.starts_with("http://") || endpoint.starts_with("https://");
-    let endpoint = record
-        .graphql
-        .as_deref()
-        .map(str::trim)
-        .filter(http)
-        .or_else(|| Some(record.addr.trim()).filter(http));
-    let Some(endpoint) = endpoint else {
+    let Some(status) = peer_status(record).await? else {
         return Ok(None);
     };
-    let url = runtime_status_url(endpoint)?;
-    let client = runtime_http_client().await?;
-    let status = http_get_json(client, &url).await?;
     decode(&status, &record.node_did)
 }
 
