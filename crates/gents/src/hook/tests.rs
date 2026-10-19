@@ -1898,6 +1898,126 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
 }
 
 #[tokio::test]
+async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-hook-goal-update-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .expect("embedded node"),
+    );
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default())
+            .with_goal_tool_authority(true, false);
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("start goal"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+    bind_interruptible_request(
+        node.as_ref(),
+        &hook,
+        "goal-update-request",
+        &session_id,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+
+    for (status, expected_hint) in [
+        (
+            crate::goal::GoalStatus::Blocked,
+            "gents goal resume-request --from REQUEST_ID",
+        ),
+        (
+            crate::goal::GoalStatus::Paused,
+            "gents goal resume-request --from REQUEST_ID",
+        ),
+        (
+            crate::goal::GoalStatus::UsageLimited,
+            "gents goal resume-request --from REQUEST_ID",
+        ),
+        (
+            crate::goal::GoalStatus::Complete,
+            "a complete goal is terminal",
+        ),
+        (
+            crate::goal::GoalStatus::BudgetLimited,
+            "a budget_limited goal cannot be reactivated",
+        ),
+    ] {
+        crate::goal::set_goal(
+            &node,
+            "did:test:general",
+            &session_id,
+            Some("blocked-edit semantics"),
+            Some(crate::goal::GoalStatus::Active),
+            None,
+        )
+        .await
+        .expect("create active goal");
+        crate::goal::set_goal(
+            &node,
+            "did:test:general",
+            &session_id,
+            None,
+            Some(status),
+            None,
+        )
+        .await
+        .expect("latch status");
+        let call_id = format!("blocked-edit-{}", status.as_str());
+        let args = r#"{"objective":"revised"}"#;
+        accept_hook_tool_call(&hook, &call_id, crate::goal::UPDATE_GOAL_TOOL_NAME, args, None)
+            .await;
+        let ToolCallHookAction::Skip { tool_result, .. } = hook
+            .on_tool_call(crate::goal::UPDATE_GOAL_TOOL_NAME, None, &call_id, args)
+            .await
+        else {
+            panic!("expected hook-managed skip for {call_id}");
+        };
+        assert!(!tool_result.contains("\"accepted\": true"), "{tool_result}");
+
+        assert!(
+            tool_result.contains(&format!("the current goal status is {}", status.as_str())),
+            "{call_id}: {tool_result}"
+        );
+        assert!(
+            tool_result.contains(expected_hint),
+            "{call_id}: expected {expected_hint:?} in {tool_result}"
+        );
+        assert!(
+            !tool_result.contains("no longer active or its continuation changed"),
+            "{call_id}: stale-race message must not appear for a fresh non-active goal: {tool_result}"
+        );
+        let goal = crate::goal::load_canonical_goal(&node, "did:test:general", &session_id)
+            .await
+            .expect("load goal")
+            .expect("goal exists");
+        assert_eq!(
+            goal.parsed_status(),
+            Some(status),
+            "{call_id}: refused edit must not change status"
+        );
+        assert_eq!(
+            goal.objective, "blocked-edit semantics",
+            "{call_id}: refused edit must not change objective"
+        );
+        // Rebuild from a fresh active goal for the next case; complete and
+        // budget_limited cannot be reset to active via set_goal.
+        crate::goal::delete_goals_for_session(&node, "did:test:general", &session_id)
+            .await
+            .expect("clear goal for next case");
+    }
+
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
 async fn claimed_authored_input_persists_context_once_before_prompt() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-context-{}", uuid::Uuid::new_v4()));

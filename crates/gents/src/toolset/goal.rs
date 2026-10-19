@@ -107,7 +107,7 @@ impl Tool for UpdateGoalTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Edit the active goal's objective or token budget, or mark it complete or blocked. Omit status when editing. Completion requires the objective to be achieved; blocked requires the same condition across at least three consecutive goal turns.".to_string(),
+            description: "Edit the active goal's objective or token budget, or mark it complete or blocked. Omit status when editing; edits apply only while the goal is active. Completion requires the objective to be achieved; blocked requires the same condition across at least three consecutive goal turns. When the goal is blocked, paused, or usage_limited, edits and reactivation are refused: an operator must run `gents goal resume-request --from REQUEST_ID` to return it to active; a complete goal is terminal; a budget_limited goal cannot be reactivated.".to_string(),
             parameters: json!({
                 "type": "object",
                 "additionalProperties": false,
