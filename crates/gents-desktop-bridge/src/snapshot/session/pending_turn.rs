@@ -120,7 +120,8 @@ pub(super) fn build_pending_turn(
         request_id: request.request_id.clone(),
         request_doc_id: request.doc_id.clone(),
         content: content.to_string(),
-        captured_context: request_input.captured_context,
+        captured_context: (!request_input.captured_context.is_empty())
+            .then_some(request_input.captured_context),
         selected_skill_ids: request_input.selected_skill_ids,
         lifecycle_state,
         folded_into_request_id: folded_into.map(str::to_owned),

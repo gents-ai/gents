@@ -46,9 +46,10 @@ pub async fn send_chat_message(
         bail!("node_did is required");
     }
 
+    let captured_context = request.captured_context.unwrap_or_default();
     let content = match &request.answer {
         Some(answer) => {
-            if !request.content.trim().is_empty() || !request.captured_context.is_empty() {
+            if !request.content.trim().is_empty() || !captured_context.is_empty() {
                 bail!("an answer renders its own content; send empty content");
             }
             super::mailbox::question_reply_content(
@@ -61,7 +62,7 @@ pub async fn send_chat_message(
         }
         None => request.content.trim().to_string(),
     };
-    if content.is_empty() && request.captured_context.is_empty() {
+    if content.is_empty() && captured_context.is_empty() {
         bail!("content is required");
     }
 
@@ -87,7 +88,7 @@ pub async fn send_chat_message(
             &session_id,
             gents_protocol::request_input::RequestInput {
                 cwd: chat_folder(request.cwd.as_deref())?,
-                captured_context: request.captured_context,
+                captured_context,
                 ..Default::default()
             },
             request
