@@ -151,6 +151,57 @@ describe("activation and the plugin store", () => {
     expect(isUxPluginLive("late")).toBe(false);
   });
 
+  it("keeps a reload's registrations and disposes what the register() it replaced adds late", async () => {
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const header = () => registry.getArea(SESSION_HEADER_ACTIONS_AREA).map((c) => c.id);
+    activateUxPlugin(
+      {
+        id: "again",
+        async register(ctx) {
+          ctx.register({
+            id: "early",
+            area: SESSION_HEADER_ACTIONS_AREA,
+            render: () => null,
+          });
+          await gate;
+          ctx.register({
+            id: "stale",
+            area: SESSION_HEADER_ACTIONS_AREA,
+            render: () => null,
+          });
+          ctx.setInterval(() => {}, 60_000);
+        },
+      },
+      { door: "bundled" },
+    );
+    expect(header()).toEqual(["again:early"]);
+    /* the plugin is loaded again under the same id while the first
+       register() still awaits: the reload of a runtime plugin */
+    await activateUxPlugin(
+      {
+        id: "again",
+        register(ctx) {
+          ctx.register({
+            id: "fresh",
+            area: SESSION_HEADER_ACTIONS_AREA,
+            render: () => null,
+          });
+        },
+      },
+      { door: "bundled" },
+    );
+    expect(header()).toEqual(["again:fresh"]);
+    finish();
+    await gate;
+    await Promise.resolve();
+    expect(header()).toEqual(["again:fresh"]);
+    expect(isUxPluginLive("again")).toBe(true);
+    expect(uxPluginRecords().again?.status).toBe("loaded");
+  });
+
   it("rolls back a register() that throws and reports on the plugin's row", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     activateUxPlugin(
