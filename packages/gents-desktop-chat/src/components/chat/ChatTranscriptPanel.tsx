@@ -101,6 +101,8 @@ export function ChatTranscriptPanel({
     null,
   );
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [awayFromBottom, setAwayFromBottom] = useState(false);
+  const [newContentBelow, setNewContentBelow] = useState(false);
 
   const sourceTimelineItems = useMemo<RenderedTimelineItem[]>(() => {
     const durable = session?.timelineItems ?? [];
@@ -169,6 +171,24 @@ export function ChatTranscriptPanel({
     [timelineItems],
   );
 
+  const tipChange = useMemo(
+    () => timelineChangeSignal(sourceTimelineItems.slice(-1)),
+    [sourceTimelineItems],
+  );
+  const observedTip = useRef(tipChange);
+  useLayoutEffect(() => {
+    if (autoFollowTranscript) setNewContentBelow(false);
+    else if (observedTip.current !== tipChange) setNewContentBelow(true);
+    observedTip.current = tipChange;
+    if (transcriptPanel)
+      setAwayFromBottom(
+        transcriptPanel.scrollHeight -
+          transcriptPanel.scrollTop -
+          transcriptPanel.clientHeight >=
+          64,
+      );
+  }, [tipChange, autoFollowTranscript, transcriptPanel, transcriptChange]);
+
   const lastItem = timelineItems[timelineItems.length - 1];
   const latestUserTurn = useMemo(() => {
     const items = timelineItems;
@@ -191,13 +211,11 @@ export function ChatTranscriptPanel({
       : null;
   const sendIdentity = optimisticSendIdentity
     ? optimisticSendIdentity
-    : session?.latestRequestId
-      ? `request:${session.latestRequestId}`
-      : latestUserTurn?.kind === "pendingUserTurn"
-        ? `request:${latestUserTurn.requestId}`
-        : latestUserTurn
-          ? `message:${latestUserTurn.itemKey}`
-          : null;
+    : latestUserTurn?.requestId
+      ? `request:${latestUserTurn.requestId}`
+      : latestUserTurn
+        ? `message:${latestUserTurn.itemKey}`
+        : null;
   useLayoutEffect(() => {
     setTranscriptWindow({
       sessionId: selectedSessionId,
@@ -224,15 +242,16 @@ export function ChatTranscriptPanel({
   }, [sendIdentity, transcriptPanel]);
 
   useLayoutEffect(() => {
-    if (
-      !transcriptPanel ||
-      !autoFollowTranscript ||
-      typeof ResizeObserver !== "function"
-    )
-      return;
-    const observer = new ResizeObserver(() =>
-      scrollPanelToTip(transcriptPanel),
-    );
+    if (!transcriptPanel || typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(() => {
+      if (autoFollowTranscript) scrollPanelToTip(transcriptPanel);
+      setAwayFromBottom(
+        transcriptPanel.scrollHeight -
+          transcriptPanel.scrollTop -
+          transcriptPanel.clientHeight >=
+          64,
+      );
+    });
     observer.observe(transcriptPanel);
     return () => observer.disconnect();
   }, [transcriptPanel, autoFollowTranscript]);
@@ -269,12 +288,19 @@ export function ChatTranscriptPanel({
   useLayoutEffect(() => {
     const previousScrollHeight = prependScrollHeightRef.current;
     const panel = transcriptPanel;
-    if (previousScrollHeight == null || !panel) return;
+    if (previousScrollHeight == null || !panel || pageFlight.current) return;
 
     prependScrollHeightRef.current = null;
     if (!windowed) panel.scrollTop += panel.scrollHeight - previousScrollHeight;
     lastScrollTop.current = panel.scrollTop;
-  }, [firstVisibleIndex, timelineItems.length, transcriptPanel, windowed]);
+  }, [
+    firstVisibleIndex,
+    loadingOlder,
+    timelineItems.length,
+    session?.timelinePage?.oldestItemKey,
+    transcriptPanel,
+    windowed,
+  ]);
 
   async function loadOlderItems() {
     const panel = transcriptPanel;
@@ -343,6 +369,7 @@ export function ChatTranscriptPanel({
     const remaining = panel.scrollHeight - panel.scrollTop - panel.clientHeight;
     const atTip = remaining < 64;
     setAutoFollowTranscript(atTip);
+    setAwayFromBottom(!atTip);
     setTranscriptWindow((current) => {
       const currentVisibleCount =
         current.sessionId === selectedSessionId
@@ -435,19 +462,25 @@ export function ChatTranscriptPanel({
           ) : null}
           {hasOlderItems ? (
             <div
-              role="status"
-              aria-live="polite"
+              className="transcript-history-control"
               data-testid="transcript-older-status"
             >
-              {loadingOlder ? "Loading older messages…" : null}
               <button
                 className="transcript-load-older"
                 type="button"
+                aria-label="Load older messages"
                 disabled={loadingOlder}
                 onClick={() => void loadOlderItems()}
               >
-                Load older messages
+                {loadingOlder ? "Loading history…" : "Load older messages"}
               </button>
+              <span
+                className="transcript-history-announcement"
+                role="status"
+                aria-live="polite"
+              >
+                {loadingOlder ? "Loading older messages" : ""}
+              </span>
             </div>
           ) : null}
           <MessageList
@@ -546,6 +579,52 @@ export function ChatTranscriptPanel({
           </p>
         </div>
       )}
+      {!autoFollowTranscript && awayFromBottom ? (
+        <div className="transcript-jump">
+          <button
+            type="button"
+            className="transcript-jump-button"
+            aria-label="Scroll to bottom"
+            title={
+              newContentBelow
+                ? "New activity below. Scroll to bottom"
+                : "Scroll to bottom"
+            }
+            onClick={() => {
+              setAutoFollowTranscript(true);
+              setNewContentBelow(false);
+              if (transcriptPanel) {
+                transcriptPanel.focus({ preventScroll: true });
+                scrollPanelToTip(transcriptPanel);
+              }
+            }}
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 16 16"
+              fill="none"
+              aria-hidden="true"
+            >
+              {newContentBelow ? (
+                <g fill="currentColor">
+                  <circle cx="3" cy="8" r="1" />
+                  <circle cx="8" cy="8" r="1" />
+                  <circle cx="13" cy="8" r="1" />
+                </g>
+              ) : (
+                <path
+                  d="M8 2.5v11m-4-4 4 4 4-4"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              )}
+            </svg>
+          </button>
+        </div>
+      ) : null}
     </section>
   );
 }

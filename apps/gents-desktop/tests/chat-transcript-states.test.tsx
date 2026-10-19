@@ -932,4 +932,175 @@ describe("ChatTranscriptPanel states", () => {
     expect(screen.getByText("remote-message-40")).toBe(retainedMessage);
     expect(screen.queryByTestId("transcript-older-status")).not.toBeInTheDocument();
   });
+  it("loads successive older pages when compact actions keep the same row count", async () => {
+    const onLoad = vi.fn();
+    const group = (index: number): RenderedTimelineItem => ({
+      kind: "toolGroup",
+      itemKey: `tools-${index}`,
+      messageSequence: index,
+      tools: [
+        {
+          itemKey: `action-${index}`,
+          toolName: "bash",
+          statusKind: "success",
+          reconstruction: { state: "ready" },
+          presentation: {
+            kind: "generic",
+            summary: "Ran a command",
+            input: null,
+            output: null,
+          },
+        },
+      ],
+    });
+    function CompactHistory() {
+      const [session, setSession] = useState(() =>
+        makeSession({
+          timelineItems: [group(3)],
+          timelinePage: {
+            totalItems: 4,
+            pageItems: 1,
+            hasOlder: true,
+            hasNewer: false,
+            oldestItemKey: "tools-3",
+            newestItemKey: "tools-3",
+          },
+        }),
+      );
+      return (
+        <ChatTranscriptPanel
+          selectedSessionId="s1"
+          session={session}
+          compactTools
+          onLoadOlder={async () => {
+            onLoad();
+            setSession((current) => {
+              const index = 3 - onLoad.mock.calls.length;
+              return {
+                ...current,
+                timelineItems: [group(index), ...current.timelineItems],
+                timelinePage: {
+                  ...current.timelinePage!,
+                  oldestItemKey: `tools-${index}`,
+                  hasOlder: index > 0,
+                },
+              };
+            });
+            return true;
+          }}
+        />
+      );
+    }
+    render(<CompactHistory />);
+    const older = screen.getByRole("button", { name: "Load older messages" });
+    fireEvent.click(older);
+    await waitFor(() => expect(older).not.toBeDisabled());
+    fireEvent.click(older);
+    await waitFor(() => expect(onLoad).toHaveBeenCalledTimes(2));
+    fireEvent.click(older);
+    await waitFor(() => expect(onLoad).toHaveBeenCalledTimes(3));
+    expect(
+      screen.queryByRole("button", { name: "Load older messages" }),
+    ).not.toBeInTheDocument();
+  });
+  it("keeps the reader in place when a background request replaces the active request", () => {
+    const timelineItems = [
+      userMessage({
+        itemKey: "user-1",
+        requestId: "request-1",
+        content: "Work on this project",
+      }),
+      liveAssistant({ itemKey: "answer", content: "Progress" }),
+    ];
+    const { rerender } = render(
+      <ChatTranscriptPanel
+        selectedSessionId="s1"
+        session={makeSession({ latestRequestId: "request-1", timelineItems })}
+      />,
+    );
+    const panel = screen.getByTestId("transcript-panel");
+    Object.defineProperties(panel, {
+      scrollHeight: { configurable: true, value: 1000 },
+      scrollTop: { configurable: true, writable: true, value: 100 },
+      clientHeight: { configurable: true, value: 400 },
+    });
+    fireEvent.scroll(panel);
+    rerender(
+      <ChatTranscriptPanel
+        selectedSessionId="s1"
+        session={makeSession({ latestRequestId: "background-2", timelineItems })}
+      />,
+    );
+    expect(panel.scrollTop).toBe(100);
+    expect(
+      screen.getByRole("button", { name: "Scroll to bottom" }),
+    ).toBeInTheDocument();
+  });
+  it("holds the reading anchor while remote pagination crosses hidden input pages", async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const recent = userMessage({ itemKey: "recent", content: "Recent message" });
+    function HiddenHistory() {
+      const [session, setSession] = useState(() =>
+        makeSession({
+          timelineItems: [recent],
+          timelinePage: {
+            totalItems: -1,
+            pageItems: 1,
+            hasOlder: true,
+            hasNewer: false,
+            oldestItemKey: "recent",
+            newestItemKey: "recent",
+          },
+        }),
+      );
+      return (
+        <ChatTranscriptPanel
+          selectedSessionId="s1"
+          session={session}
+          onLoadOlder={async () => {
+            setSession((current) => ({
+              ...current,
+              timelinePage: { ...current.timelinePage!, oldestItemKey: "hidden-input" },
+            }));
+            await pending;
+            setSession((current) => ({
+              ...current,
+              timelineItems: [
+                userMessage({ itemKey: "older", content: "Older message" }),
+                recent,
+              ],
+              timelinePage: {
+                ...current.timelinePage!,
+                oldestItemKey: "older",
+                hasOlder: false,
+              },
+            }));
+            return true;
+          }}
+        />
+      );
+    }
+    render(<HiddenHistory />);
+    const panel = screen.getByTestId("transcript-panel");
+    Object.defineProperties(panel, {
+      scrollHeight: {
+        configurable: true,
+        get: () => panel.querySelectorAll(".message-card").length * 200 + 200,
+      },
+      scrollTop: { configurable: true, writable: true, value: 0 },
+      clientHeight: { configurable: true, value: 200 },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await act(async () => {
+      finish();
+      await pending;
+    });
+    await waitFor(() => expect(panel.scrollTop).toBe(200));
+  });
 });
