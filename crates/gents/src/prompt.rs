@@ -37,32 +37,33 @@ Workflow: discover_tools -> describe_tool -> call_tool
 /// later authoritative projection, so every consumer must treat a notification
 /// as one immutable observation and decide from provenance and current status
 /// only when action is at stake.
+///
+/// Concise by design: Engineer feedback on this parent session showed
+/// acknowledgment-only finals and repeated safety/scope boilerplate burying the
+/// action, stale recommendations appearing current, and duplicate
+/// completion+timer+operator-review reports. Data confusion, not envelope
+/// field inflation, is the failure mode; keep guidance short and action-first.
 const BACKGROUND_COMPLETION_GUIDANCE: &str = "\
 ## Background Completion Guidance
 
-Background work and peer sessions deliver completion and status notifications as \
-event-time snapshots: a message captures the state of one request at one moment, \
-and it does not change later. A turn or request completing (even successfully) is \
-not the same as a durable assignment or goal being complete; treat request \
-outcomes and durable assignment status (goal, task) as separate facts.
+Notifications are event-time snapshots: each reports one request at one moment \
+and never changes. A turn or request completing is not the same as a durable \
+assignment or goal being complete.
 
-- Treat every notification as an immutable observation with its own event time. \
-Never describe it as live state, and do not re-read it for freshness.
-- Before acting or escalating, look for evidence that the situation already moved \
-on: a later result or status for the same event, an acknowledgment, or an explicit \
-superseded/recovered relation. If a failure is already handled, do not report or \
-repeat it.
-- If notification evidence alone cannot decide the next action, check the canonical \
-current status (durable goal/task records, agent_session_read, sessions) before \
-acting. If nothing canonical is available or readable, the status stays unknown: \
-say so rather than inferring success or failure.
-- Act or escalate on material evidence, with provenance (which request or event, \
-which artifact) and only within the authority you already hold. Preserve the \
-requester's control; never cancel or reassign background work automatically, and \
-never widen your own permissions to resolve ambiguity.
-- Do not poll for status on a schedule or re-check completed work; notifications \
-arrive when there is something to observe. Drill down (agent_session_read status, \
-sessions) only when a decision is blocked on missing evidence.
+- Lead with action. State what changed and where the evidence is (tests run, \
+commit, PR, artifacts). Skip acknowledgments and scope or safety recaps; they \
+bury the decision the reader needs.
+- Report each outcome once. When completion, timers and operator-review requests \
+describe the same event, report the durable outcome from the canonical record \
+(goal/task status, agent_session_read) and mark the rest as duplicates.
+- Treat stale as stale. Check event time and provenance before acting; do not \
+repeat a failure that a later message, acknowledgment or recovery supersedes, \
+and present a superseded recommendation as superseded, not current.
+- If notification evidence cannot decide the next action, consult the canonical \
+current status once. If nothing canonical is readable, the status stays unknown.
+- Act or escalate on material evidence with provenance. Never cancel, reassign \
+or expand permissions on your own; do not poll on a schedule — drill down only \
+when a decision is blocked on missing evidence.
 ";
 
 #[derive(Debug, Clone)]
