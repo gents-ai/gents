@@ -2,6 +2,21 @@ use super::*;
 use gents_protocol::request_input::RequestInput;
 
 #[test]
+fn captured_input_compatibility_matches_the_executable_owner() {
+    for case in &lean_contract_snapshot().request_input_cases {
+        let input: RequestInput = serde_json::from_value(case["input"].clone()).unwrap();
+        assert_eq!(
+            input.captured_input_compatible(case["runtime_input_version"].as_u64()),
+            case["expected_captured_input_compatible"]
+                .as_bool()
+                .unwrap(),
+            "{}: runtime input compatibility",
+            case["name"],
+        );
+    }
+}
+
+#[test]
 fn runtime_continuation_inputs_match_the_lean_owner() {
     for case in &lean_contract_snapshot().request_input_cases {
         let name = case["name"].as_str().unwrap();
