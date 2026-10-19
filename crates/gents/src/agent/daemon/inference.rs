@@ -1405,7 +1405,7 @@ pub(super) mod tests {
             let context = (!case["context"].is_null()).then(|| message(&case["context"]).message);
             let (mut actual, prompt) = super::request_entry(
                 history,
-                &Message::user(case["authored"].to_string()),
+                &crate::llm::message::Message::user(case["authored"].to_string()),
                 case["resume"].as_bool().unwrap(),
                 context.as_ref(),
                 &[],
