@@ -16,7 +16,7 @@ on:
         type: boolean
         default: true
       candidate_sha:
-        description: Exact 40-character commit SHA expected at the dispatched ref.
+        description: Exact 40-character candidate commit to check out and qualify.
         required: true
         type: string
 
@@ -44,11 +44,12 @@ env:
 
 jobs:
   repository-guard:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["self-hosted","macOS","ARM64","studio"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.sha }}
           persist-credentials: false
 
       - name: Verify immutable full-candidate dispatch
@@ -66,10 +67,13 @@ jobs:
             echo "::error::candidate_sha must be a full lowercase 40-character commit SHA."
             exit 1
           fi
-          if [[ "${CANDIDATE_SHA}" != "${GITHUB_SHA}" ]]; then
-            echo "::error::candidate_sha ${CANDIDATE_SHA} does not match checked-out GITHUB_SHA ${GITHUB_SHA}."
+          checked_sha="$(git rev-parse HEAD)"
+          if [[ "${CANDIDATE_SHA}" != "${checked_sha}" ]]; then
+            echo "::error::candidate_sha ${CANDIDATE_SHA} does not match checked-out commit ${checked_sha}."
             exit 1
           fi
+
+          printf 'Candidate commit: %s\nQualification workflow commit: %s\n' "${checked_sha}" "${GITHUB_SHA}" >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Test macOS release signing modes
         run: |
@@ -161,6 +165,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.sha }}
           persist-credentials: false
 
       # gents-migration's build script compiles the fixture lens for WASM and
@@ -441,6 +446,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.sha }}
           persist-credentials: false
 
       - name: Install elan
@@ -514,11 +520,12 @@ jobs:
       github.event.pull_request.stack.position == github.event.pull_request.stack.size))
     # Package boundary, publishability, and package-local tests are independent
     # of the desktop application/browser gate and should not block it.
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["self-hosted","macOS","ARM64","studio"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@v7
@@ -561,7 +568,7 @@ jobs:
     # This job exercises browser-only code. Keep scarce macOS capacity for the
     # Rust/Lean work that benefits from persistent host caches.
     name: desktop-ui (${{ matrix.suite }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["self-hosted","macOS","ARM64","studio"]') || 'ubuntu-latest' }}
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -570,6 +577,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@v7
@@ -649,6 +657,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@v7
@@ -686,11 +695,12 @@ jobs:
     # The issue-triage bot holds `issues: write` and runs on a daily cron. These
     # tests are the only fence on its decision function, so every pull request
     # must run them.
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["self-hosted","macOS","ARM64","studio"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.sha }}
           persist-credentials: false
 
       # The triage scripts import `node:` built-ins only, so this job needs no
