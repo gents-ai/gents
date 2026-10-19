@@ -39,6 +39,7 @@ pub(crate) fn installed_plugin(
         owner_pack_digest: None,
         model_binding: None,
         data_unique_keys: Default::default(),
+        data_collection_fields: Default::default(),
     };
     store::write_record(home.path(), &record).unwrap();
     (home, record)
@@ -1384,4 +1385,728 @@ async fn bound_receipt_names_the_declared_field_not_the_host_path() {
     let encoded = serde_json::to_string(&authority).unwrap();
     let host = directory.path().canonicalize().unwrap();
     assert!(!encoded.contains(host.to_str().unwrap()), "{encoded}");
+}
+
+mod mounted {
+    use super::*;
+    use crate::pack::{write_home_install, BindAccess, HomePackInstall, InstalledVia, PackKind};
+    use crate::plugin::tests::{open_and_copy_wat, ECHO_WAT};
+    use crate::plugin::BoundDir;
+    use gents_protocol::job::AssetMountDeclaration;
+    use gents_protocol::plugin::{PluginFilesystemGrant, PluginFilesystemScope};
+
+    /// A plugin declaring the `workflows` mount class, in a home whose one
+    /// materialized pack ships `workflows/a.json`.
+    fn mounted_plugin(
+        wat: &str,
+        access: Option<BindAccess>,
+    ) -> (tempfile::TempDir, InstalledPlugin) {
+        let (home, mut record) = installed_plugin(wat, access);
+        record.declaration.asset_mounts = vec![AssetMountDeclaration {
+            class: "workflows".into(),
+        }];
+        store::write_record(home.path(), &record).unwrap();
+        let hex = "a".repeat(64);
+        let assets = format!("packs/.materialized/acme/content/{hex}");
+        let dir = home.path().join(&assets).join("workflows");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.json"), r#"{"mounted":true}"#).unwrap();
+        write_home_install(
+            home.path(),
+            &HomePackInstall {
+                coordinate: "acme/content".into(),
+                version: "1.0.0".into(),
+                digest: format!("sha256:{hex}"),
+                kind: PackKind::Documents,
+                assets,
+                dependency_assets: vec![],
+                plugins: vec![],
+                installed_at: "2026-01-01T00:00:00Z".into(),
+                installed_via: Some(InstalledVia::Operator),
+            },
+        )
+        .unwrap();
+        (home, record)
+    }
+
+    fn executor(home: &tempfile::TempDir) -> PluginExecutor {
+        PluginExecutor::new(Some(home.path().to_owned()))
+    }
+
+    #[tokio::test]
+    async fn mounted_path_is_readable_and_a_write_to_it_fails() {
+        let (home, record) = mounted_plugin(&open_and_copy_wat("a.json", 0), None);
+        let read = executor(&home)
+            .call(&record, serde_json::json!({}))
+            .await
+            .unwrap();
+        assert_eq!(read.outcome.output, serde_json::json!({"mounted": true}));
+
+        let (home, record) = mounted_plugin(&open_and_copy_wat("new.json", 1), None);
+        let write = executor(&home)
+            .call(&record, serde_json::json!({}))
+            .await
+            .unwrap();
+        assert_eq!(
+            write.outcome.verdict,
+            crate::plugin::PluginVerdict::BadOutput
+        );
+        let mounted = home.path().join(format!(
+            "packs/.materialized/acme/content/{}/workflows",
+            "a".repeat(64)
+        ));
+        assert!(!mounted.join("new.json").exists());
+    }
+
+    #[tokio::test]
+    async fn read_write_bind_with_mounts_is_refused_with_the_next_call() {
+        let (home, record) = mounted_plugin(ECHO_WAT, Some(BindAccess::ReadWrite));
+        let directory = tempfile::tempdir().unwrap();
+        let bound = BoundDir::new(directory.path(), None).unwrap();
+        let error = executor(&home)
+            .call_bound(&record, serde_json::json!({}), bound)
+            .await
+            .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("this call writes; run it without mounted workflows"),
+            "{message}"
+        );
+    }
+
+    /// [`ECHO_WAT`] with a 4 KiB read buffer: a mount list outgrows its 256 bytes.
+    const ECHO_BIG_WAT: &str = r#"
+      (module
+        (import "wasi_snapshot_preview1" "fd_read"
+          (func $fd_read (param i32 i32 i32 i32) (result i32)))
+        (import "wasi_snapshot_preview1" "fd_write"
+          (func $fd_write (param i32 i32 i32 i32) (result i32)))
+        (memory (export "memory") 1)
+        (func (export "_start")
+          i32.const 8192  i32.const 0    i32.store
+          i32.const 8196  i32.const 4096 i32.store
+          i32.const 0
+          i32.const 8192
+          i32.const 1
+          i32.const 8200
+          call $fd_read
+          drop
+          i32.const 8196  i32.const 8200 i32.load  i32.store
+          i32.const 1
+          i32.const 8192
+          i32.const 1
+          i32.const 8204
+          call $fd_write
+          drop))
+    "#;
+
+    fn mounts_of(output: &serde_json::Value) -> &Vec<serde_json::Value> {
+        output["asset_mounts"].as_array().expect("a mount list")
+    }
+
+    #[tokio::test]
+    async fn non_job_call_receives_asset_mounts() {
+        let (home, record) = mounted_plugin(ECHO_BIG_WAT, None);
+        let call = executor(&home)
+            .call(&record, serde_json::json!({"keep": 1}))
+            .await
+            .unwrap();
+        assert_eq!(call.outcome.output["keep"], 1);
+        let mounts = mounts_of(&call.outcome.output);
+        assert_eq!(mounts.len(), 1);
+        assert_eq!(mounts[0]["pack"], "acme/content");
+        assert_eq!(mounts[0]["class"], "workflows");
+        assert_eq!(mounts[0]["digest"], format!("sha256:{}", "a".repeat(64)));
+        assert!(mounts[0]["path"].as_str().unwrap().ends_with("/workflows"));
+    }
+
+    #[tokio::test]
+    async fn guest_supplied_asset_mounts_is_overwritten() {
+        let (home, record) = mounted_plugin(ECHO_BIG_WAT, None);
+        let call = executor(&home)
+            .call(&record, serde_json::json!({"asset_mounts": "forged"}))
+            .await
+            .unwrap();
+        let mounts = mounts_of(&call.outcome.output);
+        assert_eq!(mounts.len(), 1);
+        assert_eq!(mounts[0]["pack"], "acme/content");
+    }
+
+    #[tokio::test]
+    async fn mounted_call_receipt_scope_is_mounted_without_host_paths() {
+        let (home, record) = mounted_plugin(ECHO_WAT, Some(BindAccess::Read));
+        let plain = executor(&home)
+            .call(&record, serde_json::json!({}))
+            .await
+            .unwrap();
+        let scope = |bound_input: Option<&str>| {
+            PluginFilesystemGrant::ReadOnly(PluginFilesystemScope::Mounted {
+                installed_roots: 0,
+                mounts: 1,
+                project_tier: false,
+                bound_input: bound_input.map(str::to_owned),
+            })
+        };
+        assert_eq!(plain.receipt.authority.unwrap().filesystem, scope(None));
+
+        let directory = tempfile::tempdir().unwrap();
+        let bound = BoundDir::new(directory.path(), None).unwrap();
+        let bound_call = executor(&home)
+            .call_bound(&record, serde_json::json!({}), bound)
+            .await
+            .unwrap();
+        let authority = bound_call.receipt.authority.unwrap();
+        assert_eq!(authority.filesystem, scope(Some("path")));
+        let encoded = serde_json::to_string(&authority).unwrap();
+        for host in [home.path(), directory.path()] {
+            let host = host.canonicalize().unwrap();
+            assert!(!encoded.contains(host.to_str().unwrap()), "{encoded}");
+        }
+    }
+}
+
+mod data_calls {
+    use std::collections::BTreeMap;
+
+    use gents_protocol::job::{DataQueryResponse, PluginDataDeclaration, RoundResult};
+    use serde_json::{json, Value};
+
+    use super::*;
+    use crate::config_client::ConfigAccess;
+    use crate::plugin::data::DataCaller;
+    use crate::plugin::PluginVerdict;
+
+    const NODE: &str = "did:key:z6Mknode";
+
+    async fn node_with(rows: &[(&str, &str)]) -> Arc<crate::defra_node::EmbeddedNode> {
+        let node = Arc::new(
+            crate::defra_node::EmbeddedNode::builder()
+                .build()
+                .await
+                .unwrap(),
+        );
+        node.add_schema("type Note { owner: String body: String }")
+            .await
+            .unwrap();
+        for (owner, body) in rows {
+            ConfigAccess::transact_local_write(&node, None, "data_calls_test", |txn| {
+                let mutation = format!(
+                    "mutation {{ add_Note(input: {{ owner: \"{owner}\", body: \"{body}\" }}) {{ _docID }} }}"
+                );
+                Box::pin(async move { txn.execute(&mutation).await })
+            })
+            .await
+            .unwrap();
+        }
+        node
+    }
+
+    fn declaration(ops: &[&str]) -> PluginDataDeclaration {
+        PluginDataDeclaration {
+            collections: vec!["Note".into()],
+            ops: ops.iter().map(|op| (*op).to_owned()).collect(),
+            stamped: BTreeMap::new(),
+        }
+    }
+
+    fn query(id: &str, query: Value) -> Value {
+        let mut query = query;
+        let object = query.as_object_mut().unwrap();
+        object.entry("collection").or_insert(json!("Note"));
+        object.entry("filter").or_insert(json!({}));
+        object.entry("fields").or_insert(json!(["body"]));
+        json!({"id": id, "query": query})
+    }
+
+    /// Runs a plugin that asks for `requests` once and echoes the answers.
+    async fn ask(
+        data: Option<PluginDataDeclaration>,
+        node: &Arc<crate::defra_node::EmbeddedNode>,
+        requests: Value,
+    ) -> crate::plugin::executor::PluginCall {
+        let canned = json!({"data_calls": {"requests": requests, "state": {"page": 1}}});
+        let (home, mut record) = installed_plugin(
+            &asking_plugin_wat("data_calls", "data_results", &canned, false),
+            None,
+        );
+        record.declaration.data = data;
+        store::write_record(home.path(), &record).unwrap();
+        PluginExecutor::new(Some(home.path().to_owned()))
+            .call_with_data(
+                &record,
+                json!({}),
+                DataCaller::new(node.clone(), NODE).unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+
+    fn results_of(
+        call: &crate::plugin::executor::PluginCall,
+    ) -> BTreeMap<String, RoundResult<DataQueryResponse>> {
+        assert_eq!(
+            call.outcome.verdict,
+            PluginVerdict::Success,
+            "{}",
+            call.outcome.diagnostics
+        );
+        serde_json::from_value(call.outcome.output["data_results"].clone()).unwrap()
+    }
+
+    fn bodies(answer: &RoundResult<DataQueryResponse>) -> Vec<String> {
+        match answer {
+            RoundResult::Result { result } => result
+                .rows
+                .iter()
+                .map(|row| row["body"].as_str().unwrap().to_owned())
+                .collect(),
+            RoundResult::Error { error } => panic!("refused: {error}"),
+        }
+    }
+
+    fn refusal(answer: &RoundResult<DataQueryResponse>) -> &str {
+        match answer {
+            RoundResult::Error { error } => error,
+            RoundResult::Result { .. } => panic!("expected a refusal"),
+        }
+    }
+
+    #[tokio::test]
+    async fn data_calls_query_substitutes_caller_node_did() {
+        let node = node_with(&[(NODE, "mine"), ("did:key:z6Mkother", "theirs")]).await;
+        let call = ask(
+            Some(declaration(&["query"])),
+            &node,
+            json!([query(
+                "q",
+                json!({"filter": {"owner": {"_eq": "$caller.node_did"}}, "limit": 10})
+            )]),
+        )
+        .await;
+        assert_eq!(bodies(&results_of(&call)["q"]), ["mine"]);
+        assert_eq!(call.outcome.output["state"], json!({"page": 1}));
+    }
+
+    #[tokio::test]
+    async fn data_calls_query_outside_the_grant_is_refused() {
+        let node = node_with(&[(NODE, "mine")]).await;
+        let call = ask(
+            Some(declaration(&["query"])),
+            &node,
+            json!([
+                query("other", json!({"collection": "Other", "limit": 1})),
+                query("runtime", json!({"collection": "AgentRequest", "limit": 1})),
+            ]),
+        )
+        .await;
+        let answers = results_of(&call);
+        assert!(refusal(&answers["other"]).contains("data.collections"));
+        assert!(refusal(&answers["runtime"]).contains("data.collections"));
+
+        let call = ask(
+            Some(declaration(&["insert"])),
+            &node,
+            json!([query("q", json!({"limit": 1}))]),
+        )
+        .await;
+        assert!(refusal(&results_of(&call)["q"]).contains("data.ops"));
+    }
+
+    #[tokio::test]
+    async fn data_calls_query_with_a_bad_field_name_is_refused() {
+        let node = node_with(&[(NODE, "mine")]).await;
+        let call = ask(
+            Some(declaration(&["query"])),
+            &node,
+            json!([
+                query("field", json!({"fields": ["body } { owner"], "limit": 1})),
+                query(
+                    "filter",
+                    json!({"filter": {"body } x": {"_eq": "a"}}, "limit": 1})
+                ),
+                query("unknown", json!({"fields": ["nope"], "limit": 1})),
+            ]),
+        )
+        .await;
+        let answers = results_of(&call);
+        for id in ["field", "filter", "unknown"] {
+            refusal(&answers[id]);
+        }
+    }
+
+    #[tokio::test]
+    async fn data_calls_query_caps_results_at_the_limit() {
+        let node = node_with(&[(NODE, "a"), (NODE, "b"), (NODE, "c")]).await;
+        let call = ask(
+            Some(declaration(&["query"])),
+            &node,
+            json!([
+                query("two", json!({"limit": 2})),
+                query("zero", json!({"limit": 0})),
+                query("many", json!({"limit": 257})),
+            ]),
+        )
+        .await;
+        let answers = results_of(&call);
+        assert_eq!(bodies(&answers["two"]).len(), 2);
+        assert!(refusal(&answers["zero"]).contains("limit"));
+        assert!(refusal(&answers["many"]).contains("256"));
+    }
+
+    #[tokio::test]
+    async fn data_calls_query_returns_rows_after_offset() {
+        let node = node_with(&[(NODE, "a"), (NODE, "b"), (NODE, "c")]).await;
+        let ordered = |id: &str, extra: Value| {
+            let mut request = json!({"order": {"body": "ASC"}});
+            request
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            query(id, request)
+        };
+        let call = ask(
+            Some(declaration(&["query"])),
+            &node,
+            json!([
+                ordered("window", json!({"offset": 1, "limit": 2})),
+                ordered("wide", json!({"offset": 1, "limit": 256})),
+                ordered("start", json!({"limit": 2})),
+            ]),
+        )
+        .await;
+        let answers = results_of(&call);
+        assert_eq!(bodies(&answers["window"]), ["b", "c"]);
+        assert_eq!(bodies(&answers["wide"]), ["b", "c"]);
+        assert_eq!(bodies(&answers["start"]), ["a", "b"]);
+    }
+
+    #[tokio::test]
+    async fn data_calls_is_not_offered_to_plugins_without_data() {
+        let node = node_with(&[(NODE, "mine")]).await;
+        let call = ask(None, &node, json!([query("q", json!({"limit": 1}))])).await;
+        assert_eq!(call.outcome.verdict, PluginVerdict::Success);
+        assert!(call.outcome.output.get("data_calls").is_none());
+        assert!(call.outcome.output.get("data_results").is_none());
+
+        let (home, mut record) = installed_echo();
+        record.declaration.data = Some(declaration(&["query"]));
+        store::write_record(home.path(), &record).unwrap();
+        let call = PluginExecutor::new(Some(home.path().to_owned()))
+            .call(&record, json!({}))
+            .await
+            .unwrap();
+        assert!(call.outcome.output.get("data_calls").is_none());
+    }
+
+    #[tokio::test]
+    async fn data_calls_answers_are_keyed_by_id_in_data_results() {
+        let node = node_with(&[(NODE, "mine")]).await;
+        let call = ask(
+            Some(declaration(&["query"])),
+            &node,
+            json!([
+                query("a", json!({"limit": 5})),
+                query("b", json!({"collection": "Other", "limit": 5})),
+            ]),
+        )
+        .await;
+        let answers = results_of(&call);
+        assert_eq!(answers.keys().collect::<Vec<_>>(), ["a", "b"]);
+        assert_eq!(bodies(&answers["a"]), ["mine"]);
+        assert!(matches!(answers["b"], RoundResult::Error { .. }));
+    }
+
+    #[tokio::test]
+    async fn data_call_with_an_unknown_key_is_a_bad_output() {
+        let node = node_with(&[(NODE, "mine")]).await;
+        let mut request = query("a", json!({"limit": 1}));
+        request["extra"] = json!(true);
+        let call = ask(Some(declaration(&["query"])), &node, json!([request])).await;
+        assert_eq!(call.outcome.verdict, PluginVerdict::BadOutput);
+        assert!(
+            call.outcome.diagnostics.contains("DataCall"),
+            "{}",
+            call.outcome.diagnostics
+        );
+    }
+}
+
+mod tool_writes {
+    use std::collections::BTreeMap;
+
+    use gents_protocol::job::{PluginDataDeclaration, StampedField};
+    use serde_json::{json, Value};
+
+    use super::*;
+    use crate::config_client::ConfigAccess;
+    use crate::tool_call_lifecycle::admission_fixture::published_spawn_parent;
+
+    const NODE: &str = "did:key:z6Mknode";
+
+    fn grant(
+        collections: &[&str],
+        stamped: &[(&str, StampedField)],
+        fields: &[(&str, &[&str])],
+    ) -> (PluginDataDeclaration, BTreeMap<String, Vec<String>>) {
+        (
+            PluginDataDeclaration {
+                collections: collections.iter().map(|c| (*c).to_owned()).collect(),
+                ops: vec!["insert".to_owned()],
+                stamped: stamped
+                    .iter()
+                    .map(|(field, stamp)| ((*field).to_owned(), *stamp))
+                    .collect(),
+            },
+            fields
+                .iter()
+                .map(|(collection, names)| {
+                    (
+                        (*collection).to_owned(),
+                        names.iter().map(|n| (*n).to_owned()).collect(),
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    fn insert(collection: &str, body: &str) -> Value {
+        json!({"op": "insert", "collection": collection, "fields": {"body": body}})
+    }
+
+    struct Finished {
+        node: Arc<crate::defra_node::EmbeddedNode>,
+        path: std::path::PathBuf,
+        tool_row: Value,
+        result: Result<String, String>,
+    }
+
+    impl Finished {
+        async fn bodies(&self, collection: &str) -> Vec<String> {
+            let rows = ConfigAccess::local(self.node.clone())
+                .execute(&format!("{{ {collection} {{ body }} }}"))
+                .await
+                .unwrap();
+            rows["data"][collection]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["body"].as_str().unwrap().to_owned())
+                .collect()
+        }
+
+        async fn finish(self) {
+            self.node.shutdown().await;
+            std::fs::remove_dir_all(self.path).unwrap();
+        }
+    }
+
+    /// Runs the echo plugin, which returns `output` as its result, as the model
+    /// tool of one admitted tool call, then terminalizes that call with the
+    /// result the tool returned.
+    async fn run(
+        name: &str,
+        data: Option<(PluginDataDeclaration, BTreeMap<String, Vec<String>>)>,
+        output: Value,
+    ) -> Finished {
+        run_with_terminal(name, data, output, false).await
+    }
+
+    /// `transient_terminal` makes the first terminal transaction fail with a
+    /// conflict the transaction owner replays.
+    async fn run_with_terminal(
+        name: &str,
+        data: Option<(PluginDataDeclaration, BTreeMap<String, Vec<String>>)>,
+        output: Value,
+        transient_terminal: bool,
+    ) -> Finished {
+        let (node, path, mut call) = published_spawn_parent(name).await;
+        node.add_schema(
+            "type Stamped { body: String job_row_doc_id: String } type Plain { body: String }",
+        )
+        .await
+        .unwrap();
+        let (home, mut record) = installed_echo();
+        if let Some((declaration, fields)) = data {
+            record.declaration.data = Some(declaration);
+            record.data_collection_fields = fields;
+        }
+        store::write_record(home.path(), &record).unwrap();
+        let executor = Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
+        let tool = PluginTool::resolve(executor, &tool_ref(Some(&record.digest)), None)
+            .unwrap()
+            .with_data_node(node.clone());
+        let doc_id = call.doc_id().unwrap().to_owned();
+        let registry = gents_loop::live_output::LiveToolOutputRegistry::default();
+        let writer = registry.writer_for(doc_id.clone()).await;
+        let dispatched = gents_loop::tool_call_lifecycle::runtime::scope_tool_request_identity(
+            None,
+            Some(NODE.into()),
+            None,
+            None,
+            gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+                None,
+                Some(writer),
+                Some(format!("session-{name}")),
+                None,
+                BTreeMap::new(),
+                false,
+                tool.call_with_receipt(output.to_string()),
+            ),
+        )
+        .await;
+        if let Some(writes) = dispatched.deferred_writes {
+            registry
+                .writer_for(doc_id.clone())
+                .await
+                .record_deferred_writes(writes)
+                .await
+                .unwrap();
+        }
+        let result = dispatched.result.map_err(|error| error.to_string());
+        call.stage_plugin_writes(registry.deferred_writes(&doc_id).await);
+        if transient_terminal {
+            crate::tool_call_lifecycle::delivery::fail_next_terminal_for_test(&doc_id);
+        }
+        match &result {
+            Ok(text) => call.complete(text).await.unwrap(),
+            Err(text) => call
+                .fail(
+                    text,
+                    crate::tool_call_lifecycle::FailureClass::ToolReturnedError,
+                )
+                .await
+                .unwrap(),
+        }
+        assert!(
+            !transient_terminal
+                || !crate::tool_call_lifecycle::delivery::terminal_failure_pending_for_test(
+                    &doc_id
+                ),
+            "the first terminal transaction must have failed before the replay"
+        );
+        let tool_row = ConfigAccess::local(node.clone())
+            .execute(&format!(
+                r#"{{ AgentToolCall(docID: "{doc_id}") {{ lifecycle_state }} }}"#
+            ))
+            .await
+            .unwrap()["data"]["AgentToolCall"][0]
+            .clone();
+        Finished {
+            node,
+            path,
+            tool_row,
+            result,
+        }
+    }
+
+    #[tokio::test]
+    async fn data_plugin_tool_writes_commit_with_its_tool_row() {
+        let data = grant(&["Plain"], &[], &[("Plain", &["body"])]);
+        let done = run(
+            "tool-writes-commit",
+            Some(data),
+            json!({"response": "ok", "writes": [insert("Plain", "x")]}),
+        )
+        .await;
+        assert_eq!(done.tool_row["lifecycle_state"], "completed");
+        assert_eq!(done.bodies("Plain").await, ["x"]);
+        let text = done.result.as_ref().unwrap();
+        assert!(text.contains("\"response\":\"ok\""), "{text}");
+        assert!(
+            !text.contains("\"writes\""),
+            "the model sees the output, not the writes: {text}"
+        );
+        done.finish().await;
+    }
+
+    #[tokio::test]
+    async fn replayed_terminal_commits_the_writes_that_travel_with_the_call_once() {
+        let data = grant(&["Plain"], &[], &[("Plain", &["body"])]);
+        let done = run_with_terminal(
+            "tool-writes-replay",
+            Some(data),
+            json!({"response": "ok", "writes": [insert("Plain", "x")]}),
+            true,
+        )
+        .await;
+        assert_eq!(done.tool_row["lifecycle_state"], "completed");
+        assert_eq!(done.bodies("Plain").await, ["x"]);
+        done.finish().await;
+    }
+
+    #[tokio::test]
+    async fn refused_plugin_tool_write_fails_the_tool_and_commits_no_document() {
+        let data = grant(&["Plain"], &[], &[("Plain", &["body"])]);
+        let done = run(
+            "tool-writes-refused",
+            Some(data),
+            json!({"writes": [insert("Plain", "x"), insert("Elsewhere", "y")]}),
+        )
+        .await;
+        assert_eq!(done.tool_row["lifecycle_state"], "failed");
+        assert!(done.bodies("Plain").await.is_empty());
+        done.finish().await;
+    }
+
+    #[tokio::test]
+    async fn non_job_stamp_context_refuses_job_only_stamps() {
+        let data = grant(
+            &["Stamped"],
+            &[("job_row_doc_id", StampedField::JobRowDocId)],
+            &[("Stamped", &["body", "job_row_doc_id"])],
+        );
+        let done = run(
+            "tool-writes-job-stamp",
+            Some(data),
+            json!({"writes": [insert("Stamped", "x")]}),
+        )
+        .await;
+        assert_eq!(done.tool_row["lifecycle_state"], "failed");
+        assert!(done.bodies("Stamped").await.is_empty());
+        done.finish().await;
+    }
+
+    #[tokio::test]
+    async fn plugin_without_data_is_unaffected() {
+        let output = json!({"writes": [insert("Plain", "x")]});
+        let done = run("tool-writes-no-data", None, output.clone()).await;
+        assert_eq!(done.tool_row["lifecycle_state"], "completed");
+        assert!(done.bodies("Plain").await.is_empty());
+        let text: Value = serde_json::from_str(done.result.as_ref().unwrap()).unwrap();
+        assert_eq!(text["writes"], output["writes"]);
+        done.finish().await;
+    }
+
+    #[tokio::test]
+    async fn stamp_scoped_to_written_collection() {
+        let data = || {
+            grant(
+                &["Stamped", "Plain"],
+                &[("job_row_doc_id", StampedField::JobRowDocId)],
+                &[
+                    ("Stamped", &["body", "job_row_doc_id"]),
+                    ("Plain", &["body"]),
+                ],
+            )
+        };
+        let plain = run(
+            "tool-writes-scope-plain",
+            Some(data()),
+            json!({"writes": [insert("Plain", "x")]}),
+        )
+        .await;
+        assert_eq!(plain.tool_row["lifecycle_state"], "completed");
+        assert_eq!(plain.bodies("Plain").await, ["x"]);
+        plain.finish().await;
+        let stamped = run(
+            "tool-writes-scope-stamped",
+            Some(data()),
+            json!({"writes": [insert("Stamped", "x")]}),
+        )
+        .await;
+        assert_eq!(stamped.tool_row["lifecycle_state"], "failed");
+        stamped.finish().await;
+    }
 }

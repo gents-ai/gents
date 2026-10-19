@@ -359,6 +359,7 @@ impl ToolCallLifecycle {
             arguments,
             execution_generation: Some(accepted.execution_generation),
             plugin_receipt: None,
+            plugin_writes: None,
             spawned_by_tool_call_doc_id,
             plugin_effect,
             doc_id: Some(row.doc_id),

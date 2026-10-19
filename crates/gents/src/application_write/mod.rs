@@ -8,6 +8,9 @@ use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::defra_query::{CollectionScope, DefraQueryParams};
 use crate::llm::tool::{Tool, ToolDefinition};
 
+mod plugin_writes;
+pub use plugin_writes::apply_plugin_writes_in_txn;
+
 pub const WRITE_TOOL_NAME: &str = "write";
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -21,7 +24,7 @@ pub struct WriteParams {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct Observation {
+pub struct Observation {
     pub operation: String,
     pub granted: bool,
     pub application: bool,

@@ -466,14 +466,25 @@ pub(crate) async fn record_dispatch_receipt(
     dispatched: crate::tool::ToolDispatchResult,
     live_output: Option<LiveToolOutputWriter>,
 ) -> Result<String, ToolError> {
-    if let (Some(writer), Some(receipt)) = (live_output, dispatched.plugin_receipt) {
-        writer
-            .record_plugin_receipt(receipt)
-            .await
-            .map_err(|error| ToolError::ReportedFailure {
-                class: FailureClass::External,
-                text: format!("plugin execution receipt rejected: {error}"),
-            })?;
+    if let Some(writer) = live_output {
+        if let Some(receipt) = dispatched.plugin_receipt {
+            writer
+                .record_plugin_receipt(receipt)
+                .await
+                .map_err(|error| ToolError::ReportedFailure {
+                    class: FailureClass::External,
+                    text: format!("plugin execution receipt rejected: {error}"),
+                })?;
+        }
+        if let Some(writes) = dispatched.deferred_writes {
+            writer
+                .record_deferred_writes(writes)
+                .await
+                .map_err(|error| ToolError::ReportedFailure {
+                    class: FailureClass::External,
+                    text: format!("deferred tool writes rejected: {error}"),
+                })?;
+        }
     }
     dispatched.result
 }
@@ -619,6 +630,7 @@ mod tests {
                 crate::tool::ToolDispatchResult {
                     result: self.call(args).await,
                     plugin_receipt: (!self.forge_text).then(plugin_receipt),
+                    deferred_writes: None,
                 }
             })
         }

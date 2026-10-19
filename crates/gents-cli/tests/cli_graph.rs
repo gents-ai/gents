@@ -272,6 +272,17 @@ fn offline_pack_install_with_a_graph_dependency_holds_one_store_claim() -> Resul
         enabled.get("enabled") == Some(&Value::Bool(true)),
         "the graph dependency was not installed: {enabled}"
     );
+    let record = gents::pack::read_home_install(&home, "fixture/dependent_fixture")?
+        .context("the dependent pack wrote no home record")?;
+    anyhow::ensure!(
+        record.dependency_assets.len() == 1
+            && record.dependency_assets[0].0 == "fixture/review_graph"
+            && home
+                .join(&record.dependency_assets[0].1)
+                .join("agents/review_recon/system_prompt.md")
+                .is_file(),
+        "the dependent's record does not name its dependency's assets: {record:?}"
+    );
 
     let _held = gents::home::lock_store(&home, &gents::home::default_data_dir(&home))?;
     let denial = run_cli_failure_stderr(tempdir.path(), &install_args_ref)?;

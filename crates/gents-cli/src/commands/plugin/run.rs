@@ -131,6 +131,7 @@ mod tests {
             owner_pack_digest: None,
             model_binding: None,
             data_unique_keys: Default::default(),
+            data_collection_fields: Default::default(),
         }
     }
 
@@ -179,6 +180,7 @@ mod tests {
             &bytes,
             None,
             Default::default(),
+            Default::default(),
             false,
         )
         .unwrap();
@@ -210,6 +212,7 @@ mod tests {
             &invalid.declaration,
             &bytes,
             None,
+            Default::default(),
             Default::default(),
             false
         )
@@ -347,6 +350,7 @@ mod tests {
             &bytes,
             None,
             Default::default(),
+            Default::default(),
             false,
         )
         .unwrap_err();
@@ -366,6 +370,7 @@ mod tests {
             &bytes,
             None,
             Default::default(),
+            Default::default(),
             true,
         )
         .unwrap();
@@ -379,6 +384,7 @@ mod tests {
             &declaration,
             &bytes,
             None,
+            Default::default(),
             Default::default(),
             false,
         )

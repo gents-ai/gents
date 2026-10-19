@@ -56,6 +56,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         )?
         .to_string_lossy()
         .into_owned(),
+        dependency_assets: Vec::new(),
         plugins: identity.plugins.clone(),
         installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         installed_via: Some(gents::pack::InstalledVia::Operator),

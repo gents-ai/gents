@@ -75,9 +75,27 @@ pub struct InstalledPlugin {
     /// install so a call never reads SDL.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub data_unique_keys: std::collections::BTreeMap<String, Vec<Vec<String>>>,
+    /// Each collection of `declaration.data` and its field names in the pack's
+    /// own SDL, from the same install-time parse as `data_unique_keys`; a
+    /// write to a collection absent here is refused.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub data_collection_fields: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 impl InstalledPlugin {
+    /// The data grant this record carries, or `None` when the plugin declares
+    /// no data.
+    pub fn data_grant(&self) -> Option<crate::plugin::data::PluginData> {
+        self.declaration
+            .data
+            .clone()
+            .map(|declaration| crate::plugin::data::PluginData {
+                declaration,
+                collection_fields: self.data_collection_fields.clone(),
+                unique_keys: self.data_unique_keys.clone(),
+            })
+    }
+
     pub fn ceiling(&self) -> crate::plugin::Manifold {
         self.granted
             .clone()
@@ -452,6 +470,7 @@ mod tests {
             owner_pack_digest: owner_pack_coordinate.map(|_| "sha256:pack".to_owned()),
             model_binding: None,
             data_unique_keys: Default::default(),
+            data_collection_fields: Default::default(),
         }
     }
 

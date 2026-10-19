@@ -1593,6 +1593,7 @@ async fn run_graph_prepares_host_input_under_the_effective_root() {
             owner_pack_digest: None,
             model_binding: None,
             data_unique_keys: Default::default(),
+            data_collection_fields: Default::default(),
         },
     )
     .expect("record the plugin");
@@ -7931,6 +7932,7 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
             owner_pack_digest: None,
             model_binding: None,
             data_unique_keys: Default::default(),
+            data_collection_fields: Default::default(),
         },
     )
     .unwrap();

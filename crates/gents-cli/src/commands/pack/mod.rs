@@ -593,6 +593,37 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                     "would_write": false,
                 }));
             }
+            // Every pack that ships an asset class is materialized before any
+            // write; the leases are held until the home record is written.
+            let mut cache_leases = Vec::new();
+            let mut materialized_assets = String::new();
+            let mut dependency_assets = Vec::new();
+            if args.scope.graphql.is_none() {
+                for dependency in &dependencies {
+                    if let Some((assets, lease)) =
+                        gents::pack::home_install::materialize_asset_pack(
+                            &home,
+                            dependency.archive(),
+                        )?
+                    {
+                        dependency_assets.push((
+                            format!(
+                                "{}/{}",
+                                dependency.manifest().metadata.namespace,
+                                dependency.manifest().name
+                            ),
+                            assets,
+                        ));
+                        cache_leases.push(lease);
+                    }
+                }
+                if let Some((assets, lease)) =
+                    gents::pack::home_install::materialize_asset_pack(&home, pack.archive())?
+                {
+                    materialized_assets = assets;
+                    cache_leases.push(lease);
+                }
+            }
             let dependency_coordinates: Vec<String> = dependencies
                 .iter()
                 .map(|dependency| {
@@ -688,7 +719,8 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                         version: identity.version.clone(),
                         digest: identity.digest.clone(),
                         kind: PackKind::Documents,
-                        assets: String::new(),
+                        assets: materialized_assets,
+                        dependency_assets,
                         plugins: identity.plugins.clone(),
                         installed_at: chrono::Utc::now()
                             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),

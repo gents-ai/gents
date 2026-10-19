@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use gents_protocol::job::AssetMount;
 use gents_protocol::plugin::{
     PluginEnvironmentGrant, PluginExecutionAuthority, PluginExecutionLimits,
     PluginExecutionReceipt, PluginExecutionVerdict, PluginFilesystemGrant, PluginFilesystemScope,
@@ -10,6 +11,7 @@ use gents_protocol::plugin::{
 };
 use sha2::{Digest, Sha256};
 
+use super::data::{self, DataCaller};
 use super::http_calls;
 use super::model_calls::{self, ModelResolver};
 use super::rounds::{self, HostCalls};
@@ -125,16 +127,18 @@ pub(super) fn initial_receipt(
 fn authority(
     manifold: &Manifold,
     bound_field: Option<&str>,
+    mounted: Option<PluginFilesystemScope>,
     model: bool,
     http: Option<&http_calls::Session>,
     tools: bool,
 ) -> PluginExecutionAuthority {
     use afterburner_core::manifold::{EnvAccess, FsAccess, NetAccess};
-    let scope = |roots: &[PathBuf]| match bound_field {
-        Some(field) => PluginFilesystemScope::BoundInput {
+    let scope = |roots: &[PathBuf]| match (&mounted, bound_field) {
+        (Some(mounted), _) => mounted.clone(),
+        (None, Some(field)) => PluginFilesystemScope::BoundInput {
             field: field.to_owned(),
         },
-        None => PluginFilesystemScope::Installed {
+        (None, None) => PluginFilesystemScope::Installed {
             roots: roots.len() as u64,
         },
     };
@@ -390,6 +394,20 @@ impl PluginExecutor {
         tool_root: Option<&Path>,
         tool_calls: bool,
     ) -> Result<PluginCall> {
+        self.call_data_bound_for(record, input, tool_root, tool_calls, None)
+            .await
+    }
+
+    /// [`Self::call_data_bound`] offering `data_calls.query` as `data` when
+    /// the plugin declares data.
+    pub async fn call_data_bound_for(
+        &self,
+        record: &InstalledPlugin,
+        input: serde_json::Value,
+        tool_root: Option<&Path>,
+        tool_calls: bool,
+        data: Option<DataCaller>,
+    ) -> Result<PluginCall> {
         let session = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
         let workdir = session
             .as_ref()
@@ -414,6 +432,7 @@ impl PluginExecutor {
             input,
             bound,
             super::tool_calls::Session::for_call(tool_calls),
+            data,
         )
         .await
     }
@@ -425,9 +444,23 @@ impl PluginExecutor {
         tool_root: Option<&Path>,
         tool_calls: bool,
     ) -> (Result<PluginCall>, PluginExecutionReceipt) {
+        self.call_data_bound_with_receipt_for(record, input, tool_root, tool_calls, None)
+            .await
+    }
+
+    /// [`Self::call_data_bound_with_receipt`] offering `data_calls.query` as
+    /// `data` when the plugin declares data.
+    pub async fn call_data_bound_with_receipt_for(
+        &self,
+        record: &InstalledPlugin,
+        input: serde_json::Value,
+        tool_root: Option<&Path>,
+        tool_calls: bool,
+        data: Option<DataCaller>,
+    ) -> (Result<PluginCall>, PluginExecutionReceipt) {
         let refused = initial_receipt(record, &input);
         let result = self
-            .call_data_bound(record, input, tool_root, tool_calls)
+            .call_data_bound_for(record, input, tool_root, tool_calls, data)
             .await;
         let receipt = match &result {
             Ok(call) => call.receipt.clone(),
@@ -462,7 +495,18 @@ impl PluginExecutor {
         record: &InstalledPlugin,
         input: serde_json::Value,
     ) -> Result<PluginCall> {
-        self.run(record, input, None, None).await
+        self.run(record, input, None, None, None).await
+    }
+
+    /// [`Self::call`] offering `data_calls.query` as `caller` when the plugin
+    /// declares data.
+    pub async fn call_with_data(
+        &self,
+        record: &InstalledPlugin,
+        input: serde_json::Value,
+        caller: DataCaller,
+    ) -> Result<PluginCall> {
+        self.run(record, input, None, None, Some(caller)).await
     }
 
     pub async fn call_bound(
@@ -471,7 +515,19 @@ impl PluginExecutor {
         input: serde_json::Value,
         bound: BoundDir,
     ) -> Result<PluginCall> {
-        self.run(record, input, Some(bound), None).await
+        self.run(record, input, Some(bound), None, None).await
+    }
+
+    /// [`Self::call`] granting `bound` and offering `data_calls.query` as
+    /// `data`, each when given (a callback invocation).
+    pub async fn call_bound_data(
+        &self,
+        record: &InstalledPlugin,
+        input: serde_json::Value,
+        bound: Option<BoundDir>,
+        data: Option<DataCaller>,
+    ) -> Result<PluginCall> {
+        self.run(record, input, bound, None, data).await
     }
 
     async fn run(
@@ -480,6 +536,7 @@ impl PluginExecutor {
         input: serde_json::Value,
         bound: Option<BoundDir>,
         tools: Option<super::tool_calls::Session>,
+        data: Option<DataCaller>,
     ) -> Result<PluginCall> {
         let mut receipt = initial_receipt(record, &input);
         let result: Result<PluginCall> = async {
@@ -506,16 +563,23 @@ impl PluginExecutor {
                 model,
                 http: http_calls::Session::for_grant(&coordinate, &admitted.runner.manifold)?,
                 tools,
+                data: data::Session::for_call(record.declaration.data.as_ref(), data),
             };
             let first_input = if calls.is_empty() {
                 input.clone()
             } else {
                 calls.prepare_input(input.clone())?
             };
-            let (effective_input, manifold) = match &bound {
-                Some(bound) => admitted.runner.prepare_bound(&first_input, bound)?,
-                None => (first_input, admitted.runner.manifold.clone()),
+            let mounts = match &self.home {
+                Some(home) if !record.declaration.asset_mounts.is_empty() => {
+                    super::mounts::resolve(home, record, None, None)?
+                }
+                _ => Vec::new(),
             };
+            let (effective_input, manifold, mounted) =
+                admitted
+                    .runner
+                    .prepare_mounted(&first_input, bound.as_ref(), &mounts)?;
             receipt.input_digest = json_digest(&effective_input);
             receipt.limits = Some(PluginExecutionLimits {
                 fuel: admitted.budget.fuel,
@@ -530,6 +594,7 @@ impl PluginExecutor {
             receipt.authority = Some(authority(
                 &manifold,
                 bound_field,
+                mounted,
                 calls.model.is_some(),
                 calls.http.as_ref(),
                 calls.tools.is_some(),
@@ -542,6 +607,7 @@ impl PluginExecutor {
                 input,
                 admitted.budget,
                 bound,
+                mounts,
             )
             .await
             .inspect_err(|error| {
@@ -665,8 +731,9 @@ async fn drive(
         model,
         http: http_calls::Session::for_grant(coordinate, &runner.manifold)?,
         tools,
+        data: None,
     };
-    drive_with_calls(coordinate, runner, calls, input, budget, bound).await
+    drive_with_calls(coordinate, runner, calls, input, budget, bound, Vec::new()).await
 }
 
 async fn drive_with_calls(
@@ -676,10 +743,10 @@ async fn drive_with_calls(
     input: serde_json::Value,
     budget: PluginBudget,
     bound: Option<BoundDir>,
+    mounts: Vec<AssetMount>,
 ) -> Result<PluginOutcome> {
-    let round: rounds::Round = Arc::new(move |input, budget| match &bound {
-        Some(bound) => runner.call_bound(&input, &budget, bound),
-        None => runner.call(&input, &budget),
+    let round: rounds::Round = Arc::new(move |input, budget| {
+        runner.call_mounted(&input, &budget, bound.as_ref(), &mounts)
     });
     if calls.is_empty() {
         tokio::task::spawn_blocking(move || round(input, budget))

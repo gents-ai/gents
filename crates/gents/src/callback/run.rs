@@ -306,6 +306,7 @@ pub async fn run_owned_invocation(
     callback: &crate::document_config::Callback,
     ceiling: Option<&Path>,
     plugins: &PluginExecutor,
+    data_node: Option<&std::sync::Arc<EmbeddedNode>>,
 ) -> Result<()> {
     if !invocation_is_claimable(&invocation.owner_node_did, invocation)
         && invocation.lifecycle_state != LIFECYCLE_CLAIMED
@@ -324,7 +325,16 @@ pub async fn run_owned_invocation(
     }
 
     let source = claimed.input.clone();
-    execute_running_invocation(node, &mut claimed, callback, &source, ceiling, plugins).await
+    execute_running_invocation(
+        node,
+        &mut claimed,
+        callback,
+        &source,
+        ceiling,
+        plugins,
+        data_node,
+    )
+    .await
 }
 
 async fn persist_claimed_to_running(
@@ -368,6 +378,7 @@ async fn execute_running_invocation(
     source: &Value,
     ceiling: Option<&Path>,
     plugins: &PluginExecutor,
+    data_node: Option<&std::sync::Arc<EmbeddedNode>>,
 ) -> Result<()> {
     if callback.node_did != invocation.owner_node_did
         || callback.callback_id != invocation.callback_id
@@ -399,7 +410,10 @@ async fn execute_running_invocation(
             correlation_field: correlation_field.as_deref(),
             outputs,
         };
-        return super::plugin::execute(node, invocation, handler, source, plugins, journal).await;
+        return super::plugin::execute(
+            node, invocation, handler, source, plugins, journal, data_node,
+        )
+        .await;
     }
 
     // Recovery with a stored plan must not reload/re-validate the WASM module;
@@ -802,7 +816,7 @@ async fn execute_recovered(
     if let Some(engine) = engine {
         engine.execute_invocation(invocation, callback).await
     } else {
-        run_owned_invocation(node, invocation, callback, ceiling, plugins).await
+        run_owned_invocation(node, invocation, callback, ceiling, plugins, None).await
     }
 }
 

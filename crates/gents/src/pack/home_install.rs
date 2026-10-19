@@ -4,6 +4,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::{is_valid_pack_name, InstalledPackPlugin, PackKind};
+use crate::file_lock::FileLock;
+use crate::pack_archive::PackArchive;
 
 /// Who installed a pack: the operator through the CLI, or the model through
 /// self-configuration.
@@ -21,6 +23,12 @@ pub struct HomePackInstall {
     pub digest: String,
     pub kind: PackKind,
     pub assets: String,
+    /// The materialized asset directories of the dependencies this install ran,
+    /// as `(coordinate, assets)` with `assets` spelled as [`Self::assets`].
+    /// Dependencies are graph packs and write no record of their own, so the
+    /// dependent's record is where their assets are found. Empty when none.
+    #[serde(default)]
+    pub dependency_assets: Vec<(String, String)>,
     pub plugins: Vec<InstalledPackPlugin>,
     pub installed_at: String,
     /// Absent on records written before provenance was recorded; read through
@@ -77,6 +85,33 @@ pub fn record_after_install(
         installed_via,
     ));
     write_home_install(home, &record)
+}
+
+/// Materializes `pack` into the home's asset cache when it ships an asset
+/// class (a distributable asset under a top-level snake_case directory),
+/// whatever plugins are installed. Returns the cache directory relative to
+/// `home`, as [`HomePackInstall::assets`] spells it, with the lease the caller
+/// holds until the install record is written; `None` for a pack with no asset
+/// class.
+pub fn materialize_asset_pack(
+    home: &Path,
+    pack: &PackArchive,
+) -> Result<Option<(String, FileLock)>> {
+    let ships_class = pack.manifest().metadata.assets.iter().any(|path| {
+        path.split_once('/').is_some_and(|(class, _)| {
+            super::asset_path::is_snake_case_name(class) && super::is_distributable_asset_path(path)
+        })
+    });
+    if !ships_class {
+        return Ok(None);
+    }
+    let (root, lease) = super::materialize::cached(home, pack)?;
+    let assets = root
+        .strip_prefix(home)
+        .unwrap_or(root.as_path())
+        .to_string_lossy()
+        .into_owned();
+    Ok(Some((assets, lease)))
 }
 
 fn checked_coordinate(coordinate: &str) -> Result<(&str, &str)> {
@@ -182,6 +217,7 @@ mod tests {
             digest: format!("sha256:{}", "a".repeat(64)),
             kind: PackKind::Assets,
             assets: "packs/subject_pack/aaaa".into(),
+            dependency_assets: vec![],
             plugins: vec![],
             installed_at: "2026-01-01T00:00:00Z".into(),
             installed_via: None,
@@ -228,6 +264,25 @@ mod tests {
             recorded_provenance(record.kind, Some(record.installed_via)),
             InstalledVia::Operator
         );
+    }
+
+    #[test]
+    fn record_without_dependency_assets_reads_empty() {
+        let home = tempfile::tempdir().unwrap();
+        let mut record = sample("gents/mailbox");
+        record.dependency_assets =
+            vec![("gents/dep".into(), "packs/.materialized/gents/dep/a".into())];
+        write_home_install(home.path(), &record).unwrap();
+        let path = record_path(home.path(), "gents/mailbox").unwrap();
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        json.as_object_mut().unwrap().remove("dependency_assets");
+        std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+
+        let record = read_home_install(home.path(), "gents/mailbox")
+            .unwrap()
+            .unwrap();
+        assert!(record.dependency_assets.is_empty());
     }
 
     #[test]

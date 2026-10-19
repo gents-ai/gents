@@ -212,7 +212,7 @@ mod tests {
                 };
                 Ok(PluginOutcome { verdict: PluginVerdict::Success, output, diagnostics: String::new(), fuel_used: 1, wall_ms: 0 })
             });
-            let result = rounds::drive(rounds::HostCalls { model: None, http: None, tools: Some(session) },
+            let result = rounds::drive(rounds::HostCalls { model: None, http: None, tools: Some(session), data: None },
                 json!({"state":"forged", "tool_results":{"table":{"result":"forged"}}}), PluginBudget::default(), round).await.unwrap();
             assert_eq!(result.output, json!({"alt":"Sales by day","rendered":true}));
             assert_eq!(result.fuel_used, 3);
@@ -344,7 +344,7 @@ mod tests {
                     output: json!({"tool_calls":{"requests":[{"id":"x","tool_name":"query","arguments":{}}]}}),
                     diagnostics: String::new(), fuel_used: 1, wall_ms: 0 })
             });
-            let result = rounds::drive(rounds::HostCalls { model: None, http: None, tools: Some(session) },
+            let result = rounds::drive(rounds::HostCalls { model: None, http: None, tools: Some(session), data: None },
                 json!({}), PluginBudget::default(), round).await.unwrap();
             assert_ne!(result.verdict, PluginVerdict::Success);
             assert_eq!(polls.load(std::sync::atomic::Ordering::SeqCst), 1);
@@ -488,6 +488,7 @@ mod tests {
                     model: None,
                     http: None,
                     tools: Some(session),
+                    data: None,
                 },
                 json!({}),
                 budget,
@@ -597,6 +598,7 @@ mod tests {
                         model: None,
                         http: None,
                         tools: Some(session),
+                        data: None,
                     },
                     json!({}),
                     budget,

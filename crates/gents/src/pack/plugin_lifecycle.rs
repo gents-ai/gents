@@ -48,6 +48,7 @@ pub async fn install<F: Future<Output = Result<()>>>(
                 digest: archive.digest().to_owned(),
                 kind: manifest.metadata.kind.clone(),
                 assets: root.strip_prefix(home)?.to_string_lossy().into_owned(),
+                dependency_assets: Vec::new(),
                 plugins: plugins
                     .iter()
                     .map(|plugin| InstalledPackPlugin {

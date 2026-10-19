@@ -499,7 +499,8 @@ impl ToolSurface {
                 self.host_tools
                     .read_root()
                     .map(std::path::Path::to_path_buf),
-            )?;
+            )?
+            .with_data_node(runtime.node.clone());
             if !registered_names.insert(tool.name()) {
                 anyhow::bail!(
                     "plugin tool `{}` has the same name as another tool; rename one of them",

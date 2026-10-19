@@ -221,6 +221,9 @@ pub struct ToolCallLifecycle {
     arguments: Option<gents_protocol::output::PayloadRef>,
     execution_generation: Option<String>,
     plugin_receipt: Option<gents_protocol::plugin::PluginExecutionReceipt>,
+    /// Data writes a plugin tool returned beside its output; committed with a
+    /// Completed terminal and discarded by any other.
+    plugin_writes: Option<delivery::PluginToolWrites>,
     /// Immutable physical provenance for dispatch, recovery, and completion routing.
     spawned_by_tool_call_doc_id: Option<String>,
     plugin_effect: Option<PluginEffectBinding>,
@@ -316,6 +319,7 @@ impl ToolCallLifecycle {
             arguments: Some(accepted.arguments),
             execution_generation: Some(accepted.execution_generation),
             plugin_receipt: None,
+            plugin_writes: None,
             spawned_by_tool_call_doc_id: None,
             plugin_effect: None,
             doc_id: Some(accepted.tool_call_doc_id),
@@ -335,6 +339,18 @@ impl ToolCallLifecycle {
     ) {
         if receipt.is_some() {
             self.plugin_receipt = receipt;
+        }
+    }
+
+    pub(crate) fn stage_plugin_writes(
+        &mut self,
+        writes: Option<gents_loop::live_output::DeferredToolWrites>,
+    ) {
+        if let Some(writes) = writes
+            .as_ref()
+            .and_then(|writes| writes.downcast_ref::<delivery::PluginToolWrites>())
+        {
+            self.plugin_writes = Some(writes.clone());
         }
     }
 
@@ -370,6 +386,7 @@ impl ToolCallLifecycle {
             arguments: None,
             execution_generation: None,
             plugin_receipt: None,
+            plugin_writes: None,
             spawned_by_tool_call_doc_id: None,
             plugin_effect: None,
             doc_id: None,
@@ -437,6 +454,7 @@ impl ToolCallLifecycle {
             arguments: None,
             execution_generation: None,
             plugin_receipt: None,
+            plugin_writes: None,
             spawned_by_tool_call_doc_id: None,
             plugin_effect: None,
             doc_id: None,

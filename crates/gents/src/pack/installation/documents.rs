@@ -8,6 +8,7 @@ use crate::document_config::PackConfig;
 use crate::graph_package::{GraphInstallRecord, GraphPackageInstallBindings, LoadedGraphPackage};
 use crate::pack_archive::PackArchive;
 
+use super::super::home_install::materialize_asset_pack;
 use super::super::{
     HomePackInstall, InstalledVia, PackInferenceBindingPreview, PackInferenceBindings,
     PackInstallOptions,
@@ -91,13 +92,16 @@ fn sdl_types(sdl: &str) -> Result<BTreeMap<String, SdlType>> {
 }
 
 /// Checks `plugin`'s `data` and `asset_mounts` against the pack that ships it
-/// and returns each declared collection's unique key field sets. Every path
-/// that installs a pack plugin goes through this check.
+/// and returns each declared collection's unique key field sets and field
+/// names. Every path that installs a pack plugin goes through this check.
 pub fn plugin_data_unique_keys<'a>(
     manifest: &super::super::PackManifest,
     plugin: &super::super::PackPlugin,
     asset: &dyn Fn(&str) -> Result<&'a [u8]>,
-) -> Result<BTreeMap<String, Vec<Vec<String>>>> {
+) -> Result<(
+    BTreeMap<String, Vec<Vec<String>>>,
+    BTreeMap<String, Vec<String>>,
+)> {
     let name = &plugin.name;
     for mount in &plugin.asset_mounts {
         let prefix = format!("{}/", mount.class);
@@ -111,13 +115,14 @@ pub fn plugin_data_unique_keys<'a>(
         );
     }
     let Some(data) = &plugin.data else {
-        return Ok(BTreeMap::new());
+        return Ok((BTreeMap::new(), BTreeMap::new()));
     };
     let mut types = BTreeMap::new();
     for path in sdl_paths(manifest) {
         types.extend(sdl_types(std::str::from_utf8(asset(path)?)?)?);
     }
     let mut keys = BTreeMap::new();
+    let mut fields = BTreeMap::new();
     for collection in &data.collections {
         let declared = types.get(collection).with_context(|| {
             format!(
@@ -126,6 +131,10 @@ pub fn plugin_data_unique_keys<'a>(
             )
         })?;
         keys.insert(collection.clone(), declared.unique.clone());
+        fields.insert(
+            collection.clone(),
+            declared.fields.iter().cloned().collect(),
+        );
     }
     for field in data.stamped.keys() {
         anyhow::ensure!(
@@ -136,7 +145,7 @@ pub fn plugin_data_unique_keys<'a>(
              data.collections; stamp a field the pack's SDL declares"
         );
     }
-    Ok(keys)
+    Ok((keys, fields))
 }
 
 pub struct PreparedDocumentPackInstall {
@@ -251,6 +260,7 @@ pub async fn install_prepared_document_pack(
     access: &ConfigAccess,
     owner: &str,
     archive: &PackArchive,
+    dependency_archives: &[&PackArchive],
     prepared: &PreparedDocumentPackInstall,
     plugin_home: Option<&Path>,
     grant_authority: bool,
@@ -276,6 +286,29 @@ pub async fn install_prepared_document_pack(
                 plugin,
                 grant_authority,
             )?;
+        }
+    }
+    // The leases are held until the install's home record is written.
+    let mut leases = Vec::new();
+    let mut assets = String::new();
+    let mut dependency_assets = Vec::new();
+    if let Some(home) = plugin_home {
+        for dependency in dependency_archives {
+            if let Some((root, lease)) = materialize_asset_pack(home, dependency)? {
+                dependency_assets.push((
+                    format!(
+                        "{}/{}",
+                        dependency.manifest().metadata.namespace,
+                        dependency.manifest().name
+                    ),
+                    root,
+                ));
+                leases.push(lease);
+            }
+        }
+        if let Some((root, lease)) = materialize_asset_pack(home, archive)? {
+            assets = root;
+            leases.push(lease);
         }
     }
     let mut schemas = Vec::new();
@@ -317,7 +350,15 @@ pub async fn install_prepared_document_pack(
         .await
         .context("graph activation failed after local pack plugins were published; the plugins remain installed")?;
         if let Some(home) = plugin_home {
-            record_home_install(home, &package.manifest, &identity, installed_via, false)?;
+            record_home_install(
+                home,
+                &package.manifest,
+                &identity,
+                String::new(),
+                Vec::new(),
+                installed_via,
+                false,
+            )?;
         }
     }
     for (path, plan) in schemas {
@@ -348,7 +389,15 @@ pub async fn install_prepared_document_pack(
             .await
             .context("document pack installation failed after local pack plugins were published; the plugins remain installed")?;
     if let Some(home) = plugin_home {
-        record_home_install(home, archive.manifest(), &identity, installed_via, true)?;
+        record_home_install(
+            home,
+            archive.manifest(),
+            &identity,
+            assets,
+            dependency_assets,
+            installed_via,
+            true,
+        )?;
     }
     Ok(report)
 }
@@ -360,6 +409,8 @@ pub(super) fn record_home_install(
     home: &Path,
     manifest: &super::super::PackManifest,
     identity: &PackIdentity,
+    assets: String,
+    dependency_assets: Vec<(String, String)>,
     installed_via: InstalledVia,
     explicit: bool,
 ) -> Result<()> {
@@ -370,7 +421,8 @@ pub(super) fn record_home_install(
             version: identity.version.clone(),
             digest: identity.digest.clone(),
             kind: manifest.metadata.kind.clone(),
-            assets: String::new(),
+            assets,
+            dependency_assets,
             plugins: identity.plugins.clone(),
             installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             installed_via: Some(installed_via),

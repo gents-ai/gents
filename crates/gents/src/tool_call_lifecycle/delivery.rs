@@ -24,6 +24,59 @@ pub(crate) enum ToolDispatchRejection {
     LostRequestOwnership,
 }
 
+/// Data writes a plugin tool returned beside its output, deferred to the
+/// terminal of the tool call that returned them.
+#[derive(Clone)]
+pub(crate) struct PluginToolWrites {
+    pub(crate) grant: crate::plugin::data::PluginData,
+    pub(crate) writes: Vec<gents_protocol::job::DataWrite>,
+}
+
+#[cfg(test)]
+static FAIL_NEXT_TERMINAL: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+pub(crate) fn fail_next_terminal_for_test(tool_call_doc_id: &str) {
+    FAIL_NEXT_TERMINAL
+        .lock()
+        .unwrap()
+        .push(tool_call_doc_id.to_owned());
+}
+
+#[cfg(test)]
+pub(crate) fn terminal_failure_pending_for_test(tool_call_doc_id: &str) -> bool {
+    FAIL_NEXT_TERMINAL
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|id| id == tool_call_doc_id)
+}
+
+#[cfg(test)]
+fn take_terminal_failure_for_test(tool_call_doc_id: &str) -> bool {
+    let mut pending = FAIL_NEXT_TERMINAL.lock().unwrap();
+    let before = pending.len();
+    pending.retain(|id| id != tool_call_doc_id);
+    pending.len() != before
+}
+
+/// A deferred plugin write was refused or failed inside the terminal's
+/// transaction, which rolled back whole.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+struct PluginWritesFailed(String);
+
+/// Marks a refusal. A conflict or storage failure passes through unmarked so
+/// the transaction owner replays it and, once exhausted, it stays a transient
+/// error rather than a plugin refusal.
+fn plugin_writes_failed(error: anyhow::Error) -> anyhow::Error {
+    if crate::config_client::is_transaction_step_unavailable(&error) {
+        return error;
+    }
+    let text = format!("{error:#}");
+    error.context(PluginWritesFailed(text))
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct TerminalFields<'a> {
     pub state: ToolCallState,
@@ -831,6 +884,12 @@ impl ToolCallLifecycle {
             .map(|receipt| super::plugin_receipt::published(fields.state, receipt));
         let spawned_by_tool_call_doc_id = self.spawned_by_tool_call_doc_id.clone();
         let plugin_effect = self.plugin_effect_terminal()?;
+        // Only a completed call commits the writes its output carried; any
+        // other terminal discards them.
+        let plugin_writes = self
+            .plugin_writes
+            .clone()
+            .filter(|_| fields.state == ToolCallState::Completed);
 
         let published = ConfigAccess::transact_local_idempotent(
             &self.node,
@@ -853,9 +912,10 @@ impl ToolCallLifecycle {
                 let spawned_by_tool_call_doc_id = spawned_by_tool_call_doc_id.clone();
                 let plugin_effect = plugin_effect.clone();
                 let presentation = presentation.clone();
+                let plugin_writes = plugin_writes.clone();
                 Box::pin(async move {
                     let now = fixture_now.unwrap_or_else(Utc::now);
-                    terminalize_transaction(
+                    let published = terminalize_transaction(
                         txn,
                         &doc_id,
                         &request_doc_id,
@@ -884,11 +944,63 @@ impl ToolCallLifecycle {
                         adopt_competing_terminal,
                         publish_native_result,
                     )
-                    .await
+                    .await?;
+                    #[cfg(test)]
+                    if take_terminal_failure_for_test(&doc_id) {
+                        return Err(crate::config_client::classified_conflict_for_test());
+                    }
+                    // Applied after the terminal compare so a lost compare
+                    // writes nothing; a failure rolls the terminal back too.
+                    if let (true, Some(pending)) = (published, &plugin_writes) {
+                        let stamps = crate::plugin::data::StampContext::ToolOutput {
+                            node_did: node_did.clone(),
+                            session_id: session_id.clone(),
+                            request_doc_id: request_doc_id.clone(),
+                            tool_call_doc_id: doc_id.clone(),
+                        };
+                        crate::application_write::apply_plugin_writes_in_txn(
+                            txn,
+                            &pending.grant,
+                            &stamps,
+                            pending.writes.clone(),
+                        )
+                        .await
+                        .map_err(plugin_writes_failed)?;
+                    }
+                    Ok(published)
                 })
             },
         )
-        .await?;
+        .await;
+        let published = match published {
+            Ok(published) => published,
+            Err(error) => match error.downcast_ref::<PluginWritesFailed>() {
+                Some(refused) => {
+                    let text = format!(
+                        "plugin data writes were refused and nothing was committed: {refused}"
+                    );
+                    let fields = TerminalFields {
+                        state: ToolCallState::Failed,
+                        failure: Some(FailureClass::ToolReturnedError),
+                        cancel: None,
+                        completion_reason: None,
+                    };
+                    return Box::pin(self.terminalize_with_options_at(
+                        expected,
+                        fields,
+                        &text,
+                        None,
+                        None,
+                        adopt_competing_terminal,
+                        publish_native_result,
+                        operation,
+                        fixture_now,
+                    ))
+                    .await;
+                }
+                None => return Err(error),
+            },
+        };
         if published {
             self.state = fields.state;
             self.failure_class = fields.failure;
@@ -1935,6 +2047,27 @@ async fn append_tool_output_with_time(
         },
     )
     .await
+}
+
+#[cfg(test)]
+mod plugin_writes_failed_tests {
+    use super::*;
+
+    #[test]
+    fn plugin_writes_failure_keeps_a_typed_conflict_replayable() {
+        let conflict = crate::config_client::classified_conflict_for_test();
+        let wrapped = plugin_writes_failed(conflict);
+        assert!(crate::config_client::is_classified_transaction_conflict(
+            &wrapped
+        ));
+        assert!(wrapped.downcast_ref::<PluginWritesFailed>().is_none());
+
+        let refused = plugin_writes_failed(anyhow::anyhow!("collection is not declared"));
+        assert!(!crate::config_client::is_classified_transaction_conflict(
+            &refused
+        ));
+        assert!(refused.downcast_ref::<PluginWritesFailed>().is_some());
+    }
 }
 
 #[cfg(test)]

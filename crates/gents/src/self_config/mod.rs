@@ -1299,6 +1299,10 @@ impl PackInstaller {
             &access,
             owner,
             &distribution.0.archive,
+            &dependencies
+                .iter()
+                .map(|d| &d.0.archive)
+                .collect::<Vec<_>>(),
             &prepared,
             self.home.as_deref(),
             false,
