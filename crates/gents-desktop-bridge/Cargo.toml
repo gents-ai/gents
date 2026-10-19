@@ -26,7 +26,7 @@ gents = { path = "../gents", features = ["typescript"] }
 gents-server = { package = "gents-cli", path = "../gents-cli", default-features = false, features = ["typescript"] }
 gents-chatgpt-login.workspace = true
 gents-claude-login.workspace = true
-gents-desktop-core.workspace = true
+gents-desktop-core = { workspace = true, features = ["typescript"] }
 gents-protocol = { workspace = true, features = ["typescript"] }
 hostname.workspace = true
 notify = { version = "8.2", default-features = false, features = ["macos_kqueue"] }

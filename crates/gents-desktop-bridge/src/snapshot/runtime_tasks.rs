@@ -21,17 +21,7 @@ fn recent_runs_view(runs: &TaskRecentRuns) -> TaskRecentRunsView {
     }
 }
 
-pub(super) fn source_matches_node(
-    sources: &[Option<String>],
-    row_index: usize,
-    node_did: &str,
-    require_source_scope: bool,
-) -> bool {
-    match sources.get(row_index).and_then(|source| source.as_deref()) {
-        Some(source_node_did) => source_node_did == node_did,
-        None => !require_source_scope,
-    }
-}
+pub(super) use gents_desktop_core::client::source_matches_node;
 
 pub(super) fn request_matches_node(request: &AgentRequestRow, node_did: &str) -> bool {
     request.node_did.as_deref() == Some(node_did)
