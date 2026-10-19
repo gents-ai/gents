@@ -685,11 +685,8 @@ impl TriggerEngine {
                 return result;
             }
         };
-        // Scheduled fires render the task's saved prompt_template: the model
-        // turn is the stored configuration's instructions rendered with this
-        // fire's template scope, not a statement of current repo, draft, or
-        // budget state. Label it as such for schedule triggers only; event and
-        // manual prompts keep their existing bytes.
+        // Schedule triggers label their rendered prompt as saved
+        // configuration; event and manual prompts keep their existing bytes.
         let rendered = if matches!(intent.trigger_kind, TriggerKind::Schedule) {
             format!(
                 "Scheduled task instructions (rendered from saved configuration):\n\n{rendered}"
