@@ -461,6 +461,11 @@ def restartDispositionCaseJson (witness : RestartDispositionCase) : String :=
     ++ "\"await_mode\":" ++ jsonString witness.awaitMode ++ ","
     ++ "\"session_message\":"
       ++ boolString (witness.kind == .sessionMessage) ++ ","
+    ++ "\"kind\":"
+      ++ jsonString (match witness.kind with
+        | .native => "native"
+        | .sessionMessage => "sessionMessage"
+        | .pluginJob => "pluginJob") ++ ","
     ++ "\"parent_observation\":"
       ++ jsonString witness.parentObservation ++ ","
     ++ "\"deadline_expired\":" ++ boolString witness.deadlineExpired ++ ","

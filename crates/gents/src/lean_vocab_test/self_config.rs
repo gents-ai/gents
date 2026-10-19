@@ -164,11 +164,27 @@ pub(crate) struct LeanGraphPresentationCase {
     pub(crate) presented: bool,
 }
 
+/// A self-config write of a Tools `integrations` value (Lean `JobGuardRow`):
+/// `writer` is `"model"` or `"operator"`, `stored_integrations` is null when
+/// the stored Tools document has no `integrations`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanJobGuardCase {
+    pub(crate) name: String,
+    pub(crate) writer: String,
+    pub(crate) selected_before: bool,
+    #[serde(deserialize_with = "super::required_nullable")]
+    pub(crate) stored_integrations: Option<serde_json::Value>,
+    pub(crate) candidate_integrations: serde_json::Value,
+    pub(crate) accepted: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanSelfConfigSelectionCases {
     pub(crate) tool_flag_cases: Vec<LeanToolFlagCase>,
     pub(crate) graph_presentation_cases: Vec<LeanGraphPresentationCase>,
+    pub(crate) job_guard_cases: Vec<LeanJobGuardCase>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

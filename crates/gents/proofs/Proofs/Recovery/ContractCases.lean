@@ -1,5 +1,6 @@
 import Proofs.Recovery.Sweeps
 import Proofs.Conformance.ContractCases
+import Proofs.Conformance.PluginJob
 
 namespace Recovery
 
@@ -86,6 +87,23 @@ def sessionMessageRecoveryCase
         Recovery.sessionMessageHandoffReason true handoff
       else
         cause.notificationReason
+  }
+
+/-- Plugin-job recovery witness: one tick of the registered sweep over a
+    running row; a row the tick leaves not running has failed closed. -/
+def pluginJobRecoveryCase (c : Conformance.PluginJob.RecoveryCase) : RecoverySweepCase :=
+  let after := Conformance.PluginJob.recoveryTick c.row
+  let state := fun (row : PluginJobRow) =>
+    (if row.running then ToolExecution.ToolCallState.running else .failed).toDefraDB
+  { (recoveryCase
+      pluginJobRecoverySweep
+      c.name
+      (state c.row)
+      (state after)
+      "plugin-job-recovery-tick"
+      (Conformance.PluginJob.recoveryMeasure c.row)
+      (Conformance.PluginJob.recoveryMeasure after)) with
+    deadlineExpired := some c.row.deadlineExpired
   }
 
 def taskHookRecordRecoveryCase
@@ -221,7 +239,8 @@ def recoverySweepCases : List RecoverySweepCase :=
       "session_message_request_dead_to_failed" .requestDead
   , sessionMessageRecoveryCase
       "session_message_request_superseded_to_failed" .requestSuperseded
-  , recoveryCase
+  ] ++ Conformance.PluginJob.recoveryCases.map pluginJobRecoveryCase ++
+  [ recoveryCase
       inferenceCallRecoverySweep
       "inference_queued_stale_to_cancelled"
       "queued"
@@ -354,11 +373,24 @@ def restartDispositionCases : List RestartDispositionCase :=
       .background .native .missing
       "Recovery.missing_parent_never_terminalizes"
       (deadlineExpired := true)
+  , restartDispositionCase
+      "restart_plugin_job_live_parent_left_running"
+      .background .pluginJob .live
+      "Recovery.plugin_job_row_left_running"
+  , restartDispositionCase
+      "restart_plugin_job_interrupted_parent_left_running"
+      .background .pluginJob .interrupted
+      "Recovery.plugin_job_row_left_running"
+  , restartDispositionCase
+      "restart_plugin_job_deadline_expired_left_running"
+      .background .pluginJob .otherTerminal
+      "Recovery.plugin_job_row_left_running"
+      (deadlineExpired := true)
   ]
 
 theorem restartDispositionCases_cover_every_disposition :
     (restartDispositionCases.filter
-        (fun witness => witness.disposition = "leave_running")).length = 9 ∧
+        (fun witness => witness.disposition = "leave_running")).length = 12 ∧
       (restartDispositionCases.filter
         (fun witness => witness.disposition = "terminalize")).length = 7 := by
   native_decide

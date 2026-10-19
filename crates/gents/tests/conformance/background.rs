@@ -1,8 +1,10 @@
 use super::*;
+use crate::lean_vocab_test::LeanRestartRowKind;
+use gents::tool_call_lifecycle::{AwaitMode, ToolRowKind};
 
 pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
     let cases = lean_r6_backgrounding_cases();
-    assert_eq!(cases.len(), 45);
+    assert_eq!(cases.len(), 46);
 
     let names = cases
         .iter()
@@ -25,6 +27,7 @@ pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
             "tool_kind_explicit_cancel_projects_explicit_cancel",
             "native_background_row_foregrounds",
             "session_message_row_refuses_foreground",
+            "plugin_job_row_refuses_foreground",
             "background_recovery_running_live_parent_to_cancelled",
             "background_completion_source_writes_canonical_key",
             "terminal_completion_message_precedes_claimed_continuation",
@@ -279,5 +282,56 @@ pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
     assert_eq!(
         dispatch_deadline.reason.as_deref(),
         Some("caller_deadline_exceeded")
+    );
+}
+
+/// Lean `restartDisposition` leaves a plugin-job row running and
+/// `ToolCallContext.Transition.foreground` refuses it, through the decision
+/// cores of `ToolRowKind` that sit beside the orphan sweep's
+/// `is_background_tool_row` and `ToolCallLifecycle::foreground`, which call
+/// them: a plugin-job row is outside the orphan sweep's scope and is never
+/// foregrounded. Each row supplies its own kind and await mode.
+#[tokio::test]
+async fn generated_plugin_job_restart_and_foreground_rows_match_owners() {
+    let restarts = lean_restart_disposition_cases()
+        .iter()
+        .filter(|case| case.kind == LeanRestartRowKind::PluginJob)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        restarts.len(),
+        3,
+        "Lean should emit the plugin-job restart rows"
+    );
+    for case in restarts {
+        let name = case.name.as_str();
+        assert!(!case.session_message, "{name}");
+        assert_eq!(case.disposition, "leave_running", "{name}");
+        assert_eq!(case.cause, None, "{name}");
+        assert_eq!(case.terminal_state, None, "{name}");
+        assert_eq!(case.notification_reason, None, "{name}");
+        assert_eq!(case.queue_source, None, "{name}");
+        let await_mode = AwaitMode::from_persisted(&case.await_mode)
+            .unwrap_or_else(|| panic!("{name}: unknown await mode {:?}", case.await_mode));
+        assert!(
+            !ToolRowKind::PluginJob.in_orphan_sweep_scope(await_mode),
+            "{name}: the orphan sweep must never select a plugin-job row"
+        );
+    }
+
+    let refusal = lean_r6_backgrounding_case("plugin_job_row_refuses_foreground");
+    assert_eq!(refusal.group, "native_lifecycle");
+    assert_eq!(refusal.action, "foreground");
+    assert_eq!(refusal.operation.as_deref(), Some("pluginJob"));
+    assert_eq!(refusal.await_mode, "background");
+    assert_eq!(refusal.terminal_state, "rejected");
+    assert!(!refusal.legal);
+    let kind = match refusal.operation.as_deref() {
+        Some("pluginJob") => ToolRowKind::PluginJob,
+        other => panic!("plugin_job_row_refuses_foreground: unexpected operation {other:?}"),
+    };
+    assert_eq!(
+        kind.may_foreground(),
+        refusal.legal,
+        "a plugin-job row must refuse the foreground flip"
     );
 }

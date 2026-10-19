@@ -296,6 +296,10 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.agentFacing, Surface.runtimeInternal]
     , deferred := []
     }
+  , { feature := "plugin-jobs"
+    , required := [Surface.agentFacing, Surface.runtimeInternal]
+    , deferred := [(Surface.operatorCli, "gents job"), (Surface.operatorUi, "desktop")]
+    }
   ]
 
 def vocabularyCoverage : List CoverageEntry :=
@@ -1406,6 +1410,92 @@ def caseCoverage : List CoverageEntry :=
       "PluginToolCallCases"
       "plugin::tool_calls::tests::generated_tool_call_bounds_and_grants")
       "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "plugin_job_admission_cases"
+      "PluginJobAdmissionCases"
+      "conformance::plugin_job::generated_plugin_job_admission_cases_drive_admit_step")
+      "plugin-jobs" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "plugin_job_adoption_cases"
+      "PluginJobAdoptionCases"
+      "conformance::plugin_job::generated_plugin_job_adoption_cases_drive_adopt")
+      "plugin-jobs" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "plugin_job_control_cases"
+      "PluginJobControlCases"
+      "conformance::plugin_job::generated_plugin_job_control_cases_drive_control_owners")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "plugin_job_key_cases"
+      "PluginJobKeyCases"
+      "conformance::plugin_job::generated_plugin_job_key_cases_match_protocol_encoders")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "plugin_job_authority_cases"
+      "PluginJobAuthorityCases"
+      "conformance::plugin_job::generated_plugin_job_authority_cases_drive_origin_and_provenance")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "plugin_job_wire_cases"
+      "PluginJobWireCases"
+      "conformance::plugin_job::generated_plugin_job_wire_cases_round_trip_protocol_types")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "plugin_job_wire_cases"
+      "PluginJobWireCases"
+      "conformance::plugin_job::plugin_job_protocol_field_names_are_secret_free")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "plugin_job_lineage_cases"
+      "PluginJobLineageCases"
+      "conformance::plugin_job::generated_plugin_job_lineage_cases_decode_strictly"
+      "Rows decode strictly against DurableLineage.openingRequest. The client consumers that drive the native opening-request owner are pending.")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "plugin_job_recovery_cases"
+      "PluginJobRecoveryCases"
+      "conformance::recovery_sweeps::generated_plugin_job_recovery_cases_drive_redrive_owner")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "restart_disposition_cases"
+      "RestartDispositionCases"
+      "conformance::background::generated_plugin_job_restart_and_foreground_rows_match_owners")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "r6_background_cases"
+      "R6BackgroundingCases"
+      "conformance::background::generated_plugin_job_restart_and_foreground_rows_match_owners")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "plugin_data_cases"
+      "PluginDataCases"
+      "conformance::tool_policy::generated_plugin_data_cases_drive_admit_write")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "plugin_resource_cases"
+      "PluginAssetMountCases"
+      "conformance::tool_policy::generated_plugin_job_resource_cases_drive_mounts_and_scratch")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "plugin_resource_cases"
+      "PluginProjectTierCases"
+      "conformance::tool_policy::generated_plugin_job_resource_cases_drive_mounts_and_scratch")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "plugin_resource_cases"
+      "PluginScratchCases"
+      "conformance::tool_policy::generated_plugin_job_resource_cases_drive_mounts_and_scratch")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "plugin_calls_route_cases"
+      "PluginCallsRouteCases"
+      "conformance::tool_policy::generated_plugin_calls_route_cases_drive_supported")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "self_config_cases"
+      "SelfConfigCases"
+      "conformance::self_config::generated_self_config_job_guard_cases_drive_native_guard")
+      "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
       "tool_timeout_cases"
       "ToolTimeoutCases"
