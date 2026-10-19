@@ -41,6 +41,7 @@ pub struct SubmitRequestOptions {
 pub async fn submit_request(
     node: &Arc<EmbeddedNode>,
     store: &ClientStore,
+    access: &ConfigAccess,
     session_id: &str,
     node_did: &str,
     requester_did: &str,
@@ -65,7 +66,7 @@ pub async fn submit_request(
     )
     .await?;
     let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
-    ConfigAccess::write_local(node, "submit_request", &mutation).await?;
+    access.write("submit_request", &mutation).await?;
     Ok(result)
 }
 
@@ -828,6 +829,7 @@ pub async fn resend_request(
     submit_request(
         node,
         store,
+        &ConfigAccess::local(node.clone()),
         &retry_session_id,
         stale_node_did,
         requester_did,
