@@ -7,6 +7,7 @@ structure RequestInputCase where
   name : String
   input : RequestInput
   authoredText : String := "Check this context."
+  runtimeInputVersion : Option Nat := some 1
   contextSkillIds : List String
   cwdAllowed : Bool := true
   queueSourceAllowed : Bool := true
@@ -133,6 +134,15 @@ def capturedPresentationCases : List RequestInputCase :=
       contextSkillIds := [], authoredText := "Review this empty file." }
   ]
 
+def capturedCompatibilityCases : List RequestInputCase :=
+  [ { name := "capture-requires-runtime-advertisement", input := {capturedContext := [capturedSelection]},
+      contextSkillIds := [], runtimeInputVersion := none }
+  , { name := "capture-rejects-unknown-runtime-contract", input := {capturedContext := [capturedSelection]},
+      contextSkillIds := [], runtimeInputVersion := some 2 }
+  , { name := "plain-input-keeps-unadvertised-runtime-support", input := {}, contextSkillIds := [],
+      runtimeInputVersion := none }
+  ]
+
 def requestInputCases : List RequestInputCase :=
   [ { name := "empty-input-inherits-context", input := {}, contextSkillIds := ["rust"] }
   , { name := "explicit-skill-within-whitelist", input := { selectedSkillIds := ["rust"] },
@@ -214,13 +224,13 @@ def requestInputCases : List RequestInputCase :=
       admissionKind := .runtimeInternal
       verifiedGoalContinuation := some ⟨3, false⟩ }
 
-  ] ++ workspaceCases ++ queueExtensionCases ++ capturedContextCases ++ capturedPresentationCases
+  ] ++ workspaceCases ++ queueExtensionCases ++ capturedContextCases ++ capturedPresentationCases ++ capturedCompatibilityCases
 
 theorem input_boundary_cases_pinned : requestInputCases.map RequestInputCase.accepted =
     [true, true, false, false, false, false, false, true, true, true, false,
      false, false, true, true, false, false, false, false, false, false, true,
      true, false, false, false, false, false, true, false, false, false, true, true, true, true, true] ++
-      List.replicate 16 true ++ [false, false, false, false] ++ List.replicate 6 true := by native_decide
+      List.replicate 16 true ++ [false, false, false, false] ++ List.replicate 9 true := by native_decide
 
 theorem title_creation_cases_pinned :
     (requestInputCases.drop 7 |>.take 3).map
