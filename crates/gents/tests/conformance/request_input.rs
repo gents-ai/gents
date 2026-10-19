@@ -161,3 +161,17 @@ fn lean_workspace_references_preserve_exact_owner_and_attenuate_authority() {
         );
     }
 }
+
+#[test]
+fn captured_context_structure_matches_the_executable_input_owner() {
+    let cases = &lean_contract_snapshot().request_input_cases;
+    assert!(cases.iter().any(|case| case["name"] == "captured-selection"));
+    for case in cases {
+        let input: RequestInput = serde_json::from_value(case["input"].clone()).unwrap();
+        assert_eq!(
+            input.captured_context.iter().all(|context| context.is_well_formed()),
+            case["expected_captures_well_formed"].as_bool().unwrap(),
+            "{}: actual captured-context structural owner", case["name"],
+        );
+    }
+}
