@@ -2078,7 +2078,7 @@ impl ConfigCommandTool {
             SelfConfigTarget::InferenceProfile => (
                 "InferenceProfile",
                 "profile_id",
-                "profile_id display_name description backend_id model_name reasoning_effort context_window max_output_tokens sampling_id execution_id",
+                "profile_id display_name description backend_id model_name reasoning_effort service_tier context_window max_output_tokens sampling_id execution_id",
             ),
             SelfConfigTarget::InferenceBackend => (
                 "InferenceBackend",
@@ -2541,7 +2541,7 @@ pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
             patch_contract(
                 SelfConfigTarget::InferenceProfile,
                 json!({
-                    "display_name":"string|null","description":"string|null","backend_id":"existing same-node backend ID; never another account of the current provider","model_name":"string","reasoning_effort":"none|minimal|low|medium|high|xhigh|max|ultra|null","context_window":"positive integer <= the model's advertised maximum context window, when the backend advertises one|null","max_output_tokens":"positive integer|null","sampling_id":"existing same-node sampling ID|null","execution_id":"existing same-node execution ID|null","tags":"array<string>; default []"
+                    "display_name":"string|null","description":"string|null","backend_id":"existing same-node backend ID; never another account of the current provider","model_name":"string","reasoning_effort":"none|minimal|low|medium|high|xhigh|max|ultra|null","service_tier":"default|fast|null; OpenAI-compatible and ChatGPT backends only","context_window":"positive integer <= the model's advertised maximum context window, when the backend advertises one|null","max_output_tokens":"positive integer|null","sampling_id":"existing same-node sampling ID|null","execution_id":"existing same-node execution ID|null","tags":"array<string>; default []"
                 }),
             ),
             patch_contract(

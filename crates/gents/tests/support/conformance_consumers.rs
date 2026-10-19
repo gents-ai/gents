@@ -238,6 +238,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_claude_wire_start_cases_drive_native_parser",
         },
         ConformanceConsumer::RustTest {
+            id: "completion_factory::tests::generated_service_tier_cases_drive_loop_config",
+            package: "gents",
+            source_path: "crates/gents/src/completion_factory/tests.rs",
+            module_path: "completion_factory::tests",
+            function: "generated_service_tier_cases_drive_loop_config",
+        },
+        ConformanceConsumer::RustTest {
             id: "completion_factory::tests::generated_responses_storage_cases_drive_loop_config",
             package: "gents",
             source_path: "crates/gents/src/completion_factory/tests.rs",

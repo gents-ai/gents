@@ -536,6 +536,7 @@ fn agent_with_retry(completion_retry: CompletionRetryProfileFields) -> ResolvedA
         backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
         backend_auth: crate::document_config::BackendAuth::Unauthenticated,
         model_name: crate::config::DEFAULT_MODEL_NAME.to_string(),
+        service_tier: None,
         resolved_reasoning_efforts: None,
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         max_output_tokens: crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
@@ -860,4 +861,62 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
         }
     })
     .await;
+}
+
+#[test]
+fn generated_service_tier_cases_drive_loop_config() {
+    let cases = crate::lean_vocab_test::lean_prompt_assembly_service_tier_cases();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let family = BackendProviderKind::parse_optional(Some(&case.family)).expect("Lean family");
+        let tier: Option<crate::config::ServiceTier> =
+            serde_json::from_value(serde_json::to_value(&case.requested).unwrap())
+                .expect("Lean tier");
+        assert_eq!(
+            crate::config::validate_service_tier(family, tier).is_ok(),
+            case.allowed,
+            "{case:?}"
+        );
+        if !case.allowed {
+            continue;
+        }
+        for wire in [
+            crate::OpenAiWireApi::Responses,
+            crate::OpenAiWireApi::ChatCompletions,
+        ] {
+            if family == BackendProviderKind::ChatGptCodex
+                && wire != crate::OpenAiWireApi::Responses
+            {
+                continue;
+            }
+            let mut agent = agent_with_retry(Default::default());
+            agent.backend_provider_kind = family;
+            agent.openai_wire_api = wire;
+            agent.service_tier = tier;
+            let config = loop_config(&agent, "preamble".into(), 0, CaptureScopeKind::Inference);
+            let request = rig::completion::CompletionRequest {
+                model: None,
+                preamble: config.preamble.clone(),
+                chat_history: rig::one_or_many::OneOrMany::one(rig::completion::Message::user(
+                    "hi",
+                )),
+                documents: Vec::new(),
+                tools: Vec::new(),
+                temperature: None,
+                max_tokens: None,
+                tool_choice: None,
+                additional_params: config.additional_params.clone(),
+                output_schema: None,
+            };
+            let body = config
+                .provider_input_counter
+                .project_body(&request)
+                .expect("provider body");
+            assert_eq!(
+                body.get("service_tier").and_then(serde_json::Value::as_str),
+                case.wire.as_deref(),
+                "{case:?}, {wire:?}"
+            );
+        }
+    }
 }

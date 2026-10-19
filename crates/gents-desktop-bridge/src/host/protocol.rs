@@ -55,6 +55,10 @@ pub enum ClientCommand {
     InferenceModelRecommendation {
         request: crate::inference_setup::InferenceRecommendationRequest,
     },
+    #[serde(rename = "client_agent_model_select")]
+    AgentModelSelect {
+        request: crate::types::AgentModelSelectionRequest,
+    },
     #[serde(rename = "client_config_apply")]
     ConfigApply {
         request: crate::types::ConfigComponentsApplyRequest,
@@ -213,6 +217,7 @@ impl ClientCommand {
         "client_runtime_is_local",
         "client_inference_setup_catalog",
         "client_inference_setup_state",
+        "client_agent_model_select",
         "client_inference_models_discover",
         "client_inference_model_recommendation",
         "client_config_apply",

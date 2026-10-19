@@ -34,6 +34,7 @@ pub struct ResolvedAgent {
     pub backend_endpoint: String,
     pub backend_auth: crate::document_config::BackendAuth,
     pub model_name: String,
+    pub service_tier: Option<ServiceTier>,
     /// Provider-advertised effort choices for the selected model. `None` is
     /// unknown and must not be inferred from the model name at dispatch.
     pub resolved_reasoning_efforts: Option<Vec<ReasoningEffort>>,
@@ -116,6 +117,7 @@ impl ResolvedInference {
     }
 
     pub fn sampling_config(&self) -> Result<SamplingConfig> {
+        validate_service_tier(self.backend.provider_kind, self.profile.service_tier)?;
         let sampling = self.sampling.clone().unwrap_or_default();
         let result = SamplingConfig {
             temperature: sampling.temperature,
@@ -141,6 +143,26 @@ fn positive_inference_limit(value: Option<i64>, default: usize, field: &str) -> 
         Some(value) if value > 0 => Ok(usize::try_from(value)?),
         Some(_) => anyhow::bail!("{field} must be positive"),
     }
+}
+
+pub use gents_loop::provider_input::ServiceTier;
+
+pub fn supports_service_tier(provider: BackendProviderKind) -> bool {
+    matches!(
+        provider,
+        BackendProviderKind::OpenAiCompatible | BackendProviderKind::ChatGptCodex
+    )
+}
+
+pub fn validate_service_tier(
+    provider: BackendProviderKind,
+    tier: Option<ServiceTier>,
+) -> Result<()> {
+    anyhow::ensure!(
+        tier.is_none() || supports_service_tier(provider),
+        "{provider} does not support selecting a service tier"
+    );
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -344,6 +366,7 @@ impl std::fmt::Debug for ResolvedAgent {
             .field("backend_endpoint", &self.backend_endpoint)
             .field("backend_auth", &self.backend_auth)
             .field("model_name", &self.model_name)
+            .field("service_tier", &self.service_tier)
             .field(
                 "resolved_reasoning_efforts",
                 &self.resolved_reasoning_efforts,
@@ -449,6 +472,7 @@ mod tests {
             backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
             backend_auth: crate::document_config::BackendAuth::Unauthenticated,
             model_name: DEFAULT_MODEL_NAME.to_string(),
+            service_tier: None,
             resolved_reasoning_efforts: None,
             context_window: DEFAULT_CONTEXT_WINDOW,
             max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
@@ -628,6 +652,7 @@ pub fn advertised_model_for_profile(
     profile: &crate::document_config::InferenceProfile,
     observation: Option<&crate::document_config::InferenceBackendObservation>,
 ) -> anyhow::Result<Option<crate::document_config::AdvertisedModel>> {
+    validate_service_tier(backend.provider_kind, profile.service_tier)?;
     let Some(catalog) = backend_catalog(backend, observation)? else {
         return Ok(None);
     };

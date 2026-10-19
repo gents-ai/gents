@@ -13,6 +13,38 @@ pub mod budget;
 pub mod replay_frontier;
 pub mod routing_affinity;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub enum ServiceTier {
+    Default,
+    Fast,
+}
+
+impl ServiceTier {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Fast => "fast",
+        }
+    }
+
+    /// Rig's Responses DTO accepts fewer tiers than the provider. Apply the
+    /// native selection after DTO conversion, before accounting and capture.
+    pub fn apply(self, body: &mut Value) -> Result<()> {
+        body.as_object_mut()
+            .context("provider request must be an object")?
+            .insert("service_tier".into(), self.as_str().into());
+        Ok(())
+    }
+
+    pub fn patch(self, body: &[u8]) -> Result<Vec<u8>> {
+        let mut value = serde_json::from_slice(body).context("decoding provider request")?;
+        self.apply(&mut value)?;
+        serde_json::to_vec(&value).context("encoding provider request")
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProviderInputProfile {
     OpenAiChatCompletions,
@@ -72,6 +104,7 @@ impl ProviderInputProfile {
 pub struct ProviderInputCounter {
     profile: ProviderInputProfile,
     model: String,
+    service_tier: Option<ServiceTier>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -90,7 +123,13 @@ impl ProviderInputCounter {
         Self {
             profile: ProviderInputProfile::resolve(provider, wire),
             model: model.into(),
+            service_tier: None,
         }
+    }
+
+    pub fn with_service_tier(mut self, service_tier: Option<ServiceTier>) -> Self {
+        self.service_tier = service_tier;
+        self
     }
 
     pub fn profile(&self) -> ProviderInputProfile {
@@ -126,7 +165,7 @@ impl ProviderInputCounter {
 
     #[cfg(feature = "native")]
     pub fn project_body(&self, request: &CompletionRequest) -> Result<Value> {
-        let body = match self.profile {
+        let mut body = match self.profile {
             ProviderInputProfile::OpenAiChatCompletions => {
                 let dto = rig::providers::openai::completion::CompletionRequest::try_from((
                     self.model.clone(),
@@ -163,6 +202,9 @@ impl ProviderInputCounter {
                 crate::claude_messages_body::build_messages_body(&self.model, request)?
             }
         };
+        if let Some(tier) = self.service_tier {
+            tier.apply(&mut body)?;
+        }
         Ok(body)
     }
 

@@ -107,7 +107,9 @@ pub use principal::{
     read_config_editor_on, save_backend_authentication_on, save_config_editor_on,
     set_default_agent_on, upsert_node_on, ConfigEditorDocument, ConfigEditorRevision,
 };
-pub use profile::{delete_inference_profile_on, upsert_inference_profile_on};
+pub use profile::{
+    delete_inference_profile_on, select_agent_model_on, upsert_inference_profile_on,
+};
 pub use skill::{delete_skill_on, upsert_skill_on};
 pub use task::{
     delete_event_source_on, delete_schedule_on, delete_task_on, delete_trigger_on,

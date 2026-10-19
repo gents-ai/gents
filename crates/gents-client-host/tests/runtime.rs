@@ -102,8 +102,12 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     let (emitted, _) = tokio::sync::watch::channel(None);
     let provider_gate = gate.clone();
-    let provider = FakeLlm::start(
-        "editor-fixture",
+    let provider = FakeLlm::start_with_models(
+        if matches!(journey, Journey::Editor) {
+            &["editor-fixture", "editor-fixture-alternate"]
+        } else {
+            &["editor-fixture"]
+        },
         None,
         Arc::new(move |_| {
             ChatAction::GatedSse(
@@ -630,6 +634,51 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         ensure!(
             rows.len() == 1,
             "the editor must submit one workspace request: {submitted}"
+        );
+        let selected = client
+            .call(
+                id,
+                "client_inference_setup_state",
+                json!({"nodeDid":node_did}),
+            )
+            .await;
+        id += 1;
+        let binding = selected["agentConfigs"]
+            .as_array()
+            .and_then(|agents| agents.iter().find(|agent| agent["agent_id"] == agent_id))
+            .context("selected agent configuration")?;
+        ensure!(
+            selected["inferenceProfiles"]
+                .as_array()
+                .is_some_and(|profiles| {
+                    profiles.iter().any(|profile| {
+                        profile["profile_id"] == binding["inference_profile_id"]
+                            && profile["model_name"] == "editor-fixture-alternate"
+                            && profile["service_tier"] == "fast"
+                    })
+                }),
+            "the composer model selection did not reach the selected agent: {selected}"
+        );
+        ensure!(
+            provider.captured_chat_requests().iter().any(|request| {
+                request["model"] == "editor-fixture-alternate"
+                    && request["service_tier"] == "fast"
+                    && request["messages"].as_array().is_some_and(|messages| {
+                        messages.iter().any(|message| {
+                            message["role"] == "user"
+                                && match &message["content"] {
+                                    Value::String(text) => text.contains("Check this repository"),
+                                    Value::Array(parts) => parts.iter().any(|part| {
+                                        part["text"].as_str().is_some_and(|text| {
+                                            text.contains("Check this repository")
+                                        })
+                                    }),
+                                    _ => false,
+                                }
+                        })
+                    })
+            }),
+            "the editor request did not use the selected model"
         );
         let cwd = rows[0]["input"]["cwd"]
             .as_str()

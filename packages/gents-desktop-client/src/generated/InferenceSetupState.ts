@@ -5,4 +5,4 @@ import type { InferenceBackendView } from "./InferenceBackendView.js";
 import type { InferenceProfile } from "./InferenceProfile.js";
 import type { NodeView } from "./NodeView.js";
 
-export type InferenceSetupState = { nodeDid: string, node: NodeView, agents: Array<AgentView>, agentConfigs: Array<Agent>, inferenceBackends: Array<InferenceBackendView>, inferenceProfiles: Array<InferenceProfile>, };
+export type InferenceSetupState = { nodeDid: string, node: NodeView, agents: Array<AgentView>, agentConfigs: Array<Agent>, inferenceBackends: Array<InferenceBackendView>, inferenceProfiles: Array<InferenceProfile>, fastModeBackendIds: Array<string>, };
