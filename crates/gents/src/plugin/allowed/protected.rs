@@ -60,8 +60,10 @@ pub(super) fn inspect(paths: &[PathBuf], path: &Path) -> io::Result<bool> {
             Err(error) => return Err(error),
         };
         if metadata.is_dir() {
-            for entry in fs::read_dir(&guarded)? {
-                remaining.push(entry?.path());
+            if let Some(entries) = optional_directory(&guarded)? {
+                for entry in entries {
+                    remaining.push(entry?.path());
+                }
             }
         } else {
             if metadata.is_symlink() && fs::metadata(&guarded)?.is_dir() {
@@ -79,6 +81,14 @@ pub(super) fn inspect(paths: &[PathBuf], path: &Path) -> io::Result<bool> {
         }
     }
     Ok(false)
+}
+
+pub(super) fn optional_directory(path: &Path) -> io::Result<Option<fs::ReadDir>> {
+    match fs::read_dir(path) {
+        Ok(entries) => Ok(Some(entries)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 fn regular_file(path: &Path) -> io::Result<Handle> {
