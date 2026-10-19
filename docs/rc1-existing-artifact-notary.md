@@ -60,33 +60,52 @@ these artifacts; the originals are immutable.
 ## Phases
 
 1. **`repository-guard`** — asserts `workflow_dispatch` from `gents-ai/gents`
-   on the branch named by the explicit `github.event.repository.default_branch`
-   expression (empty expression fails closed), then shellchecks the auth
-   helper, syntax-checks it, and runs both mocked test suites
-   (`test-rc1-notary-verify.py`, `test-rc1-notary-workflow.py`).
+   on the full ref `refs/heads/` + the explicit
+   `github.event.repository.default_branch` expression (empty expression and
+   any tag/PR-head ref fail closed; both jobs re-assert this as their FIRST
+   step, before any checkout), then preflights the control toolchain
+   (shellcheck, python3, PyYAML), shellchecks and syntax-checks the auth
+   helper, and runs both test suites (`test-rc1-notary-auth.py`,
+   `test-rc1-notary-workflow.py`).
 2. **`notary-auth-preflight`** — invokes `.github/scripts/rc1-notary-auth.sh`
-   once (no retry loop). The helper materializes the `.p8` in a `0700` temp
-   dir (key file `0600`), captures the full `notarytool history` output and
-   errors in private `0600` files inside that dir, emits only the allowlisted
-   success line or a fixed HTTP 403 / auth-failure diagnostic, and removes the
-   key material and captured output via EXIT/INT/TERM traps on every path.
+   once (no retry loop) after re-running the same pre-checkout guard. The
+   helper materializes the `.p8` as `0600` inside a `0700` dir under
+   `$RUNNER_TEMP` (runner-scoped private temp; `$TMPDIR`/`/tmp` fallback),
+   captures the full `notarytool history` stdout/stderr in private `0600`
+   files inside that dir, classifies failures by HTTP status alone, emits
+   only the allowlisted success line or one of the fixed failure diagnostics
+   (neutral guidance only — no asserted portal/team remedy), and removes the
+   key material and captured output via EXIT/INT/TERM traps on every in-process
+   exit path. Cleanup is best-effort: it cannot cover `SIGKILL`, runner loss,
+   or external reaping, so credential revocability remains the durable
+   control.
 
 ## Secrets handling
 
 - Secrets are read from the repository secret store only through the step
   `env:` mapping in the workflow; no shell reads or prints them.
-- The `.p8` exists only inside the `0700` temp dir as a `0600` file and is
-  deleted by the cleanup trap on success, failure, signal, and script exit.
+- The `.p8` exists only inside the `0700` temp dir as a `0600` file (constant
+  `AuthKey.p8` filename; the key id never appears in a path) and is deleted by
+  the cleanup trap on success, failure, signal, and script exit. This cleanup
+  is best-effort and cannot guarantee removal on `SIGKILL`, runner loss, or
+  external reaping.
 - Raw notary history/error output is never echoed; only the allowlisted
-  diagnostic lines above may appear in job logs.
+  success line or the fixed failure diagnostics may appear in job logs.
+  Failure classification reads only the private stderr capture and is driven
+  by the HTTP status alone; provider wording (e.g. agreement language) never
+  selects a diagnostic, and diagnostics give neutral guidance only — they do
+  not assert any specific portal or team remedy.
 
 ## What this workflow never does
 
 - No notary submission, no stapling, no release or tag write, no product
   build, no artifact download, no re-signing.
 - No execution of any candidate CLI/app/bridge binary or staged script.
-- No writes to releases, tags, or repository contents (permissions are
-  `contents: read`, `actions: read` only).
+- No writes to releases, tags, or repository contents (the only permission is
+  `contents: read`). The `actions: read` permission was removed as unused.
+  Both `actions/checkout` uses are hard-pinned to the verified upstream
+  commit `3d3c42e5aac5ba805825da76410c181273ba90b1` (the peeled `v7` tag,
+  confirmed via the GitHub API as an object of type `commit`).
 - No source changes to the product at `08edd1bdfedca73fa28e648e4781ae03aeacf5e6`;
   the desktop (`12217555726`), CLI (`12214205657`), and build-run
   (`39302246819`) originals remain immutable.
@@ -103,8 +122,8 @@ and fully sanitized diagnostics.
 ## Local verification
 
 ```sh
+python3 .github/scripts/test-rc1-notary-auth.py       # auth helper behavioral tests
 python3 .github/scripts/test-rc1-notary-workflow.py   # workflow structure tests
-python3 .github/scripts/test-rc1-notary-verify.py     # mocked verifier/auth tests
 sh -n .github/scripts/rc1-notary-auth.sh
 shellcheck -s sh .github/scripts/rc1-notary-auth.sh
 ```

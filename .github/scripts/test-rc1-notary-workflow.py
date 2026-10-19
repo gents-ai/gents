@@ -2,23 +2,25 @@
 """Workflow-level structural tests for rc1-existing-artifact-notary.yml.
 
 Parses the real workflow file and enforces that it is the AUTH-ONLY control
-plane: dispatch only from the pinned repository's trusted default branch, and
-no submit/staple/release/build path anywhere in the file. No GitHub services
-are contacted; this is a static analysis of the committed YAML plus the
-helper script on disk.
+plane: dispatch only from the pinned repository's trusted default branch, a
+hard-pinned checkout action, minimal permissions, and no submit/staple/
+release/build path anywhere in the file. No GitHub services are contacted;
+this is a static analysis of the committed YAML plus the helper script.
 """
 
 from __future__ import annotations
 
 import re
-import tempfile
 import unittest
 from pathlib import Path
 
 import yaml
 
 WORKFLOW = Path(__file__).resolve().parents[1] / "workflows" / "rc1-existing-artifact-notary.yml"
-AUTH_HELPER = Path(__file__).with_name("rc1-notary-auth.sh")
+
+# Verified via `gh api repos/actions/checkout/git/ref/tags/v7`; the ref peels
+# directly to this commit (object.type == "commit", not an annotated tag).
+CHECKOUT_PIN_SHA = "3d3c42e5aac5ba805825da76410c181273ba90b1"
 
 FORBIDDEN_JOB_NAME = re.compile(
     r"submit|staple|release|publish|upload|build|notariz", re.IGNORECASE)
@@ -40,7 +42,6 @@ REQUIRED_SUBSTRINGS = [
     "MACOS_NOTARY_ISSUER_ID",
     "MACOS_NOTARY_KEY_ID",
     "contents: read",
-    "actions: read",
 ]
 
 
@@ -61,7 +62,15 @@ class WorkflowStructureTests(unittest.TestCase):
         self.assertNotIn("inputs", dispatch)
 
     def test_permissions_are_minimal(self):
-        self.assertEqual(self.wf["permissions"], {"contents": "read", "actions": "read"})
+        # The auth-only workflow needs no actions/read or any write scope.
+        self.assertEqual(self.wf["permissions"], {"contents": "read"})
+
+    def test_no_provenance_env_leak(self):
+        self.assertNotIn("ACTIONS_BUILD_PROVENANCE", self.raw)
+        for env_key in self.wf.get("env", {}):
+            self.assertFalse(
+                env_key.startswith("ACTIONS_"),
+                f"unexpected runner-provenance env var: {env_key}")
 
     def test_repository_is_pinned(self):
         env = self.wf.get("env", {})
@@ -88,6 +97,21 @@ class WorkflowStructureTests(unittest.TestCase):
                         match,
                         f"job {job_name}: forbidden {label} path via "
                         f"{match.group(0) if match else ''!r} in:\n{run}")
+
+    def test_checkout_is_hard_pinned_to_verified_sha(self):
+        for job_name, job in self.wf["jobs"].items():
+            checkout_steps = [s for s in job["steps"] if "uses" in s]
+            self.assertEqual(
+                len(checkout_steps), 1,
+                f"job {job_name}: exactly one action step (the pinned checkout)")
+            uses = checkout_steps[0]["uses"]
+            self.assertEqual(
+                uses, f"actions/checkout@{CHECKOUT_PIN_SHA}",
+                f"job {job_name}: checkout must be pinned to the verified "
+                f"upstream commit {CHECKOUT_PIN_SHA}, got {uses!r}")
+            self.assertEqual(
+                checkout_steps[0].get("with", {}).get("persist-credentials"), False,
+                f"job {job_name}: checkout must not persist credentials")
 
     def test_trusted_default_branch_guard_is_explicit(self):
         guard = self.wf["jobs"]["repository-guard"]["steps"]
@@ -144,39 +168,17 @@ class WorkflowStructureTests(unittest.TestCase):
         self.assertNotIn("submission-attempt.json", self.raw)
         self.assertNotIn("receipts", self.raw)
 
-
-class AuthHelperStructureTests(unittest.TestCase):
-    def test_helper_exists_and_is_executable(self):
-        self.assertTrue(AUTH_HELPER.is_file())
-        self.assertTrue(AUTH_HELPER.stat().st_mode & 0o111)
-
-    def test_helper_has_cleanup_trap_and_private_capture(self):
-        helper = AUTH_HELPER.read_text()
-        self.assertIn("trap cleanup EXIT INT TERM", helper)
-        self.assertIn("chmod 0700", helper)
-        self.assertIn("chmod 0600", helper)
-        self.assertIn("HISTORY_FILE", helper)
-        self.assertIn("notarytool history", helper)
-        self.assertNotIn("notarytool submit", helper)
-        self.assertNotIn("stapler", helper)
-        # No raw payload may be echoed: the only printf of history content is
-        # absent; output is read from the private file by grep/jq only.
-        self.assertNotIn('printf \'%s\\n\' "${history_output}"', helper)
-
-    def test_helper_bash_and_sh_clean(self):
-        import subprocess
-        for argv in (["sh", "-n", str(AUTH_HELPER)],
-                     ["shellcheck", "-s", "sh", str(AUTH_HELPER)]):
-            result = subprocess.run(argv, capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-
-
-class TempIsolationSmokeTest(unittest.TestCase):
-    """Sanity check that the mocked helper tests use an isolated TMPDIR."""
-
-    def test_tmpdir_isolation_smoke(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self.assertTrue(Path(tmp).is_dir())
+    def test_self_test_step_runs_the_auth_and_workflow_suites(self):
+        guard = self.wf["jobs"]["repository-guard"]["steps"]
+        test_steps = [s for s in guard
+                      if "test-rc1-notary-auth.py" in (s.get("run") or "")]
+        self.assertEqual(len(test_steps), 1,
+                         "guard job must run the auth helper behavioral suite")
+        run = test_steps[0]["run"]
+        self.assertIn("test-rc1-notary-workflow.py", run)
+        self.assertNotIn("test-rc1-notary-verify.py", run,
+                         "removed verify suite must no longer be referenced")
+        self.assertNotIn("rc1-notary-verify.py", run)
 
 
 if __name__ == "__main__":

@@ -2,12 +2,21 @@
 # Auth-only notarytool probe for the RC1 existing-artifact notary workflow.
 #
 # Guarantees:
-# - The notary credentials are materialized in a 0700 temp dir; the .p8 file is
-#   0600 and is removed by an EXIT/INT/TERM trap on every path.
-# - The full `notarytool history` output, including any errors, is captured to
-#   a 0600 file inside the same private temp dir; it is never echoed raw.
-# - Only an allowlisted success line, or a fixed 403 / auth-failure diagnostic
-#   naming the failing credential variables, may reach stdout/stderr.
+# - The notary credentials are materialized in a private temp dir (0700 dir,
+#   0600 .p8 file). The preferred location is $RUNNER_TEMP (runner-scoped,
+#   cleaned by the runner between jobs); $TMPDIR or /tmp is the fallback.
+#   The EXIT/INT/TERM trap removes the whole dir on every in-process exit.
+#   NOTE: this cleanup is best-effort. It cannot guarantee removal if the
+#   process is killed with SIGKILL, the runner loses power, or the job is
+#   reaped externally; durable secrecy therefore rests on the credential's
+#   revocability, not on this trap.
+# - The full `notarytool history` stdout and stderr, including any errors, are
+#   captured to 0600 files inside the private temp dir; they are never echoed.
+# - Failure classification is driven ONLY by the HTTP status in the private
+#   stderr capture. Only an allowlisted success line, or one of the fixed
+#   failure diagnostics below (which name the credential variable names and
+#   give neutral guidance), may reach stdout/stderr. Raw history/error output
+#   is never printed.
 # - The probe runs exactly once; there is no retry loop. No submission, upload,
 #   or notary state change is ever attempted here.
 
@@ -36,7 +45,9 @@ if [ -n "${missing}" ]; then
 fi
 
 umask 077
-NOTARY_DIR="$(mktemp -d "${TMPDIR:-/tmp}/gents-rc1-notary-auth.XXXXXX")"
+# Prefer the runner-scoped private temp; fall back to TMPDIR or /tmp.
+notary_tmp_base="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+NOTARY_DIR="$(mktemp -d "${notary_tmp_base%/}/gents-rc1-notary-auth.XXXXXX")"
 chmod 0700 "${NOTARY_DIR}"
 # Constant key filename: never embed the key id in a path that could leak it.
 NOTARY_KEY_PATH="${NOTARY_DIR}/AuthKey.p8"
@@ -54,22 +65,21 @@ xcrun notarytool history \
   --output-format json >"${HISTORY_FILE}" 2>"${ERROR_FILE}" || status=$?
 
 if [ "${status}" -ne 0 ]; then
-  # Classification reads only the private stderr capture; the payload body is
-  # never printed. Agreement rejections and generic rejections get distinct
-  # fixed diagnostics.
-  if grep -qi 'agreement' "${ERROR_FILE}" 2>/dev/null; then
-    echo "rc1-notary-auth: auth failure: notary agreement not accepted (HTTP 403): accept the notary agreement for this team in App Store Connect, then re-run" >&2
-  elif grep -q '403' "${ERROR_FILE}" 2>/dev/null; then
-    echo "rc1-notary-auth: auth failure: notary auth rejected (HTTP 403); check MACOS_NOTARY_API_KEY/ISSUER_ID/KEY_ID validity and team permissions" >&2
+  # Classification reads only the private stderr capture and is driven by the
+  # HTTP status alone; provider wording (e.g. agreement language) never
+  # selects the diagnostic, and the captured body is never printed.
+  if grep -q 'HTTP status 403' "${ERROR_FILE}" 2>/dev/null; then
+    echo "rc1-notary-auth: auth failure: notary credential rejected (HTTP 403); verify the credential material and its authorization state before retrying" >&2
   else
     echo "rc1-notary-auth: auth failure: notarytool history exited ${status}; credential material and provider errors withheld" >&2
   fi
   exit "${status}"
 fi
 
-# Structural check only: the payload shape is verified without printing it.
-if ! jq -e 'type == "object"' "${HISTORY_FILE}" >/dev/null 2>&1; then
-  echo "rc1-notary-auth: auth failure: unexpected notary history payload" >&2
+# Success requires a non-empty private history capture; its contents are
+# verified only by size, never parsed or printed.
+if [ ! -s "${HISTORY_FILE}" ]; then
+  echo "rc1-notary-auth: auth failure: notary history returned no data" >&2
   exit 3
 fi
 
