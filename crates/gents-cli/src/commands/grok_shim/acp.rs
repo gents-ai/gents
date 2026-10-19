@@ -101,6 +101,8 @@ pub(crate) struct AcpServiceConfig {
     pub(crate) agent_id: Arc<str>,
     pub(crate) current_model: BoundModel,
     pub(crate) grok_home: Option<std::path::PathBuf>,
+    /// Gents home the plugin catalogs of `x.ai/workflows/list` are read under.
+    pub(crate) plugin_home: std::path::PathBuf,
 }
 
 impl AcpServiceConfig {
@@ -442,6 +444,16 @@ impl AcpService {
                     result,
                 })
             }
+            "x.ai/workflows/list" => Ok(RequestOutcome {
+                notifications: Vec::new(),
+                result: super::workflow_catalog::list(
+                    &self.config.node,
+                    &self.config.node_did,
+                    &self.config.agent_id,
+                    &self.config.plugin_home,
+                )
+                .await?,
+            }),
             "x.ai/sessions/list" => Ok(RequestOutcome {
                 notifications: Vec::new(),
                 result: super::sessions::roster(
@@ -1317,6 +1329,7 @@ mod tests {
                 .await
                 .expect("embedded node"),
         );
+        let plugin_home = tempdir.path().join("home");
         (
             tempdir,
             AcpServiceConfig {
@@ -1325,6 +1338,7 @@ mod tests {
                 agent_id: Arc::from("did:test:grok-shim:default"),
                 current_model: bound_model(),
                 grok_home: None,
+                plugin_home,
             },
         )
     }
@@ -2505,6 +2519,7 @@ mod tests {
             agent_id: Arc::from(agent_id.as_str()),
             current_model: bound_model(),
             grok_home: None,
+            plugin_home: std::path::PathBuf::new(),
         };
         let turns = Arc::new(TurnManager::new(
             node.clone(),
@@ -2702,6 +2717,7 @@ mod tests {
             agent_id: Arc::from(agent_id.as_str()),
             current_model: bound_model(),
             grok_home: None,
+            plugin_home: std::path::PathBuf::new(),
         };
         gents::schema::ensure_runtime_schemas(config.node.as_ref())
             .await
@@ -3051,6 +3067,38 @@ mod tests {
             response["result"]["result"],
             json!({"config":null,"on_demand_enabled":false})
         );
+    }
+
+    #[tokio::test]
+    async fn workflows_list_is_routed() {
+        let (_staging, service) = service_over(true).await;
+        let config = &service.config;
+        super::super::seed_test_agent_configuration(
+            &config.node,
+            &config.node_did,
+            &config.agent_id,
+            &config.agent_id,
+            "grok-workflows-model",
+            true,
+        )
+        .await;
+        let dispatch = service
+            .handle_acp_payload(&request_payload("x.ai/workflows/list", json!({})))
+            .await;
+        let response = parse_response(dispatch.response.as_deref().expect("response line"));
+        assert!(response.get("error").is_none(), "{response}");
+        assert_eq!(response["result"], json!({"workflows": []}));
+    }
+
+    #[tokio::test]
+    async fn workflows_list_failure_is_a_shaped_internal_error() {
+        let (_staging, service) = test_service().await;
+        let dispatch = service
+            .handle_acp_payload(&request_payload("x.ai/workflows/list", json!({})))
+            .await;
+        let response = parse_response(dispatch.response.as_deref().expect("response line"));
+        assert_eq!(response["error"]["code"], -32603, "{response}");
+        assert!(!response["error"]["message"].as_str().unwrap().is_empty());
     }
 
     #[tokio::test]

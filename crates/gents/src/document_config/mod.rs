@@ -84,7 +84,7 @@ pub(crate) use surface_tool::{
 pub use surface_tool::{
     merge_datastore_tool_surfaces, MergedSurfaceTools, QueryToolDecl, SurfaceToolDecl,
 };
-pub(crate) use tools::load_agent_tools_in_txn;
+pub use tools::load_agent_tools_in_txn;
 pub use tools::{
     AgentTools, BashTools, BuiltInTools, CliTool, DatastoreTools, FileTools, HostTools,
     IntegrationTools, LspTools, PluginToolRef, RemoteServiceTools, RemoteToolStyle, RemoteTools,

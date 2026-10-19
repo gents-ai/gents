@@ -943,7 +943,7 @@ impl Tools {
 /// The Tools document an agent selects, under its owner: agent ->
 /// context -> `tools_id`. `None` when the agent has no context or the
 /// context selects no Tools; a missing referenced document is an error.
-pub(crate) async fn load_agent_tools_in_txn(
+pub async fn load_agent_tools_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     owner: &str,
     agent_id: &str,

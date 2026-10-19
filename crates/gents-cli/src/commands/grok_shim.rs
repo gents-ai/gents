@@ -19,6 +19,7 @@ mod task_control;
 mod test_fixtures;
 pub(crate) mod turn;
 mod usage;
+mod workflow_catalog;
 mod workflow_command;
 
 #[cfg(test)]
@@ -120,6 +121,8 @@ pub(crate) struct GrokShimBindArgs {
     pub(crate) node_did: String,
     pub(crate) node_name: String,
     pub(crate) socket_path: std::path::PathBuf,
+    /// Gents home plugins are installed under.
+    pub(crate) home: std::path::PathBuf,
 }
 
 /// Bind and spawn the Grok shim leader. The agent must exist and select a
@@ -153,6 +156,7 @@ pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandl
         node_did: args.node_did.clone(),
         agent_id: agent_id.clone(),
         bound: bound.clone(),
+        plugin_home: args.home.clone(),
     };
     let leader = spawn_leader(
         LeaderServerConfig::new(args.socket_path.clone()),
@@ -180,6 +184,7 @@ struct AcpDelegateFactoryInputs {
     node_did: String,
     agent_id: String,
     bound: crate::commands::grok_shim::projection::BoundModelContext,
+    plugin_home: std::path::PathBuf,
 }
 
 fn production_acp_delegate_factory(
@@ -224,6 +229,7 @@ impl AcpDelegateFactoryInputs {
                     total_context_tokens: inputs.bound.total_context_tokens,
                 },
                 grok_home: crate::commands::grok_shim::session_record::default_grok_home(),
+                plugin_home: inputs.plugin_home.clone(),
             },
             turns,
             projections,

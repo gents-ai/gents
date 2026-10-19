@@ -6,6 +6,8 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- The Grok pager's Workflows tab lists the workflows of every installed plugin
+  that declares a catalog, instead of an error.
 - The Grok pager shows each plugin job as a workflow run with its phases,
   agents and budget, tags the job's subagent cards with that run, and handles
   `/workflow stop`, `/workflow pause` and `/workflow runs` in the session.
