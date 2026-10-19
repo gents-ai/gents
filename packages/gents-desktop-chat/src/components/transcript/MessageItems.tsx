@@ -181,7 +181,10 @@ export function PendingUserTurnItem({ item }: { item: PendingUserTurn }) {
           ) : null}
         </div>
         <div className="message-content">
-          <MarkdownContent value={normalizeTranscriptText(item.content)} />
+          {item.content && (
+            <MarkdownContent value={normalizeTranscriptText(item.content)} />
+          )}
+          <CapturedContextItems contexts={item.capturedContext ?? []} />
         </div>
       </article>
     </div>

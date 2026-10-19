@@ -26,6 +26,8 @@ pub struct PendingQueueEntry {
     pub request_doc_id: String,
     pub request_id: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub captured_context: Vec<gents_protocol::request_input::CapturedContext>,
     pub editable: bool,
     pub steerable: bool,
     pub edit_group: Option<String>,
@@ -94,6 +96,15 @@ pub async fn pending_user_queue_projection(
                                 row.content.unwrap_or_default()
                             } else {
                                 String::new()
+                            },
+                            captured_context: if row.requester_did.as_deref() == Some(requester_did)
+                            {
+                                row.input
+                                    .as_ref()
+                                    .map(|input| input.captured_context.clone())
+                                    .unwrap_or_default()
+                            } else {
+                                Vec::new()
                             },
                             editable: can_edit,
                             steerable: can_edit
@@ -202,7 +213,11 @@ fn selected_group<'a>(
             "Replacement messages must name each selected message once."
         );
         anyhow::ensure!(
-            !message.content.trim().is_empty(),
+            selected
+                .iter()
+                .find(|row| row.doc_id.as_deref() == Some(message.request_doc_id.as_str()))
+                .and_then(|row| row.input.as_ref())
+                .is_some_and(|input| input.has_authored_input(&message.content)),
             "A message cannot be empty. Remove it instead."
         );
     }

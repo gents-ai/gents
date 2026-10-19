@@ -550,7 +550,7 @@
   }
 }
 
-@layer components {
+@layer transcript {
   .message-contexts {
     display: flex;
     flex-wrap: wrap;

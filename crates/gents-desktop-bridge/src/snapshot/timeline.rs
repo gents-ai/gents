@@ -109,6 +109,7 @@ fn render_timeline_order(
                         item_key: format!("pending-{}", pending_turn.request_id),
                         request_id: pending_turn.request_id.clone(),
                         content: pending_turn.content.clone(),
+                        captured_context: pending_turn.captured_context.clone(),
                         selected_skill_ids: pending_turn.selected_skill_ids.clone(),
                         lifecycle_state: pending_turn.lifecycle_state.clone(),
                         folded_into_request_id: pending_turn.folded_into_request_id.clone(),
