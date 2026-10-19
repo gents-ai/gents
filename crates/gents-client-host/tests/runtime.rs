@@ -1368,25 +1368,29 @@ async fn verify_editor_steering(
                 == 1,
         "the provider must receive the promoted input exactly once: {requests:?}"
     );
-    let captured_parts = steered_rounds[0]["messages"]
-        .as_array()
-        .context("steered provider messages")?
-        .iter()
-        .filter(|message| message["role"] == "user")
-        .filter_map(|message| message["content"].as_array())
-        .flatten()
-        .filter_map(|part| part["text"].as_str())
-        .filter_map(|text| {
-            text.strip_prefix(
-                "Editor context (captured text; URI identifies its editor location):\n",
-            )
-        })
-        .filter_map(|text| serde_json::from_str::<Value>(text).ok())
-        .filter(|value| value == &capture)
-        .count();
+    let capture_count = |body: &Value| {
+        body["messages"]
+            .as_array()
+            .context("steered provider messages")?
+            .iter()
+            .filter(|message| message["role"] == "user")
+            .filter_map(|message| message["content"].as_array())
+            .flatten()
+            .filter_map(|part| part["text"].as_str())
+            .filter_map(|text| {
+                text.strip_prefix(
+                    "Editor context (captured text; URI identifies its editor location):\n",
+                )
+            })
+            .filter_map(|text| serde_json::from_str::<Value>(text).ok())
+            .filter(|value| value == &capture)
+            .count()
+    };
+    let captured_parts = capture_count(steered_rounds[0]);
+    let all_captured_parts = requests.iter().map(capture_count).sum::<usize>();
     ensure!(
-        captured_parts == 1,
-        "the steered provider request lost or duplicated its capture"
+        captured_parts == 1 && all_captured_parts == 1,
+        "the provider lost, duplicated or received the capture before Steer"
     );
     Ok(json!({
         "nodeDid": node_did, "sessionId": session, "authorDid": client_did,
@@ -1398,7 +1402,7 @@ async fn verify_editor_steering(
         "renderedRequests": rendered, "providerInputOccurrences": provider_input_occurrences,
         "providerRequests": requests.len(),
         "verifiedSignatures": rows.len(),
-        "context": capture, "providerCaptureOccurrences": captured_parts,
+        "context": capture, "providerCaptureOccurrences": all_captured_parts,
     }))
 }
 

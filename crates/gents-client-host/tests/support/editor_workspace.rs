@@ -193,32 +193,28 @@ fn provider_occurrences(provider: &FakeLlm, content: &str, context: &Value) -> u
     let captured = provider.captured_chat_requests();
     captured
         .iter()
-        .filter(|request| {
-            request["messages"].as_array().is_some_and(|messages| {
-                messages.iter().any(|message| {
-                    if message["role"] != "user" {
-                        return false;
-                    }
-                    let texts = match &message["content"] {
-                        Value::String(text) => vec![text.as_str()],
-                        Value::Array(parts) => parts
-                            .iter()
-                            .filter_map(|part| part["text"].as_str())
-                            .collect(),
-                        _ => return false,
-                    };
-                    texts.len() == if content.is_empty() { 1 } else { 2 }
-                        && (content.is_empty() || texts[0] == content)
-                        && texts
-                            .last()
-                            .unwrap()
-                            .strip_prefix(CONTEXT_HEADER)
-                            .is_some_and(|text| {
-                                serde_json::from_str::<Value>(text)
-                                    .is_ok_and(|value| &value == context)
-                            })
-                })
-            })
+        .flat_map(|request| request["messages"].as_array().into_iter().flatten())
+        .filter(|message| {
+            if message["role"] != "user" {
+                return false;
+            }
+            let texts = match &message["content"] {
+                Value::String(text) => vec![text.as_str()],
+                Value::Array(parts) => parts
+                    .iter()
+                    .filter_map(|part| part["text"].as_str())
+                    .collect(),
+                _ => return false,
+            };
+            texts.len() == if content.is_empty() { 1 } else { 2 }
+                && (content.is_empty() || texts[0] == content)
+                && texts
+                    .last()
+                    .unwrap()
+                    .strip_prefix(CONTEXT_HEADER)
+                    .is_some_and(|text| {
+                        serde_json::from_str::<Value>(text).is_ok_and(|value| &value == context)
+                    })
         })
         .count()
 }
