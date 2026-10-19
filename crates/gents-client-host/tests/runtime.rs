@@ -218,6 +218,18 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             if matches!(journey, Journey::EditorWorkspace)
                 && request["messages"]
                     .to_string()
+                    .contains(editor_workspace::CAPTURED.trim())
+                && !request["messages"]
+                    .to_string()
+                    .contains(editor_workspace::PROMPT)
+            {
+                return ChatAction::Sse(fake_llm::completion_text_sse(
+                    editor_workspace::ATTACHMENT_ONLY_REPLY,
+                ));
+            }
+            if matches!(journey, Journey::EditorWorkspace)
+                && request["messages"]
+                    .to_string()
                     .contains(editor_workspace::PROMPT)
             {
                 return ChatAction::Sse(fake_llm::completion_text_sse(editor_workspace::REPLY));
