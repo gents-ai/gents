@@ -385,7 +385,11 @@ impl<M: crate::llm::rig_compat::ProviderModel> AuxiliaryTask<M> {
                     )
                     .await
                     .unwrap_or_default();
-                    let prompt = title_generation_prompt(&request.content, &recent);
+                    let source = crate::session::title_text::generation_input(
+                        &parent.content,
+                        &parent.input.captured_context,
+                    );
+                    let prompt = title_generation_prompt(&source, &recent);
                     let mut config = crate::completion_factory::loop_config(
                         &self.agent_config,
                         title_generation_preamble(),
@@ -404,7 +408,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AuxiliaryTask<M> {
                             &request,
                         )
                         .await?;
-                    Ok::<_, anyhow::Error>(Some((prompt, config)))
+                    Ok::<_, anyhow::Error>(Some((prompt, config, source)))
                 };
                 let Some(prepared) =
                     super::request::prepare_unless_interrupted(&mut interrupt_rx, preparation)
@@ -412,11 +416,11 @@ impl<M: crate::llm::rig_compat::ProviderModel> AuxiliaryTask<M> {
                 else {
                     return Ok(AuxiliaryResult::Interrupted);
                 };
-                let Some((prompt, config)) = prepared? else {
+                let Some((prompt, config, source)) = prepared? else {
                     return Ok(AuxiliaryResult::Skipped);
                 };
                 self.generate_with_fallback(
-                    &request,
+                    &source,
                     &prompt,
                     config,
                     parent.requester_did,
@@ -431,7 +435,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AuxiliaryTask<M> {
 
     async fn generate_with_fallback(
         &self,
-        request: &AgentRequest,
+        fallback_source: &str,
         prompt: &str,
         config: crate::agent::loop_stream::LoopConfig,
         parent_requester_did: Option<String>,
@@ -476,7 +480,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AuxiliaryTask<M> {
             match result {
                 Ok(Ok(raw)) => {
                     return Ok(AuxiliaryResult::Generated {
-                        title: sanitize_generated_title(&raw, &request.content),
+                        title: sanitize_generated_title(&raw, fallback_source),
                         parent_requester_did,
                     })
                 }
