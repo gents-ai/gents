@@ -1952,14 +1952,17 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
             None,
         )
         .await;
-        let ToolCallHookAction::Skip { reason: tool_result } = hook
+        let ToolCallHookAction::Skip {
+            reason: tool_result,
+        } = hook
             .on_tool_call(crate::goal::UPDATE_GOAL_TOOL_NAME, None, &call_id, args)
             .await
         else {
             panic!("expected hook-managed skip for {call_id}");
         };
         assert!(
-            serde_json::from_str::<serde_json::Value>(&tool_result).expect("JSON tool result")["accepted"] == true,
+            serde_json::from_str::<serde_json::Value>(&tool_result).expect("JSON tool result")["accepted"]
+                == true,
             "active edit must be accepted: {tool_result}"
         );
         let goal = crate::goal::load_canonical_goal(&node, "did:test:general", &session_id)
@@ -2037,13 +2040,20 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
                 None,
             )
             .await;
-            let ToolCallHookAction::Skip { reason: tool_result } = hook
+            let ToolCallHookAction::Skip {
+                reason: tool_result,
+            } = hook
                 .on_tool_call(crate::goal::UPDATE_GOAL_TOOL_NAME, None, &call_id, args)
                 .await
             else {
                 panic!("expected hook-managed skip for {call_id}");
             };
-            assert!(!serde_json::from_str::<serde_json::Value>(&tool_result).expect("JSON tool result")["accepted"] == true, "{tool_result}");
+            assert!(
+                serde_json::from_str::<serde_json::Value>(&tool_result).expect("JSON tool result")
+                    ["accepted"]
+                    == false,
+                "{tool_result}"
+            );
 
             assert!(
                 tool_result.contains(&format!("the current goal status is {}", status.as_str())),
