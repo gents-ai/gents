@@ -195,6 +195,26 @@ impl DefraSessionHook {
                     json!({"accepted": false, "error": "reason is only accepted with status complete or blocked"})
                 } else if let Err(error) = fields.validate() {
                     json!({"accepted": false, "error": error.to_string()})
+                } else if pre.status != GoalStatus::Active {
+                    let hint = match pre.status {
+                        GoalStatus::BudgetLimited => {
+                            "a budget_limited goal cannot be reactivated and has no resume path"
+                        }
+                        GoalStatus::Complete => {
+                            "a complete goal is terminal and has no resume path"
+                        }
+                        _ => {
+                            "an operator resumes it with `gents goal resume-request --session SESSION --from REQUEST_ID`"
+                        }
+                    };
+                    json!({
+                        "accepted": false,
+                        "error": format!(
+                            "update_goal edits require an active goal; the current goal status is {} and {}",
+                            pre.status.as_str(),
+                            hint
+                        ),
+                    })
                 } else if let Some(updated) = edit_active_goal(&self.node, &goal, &fields).await? {
                     json!({"accepted": true, "goal": crate::goal::snapshot(&updated, Utc::now())})
                 } else {
