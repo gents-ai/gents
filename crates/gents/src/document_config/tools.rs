@@ -943,11 +943,24 @@ impl Tools {
 /// The Tools document an agent selects, under its owner: agent ->
 /// context -> `tools_id`. `None` when the agent has no context or the
 /// context selects no Tools; a missing referenced document is an error.
-pub(crate) async fn load_agent_tools_in_txn(
+pub async fn load_agent_tools_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     owner: &str,
     agent_id: &str,
 ) -> anyhow::Result<Option<Tools>> {
+    Ok(load_agent_context_and_tools_in_txn(txn, owner, agent_id)
+        .await?
+        .1)
+}
+
+/// [`load_agent_tools_in_txn`] that also returns the agent's context: the
+/// context is `None` when the agent has none, the Tools when the context
+/// selects none; a missing referenced document is an error.
+pub async fn load_agent_context_and_tools_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    owner: &str,
+    agent_id: &str,
+) -> anyhow::Result<(Option<super::AgentContext>, Option<Tools>)> {
     use crate::collection::Collection;
     use crate::config_client::read_desired_state_document_in_txn as read;
     use anyhow::Context as _;
@@ -957,7 +970,7 @@ pub(crate) async fn load_agent_tools_in_txn(
             .with_context(|| format!("Agent {agent_id} not found for {owner}"))?,
     )?;
     let Some(context_id) = agent.context_id else {
-        return Ok(None);
+        return Ok((None, None));
     };
     let context: super::AgentContext = serde_json::from_value(
         read(txn, Collection::AgentContext, owner, &context_id)
@@ -965,13 +978,376 @@ pub(crate) async fn load_agent_tools_in_txn(
             .with_context(|| format!("AgentContext {context_id} not found for {owner}"))?,
     )?;
     let Some(tools_id) = context.tools_id.as_deref() else {
-        return Ok(None);
+        return Ok((Some(context), None));
     };
-    Ok(Some(serde_json::from_value(
+    let tools = serde_json::from_value(
         read(txn, Collection::Tools, owner, tools_id)
             .await?
             .with_context(|| format!("Tools {tools_id} not found for {owner}"))?,
-    )?))
+    )?;
+    Ok((Some(context), Some(tools)))
+}
+
+/// What wiring changed, answer first: the changes, then the job block the
+/// operator consents to, then warnings and the next call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WireReport {
+    pub changed: Vec<String>,
+    /// The plugin's job block after the change; `None` means non-job verbs only.
+    pub job: Option<gents_protocol::job::PluginJobSettings>,
+    pub warnings: Vec<String>,
+    /// Set only when no job block was written (R14).
+    pub next_call: Option<String>,
+}
+
+fn union_into(list: &mut Vec<String>, items: &[String]) {
+    for item in items {
+        if !list.contains(item) {
+            list.push(item.clone());
+        }
+    }
+}
+
+/// Merges `new` into `existing` without widening anything `existing` grants
+/// (targets and trusted packs are the additions); `project_roots` is never set.
+fn merge_job_blocks(
+    existing: &gents_protocol::job::PluginJobSettings,
+    new: &gents_protocol::job::PluginJobSettings,
+) -> gents_protocol::job::PluginJobSettings {
+    use gents_protocol::job::DynamicMode;
+    fn rank(mode: DynamicMode) -> u8 {
+        match mode {
+            DynamicMode::Off => 0,
+            DynamicMode::Check => 1,
+            DynamicMode::Run => 2,
+        }
+    }
+    let mut merged = existing.clone();
+    union_into(&mut merged.agent_targets, &new.agent_targets);
+    union_into(&mut merged.policy.trusted_packs, &new.policy.trusted_packs);
+    merged.max_live = existing.max_live.min(new.max_live);
+    merged.max_spawns = existing.max_spawns.min(new.max_spawns);
+    merged.max_messages_per_slot = existing
+        .max_messages_per_slot
+        .min(new.max_messages_per_slot);
+    merged.result_bytes = existing.result_bytes.min(new.result_bytes);
+    merged.max_wall_secs = existing.max_wall_secs.min(new.max_wall_secs);
+    if rank(new.policy.dynamic) < rank(existing.policy.dynamic) {
+        merged.policy.dynamic = new.policy.dynamic;
+    }
+    merged
+        .policy
+        .dynamic_targets
+        .retain(|id| new.policy.dynamic_targets.contains(id));
+    merged
+}
+
+/// Wires an installed plugin into an agent's Tools and Context: the plugin
+/// entry pinned to the installed digest, its job block (the reviewed block, or
+/// the defaults over `targets_from`; a merge never widens an existing block),
+/// the targets, trusted packs and skills. Each `targets_from` entry is
+/// (pack coordinate, the AgentTarget ids that pack ships, its provenance).
+/// `agents.enabled` is never written.
+pub fn wire_plugin(
+    tools: &Tools,
+    context: &super::AgentContext,
+    plugin: &crate::plugin::store::InstalledPlugin,
+    reviewed_job: Option<&gents_protocol::job::PluginJobSettings>,
+    skill_ids: &[String],
+    targets_from: &[(String, Vec<String>, crate::pack::InstalledVia)],
+) -> anyhow::Result<(Tools, super::AgentContext, WireReport)> {
+    use crate::plugin_job::settings;
+    use gents_protocol::job::{JobPolicy, PluginJobSettings};
+
+    let coordinate = format!("{}/{}", plugin.namespace, plugin.name);
+    let mut tools = tools.clone();
+    let mut context = context.clone();
+    let mut changed = Vec::new();
+    let mut warnings = Vec::new();
+
+    let plugins = tools
+        .integrations
+        .get_or_insert_with(Default::default)
+        .plugins
+        .get_or_insert_with(Default::default);
+    let index = match plugins.iter().position(|entry| entry.plugin == coordinate) {
+        Some(index) => {
+            plugins[index].digest = Some(plugin.digest.clone());
+            changed.push(format!("pinned plugin {coordinate} to {}", plugin.digest));
+            index
+        }
+        None => {
+            plugins.push(PluginToolRef {
+                plugin: coordinate.clone(),
+                digest: Some(plugin.digest.clone()),
+                tool_calls: false,
+                input_fields: Vec::new(),
+                job: None,
+            });
+            changed.push(format!("added plugin {coordinate} at {}", plugin.digest));
+            plugins.len() - 1
+        }
+    };
+
+    let agents = tools.agents.get_or_insert_with(Default::default);
+    let targets_before = agents.target_ids.clone();
+    let mut job = plugins[index].job.clone();
+    if plugin.declaration.job.0 {
+        let incoming = reviewed_job.cloned().or_else(|| {
+            (!targets_from.is_empty()).then(|| PluginJobSettings {
+                agent_targets: Vec::new(),
+                max_live: PluginJobSettings::DEFAULT_MAX_LIVE,
+                max_spawns: PluginJobSettings::DEFAULT_MAX_SPAWNS,
+                max_messages_per_slot: PluginJobSettings::DEFAULT_MAX_MESSAGES_PER_SLOT,
+                result_bytes: PluginJobSettings::DEFAULT_RESULT_BYTES,
+                max_wall_secs: PluginJobSettings::DEFAULT_MAX_WALL_SECS,
+                policy: JobPolicy {
+                    trusted_packs: plugin.owner_pack_coordinate.iter().cloned().collect(),
+                    ..JobPolicy::default()
+                },
+            })
+        });
+        if let Some(incoming) = incoming {
+            let merged = job.is_some();
+            let mut block = match &job {
+                Some(existing) => merge_job_blocks(existing, &incoming),
+                None => {
+                    let mut fresh = incoming;
+                    fresh.policy.project_roots.clear();
+                    fresh
+                }
+            };
+            for (pack, pack_targets, via) in targets_from {
+                (block.policy, block.agent_targets, agents.target_ids) =
+                    settings::wire_targets_from(
+                        pack,
+                        pack_targets,
+                        block.policy,
+                        &block.agent_targets,
+                        &agents.target_ids,
+                    );
+                changed.push(format!("trusted pack {pack} and wired its targets"));
+                if *via != crate::pack::InstalledVia::Operator {
+                    warnings.push(format!(
+                        "trusted_pack_not_operator: {pack} is not operator-installed; its scripts classify as dynamic"
+                    ));
+                }
+            }
+            union_into(&mut agents.target_ids, &block.agent_targets);
+            let problems = settings::validate(&block);
+            anyhow::ensure!(
+                problems.is_empty(),
+                "job block for {coordinate} is not valid: {}",
+                problems.join("; ")
+            );
+            changed.push(format!(
+                "{} job block for {coordinate}",
+                if merged { "merged" } else { "wrote" }
+            ));
+            job = Some(block);
+        }
+    }
+    plugins[index].job = job.clone();
+
+    let added: Vec<String> = agents
+        .target_ids
+        .iter()
+        .filter(|id| !targets_before.contains(id))
+        .cloned()
+        .collect();
+    if !added.is_empty() {
+        changed.push(format!("added agent targets {}", added.join(", ")));
+        if agents.enabled == Some(true) {
+            warnings.push(format!(
+                "agent_new_widened: {} are also reachable by agent_new",
+                added.join(", ")
+            ));
+        }
+    }
+
+    let skills: Vec<String> = skill_ids
+        .iter()
+        .filter(|id| !context.skill_ids.contains(id))
+        .cloned()
+        .collect();
+    if !skills.is_empty() {
+        changed.push(format!("added skills {}", skills.join(", ")));
+        context.skill_ids.extend(skills);
+    }
+
+    let next_call = (plugin.declaration.job.0 && job.is_none())
+        .then(|| format!("gents pack wire {coordinate} --agent <agent> --targets-from <pack>"));
+    Ok((
+        tools,
+        context,
+        WireReport {
+            changed,
+            job,
+            warnings,
+            next_call,
+        },
+    ))
+}
+
+/// Inverse of [`wire_plugin`]. With no `targets_from`, drops the plugin entry
+/// and then its job targets and the `skill_ids`, each only when no other
+/// plugin entry still needs it (skills are not recorded per plugin, so any
+/// remaining plugin keeps them). With `targets_from`, keeps the plugin and
+/// removes only those packs' targets and trust entries; a block left without
+/// targets is dropped. `agents.enabled`, `policy.dynamic` and `project_roots`
+/// are never written.
+pub fn unwire_plugin(
+    tools: &Tools,
+    context: &super::AgentContext,
+    plugin: &crate::plugin::store::InstalledPlugin,
+    skill_ids: &[String],
+    targets_from: &[(String, Vec<String>, crate::pack::InstalledVia)],
+) -> anyhow::Result<(Tools, super::AgentContext, WireReport)> {
+    use crate::plugin_job::settings;
+
+    let coordinate = format!("{}/{}", plugin.namespace, plugin.name);
+    let mut tools = tools.clone();
+    let mut context = context.clone();
+    let mut changed = Vec::new();
+    let mut warnings = Vec::new();
+    let mut next_call = None;
+
+    let mut plugins = tools
+        .integrations
+        .as_ref()
+        .and_then(|integrations| integrations.plugins.clone())
+        .unwrap_or_default();
+    let Some(index) = plugins.iter().position(|entry| entry.plugin == coordinate) else {
+        warnings.push(format!("{coordinate} is not wired; nothing to remove"));
+        return Ok((
+            tools,
+            context,
+            WireReport {
+                changed,
+                job: None,
+                warnings,
+                next_call,
+            },
+        ));
+    };
+    let entry = plugins.remove(index);
+    let referenced_elsewhere = |id: &String| {
+        plugins
+            .iter()
+            .filter_map(|other| other.job.as_ref())
+            .any(|block| {
+                block.agent_targets.contains(id) || block.policy.dynamic_targets.contains(id)
+            })
+    };
+
+    let mut job = entry.job.clone();
+    let mut dropped_targets: Vec<String> = Vec::new();
+    if targets_from.is_empty() {
+        changed.push(format!("removed plugin {coordinate}"));
+        dropped_targets = entry
+            .job
+            .iter()
+            .flat_map(|block| block.agent_targets.clone())
+            .collect();
+        job = None;
+        let skills: Vec<&String> = skill_ids
+            .iter()
+            .filter(|id| context.skill_ids.contains(id))
+            .collect();
+        if plugins.is_empty() && !skills.is_empty() {
+            changed.push(format!(
+                "removed skills {}",
+                skills
+                    .iter()
+                    .map(|id| id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+            context.skill_ids.retain(|id| !skill_ids.contains(id));
+        }
+    } else if let Some(block) = job.as_mut() {
+        for (pack, pack_targets, _) in targets_from {
+            dropped_targets.extend(
+                block
+                    .agent_targets
+                    .iter()
+                    .filter(|id| pack_targets.contains(id))
+                    .cloned(),
+            );
+            block.agent_targets.retain(|id| !pack_targets.contains(id));
+            if plugin.owner_pack_coordinate.as_deref() != Some(pack.as_str()) {
+                block.policy.trusted_packs.retain(|trusted| trusted != pack);
+            }
+            changed.push(format!("untrusted pack {pack} and unwired its targets"));
+        }
+        block
+            .policy
+            .dynamic_targets
+            .retain(|id| block.agent_targets.contains(id));
+        if block.agent_targets.is_empty() {
+            job = None;
+            changed.push(format!("dropped the job block for {coordinate}"));
+            next_call = Some(format!(
+                "{coordinate} now serves non-job verbs only; to run jobs again: gents pack wire {coordinate} --agent <agent> --targets-from <pack>"
+            ));
+        } else {
+            let problems = settings::validate(block);
+            anyhow::ensure!(
+                problems.is_empty(),
+                "job block for {coordinate} is not valid: {}",
+                problems.join("; ")
+            );
+        }
+    }
+
+    if let Some(agents) = tools.agents.as_mut() {
+        let kept = |id: &String| {
+            referenced_elsewhere(id) || job.as_ref().is_some_and(|b| b.agent_targets.contains(id))
+        };
+        let removed: Vec<String> = dropped_targets
+            .into_iter()
+            .filter(|id| agents.target_ids.contains(id) && !kept(id))
+            .collect();
+        if !removed.is_empty() {
+            agents.target_ids.retain(|id| !removed.contains(id));
+            changed.push(format!("removed agent targets {}", removed.join(", ")));
+        }
+    }
+
+    if targets_from.is_empty() {
+        if plugins.is_empty() {
+            if let Some(integrations) = tools.integrations.as_mut() {
+                integrations.plugins = None;
+                if *integrations == IntegrationTools::default() {
+                    tools.integrations = None;
+                }
+            }
+        } else {
+            tools
+                .integrations
+                .get_or_insert_with(Default::default)
+                .plugins = Some(plugins);
+        }
+    } else {
+        let mut entry = entry;
+        entry.job = job.clone();
+        plugins.insert(index, entry);
+        tools
+            .integrations
+            .get_or_insert_with(Default::default)
+            .plugins = Some(plugins);
+    }
+
+    Ok((
+        tools,
+        context,
+        WireReport {
+            changed,
+            job,
+            warnings,
+            next_call,
+        },
+    ))
 }
 
 /// Compact full-document serialization. Explicit sparse patches use a separate
@@ -1060,6 +1436,521 @@ mod tests {
                 message.contains(&format!("integrations.plugins[ns/runner].{field}")),
                 "{message}"
             );
+        }
+    }
+
+    mod wire {
+        use super::super::*;
+        use crate::document_config::AgentContext;
+        use crate::pack::InstalledVia;
+        use crate::plugin::store::InstalledPlugin;
+        use crate::plugin_job::settings;
+        use gents_protocol::job::{DynamicMode, JobPolicy, PluginJobSettings};
+        use serde_json::json;
+        use std::collections::BTreeSet;
+
+        fn installed(job: bool, owner: Option<&str>) -> InstalledPlugin {
+            serde_json::from_value(json!({
+                "namespace": "acme", "name": "runner", "version": "1.0.0",
+                "digest": "sha256:aa", "language": "rust",
+                "declaration": {
+                    "name": "runner", "description": "Runs", "artifact": "plugins/runner.afb",
+                    "language": "rust", "input_schema": {"type": "object"}, "job": job
+                },
+                "owner_pack_coordinate": owner,
+            }))
+            .unwrap()
+        }
+
+        fn start(enabled: Option<bool>) -> (Tools, AgentContext) {
+            let tools = Tools {
+                agents: Some(AgentTools {
+                    target_ids: vec![],
+                    enabled,
+                }),
+                ..Tools::default()
+            };
+            let context = serde_json::from_value(json!({
+                "context_id": "ctx", "node_did": "did:key:example",
+                "skill_ids": ["existing"]
+            }))
+            .unwrap();
+            (tools, context)
+        }
+
+        fn strs(items: &[&str]) -> Vec<String> {
+            items.iter().map(|item| (*item).to_owned()).collect()
+        }
+
+        fn set(items: &[String]) -> BTreeSet<&str> {
+            items.iter().map(String::as_str).collect()
+        }
+
+        fn job(value: serde_json::Value) -> PluginJobSettings {
+            serde_json::from_value(value).unwrap()
+        }
+
+        fn block(tools: &Tools) -> Option<&PluginJobSettings> {
+            tools
+                .integrations
+                .as_ref()
+                .unwrap()
+                .plugins
+                .as_ref()
+                .unwrap()[0]
+                .job
+                .as_ref()
+        }
+
+        fn existing(tools: &mut Tools, block: PluginJobSettings) {
+            tools.integrations = Some(IntegrationTools {
+                plugins: Some(vec![PluginToolRef {
+                    plugin: "acme/runner".to_owned(),
+                    digest: Some("sha256:old".to_owned()),
+                    tool_calls: false,
+                    input_fields: vec![],
+                    job: Some(block),
+                }]),
+                ..IntegrationTools::default()
+            });
+        }
+
+        #[test]
+        fn no_reviewed_block_and_no_targets_wires_without_a_job_block() {
+            let (tools, context) = start(None);
+            let (tools, _, report) =
+                wire_plugin(&tools, &context, &installed(true, None), None, &[], &[]).unwrap();
+            let refs = tools
+                .integrations
+                .as_ref()
+                .unwrap()
+                .plugins
+                .as_ref()
+                .unwrap();
+            assert_eq!(refs.len(), 1);
+            assert_eq!(refs[0].plugin, "acme/runner");
+            assert_eq!(refs[0].digest.as_deref(), Some("sha256:aa"));
+            assert!(refs[0].job.is_none());
+            assert!(report.job.is_none());
+            assert_eq!(
+                report.next_call.as_deref(),
+                Some("gents pack wire acme/runner --agent <agent> --targets-from <pack>")
+            );
+        }
+
+        #[test]
+        fn targets_from_without_reviewed_block_builds_a_valid_block() {
+            let (tools, context) = start(None);
+            let (tools, _, report) = wire_plugin(
+                &tools,
+                &context,
+                &installed(true, Some("acme/engine")),
+                None,
+                &[],
+                &[(
+                    "acme/content".to_owned(),
+                    strs(&["wf-a"]),
+                    InstalledVia::Operator,
+                )],
+            )
+            .unwrap();
+            let block = block(&tools).unwrap();
+            assert_eq!(set(&block.agent_targets), BTreeSet::from(["wf-a"]));
+            assert_eq!(
+                set(&block.policy.trusted_packs),
+                BTreeSet::from(["acme/engine", "acme/content"])
+            );
+            assert_eq!(block.policy.dynamic, DynamicMode::Check);
+            assert!(block.policy.dynamic_targets.is_empty());
+            assert!(block.policy.project_roots.is_empty());
+            assert_eq!(block.max_live, PluginJobSettings::DEFAULT_MAX_LIVE);
+            assert_eq!(block.max_spawns, PluginJobSettings::DEFAULT_MAX_SPAWNS);
+            assert_eq!(
+                block.max_messages_per_slot,
+                PluginJobSettings::DEFAULT_MAX_MESSAGES_PER_SLOT
+            );
+            assert_eq!(block.result_bytes, PluginJobSettings::DEFAULT_RESULT_BYTES);
+            assert_eq!(
+                block.max_wall_secs,
+                PluginJobSettings::DEFAULT_MAX_WALL_SECS
+            );
+            assert!(settings::validate(block).is_empty());
+            assert_eq!(report.job.as_ref(), Some(block));
+            assert!(report.next_call.is_none());
+        }
+
+        #[test]
+        fn engine_reviewed_block_with_wf_read_only_passes() {
+            let reviewed = job(json!({
+                "agent_targets": ["wf-read-only"],
+                "policy": {
+                    "dynamic": "check", "dynamic_targets": ["wf-read-only"],
+                    "trusted_packs": ["gents/rhai_workflows"]
+                }
+            }));
+            let (tools, context) = start(None);
+            let (tools, _, _) = wire_plugin(
+                &tools,
+                &context,
+                &installed(true, Some("gents/rhai_workflows")),
+                Some(&reviewed),
+                &[],
+                &[],
+            )
+            .unwrap();
+            let block = block(&tools).unwrap();
+            assert_eq!(block, &reviewed);
+            assert!(settings::validate(block).is_empty());
+        }
+
+        #[test]
+        fn merge_never_widens() {
+            let (mut tools, context) = start(None);
+            existing(
+                &mut tools,
+                job(json!({
+                    "agent_targets": ["a", "c"], "max_live": 2, "max_spawns": 10,
+                    "max_messages_per_slot": 9, "result_bytes": 2048, "max_wall_secs": 100,
+                    "policy": {"dynamic": "off", "dynamic_targets": ["a", "c"]}
+                })),
+            );
+            let reviewed = job(json!({
+                "agent_targets": ["b", "c"], "max_live": 8,
+                "policy": {"dynamic": "check", "dynamic_targets": ["b", "c"]}
+            }));
+            let (tools, _, _) = wire_plugin(
+                &tools,
+                &context,
+                &installed(true, None),
+                Some(&reviewed),
+                &[],
+                &[],
+            )
+            .unwrap();
+            let block = block(&tools).unwrap();
+            assert_eq!(set(&block.agent_targets), BTreeSet::from(["a", "b", "c"]));
+            assert_eq!(block.max_live, 2);
+            assert_eq!(block.max_spawns, 10);
+            assert_eq!(block.max_messages_per_slot, 4);
+            assert_eq!(block.result_bytes, 2048);
+            assert_eq!(block.max_wall_secs, 100);
+            assert_eq!(block.policy.dynamic, DynamicMode::Off);
+            assert_eq!(block.policy.dynamic_targets, strs(&["c"]));
+        }
+
+        #[test]
+        fn project_roots_untouched() {
+            let (mut tools, context) = start(None);
+            existing(
+                &mut tools,
+                job(json!({"agent_targets": ["a"], "policy": {"project_roots": ["/w"]}})),
+            );
+            let reviewed = job(json!({
+                "agent_targets": ["b"], "policy": {"project_roots": ["/elsewhere"]}
+            }));
+            let (tools, _, _) = wire_plugin(
+                &tools,
+                &context,
+                &installed(true, None),
+                Some(&reviewed),
+                &[],
+                &[],
+            )
+            .unwrap();
+            assert_eq!(block(&tools).unwrap().policy.project_roots, strs(&["/w"]));
+
+            let (fresh, context) = start(None);
+            let (fresh, _, _) = wire_plugin(
+                &fresh,
+                &context,
+                &installed(true, None),
+                Some(&reviewed),
+                &[],
+                &[],
+            )
+            .unwrap();
+            assert!(block(&fresh).unwrap().policy.project_roots.is_empty());
+        }
+
+        #[test]
+        fn targets_from_goes_through_wire_targets_from() {
+            let (tools, context) = start(None);
+            let pack_targets = strs(&["wf-a", "wf-b"]);
+            let (tools, _, _) = wire_plugin(
+                &tools,
+                &context,
+                &installed(true, Some("acme/engine")),
+                None,
+                &[],
+                &[(
+                    "acme/content".to_owned(),
+                    pack_targets.clone(),
+                    InstalledVia::Operator,
+                )],
+            )
+            .unwrap();
+            let policy = JobPolicy {
+                trusted_packs: strs(&["acme/engine"]),
+                ..JobPolicy::default()
+            };
+            let (policy, job_targets, caller_targets) =
+                settings::wire_targets_from("acme/content", &pack_targets, policy, &[], &[]);
+            let block = block(&tools).unwrap();
+            assert_eq!(block.policy, policy);
+            assert_eq!(block.agent_targets, job_targets);
+            assert_eq!(tools.agents.unwrap().target_ids, caller_targets);
+        }
+
+        #[test]
+        fn agents_enabled_unchanged() {
+            for enabled in [None, Some(false)] {
+                let (tools, context) = start(enabled);
+                let (tools, _, _) = wire_plugin(
+                    &tools,
+                    &context,
+                    &installed(true, None),
+                    None,
+                    &[],
+                    &[(
+                        "acme/content".to_owned(),
+                        strs(&["wf-a"]),
+                        InstalledVia::Operator,
+                    )],
+                )
+                .unwrap();
+                assert_eq!(tools.agents.unwrap().enabled, enabled);
+            }
+        }
+
+        #[test]
+        fn agent_new_widened_warning_when_enabled() {
+            let (tools, context) = start(Some(true));
+            let (tools, _, report) = wire_plugin(
+                &tools,
+                &context,
+                &installed(true, None),
+                None,
+                &[],
+                &[(
+                    "acme/content".to_owned(),
+                    strs(&["wf-a"]),
+                    InstalledVia::Operator,
+                )],
+            )
+            .unwrap();
+            assert_eq!(tools.agents.unwrap().enabled, Some(true));
+            assert!(report.warnings.iter().any(
+                |warning| warning.starts_with("agent_new_widened") && warning.contains("wf-a")
+            ));
+        }
+
+        #[test]
+        fn non_operator_targets_from_pack_warns() {
+            let (tools, context) = start(None);
+            let (_, _, report) = wire_plugin(
+                &tools,
+                &context,
+                &installed(true, None),
+                None,
+                &[],
+                &[(
+                    "acme/dep".to_owned(),
+                    strs(&["wf-a"]),
+                    InstalledVia::SelfConfig,
+                )],
+            )
+            .unwrap();
+            assert!(report.warnings.iter().any(|warning| {
+                warning.starts_with("trusted_pack_not_operator") && warning.contains("acme/dep")
+            }));
+        }
+
+        #[test]
+        fn skill_ids_added_to_context() {
+            let (tools, context) = start(None);
+            let skills = strs(&["create-workflow"]);
+            let (_, context, _) =
+                wire_plugin(&tools, &context, &installed(true, None), None, &skills, &[]).unwrap();
+            assert_eq!(context.skill_ids, strs(&["existing", "create-workflow"]));
+            let (_, context, _) =
+                wire_plugin(&tools, &context, &installed(true, None), None, &skills, &[]).unwrap();
+            assert_eq!(context.skill_ids, strs(&["existing", "create-workflow"]));
+        }
+
+        fn sorted(mut tools: Tools) -> Tools {
+            if let Some(agents) = tools.agents.as_mut() {
+                agents.target_ids.sort();
+            }
+            tools
+        }
+
+        fn content_pack() -> (String, Vec<String>, InstalledVia) {
+            (
+                "acme/content".to_owned(),
+                strs(&["wf-a", "wf-b"]),
+                InstalledVia::Operator,
+            )
+        }
+
+        #[test]
+        fn wire_then_remove_restores_documents() {
+            let reviewed = job(json!({"agent_targets": ["wf-a"]}));
+            let skills = strs(&["create-workflow"]);
+            let plugin = installed(true, Some("acme/engine"));
+            for wired_from in [vec![], vec![content_pack()]] {
+                let (tools, context) = start(None);
+                let (wired, wired_context, _) = wire_plugin(
+                    &tools,
+                    &context,
+                    &plugin,
+                    Some(&reviewed),
+                    &skills,
+                    &wired_from,
+                )
+                .unwrap();
+                assert_ne!(wired, tools);
+                let (restored, restored_context, report) =
+                    unwire_plugin(&wired, &wired_context, &plugin, &skills, &[]).unwrap();
+                assert_eq!(sorted(restored), sorted(tools));
+                assert_eq!(restored_context, context);
+                assert!(report.job.is_none());
+                assert!(report.next_call.is_none());
+                assert!(!report.changed.is_empty());
+            }
+        }
+
+        #[test]
+        fn shared_targets_and_skills_survive_one_removal() {
+            let (tools, context) = start(None);
+            let skills = strs(&["create-workflow"]);
+            let runner = installed(true, None);
+            let mut other = installed(true, None);
+            other.name = "other".to_owned();
+            let (tools, context, _) = wire_plugin(
+                &tools,
+                &context,
+                &runner,
+                Some(&job(json!({"agent_targets": ["shared", "runner-own"]}))),
+                &skills,
+                &[],
+            )
+            .unwrap();
+            let (tools, context, _) = wire_plugin(
+                &tools,
+                &context,
+                &other,
+                Some(&job(json!({"agent_targets": ["shared", "other-own"]}))),
+                &skills,
+                &[],
+            )
+            .unwrap();
+
+            let (tools, context, _) =
+                unwire_plugin(&tools, &context, &runner, &skills, &[]).unwrap();
+            let plugins = tools
+                .integrations
+                .as_ref()
+                .unwrap()
+                .plugins
+                .as_ref()
+                .unwrap();
+            assert_eq!(plugins.len(), 1);
+            assert_eq!(plugins[0].plugin, "acme/other");
+            let target_ids = &tools.agents.as_ref().unwrap().target_ids;
+            assert_eq!(set(target_ids), BTreeSet::from(["shared", "other-own"]));
+            assert!(context.skill_ids.contains(&"create-workflow".to_owned()));
+
+            let (tools, context, _) =
+                unwire_plugin(&tools, &context, &other, &skills, &[]).unwrap();
+            assert!(tools.agents.as_ref().unwrap().target_ids.is_empty());
+            assert_eq!(context.skill_ids, strs(&["existing"]));
+        }
+
+        #[test]
+        fn targets_from_removal_keeps_the_plugin() {
+            let (tools, context) = start(None);
+            let plugin = installed(true, Some("acme/engine"));
+            let extra = (
+                "acme/extra".to_owned(),
+                strs(&["wf-c"]),
+                InstalledVia::Operator,
+            );
+            let (tools, context, _) = wire_plugin(
+                &tools,
+                &context,
+                &plugin,
+                None,
+                &[],
+                &[content_pack(), extra],
+            )
+            .unwrap();
+            let (tools, _, report) =
+                unwire_plugin(&tools, &context, &plugin, &[], &[content_pack()]).unwrap();
+            let kept = &tools
+                .integrations
+                .as_ref()
+                .unwrap()
+                .plugins
+                .as_ref()
+                .unwrap()[0];
+            assert_eq!(kept.plugin, "acme/runner");
+            assert_eq!(kept.digest.as_deref(), Some("sha256:aa"));
+            let block = block(&tools).unwrap();
+            assert_eq!(set(&block.agent_targets), BTreeSet::from(["wf-c"]));
+            assert_eq!(
+                set(&block.policy.trusted_packs),
+                BTreeSet::from(["acme/engine", "acme/extra"])
+            );
+            assert!(settings::validate(block).is_empty());
+            assert_eq!(
+                set(&tools.agents.as_ref().unwrap().target_ids),
+                BTreeSet::from(["wf-c"])
+            );
+            assert_eq!(report.job.as_ref(), Some(block));
+            assert!(report.next_call.is_none());
+        }
+
+        #[test]
+        fn removing_the_last_target_drops_the_job_block() {
+            let (tools, context) = start(None);
+            let plugin = installed(true, Some("acme/engine"));
+            let (tools, context, _) =
+                wire_plugin(&tools, &context, &plugin, None, &[], &[content_pack()]).unwrap();
+            let (tools, _, report) =
+                unwire_plugin(&tools, &context, &plugin, &[], &[content_pack()]).unwrap();
+            assert!(block(&tools).is_none());
+            assert!(report.job.is_none());
+            assert!(report.next_call.unwrap().contains("non-job verbs only"));
+            assert!(tools.agents.unwrap().target_ids.is_empty());
+        }
+
+        #[test]
+        fn remove_never_changes_enabled_dynamic_or_project_roots() {
+            for (removed, dynamic_targets) in [("b", vec!["a"]), ("a", vec![])] {
+                let (mut tools, context) = start(Some(true));
+                tools.agents.as_mut().unwrap().target_ids = strs(&["a", "b"]);
+                existing(
+                    &mut tools,
+                    job(json!({
+                        "agent_targets": ["a", "b"],
+                        "policy": {
+                            "dynamic": "run", "dynamic_targets": ["a"], "project_roots": ["/w"]
+                        }
+                    })),
+                );
+                let pack = (
+                    "acme/content".to_owned(),
+                    strs(&[removed]),
+                    InstalledVia::Operator,
+                );
+                let (tools, _, _) =
+                    unwire_plugin(&tools, &context, &installed(true, None), &[], &[pack]).unwrap();
+                let block = block(&tools).unwrap();
+                assert_eq!(block.policy.dynamic, DynamicMode::Run);
+                assert_eq!(block.policy.project_roots, strs(&["/w"]));
+                assert_eq!(block.policy.dynamic_targets, strs(&dynamic_targets));
+                assert_eq!(tools.agents.unwrap().enabled, Some(true));
+            }
         }
     }
 }

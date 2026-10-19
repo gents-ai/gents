@@ -783,7 +783,7 @@ fn bounded_chars(text: &str, limit: usize) -> String {
 pub(super) const SUMMARY_ARGUMENT_MAX_CHARS: usize = 100;
 
 /// Removes terminal control characters from untrusted text before display.
-pub(super) fn sanitize_summary_text(text: &str, max_chars: usize) -> Option<String> {
+pub(crate) fn sanitize_summary_text(text: &str, max_chars: usize) -> Option<String> {
     let mut normalized = String::with_capacity(text.len());
     let mut last_was_space = false;
     for ch in text.chars() {

@@ -783,6 +783,94 @@ async fn load_agent_tool_calls_hydrates_background_projection_fields() {
 }
 
 #[tokio::test]
+async fn load_agent_tool_calls_hydrates_job_pin_and_progress() {
+    use gents::config_client::ConfigAccess;
+    use gents_protocol::job::{JobBudget, JobCeiling, JobOrigin, JobPin, JobProgress, JobState};
+
+    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    ensure_runtime_schemas(node.as_ref())
+        .await
+        .expect("schemas");
+
+    let pin = JobPin {
+        script_id: "fixture-script".into(),
+        source_digest: "sha256:source".into(),
+        origin: JobOrigin::Installed,
+        engine_digest: "sha256:engine".into(),
+        plugin_ref: "fixture/workflow".into(),
+        agent_budget: 4,
+        handle: "job-1".into(),
+        cwd: "/fixture/cwd".into(),
+        adopted_at: 1_780_000_000_000,
+        args_digest: "sha256:args".into(),
+        chain_root_doc_id: "root-doc".into(),
+        resume_of: None,
+        replayed_from: None,
+        ceiling_at_pin: JobCeiling {
+            targets: vec!["general".into()],
+            max_live: 2,
+            max_spawns: 8,
+            max_messages_per_slot: 4,
+            result_bytes: 65_536,
+            max_wall_secs: 600,
+        },
+    };
+    let progress = JobProgress {
+        title: "Job one".into(),
+        state: JobState::Running,
+        pause_reason: None,
+        phases: Vec::new(),
+        active: Vec::new(),
+        spawned: 2,
+        budget: JobBudget {
+            total: 4,
+            spent: 2,
+            remaining: 2,
+        },
+        last_event: "seeded".into(),
+        last_event_at: None,
+        question: None,
+        observed_terminal_children: 0,
+        revision: 1,
+    };
+    let mutation = r#"mutation($job_pin: JSON, $job_progress: JSON) {
+        create_AgentToolCall(input: {
+            tool_call_key: "session-1:job-1",
+            request_id: "parent-1",
+            session_id: "session-1",
+            message_sequence: 1,
+            tool_name: "workflow",
+            tool_call_id: "job-1",
+            status: "running",
+            lifecycle_state: "running",
+            await_mode: "background",
+            started_at: "2026-07-29T00:00:00Z",
+            job_pin: $job_pin,
+            job_progress: $job_progress
+        }) { tool_call_key }
+    }"#;
+    let variables = serde_json::json!({ "job_pin": pin, "job_progress": progress });
+    ConfigAccess::local(node.clone())
+        .transact_write("test.fixture.variables", |txn| {
+            let variables = variables.clone();
+            Box::pin(async move { txn.execute_with_variables(mutation, &variables).await })
+        })
+        .await
+        .expect("seed job row");
+
+    let tool_calls = load_agent_tool_calls(node.as_ref())
+        .await
+        .expect("load agent tool calls");
+    let tool_call = tool_calls
+        .iter()
+        .find(|row| row.tool_call_key == "session-1:job-1")
+        .expect("created tool call");
+    assert_eq!(tool_call.job_pin.as_ref(), Some(&pin));
+    assert_eq!(tool_call.job_progress.as_ref(), Some(&progress));
+    assert!(!AGENT_TOOL_CALL_FIELDS.contains("job_step_state"));
+}
+
+#[tokio::test]
 async fn load_node_scoped_snapshot_excludes_other_nodes() {
     let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
     ensure_runtime_schemas(node.as_ref())

@@ -4,8 +4,9 @@ A fixture `documents` pack carrying one table-driven job plugin, `job_fixture`,
 a `FixtureNote` schema and the `fixture_assets` asset class. Test data, not a
 shipped pack.
 
-The `.afb` is not checked in: `gents pack build` compiles the plugin source, and
-the tests write a module at the declared path in a temp copy.
+`plugins/job_fixture.afb` is built from `plugins/job_fixture/source` by `gents pack build` and checked in, and `plugins/job_fixture/Cargo.lock` pins the guest's dependencies so the build is reproducible.
+The gents-cli test `committed_job_fixture_artifact_matches_its_source` fails when the artifact and its source drift, and `write_job_fixture_artifact` (ignored) regenerates it.
+Some tests still write a module at the declared path in a temp copy.
 
 ## Configuration
 
@@ -16,5 +17,5 @@ the tests write a module at the declared path in a temp copy.
 
 ## Usage
 
-Used by the plugin-job conformance and runtime tests. It is never installed onto
-a runtime agent.
+Used by the plugin-job conformance and runtime tests.
+The plugin-job end-to-end tests (`e2e_background`'s `plugin_job_*` modules and gents-cli's `cli_job` suite) install it onto a runtime agent.

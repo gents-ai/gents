@@ -118,21 +118,8 @@ fn release_plugin_records(
     plugins: &[InstalledPackPlugin],
     candidates: &mut BTreeSet<String>,
 ) -> Result<Vec<InstalledPackPlugin>> {
-    let (namespace, _) = super::split_namespace(coordinate);
-    let mut released = Vec::new();
-    for plugin in plugins {
-        candidates.insert(plugin.digest.clone());
-        if gents::plugin::store::remove_record_if_owned(
-            home,
-            namespace,
-            &plugin.name,
-            coordinate,
-            &plugin.digest,
-        )? {
-            released.push(plugin.clone());
-        }
-    }
-    Ok(released)
+    candidates.extend(plugins.iter().map(|plugin| plugin.digest.clone()));
+    gents::pack::plugin_lifecycle::release_plugin_records(home, coordinate, plugins)
 }
 
 fn plugin_release_result(home: &Path, candidates: &BTreeSet<String>) -> Result<Vec<String>> {
@@ -165,7 +152,7 @@ async fn release_archives(
     Ok(released)
 }
 
-async fn remove_home_install(home: &Path, coordinate: &str) -> Result<Value> {
+pub(crate) async fn remove_home_install(home: &Path, coordinate: &str) -> Result<Value> {
     let mut retained = Vec::new();
     let mut assets_removed = Vec::new();
     let removal = gents::pack::plugin_lifecycle::remove_local(

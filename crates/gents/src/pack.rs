@@ -27,8 +27,8 @@ pub use inference::{
     preview_pack_inference_bindings, PackInferenceBindingPreview, PackInferenceProfileOption,
 };
 pub use installation::{
-    document_pack_schema_paths, install_prepared_document_pack, installed_packs,
-    list_installed_packs, plugin_data_unique_keys, prepare_document_pack_install,
+    document_pack_schema_paths, install_prepared_document_pack, installed_pack_documents,
+    installed_packs, list_installed_packs, plugin_data_unique_keys, prepare_document_pack_install,
     read_installed_pack, record_plugin_store_change, record_plugin_store_change_as,
     referenced_pack_digests, remove_pack, DriftPolicy, InstallReport, InstalledPack,
     InstalledPackPlugin, PackIdentity, PreparedDependency, PreparedDocumentPackInstall,

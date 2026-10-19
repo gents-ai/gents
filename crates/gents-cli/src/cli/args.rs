@@ -216,6 +216,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: GoalCommand,
     },
+    #[command(about = "Inspect and control plugin jobs")]
+    Job {
+        #[command(subcommand)]
+        command: JobCommand,
+    },
     #[command(about = "Manage EVM chain keys, endpoints, and queries")]
     Chain {
         #[command(subcommand)]
@@ -631,6 +636,9 @@ pub(crate) enum PackCommand {
     Graph(PackGraphArgs),
     /// Install a pack into an initialized node; never seed or prune.
     Install(PackInstallArgs),
+    /// Wire an installed plugin into an agent's Tools and Context, or with
+    /// `--remove` take it back out.
+    Wire(PackWireArgs),
     /// Remove an installed pack of any kind, and whatever nothing else still uses.
     Remove(PackRemoveArgs),
     /// List installed packs with a newer version in the registry.
@@ -921,6 +929,30 @@ pub(crate) struct PackPruneArgs {
 }
 
 #[derive(clap::Args)]
+pub(crate) struct PackWireArgs {
+    #[arg(help = "An installed plugin, as <namespace>/<name>")]
+    pub(crate) plugin: String,
+    #[arg(long, help = "Agent whose Tools and Context to change")]
+    pub(crate) agent: String,
+    #[arg(
+        long = "targets-from",
+        value_name = "PACK",
+        action = clap::ArgAction::Append,
+        help = "Wire an installed pack's AgentTargets into the job block and trust the pack; repeat for each pack"
+    )]
+    pub(crate) targets_from: Vec<String>,
+    #[arg(
+        long,
+        help = "Take the wiring back out, leaving what other plugins still use"
+    )]
+    pub(crate) remove: bool,
+    #[arg(long, help = "Report what wiring would write, writing nothing")]
+    pub(crate) preview: bool,
+    #[command(flatten)]
+    pub(crate) scope: ScopeArgs,
+}
+
+#[derive(clap::Args)]
 pub(crate) struct PackInstallArgs {
     #[arg(help = "A local path/sha256:<hex>, an installed coordinate, or a registry name")]
     pub(crate) package: String,
@@ -965,6 +997,19 @@ pub(crate) struct PackInstallArgs {
         help = "Allow the files, network or environment the pack's plugins ask for"
     )]
     pub(crate) grant_authority: bool,
+    #[arg(
+        long,
+        value_name = "AGENT",
+        action = clap::ArgAction::Append,
+        help = "After the install, wire the pack's plugins into this agent's Tools and Context; repeat for each agent"
+    )]
+    pub(crate) wire: Vec<String>,
+    #[arg(
+        long = "expect-digest",
+        value_name = "sha256:HEX",
+        help = "Refuse the install, writing nothing, unless the pack's content digest is this one (see gents pack show)"
+    )]
+    pub(crate) expect_digest: Option<String>,
     /// Whether this install was requested for its own sake, rather than only
     /// as a documents pack's dependency; never a CLI flag.
     #[arg(skip = true)]
@@ -1752,6 +1797,13 @@ pub(crate) struct InitArgs {
         help = "Restrict the defra_query tool to these collections when a package enables it (repeatable); omit for all collections"
     )]
     pub(crate) defra_query_collections: Vec<String>,
+    #[arg(
+        long,
+        default_value_t = false,
+        conflicts_with = "identity_only",
+        help = "After init, install gents/rhai_workflows as an operator install and wire it into the default agent (grants the engine pack's declared authority)"
+    )]
+    pub(crate) workflows: bool,
 }
 
 impl InitArgs {
@@ -3906,6 +3958,107 @@ pub(crate) enum SessionCommand {
     Show(ConfigShowArgs),
     #[command(about = "Fork an existing session at a user-turn boundary")]
     Fork(SessionForkArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum JobCommand {
+    #[command(about = "List plugin jobs, newest first")]
+    List(JobListArgs),
+    #[command(about = "Show one plugin job: its state, outcome, phases, children and next calls")]
+    Show(JobShowArgs),
+    #[command(
+        about = "Follow one plugin job until it ends, is paused or awaits an answer; needs a running server"
+    )]
+    Watch(JobWatchArgs),
+    #[command(about = "Stop one plugin job and interrupt its children; local only")]
+    Stop(JobControlArgs),
+    #[command(about = "Pause one plugin job and interrupt its children; local only")]
+    Pause(JobControlArgs),
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+#[value(rename_all = "snake_case")]
+pub(crate) enum JobStateArg {
+    Running,
+    Paused,
+    AwaitingUser,
+    Completed,
+    Failed,
+    Cancelled,
+    TimedOut,
+    All,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct JobListArgs {
+    #[command(flatten)]
+    pub(crate) scope: ScopeArgs,
+    #[arg(long, value_name = "SESSION_ID", help = "Only jobs of this session")]
+    pub(crate) session: Option<String>,
+    #[arg(
+        long,
+        value_enum,
+        value_name = "STATE",
+        help = "Only jobs in this state; repeatable, or `all`. Defaults to running, paused and awaiting_user"
+    )]
+    pub(crate) state: Vec<JobStateArg>,
+    #[arg(long, value_name = "NS/NAME", help = "Only jobs of this plugin")]
+    pub(crate) plugin: Option<String>,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    pub(crate) output: OutputFormat,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct JobShowArgs {
+    #[command(flatten)]
+    pub(crate) scope: ScopeArgs,
+    #[arg(help = "A job address (SESSION_ID:TOOL_CALL_ID), a tool call id or a handle")]
+    pub(crate) selector: String,
+    #[arg(
+        long,
+        value_name = "SESSION_ID",
+        help = "Resolve a handle within this session"
+    )]
+    pub(crate) session: Option<String>,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct JobControlArgs {
+    #[command(flatten)]
+    pub(crate) scope: ScopeArgs,
+    #[arg(help = "A job address (SESSION_ID:TOOL_CALL_ID), a tool call id or a handle")]
+    pub(crate) selector: String,
+    #[arg(
+        long,
+        value_name = "SESSION_ID",
+        help = "Resolve a handle within this session"
+    )]
+    pub(crate) session: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct JobWatchArgs {
+    #[command(flatten)]
+    pub(crate) scope: ScopeArgs,
+    #[arg(help = "A job address (SESSION_ID:TOOL_CALL_ID), a tool call id or a handle")]
+    pub(crate) selector: String,
+    #[arg(
+        long,
+        value_name = "SESSION_ID",
+        help = "Resolve a handle within this session"
+    )]
+    pub(crate) session: Option<String>,
+    #[arg(
+        long,
+        help = "Print nothing until the job ends, then one JSON line; exit 0 completed, 3 paused or awaiting_user, 1 failed, cancelled or timed_out, 4 not observable"
+    )]
+    pub(crate) until_terminal: bool,
+    #[arg(long, default_value_t = 1_000)]
+    pub(crate) interval_ms: u64,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
 }
 
 #[derive(Subcommand)]

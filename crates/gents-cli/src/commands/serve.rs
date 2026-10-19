@@ -1147,6 +1147,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
                         node_did: identity.did().to_string(),
                         node_name: node_name.clone(),
                         socket_path: socket_path.clone(),
+                        home: home_dir.clone(),
                     })
                     .await
                     {

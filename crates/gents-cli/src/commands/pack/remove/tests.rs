@@ -25,6 +25,8 @@ async fn install(home: &Path, package: String) -> anyhow::Result<Value> {
         registry: None,
         drift: PackDriftArgs::default(),
         grant_authority: false,
+        wire: Vec::new(),
+        expect_digest: None,
         explicit: true,
     }))
     .await

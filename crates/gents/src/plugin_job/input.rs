@@ -685,7 +685,11 @@ pub(crate) mod tests {
         node
     }
 
-    pub(crate) async fn insert(node: &std::sync::Arc<EmbeddedNode>, collection: &str, value: Value) -> String {
+    pub(crate) async fn insert(
+        node: &std::sync::Arc<EmbeddedNode>,
+        collection: &str,
+        value: Value,
+    ) -> String {
         ConfigAccess::transact_local_write(node, None, "test.plugin_job_children", |txn| {
             let value = &value;
             Box::pin(async move {
@@ -703,7 +707,11 @@ pub(crate) mod tests {
     }
 
     /// Overwrites the stored `lifecycle_state` of the job row `row_doc_id`.
-    pub(crate) async fn set_lifecycle(node: &std::sync::Arc<EmbeddedNode>, row_doc_id: &str, state: &str) {
+    pub(crate) async fn set_lifecycle(
+        node: &std::sync::Arc<EmbeddedNode>,
+        row_doc_id: &str,
+        state: &str,
+    ) {
         ConfigAccess::transact_local_write(node, None, "test.plugin_job_lifecycle", |txn| {
             Box::pin(async move {
                 txn.execute(&format!(

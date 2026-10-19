@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use gents::graphql::escape_graphql_string;
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+use gents_protocol::job::JobProgress;
 use gents_protocol::row::AgentRequestRow;
 use tempfile::TempDir;
 
@@ -325,6 +326,150 @@ pub async fn create_tool_call(core: &Arc<ClientCore>, call: &str, tool: &str) ->
         "AgentToolCall",
     )
     .await
+}
+
+/// Seed one plugin job row of a fresh request, optionally with the closed
+/// terminal output a failed or timed-out job carries. Returns the row's `_docID`.
+pub async fn seed_job_row(
+    core: &Arc<ClientCore>,
+    session_id: &str,
+    tool_call_id: &str,
+    lifecycle_state: &str,
+    progress: &JobProgress,
+    coded_output: Option<(&str, &str)>,
+) -> String {
+    use gents::config_client::ConfigAccess;
+    use gents::session::canonical_rows::{
+        output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    };
+    use gents_protocol::job::{JobCeiling, JobOrigin, JobPin};
+    use gents_protocol::output::{
+        OutputOutcome, OutputSegment, OutputSource, OutputWriter, SegmentRun, SourceClose,
+        StreamDeclaration, StreamPayload,
+    };
+
+    let access = ConfigAccess::local(core.node_arc());
+    let request_doc_id = create_request(
+        core,
+        &format!("req-{tool_call_id}"),
+        OPERATOR,
+        session_id,
+        "completed",
+        "2026-05-20T00:00:00Z",
+        None,
+    )
+    .await;
+    let mut pin = JobPin {
+        script_id: "fixture-script".into(),
+        source_digest: "sha256:source".into(),
+        origin: JobOrigin::Installed,
+        engine_digest: "sha256:engine".into(),
+        plugin_ref: "fixture/workflow".into(),
+        agent_budget: 4,
+        handle: tool_call_id.into(),
+        cwd: "/fixture/cwd".into(),
+        adopted_at: 1_780_000_000_000,
+        args_digest: "sha256:args".into(),
+        chain_root_doc_id: String::new(),
+        resume_of: None,
+        replayed_from: None,
+        ceiling_at_pin: JobCeiling {
+            targets: vec!["general".into()],
+            max_live: 2,
+            max_spawns: 8,
+            max_messages_per_slot: 4,
+            result_bytes: 65_536,
+            max_wall_secs: 600,
+        },
+    };
+    let completed_at = if lifecycle_state == "running" {
+        String::new()
+    } else {
+        r#"completed_at: "2026-05-20T00:05:00Z","#.to_owned()
+    };
+    let mutation = format!(
+        r#"mutation($job_pin: JSON, $job_progress: JSON) {{ create_AgentToolCall(input: {{
+            tool_call_key: "{key}", request_id: "req-{call}", request_doc_id: "{request_doc_id}",
+            session_id: "{session}", node_did: "{OPERATOR}", requester_did: "{OPERATOR}",
+            tool_name: "workflow", tool_call_id: "{call}", message_sequence: 1,
+            await_mode: "background", status: "{lifecycle}", lifecycle_state: "{lifecycle}",
+            started_at: "2026-05-20T00:00:00Z", {completed_at}
+            job_pin: $job_pin, job_progress: $job_progress
+        }}) {{ _docID }} }}"#,
+        key = escape_graphql_string(&format!("{session_id}:{tool_call_id}")),
+        request_doc_id = escape_graphql_string(&request_doc_id),
+        session = escape_graphql_string(session_id),
+        call = escape_graphql_string(tool_call_id),
+        lifecycle = escape_graphql_string(lifecycle_state),
+    );
+    let variables = serde_json::json!({ "job_pin": pin, "job_progress": progress });
+    let response = access
+        .transact_write("test.fixture.job_row", |txn| {
+            let (mutation, variables) = (mutation.clone(), variables.clone());
+            Box::pin(async move { txn.execute_with_variables(&mutation, &variables).await })
+        })
+        .await
+        .expect("seed job row");
+    let row_doc_id = gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentToolCall")
+        .expect("job row doc id");
+    pin.chain_root_doc_id = row_doc_id.clone();
+    let update = format!(
+        r#"mutation($job_pin: JSON) {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ job_pin: $job_pin }}) {{ _docID }} }}"#,
+        escape_graphql_string(&row_doc_id)
+    );
+    let variables = serde_json::json!({ "job_pin": pin });
+    access
+        .transact_write("test.fixture.job_pin", |txn| {
+            let (update, variables) = (update.clone(), variables.clone());
+            Box::pin(async move { txn.execute_with_variables(&update, &variables).await })
+        })
+        .await
+        .expect("pin the job chain root");
+
+    if let Some((code, message)) = coded_output {
+        let payload = serde_json::json!({ "code": code, "message": message }).to_string();
+        let segment = OutputSegment {
+            node_did: OPERATOR.into(),
+            requester_did: Some(OPERATOR.into()),
+            session_id: session_id.into(),
+            request_doc_id,
+            source: OutputSource::ToolCall {
+                tool_call_doc_id: row_doc_id.clone(),
+            },
+            writer: OutputWriter::ToolExecution {
+                tool_call_doc_id: row_doc_id.clone(),
+            },
+            ordinal: Some(0),
+            runs: vec![SegmentRun {
+                stream: 0,
+                bytes: payload.len() as u32,
+                declaration: Some(StreamDeclaration {
+                    block_index: 0,
+                    part_index: 0,
+                    payload: StreamPayload::ToolOutput,
+                }),
+            }],
+            payload: payload.clone(),
+            close: Some(SourceClose::Closed {
+                outcome: OutputOutcome::Complete,
+                segments: 1,
+                stream_bytes: vec![payload.len() as u64],
+            }),
+            created_at: "2026-05-20T00:05:00Z".into(),
+        };
+        let variables = output_segment_create_variables(&segment).expect("segment variables");
+        access
+            .transact_write("test.fixture.job_output", |txn| {
+                let variables = variables.clone();
+                Box::pin(async move {
+                    txn.execute_with_variables(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION, &variables)
+                        .await
+                })
+            })
+            .await
+            .expect("seed job output");
+    }
+    row_doc_id
 }
 
 pub async fn fetch_request_row(core: &Arc<ClientCore>, request_id: &str) -> AgentRequestRow {

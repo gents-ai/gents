@@ -1228,46 +1228,41 @@ pub(super) async fn store_running_progress(
     use crate::config_client::ConfigAccess;
     use gents_protocol::job::{JobBudget, JobProgress};
     let doc_id = admission.tool.doc_id().unwrap().to_owned();
-    ConfigAccess::transact_local_write(
-        &admission.node,
-        None,
-        "test.driver.progress",
-        |txn| {
-            let doc_id = doc_id.clone();
-            Box::pin(async move {
-                let guest = JobProgress {
-                    title: "audit".to_owned(),
-                    state: JobState::Running,
-                    pause_reason: None,
-                    phases: Vec::new(),
-                    active: Vec::new(),
-                    spawned: 0,
-                    budget: JobBudget {
-                        total: 0,
-                        spent: 0,
-                        remaining: 0,
-                    },
-                    last_event: "scanning".to_owned(),
-                    last_event_at: None,
-                    question: None,
-                    observed_terminal_children: 0,
-                    revision: 0,
-                };
-                let host = HostProgressFacts {
-                    spawned: 2,
-                    budget: JobBudget {
-                        total: 4,
-                        spent: 2,
-                        remaining: 2,
-                    },
-                    observed_terminal_children: 1,
-                    state: JobState::Running,
-                    pause_reason: None,
-                };
-                write_progress_in_txn(txn, &doc_id, 0, guest, host).await
-            })
-        },
-    )
+    ConfigAccess::transact_local_write(&admission.node, None, "test.driver.progress", |txn| {
+        let doc_id = doc_id.clone();
+        Box::pin(async move {
+            let guest = JobProgress {
+                title: "audit".to_owned(),
+                state: JobState::Running,
+                pause_reason: None,
+                phases: Vec::new(),
+                active: Vec::new(),
+                spawned: 0,
+                budget: JobBudget {
+                    total: 0,
+                    spent: 0,
+                    remaining: 0,
+                },
+                last_event: "scanning".to_owned(),
+                last_event_at: None,
+                question: None,
+                observed_terminal_children: 0,
+                revision: 0,
+            };
+            let host = HostProgressFacts {
+                spawned: 2,
+                budget: JobBudget {
+                    total: 4,
+                    spent: 2,
+                    remaining: 2,
+                },
+                observed_terminal_children: 1,
+                state: JobState::Running,
+                pause_reason: None,
+            };
+            write_progress_in_txn(txn, &doc_id, 0, guest, host).await
+        })
+    })
     .await
     .unwrap();
 }

@@ -76,6 +76,25 @@ async fn tools_ids(access: &ConfigAccess) -> Vec<String> {
 }
 
 #[tokio::test]
+async fn installed_pack_documents_lists_what_the_record_holds() {
+    let access = access().await;
+    install(&access, "1", &config(&[("t1", "T1")]), DriftPolicy::Refuse)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        installed_pack_documents(&access, OWNER, "acme/demo")
+            .await
+            .unwrap(),
+        vec![(Collection::Tools, "t1".to_owned())]
+    );
+    assert!(installed_pack_documents(&access, OWNER, "acme/other")
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
 async fn install_then_remove_leaves_no_pack_documents_and_keeps_adopted_ones() {
     let access = access().await;
     edit_tools(&access, "shared", "Shared before the pack").await;

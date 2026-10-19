@@ -348,6 +348,15 @@ pub struct DesktopInterruptRequest {
     pub cause: String,
 }
 
+/// Stops or pauses exactly the job row at `session_id:tool_call_id`.
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopJobControlRequest {
+    pub session_id: String,
+    pub tool_call_id: String,
+    pub action: gents_protocol::job::JobControlKind,
+}
+
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopProbeMcpServiceRequest {

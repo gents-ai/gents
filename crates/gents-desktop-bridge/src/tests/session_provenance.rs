@@ -27,6 +27,7 @@ async fn maps_the_lineage_owner_and_each_call_to_its_caused_request() {
 
     assert_eq!(view.session_id, "sess_parent");
     assert!(view.started_by.is_none() && view.received.is_empty());
+    assert!(view.opening_request_id.is_none());
     assert_eq!(
         sessions(&view.started),
         ["sess_child", "sess_peer"],
@@ -111,6 +112,7 @@ async fn a_started_session_names_its_starter_and_the_sender_of_each_turn() {
         Some("sess_parent")
     );
     assert!(view.started.is_empty() && view.sent.is_empty() && view.calls.is_empty());
+    assert_eq!(view.opening_request_id.as_deref(), Some("req_child"));
     let mut senders: Vec<_> = view
         .senders
         .iter()

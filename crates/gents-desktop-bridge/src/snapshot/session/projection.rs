@@ -742,6 +742,22 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                     };
                     derive_tool_call_cause(&req_evidence, &tool_evidence)
                 };
+            let (job_progress, job_handle, job_state) = match row.job_pin.as_ref() {
+                Some(pin) => (
+                    row.job_progress.clone(),
+                    Some(pin.handle.clone()),
+                    row.lifecycle_state
+                        .as_deref()
+                        .and_then(gents::tool_call_lifecycle::ToolCallState::from_persisted)
+                        .map(|lifecycle| {
+                            gents::plugin::job_calls::job_state(
+                                lifecycle,
+                                row.job_progress.as_ref(),
+                            )
+                        }),
+                ),
+                None => (None, None, None),
+            };
             ToolCallView {
                 tool_call_key: row.tool_call_key.clone(),
                 request_id: normalize_optional(row.request_id.as_deref()),
@@ -760,6 +776,11 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 completed_at: normalize_optional(row.completed_at.as_deref()),
                 denial: command_denial_from_row(&row),
                 cancel_cause,
+                job_progress,
+                job_handle,
+                job_state,
+                job_outcome: None,
+                job_next_calls: Vec::new(),
             }
         })
         .collect::<Vec<_>>();
