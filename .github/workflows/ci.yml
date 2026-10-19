@@ -36,6 +36,7 @@ env:
   LEAN_CACHE_ROOT: ${{ vars.LEAN_CACHE_ROOT || '/Users/admin/.cache/gents-lean' }}
   RUSTC_WRAPPER: sccache
   RUST_BACKTRACE: "1"
+  RUST_TEST_THREADS: ${{ vars.RUST_TEST_THREADS || vars.CARGO_BUILD_JOBS || '12' }}
   SCCACHE_CACHE_SIZE: ${{ vars.SCCACHE_CACHE_SIZE || '120G' }}
   # The host service and clients normalize every registered checkout root.
   SCCACHE_BASEDIRS: ${{ vars.SCCACHE_BASEDIRS }}
