@@ -43,6 +43,18 @@ pub struct RequestInput {
 }
 
 impl RequestInput {
+    pub fn authored_message(&self, prose: &str) -> anyhow::Result<crate::message::Message> {
+        use crate::message::{Message, UserContent};
+        let mut content = Vec::with_capacity(self.captured_context.len() + 1);
+        if !prose.is_empty() || self.captured_context.is_empty() {
+            content.push(UserContent::text(prose));
+        }
+        for context in &self.captured_context {
+            content.push(UserContent::Document(context.to_document()?));
+        }
+        Ok(Message::User { content })
+    }
+
     /// Runtime continuations retain the invocation directory; the host still
     /// validates it against the current workspace and configured tool ceiling.
     pub fn continuation(
