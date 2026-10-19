@@ -417,6 +417,10 @@ pub(crate) async fn agent_session_read(
         let active = active.clone();
         let args = args.clone();
         Box::pin(async move {
+            // Captured before any query runs: this is when the read began,
+            // not a claim that the response reflects a single atomic
+            // snapshot of session state.
+            let observation_started_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
             let scope = crate::session::session_scope_filter(&target.node_did, &target.session_id, target.requester_did.as_deref());
             let response = txn.execute(&format!("{{AgentSession(filter: {{{scope}}}, limit: 2) {{{}}}}}", crate::session::AGENT_SESSION_FIELDS)).await?;
             let sessions = rows(&response, "AgentSession")?;
@@ -443,6 +447,7 @@ pub(crate) async fn agent_session_read(
                     Some(goal) => { let (objective, truncated) = bounded(&goal.objective, TOOL_PREVIEW_CHARS); json!({"goal_id": goal.goal_id, "status": goal.status, "objective": objective, "objective_truncated": truncated, "tokens_used": goal.tokens_used, "token_budget": goal.token_budget, "active_time_seconds": goal.active_time_seconds}) },
                     None => Value::Null,
                 };
+                result["observation_started_at"] = json!(observation_started_at);
             } else {
                 result["messages"] = messages(txn, &target, &args).await?;
             }
@@ -624,6 +629,12 @@ mod tests {
         assert_eq!(status["request"]["request_id"], worker.request().request_id);
         assert_eq!(status["request"]["lifecycle_state"], "processing");
         assert_eq!(status["request"]["causal_hop"], 0);
+        // Status read adds only the read-start timestamp; the Goal was
+        // created before the read and is exposed as-is.
+        assert_eq!(status["goal"]["objective"], "verify shard R3a");
+        assert!(status["observation_started_at"].is_string());
+        chrono::DateTime::parse_from_rfc3339(status["observation_started_at"].as_str().unwrap())
+            .unwrap();
         assert_eq!(status["tools_in_flight"]["items"][0]["name"], "bash");
         assert_eq!(status["tools_in_flight"]["items"][0]["status"], "running");
         assert!(
@@ -632,7 +643,6 @@ mod tests {
                 .unwrap()
                 >= 0
         );
-        assert_eq!(status["goal"]["objective"], "verify shard R3a");
         assert_eq!(
             status["queued_steering"]["items"][0]["request_id"],
             "read-worker-steering"
@@ -692,6 +702,8 @@ mod tests {
         assert_eq!(last["request"]["request_id"], "read-worker-steering");
         assert_eq!(last["request"]["lifecycle_state"], "pending");
         assert!(last["request"]["created_at"].is_string());
+        // The last view carries messages only; it does not add status fields.
+        assert!(last.get("observation_started_at").is_none());
         assert!(!last.to_string().contains("private encrypted reasoning"));
         assert!(!last.to_string().contains("private provider id"));
         args.view = ReadView::Recent;
@@ -760,6 +772,7 @@ mod tests {
             .unwrap();
         assert_eq!(unavailable["request"]["request_id"], "unobserved-request");
         assert_eq!(unavailable["request"]["available"], false);
+        assert!(unavailable["observation_started_at"].is_string());
         args.session_id = caller.session_id.clone();
         assert!(agent_session_read(&node, &caller, &tools, &args)
             .await
