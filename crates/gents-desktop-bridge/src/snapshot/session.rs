@@ -290,6 +290,7 @@ pub async fn build_session_snapshot_for_node_with_transcript(
                                 request_id: entry.request_id,
                                 content: entry.content,
                                 editable: entry.editable,
+                                steerable: entry.steerable,
                                 edit_group: entry.edit_group,
                             })
                             .collect(),

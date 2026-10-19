@@ -84,6 +84,7 @@ export function createDesktopApiAdapter(
       }),
     sendChatMessage: (request) =>
       invokeDesktop("desktop_chat_send", { request }),
+    steerPendingMessage: (request) => invokeDesktop("desktop_pending_message_steer", { request }),
     editPendingQueue: (request) =>
       invokeDesktop("desktop_pending_queue_edit", {
         request,

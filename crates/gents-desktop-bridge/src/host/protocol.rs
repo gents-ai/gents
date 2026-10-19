@@ -4,8 +4,8 @@ use ts_rs::TS;
 
 use crate::error::BridgeError;
 use crate::types::{
-    ChatSendRequest, DesktopInterruptRequest, EnrollmentStatusRequest, PendingQueueEditRequest,
-    SessionRenameRequest,
+    ChatSendRequest, DesktopInterruptRequest, EnrollmentStatusRequest, PendingMessageSteerRequest,
+    PendingQueueEditRequest, SessionRenameRequest,
 };
 
 /// Change the version for incompatible framing or operation semantics.
@@ -215,6 +215,8 @@ pub enum ClientCommand {
     Send { request: ChatSendRequest },
     #[serde(rename = "desktop_pending_queue_edit")]
     EditPending { request: PendingQueueEditRequest },
+    #[serde(rename = "desktop_pending_message_steer")]
+    SteerPending { request: PendingMessageSteerRequest },
     #[serde(rename = "desktop_session_fork_before_message")]
     ForkBeforeMessage {
         request: crate::types::SessionForkBeforeRequest,
@@ -268,6 +270,7 @@ impl ClientCommand {
         "desktop_goal_control",
         "desktop_chat_send",
         "desktop_pending_queue_edit",
+        "desktop_pending_message_steer",
         "desktop_session_fork_before_message",
         "desktop_session_rename",
         "desktop_interrupt_request",

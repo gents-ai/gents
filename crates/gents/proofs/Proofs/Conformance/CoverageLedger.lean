@@ -1249,7 +1249,7 @@ def caseCoverage : List CoverageEntry :=
       "queue_management_cases"
       "QueueManagementCases"
       "lifecycle::queue::tests::management::generated_pending_management_cases_bind_to_signed_replacement_owner"
-      "Nine representable replacement cases exercise signed native replacement, rejection, immutable originals and physical slot order. Reused request IDs and caller-chosen slot mutations remain executable model cases: the replacement API generates both internally, so these cases are not claimed as native management coverage. Intake cases are modeled here and bound through the composed steering publication and loop consumers.")
+      "Fifteen representable replacement cases exercise signed native replacement, rejection, immutable originals and physical slot order. Reused request IDs and caller-chosen slot mutations remain executable model cases: the replacement API generates both internally, so these cases are not claimed as native management coverage. Intake cases are modeled here and bound through the composed steering publication and loop consumers.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "queue_management_cases"

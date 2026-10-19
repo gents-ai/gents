@@ -53,6 +53,7 @@ export function createBridgeHttpAdapter(
     listWorkspace: unsupported("listWorkspace"),
     fetchRequestTimeline: unsupported("fetchRequestTimeline"),
     fetchSessionGoal: unsupported("fetchSessionGoal"),
+    steerPendingMessage: unsupported("steerPendingMessage"),
     controlGoal: unsupported("controlGoal"),
     explainToolSurface: unsupported("explainToolSurface"),
     fetchNetworkStatus: unsupported("fetchNetworkStatus"),

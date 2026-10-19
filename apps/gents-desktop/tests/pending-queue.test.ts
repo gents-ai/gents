@@ -17,6 +17,7 @@ const entry = (id: string, group: string | null = "same"): PendingQueueEntryView
   requestId: id,
   content: `message ${id}`,
   editable: group !== null,
+  steerable: group !== null,
   editGroup: group,
 });
 const turn = (

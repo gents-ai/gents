@@ -559,22 +559,68 @@ impl ClientCore {
         session_id: &str,
         edit: gents::lifecycle::PendingQueueEdit,
     ) -> Result<gents_protocol::session_input_edit::SessionInputEditReceipt> {
+        self.apply_pending_queue_edit(node_did, session_id, edit, None)
+            .await
+    }
+
+    pub async fn steer_pending_message(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        expected_request_doc_ids: Vec<String>,
+        request_doc_id: &str,
+    ) -> Result<gents_protocol::session_input_edit::SessionInputEditReceipt> {
+        let snapshot = self.pending_user_queue(node_did, session_id).await?;
+        let edit = gents::lifecycle::pending_steer_edit(
+            &snapshot,
+            expected_request_doc_ids,
+            request_doc_id,
+        )?;
+        self.apply_pending_queue_edit(node_did, session_id, edit, Some(request_doc_id))
+            .await
+    }
+
+    async fn apply_pending_queue_edit(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        edit: gents::lifecycle::PendingQueueEdit,
+        steer: Option<&str>,
+    ) -> Result<gents_protocol::session_input_edit::SessionInputEditReceipt> {
         let peer = self
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
         ensure_peer_chat_ready_at(node_did, peer.as_ref(), Utc::now())?;
         let (signer, admission, _) = self.request_authority(node_did, peer.as_ref()).await?;
         let selected_doc_ids = edit.selected_request_doc_ids.clone();
-        let result = gents::lifecycle::submit_pending_user_edit(
-            &self.session_queue_access(node_did),
-            signer.as_ref(),
-            admission,
-            Some(self.local_peer_id()),
-            node_did,
-            session_id,
-            edit,
-        )
-        .await;
+        let access = self.session_queue_access(node_did);
+        let result = match steer {
+            Some(request_doc_id) => {
+                gents::lifecycle::submit_pending_user_steer(
+                    &access,
+                    signer.as_ref(),
+                    admission,
+                    Some(self.local_peer_id()),
+                    node_did,
+                    session_id,
+                    edit,
+                    request_doc_id,
+                )
+                .await
+            }
+            None => {
+                gents::lifecycle::submit_pending_user_edit(
+                    &access,
+                    signer.as_ref(),
+                    admission,
+                    Some(self.local_peer_id()),
+                    node_did,
+                    session_id,
+                    edit,
+                )
+                .await
+            }
+        };
         match result {
             Ok(receipt) => {
                 let requester_did = peer

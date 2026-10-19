@@ -553,6 +553,15 @@ pub struct PendingQueueEditRequest {
     pub messages: Vec<PendingMessageEditRequest>,
 }
 
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PendingMessageSteerRequest {
+    pub node_did: String,
+    pub session_id: String,
+    pub expected_request_doc_ids: Vec<String>,
+    pub request_doc_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingQueueEditResult {

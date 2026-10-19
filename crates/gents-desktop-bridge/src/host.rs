@@ -558,6 +558,11 @@ impl ClientHost {
                     .await
                     .map_err(backend_error)?,
             ),
+            ClientCommand::SteerPending { request } => encode(
+                crate::commands::steer_pending_message(&self.core, request)
+                    .await
+                    .map_err(backend_error)?,
+            ),
             ClientCommand::EditPending { request } => encode(
                 crate::commands::edit_pending_queue(&self.core, request)
                     .await

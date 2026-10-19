@@ -1870,6 +1870,32 @@ Denies the desktop_peer_status_fetch command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-pending-message-steer`
+
+</td>
+<td>
+
+Enables the desktop_pending_message_steer command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-pending-message-steer`
+
+</td>
+<td>
+
+Denies the desktop_pending_message_steer command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-pending-queue-edit`
 
 </td>

@@ -114,6 +114,7 @@ export type {
   MessageView,
   PendingTurnView,
   PendingQueueEditRequest,
+  PendingMessageSteerRequest,
   PendingQueueEditResult,
   PendingQueueEntryView,
   RenderedTimelineItem,

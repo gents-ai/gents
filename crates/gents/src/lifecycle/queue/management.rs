@@ -6,7 +6,7 @@ use crate::lifecycle::{RequestIdentity, RequestSigner, RequestSpec, WorkspaceLin
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
-use gents_protocol::request_input::QueuePosition;
+use gents_protocol::request_input::{QueueDelivery, QueuePosition};
 use serde::{Deserialize, Serialize};
 
 pub const REPLACED_REASON: &str = "pending message replaced";
@@ -27,6 +27,7 @@ pub struct PendingQueueEntry {
     pub request_id: String,
     pub content: String,
     pub editable: bool,
+    pub steerable: bool,
     pub edit_group: Option<String>,
 }
 
@@ -95,6 +96,12 @@ pub async fn pending_user_queue_projection(
                                 String::new()
                             },
                             editable: can_edit,
+                            steerable: can_edit
+                                && row
+                                    .input
+                                    .as_ref()
+                                    .and_then(|input| input.queue.as_ref())
+                                    .is_some_and(|queue| queue.delivery == QueueDelivery::Queue),
                             edit_group,
                         })
                     })
@@ -202,6 +209,10 @@ fn selected_group<'a>(
     Ok(selected)
 }
 
+pub(super) fn replacement_delivery_allowed(before: QueueDelivery, after: QueueDelivery) -> bool {
+    before == after || (before == QueueDelivery::Queue && after == QueueDelivery::Steer)
+}
+
 fn replacement_spec(
     selected: &[AgentRequestRow],
     slot: &AgentRequestRow,
@@ -212,6 +223,7 @@ fn replacement_spec(
     requester_did: &str,
     request_id: String,
     created_at: String,
+    delivery: QueueDelivery,
 ) -> Result<RequestSpec> {
     let source = selected
         .iter()
@@ -233,9 +245,10 @@ fn replacement_spec(
         .as_mut()
         .context("selected message has no queue input")?;
     anyhow::ensure!(
-        queue.delivery == old_queue.delivery,
-        "Messages with different delivery modes cannot be reordered together."
+        replacement_delivery_allowed(old_queue.delivery, delivery),
+        "Steering input cannot be changed back to queued delivery."
     );
+    queue.delivery = delivery;
     queue.position = Some(QueuePosition {
         slot_request_doc_id: old_queue
             .position
@@ -278,9 +291,37 @@ pub async fn prepare_pending_user_edit(
     requester_did: &str,
     edit: &PendingQueueEdit,
 ) -> Result<Vec<AgentRequestCreate>> {
+    prepare_pending_user_edit_with_deliveries(
+        access,
+        signer,
+        admission,
+        node_did,
+        session_id,
+        requester_did,
+        edit,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn prepare_pending_user_edit_with_deliveries(
+    access: &ConfigAccess,
+    signer: &dyn NodeIdentity,
+    admission: AgentRequestAdmissionRecord,
+    node_did: &str,
+    session_id: &str,
+    requester_did: &str,
+    edit: &PendingQueueEdit,
+    deliveries: Option<&[QueueDelivery]>,
+) -> Result<Vec<AgentRequestCreate>> {
     anyhow::ensure!(
         signer.did() == requester_did && admission.signer_did == requester_did,
         "Only the author can edit pending messages."
+    );
+    anyhow::ensure!(
+        deliveries.is_none_or(|values| values.len() == edit.messages.len()),
+        "Replacement delivery count changed."
     );
     let rows = access
         .transact_readonly("queue.read_pending_edit", |txn| {
@@ -289,7 +330,19 @@ pub async fn prepare_pending_user_edit(
         .await?;
     let selected = selected_group(&rows, edit, requester_did)?;
     let mut creates = Vec::new();
-    for (slot, message) in selected.iter().zip(&edit.messages) {
+    for (index, (slot, message)) in selected.iter().zip(&edit.messages).enumerate() {
+        let delivery = match deliveries {
+            Some(values) => values[index],
+            None => {
+                selected
+                    .iter()
+                    .find(|row| row.doc_id.as_deref() == Some(message.request_doc_id.as_str()))
+                    .and_then(|row| row.input.as_ref())
+                    .and_then(|input| input.queue.as_ref())
+                    .context("Selected message has no queue input.")?
+                    .delivery
+            }
+        };
         let spec = replacement_spec(
             selected,
             slot,
@@ -300,6 +353,7 @@ pub async fn prepare_pending_user_edit(
             requester_did,
             uuid::Uuid::new_v4().to_string(),
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            delivery,
         )?;
         creates.push(
             crate::lifecycle::build_signed_request(spec, RequestSigner::Identity(signer)).await?,
@@ -355,6 +409,12 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
                 requester_did,
                 create.request_id.clone(),
                 create.created_at.clone(),
+                create
+                    .input
+                    .queue
+                    .as_ref()
+                    .context("Replacement has no queue input.")?
+                    .delivery,
             )?)?;
             anyhow::ensure!(
                 create == &expected,
@@ -522,6 +582,52 @@ pub(crate) async fn apply_pending_user_edit_in_txn(
     Ok(receipt)
 }
 
+pub fn pending_steer_edit(
+    snapshot: &PendingQueueSnapshot,
+    expected: Vec<String>,
+    request_doc_id: &str,
+) -> Result<PendingQueueEdit> {
+    anyhow::ensure!(
+        snapshot
+            .entries
+            .iter()
+            .map(|entry| &entry.request_doc_id)
+            .eq(expected.iter()),
+        "The message queue changed. Refresh it and try again."
+    );
+    let index = snapshot
+        .entries
+        .iter()
+        .position(|entry| entry.request_doc_id == request_doc_id)
+        .context("This message is no longer pending.")?;
+    let target = &snapshot.entries[index];
+    anyhow::ensure!(
+        target.steerable,
+        "This message cannot be steered or is already steering."
+    );
+    let selected = &snapshot.entries[..=index];
+    anyhow::ensure!(
+        selected
+            .iter()
+            .all(|entry| entry.steerable && entry.edit_group == target.edit_group),
+        "This message cannot pass earlier input with different execution settings."
+    );
+    let reordered = std::iter::once(target).chain(snapshot.entries[..index].iter());
+    Ok(PendingQueueEdit {
+        expected_request_doc_ids: expected,
+        selected_request_doc_ids: selected
+            .iter()
+            .map(|entry| entry.request_doc_id.clone())
+            .collect(),
+        messages: reordered
+            .map(|entry| PendingMessageEdit {
+                request_doc_id: entry.request_doc_id.clone(),
+                content: entry.content.clone(),
+            })
+            .collect(),
+    })
+}
+
 #[cfg(test)]
 pub(super) async fn replace_pending_user_messages(
     access: &ConfigAccess,
@@ -531,8 +637,9 @@ pub(super) async fn replace_pending_user_messages(
     session_id: &str,
     requester_did: &str,
     edit: PendingQueueEdit,
+    deliveries: &[QueueDelivery],
 ) -> Result<PendingQueueReceipt> {
-    let creates = prepare_pending_user_edit(
+    let creates = prepare_pending_user_edit_with_deliveries(
         access,
         signer,
         admission,
@@ -540,6 +647,7 @@ pub(super) async fn replace_pending_user_messages(
         session_id,
         requester_did,
         &edit,
+        Some(deliveries),
     )
     .await?;
     access

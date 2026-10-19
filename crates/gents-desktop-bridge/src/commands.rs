@@ -22,7 +22,7 @@ mod util;
 
 pub use chat::{
     edit_pending_queue, fork_session_before_message, rename_session, request_output,
-    send_chat_message,
+    send_chat_message, steer_pending_message,
 };
 #[cfg_attr(test, allow(unused_imports))]
 pub use config::{

@@ -62,13 +62,14 @@ pub(crate) use materialize::{
 pub use queue::enqueue_local_steering_request;
 pub use queue::validate_position as validate_queue_position;
 pub use queue::{
+    pending_steer_edit, submit_pending_user_edit, submit_pending_user_steer, PendingMessageEdit,
+    PendingQueueEdit, PendingQueueReceipt,
+};
+pub use queue::{
     pending_user_queue, pending_user_queue_projection, PendingQueueEntry, PendingQueueProjection,
     PendingQueueSnapshot,
 };
 pub use queue::{prepare_pending_user_edit, prepare_user_message_input};
-pub use queue::{
-    submit_pending_user_edit, PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt,
-};
 pub use queue::{FOLDED_REASON, REMOVED_REASON, REPLACED_REASON};
 pub(crate) use task_title::task_goal_session_title;
 pub use task_title::task_session_title;

@@ -255,6 +255,7 @@ pub struct PendingQueueEntryView {
     pub request_id: String,
     pub content: String,
     pub editable: bool,
+    pub steerable: bool,
     pub edit_group: Option<String>,
 }
 

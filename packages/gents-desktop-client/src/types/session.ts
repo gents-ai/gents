@@ -26,6 +26,7 @@ export type { RequestResendResultView as RequestResendResult } from "../generate
 export type { RunTimelineEventView } from "../generated/RunTimelineEventView.js";
 export type { RequestTimelineView } from "../generated/RequestTimelineView.js";
 
+export type { PendingMessageSteerRequest } from "../generated/PendingMessageSteerRequest.js";
 export type { PendingQueueEditRequest } from "../generated/PendingQueueEditRequest.js";
 export type { PendingQueueEditResult } from "../generated/PendingQueueEditResult.js";
 export type { PendingQueueEntryView } from "../generated/PendingQueueEntryView.js";

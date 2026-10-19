@@ -200,3 +200,21 @@ pub async fn edit_pending_queue(
         request_ids: result.request_ids,
     })
 }
+
+pub async fn steer_pending_message(
+    core: &ClientCore,
+    request: super::super::types::PendingMessageSteerRequest,
+) -> Result<super::super::types::PendingQueueEditResult> {
+    let result = core
+        .steer_pending_message(
+            &request.node_did,
+            &request.session_id,
+            request.expected_request_doc_ids,
+            &request.request_doc_id,
+        )
+        .await?;
+    Ok(super::super::types::PendingQueueEditResult {
+        request_doc_ids: result.request_doc_ids,
+        request_ids: result.request_ids,
+    })
+}

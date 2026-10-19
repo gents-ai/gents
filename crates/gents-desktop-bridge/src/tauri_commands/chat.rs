@@ -252,3 +252,16 @@ pub async fn desktop_pending_queue_edit(
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))
 }
+
+#[tauri::command]
+pub async fn desktop_pending_message_steer(
+    request: crate::types::PendingMessageSteerRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<crate::types::PendingQueueEditResult, BridgeError> {
+    let Some(core) = current_core(&state) else {
+        return Err(BridgeError::untyped("desktop client is not running"));
+    };
+    crate::commands::steer_pending_message(core.as_ref(), request)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))
+}

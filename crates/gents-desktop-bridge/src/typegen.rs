@@ -210,6 +210,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ChatSendRequest,
         PendingMessageEditRequest,
         PendingQueueEditRequest,
+        PendingMessageSteerRequest,
         PendingQueueEditResult,
         SessionGoalView,
         GoalControlView,
