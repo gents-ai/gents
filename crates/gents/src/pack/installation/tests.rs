@@ -583,6 +583,7 @@ async fn install_dependee(access: &ConfigAccess, explicit: bool) {
         &requested,
         &[],
         crate::pack::InstalledVia::Operator,
+        None,
         &|_| None,
     )
     .await
@@ -1440,6 +1441,7 @@ async fn pack_job_block_is_refused_on_a_self_config_install() {
             &requested,
             &[],
             via,
+            None,
             &|_| None,
         )
     };
@@ -1674,6 +1676,7 @@ async fn try_install_dependent_with_dependee(
         &requested,
         &[dependee],
         crate::pack::InstalledVia::Operator,
+        plugin_home,
         &|_| None,
     )
     .await
@@ -1837,6 +1840,7 @@ async fn refused_dependency(dependee_plugin: bool, change: &dyn Fn(&mut Value)) 
         &BTreeMap::from([("worker".to_owned(), "glm:inference".to_owned())]),
         &[&dependee],
         crate::pack::InstalledVia::Operator,
+        None,
         &|_| None,
     )
     .await
@@ -1881,6 +1885,133 @@ async fn a_documents_dependency_with_its_own_dependencies_is_refused() {
     );
     assert!(
         error.contains("install it with `gents pack install`, then remove it from `dependencies`"),
+        "{error}"
+    );
+}
+
+fn plugin_pack_manifest(name: &str, kind: &str, plugins: &[&str]) -> crate::pack::PackManifest {
+    let mut manifest: crate::pack::PackManifest = serde_json::from_value(json!({
+        "manifest_version": 1, "name": name, "version": "1.0.0", "namespace": "acme",
+        "description": "d", "authors": ["tests"], "kind": kind,
+        "assets": std::iter::once("README.md".to_owned())
+            .chain(plugins.iter().map(|plugin| format!("plugins/{plugin}.afb")))
+            .collect::<Vec<_>>(),
+        "plugins": plugins.iter().map(|plugin| json!({
+            "name": plugin, "description": "d", "artifact": format!("plugins/{plugin}.afb"),
+            "language": "rust", "input_schema": {"type": "object"},
+        })).collect::<Vec<_>>(),
+    }))
+    .unwrap();
+    if kind == "documents" {
+        manifest.config = Some("config.json".to_owned());
+        manifest.metadata.assets.push("config.json".to_owned());
+    }
+    manifest
+}
+
+fn config_naming_plugin(plugin: &str) -> PackConfig {
+    serde_json::from_value(json!({
+        "node": {"node_did": OWNER},
+        "tools": [{"tools_id": "web_persona:tools", "node_did": OWNER,
+            "integrations": {"plugins": [{"plugin": plugin}]}}],
+    }))
+    .unwrap()
+}
+
+async fn prepare_naming_plugin(
+    manifest: &crate::pack::PackManifest,
+    plugin_home: Option<&Path>,
+) -> Result<PreparedDocumentPackInstall> {
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    crate::document_config::ensure_node(&node, OWNER)
+        .await
+        .unwrap();
+    prepare_document_pack_install(
+        &ConfigAccess::local(node),
+        OWNER,
+        manifest,
+        &config_naming_plugin("acme/web_search"),
+        &crate::pack::PackInferenceBindings::new(),
+        &[],
+        crate::pack::InstalledVia::Operator,
+        plugin_home,
+        &|_| None,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn an_install_naming_an_unresolved_plugin_is_refused_before_writing() {
+    let home = tempfile::tempdir().unwrap();
+    let manifest = plugin_pack_manifest("workflow", "documents", &[]);
+    let error = match prepare_naming_plugin(&manifest, Some(home.path())).await {
+        Ok(_) => panic!("an unresolved plugin reference must be refused"),
+        Err(error) => format!("{error:#}"),
+    };
+    assert!(
+        error.contains("acme/web_search")
+            && error.contains("web_persona:tools")
+            && error.contains("gents pack install"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn a_plugin_the_pack_ships_or_the_node_has_installed_resolves() {
+    let home = tempfile::tempdir().unwrap();
+    let shipping = plugin_pack_manifest("workflow", "documents", &["web_search"]);
+    prepare_naming_plugin(&shipping, Some(home.path()))
+        .await
+        .unwrap();
+
+    let manifest = plugin_pack_manifest("workflow", "documents", &[]);
+    let record: crate::plugin::store::InstalledPlugin = serde_json::from_value(json!({
+        "namespace": "acme", "name": "web_search", "version": "1.0.0",
+        "digest": format!("sha256:{}", "a".repeat(64)), "language": "rust",
+        "declaration": plugin_pack_manifest("web", "plugins", &["web_search"]).metadata.plugins[0],
+    }))
+    .unwrap();
+    crate::plugin::store::write_record(home.path(), &record).unwrap();
+    prepare_naming_plugin(&manifest, Some(home.path()))
+        .await
+        .unwrap();
+}
+
+#[test]
+fn a_plugin_a_declared_dependency_ships_resolves() {
+    let home = tempfile::tempdir().unwrap();
+    let manifest = plugin_pack_manifest("workflow", "documents", &[]);
+    let config = config_naming_plugin("acme/web_search");
+    let dependency = plugin_pack_manifest("web", "graph", &["web_search"]);
+    let dependency_config = config_naming_plugin("acme/web_search");
+    super::documents::ensure_plugin_references_resolve(
+        &[(&manifest, &config), (&dependency, &dependency_config)],
+        Some(home.path()),
+    )
+    .unwrap();
+    assert!(super::documents::ensure_plugin_references_resolve(
+        &[(&manifest, &config)],
+        Some(home.path()),
+    )
+    .is_err());
+}
+
+#[test]
+fn a_documents_dependency_naming_an_unresolved_plugin_is_refused() {
+    let home = tempfile::tempdir().unwrap();
+    let manifest = plugin_pack_manifest("workflow", "documents", &["web_search"]);
+    let config = config_naming_plugin("acme/web_search");
+    let dependency = plugin_pack_manifest("base", "documents", &[]);
+    let dependency_config = config_naming_plugin("acme/missing");
+    let error = super::documents::ensure_plugin_references_resolve(
+        &[(&manifest, &config), (&dependency, &dependency_config)],
+        Some(home.path()),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("pack base") && error.contains("acme/missing"),
         "{error}"
     );
 }

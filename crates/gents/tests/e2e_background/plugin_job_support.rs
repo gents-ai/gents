@@ -172,6 +172,7 @@ pub(crate) async fn install_job_fixture(
         &PackInferenceBindings::new(),
         &[],
         InstalledVia::Operator,
+        Some(plugin_home),
         &|_| None,
     )
     .await
