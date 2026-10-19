@@ -57,6 +57,9 @@ pub struct GoalControlRequest {
     pub agent_id: Option<String>,
     pub action: GoalControlAction,
     pub cwd: Option<String>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub captured_context: Vec<gents_protocol::request_input::CapturedContext>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

@@ -162,7 +162,8 @@ pub(super) fn build_rendered_timeline(
                 || (!message.has_tool_results
                     && (!normalize_timeline_text(message.display_content.as_deref()).is_empty()
                         || !normalize_timeline_text(message.reasoning.as_deref()).is_empty()
-                        || message.has_tool_calls)));
+                        || message.has_tool_calls
+                        || !message.captured_context.is_empty())));
         if !keep {
             continue;
         }
@@ -188,7 +189,10 @@ pub(super) fn build_rendered_timeline(
                 }),
             )
         } else if is_user {
-            match (normalized_content.clone(), unresolved) {
+            match (
+                normalized_content.clone(),
+                unresolved || !message.captured_context.is_empty(),
+            ) {
                 (Some(_), _) | (None, true) => (
                     true,
                     Some(RenderedTimelineItem::UserMessage {
@@ -198,6 +202,7 @@ pub(super) fn build_rendered_timeline(
                         input_request_id: message.input_request_id.clone(),
                         sequence: message.sequence,
                         content: normalized_content.clone(),
+                        captured_context: message.captured_context.clone(),
                         timestamp: normalize_optional(message.timestamp.as_deref()),
                         reconstruction,
                     }),
