@@ -11,6 +11,8 @@ use crate::admission::{self, CallKind};
 use crate::agent::loop_stream::AggregateTokenBudget;
 use crate::watcher::AgentRequest;
 
+#[cfg(test)]
+mod context_tests;
 mod task;
 
 const REVIEW_TIMEOUT: Duration = Duration::from_secs(20);
@@ -32,26 +34,16 @@ impl WorkspaceReviewer {
     }
 }
 
-fn visible_context<'a>(
-    history: impl IntoIterator<Item = &'a crate::llm::message::Message>,
-    parent: &AgentRequest,
-) -> Vec<String> {
+fn visible_context(message: &crate::llm::message::Message) -> Option<String> {
     use crate::llm::message::Message;
 
-    let mut context = Vec::new();
-    for message in history {
-        let label = match message {
-            Message::System { .. } => continue,
-            Message::Assistant { .. } => "Assistant",
-            Message::User { .. } => "Context",
-        };
-        let body = gents_protocol::transcript::render_message_body_markdown(message);
-        if !body.is_empty() {
-            context.push(format!("{label}:\n{body}"));
-        }
-    }
-    context.push(format!("Current request:\n{}", parent.content));
-    context
+    let label = match message {
+        Message::System { .. } => return None,
+        Message::Assistant { .. } => "Assistant",
+        Message::User { .. } => "Context",
+    };
+    let body = gents_protocol::transcript::render_message_body_markdown(message);
+    (!body.is_empty()).then(|| format!("{label}:\n{body}"))
 }
 
 impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
@@ -110,19 +102,17 @@ impl<M: crate::llm::rig_compat::ProviderModel> AuxiliaryTask<M> {
                             Some(&parent.doc_id),
                         )
                         .await?;
-                        let input = ReviewInput {
-                            action_id: invocation.action_id.clone(),
-                            policy: policy.text.clone(),
-                            action: serde_json::json!({
+                        let input = ReviewInput::bounded(
+                            invocation.action_id.clone(),
+                            policy.text.clone(),
+                            serde_json::json!({
                                 "workspace": invocation.binding.scope.workspace.path,
                                 "subject": invocation.binding.action,
                                 "input": invocation.payload,
                             }),
-                            conversation: visible_context(
-                                history.iter().map(|row| &row.message),
-                                &parent,
-                            ),
-                        };
+                            &parent.content,
+                            history.iter().map(|row| &row.message),
+                        )?;
                         let content = serde_json::to_string(&input)?;
                         anyhow::ensure!(
                             content.len() <= MAX_INPUT_BYTES,
@@ -193,6 +183,51 @@ pub(in crate::agent::daemon) struct ReviewInput {
     /// both are required to review an action's effects under that boundary.
     pub(super) action: serde_json::Value,
     pub(super) conversation: Vec<String>,
+    /// History rows absent from this input, including system and empty rows.
+    pub(super) omitted_history_entries: usize,
+}
+
+impl ReviewInput {
+    fn bounded<'a>(
+        action_id: String,
+        policy: String,
+        action: serde_json::Value,
+        current_request: &str,
+        history: impl DoubleEndedIterator<Item = &'a crate::llm::message::Message> + ExactSizeIterator,
+    ) -> Result<Self> {
+        let history_len = history.len();
+        let mut input = Self {
+            action_id,
+            policy,
+            action,
+            conversation: vec![format!("Current request:\n{current_request}")],
+            omitted_history_entries: history_len,
+        };
+        // The initial omission count has at least as many digits as the final
+        // count, so its encoded envelope is an upper bound on required bytes.
+        let required = serde_json::to_vec(&input)?.len();
+        let mut recent = Vec::new();
+        let costs = history.rev().filter_map(visible_context).map(|text| {
+            let cost = serde_json::to_vec(&text)
+                .expect("JSON string encoding cannot fail")
+                .len()
+                + 1;
+            recent.push(text);
+            cost as u64
+        });
+        let count = gents_loop::tool_policy::access_review::select_context(
+            required as u64,
+            MAX_INPUT_BYTES as u64,
+            costs,
+        )
+        .context("access review policy, action and current request exceed the input limit")?;
+        recent.truncate(count);
+        recent.reverse();
+        recent.append(&mut input.conversation);
+        input.conversation = recent;
+        input.omitted_history_entries = history_len - count;
+        Ok(input)
+    }
 }
 
 pub(in crate::agent::daemon) struct ReviewExecution {

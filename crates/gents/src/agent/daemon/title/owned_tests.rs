@@ -120,6 +120,7 @@ fn review_input(action_id: &str) -> String {
         policy: "Allow routine project work. Ask about unrelated changes.".into(),
         action: serde_json::json!({ "command": ["cargo", "test"] }),
         conversation: vec!["Fix the failing project test.".into()],
+        omitted_history_entries: 0,
     })
     .unwrap()
 }
