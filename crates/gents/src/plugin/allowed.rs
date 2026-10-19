@@ -54,12 +54,10 @@ pub fn list(home: &Path) -> Result<Vec<AllowedDir>> {
 fn save(home: &Path, dirs: Vec<AllowedDir>) -> Result<()> {
     std::fs::create_dir_all(home).with_context(|| format!("creating {}", home.display()))?;
     let bytes = serde_json::to_vec_pretty(&Stored { dirs })?;
-    let mut temp = tempfile::NamedTempFile::new_in(home).context("staging the allowed folders")?;
-    std::io::Write::write_all(&mut temp, &bytes).context("staging the allowed folders")?;
     let path = file(home);
-    temp.persist(&path)
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
+    write_permission_file(home, &path, |file| {
+        std::io::Write::write_all(file, &bytes).context("staging the allowed folders")
+    })
 }
 
 pub fn add(home: &Path, path: &Path, access: BindAccess) -> Result<AllowedDir> {
@@ -318,6 +316,7 @@ pub fn bind(
 
 mod protected;
 pub(crate) use protected::ensure_mount_safe;
+pub(crate) use protected::write_permission_file;
 pub use protected::{is_protected, protect};
 
 #[cfg(test)]

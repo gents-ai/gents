@@ -3,7 +3,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use anyhow::Context as _;
 use same_file::Handle;
+
+pub(crate) const STAGING_DIR: &str = ".permission-staging";
 
 static PROTECTED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
@@ -16,6 +19,7 @@ pub fn protect(home: &Path) {
         home.join(crate::plugin::approval::workspace::FILE),
         home.join(crate::plugin::approval::workspace::LOCK),
         home.join(crate::home::PLUGIN_APPROVALS_DIR_NAME),
+        home.join(STAGING_DIR),
     ];
     if let Ok(mut protected) = PROTECTED.lock() {
         for path in paths {
@@ -24,6 +28,81 @@ pub fn protect(home: &Path) {
             }
         }
     }
+}
+
+/// Temporary permission data shares the reserved boundary of its final file.
+/// Retained handles detect directory or object replacement before publication;
+/// namespace changes after the last inspection remain a host filesystem premise.
+pub(crate) fn write_permission_file(
+    home: &Path,
+    target: &Path,
+    write: impl FnOnce(&mut fs::File) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let home = home
+        .canonicalize()
+        .context("resolving the permission home")?;
+    anyhow::ensure!(
+        target
+            .parent()
+            .context("permission target has no parent")?
+            .canonicalize()?
+            == home,
+        "permission target is outside its runtime home"
+    );
+    let target = home.join(
+        target
+            .file_name()
+            .context("permission target has no name")?,
+    );
+    let directory = home.join(STAGING_DIR);
+    #[cfg(unix)]
+    let create = {
+        use std::os::unix::fs::DirBuilderExt;
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(0o700);
+        builder.create(&directory)
+    };
+    #[cfg(not(unix))]
+    let create = fs::DirBuilder::new().create(&directory);
+    match create {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error).context("creating permission staging directory"),
+    }
+    super::canonical_target(&directory, Some(true))?;
+    let directory_identity = Handle::from_path(&directory)?;
+    protect(&home);
+    let mut staged =
+        tempfile::NamedTempFile::new_in(&directory).context("staging runtime permissions")?;
+    let file_identity = Handle::from_file(staged.as_file().try_clone()?)?;
+    validate_staging(&directory, &directory_identity, &staged, &file_identity)?;
+    write(staged.as_file_mut())?;
+    staged
+        .as_file()
+        .sync_all()
+        .context("flushing runtime permissions")?;
+    validate_staging(&directory, &directory_identity, &staged, &file_identity)?;
+    staged
+        .persist(&target)
+        .map_err(|error| error.error)
+        .context("publishing runtime permissions")?;
+    Ok(())
+}
+
+fn validate_staging(
+    directory: &Path,
+    directory_identity: &Handle,
+    staged: &tempfile::NamedTempFile,
+    file_identity: &Handle,
+) -> anyhow::Result<()> {
+    super::canonical_target(directory, Some(true))?;
+    super::canonical_target(staged.path(), Some(false))?;
+    anyhow::ensure!(
+        Handle::from_path(directory)? == *directory_identity
+            && regular_file(staged.path())? == *file_identity,
+        "permission staging directory or file changed before publication"
+    );
+    Ok(())
 }
 
 /// Missing targets have already had their existing ancestors canonicalized

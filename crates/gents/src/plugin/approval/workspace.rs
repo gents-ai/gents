@@ -521,16 +521,9 @@ fn lock(home: &Path) -> Result<crate::file_lock::FileLock> {
 }
 
 fn save(home: &Path, stored: &Stored) -> Result<()> {
-    let staged = tempfile::NamedTempFile::new_in(home).context("staging workspace permissions")?;
-    serde_json::to_writer(staged.as_file(), &stored).context("encoding workspace permissions")?;
-    staged
-        .as_file()
-        .sync_all()
-        .context("flushing workspace permissions")?;
-    staged
-        .persist(preferences_file(home))
-        .context("saving workspace permissions")?;
-    Ok(())
+    crate::plugin::allowed::write_permission_file(home, &preferences_file(home), |file| {
+        serde_json::to_writer(file, &stored).context("encoding workspace permissions")
+    })
 }
 
 #[cfg(test)]

@@ -9,7 +9,7 @@ fn generated_operator_path_cases_protect_names_and_file_aliases() {
     }
 
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().operator_path_cases;
-    assert_eq!(cases.len(), 10);
+    assert_eq!(cases.len(), 13);
     for value in cases {
         let case: Case = serde_json::from_value(value.clone()).unwrap();
         let world = world();
@@ -20,6 +20,8 @@ fn generated_operator_path_cases_protect_names_and_file_aliases() {
         let question = queue.join("v3/question.decision");
         std::fs::write(&question, "operator answer").unwrap();
         let mut paths = vec![guarded.clone(), queue];
+        let staging = world.gents.join(protected::STAGING_DIR);
+        paths.push(staging.clone());
         let mut target = world.root.join("work/a.txt");
         match case.kind.as_str() {
             "ordinary" => {}
@@ -37,6 +39,19 @@ fn generated_operator_path_cases_protect_names_and_file_aliases() {
                 target = alias;
             }
             "missing" => target = world.root.join("work/missing.txt"),
+            "staged" | "stagedAlias" => {
+                std::fs::create_dir(&staging).unwrap();
+                let staged = staging.join("pending");
+                std::fs::write(&staged, "pending permissions").unwrap();
+                target = if case.kind == "staged" {
+                    staged
+                } else {
+                    let alias = world.root.join("work/staged-alias");
+                    std::fs::hard_link(&staged, &alias).unwrap();
+                    alias
+                };
+            }
+            "uncreatedStaged" => target = staging.join("future"),
             "named" => target = guarded,
             "uncreatedNamed" => {
                 std::fs::remove_file(&guarded).unwrap();
@@ -133,6 +148,131 @@ fn world() -> World {
         root: base,
         gents,
     }
+}
+
+#[test]
+fn staged_permission_objects_are_rejected_by_native_paths_and_plugin_mounts() {
+    use std::io::Write;
+
+    let world = world();
+    let directory = world.gents.join(protected::STAGING_DIR);
+    let context = crate::toolset::ToolContext::new(world.root.clone(), false).unwrap();
+    write_permission_file(&world.gents, &file(&world.gents), |output| {
+        output.write_all(b"new permissions")?;
+        let staged = std::fs::read_dir(&directory)?.next().unwrap()?.path();
+        let alias = world.root.join("work/permission-alias");
+        std::fs::hard_link(&staged, &alias)?;
+        assert!(context.resolve_path(staged.to_str().unwrap()).is_err());
+        assert!(context.resolve_path(alias.to_str().unwrap()).is_err());
+        assert!(context
+            .resolve_path_allow_create(staged.to_str().unwrap())
+            .is_err());
+        assert!(context
+            .resolve_path_allow_create(alias.to_str().unwrap())
+            .is_err());
+        assert!(ensure_mount_safe(&directory).is_err());
+        assert!(ensure_mount_safe(&world.root.join("work")).is_err());
+        std::fs::remove_file(alias)?;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        std::fs::read(file(&world.gents)).unwrap(),
+        b"new permissions"
+    );
+    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
+    let ordinary = world.gents.join("plugins/source.txt");
+    std::fs::write(&ordinary, "plugin source").unwrap();
+    assert_eq!(
+        context.resolve_path(ordinary.to_str().unwrap()).unwrap(),
+        ordinary
+    );
+}
+
+#[test]
+fn failed_permission_encoding_keeps_the_prior_file_and_removes_staging() {
+    use std::io::Write;
+
+    let world = world();
+    let target = file(&world.gents);
+    std::fs::write(&target, "prior permissions").unwrap();
+    let result = write_permission_file(&world.gents, &target, |output| {
+        output.write_all(b"incomplete")?;
+        anyhow::bail!("fixture encoding failure")
+    });
+    assert!(result.is_err());
+    assert_eq!(std::fs::read(&target).unwrap(), b"prior permissions");
+    assert_eq!(
+        std::fs::read_dir(world.gents.join(protected::STAGING_DIR))
+            .unwrap()
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn both_permission_writers_publish_without_leaving_staged_files() {
+    let world = world();
+    let entry = add(
+        &world.gents,
+        &world.root.join("work/a.txt"),
+        BindAccess::Read,
+    )
+    .unwrap();
+    assert_eq!(list(&world.gents).unwrap(), vec![entry]);
+    let key = crate::plugin::approval::workspace::WorkspaceKey::canonical(
+        "node",
+        "requester",
+        "agent",
+        &world.root.join("work"),
+    )
+    .unwrap();
+    let saved = crate::plugin::approval::workspace::save_mode(
+        &world.gents,
+        &key,
+        0,
+        crate::plugin::approval::workspace::Mode::FullAccess,
+        None,
+    )
+    .unwrap();
+    let loaded = crate::plugin::approval::workspace::get(&world.gents, &key)
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded.scope(), saved.scope());
+    assert_eq!(loaded.selection.mode, saved.selection.mode);
+    assert_eq!(
+        std::fs::read_dir(world.gents.join(protected::STAGING_DIR))
+            .unwrap()
+            .count(),
+        0
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_retargeted_staging_directory_cannot_publish_permissions() {
+    use std::io::Write;
+
+    let world = world();
+    let target = file(&world.gents);
+    std::fs::write(&target, "prior permissions").unwrap();
+    let directory = world.gents.join(protected::STAGING_DIR);
+    let outside = world.root.join("outside");
+    std::os::unix::fs::symlink(&outside, &directory).unwrap();
+    assert!(write_permission_file(&world.gents, &target, |_| {
+        panic!("an aliased staging directory reached the writer")
+    })
+    .is_err());
+    std::fs::remove_file(&directory).unwrap();
+    assert!(write_permission_file(&world.gents, &target, |output| {
+        output.write_all(b"unpublished permissions")?;
+        std::fs::rename(&directory, world.root.join("moved-staging"))?;
+        std::fs::create_dir(&directory)?;
+        Ok(())
+    })
+    .is_err());
+    assert_eq!(std::fs::read(&target).unwrap(), b"prior permissions");
+    assert_eq!(std::fs::read_dir(outside).unwrap().count(), 1);
 }
 
 fn resolved(world: &World, path: &str) -> Result<Resolved, String> {
@@ -372,6 +512,9 @@ fn the_file_tools_refuse_the_allowed_folders_file_and_the_approval_queue() {
             .gents
             .join(crate::home::PLUGIN_APPROVALS_DIR_NAME)
             .join("q.decision")
+    ));
+    assert!(is_protected(
+        &world.gents.join(protected::STAGING_DIR).join("pending")
     ));
     assert!(!is_protected(&world.gents.join("plugins/x")));
     assert!(!is_protected(&world.root.join("work/a.txt")));
