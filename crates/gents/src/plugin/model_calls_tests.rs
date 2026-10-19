@@ -16,6 +16,7 @@ const KEY: &str = "sekret-key-0123";
 #[derive(Clone)]
 enum Reply {
     Text,
+    Paired(Arc<tokio::sync::Barrier>),
     Status(u16),
     Hang,
     Big(usize),
@@ -92,6 +93,10 @@ impl Fake {
                     .into_response(),
                 Reply::Big(bytes) => text("x".repeat(*bytes)),
                 Reply::Text => text(format!("answer:{prompt}")),
+                Reply::Paired(barrier) => {
+                    barrier.wait().await;
+                    text(format!("answer:{prompt}"))
+                }
             };
             shared.in_flight.fetch_sub(1, Ordering::SeqCst);
             answer
@@ -238,9 +243,15 @@ async fn a_bound_slot_answers_the_plugins_requests_and_echoes_its_state() {
 
 #[tokio::test]
 async fn the_backend_concurrency_cap_is_honoured() {
-    let fake = Arc::new(Fake::start(Reply::Text, Duration::from_millis(120)).await);
+    let fake = Arc::new(
+        Fake::start(
+            Reply::Paired(Arc::new(tokio::sync::Barrier::new(2))),
+            Duration::ZERO,
+        )
+        .await,
+    );
     let canned = asking((0..6).map(|n| request(&n.to_string())).collect());
-    let (home, record) = installed(&canned, false, true);
+    let (home, record) = installed_within(&canned, false, 30);
     let call = executor(&home, Fixed(fake.clone(), 2, Duration::from_secs(30)))
         .call(&record, json!({}))
         .await
