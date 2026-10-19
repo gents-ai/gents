@@ -119,6 +119,42 @@ async fn read_only_commands_keep_the_permission_guard() {
 }
 
 #[tokio::test]
+async fn guarded_commands_build_and_run_a_rust_workspace() {
+    for mode in [
+        CommandExecutionMode::WorkspaceWrite,
+        CommandExecutionMode::Unrestricted,
+    ] {
+        let (_directory, root, home) = fixture();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"guarded-build-fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\
+             [workspace]\n[[bin]]\nname = \"guarded-build-fixture\"\npath = \"main.rs\"\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("main.rs"), "fn main() { print!(\"built\"); }\n").unwrap();
+        let args = vec![
+            "-c".into(),
+            "\"$1\" build --offline --manifest-path \"$2/Cargo.toml\" --target-dir \"$2/target\" 2>&1 && \"$2/target/debug/guarded-build-fixture\"".into(),
+            "fixture".into(),
+            env!("CARGO").into(),
+            root.to_str().unwrap().into(),
+        ];
+        let (code, output) = run(&root, &home, mode, "/bin/sh", &args).await;
+        assert_eq!(
+            code,
+            Some(0),
+            "{mode:?}: {}",
+            String::from_utf8_lossy(&output)
+        );
+        assert!(output.ends_with(b"built"));
+        assert_eq!(
+            std::fs::read(home.join(crate::home::ALLOWED_DIRS_FILE_NAME)).unwrap(),
+            b"operator permission data"
+        );
+    }
+}
+
+#[tokio::test]
 async fn configured_cli_tools_keep_the_guard_and_declared_environment() {
     let (_directory, root, home) = fixture();
     let tool = crate::toolset::cli_tool_for_test(crate::toolset::CliToolConfig {
