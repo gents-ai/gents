@@ -227,8 +227,16 @@ mod tests {
             .find(|tool| tool.name() == UPDATE_GOAL_TOOL_NAME)
             .expect("update_goal is always advertised");
         let definition = update.definition(String::new()).await;
-        assert!(definition.description.contains("edits apply only while the goal is active"));
-        assert!(definition.description.contains("gents goal resume-request --session SESSION --from REQUEST_ID"));
+        assert!(
+            definition
+                .description
+                .contains("edits apply only while the goal is active")
+        );
+        assert!(
+            definition
+                .description
+                .contains("gents goal resume-request --session SESSION --from REQUEST_ID")
+        );
         let description = definition.parameters["properties"]["token_budget"]["description"]
             .as_str()
             .expect("budget description");
