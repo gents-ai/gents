@@ -88,11 +88,8 @@ async fn editor_preserves_live_session_and_draft_across_window_reload() -> Resul
 }
 
 async fn exercise(root: &Path, journey: Journey) -> Result<()> {
-    let cli = Path::new(env!("CARGO_BIN_EXE_gents-client-host"))
-        .parent()
-        .context("native binary directory")?
-        .join(format!("gents{}", std::env::consts::EXE_SUFFIX));
-    ensure!(cli.is_file(), "build gents-cli before running runtime-e2e");
+    let cli = support::native_binary("gents")?;
+    let host = support::native_binary("gents-client-host")?;
     if matches!(journey, Journey::Editor) {
         std::fs::write(
             root.join("AGENTS.md"),
@@ -218,7 +215,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let client_did = seed.node_identity().did().to_owned();
     seed.shutdown().await?;
     drop(seed);
-    let mut host_command = Command::new(env!("CARGO_BIN_EXE_gents-client-host"));
+    let mut host_command = Command::new(&host);
     host_command.args(["--serve", "--home"]).arg(paths.root());
     if matches!(journey, Journey::Editor) {
         host_command.arg("--editor-store");
@@ -638,7 +635,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             .arg(script)
             .arg(root)
             .arg(paths.root())
-            .arg(env!("CARGO_BIN_EXE_gents-client-host"))
+            .arg(&host)
             .arg(session)
             .stdout(Stdio::from(log.try_clone()?))
             .stderr(Stdio::from(log))
