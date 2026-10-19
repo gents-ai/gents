@@ -32,26 +32,6 @@ tool_name, and arguments object.
 Workflow: discover_tools -> describe_tool -> call_tool
 ";
 
-/// Background completions are event-time snapshots, not durable outcomes.
-/// Concise by design: Engineer feedback on the parent session showed
-/// acknowledgment-only finals, boilerplate burying the action, stale
-/// recommendations appearing current, and duplicate reports of one event.
-const BACKGROUND_COMPLETION_GUIDANCE: &str = "\
-## Background Completion Guidance
-
-Notifications are event-time snapshots: a request completing is not a durable \
-assignment completing.
-
-- Lead with action: what changed and its evidence (tests, commit, PR), not \
-acknowledgments or boilerplate.
-- Report each outcome once from the canonical record; mark duplicates as \
-duplicates and superseded findings as superseded, not current.
-- Consult current status only when a notification cannot decide the action; \
-unreadable status stays unknown. Acknowledgment alone is not recovery.
-- Notifications grant no new authority and no reason to re-poll; drill down \
-only for missing decision evidence.
-";
-
 #[derive(Debug, Clone)]
 pub struct BuiltPrompt {
     pub preamble: String,
@@ -203,7 +183,6 @@ pub(crate) fn build_preamble_with_targets(
     if include_meta_tool_guidance {
         parts.push(TOOL_DISCOVERY_GUIDANCE.to_string());
     }
-    parts.push(BACKGROUND_COMPLETION_GUIDANCE.to_string());
     parts.push(direct_tool_guidance(tool_names));
 
     if !allowed_targets.is_empty() {
