@@ -171,13 +171,16 @@ async fn merge_parked_unique_conflict_does_not_brick_boot() {
     let report = gents::migration::ensure_migrations(&home.node)
         .await
         .expect("ensure_migrations after boot");
-    if report.materialization.collections_attempted == 0 {
-        assert!(
-            gents::migration::DEFAULT_STEPS.is_empty(),
-            "only a chain-free registry may skip eager materialization"
-        );
-        assert!(report.materialization.parked_unique_conflicts.is_empty());
-    } else {
+    let endpoint_is_versioned = gents::migration::DEFAULT_STEPS.iter().any(|step| {
+        matches!(
+            step,
+            gents::migration::MigrationStep::PatchVersioned {
+                collection: "PeerEndpoint",
+                ..
+            }
+        )
+    });
+    if endpoint_is_versioned {
         assert_eq!(
             report.materialization.parked_unique_conflicts.len(),
             1,
@@ -197,6 +200,8 @@ async fn merge_parked_unique_conflict_does_not_brick_boot() {
             "report warnings must surface the parked collection: {:?}",
             report.warnings
         );
+    } else {
+        assert!(report.materialization.parked_unique_conflicts.is_empty());
     }
 
     let mut docs = scan_endpoints(&home.node).await;

@@ -369,11 +369,17 @@ jobs:
           env -u CARGO_TARGET_DIR cargo test --target-dir "$CARGO_TARGET_DIR" \
             -p gents-cli --lib commands::pack::check::
 
+      - name: Run plugin admission cases in an isolated process
+        if: matrix.suite == 'runtime' && github.event_name != 'pull_request'
+        env:
+          RUST_MIN_STACK: 16777216
+        run: cargo test -p gents --lib plugin::tests::generated_plugin_call_access_cases_drive_bind_admission -- --exact --test-threads=1
+
       - name: Run full library and integration tests
         if: matrix.suite == 'runtime' && github.event_name != 'pull_request'
         env:
           RUST_MIN_STACK: 16777216
-        run: cargo test --no-fail-fast -p gents -p gents-loop --lib --tests
+        run: cargo test --no-fail-fast -p gents -p gents-loop --lib --tests -- --skip plugin::tests::generated_plugin_call_access_cases_drive_bind_admission
 
       - name: Run desktop Rust package tests
         if: matrix.suite == 'desktop'
