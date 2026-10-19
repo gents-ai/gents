@@ -142,7 +142,10 @@ permissions = [
 [[set]]
 identifier = "interrupt-control"
 description = "Interrupt request execution"
-permissions = ["allow-desktop-interrupt-request"]
+permissions = [
+  "allow-desktop-interrupt-request",
+  "allow-desktop-job-control",
+]
 
 [[set]]
 identifier = "runtime-admin"

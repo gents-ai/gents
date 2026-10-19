@@ -22,11 +22,14 @@ function pulse(
   const live = sessions.filter((s) => isLive(s.turnState)).length;
   const tools = ops?.backgroundedTools ?? [];
   const workers = tools.filter((t) => t.startsSession).length;
-  const jobs = tools.length - workers;
+  /* a plugin job is a workflow, not a background command */
+  const workflows = tools.filter((t) => t.job && !t.startsSession).length;
+  const jobs = tools.length - workers - workflows;
   const overdue = tools.filter((t) => t.deadlineExpired).length;
   const parts = [
     live ? `${live} ${live === 1 ? "session" : "sessions"} live` : null,
     workers ? `${workers} ${workers === 1 ? "session call" : "session calls"}` : null,
+    workflows ? `${workflows} ${workflows === 1 ? "workflow" : "workflows"}` : null,
     jobs ? `${jobs} background ${jobs === 1 ? "job" : "jobs"}` : null,
     overdue ? `${overdue} past ${overdue === 1 ? "its" : "their"} deadline` : null,
   ].filter(Boolean) as string[];

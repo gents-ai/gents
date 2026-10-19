@@ -36,6 +36,7 @@ import type {
   SessionProvenance,
   TriggerView,
 } from "@source-inc/gents-desktop-client";
+import type { JobControlOutcome } from "@source-inc/gents-desktop-client/generated/JobControlOutcome";
 import type { RequestOutcomeView } from "@source-inc/gents-desktop-client/generated/RequestOutcomeView";
 import type { MessageReconstructionView } from "@source-inc/gents-desktop-client/generated/MessageReconstructionView";
 import type { SessionContextView } from "@source-inc/gents-desktop-client/generated/SessionContextView";
@@ -2532,6 +2533,12 @@ export function createDesktopUiHarness(
         alreadyInterrupted: false,
       };
       return result;
+    },
+    async jobControl() {
+      const outcome: JobControlOutcome = {
+        AlreadyTerminal: { state: "completed" },
+      };
+      return outcome;
     },
   };
 

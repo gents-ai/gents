@@ -725,6 +725,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn job_rows_keep_child_request_id_none() {
+        use crate::tool_call_lifecycle::admission_fixture::{
+            claimed_request, publish_accepted_on_claimed_request, write_fixture_job_pin,
+        };
+        use crate::tool_call_lifecycle::AwaitMode;
+
+        const NODE_DID: &str = "did:test:job-timeline";
+        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let mut root = claimed_request(&node, "job-root", "job-root-session", NODE_DID).await;
+        let root_doc_id = root.request().doc_id.clone();
+        let call = publish_accepted_on_claimed_request(
+            node.clone(),
+            &mut root,
+            NODE_DID,
+            0,
+            "workflow",
+            "job-call",
+            serde_json::json!({"argv": ["run"]}),
+            AwaitMode::Background,
+            true,
+        )
+        .await
+        .unwrap();
+        let tool_doc_id = call.doc_id().unwrap().to_owned();
+        write_fixture_job_pin(&node, &tool_doc_id).await.unwrap();
+        for slot in ["alpha", "beta"] {
+            let response = node
+                .execute(&format!(
+                    r#"mutation {{ create_AgentRequest(input: {{
+                        request_id: "job-child-{slot}", purpose: "normal", node_did: "{NODE_DID}",
+                        agent_id: "general", session_id: "job-child-session-{slot}",
+                        content: "child", lifecycle_state: "completed", backend_id: "",
+                        created_at: "2026-08-26T00:00:00Z", retry_count: 0, request_hop: 1,
+                        caused_by_parent_request_id: "job-root",
+                        caused_by_parent_request_doc_id: "{root_doc}",
+                        caused_by_parent_tool_call_id: "job-call",
+                        caused_by_parent_tool_call_doc_id: "{tool_doc}"
+                    }}) {{ _docID }} }}"#,
+                    root_doc = escape_graphql_string(&root_doc_id),
+                    tool_doc = escape_graphql_string(&tool_doc_id),
+                ))
+                .await;
+            assert!(
+                !response.has_errors(),
+                "seed child {slot}: {:?}",
+                response.errors
+            );
+        }
+
+        let rows = load_run_timeline_rows(&ConfigAccess::local(node.clone()), "job-root")
+            .await
+            .unwrap();
+
+        let job = rows
+            .tool_calls
+            .iter()
+            .find(|row| row.tool_call_id == "job-call")
+            .expect("the job row");
+        assert_eq!(job.child_request_id, None);
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn fetches_complete_inference_provenance() {
         let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();

@@ -908,6 +908,32 @@ Denies the desktop_interrupt_request command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-job-control`
+
+</td>
+<td>
+
+Enables the desktop_job_control command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-job-control`
+
+</td>
+<td>
+
+Denies the desktop_job_control command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-list-backends-with-health`
 
 </td>

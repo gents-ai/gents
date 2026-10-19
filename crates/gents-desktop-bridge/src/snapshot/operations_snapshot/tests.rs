@@ -20,6 +20,7 @@ fn row(
         deadline_at: None,
         await_mode: Some("background".into()),
         stuck_since: None,
+        job: false,
     }
 }
 
@@ -289,6 +290,7 @@ fn backgrounded_tools_flag_session_starting_calls() {
         deadline_at: None,
         await_mode: Some("background".into()),
         stuck_since: None,
+        job: false,
     };
     let rows = vec![
         row("tc_new", "agent_new"),
@@ -305,4 +307,29 @@ fn backgrounded_tools_flag_session_starting_calls() {
         starts,
         vec![("tc_new", true), ("tc_msg", true), ("tc_grep", false)]
     );
+}
+
+#[test]
+fn backgrounded_job_rows_are_marked_job() {
+    let row = |tool_call_id: &str, job: bool| ToolCallRow {
+        request_id: "req_a".into(),
+        tool_call_id: tool_call_id.into(),
+        tool_name: "workflow".into(),
+        lifecycle_state: Some("running".into()),
+        status: None,
+        started_at: Some("2026-05-20T12:00:00Z".into()),
+        completed_at: None,
+        deadline_at: None,
+        await_mode: Some("background".into()),
+        stuck_since: None,
+        job,
+    };
+    let rows = vec![row("tc_job", true), row("tc_plain", false)];
+
+    let projected = project_backgrounded_tools(&rows, &liveness_with(Vec::new(), Vec::new()));
+    let jobs: Vec<(&str, bool)> = projected
+        .iter()
+        .map(|t| (t.tool_call_id.as_str(), t.job))
+        .collect();
+    assert_eq!(jobs, vec![("tc_job", true), ("tc_plain", false)]);
 }

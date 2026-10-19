@@ -67,6 +67,7 @@ pub struct BackgroundedToolView {
     pub tool_call_id: String,
     pub tool_name: String,
     pub starts_session: bool,
+    pub job: bool,
     pub lifecycle_state: Option<String>,
     pub status: Option<String>,
     pub started_at: Option<String>,
@@ -119,6 +120,11 @@ pub struct SessionProvenanceView {
     pub started: Vec<LinkedSessionView>,
     pub sent: Vec<LinkedSessionView>,
     pub received: Vec<LinkedSessionView>,
+    /// The request of this session that its starter's call opened it with
+    /// (C7), while that request is visible.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub opening_request_id: Option<String>,
     pub senders: Vec<TurnSenderView>,
     pub calls: Vec<CausedCallView>,
 }

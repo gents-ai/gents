@@ -21,6 +21,7 @@ import type { DesktopClientSnapshot } from "./DesktopClientSnapshot.js";
 import type { DesktopInitRequest } from "./DesktopInitRequest.js";
 import type { DesktopInitSummary } from "./DesktopInitSummary.js";
 import type { DesktopInterruptRequest } from "./DesktopInterruptRequest.js";
+import type { DesktopJobControlRequest } from "./DesktopJobControlRequest.js";
 import type { DesktopObserverMetrics } from "./DesktopObserverMetrics.js";
 import type { DesktopOperationsSnapshot } from "./DesktopOperationsSnapshot.js";
 import type { DesktopOperationsSnapshotRequest } from "./DesktopOperationsSnapshotRequest.js";
@@ -48,6 +49,7 @@ import type { InferenceRecommendationRequest } from "./InferenceRecommendationRe
 import type { InferenceSetupCatalog } from "./InferenceSetupCatalog.js";
 import type { InstalledPacksView } from "./InstalledPacksView.js";
 import type { InterruptRequestResult } from "./InterruptRequestResult.js";
+import type { JobControlOutcome } from "./JobControlOutcome.js";
 import type { JsonValue } from "./serde_json/JsonValue.js";
 import type { MCPServiceHealthView } from "./MCPServiceHealthView.js";
 import type { MailboxItemRequest } from "./MailboxItemRequest.js";
@@ -152,6 +154,7 @@ export type DesktopCommands = {
   desktop_inference_setup_catalog: { args: Record<string, never>; result: InferenceSetupCatalog };
   desktop_init_local_standard: { args: { request: DesktopInitRequest }; result: DesktopInitSummary };
   desktop_interrupt_request: { args: { request: DesktopInterruptRequest }; result: InterruptRequestResult };
+  desktop_job_control: { args: { request: DesktopJobControlRequest }; result: JobControlOutcome };
   desktop_list_backends_with_health: { args: Record<string, never>; result: Array<BackendHealthView> };
   desktop_list_mcp_services_with_health: { args: Record<string, never>; result: Array<MCPServiceHealthView> };
   desktop_mailbox_dismiss: { args: { request: MailboxItemRequest }; result: void };

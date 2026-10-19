@@ -7,6 +7,8 @@ import type { GoalControlRequest } from "../generated/GoalControlRequest.js";
 import type { GoalControlResult } from "../generated/GoalControlResult.js";
 import type { SessionGoalView } from "../generated/SessionGoalView.js";
 import type { OauthProvider } from "../transport.js";
+import type { DesktopJobControlRequest } from "../generated/DesktopJobControlRequest.js";
+import type { JobControlOutcome } from "../generated/JobControlOutcome.js";
 import type { ConfigComponentsApplyRequest } from "../generated/ConfigComponentsApplyRequest.js";
 import type { ConfigComponentsPatchRequest } from "../generated/ConfigComponentsPatchRequest.js";
 import type { EventSourceSaveRequest } from "../generated/EventSourceSaveRequest.js";
@@ -354,6 +356,7 @@ export type DesktopApiAdapter = {
   interruptRequest: (
     request: DesktopInterruptRequestRequest,
   ) => Promise<InterruptRequestResult>;
+  jobControl: (request: DesktopJobControlRequest) => Promise<JobControlOutcome>;
   listInstalledPacks: () => Promise<{ packs: InstalledPack[] }>;
   listPackPluginSlots: () => Promise<{
     plugins: PackPluginSlot[];

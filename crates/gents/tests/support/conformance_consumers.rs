@@ -1568,6 +1568,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "project_filters_to_background_await_mode_only",
         },
         ConformanceConsumer::RustTest {
+            id: "gents_desktop_bridge::provenance::tests::generated_plugin_job_lineage_cases_drive_desktop_opening_request",
+            package: "gents-desktop-bridge",
+            source_path: "crates/gents-desktop-bridge/src/provenance.rs",
+            module_path: "gents_desktop_bridge::provenance::tests",
+            function: "generated_plugin_job_lineage_cases_drive_desktop_opening_request",
+        },
+        ConformanceConsumer::RustTest {
             id: "hook::tests::background_admission::spawn_process_rejects_target_policy_before_spawned_admission",
             package: "gents",
             source_path: "crates/gents/src/hook/tests/background_admission.rs",

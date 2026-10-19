@@ -6,6 +6,10 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- The desktop shows a plugin job's progress on its tool row (state, phases,
+  agents and budget, the outcome or pause reason with the next step), with
+  Stop and Pause buttons and an Answer button that prefills the composer; the
+  agent card labels job rows as workflows.
 - The Grok pager's Workflows tab lists the workflows of every installed plugin
   that declares a catalog, instead of an error.
 - The Grok pager shows each plugin job as a workflow run with its phases,
